@@ -146,6 +146,7 @@ and every other significant type in the tree already matched its own name
 | Parent shortcut-root lifecycle state is stored in the parent sync store, rebuilt into parent-owned observation protection, and applied before the parent publishes child work and cleanup work to multisync. Empty complete remote shortcut observation batches are persisted and retire old roots; child final-drain acknowledgement first persists `removed_release_pending`; release cleanup later moves old roots to `removed_child_cleanup_pending` or promotes waiting replacements; cleanup-blocked release failures are durable state, never pass errors: the transition into `removed_cleanup_blocked` (or a change of its reason) is persisted and reported once as a plain warning, an unchanged blocked cleanup is retried every pass at Debug, and neither returns an error (that would fail every one-shot run and end the watch remote observer); child artifact cleanup acknowledgement deletes cleanup-pending rows; duplicate automatic shortcut targets are parent-owned blocked roots. Cleanup requests are derived from these rows with explicit child mount ID and local-root scope, not reconstructed by multisync. | `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain`, `TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable`, `TestSyncStore_acknowledgeShortcutChildArtifactsPurgedRemovesCleanupPendingRoot`, `TestSyncStore_SamePathReplacementWaitsBehindRetiringRoot`, `TestSyncStore_DuplicateAutomaticShortcutTargetIsParentBlocked`, `TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending`, `TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutError`, `TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet`, `TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending`, `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler` |
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 | An issue type or condition type that no `IssueType` member names is refused at the store boundary on read and on write (R-2.5.6); every member has a stated verdict on local and remote truth, and a value outside the enum leaves local truth unavailable. | `TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType`, `TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType`, `TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember`, `TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas`, `TestObservationIssueBlocksTruth_VerdictForEveryIssueType`, `TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable` |
+| An observation findings batch replaces the stored issues of exactly the types it manages, and a batch that reports an issue of a type it does not manage is refused before anything is written, naming the type and the path: such a row would outlive every later batch that stops reporting it, as an interrupted removal's report outlived the file (R-2.10.10, R-6.4.9). | `TestBuildObservationReconcilePlan_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover` |
 | Debug invariant checks reject malformed retry/block durable state before runtime handoff. | `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
 
 ## Write Responsibilities
@@ -248,17 +249,15 @@ Worker-result handling, held retry release, and held trial release may read
 observation facts, but they must not create, clear, or rewrite
 `observation_issues`.
 
-Observation-owned reconciliation supports two scopes of authority:
-
-- whole-observation batches replace the managed observation issue types they
-  own
-- exact-path batches manage only the observed path set they proved. The store
-  honors this mode and is tested for it directly, but no current caller sets
-  `ManagedPaths`: its only consumer was single-path observation, removed when
-  the linear runtime replaced per-path retry reconstruction with replanning
-  from committed truth. The mode is kept as a store primitive rather than
-  removed, because dropping a durable reconciliation semantic is a decision
-  about persisted state, not cleanup of an unused helper
+Observation-owned reconciliation has one scope of authority: a batch is one
+whole observation pass's findings for the issue types it manages, and it
+replaces the stored issues of exactly those types. An exact-path mode
+(`ManagedPaths`, a batch that managed only the paths it listed) existed for
+single-path observation; that consumer went when the linear runtime replaced
+per-path retry reconstruction with replanning from committed truth, and the
+mode, used by nothing but test seed helpers since, was removed on
+2026-11-11. It was a batch input, not persisted state, so removing it changed
+no stored row.
 
 ### Mutation writes
 
@@ -320,10 +319,8 @@ The target store API persists three durable control authorities:
 
 Supporting outcome mutations should stay separate by owner:
 
-- observation-findings reconciliation that replaces the current
-  observation-owned issue set in one transaction, either as a full managed
-  issue-type set or as an exact-path reconciliation (see the note above on
-  `ManagedPaths` having no current caller)
+- observation-findings reconciliation that replaces the stored issues of the
+  batch's managed issue types in one transaction
 - exact retry-work upsert/delete helpers
 - retry-work rearm helpers that reschedule exact held work without inventing
   new planning or observation authority
@@ -373,7 +370,14 @@ set reconciliation: current managed observation issues, desired managed
 observation issues, exact deletes, exact upserts. The key used for those exact
 deletes is the same managed issue identity used on both the current and
 desired sides; the store does not need a second delete-only shape to express
-it.
+it. The same helper (`buildObservationReconcilePlan`) refuses a batch that
+reports an issue of a type it does not manage, before anything is written and
+with an error naming the type and the path: a batch deletes only rows of its
+managed types, so such a row would outlive every later batch that stops
+reporting it. Every production batch satisfies the rule (the local batch
+manages every type a local scan reports, the remote batch reports only
+`remote_read_denied`, which it manages), so the refusal marks a constructor
+bug rather than an input the store tolerates.
 
 Derived truth inspection stays read-only and authority-based. Observation-owned
 boundary issues tagged with read-scope keys suppress descendant truth through

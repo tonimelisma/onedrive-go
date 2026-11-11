@@ -427,12 +427,12 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	if commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings, flow.deps.now()); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
 	flow.logSkippedObservationFindings(localResult.Skipped, flow.knownObservationIssues(ctx))
 	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings, flow.deps.now()); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run local observation findings in scratch store: %w", reconcileErr)
 	}
 

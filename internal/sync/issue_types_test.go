@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -18,10 +19,27 @@ import (
 func issueTypeConstantsInSource(t *testing.T) []IssueType {
 	t.Helper()
 
+	byName := issueTypeConstantsByName(t)
+	members := make([]IssueType, 0, len(byName))
+	for _, member := range byName {
+		members = append(members, member)
+	}
+	slices.Sort(members)
+
+	return members
+}
+
+// issueTypeConstantsByName maps the name of every IssueType constant
+// issue_types.go declares to its value, read from the source, so a check
+// that looks for the constants by name in other source files names exactly
+// the declared ones.
+func issueTypeConstantsByName(t *testing.T) map[string]IssueType {
+	t.Helper()
+
 	parsed, err := parser.ParseFile(token.NewFileSet(), "issue_types.go", nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
-	var members []IssueType
+	members := make(map[string]IssueType)
 	for _, decl := range parsed.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
@@ -41,7 +59,7 @@ func issueTypeConstantsInSource(t *testing.T) []IssueType {
 				require.True(t, ok, "IssueType constant %s is not a string literal", value.Names[i].Name)
 				unquoted, unquoteErr := strconv.Unquote(lit.Value)
 				require.NoError(t, unquoteErr)
-				members = append(members, IssueType(unquoted))
+				members[value.Names[i].Name] = IssueType(unquoted)
 			}
 		}
 	}

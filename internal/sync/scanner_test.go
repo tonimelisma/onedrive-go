@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -235,6 +236,47 @@ func TestFullScan_StoresFilesystemIdentityForFilesAndDirectories(t *testing.T) {
 	assert.NotZero(t, rowsByPath["Docs"].LocalInode)
 	assert.True(t, rowsByPath["Docs/report.txt"].LocalHasIdentity)
 	assert.NotZero(t, rowsByPath["Docs/report.txt"].LocalInode)
+}
+
+// Sync sets aside only a regular file while removing it, so only a regular
+// file under that hidden name is reported as an interrupted removal. A folder
+// or a FIFO with such a name is the user's: it is excluded like every entry
+// with that name (neither synced nor walked), and it is not reported. Before,
+// either was reported as a set-aside file.
+//
+// Validates: R-6.4.9
+func TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval(t *testing.T) {
+	t.Parallel()
+
+	const (
+		leftoverName = ".onedrive-go.0123456789abcdef.detach"
+		folderName   = ".onedrive-go.1123456789abcdef.detach"
+		fifoName     = ".onedrive-go.2123456789abcdef.detach"
+	)
+	syncRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "visible.txt"), []byte("synced\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, leftoverName), []byte("half-removed\n"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, folderName), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, folderName, "inside.txt"), []byte("user\n"), 0o600))
+	require.NoError(t, syscall.Mkfifo(filepath.Join(syncRoot, fifoName), 0o600))
+
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	var reported []string
+	for i := range result.Skipped {
+		if result.Skipped[i].Reason == issueLocalInterruptedRemoval {
+			reported = append(reported, result.Skipped[i].Path)
+		}
+	}
+	assert.Equal(t, []string{leftoverName}, reported)
+	paths := make([]string, 0, len(result.Rows))
+	for i := range result.Rows {
+		paths = append(paths, result.Rows[i].Path)
+	}
+	assert.Equal(t, []string{"visible.txt"}, paths,
+		"every entry with that name stays excluded, the folder's contents included")
 }
 
 // ---------------------------------------------------------------------------

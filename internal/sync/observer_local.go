@@ -547,9 +547,11 @@ type localObserver struct {
 	writeCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
 	startupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
 
-	// skippedCh forwards SkippedItems from safety scans to the engine for
-	// observation-issue persistence. Nil disables forwarding (pre-existing behavior).
-	// Set via SetSkippedChannel before Watch.
+	// skippedCh carries the finding set of every watch-mode full scan (safety,
+	// recovery and fallback scans) to the engine, which persists it as the
+	// observation issues of the local scan (TrySendScanFindings). When nil,
+	// the sets are only logged at Debug and nothing is persisted. Set via
+	// SetSkippedChannel before Watch.
 	skippedCh chan<- []skippedItem
 
 	// localBatchCh forwards engine-applied local observation batches. The
@@ -587,12 +589,15 @@ func newLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 	}
 }
 
-// SetSkippedChannel sets the channel for forwarding SkippedItems from safety
-// scans to the engine. Must be called before Watch. Nil disables forwarding.
+// SetSkippedChannel sets the channel that carries each watch-mode full scan's
+// finding set to the engine (see skippedCh). Must be called before Watch.
 func (o *localObserver) SetSkippedChannel(ch chan<- []skippedItem) {
 	o.skippedCh = ch
 }
 
+// SetLocalObservationBatchChannel sets the channel that carries local
+// observation batches to the watch runtime (see localBatchCh). Must be called
+// before Watch.
 func (o *localObserver) SetLocalObservationBatchChannel(ch chan<- localObservationBatch) {
 	o.localBatchCh = ch
 }
@@ -767,6 +772,29 @@ func (o *localObserver) TrySendFullLocalSnapshot(ctx context.Context, result sca
 		fullSnapshot: true,
 		rows:         buildLocalStateRows(result),
 	})
+}
+
+// TrySendScanFindings hands a full scan's finding set to the engine, which
+// reconciles it as the whole set of local findings: it records the new ones
+// and clears every earlier one the set lacks. The set goes even when it is
+// empty, because a full scan that skipped nothing has proven every earlier
+// finding gone. It never blocks: a set dropped on a full channel is replaced
+// by the next full scan's, which is again the whole set.
+func (o *localObserver) TrySendScanFindings(skipped []skippedItem) {
+	if o.skippedCh == nil {
+		if len(skipped) > 0 {
+			o.logger.Debug("full scan: skipped items", slog.Int("count", len(skipped)))
+		}
+
+		return
+	}
+
+	select {
+	case o.skippedCh <- skipped:
+	default:
+		o.logger.Debug("skipped items channel full, will catch on next scan",
+			slog.Int("count", len(skipped)))
+	}
 }
 
 // localBatchChannelFull reports whether the runtime has not taken the
