@@ -223,6 +223,17 @@ performance data.
   command.
 - `internal/multisync` owns live sync-owner registration and the control-socket
   surfaces that expose live snapshots and trigger captures.
+- Two recording routes exist. The engine records its own phases and counters
+  (observe, plan, execute, refresh, watch batches, stale work, local
+  observation, replan idle) on the collector it was constructed with. HTTP
+  requests and retries, store transactions and transfers are recorded on the
+  collector the call's context carries (`perf.FromContext`); a context that
+  carries none records nothing. `perf.WithCollector` replaces the context's
+  collector rather than adding one, and every collector forwards each record to
+  its parent, so the rule for an owner is to carry the most specific collector
+  in the context: `internal/multisync` puts each mount's collector in that
+  mount's run context, and the record reaches the mount snapshot, the owner
+  aggregate and the command collector once each.
 - Logs are the durable history. `status --perf` and the control socket are
   live-owner views only and intentionally do not invent a new persistent perf
   database.
