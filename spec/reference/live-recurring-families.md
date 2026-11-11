@@ -133,3 +133,33 @@ Promoted docs:
 Matching ledger incidents:
 
 - [LI-20260422-05](live-incidents.md#li-20260422-05-transfer-worker-e2e-assumed-one-upload-only-pass-could-not-leave-retryable-transient-work)
+
+## Name-Only Wait Stops The Daemon Mid-Create And Leaves An Empty Placeholder
+
+Current repo policy:
+
+- a new file reaches OneDrive in two requests: the create makes an empty item
+  under the final name, and the content follows by item ID, so `stat` and
+  parent `ls` show the name while the file still has 0 bytes
+- a live test that waits for a file a running `sync --watch` daemon uploads,
+  and then stops the daemon, edits or deletes the file, or changes the remote
+  copy, waits for the size (`waitForRemoteStatSize`,
+  `waitForRemoteStatSizeForDrive`), or for the content
+  (`waitForRemoteFileContent`) when it compares content next or the upload
+  replaces an existing file
+- a size wait proves the upload of a new file only: an overwrite keeps the old
+  content until the new commits, so a change to content of the same length
+  needs the content wait
+- name-only waits (`waitForRemoteReadContains`, parent listings, exact-path and
+  fixture-seed visibility) remain for files written by a command that has
+  already exited (`put`, `cp`, a one-shot `sync`), which has no upload in
+  flight
+
+Promoted docs:
+
+- [system.md](../design/system.md)
+- [drive-transfers.md](../design/drive-transfers.md)
+
+Matching ledger incidents:
+
+- [LI-20261110-01](live-incidents.md#li-20261110-01-a-failed-uploads-cleanup-was-refused-with-412-and-left-an-empty-file-on-onedrive)

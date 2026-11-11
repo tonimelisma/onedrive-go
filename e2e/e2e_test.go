@@ -433,6 +433,10 @@ const remoteDeletePropagationTimeout = 2 * time.Minute
 // follow-up reconcile pass before remote reads settle on the new state.
 const remoteScopeTransitionTimeout = 3 * time.Minute
 
+// daemonPollTimeout is the default timeout for polling in daemon tests.
+// Daemon operations may take longer than one-shot sync due to poll intervals.
+const daemonPollTimeout = 3 * time.Minute
+
 // transientGraphRetryTimeout covers the rare case where a live Graph read-only
 // command hits repeated 502/503/504 gateway failures before succeeding.
 const transientGraphRetryTimeout = 4 * time.Minute

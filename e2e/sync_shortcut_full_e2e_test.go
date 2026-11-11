@@ -265,10 +265,15 @@ func TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget(t *testing.T) {
 	eventsPath := withShortcutWatchDaemon(t, cfgPath, env, fixture.ParentDrive, "--upload-only")
 	waitForDaemonReady(t, eventsPath)
 
+	const uploadContent = "watch local shortcut upload\n"
 	localPath := filepath.Join(syncDir, fixture.ShortcutName, remoteName)
-	require.NoError(t, os.WriteFile(localPath, []byte("watch local shortcut upload\n"), 0o600))
+	require.NoError(t, os.WriteFile(localPath, []byte(uploadContent), 0o600))
 
-	waitForRemoteReadContains(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, remoteName, 3*time.Minute, "stat", remotePath)
+	// Wait for the full size, not only the name: the daemon stops when the
+	// test ends, and stopping it between the create and the content leaves
+	// an empty file in the shared folder (LI-20261110-01).
+	waitForRemoteStatSizeForDrive(
+		t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, remotePath, int64(len(uploadContent)), 3*time.Minute)
 }
 
 // Validates: R-2.8.1

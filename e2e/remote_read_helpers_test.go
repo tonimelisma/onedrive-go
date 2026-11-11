@@ -208,9 +208,8 @@ func waitForRemoteReadContains(
 	)
 }
 
-// waitForRemoteStatSize waits until `stat --json` reports remotePath at
-// size bytes. It reads the JSON document rather than the human "N bytes"
-// text, so the wait cannot break when stat's human formatting changes.
+// waitForRemoteStatSize is waitForRemoteStatSizeForDrive on the drive that env
+// selects, or else on the suite's primary drive.
 func waitForRemoteStatSize(
 	t *testing.T,
 	cfgPath string,
@@ -221,25 +220,59 @@ func waitForRemoteStatSize(
 ) {
 	t.Helper()
 
+	waitForRemoteStatSizeForDrive(t, cfgPath, env, "", remotePath, size, timeout)
+}
+
+// waitForRemoteStatSizeForDrive waits until `stat --json` reports remotePath
+// at size bytes on driveID. This is the wait for a new file a running daemon
+// uploads: the file is created empty under its final name and filled by a
+// second request, so its name is visible while it still has 0 bytes, and a
+// test that stops the daemon on the name alone can stop it between the two
+// requests and leave the empty item behind (LI-20261110-01). The size of a new
+// file changes only when its content commits. An overwrite keeps the old
+// content until the new commits, so a change to content of the same length
+// needs waitForRemoteFileContent instead.
+//
+// It reads the JSON document rather than the human "N bytes" text, so the wait
+// cannot break when stat's human formatting changes.
+func waitForRemoteStatSizeForDrive(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+	size int64,
+	timeout time.Duration,
+) {
+	t.Helper()
+
 	pollRemoteEventually(
 		t,
 		cfgPath,
 		env,
-		"",
+		driveID,
 		timeout,
 		timingKindRemoteWriteVisibility,
 		fmt.Sprintf("remote stat size %d for %s", size, remotePath),
 		func(stdout, _ string, err error) bool {
-			if err != nil {
-				return false
-			}
-			var stat struct {
-				Size int64 `json:"size"`
-			}
-			return json.Unmarshal([]byte(stdout), &stat) == nil && stat.Size == size
+			return remoteStatSizeReady(stdout, err, size)
 		},
 		"--json", "stat", remotePath,
 	)
+}
+
+// remoteStatSizeReady reports whether one `stat --json` attempt answered with
+// the item at exactly size bytes.
+func remoteStatSizeReady(stdout string, err error, size int64) bool {
+	if err != nil {
+		return false
+	}
+
+	var stat struct {
+		Size int64 `json:"size"`
+	}
+
+	return json.Unmarshal([]byte(stdout), &stat) == nil && stat.Size == size
 }
 
 // waitForRemoteExactStatVisible is for tests whose contract is the exact path
@@ -426,11 +459,13 @@ func waitForRemoteDeleteDisappearance(
 	)
 }
 
-// waitForRemoteFileContent waits until a download of remotePath holds exactly
-// want. A visible name proves nothing about the content: a new file is created
-// empty and filled by a second request, so `stat` and `ls` answer while the
-// file still has 0 bytes. A test that stops the daemon on the name alone can
-// stop it between the two requests and then read an empty file (LI-20261110-01).
+// waitForRemoteFileContent waits up to daemonPollTimeout until a download of
+// remotePath, on the drive that env selects or else on the suite's primary
+// drive, holds exactly want. A visible name proves nothing about the content:
+// a new file is created empty and filled by a second request, so `stat` and
+// `ls` answer while the file still has 0 bytes. A test that stops the daemon
+// on the name alone can stop it between the two requests and then read an
+// empty file (LI-20261110-01).
 //
 // Every attempt downloads to the same local path. `get` publishes a download
 // by renaming it over its destination and the content is read only after a
@@ -439,10 +474,8 @@ func waitForRemoteFileContent(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
-	driveID string,
 	remotePath string,
 	want string,
-	timeout time.Duration,
 ) {
 	t.Helper()
 
@@ -451,10 +484,10 @@ func waitForRemoteFileContent(
 		t,
 		cfgPath,
 		env,
-		driveID,
-		timeout,
+		"",
+		daemonPollTimeout,
 		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("remote content of %q", remotePath),
+		fmt.Sprintf("remote content of %q to equal %q", remotePath, want),
 		func(_ string, _ string, err error) bool {
 			if err != nil {
 				return false
@@ -557,6 +590,20 @@ func TestClassifyFixtureSeedVisibilityAttempt(t *testing.T) {
 		"",
 		assert.AnError,
 	))
+}
+
+// The empty item a create leaves before its content is the case the size wait
+// exists to reject (LI-20261110-01).
+func TestRemoteStatSizeReady(t *testing.T) {
+	t.Parallel()
+
+	const contentSize = 21
+
+	assert.True(t, remoteStatSizeReady(`{"name":"a.txt","size":21}`, nil, contentSize))
+	assert.False(t, remoteStatSizeReady(`{"name":"a.txt","size":0}`, nil, contentSize), "the empty item before its content")
+	assert.False(t, remoteStatSizeReady(`{"name":"a.txt","size":21}`, assert.AnError, contentSize), "a failed stat")
+	assert.False(t, remoteStatSizeReady("Size: 21 B (21 bytes)\n", nil, contentSize), "human output instead of JSON")
+	assert.False(t, remoteStatSizeReady("", nil, contentSize), "no output")
 }
 
 func TestDeleteDisappearanceReady(t *testing.T) {
