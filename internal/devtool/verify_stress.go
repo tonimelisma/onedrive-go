@@ -11,17 +11,33 @@ import (
 
 const millisecondsPerSecond = 1000
 
-// stressSyncConcurrencyPattern selects the internal/sync tests that exercise
+// stressSyncTree is the stress lane's sync target: the whole tree, not the one
+// directory, so a package split out of internal/sync stays under stress
+// instead of silently leaving the lane.
+const stressSyncTree = "./internal/sync/..."
+
+// stressSyncConcurrencyPattern selects the sync tests that exercise
 // goroutines, timers, cancellation and shutdown: the watch runtime and
 // observers, the one-shot result loop, the worker pool and the concurrent
-// store and graph tests.
+// store and graph tests. Over the tree, a package with none of them is
+// expected; the step fails only when no package has one.
 const stressSyncConcurrencyPattern = "TestRunWatch|TestWatch|TestOneShot|TestWorkerPool|Shutdown|Drain|Concurren|Cancel"
+
+// goTestActionSkip is the `go test -json` action of a test that skipped.
+const goTestActionSkip = "skip"
 
 type stressCommandSpec struct {
 	stepName         string
 	statusLine       string
 	args             []string
 	collectSlowTests bool
+}
+
+// stressTestKey identifies one test across a package tree: two packages may
+// each hold a test of the same name.
+type stressTestKey struct {
+	pkg  string
+	test string
 }
 
 type stressTestTiming struct {
@@ -35,6 +51,7 @@ type stressTestTiming struct {
 //nolint:tagliatelle // Go owns these capitalized JSON keys.
 type goTestJSONEvent struct {
 	Action  string  `json:"Action"`
+	Package string  `json:"Package"`
 	Test    string  `json:"Test"`
 	Elapsed float64 `json:"Elapsed"`
 }
@@ -47,12 +64,12 @@ func runStress(
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
-	// Repetition goes where the concurrency is. One race iteration of all of
-	// internal/sync takes about six minutes on a CI runner, so fifty no longer
-	// fit any budget; its watch, runtime, shutdown and worker tests (where the
-	// 1-in-50 flakes have come from) take well under a minute and still run
-	// fifty times. Every step shuffles test order, so each repetition also
-	// varies what runs beside what.
+	// Repetition goes where the concurrency is. One race iteration of the
+	// whole sync tree takes about six minutes on a CI runner, so fifty no
+	// longer fit any budget; its watch, runtime, shutdown and worker tests
+	// (where the 1-in-50 flakes have come from) take well under a minute and
+	// still run fifty times. Every step shuffles test order, so each
+	// repetition also varies what runs beside what.
 	stressCommands := []stressCommandSpec{
 		{
 			stepName: "multisync race x50",
@@ -72,8 +89,8 @@ func runStress(
 		{
 			stepName: "sync concurrency race x50",
 			statusLine: fmt.Sprintf(
-				"==> go test -race -count=50 -shuffle=on -timeout=%s -run %s ./internal/sync\n",
-				stressSyncConcurrencyTimeout, stressSyncConcurrencyPattern,
+				"==> go test -race -count=50 -shuffle=on -timeout=%s -run %s %s\n",
+				stressSyncConcurrencyTimeout, stressSyncConcurrencyPattern, stressSyncTree,
 			),
 			args: []string{
 				"test",
@@ -82,14 +99,14 @@ func runStress(
 				"-shuffle=on",
 				"-timeout=" + stressSyncConcurrencyTimeout,
 				"-run", stressSyncConcurrencyPattern,
-				"./internal/sync",
+				stressSyncTree,
 			},
 		},
 		{
 			stepName: "sync race x3",
 			statusLine: fmt.Sprintf(
-				"==> go test -json -race -count=3 -shuffle=on -timeout=%s ./internal/sync\n",
-				stressSyncTimeout,
+				"==> go test -json -race -count=3 -shuffle=on -timeout=%s %s\n",
+				stressSyncTimeout, stressSyncTree,
 			),
 			args: []string{
 				"test",
@@ -98,7 +115,7 @@ func runStress(
 				"-count=3",
 				"-shuffle=on",
 				"-timeout=" + stressSyncTimeout,
-				"./internal/sync",
+				stressSyncTree,
 			},
 			collectSlowTests: true,
 		},
@@ -136,11 +153,31 @@ func runStressCommand(
 	if err := writeStatus(stdout, command.statusLine); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", command.args...); err != nil {
+
+	// A step with a -run pattern is a targeted step, and a pattern that
+	// matches nothing anywhere in the tree must fail it: go test exits 0.
+	var err error
+	if hasRunPattern(command.args) {
+		err = runGoTestMatchingTree(ctx, runner, repoRoot, env, stdout, stderr, command.stepName, command.args...)
+	} else {
+		err = runner.Run(ctx, repoRoot, env, stdout, stderr, "go", command.args...)
+	}
+	if err != nil {
 		return fmt.Errorf("stress tests: %w", err)
 	}
 
 	return nil
+}
+
+// hasRunPattern reports whether go test arguments select tests with -run.
+func hasRunPattern(args []string) bool {
+	for _, arg := range args {
+		if arg == "-run" || strings.HasPrefix(arg, "-run=") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func runStressCommandWithSlowTests(
@@ -174,8 +211,10 @@ func runStressCommandWithSlowTests(
 	return slowTests, nil
 }
 
+// summarizeStressSlowTests totals the completed tests of `go test -json`
+// output by package and test, slowest first.
 func summarizeStressSlowTests(output []byte, limit int) []StressSlowTestSummary {
-	totals := make(map[string]*stressTestTiming)
+	totals := make(map[stressTestKey]*stressTestTiming)
 
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
@@ -195,10 +234,11 @@ func summarizeStressSlowTests(output []byte, limit int) []StressSlowTestSummary 
 		}
 
 		elapsedMS := durationMSFromSeconds(event.Elapsed)
-		timing := totals[event.Test]
+		key := stressTestKey{pkg: event.Package, test: event.Test}
+		timing := totals[key]
 		if timing == nil {
 			timing = &stressTestTiming{}
-			totals[event.Test] = timing
+			totals[key] = timing
 		}
 
 		timing.runs++
@@ -209,9 +249,10 @@ func summarizeStressSlowTests(output []byte, limit int) []StressSlowTestSummary 
 	}
 
 	summaries := make([]StressSlowTestSummary, 0, len(totals))
-	for test, timing := range totals {
+	for key, timing := range totals {
 		summaries = append(summaries, StressSlowTestSummary{
-			Test:           test,
+			Package:        key.pkg,
+			Test:           key.test,
 			Runs:           timing.runs,
 			TotalElapsedMS: timing.totalElapsedMS,
 			MaxElapsedMS:   timing.maxElapsedMS,
@@ -224,6 +265,9 @@ func summarizeStressSlowTests(output []byte, limit int) []StressSlowTestSummary 
 		}
 		if summaries[i].MaxElapsedMS != summaries[j].MaxElapsedMS {
 			return summaries[i].MaxElapsedMS > summaries[j].MaxElapsedMS
+		}
+		if summaries[i].Package != summaries[j].Package {
+			return summaries[i].Package < summaries[j].Package
 		}
 
 		return summaries[i].Test < summaries[j].Test
@@ -250,7 +294,7 @@ func writeStressSlowTestSummary(w io.Writer, slowTests []StressSlowTestSummary) 
 			w,
 			fmt.Sprintf(
 				"  %s runs=%d total=%s max=%s\n",
-				slow.Test,
+				slow.name(),
 				slow.Runs,
 				formatDurationMS(slow.TotalElapsedMS),
 				formatDurationMS(slow.MaxElapsedMS),
@@ -261,6 +305,16 @@ func writeStressSlowTestSummary(w io.Writer, slowTests []StressSlowTestSummary) 
 	}
 
 	return nil
+}
+
+// name is the test's package and name, so tests of one name in two packages
+// of the tree read apart. A summary without a package prints the test alone.
+func (s StressSlowTestSummary) name() string {
+	if s.Package == "" {
+		return s.Test
+	}
+
+	return s.Package + " " + s.Test
 }
 
 func durationMSFromSeconds(seconds float64) int64 {

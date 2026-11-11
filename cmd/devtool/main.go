@@ -12,8 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/devtool"
 )
 
-const defaultCoverageThreshold = 75.5
-
 type cwdLookup func() (string, error)
 
 type verifyFunc func(context.Context, *devtool.VerifyOptions) error
@@ -190,11 +188,13 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 
 // registerProfileFlags registers the flags of the verification profiles.
 func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
+	// The default is 0, not a number: the number lives only in requirement
+	// R-6.10.4, and the verifier reads it from there.
 	cmd.Flags().Float64Var(
 		&f.coverageThreshold,
 		"coverage-threshold",
-		defaultCoverageThreshold,
-		"minimum total coverage percentage; negative reports coverage without gating",
+		0,
+		"minimum total coverage percentage; 0 uses the number requirement R-6.10.4 states, negative reports coverage without gating",
 	)
 	cmd.Flags().StringVar(&f.coverageFile, "coverage-file", "", "coverage profile path")
 	cmd.Flags().StringVar(

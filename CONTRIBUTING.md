@@ -45,8 +45,11 @@ go run ./cmd/devtool verify default
 
 It runs formatting, lint, build (including the cross-compiled platforms), the
 unit tests with the race detector and coverage gate, the repo's documentation
-and traceability checks, and the fast live E2E suite. The live suites need
-test accounts; see "E2E & Integration Tests" in [CLAUDE.md](CLAUDE.md).
+and traceability checks, and the fast live E2E suite. Coverage is measured
+across packages (`-coverpkg=./...`), and the gate's number is written only in
+requirement R-6.10.4, which devtool reads; to change the number, change that
+line. The live suites need test accounts; see "E2E & Integration Tests" in
+[CLAUDE.md](CLAUDE.md).
 Contributors without test accounts can run `go run ./cmd/devtool verify public`,
 which is the same without the live suite.
 
@@ -56,7 +59,8 @@ the builds and `go test -short`, split into shards with `--shard k/n`) on
 Linux plus `verify platform` (host build and the same short tier) on macOS. `-short` skips the tests marked exhaustive (randomized
 model runs, replays, the reverse-dispatch re-run of every scenario, the
 reconcile matrix); the race detector and the coverage gate do not run there.
-The full tier (`verify public` on both platforms, `stress` and the full live
+The full tier (`verify public` on both platforms, `stress` over
+`./internal/multisync` and the `./internal/sync/...` tree, and the full live
 suite) runs nightly and on manual dispatch, so a data race or a coverage
 drop can reach `main` and be caught by the next nightly run. Before a PR,
 `go run ./cmd/devtool verify pr` (lint, then quick) is the local gate, and it
