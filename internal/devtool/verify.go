@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ const (
 
 	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
+	VerifyPR          VerifyProfile = "pr"
 	VerifyQuick       VerifyProfile = "quick"
 	VerifyLint        VerifyProfile = "lint"
 	VerifyPlatform    VerifyProfile = "platform"
@@ -65,11 +67,16 @@ const (
 )
 
 type VerifyOptions struct {
-	RepoRoot           string
-	Profile            VerifyProfile
-	CoverageThreshold  float64
-	CoverageFile       string
-	Shard              string
+	RepoRoot string
+	// Profile is the profile to run. Empty means the caller named none: a plain
+	// run then uses `default`, and the DoD pre-pr stage uses `pr`.
+	Profile           VerifyProfile
+	CoverageThreshold float64
+	CoverageFile      string
+	Shard             string
+	// UnitTimeout is go test's per-package deadline in the full race tier.
+	// Zero derives it from the cores this process may use.
+	UnitTimeout        time.Duration
 	E2ELogDir          string
 	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
@@ -80,10 +87,15 @@ type VerifyOptions struct {
 	DODCommentManifest string
 	DODWorktree        string
 	DODBranch          string
-	DODCITimeout       time.Duration
-	FailedTestLog      string
-	Stdout             io.Writer
-	Stderr             io.Writer
+	// DODCITimeout is the hard cap on one DoD CI wait. Zero allows one stall
+	// window for the first attempt and one for every rerun.
+	DODCITimeout time.Duration
+	// DODCIMaxReruns is how many times one DoD CI wait may rerun the canceled
+	// jobs of the head commit's run. Zero reruns nothing.
+	DODCIMaxReruns int
+	FailedTestLog  string
+	Stdout         io.Writer
+	Stderr         io.Writer
 }
 
 type VerifySummary struct {
@@ -179,12 +191,26 @@ func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (
 	return runVerifyProfile(ctx, runner, opts)
 }
 
-func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
+func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOptions) error {
+	return runVerifyProfileWithEnv(ctx, runner, opts, os.Environ())
+}
+
+// runVerifyProfileWithEnv runs one verify profile with baseEnv as the
+// environment of every command it starts, plus the Go toolchain go.mod pins
+// when baseEnv does not choose one itself.
+func runVerifyProfileWithEnv(
+	ctx context.Context, runner commandRunner, opts *VerifyOptions, baseEnv []string,
+) (runErr error) {
 	if opts == nil {
 		return fmt.Errorf("verify options are required")
 	}
 
-	plan, err := resolveVerifyPlan(opts.Profile)
+	profile := opts.Profile
+	if profile == "" {
+		profile = VerifyDefault
+	}
+
+	plan, err := resolveVerifyPlan(profile)
 	if err != nil {
 		return err
 	}
@@ -192,10 +218,15 @@ func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOpt
 	if err != nil {
 		return err
 	}
+	toolchain, err := pinnedGoToolchain(opts.RepoRoot)
+	if err != nil {
+		return err
+	}
+	env := withPinnedToolchain(baseEnv, toolchain)
 
 	stdout, stderr := resolveVerifyWriters(opts)
 	effectiveE2ELogDir := resolvedE2ELogDir(opts.E2ELogDir, plan)
-	collector := newVerifySummaryCollector(opts.Profile, stdout, opts.SummaryJSONPath, effectiveE2ELogDir)
+	collector := newVerifySummaryCollector(profile, stdout, opts.SummaryJSONPath, effectiveE2ELogDir)
 	defer func() {
 		if finalizeErr := collector.finalize(runErr); finalizeErr != nil {
 			if runErr == nil {
@@ -220,7 +251,6 @@ func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOpt
 		}
 	}()
 
-	env := os.Environ()
 	if err := runPublicVerification(
 		ctx,
 		runner,
@@ -231,6 +261,7 @@ func runVerifyProfile(ctx context.Context, runner commandRunner, opts *VerifyOpt
 		stderr,
 		coverageFile,
 		coverageThreshold,
+		resolveUnitTestTimeout(opts.UnitTimeout, runtime.GOMAXPROCS(0)),
 		plan,
 	); err != nil {
 		return err
@@ -254,6 +285,11 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 	case VerifyPublic:
 		return verifyPlan{
 			runPublicChecks: true,
+		}, nil
+	case VerifyPR:
+		return verifyPlan{
+			runLint:        true,
+			runQuickChecks: true,
 		}, nil
 	case VerifyQuick:
 		return verifyPlan{
@@ -340,6 +376,7 @@ func runPublicVerification(
 	stdout, stderr io.Writer,
 	coverageFile string,
 	coverageThreshold float64,
+	unitTimeout time.Duration,
 	plan verifyPlan,
 ) error {
 	if !plan.runPublicChecks {
@@ -354,7 +391,7 @@ func runPublicVerification(
 	}
 
 	if err := collector.runStep("unit tests", func() error {
-		return runUnitTests(ctx, runner, repoRoot, env, coverageFile, stdout, stderr)
+		return runUnitTests(ctx, runner, repoRoot, env, coverageFile, unitTimeout, stdout, stderr)
 	}); err != nil {
 		return err
 	}
@@ -476,7 +513,7 @@ func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []s
 	if err := writeStatus(stdout, "==> golangci-lint\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := assertLintVersionMatchesCI(ctx, runner, repoRoot); err != nil {
+	if err := assertLintVersionMatchesCI(ctx, runner, repoRoot, env); err != nil {
 		return err
 	}
 	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "golangci-lint", "run", "--allow-parallel-runners"); err != nil {
@@ -536,6 +573,7 @@ func runUnitTests(
 	repoRoot string,
 	env []string,
 	coverageFile string,
+	timeout time.Duration,
 	stdout, stderr io.Writer,
 ) error {
 	if err := writeStatus(stdout, "==> go test -race -coverprofile\n"); err != nil {
@@ -554,7 +592,7 @@ func runUnitTests(
 		// -race on a CI macOS runner came within seconds of the default and
 		// then past it. A deadline with headroom fails a real hang, not a
 		// slow runner.
-		"-timeout="+unitTestTimeout,
+		"-timeout="+timeout.String(),
 		"-coverprofile="+coverageFile,
 		"./...",
 	); err != nil {
@@ -564,9 +602,47 @@ func runUnitTests(
 	return nil
 }
 
-// unitTestTimeout is go test's per-package deadline in the full verify
-// profiles (race detector on, every exhaustive test running).
-const unitTestTimeout = "20m"
+const (
+	// unitTestBaseTimeout is go test's per-package deadline in the full verify
+	// profiles (race detector on, every exhaustive test running) on a host
+	// with at least unitTestReferenceCores cores.
+	unitTestBaseTimeout = 20 * time.Minute
+
+	// unitTestReferenceCores is the core count the base deadline was set on:
+	// GitHub's macOS runner, which has 3 cores and is where internal/sync
+	// under -race outgrew go test's 10-minute default. The verify-full job's
+	// timeout-minutes sits above the base deadline; a larger reference would
+	// push the macOS deadline past it and let the job, not go test, end a
+	// hang, without the goroutine dump.
+	unitTestReferenceCores = 3
+)
+
+// unitTestTimeoutForCores scales the full tier's go test deadline to the cores
+// the run may use. The race tier is CPU-bound, so a host with fewer cores than
+// the reference needs proportionally longer: a fixed deadline that fits a CI
+// runner fails a healthy run on a 2-core host. The multiplier is
+// ceil(reference / cores), which is never below one, so more cores than the
+// reference do not shorten the deadline a real hang is measured against.
+func unitTestTimeoutForCores(cores int) time.Duration {
+	if cores < 1 {
+		cores = 1
+	}
+
+	// Integer ceiling of reference/cores.
+	multiplier := (unitTestReferenceCores + cores - 1) / cores
+
+	return unitTestBaseTimeout * time.Duration(multiplier)
+}
+
+// resolveUnitTestTimeout returns the explicit deadline (`--unit-timeout`) when
+// one was given, else the deadline scaled to cores.
+func resolveUnitTestTimeout(explicit time.Duration, cores int) time.Duration {
+	if explicit > 0 {
+		return explicit
+	}
+
+	return unitTestTimeoutForCores(cores)
+}
 
 // verifyStep is one named step of a verify profile, recorded in the summary
 // under its name.

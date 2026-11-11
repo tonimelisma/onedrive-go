@@ -21,8 +21,13 @@ import (
 
 const testRepoRoot = "/repo"
 
-// Validates: R-6.10.1
-func TestNewVerifyCmdDefaultsToDefaultProfile(t *testing.T) {
+// Validates: R-6.10.1, R-6.10.16
+//
+// With no profile argument the command names none, and the verifier picks the
+// default of what it is asked to run: `default` for a plain verify, `pr` for
+// the DoD pre-pr stage. Filling in `default` here would make that stage run
+// the full tier on every host.
+func TestNewVerifyCmdLeavesTheProfileToTheVerifierByDefault(t *testing.T) {
 	t.Parallel()
 
 	var got devtool.VerifyOptions
@@ -41,11 +46,13 @@ func TestNewVerifyCmdDefaultsToDefaultProfile(t *testing.T) {
 
 	require.NoError(t, cmd.Execute())
 	assert.Equal(t, testRepoRoot, got.RepoRoot)
-	assert.Equal(t, devtool.VerifyDefault, got.Profile)
+	assert.Empty(t, got.Profile)
 	assert.InDelta(t, defaultCoverageThreshold, got.CoverageThreshold, 0.001)
 	assert.False(t, got.DOD)
 	assert.Equal(t, devtool.DefaultDODRecentMerged, got.DODRecentMerged)
-	assert.Equal(t, devtool.DefaultDODCITimeout, got.DODCITimeout)
+	assert.Zero(t, got.DODCITimeout, "no hard cap given: the wait derives one from the stall window")
+	assert.Equal(t, devtool.DefaultDODCIMaxReruns, got.DODCIMaxReruns)
+	assert.Zero(t, got.UnitTimeout, "no deadline given: the verifier scales it with the host's cores")
 }
 
 // Validates: R-6.10.1
@@ -80,6 +87,8 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--worktree", "/tmp/wt",
 		"--branch", "feat/dod",
 		"--ci-timeout", "45m",
+		"--ci-max-reruns", "1",
+		"--unit-timeout", "50m",
 		"--failed-log", "/tmp/ci.log",
 	})
 
@@ -99,6 +108,8 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, "/tmp/wt", got.DODWorktree)
 	assert.Equal(t, "feat/dod", got.DODBranch)
 	assert.Equal(t, 45*time.Minute, got.DODCITimeout)
+	assert.Equal(t, 1, got.DODCIMaxReruns)
+	assert.Equal(t, 50*time.Minute, got.UnitTimeout)
 	assert.Equal(t, "/tmp/ci.log", got.FailedTestLog)
 }
 
@@ -473,7 +484,7 @@ func TestDevtoolBinary_VerifyRejectsUnknownProfile(t *testing.T) {
 
 	_, stderr, err := runBinary(t, t.TempDir(), binPath, "verify", "weird")
 	require.Error(t, err)
-	assert.Contains(t, stderr, "usage: devtool verify [default|public|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]")
+	assert.Contains(t, stderr, "usage: devtool verify [default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]")
 }
 
 // Validates: R-6.10.21

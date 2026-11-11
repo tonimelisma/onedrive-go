@@ -110,31 +110,38 @@ func newNightlyCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
 	return cmd
 }
 
+// verifyFlags holds the values of the verify command's flags.
+type verifyFlags struct {
+	coverageThreshold  float64
+	coverageFile       string
+	shard              string
+	e2eLogDir          string
+	summaryJSONPath    string
+	classifyLiveQuirks bool
+	dod                bool
+	dodStage           string
+	dodPR              int
+	dodRecentMerged    int
+	dodCommentManifest string
+	dodWorktree        string
+	dodBranch          string
+	dodCITimeout       time.Duration
+	dodCIMaxReruns     int
+	unitTimeout        time.Duration
+	failedTestLog      string
+}
+
 func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
-	var (
-		coverageThreshold  float64
-		coverageFile       string
-		shard              string
-		e2eLogDir          string
-		summaryJSONPath    string
-		classifyLiveQuirks bool
-		dod                bool
-		dodStage           string
-		dodPR              int
-		dodRecentMerged    int
-		dodCommentManifest string
-		dodWorktree        string
-		dodBranch          string
-		dodCITimeout       time.Duration
-		failedTestLog      string
-	)
+	flags := &verifyFlags{}
 
 	cmd := &cobra.Command{
-		Use:   "verify [default|public|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]",
+		Use:   "verify [default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]",
 		Short: "Run repository verification profiles",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			profile := devtool.VerifyDefault
+			// No argument names no profile: the verifier picks `default` for
+			// a plain run and `pr` for the DoD pre-pr stage.
+			var profile devtool.VerifyProfile
 			if len(args) == 1 {
 				profile = devtool.VerifyProfile(args[0])
 			}
@@ -144,62 +151,96 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 				return fmt.Errorf("get working directory: %w", err)
 			}
 
-			return runVerify(cmd.Context(), &devtool.VerifyOptions{
-				RepoRoot:           repoRoot,
-				Profile:            profile,
-				CoverageThreshold:  coverageThreshold,
-				CoverageFile:       coverageFile,
-				Shard:              shard,
-				E2ELogDir:          e2eLogDir,
-				SummaryJSONPath:    summaryJSONPath,
-				ClassifyLiveQuirks: classifyLiveQuirks,
-				DOD:                dod,
-				DODStage:           devtool.DODStage(dodStage),
-				DODPR:              dodPR,
-				DODRecentMerged:    dodRecentMerged,
-				DODCommentManifest: dodCommentManifest,
-				DODWorktree:        dodWorktree,
-				DODBranch:          dodBranch,
-				DODCITimeout:       dodCITimeout,
-				FailedTestLog:      failedTestLog,
-				Stdout:             cmd.OutOrStdout(),
-				Stderr:             cmd.ErrOrStderr(),
-			})
+			return runVerify(cmd.Context(), flags.options(cmd, repoRoot, profile))
 		},
 	}
 
+	flags.registerProfileFlags(cmd)
+	flags.registerDODFlags(cmd)
+
+	return cmd
+}
+
+// options turns the parsed flags into the verifier's options.
+func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devtool.VerifyProfile) *devtool.VerifyOptions {
+	return &devtool.VerifyOptions{
+		RepoRoot:           repoRoot,
+		Profile:            profile,
+		CoverageThreshold:  f.coverageThreshold,
+		CoverageFile:       f.coverageFile,
+		Shard:              f.shard,
+		UnitTimeout:        f.unitTimeout,
+		E2ELogDir:          f.e2eLogDir,
+		SummaryJSONPath:    f.summaryJSONPath,
+		ClassifyLiveQuirks: f.classifyLiveQuirks,
+		DOD:                f.dod,
+		DODStage:           devtool.DODStage(f.dodStage),
+		DODPR:              f.dodPR,
+		DODRecentMerged:    f.dodRecentMerged,
+		DODCommentManifest: f.dodCommentManifest,
+		DODWorktree:        f.dodWorktree,
+		DODBranch:          f.dodBranch,
+		DODCITimeout:       f.dodCITimeout,
+		DODCIMaxReruns:     f.dodCIMaxReruns,
+		FailedTestLog:      f.failedTestLog,
+		Stdout:             cmd.OutOrStdout(),
+		Stderr:             cmd.ErrOrStderr(),
+	}
+}
+
+// registerProfileFlags registers the flags of the verification profiles.
+func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 	cmd.Flags().Float64Var(
-		&coverageThreshold,
+		&f.coverageThreshold,
 		"coverage-threshold",
 		defaultCoverageThreshold,
 		"minimum total coverage percentage; negative reports coverage without gating",
 	)
-	cmd.Flags().StringVar(&coverageFile, "coverage-file", "", "coverage profile path")
+	cmd.Flags().StringVar(&f.coverageFile, "coverage-file", "", "coverage profile path")
 	cmd.Flags().StringVar(
-		&shard,
+		&f.shard,
 		"shard",
 		"",
-		"run one slice of the quick or platform profile's short unit tier, as index/count (for example 1/2)",
+		"run one slice of the pr, quick or platform profile's short unit tier, as index/count (for example 1/2)",
 	)
-	cmd.Flags().StringVar(&e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
-	cmd.Flags().StringVar(&summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
-	cmd.Flags().BoolVar(&dod, "dod", false, "run Definition of Done automation instead of the selected verification profile")
-	cmd.Flags().StringVar(&dodStage, "stage", "", "DoD stage: start, pre-pr, pre-merge, or post-merge")
-	cmd.Flags().IntVar(&dodPR, "pr", 0, "GitHub pull request number for DoD PR stages")
-	cmd.Flags().IntVar(&dodRecentMerged, "recent-merged", devtool.DefaultDODRecentMerged, "merged PR count for DoD review-thread audits")
-	cmd.Flags().StringVar(&dodCommentManifest, "comment-manifest", "", "DoD PR review-thread manifest path")
-	cmd.Flags().StringVar(&dodWorktree, "worktree", "", "increment worktree path for DoD post-merge cleanup")
-	cmd.Flags().StringVar(&dodBranch, "branch", "", "increment branch name: owns nightly claims at DoD start, cleaned up at post-merge")
-	cmd.Flags().DurationVar(&dodCITimeout, "ci-timeout", devtool.DefaultDODCITimeout, "maximum time to wait for DoD CI checks")
-	cmd.Flags().StringVar(&failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
+	cmd.Flags().DurationVar(
+		&f.unitTimeout,
+		"unit-timeout",
+		0,
+		"go test deadline of the full race tier; default 20m, longer on hosts with fewer cores than the CI runners",
+	)
+	cmd.Flags().StringVar(&f.e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
+	cmd.Flags().StringVar(&f.summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
+	cmd.Flags().StringVar(&f.failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
 	cmd.Flags().BoolVar(
-		&classifyLiveQuirks,
+		&f.classifyLiveQuirks,
 		"classify-live-quirks",
 		false,
 		"rerun narrow known live-provider quirk failures once during verification",
 	)
+}
 
-	return cmd
+// registerDODFlags registers the flags of the Definition of Done stages.
+func (f *verifyFlags) registerDODFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&f.dod, "dod", false, "run Definition of Done automation instead of the selected verification profile")
+	cmd.Flags().StringVar(&f.dodStage, "stage", "", "DoD stage: start, pre-pr, pre-merge, or post-merge")
+	cmd.Flags().IntVar(&f.dodPR, "pr", 0, "GitHub pull request number for DoD PR stages")
+	cmd.Flags().IntVar(&f.dodRecentMerged, "recent-merged", devtool.DefaultDODRecentMerged, "merged PR count for DoD review-thread audits")
+	cmd.Flags().StringVar(&f.dodCommentManifest, "comment-manifest", "", "DoD PR review-thread manifest path")
+	cmd.Flags().StringVar(&f.dodWorktree, "worktree", "", "increment worktree path for DoD post-merge cleanup")
+	cmd.Flags().StringVar(&f.dodBranch, "branch", "", "increment branch name: owns nightly claims at DoD start, cleaned up at post-merge")
+	cmd.Flags().DurationVar(
+		&f.dodCITimeout,
+		"ci-timeout",
+		0,
+		"hard cap on one DoD CI wait; default one stall window (longest job timeout in ci.yml plus 10m) per allowed attempt",
+	)
+	cmd.Flags().IntVar(
+		&f.dodCIMaxReruns,
+		"ci-max-reruns",
+		devtool.DefaultDODCIMaxReruns,
+		"times one DoD CI wait reruns the canceled jobs of the commit it waits for; 0 turns reruns off",
+	)
 }
 
 func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {

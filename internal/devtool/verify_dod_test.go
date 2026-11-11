@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -328,29 +329,34 @@ func TestDODPreMergeStatusSummariesIncludeResolutionEvidenceCounts(t *testing.T)
 func TestDODPRCIClassification(t *testing.T) {
 	t.Parallel()
 
-	status, reason := classifyPRChecks([]prCheckRun{
+	snapshot := classifyPRChecks([]prCheckRun{
 		{Name: "verify", Status: "COMPLETED", Conclusion: "SUCCESS"},
 		{Name: "integration", Status: "COMPLETED", Conclusion: "SUCCESS"},
 		{Name: "e2e", Status: "COMPLETED", Conclusion: "SUCCESS"},
 		{Name: "stress", Status: "COMPLETED", Conclusion: "SKIPPED"},
 	})
-	assert.Equal(t, prCheckStatePass, status)
-	assert.Contains(t, reason, "passed")
+	assert.Equal(t, prCheckStatePass, snapshot.state)
+	assert.Contains(t, snapshot.reason, "passed")
 
-	status, reason = classifyPRChecks([]prCheckRun{
+	snapshot = classifyPRChecks([]prCheckRun{
 		{Name: "verify", Status: "COMPLETED", Conclusion: "SUCCESS"},
-		{Name: "integration", Status: "COMPLETED", Conclusion: "SKIPPED"},
+		{
+			Name: "integration", Status: "COMPLETED", Conclusion: "SKIPPED",
+			DetailsURL: "https://github.com/o/r/actions/runs/111/job/5",
+		},
 		{Name: "e2e", Status: "COMPLETED", Conclusion: "SUCCESS"},
 	})
-	assert.Equal(t, prCheckStateFail, status)
-	assert.Contains(t, reason, "integration concluded skipped")
+	assert.Equal(t, prCheckStateFail, snapshot.state)
+	assert.Contains(t, snapshot.reason, "integration concluded skipped")
+	assert.Zero(t, snapshot.failedRunID, "a skipped required check is a decision, not a cancellation to rerun")
 }
 
 // Validates: R-6.10.16
 func TestDODPostMergeCIClassificationRejectsSkippedPushRun(t *testing.T) {
 	t.Parallel()
 
-	status, reason := classifyPostMergeRuns([]githubRun{{
+	snapshot := classifyPostMergeRuns([]githubRun{{
+		DatabaseID: 222,
 		Name:       "CI",
 		Event:      "push",
 		Status:     checkStatusCompleted,
@@ -358,18 +364,78 @@ func TestDODPostMergeCIClassificationRejectsSkippedPushRun(t *testing.T) {
 		HeadSHA:    "merge-sha",
 	}}, "merge-sha")
 
-	assert.Equal(t, prCheckStateFail, status)
-	assert.Contains(t, reason, "every push to main must run the quick lane")
+	assert.Equal(t, prCheckStateFail, snapshot.state)
+	assert.Contains(t, snapshot.reason, "every push to main must run the quick lane")
+	assert.Zero(t, snapshot.failedRunID, "a skipped push run has no canceled job to rerun")
 
-	status, reason = classifyPostMergeRuns([]githubRun{{
+	snapshot = classifyPostMergeRuns([]githubRun{{
 		Name:       "CI",
 		Event:      "push",
 		Status:     checkStatusCompleted,
 		Conclusion: checkConclusionSuccess,
 		HeadSHA:    "merge-sha",
 	}}, "merge-sha")
-	assert.Equal(t, prCheckStatePass, status)
-	assert.Contains(t, reason, "succeeded")
+	assert.Equal(t, prCheckStatePass, snapshot.state)
+	assert.Contains(t, snapshot.reason, "succeeded")
+}
+
+// Validates: R-6.10.16
+//
+// The full race tier cannot finish inside its deadline on a two-core host, so
+// a pre-pr stage that demanded it could not be run where the work happens.
+// The stage's default is the profile such a host can finish; CI stays the
+// full gate.
+func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRequirementsBackedReadme(t, repoRoot)
+	runner := &fakeRunner{}
+	stdout := &bytes.Buffer{}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: repoRoot,
+		DOD:      true,
+		DODStage: DODStagePrePR,
+		Stdout:   stdout,
+		Stderr:   &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
+	expected = append(expected, "git fetch origin", "git merge-base --is-ancestor")
+	assert.Equal(t, expected, recordedCommandSequence(runner))
+	assert.Empty(t, runner.outputCommands, "the pr profile reports no coverage")
+	assert.Contains(t, stdout.String(), "dod pre-pr:")
+}
+
+// Validates: R-6.10.16
+func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRequirementsBackedReadme(t, repoRoot)
+	coverageFile := filepath.Join(repoRoot, "cover.out")
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"go tool cover -func=" + coverageFile: []byte("total:\t(statements)\t76.5%\n"),
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:          repoRoot,
+		Profile:           VerifyDefault,
+		CoverageThreshold: 76.0,
+		CoverageFile:      coverageFile,
+		DOD:               true,
+		DODStage:          DODStagePrePR,
+		Stdout:            &bytes.Buffer{},
+		Stderr:            &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, verifyDefaultCommandCount+2, "the full tier, then the rebase check")
+	assert.Equal(t, "-race", runner.runCommands[cmdUnitTests].args[1])
 }
 
 // Validates: R-6.10.16

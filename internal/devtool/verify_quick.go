@@ -9,7 +9,7 @@ import (
 )
 
 // verifyProfileUsage lists every verify profile for the usage line.
-const verifyProfileUsage = "default|public|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test"
+const verifyProfileUsage = "default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test"
 
 // shortUnitTestTimeout is go test's per-package deadline in the short unit
 // tier: no race detector and no exhaustive tests, so a package that takes
@@ -70,13 +70,13 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 		return verifyShard{}, nil
 	}
 	if !plan.runQuickChecks && !plan.runPlatformChecks {
-		return verifyShard{}, fmt.Errorf("--shard applies to the quick and platform profiles only")
+		return verifyShard{}, fmt.Errorf("--shard applies to the pr, quick and platform profiles only")
 	}
 
 	return parseVerifyShard(spec)
 }
 
-// runPRLaneVerification runs the per-PR CI profiles.
+// runPRLaneVerification runs the per-PR profiles.
 //
 //   - quick: format, the repository rules, the host and cross-platform builds,
 //     the tagged vets, then the short unit tier. No lint (its own CI job), no
@@ -86,9 +86,13 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 //   - platform: the host build and the short unit tier, nothing else: the
 //     secondary-OS leg exists to catch darwin-only build and behavior
 //     breakage, and the repository rules are platform-independent.
+//   - pr: lint, then quick. It is what CI's required check runs on Linux, in
+//     one local command, and what the DoD pre-pr stage runs by default: a host
+//     too small for the race tier can still finish it.
 //
 // The race detector, the coverage gate, the compile guard and the exhaustive
-// tests stay in default and public, which the local gate and nightly CI run.
+// tests stay in default and public, which nightly CI runs and which remain
+// selectable locally.
 func runPRLaneVerification(
 	ctx context.Context,
 	runner commandRunner,
@@ -100,22 +104,24 @@ func runPRLaneVerification(
 	shard verifyShard,
 ) error {
 	var steps []verifyStep
+	if plan.runLint {
+		steps = append(steps, verifyStep{"lint", runLint})
+	}
 	switch {
 	case plan.runQuickChecks:
-		steps = []verifyStep{{"format", runFormat}}
+		steps = append(steps, verifyStep{"format", runFormat})
 		steps = append(steps, repoRuleSteps()...)
 		steps = append(steps, verifyStep{"build", runBuild}, verifyStep{"tagged vet", runTaggedVet})
-	case plan.runLint:
-		steps = []verifyStep{{"lint", runLint}}
 	case plan.runPlatformChecks:
-		steps = []verifyStep{{"build", runHostBuild}}
-	default:
+		steps = append(steps, verifyStep{"build", runHostBuild})
+	}
+	if len(steps) == 0 {
 		return nil
 	}
 	if err := runVerifySteps(ctx, runner, repoRoot, env, collector, stdout, stderr, steps); err != nil {
 		return err
 	}
-	if plan.runLint {
+	if !plan.runQuickChecks && !plan.runPlatformChecks {
 		return nil
 	}
 

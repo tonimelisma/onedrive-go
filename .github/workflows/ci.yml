@@ -40,8 +40,9 @@ permissions:
 # platforms (race detector, coverage gate, every exhaustive test), `stress`,
 # and the live `e2e-full` profile. A data race or a coverage drop can
 # therefore reach main and be caught by the next nightly run; that is the
-# trade-off for a three-minute PR lane. Locally, `verify default` remains the
-# gate and still runs the full unit tier.
+# trade-off for a three-minute PR lane. Locally, the DoD pre-pr stage runs the
+# `pr` profile (lint, then quick), and `verify default` still runs the full
+# unit tier.
 #
 # The live jobs (`integration`, `e2e`) run on pull requests, dispatch and the
 # schedule, never on push to main: their shared test accounts serialize runs,
