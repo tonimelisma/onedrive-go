@@ -37,12 +37,13 @@ permissions:
 # minutes.
 #
 # The full tier runs nightly and on manual dispatch: `verify public` on both
-# platforms (race detector, coverage gate, every exhaustive test), `stress`,
-# and the live `e2e-full` profile. A data race or a coverage drop can
-# therefore reach main and be caught by the next nightly run; that is the
-# trade-off for a three-minute PR lane. Locally, the DoD pre-pr stage runs the
-# `pr` profile (lint, then quick), and `verify default` still runs the full
-# unit tier.
+# platforms (race detector, the coverage gate at the number R-6.10.4 states,
+# every exhaustive test), `stress` (race repetition of ./internal/multisync
+# and the ./internal/sync/... tree), and the live `e2e-full` profile. A data
+# race or a coverage drop can therefore reach main and be caught by the next
+# nightly run; that is the trade-off for a three-minute PR lane. Locally, the
+# DoD pre-pr stage runs the `pr` profile (lint, then quick), and
+# `verify default` still runs the full unit tier.
 #
 # The live jobs (`integration`, `e2e`) run on pull requests, dispatch and the
 # schedule, never on push to main: their shared test accounts serialize runs,
@@ -165,14 +166,18 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-      # The coverage gate is a single authoritative number, so only the Linux
+      # The coverage gate is a single authoritative number, measured across
+      # packages (-coverpkg=./...) and stated only in requirement R-6.10.4,
+      # which devtool reads; this file carries no copy of it. Only the Linux
       # leg enforces it. The macOS leg runs the same suite with coverage
       # reported but not gated: it compiles a different build-tagged file set
-      # and would legitimately land on a different percentage.
+      # and would legitimately land on a different percentage. The condition
+      # is written with != on purpose: `cond && '' || 'x'` yields 'x' when cond
+      # is true, because the empty string is falsy.
       - name: Verify public
         env:
-          COVERAGE_THRESHOLD: ${{ matrix.os == 'ubuntu-latest' && '76.0' || '-1' }}
-        run: go run ./cmd/devtool verify public --coverage-threshold "${COVERAGE_THRESHOLD}"
+          COVERAGE_ARGS: ${{ matrix.os != 'ubuntu-latest' && '--coverage-threshold -1' || '' }}
+        run: go run ./cmd/devtool verify public ${COVERAGE_ARGS}
 
   # Branch protection requires a check literally named "verify". Pointing it at
   # a matrix job does not work: the legs report as "verify-unit (ubuntu-latest,

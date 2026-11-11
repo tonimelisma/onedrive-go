@@ -3,6 +3,7 @@ package devtool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -32,13 +33,16 @@ type fakeRunner struct {
 	combinedOutputs     map[string][]byte
 	combinedErr         error
 	combinedErrByKey    map[string]error
+	// runStdoutFunc, when set, returns what a Run call writes to its stdout,
+	// so a test can show a step the output go test would have printed.
+	runStdoutFunc func(args []string) string
 }
 
 func (f *fakeRunner) Run(
 	_ context.Context,
 	cwd string,
 	env []string,
-	_, _ io.Writer,
+	stdout, _ io.Writer,
 	name string,
 	args ...string,
 ) error {
@@ -48,6 +52,12 @@ func (f *fakeRunner) Run(
 		name: name,
 		args: append([]string{}, args...),
 	})
+
+	if f.runStdoutFunc != nil {
+		if _, err := io.WriteString(stdout, f.runStdoutFunc(args)); err != nil {
+			return fmt.Errorf("write fake stdout: %w", err)
+		}
+	}
 
 	if err, ok := f.runErrByKey[name+" "+strings.Join(args, " ")]; ok {
 		return err
