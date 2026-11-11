@@ -40,7 +40,7 @@ func classifyResult(r *actionCompletion) resultDecision {
 			Class:         resultRequeue,
 			Persistence:   persistRetryWork,
 			TrialHint:     trialHintReclassify,
-			ConditionType: issueTransferStalled,
+			ConditionType: issueRequestTimeout,
 		})
 	}
 
@@ -190,7 +190,7 @@ func deriveScopeKey(r *actionCompletion) ScopeKey {
 	return scopeKeyForResult(r.serverAnswer(), r.DriveID)
 }
 
-func issueTypeForResult(r *actionCompletion) string {
+func issueTypeForResult(r *actionCompletion) IssueType {
 	if issueType, ok := issueTypeForHTTPResult(r); ok {
 		return issueType
 	}
@@ -201,7 +201,7 @@ func issueTypeForResult(r *actionCompletion) string {
 	return ""
 }
 
-func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
+func issueTypeForHTTPResult(r *actionCompletion) (IssueType, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -219,24 +219,24 @@ func issueTypeForHTTPResult(r *actionCompletion) (string, bool) {
 // function, not a package-level map, so the table cannot be mutated.
 // serverAnswerNone, serverAnswerForbidden (probe-dependent) and
 // serverAnswerOther have no fixed issue.
-func serverAnswerIssueTypes() map[serverAnswer]string {
-	return map[serverAnswer]string{
+func serverAnswerIssueTypes() map[serverAnswer]IssueType {
+	return map[serverAnswer]IssueType{
 		serverAnswerPathTooLong:         issuePathTooLong,
 		serverAnswerUnauthorized:        IssueUnauthorized,
 		serverAnswerThrottled:           issueRateLimited,
 		serverAnswerQuota:               IssueQuotaExceeded,
 		serverAnswerUnsupported:         issueUnsupportedOperation,
 		serverAnswerServiceOutage:       issueServiceOutage,
-		serverAnswerRequestTimeout:      "request_timeout",
-		serverAnswerTransientConflict:   "transient_conflict",
-		serverAnswerTransientNotFound:   "transient_not_found",
-		serverAnswerLocked:              "resource_locked",
-		serverAnswerTransferURLRejected: "transfer_url_rejected",
+		serverAnswerRequestTimeout:      issueRequestTimeout,
+		serverAnswerTransientConflict:   issueTransientConflict,
+		serverAnswerTransientNotFound:   issueTransientNotFound,
+		serverAnswerLocked:              issueResourceLocked,
+		serverAnswerTransferURLRejected: issueTransferURLRejected,
 		serverAnswerMalware:             issueMalwareDetected,
 	}
 }
 
-func issueTypeForForbiddenResult(r *actionCompletion) string {
+func issueTypeForForbiddenResult(r *actionCompletion) IssueType {
 	switch effectiveRemotePermissionCapability(r) {
 	case permissionCapabilityRemoteRead:
 		return issueRemoteReadDenied
@@ -250,7 +250,7 @@ func issueTypeForForbiddenResult(r *actionCompletion) string {
 	}
 }
 
-func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
+func issueTypeForFilesystemResult(r *actionCompletion) (IssueType, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -298,7 +298,7 @@ func issueTypeForFilesystemResult(r *actionCompletion) (string, bool) {
 
 // issueTypeForSentinelResult maps the sync package's own durable-condition
 // errors.
-func issueTypeForSentinelResult(err error) (string, bool) {
+func issueTypeForSentinelResult(err error) (IssueType, bool) {
 	switch {
 	case errors.Is(err, errDatabaseInUse):
 		return issueLocalDatabaseOpen, true
@@ -309,7 +309,7 @@ func issueTypeForSentinelResult(err error) (string, bool) {
 	}
 }
 
-func issueTypeForLocalPermissionResult(r *actionCompletion) string {
+func issueTypeForLocalPermissionResult(r *actionCompletion) IssueType {
 	switch effectiveLocalPermissionCapability(r) {
 	case permissionCapabilityLocalRead:
 		return issueLocalReadDenied

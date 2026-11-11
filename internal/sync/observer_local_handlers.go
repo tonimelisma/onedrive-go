@@ -307,7 +307,7 @@ func (o *localObserver) HandleFsEvent(
 		if skip.Reason != "" {
 			o.logger.Debug("watch: skipping file",
 				slog.String("path", dbRelPath),
-				slog.String("reason", skip.Reason))
+				slog.String("reason", string(skip.Reason)))
 		}
 
 		return

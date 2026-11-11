@@ -240,7 +240,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 }
 
 func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
-	switch evidence.IssueType {
+	switch evidence.IssueType { //nolint:exhaustive // only the permission issue types name a boundary scope
 	case issueLocalReadDenied:
 		return sKPermLocalRead(evidence.BoundaryPath)
 	case issueLocalWriteDenied:
@@ -293,7 +293,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	ctx context.Context,
 	work RetryWorkKey,
 	scopeKey ScopeKey,
-	conditionType string,
+	conditionType IssueType,
 	errMsg string,
 ) error {
 	row, err := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
@@ -310,7 +310,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	flow.retries.rowsByKey[row.WorkKey()] = *row
 	if row.AttemptCount == 1 {
 		flow.deps.logger.Warn("Not syncing "+work.Path+": "+errMsg,
-			slog.String("condition_type", conditionType),
+			slog.String("condition_type", string(conditionType)),
 		)
 	}
 	fields := append(flow.summaryLogFields(
@@ -319,7 +319,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 		work.Path,
 		scopeKey,
 	),
-		slog.String("condition_type", conditionType),
+		slog.String("condition_type", string(conditionType)),
 	)
 	flow.deps.logger.Debug("retry_work permission failure recorded", fields...)
 	return nil
@@ -344,7 +344,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 		work.Path,
 		scopeKey,
 	),
-		slog.String("condition_type", scopeKey.ConditionType()),
+		slog.String("condition_type", string(scopeKey.ConditionType())),
 	)
 	flow.deps.logger.Debug("retry_work permission failure recorded", fields...)
 	return nil

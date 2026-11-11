@@ -8,7 +8,7 @@ import "sort"
 // grouping pass without taking on each other's presentation policy.
 type storedConditionGroup struct {
 	ConditionKey  ConditionKey
-	ConditionType string
+	ConditionType IssueType
 	ScopeKey      ScopeKey
 	Count         int
 	Paths         []string
@@ -141,7 +141,7 @@ func ensureStoredConditionGroup(
 	groups *[]storedConditionGroup,
 	groupIndex map[storedConditionGroupKey]int,
 	conditionKey ConditionKey,
-	conditionType string,
+	conditionType IssueType,
 	scopeKey ScopeKey,
 ) *storedConditionGroup {
 	if conditionKey == "" {

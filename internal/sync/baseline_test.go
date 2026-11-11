@@ -153,7 +153,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key)
 		 VALUES (?, ?, ?)`,
-		"/old-issue.txt", "invalid_name", "")
+		"/old-issue.txt", string(IssueInvalidFilename), "")
 	require.NoError(t, err)
 
 	// Insert a second issue so we prove checkpoint preserves all rows rather
@@ -161,7 +161,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 	_, err = mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key)
 		 VALUES (?, ?, ?)`,
-		"/new-issue.txt", "invalid_name", "")
+		"/new-issue.txt", string(IssueInvalidFilename), "")
 	require.NoError(t, err)
 
 	// retry_work is no longer timestamp-diagnostic storage and is likewise not
@@ -280,7 +280,7 @@ func seedDurableRecoveryTruth(
 			DriveID:   driveID,
 			IssueType: IssueInvalidFilename,
 		}},
-		ManagedIssueTypes: []string{IssueInvalidFilename},
+		ManagedIssueTypes: []IssueType{IssueInvalidFilename},
 	}, now))
 	require.NoError(t, mgr.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "retry-later.txt",

@@ -48,7 +48,7 @@ type scopeDescriptor struct {
 	Access               scopeAccess
 	SubjectKind          scopeSubjectKind
 	SubjectValue         string
-	DefaultConditionType string
+	DefaultConditionType IssueType
 	Priority             int
 }
 

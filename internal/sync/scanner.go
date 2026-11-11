@@ -485,7 +485,7 @@ func (o *localObserver) makeWalkFunc(
 				*skipped = append(*skipped, *skipItem)
 				o.logger.Debug("skipping invalid entry",
 					slog.String("path", dbRelPath),
-					slog.String("reason", skipItem.Reason))
+					slog.String("reason", string(skipItem.Reason)))
 			} else {
 				o.logger.Debug("skipping excluded file", slog.String("name", name))
 			}
@@ -1331,14 +1331,14 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 // Checks (ordered by specificity): empty name, trailing dot/space, leading
 // space, component length > 255, reserved device names, reserved patterns,
 // invalid characters.
-func validateOneDriveName(name string) (reason, detail string) {
+func validateOneDriveName(name string) (reason IssueType, detail string) {
 	return validateOneDriveNameFor(name, false)
 }
 
 // validateOneDriveNameFor applies the name rules of the target drive type.
 // personal relaxes the Business/SharePoint-only reservations (lockfiles,
 // desktop.ini, "~$" owner files) that OneDrive Personal accepts.
-func validateOneDriveNameFor(name string, personal bool) (reason, detail string) {
+func validateOneDriveNameFor(name string, personal bool) (reason IssueType, detail string) {
 	if name == "" {
 		return IssueInvalidFilename, "the name is empty"
 	}
@@ -1405,7 +1405,7 @@ func syncRootExists(syncRoot string) bool {
 	return err == nil && info.IsDir()
 }
 
-func validateObservedName(name, path string, rules LocalObservationRules) (reason, detail string) {
+func validateObservedName(name, path string, rules LocalObservationRules) (reason IssueType, detail string) {
 	if reason, detail := validateOneDriveNameFor(name, rules.PersonalNameRules); reason != "" {
 		return reason, detail
 	}

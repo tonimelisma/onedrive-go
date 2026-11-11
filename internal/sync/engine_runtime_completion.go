@@ -587,7 +587,7 @@ func (flow *engineFlow) recordRetryWork(
 
 	if decision.Class == errclass.ClassActionable {
 		fields := append(flow.resultLogFields(decision, r),
-			slog.String("condition_type", decision.ConditionType),
+			slog.String("condition_type", string(decision.ConditionType)),
 			slog.String("scope_evidence", decision.ScopeEvidence.String()),
 		)
 		flow.deps.logger.Debug(
@@ -622,12 +622,12 @@ func (flow *engineFlow) recordRetryWork(
 		// follow are on the durable curve and change nothing the user can
 		// see. Status keeps listing the path under the condition meanwhile.
 		flow.deps.logger.Warn("Not syncing "+r.Path+": "+r.ErrMsg,
-			slog.String("condition_type", decision.ConditionType),
+			slog.String("condition_type", string(decision.ConditionType)),
 		)
 	}
 
 	fields := append(flow.resultLogFields(decision, r),
-		slog.String("condition_type", decision.ConditionType),
+		slog.String("condition_type", string(decision.ConditionType)),
 		slog.String("error", r.ErrMsg),
 		slog.String("scope_evidence", scopeKey.String()),
 		slog.Bool("blocked", blocked),
@@ -712,8 +712,8 @@ func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
 //     relists up to remoteFolderDeleteListLimit items before it fails again,
 //     so on the one-second curve a watch session relisted 10,000 items on
 //     every pass.
-func retryDelayForCondition(condition string) func(int) time.Duration {
-	switch condition {
+func retryDelayForCondition(condition IssueType) func(int) time.Duration {
+	switch condition { //nolint:exhaustive // only the two conditions that do not clear by themselves wait longer
 	case issueCaseCollision, issueRemoteFolderUnverifiable:
 		return durableRecheckRetryDelay
 	}

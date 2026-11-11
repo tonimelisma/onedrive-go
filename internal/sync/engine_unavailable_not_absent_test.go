@@ -325,7 +325,7 @@ func TestCountSyncFolderFiles_MissingFolderHoldsNoFiles(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-func requireNoIssueOfType(t *testing.T, eng *testEngine, path, issueType string) {
+func requireNoIssueOfType(t *testing.T, eng *testEngine, path string, issueType IssueType) {
 	t.Helper()
 
 	issues, err := eng.baseline.ListObservationIssues(t.Context())

@@ -26,7 +26,7 @@ func (flow *engineFlow) reconcileSkippedObservationFindings(
 // observationIssueKey identifies one persisted skipped-file finding.
 type observationIssueKey struct {
 	path      string
-	issueType string
+	issueType IssueType
 }
 
 // knownObservationIssues returns the skipped-file findings already persisted
@@ -62,13 +62,13 @@ func (flow *engineFlow) logSkippedObservationFindings(
 	known map[observationIssueKey]struct{},
 ) {
 	eng := flow.engine
-	byReason := make(map[string][]skippedItem)
+	byReason := make(map[IssueType][]skippedItem)
 	for i := range skipped {
 		_, alreadyReported := known[observationIssueKey{path: skipped[i].Path, issueType: skipped[i].Reason}]
 		if alreadyReported {
 			eng.logger.Debug("observation filter: skipped file (already recorded)",
 				slog.String("path", skipped[i].Path),
-				slog.String("issue_type", skipped[i].Reason),
+				slog.String("issue_type", string(skipped[i].Reason)),
 				slog.String("detail", skipped[i].Detail),
 			)
 
@@ -105,7 +105,7 @@ func (flow *engineFlow) logSkippedObservationFindings(
 		for i := range items {
 			eng.logger.Debug("observation filter: skipped file",
 				slog.String("path", items[i].Path),
-				slog.String("issue_type", reason),
+				slog.String("issue_type", string(reason)),
 				slog.String("detail", items[i].Detail),
 			)
 		}
@@ -116,7 +116,7 @@ func (flow *engineFlow) logSkippedObservationFindings(
 // when every file shares one detail, otherwise the condition's label ("11
 // files with names OneDrive does not allow"). One file's detail once spoke for
 // eleven different invalid names as "the name starts with a space".
-func aggregateSkippedText(reason string, items []skippedItem) string {
+func aggregateSkippedText(reason IssueType, items []skippedItem) string {
 	shared := skippedItemReasonText(&items[0])
 	for i := 1; i < len(items); i++ {
 		if skippedItemReasonText(&items[i]) == shared {
@@ -125,7 +125,7 @@ func aggregateSkippedText(reason string, items []skippedItem) string {
 		if key, ok := conditionKeyForIssueType(reason); ok {
 			return fmt.Sprintf("%d %s", len(items), conditionLabel(key, len(items)))
 		}
-		return fmt.Sprintf("%d files: %s", len(items), strings.ReplaceAll(reason, "_", " "))
+		return fmt.Sprintf("%d files: %s", len(items), strings.ReplaceAll(string(reason), "_", " "))
 	}
 
 	return fmt.Sprintf("%d files: %s", len(items), shared)
@@ -138,7 +138,7 @@ func skippedItemReasonText(item *skippedItem) string {
 		return item.Detail
 	}
 
-	return strings.ReplaceAll(item.Reason, "_", " ")
+	return strings.ReplaceAll(string(item.Reason), "_", " ")
 }
 
 // applyObservationFindingsBatch persists one findings batch and reports

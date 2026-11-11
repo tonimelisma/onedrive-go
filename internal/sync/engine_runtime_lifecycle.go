@@ -300,7 +300,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	ctx context.Context,
 	from ScopeKey,
 	to ScopeKey,
-	conditionType string,
+	conditionType IssueType,
 	retryAfter time.Duration,
 ) error {
 	if to.IsZero() {
@@ -359,13 +359,13 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 // Warn in plain words.
 func (flow *engineFlow) logBlockScopeActivated(
 	key ScopeKey,
-	conditionType string,
+	conditionType IssueType,
 	interval time.Duration,
 	wasActive bool,
 ) {
 	fields := []any{
 		slog.String("scope_key", key.String()),
-		slog.String("condition_type", conditionType),
+		slog.String("condition_type", string(conditionType)),
 		slog.Duration("trial_interval", interval),
 	}
 	if wasActive {
@@ -374,7 +374,7 @@ func (flow *engineFlow) logBlockScopeActivated(
 	}
 
 	retryIn := waitText(interval)
-	switch conditionType {
+	switch conditionType { //nolint:exhaustive // the scopes with their own wording; the default words every other condition
 	case issueRateLimited:
 		flow.deps.logger.Info("OneDrive is limiting requests; pausing affected transfers and retrying in "+retryIn, fields...)
 	case issueServiceOutage:
@@ -394,7 +394,7 @@ func (flow *engineFlow) logBlockScopeActivated(
 			"paused until it is writable again (checking again in "+retryIn+")",
 			fields...)
 	default:
-		flow.deps.logger.Warn("Paused syncing "+key.Humanize()+" ("+strings.ReplaceAll(conditionType, "_", " ")+
+		flow.deps.logger.Warn("Paused syncing "+key.Humanize()+" ("+strings.ReplaceAll(string(conditionType), "_", " ")+
 			"); checking again in "+retryIn, fields...)
 	}
 }

@@ -24,7 +24,7 @@ func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreate
 	assert.Equal(t, "Private", batch.Issues[0].Path)
 	assert.Equal(t, issueLocalReadDenied, batch.Issues[0].IssueType)
 	assert.Equal(t, sKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
-	assert.ElementsMatch(t, []string{
+	assert.ElementsMatch(t, []IssueType{
 		IssueInvalidFilename,
 		issuePathTooLong,
 		issueFileTooLarge,
@@ -46,5 +46,5 @@ func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssue(t *te
 	assert.Equal(t, "/", batch.Issues[0].Path)
 	assert.Equal(t, issueRemoteReadDenied, batch.Issues[0].IssueType)
 	assert.Equal(t, sKPermRemoteRead(""), batch.Issues[0].ScopeKey)
-	assert.Equal(t, []string{issueRemoteReadDenied}, batch.ManagedIssueTypes)
+	assert.Equal(t, []IssueType{issueRemoteReadDenied}, batch.ManagedIssueTypes)
 }

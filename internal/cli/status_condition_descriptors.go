@@ -44,7 +44,7 @@ func buildStatusConditionJSON(
 		descriptor := describeStatusCondition(group.ConditionKey)
 		output = append(output, statusConditionJSON{
 			ConditionKey:  string(group.ConditionKey),
-			ConditionType: group.ConditionType,
+			ConditionType: string(group.ConditionType),
 			Title:         descriptor.Title,
 			Reason:        descriptor.Reason,
 			Action:        descriptor.Action,

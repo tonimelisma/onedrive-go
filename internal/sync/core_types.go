@@ -13,11 +13,11 @@ import (
 // observation time. The scanner collects these alongside events so the
 // engine can persist them as durable observation issues.
 type skippedItem struct {
-	Path               string // NFC-normalized, relative to sync root
-	Reason             string // issue type constant (IssueInvalidFilename, etc.)
-	Detail             string // human-readable explanation
-	FileSize           int64  // populated for IssueFileTooLarge (after stat)
-	BlocksReadBoundary bool   // true when observation proved an unreadable subtree boundary
+	Path               string    // NFC-normalized, relative to sync root
+	Reason             IssueType // the observation issue type it is stored under
+	Detail             string    // human-readable explanation
+	FileSize           int64     // populated for issueFileTooLarge (after stat)
+	BlocksReadBoundary bool      // true when observation proved an unreadable subtree boundary
 }
 
 // changeEvent is an immutable observation fact produced by observers. The
@@ -402,7 +402,7 @@ const (
 type pathTruthSideStatus struct {
 	Availability truthAvailability
 	Source       pathTruthSource
-	IssueType    string
+	IssueType    IssueType
 	ScopeKey     ScopeKey
 }
 

@@ -26,7 +26,7 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 	testCases := []struct {
 		name   string
 		result *actionCompletion
-		want   string
+		want   IssueType
 		ok     bool
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
@@ -67,10 +67,10 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 			ok:   true,
 		},
 		{name: "service outage", result: &actionCompletion{HTTPStatus: http.StatusBadGateway}, want: issueServiceOutage, ok: true},
-		{name: "request timeout", result: &actionCompletion{HTTPStatus: http.StatusRequestTimeout}, want: "request_timeout", ok: true},
-		{name: "precondition failed", result: &actionCompletion{HTTPStatus: http.StatusPreconditionFailed}, want: "transient_conflict", ok: true},
-		{name: "not found", result: &actionCompletion{HTTPStatus: http.StatusNotFound}, want: "transient_not_found", ok: true},
-		{name: "locked", result: &actionCompletion{HTTPStatus: http.StatusLocked}, want: "resource_locked", ok: true},
+		{name: "request timeout", result: &actionCompletion{HTTPStatus: http.StatusRequestTimeout}, want: issueRequestTimeout, ok: true},
+		{name: "precondition failed", result: &actionCompletion{HTTPStatus: http.StatusPreconditionFailed}, want: issueTransientConflict, ok: true},
+		{name: "not found", result: &actionCompletion{HTTPStatus: http.StatusNotFound}, want: issueTransientNotFound, ok: true},
+		{name: "locked", result: &actionCompletion{HTTPStatus: http.StatusLocked}, want: issueResourceLocked, ok: true},
 		{name: "unmapped", result: &actionCompletion{HTTPStatus: http.StatusTeapot}, want: "", ok: false},
 	}
 
@@ -93,7 +93,7 @@ func TestIssueTypeForFilesystemResult_RepresentativeMappings(t *testing.T) {
 	testCases := []struct {
 		name   string
 		result *actionCompletion
-		want   string
+		want   IssueType
 		ok     bool
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
@@ -440,7 +440,7 @@ func TestClassifyResult_LocalErrnoTable(t *testing.T) {
 		err       error
 		class     errclass.Class
 		scopeKey  ScopeKey
-		issueType string
+		issueType IssueType
 	}{
 		{name: "enospc mid-write is the disk scope", err: pathErr(syscall.ENOSPC), class: resultBlockScope, scopeKey: SKDiskLocal(), issueType: issueDiskFull},
 		{name: "edquot is the disk scope", err: pathErr(syscall.EDQUOT), class: resultBlockScope, scopeKey: SKDiskLocal(), issueType: issueDiskFull},
@@ -489,7 +489,7 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 		class     errclass.Class
 		scopeKey  ScopeKey
 		evidence  ScopeKey
-		issueType string
+		issueType IssueType
 	}{
 		{
 			name:   "501 is a per-item refusal",
@@ -515,7 +515,7 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 			name:   "409 resourceModified is retried",
 			status: http.StatusConflict,
 			err:    &graph.GraphError{StatusCode: http.StatusConflict, Code: "resourceModified", Err: graph.ErrConflict},
-			class:  resultRequeue, issueType: "transient_conflict",
+			class:  resultRequeue, issueType: issueTransientConflict,
 		},
 		{
 			name:   "pre-1900 mtime 404 is a generic per-file failure, not gone",
@@ -566,7 +566,7 @@ func TestClassifyResult_Only401ErrUnauthorizedIsFatal(t *testing.T) {
 	})
 	assert.Equal(t, resultRequeue, preAuth.Class, "an expired transfer URL is one file's problem")
 	assert.True(t, preAuth.ScopeEvidence.IsZero())
-	assert.Equal(t, "transfer_url_rejected", preAuth.ConditionType)
+	assert.Equal(t, issueTransferURLRejected, preAuth.ConditionType)
 
 	signIn := classifyResult(&actionCompletion{
 		HTTPStatus: http.StatusUnauthorized,

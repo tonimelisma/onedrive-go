@@ -44,7 +44,7 @@ const (
 // conditionKeyForStoredCondition maps one durable sync-condition record
 // (observation issue, retry_work row, or block scope) into the shared
 // condition family consumed by logs, watch summaries, and CLI status.
-func conditionKeyForStoredCondition(conditionType string, scopeKey ScopeKey) ConditionKey {
+func conditionKeyForStoredCondition(conditionType IssueType, scopeKey ScopeKey) ConditionKey {
 	return conditionKeyForIssueTypeOrScope(
 		conditionType,
 		scopeKey,
@@ -54,7 +54,7 @@ func conditionKeyForStoredCondition(conditionType string, scopeKey ScopeKey) Con
 
 // conditionKeyForRuntimeResult maps one execution-time classified result into
 // the shared condition family used by logs, watch summaries, and status.
-func conditionKeyForRuntimeResult(class errclass.Class, conditionType string) ConditionKey {
+func conditionKeyForRuntimeResult(class errclass.Class, conditionType IssueType) ConditionKey {
 	if key, ok := conditionKeyForIssueType(conditionType); ok {
 		return key
 	}
@@ -83,9 +83,9 @@ func ConditionKeyLess(left, right ConditionKey) bool {
 }
 
 func conditionKeyForIssueTypeOrScope(
-	issueType string,
+	issueType IssueType,
 	scopeKey ScopeKey,
-	scopeFallbackIssueType string,
+	scopeFallbackIssueType IssueType,
 ) ConditionKey {
 	if key, ok := conditionKeyForIssueType(issueType); ok {
 		return key
@@ -150,12 +150,12 @@ func conditionKeyRank(key ConditionKey) int {
 	return len(ordered)
 }
 
-func conditionKeyForIssueType(issueType string) (ConditionKey, bool) {
+func conditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
 	// Keep the condition-family classifier exhaustive in one local table so
 	// callers do not have to think in separate "core" and "filesystem"
 	// taxonomies.
 	for _, mapping := range [...]struct {
-		issueType string
+		issueType IssueType
 		key       ConditionKey
 	}{
 		{issueType: IssueUnauthorized, key: ConditionAuthenticationRequired},

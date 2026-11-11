@@ -16,7 +16,7 @@ type permissionEvidence struct {
 	Kind         permissionEvidenceKind
 	TriggerPath  string
 	BoundaryPath string
-	IssueType    string
+	IssueType    IssueType
 	LastError    string
 	HTTPStatus   int
 }

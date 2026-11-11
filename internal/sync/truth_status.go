@@ -105,11 +105,26 @@ func availablePathTruthSideStatus() pathTruthSideStatus {
 	}
 }
 
-func observationIssueBlocksTruth(issueType string) bool {
+func observationIssueBlocksTruth(issueType IssueType) bool {
 	return observationIssueBlocksLocalTruth(issueType) || observationIssueBlocksRemoteTruth(issueType)
 }
 
-func observationIssueBlocksLocalTruth(issueType string) bool {
+// observationIssueBlocksLocalTruth reports whether an observation issue at a
+// path makes that path's local truth unavailable, so the planner reads the
+// path as unknown rather than absent. The switch names every IssueType (the
+// exhaustive linter holds it to that), so a new member needs a verdict here.
+//
+// The second group is false: remote_read_denied and remote_name_twin block
+// remote truth instead; local_interrupted_removal sits at an internal name the
+// content filter hides from planning on both sides, so no synced path can
+// read as deleted through it;
+// and every other member is a runtime condition that retry_work or a block
+// scope carries and observation never stores.
+//
+// A value outside the enum cannot come from the store, which refuses an
+// unknown stored issue type (parseIssueType). Should one appear anyway, the
+// path is treated as unavailable: unknown is not absent (D-005).
+func observationIssueBlocksLocalTruth(issueType IssueType) bool {
 	switch issueType {
 	case IssueInvalidFilename,
 		issuePathTooLong,
@@ -120,12 +135,41 @@ func observationIssueBlocksLocalTruth(issueType string) bool {
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary:
 		return true
-	default:
+	case issueRemoteReadDenied,
+		issueRemoteNameTwin,
+		issueLocalInterruptedRemoval,
+		IssueUnauthorized,
+		IssueRemoteWriteDenied,
+		IssueQuotaExceeded,
+		issueRateLimited,
+		issueLocalWriteDenied,
+		issueDiskFull,
+		issueServiceOutage,
+		issueFileTooLargeForSpace,
+		issueLocalNameTooLong,
+		issueLocalReadOnly,
+		issueDeletesHeld,
+		issueRemoteFolderUnverifiable,
+		issueLocalFileTooLarge,
+		issueLocalBusy,
+		issueLocalCrossDevice,
+		issueUnsupportedOperation,
+		issueMalwareDetected,
+		issueLocalDatabaseOpen,
+		issueUploadVerification,
+		issueDownloadIntegrity,
+		issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected:
 		return false
+	default:
+		return true
 	}
 }
 
-func observationIssueBlocksRemoteTruth(issueType string) bool {
+func observationIssueBlocksRemoteTruth(issueType IssueType) bool {
 	return issueType == issueRemoteReadDenied || issueType == issueRemoteNameTwin
 }
 

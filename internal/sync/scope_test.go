@@ -41,7 +41,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 		status     int
 		retryAfter time.Duration
 		wantScope  ScopeKey
-		wantIssue  string
+		wantIssue  IssueType
 	}{
 		{
 			name:       "rate_limited",
@@ -49,7 +49,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			status:     429,
 			retryAfter: 90 * time.Second,
 			wantScope:  SKThrottleDrive(driveid.New("0000000000000001")),
-			wantIssue:  "rate_limited",
+			wantIssue:  issueRateLimited,
 		},
 		{
 			name:       "service_outage",
@@ -57,7 +57,7 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			status:     503,
 			retryAfter: 120 * time.Second,
 			wantScope:  SKService(),
-			wantIssue:  "service_outage",
+			wantIssue:  issueServiceOutage,
 		},
 	}
 
@@ -119,7 +119,7 @@ func TestScope_507OwnDrive(t *testing.T) {
 		} else {
 			require.True(t, result.Block, "third unique path must trigger quota:own block")
 			assert.Equal(t, SKQuotaOwn(), result.ScopeKey)
-			assert.Equal(t, "quota_exceeded", result.ConditionType)
+			assert.Equal(t, IssueQuotaExceeded, result.ConditionType)
 			assert.Zero(t, result.RetryAfter)
 		}
 		advance(1 * time.Second) // stay well within the 10s window
@@ -146,7 +146,7 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 		} else {
 			require.True(t, result.Block, "fifth unique path must trigger service block")
 			assert.Equal(t, SKService(), result.ScopeKey)
-			assert.Equal(t, "service_outage", result.ConditionType)
+			assert.Equal(t, issueServiceOutage, result.ConditionType)
 			assert.Zero(t, result.RetryAfter)
 		}
 		advance(2 * time.Second) // total 8s, well within 30s window
@@ -404,7 +404,7 @@ func TestScopeKey_IssueType(t *testing.T) {
 
 	tests := []struct {
 		key  ScopeKey
-		want string
+		want IssueType
 	}{
 		{SKThrottleDrive(driveid.New("0000000000000001")), issueRateLimited},
 		{SKService(), issueServiceOutage},

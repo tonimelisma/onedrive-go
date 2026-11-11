@@ -1562,7 +1562,7 @@ type shouldObserveCase struct {
 	protectedRoots []ProtectedRoot
 	rules          LocalObservationRules
 	wantNil        bool
-	wantReason     string
+	wantReason     IssueType
 }
 
 func runShouldObserveCases(t *testing.T, tests []shouldObserveCase) {
@@ -1783,7 +1783,7 @@ func TestValidateOneDriveName_AllCases(t *testing.T) {
 	tests := []struct {
 		name       string
 		input      string
-		wantReason string
+		wantReason IssueType
 		wantDetail bool // true if we expect a non-empty detail string
 	}{
 		{

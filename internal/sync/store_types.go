@@ -13,7 +13,7 @@ import (
 type ObservationIssue struct {
 	Path      string
 	DriveID   driveid.ID
-	IssueType string
+	IssueType IssueType
 	ScopeKey  ScopeKey
 }
 
@@ -24,7 +24,7 @@ type ObservationIssue struct {
 // unrelated durable findings.
 type ObservationFindingsBatch struct {
 	Issues            []ObservationIssue
-	ManagedIssueTypes []string
+	ManagedIssueTypes []IssueType
 	ManagedPaths      []string
 }
 
@@ -32,7 +32,7 @@ type ObservationFindingsBatch struct {
 type ObservationIssueRow struct {
 	Path      string
 	DriveID   driveid.ID
-	IssueType string
+	IssueType IssueType
 	ScopeKey  ScopeKey
 }
 
@@ -45,7 +45,7 @@ type RetryWorkFailure struct {
 	ScopeKey ScopeKey
 	// ConditionType is set when a condition only the user can clear refused
 	// the work; the row then shows under that condition in status.
-	ConditionType string
+	ConditionType IssueType
 }
 
 // observedItem represents a single item from a delta API response, ready
@@ -109,7 +109,7 @@ type RetryWorkRow struct {
 	// ConditionType names the condition only the user can clear that refused
 	// this work (an invalid name on OneDrive, a path too long, a local write
 	// denied); empty for a transient failure. Status lists the row under it.
-	ConditionType string
+	ConditionType IssueType
 }
 
 // A file with a new identity whose content is provably the synced content is
