@@ -165,16 +165,59 @@ func requireVerifySummaryStep(t *testing.T, summary VerifySummary, name string) 
 func assertVerifyBucketSummary(t *testing.T, summary VerifySummary, name string, status string) {
 	t.Helper()
 
-	for _, bucket := range summary.E2EFullBuckets {
-		if bucket.Name != name {
+	for i := range summary.E2EFullBuckets {
+		if summary.E2EFullBuckets[i].Name != name {
 			continue
 		}
 
-		assert.Equal(t, status, bucket.Status)
+		assert.Equal(t, status, summary.E2EFullBuckets[i].Status)
 		return
 	}
 
 	require.Failf(t, "missing bucket summary", "bucket %q not found", name)
+}
+
+// testE2EPackage is the import path go test reports for the live suite.
+const testE2EPackage = "github.com/tonimelisma/onedrive-go/e2e"
+
+// goCommandKey is the fakeRunner key of a `go` command with these arguments.
+func goCommandKey(args []string) string {
+	return "go " + strings.Join(args, " ")
+}
+
+// rawFailLines is the plain go test output of the named tests failing.
+func rawFailLines(tests ...string) string {
+	var builder strings.Builder
+	for _, test := range tests {
+		builder.WriteString("--- FAIL: " + test + " (1.00s)\n")
+	}
+
+	return builder.String()
+}
+
+// jsonFailLines is the `go test -json` output of the named live tests
+// failing, ending with the package's own fail event.
+func jsonFailLines(tests ...string) string {
+	lines := make([]string, 0, 2*len(tests)+1)
+	for _, test := range tests {
+		lines = append(lines,
+			`{"Action":"run","Package":"`+testE2EPackage+`","Test":"`+test+`"}`,
+			`{"Action":"fail","Package":"`+testE2EPackage+`","Test":"`+test+`"}`,
+		)
+	}
+	lines = append(lines, `{"Action":"fail","Package":"`+testE2EPackage+`"}`)
+
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// bucketStatuses lists the summary's full-suite bucket statuses in run order.
+func bucketStatuses(summary VerifySummary) []string {
+	statuses := make([]string, 0, len(summary.E2EFullBuckets))
+	for i := range summary.E2EFullBuckets {
+		statuses = append(statuses, summary.E2EFullBuckets[i].Status)
+	}
+
+	return statuses
 }
 
 func assertCommandHasEnvVar(t *testing.T, cmd recordedCommand, want string) {

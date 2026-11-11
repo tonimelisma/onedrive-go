@@ -116,9 +116,11 @@ jobs:
           go install golang.org/x/tools/cmd/goimports@v0.41.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # --check-format lists what the formatters would change and fails on it;
+      # without it the format step rewrites the checkout and cannot fail.
       - name: Verify quick (format, repository rules, builds, short unit tier)
         if: matrix.os == 'ubuntu-latest'
-        run: go run ./cmd/devtool verify quick --shard "${VERIFY_SHARD}"
+        run: go run ./cmd/devtool verify quick --check-format --shard "${VERIFY_SHARD}"
 
       # The macOS leg exists to catch darwin-only build and behavior breakage;
       # the repository rules are platform-independent and already ran on Linux.
@@ -177,7 +179,16 @@ jobs:
       - name: Verify public
         env:
           COVERAGE_ARGS: ${{ matrix.os != 'ubuntu-latest' && '--coverage-threshold -1' || '' }}
-        run: go run ./cmd/devtool verify public ${COVERAGE_ARGS}
+        run: go run ./cmd/devtool verify public ${COVERAGE_ARGS} --check-format --summary-json "${RUNNER_TEMP}/verify-full-summary.json"
+
+      - name: Upload verify-full summary
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: verify-full-summary-${{ matrix.os }}
+          path: ${{ runner.temp }}/verify-full-summary.json
+          if-no-files-found: warn
+          retention-days: 7
 
   # Branch protection requires a check literally named "verify". Pointing it at
   # a matrix job does not work: the legs report as "verify-unit (ubuntu-latest,
@@ -216,7 +227,10 @@ jobs:
 
   stress:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Above the sum of the stress steps' go test deadlines (20m + 40m + 40m)
+    # plus setup, so a hung test ends at its own deadline, with a goroutine
+    # dump and a summary, not at the job's (TestCIJobTimeoutsCoverEveryGoTestDeadline).
+    timeout-minutes: 120
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7.0.1
@@ -318,20 +332,20 @@ jobs:
           SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
           TOKEN_FILE="token_${SANITIZED_FILE}.json"
 
-          echo "Downloading: ${SECRET_NAME} → .testdata/${TOKEN_FILE}"
+          # This repository's logs are public: name the variable, never the
+          # drive, the secret or the token file, which all embed the account.
+          echo "Downloading the token of ONEDRIVE_TEST_DRIVE"
           az keyvault secret download \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
             --name "$SECRET_NAME" \
             --file ".testdata/${TOKEN_FILE}" \
             --encoding utf-8
 
-          echo "=== .testdata/ contents ==="
-          ls -la .testdata/
+          echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
 
       - name: Run integration tests
         run: |
           set -euo pipefail
-          echo "=== Integration tests for: ${ONEDRIVE_TEST_DRIVE} ==="
           go run ./cmd/devtool verify integration
 
       - name: Save rotated token to Key Vault
@@ -358,7 +372,11 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Above the sum of every go test deadline e2e-full can start, its three
+    # classified reruns included, plus setup: every bucket runs even after one
+    # fails, so the deadlines add up (TestCIJobTimeoutsCoverEveryGoTestDeadline).
+    # A healthy nightly takes about 40 minutes; only hangs come near this.
+    timeout-minutes: 180
     concurrency:
       group: live-account-e2e
       cancel-in-progress: false
@@ -435,7 +453,9 @@ jobs:
             SANITIZED_FILE=$(echo "$DRIVE_VAL" | sed 's/:/_/')
             TOKEN_FILE="token_${SANITIZED_FILE}.json"
 
-            echo "Downloading: ${SECRET_NAME} → .testdata/${TOKEN_FILE}"
+            # Public logs: name the variable, never the drive, the secret or
+            # the token file, which all embed the account.
+            echo "Downloading the token of ${DRIVE_VAR}"
             az keyvault secret download \
               --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
               --name "$SECRET_NAME" \
@@ -443,8 +463,7 @@ jobs:
               --encoding utf-8
           done
 
-          echo "=== .testdata/ contents ==="
-          ls -la .testdata/
+          echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
 
       - name: Run E2E tests
         run: |
@@ -513,4 +532,4 @@ jobs:
         run: |
           echo "::warning::E2E test auth may have failed."
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap."
-          echo "::warning::See CLAUDE.md 'Test Credentials' section for re-bootstrap instructions."
+          echo "::warning::See CLAUDE.md 'Test credential pipeline' for re-bootstrap instructions."

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ func fullE2EParallelMiscBucket() fullE2EBucketSpec {
 		Kind:      fullE2EBucketKindParallelMisc,
 		TestNames: fullE2EParallelMiscTestNames(),
 		Parallel:  fullE2EParallelMiscParallel,
-		Timeout:   fullE2EPackageTimeout,
+		Timeout:   fullE2EParallelMiscTimeout,
 	}
 }
 
@@ -33,7 +34,7 @@ func fullE2ESerialSyncBucket() fullE2EBucketSpec {
 		Kind:      fullE2EBucketKindSerialSync,
 		TestNames: fullE2ESerialSyncTestNames(),
 		Parallel:  fullE2ESerialParallel,
-		Timeout:   fullE2EPackageTimeout,
+		Timeout:   fullE2ESerialSyncTimeout,
 	}
 }
 
@@ -43,7 +44,7 @@ func fullE2ESerialWatchSharedBucket() fullE2EBucketSpec {
 		Kind:      fullE2EBucketKindSerialWatchShared,
 		TestNames: fullE2ESerialWatchSharedTestNames(),
 		Parallel:  fullE2ESerialParallel,
-		Timeout:   fullE2EPackageTimeout,
+		Timeout:   fullE2ESerialWatchSharedTimeout,
 	}
 }
 
@@ -431,6 +432,40 @@ func runTaggedVet(
 	return nil
 }
 
+// errE2EPreflight marks a live-lane preflight failure: the account or the
+// fixtures are unusable, so nothing after the preflight can verify anything.
+var errE2EPreflight = errors.New("e2e preflight failed")
+
+// authPreflightSkippedNotice is the one line printed when the auth preflight
+// skipped: Microsoft reported a read-only window, and the lane is untestable.
+// It names no drive, because the subtest names do.
+const authPreflightSkippedNotice = "verify: auth preflight skipped: Microsoft reported a read-only window " +
+	"(LI-20260823-01), so the live lane is untestable in this run"
+
+// goTestSkipPrefix starts go test's line for a skipped test.
+const goTestSkipPrefix = "--- SKIP: "
+
+func authE2EPreflightArgs() []string {
+	return []string{
+		"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v",
+		"-timeout=" + e2ePreflightTimeout, "./e2e/...",
+	}
+}
+
+func fastE2EPreflightArgs() []string {
+	return []string{
+		"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v",
+		"-timeout=" + e2ePreflightTimeout, "./e2e/...",
+	}
+}
+
+func fullE2EPreflightArgs() []string {
+	return []string{
+		"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v",
+		"-timeout=" + e2ePreflightTimeout, "./e2e/...",
+	}
+}
+
 func runE2E(
 	ctx context.Context,
 	runner commandRunner,
@@ -480,12 +515,16 @@ func runFastE2ESuite(
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
 ) error {
-	return collector.runStep("fast e2e", func() error {
-		if !classifyLiveQuirks {
-			return runFastE2ESuiteOnce(ctx, runner, repoRoot, env, stdout, stderr)
+	return collector.runStepWithOutcome("fast e2e", func() (stepOutcome, error) {
+		var output string
+		var err error
+		if classifyLiveQuirks {
+			output, err = runFastE2ESuiteWithClassification(ctx, runner, repoRoot, env, collector, stdout, stderr)
+		} else {
+			output, err = runFastE2ESuiteOnce(ctx, runner, repoRoot, env, stdout, stderr)
 		}
 
-		return runFastE2ESuiteWithClassification(ctx, runner, repoRoot, env, collector, stdout, stderr)
+		return stepOutcome{failedTests: failedTopLevelTests(output)}, err
 	})
 }
 
@@ -495,15 +534,12 @@ func runFastE2ESuiteOnce(
 	repoRoot string,
 	env []string,
 	stdout, stderr io.Writer,
-) error {
+) (string, error) {
 	if err := writeStatus(stdout, "==> go test -tags=e2e\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", fastE2EArgs()...); err != nil {
-		return fmt.Errorf("fast e2e: %w", err)
+		return "", fmt.Errorf("write status: %w", err)
 	}
 
-	return nil
+	return runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e", fastE2EArgs()...)
 }
 
 func runFastE2ESuiteWithClassification(
@@ -513,68 +549,85 @@ func runFastE2ESuiteWithClassification(
 	env []string,
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
-) error {
+) (string, error) {
 	if err := writeStatus(stdout, "==> go test -json -tags=e2e\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
+		return "", fmt.Errorf("write status: %w", err)
 	}
 
-	output, err := runner.CombinedOutput(ctx, repoRoot, env, "go", fastE2EJSONArgs()...)
-	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
-		return fmt.Errorf("write fast e2e output: %w", writeErr)
-	}
+	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e", fastE2EJSONArgs()...)
 	if err == nil {
-		return nil
+		return output, nil
 	}
 
-	return rerunClassifiedFastE2EQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, output, err)
+	rerunArgs, incidentID, ok := classifyFastE2EQuirk(failedGoTestsFromJSON([]byte(output)))
+	if !ok {
+		return output, err
+	}
+
+	// The first attempt's output names what failed; the rerun covers one test.
+	_, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
+		incidentID: incidentID,
+		phase:      "fast e2e",
+		trigger:    fastDownloadTestName,
+		args:       rerunArgs,
+		firstErr:   err,
+	})
+
+	return output, err
 }
 
-func rerunClassifiedFastE2EQuirk(
+// classifiedQuirkRerun is one rerun of a documented live-provider quirk.
+type classifiedQuirkRerun struct {
+	incidentID string
+	phase      string
+	trigger    string
+	args       []string
+	// firstErr is the failure the rerun answers.
+	firstErr error
+}
+
+// rerunClassifiedQuirk reruns a known quirk once, records the rerun and
+// returns its output. A passing rerun downgrades the first failure to a
+// warning; a failing one returns its own error, which carries the first
+// attempt's too.
+func rerunClassifiedQuirk(
 	ctx context.Context,
 	runner commandRunner,
 	repoRoot string,
 	env []string,
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
-	output []byte,
-	runErr error,
-) error {
-	failedTests := failedGoTestsFromJSON(output)
-	rerunArgs, incidentID, ok := classifyFastE2EQuirk(failedTests)
-	if !ok {
-		return fmt.Errorf("fast e2e: %w", runErr)
+	rerun classifiedQuirkRerun,
+) (string, error) {
+	if err := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", rerun.incidentID)); err != nil {
+		return "", fmt.Errorf("write status: %w", err)
 	}
 
-	if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", incidentID)); writeErr != nil {
-		return fmt.Errorf("write status: %w", writeErr)
-	}
-
-	rerunStartedAt := time.Now()
-	rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", rerunArgs...)
-	rerunStatus := verifySummaryStatusPass
-	if rerunErr != nil {
-		rerunStatus = verifySummaryStatusFail
-	}
-	collector.recordClassifiedRerun(
-		incidentID,
-		"fast e2e",
-		fastDownloadTestName,
-		rerunArgs,
-		time.Since(rerunStartedAt),
-		rerunStatus,
+	startedAt := time.Now()
+	output, rerunErr := runGoTestMatching(
+		ctx, runner, repoRoot, env, stdout, stderr, rerun.phase+" rerun of "+rerun.incidentID, rerun.args...,
 	)
+	status := verifySummaryStatusPass
 	if rerunErr != nil {
-		return fmt.Errorf("fast e2e: %w", runErr)
+		status = verifySummaryStatusFail
+	}
+	collector.recordClassifiedRerun(rerun.incidentID, rerun.phase, rerun.trigger, rerun.args, time.Since(startedAt), status)
+	if rerunErr != nil {
+		return output, fmt.Errorf("%w (first attempt: %w)", rerunErr, rerun.firstErr)
 	}
 
-	warning := fmt.Sprintf("warning: classified known live quirk %s after successful rerun\n", incidentID)
-	if writeErr := writeStatus(stdout, warning); writeErr != nil {
-		return fmt.Errorf("write status: %w", writeErr)
+	warning := fmt.Sprintf("warning: classified known live quirk %s after successful rerun\n", rerun.incidentID)
+	if err := writeStatus(stdout, warning); err != nil {
+		return output, fmt.Errorf("write status: %w", err)
 	}
 
-	return nil
+	return output, nil
 }
 
+// runE2EPreflightAuth runs the auth preflight. Under --classify-live-quirks a
+// failure is rerun once for LI-20260405-06, but only when it is that quirk's
+// shape, the preflight test itself failing: a build failure, a pattern that
+// matched nothing or a timeout is not rerun.
 func runE2EPreflightAuth(
 	ctx context.Context,
 	runner commandRunner,
@@ -584,59 +637,55 @@ func runE2EPreflightAuth(
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
 ) error {
-	return collector.runStep("auth preflight", func() error {
+	return collector.runStepWithOutcome("auth preflight", func() (stepOutcome, error) {
 		if err := writeStatus(stdout, "==> go test -tags=e2e auth preflight\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
+			return stepOutcome{}, fmt.Errorf("write status: %w", err)
 		}
 
-		authArgs := []string{
-			"test",
-			"-tags=e2e",
-			"-run=" + authE2EPreflightPattern,
-			"-count=1",
-			"-v",
-			"./e2e/...",
+		args := authE2EPreflightArgs()
+		output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e auth preflight", args...)
+		if err != nil && classifyLiveQuirks && slices.Equal(failedTopLevelTests(output), []string{authPreflightTestName}) {
+			// The rerun's output decides from here on: it is the attempt whose
+			// result counts, skips included.
+			output, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
+				incidentID: authPreflightIncidentID,
+				phase:      "auth preflight",
+				trigger:    authE2EPreflightPattern,
+				args:       args,
+				firstErr:   err,
+			})
 		}
-		if err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e auth preflight", authArgs...); err != nil {
-			if !classifyLiveQuirks {
-				return fmt.Errorf("fast e2e auth preflight: %w", err)
-			}
-
-			if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", authPreflightIncidentID)); writeErr != nil {
-				return fmt.Errorf("write status: %w", writeErr)
-			}
-
-			rerunStartedAt := time.Now()
-			rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", authArgs...)
-			rerunStatus := verifySummaryStatusPass
-			if rerunErr != nil {
-				rerunStatus = verifySummaryStatusFail
-			}
-			collector.recordClassifiedRerun(
-				authPreflightIncidentID,
-				"auth preflight",
-				authE2EPreflightPattern,
-				authArgs,
-				time.Since(rerunStartedAt),
-				rerunStatus,
-			)
-			if rerunErr == nil {
-				warning := fmt.Sprintf(
-					"warning: classified known live quirk %s after successful rerun\n",
-					authPreflightIncidentID,
-				)
-				if writeErr := writeStatus(stdout, warning); writeErr != nil {
-					return fmt.Errorf("write status: %w", writeErr)
-				}
-
-				return nil
-			}
-
-			return fmt.Errorf("fast e2e auth preflight: %w", err)
+		if err != nil {
+			return stepOutcome{failedTests: failedTopLevelTests(output)}, fmt.Errorf("%w: %w", errE2EPreflight, err)
+		}
+		if !authPreflightSkipped(output) {
+			return stepOutcome{}, nil
 		}
 
-		return nil
+		if err := writeStatus(stdout, authPreflightSkippedNotice+"\n"); err != nil {
+			return stepOutcome{}, fmt.Errorf("write status: %w", err)
+		}
+
+		return stepOutcome{skipped: true}, nil
 	})
+}
+
+// authPreflightSkipped reports whether go test output shows the auth
+// preflight, or one of its per-drive subtests, skipped.
+func authPreflightSkipped(output string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), goTestSkipPrefix)
+		if !ok {
+			continue
+		}
+
+		name, _, _ := strings.Cut(rest, " ")
+		if top, _, _ := strings.Cut(name, "/"); top == authPreflightTestName {
+			return true
+		}
+	}
+
+	return false
 }
 
 func runE2EPreflightFast(
@@ -647,29 +696,44 @@ func runE2EPreflightFast(
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
-	return collector.runStep("fast fixture preflight", func() error {
-		if err := writeStatus(stdout, "==> go test -tags=e2e fixture preflight\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
-		}
-		if err := runGoTestMatching(
-			ctx,
-			runner,
-			repoRoot,
-			env,
-			stdout,
-			stderr,
-			"fast e2e fixture preflight",
-			"test",
-			"-tags=e2e",
-			"-run="+fastE2EPreflightPattern,
-			"-count=1",
-			"-v",
-			"./e2e/...",
-		); err != nil {
-			return fmt.Errorf("fast e2e fixture preflight: %w", err)
+	return runE2EPreflight(ctx, runner, repoRoot, env, collector, stdout, stderr, e2ePreflightSpec{
+		stepName:    "fast fixture preflight",
+		status:      "==> go test -tags=e2e fixture preflight\n",
+		description: "fast e2e fixture preflight",
+		args:        fastE2EPreflightArgs(),
+	})
+}
+
+// e2ePreflightSpec is one fixture preflight step.
+type e2ePreflightSpec struct {
+	stepName    string
+	status      string
+	description string
+	args        []string
+}
+
+// runE2EPreflight runs one fixture preflight; its failure wraps
+// errE2EPreflight, which stops the live lane.
+func runE2EPreflight(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	env []string,
+	collector *verifySummaryCollector,
+	stdout, stderr io.Writer,
+	spec e2ePreflightSpec,
+) error {
+	return collector.runStepWithOutcome(spec.stepName, func() (stepOutcome, error) {
+		if err := writeStatus(stdout, spec.status); err != nil {
+			return stepOutcome{}, fmt.Errorf("write status: %w", err)
 		}
 
-		return nil
+		output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, spec.description, spec.args...)
+		if err != nil {
+			return stepOutcome{failedTests: failedTopLevelTests(output)}, fmt.Errorf("%w: %w", errE2EPreflight, err)
+		}
+
+		return stepOutcome{}, nil
 	})
 }
 
@@ -690,37 +754,42 @@ func runE2EFull(
 	fullEnv := append([]string{}, env...)
 	fullEnv = append(fullEnv, "E2E_LOG_DIR="+logDir)
 
+	buckets := fullE2EBuckets()
 	if err := runE2EPreflightFull(ctx, runner, repoRoot, fullEnv, collector, stdout, stderr); err != nil {
+		collector.recordBucketsNotRun(buckets, "full fixture preflight failed")
 		return err
 	}
 
 	bucketEnv := append([]string{}, fullEnv...)
 	bucketEnv = append(bucketEnv, e2eSkipSuiteScrubEnvVar+"=1")
 
-	buckets := fullE2EBuckets()
-	for i := range buckets {
-		bucket := buckets[i]
-		if err := collector.runBucket(bucket, func() error {
+	// Every bucket runs whatever an earlier one returned: a failure in one
+	// says nothing about the others, and stopping would hide their state for
+	// the night (CLAUDE.md: collect, report, continue).
+	var bucketErrs []error
+	notRun := 0
+	for _, bucket := range buckets {
+		if ctx.Err() != nil {
+			collector.recordBucketsNotRun([]fullE2EBucketSpec{bucket}, "run canceled")
+			notRun++
+			continue
+		}
+
+		if err := collector.runBucket(bucket, func() ([]string, error) {
 			if classifyLiveQuirks && bucketSupportsClassifiedRerun(bucket) {
-				return runFullE2EBucketWithClassification(
-					ctx,
-					runner,
-					repoRoot,
-					bucketEnv,
-					collector,
-					bucket,
-					stdout,
-					stderr,
-				)
+				return runFullE2EBucketWithClassification(ctx, runner, repoRoot, bucketEnv, collector, bucket, stdout, stderr)
 			}
 
 			return runFullE2EBucket(ctx, runner, repoRoot, bucketEnv, bucket, stdout, stderr)
 		}); err != nil {
-			return err
+			bucketErrs = append(bucketErrs, fmt.Errorf("bucket %s: %w", bucket.Name, err))
 		}
 	}
+	if notRun > 0 {
+		bucketErrs = append(bucketErrs, fmt.Errorf("full e2e: %d buckets not run: %w", notRun, ctx.Err()))
+	}
 
-	return nil
+	return errors.Join(bucketErrs...)
 }
 
 func fastE2EArgs() []string {
@@ -759,6 +828,7 @@ func classifyFastE2EQuirk(failedTests map[string]struct{}) ([]string, string, bo
 		"-run=^" + fastDownloadTestName + "$",
 		"-count=1",
 		"-v",
+		"-timeout=" + classifiedRerunTimeout,
 		"./e2e/...",
 	}, fastDownloadIncidentID, true
 }
@@ -783,7 +853,7 @@ func classifyFullE2EQuirk(bucket fullE2EBucketSpec, failedTests map[string]struc
 		"-v",
 		"-parallel",
 		strconv.Itoa(fullE2ESerialParallel),
-		"-timeout=" + fullE2EPackageTimeout,
+		"-timeout=" + classifiedRerunTimeout,
 		"./e2e/...",
 	}, websocketRestartIncidentID, websocketRestartTestName, true
 }
@@ -818,23 +888,14 @@ func runFullE2EBucket(
 	env []string,
 	bucket fullE2EBucketSpec,
 	stdout, stderr io.Writer,
-) error {
+) ([]string, error) {
 	if err := writeStatus(stdout, fmt.Sprintf("==> go test -tags='e2e e2e_full' %s\n", bucket.Name)); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
-		fullE2EBucketCommandArgs(bucket)...,
-	); err != nil {
-		return fmt.Errorf("full e2e: %w", err)
+		return nil, fmt.Errorf("write status: %w", err)
 	}
 
-	return nil
+	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketCommandArgs(bucket)...)
+
+	return failedTopLevelTests(output), err
 }
 
 func runFullE2EBucketWithClassification(
@@ -845,67 +906,33 @@ func runFullE2EBucketWithClassification(
 	collector *verifySummaryCollector,
 	bucket fullE2EBucketSpec,
 	stdout, stderr io.Writer,
-) error {
+) ([]string, error) {
 	if err := writeStatus(stdout, fmt.Sprintf("==> go test -json -tags='e2e e2e_full' %s\n", bucket.Name)); err != nil {
-		return fmt.Errorf("write status: %w", err)
+		return nil, fmt.Errorf("write status: %w", err)
 	}
 
-	output, err := runner.CombinedOutput(ctx, repoRoot, env, "go", fullE2EBucketJSONCommandArgs(bucket)...)
-	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
-		return fmt.Errorf("write %s output: %w", bucket.Name, writeErr)
-	}
+	// Streamed, not captured until exit: this is the nightly's watch bucket,
+	// and a job killed during it would otherwise leave no test output at all.
+	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketJSONCommandArgs(bucket)...)
 	if err == nil {
-		return nil
+		return nil, nil
 	}
 
-	return rerunClassifiedFullE2EQuirk(ctx, runner, repoRoot, env, collector, bucket, stdout, stderr, output, err)
-}
-
-func rerunClassifiedFullE2EQuirk(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	env []string,
-	collector *verifySummaryCollector,
-	bucket fullE2EBucketSpec,
-	stdout, stderr io.Writer,
-	output []byte,
-	runErr error,
-) error {
-	failedTests := failedGoTestsFromJSON(output)
-	rerunArgs, incidentID, trigger, ok := classifyFullE2EQuirk(bucket, failedTests)
+	failedTests := failedTopLevelTests(output)
+	rerunArgs, incidentID, trigger, ok := classifyFullE2EQuirk(bucket, failedGoTestsFromJSON([]byte(output)))
 	if !ok {
-		return fmt.Errorf("full e2e: %w", runErr)
+		return failedTests, err
 	}
 
-	if writeErr := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", incidentID)); writeErr != nil {
-		return fmt.Errorf("write status: %w", writeErr)
-	}
+	_, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
+		incidentID: incidentID,
+		phase:      bucket.Name,
+		trigger:    trigger,
+		args:       rerunArgs,
+		firstErr:   err,
+	})
 
-	rerunStartedAt := time.Now()
-	rerunErr := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", rerunArgs...)
-	rerunStatus := verifySummaryStatusPass
-	if rerunErr != nil {
-		rerunStatus = verifySummaryStatusFail
-	}
-	collector.recordClassifiedRerun(
-		incidentID,
-		bucket.Name,
-		trigger,
-		rerunArgs,
-		time.Since(rerunStartedAt),
-		rerunStatus,
-	)
-	if rerunErr != nil {
-		return fmt.Errorf("full e2e: %w", runErr)
-	}
-
-	warning := fmt.Sprintf("warning: classified known live quirk %s after successful rerun\n", incidentID)
-	if writeErr := writeStatus(stdout, warning); writeErr != nil {
-		return fmt.Errorf("write status: %w", writeErr)
-	}
-
-	return nil
+	return failedTests, err
 }
 
 func writeCommandOutput(w io.Writer, output []byte) error {
@@ -935,28 +962,10 @@ func runE2EPreflightFull(
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
-	return collector.runStep("full fixture preflight", func() error {
-		if err := writeStatus(stdout, "==> go test -tags='e2e e2e_full' fixture preflight\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
-		}
-		if err := runGoTestMatching(
-			ctx,
-			runner,
-			repoRoot,
-			env,
-			stdout,
-			stderr,
-			"full e2e fixture preflight",
-			"test",
-			"-tags=e2e e2e_full",
-			"-run="+fullE2EPreflightPattern,
-			"-count=1",
-			"-v",
-			"./e2e/...",
-		); err != nil {
-			return fmt.Errorf("full e2e fixture preflight: %w", err)
-		}
-
-		return nil
+	return runE2EPreflight(ctx, runner, repoRoot, env, collector, stdout, stderr, e2ePreflightSpec{
+		stepName:    "full fixture preflight",
+		status:      "==> go test -tags='e2e e2e_full' fixture preflight\n",
+		description: "full e2e fixture preflight",
+		args:        fullE2EPreflightArgs(),
 	})
 }

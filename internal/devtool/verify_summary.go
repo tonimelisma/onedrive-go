@@ -20,54 +20,92 @@ func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJ
 	}
 }
 
+// stepOutcome is what a step reports beside its error.
+type stepOutcome struct {
+	slowTests []StressSlowTestSummary
+	// failedTests names the step's failed top-level tests; it is recorded
+	// only when the step fails.
+	failedTests []string
+	// skipped means the step's tests skipped, so it verified nothing.
+	skipped bool
+}
+
 func (c *verifySummaryCollector) runStep(name string, fn func() error) error {
-	return c.runStepWithSlowTests(name, func() ([]StressSlowTestSummary, error) {
-		return nil, fn()
+	return c.runStepWithOutcome(name, func() (stepOutcome, error) {
+		return stepOutcome{}, fn()
 	})
 }
 
-func (c *verifySummaryCollector) runStepWithSlowTests(
-	name string,
-	fn func() ([]StressSlowTestSummary, error),
-) error {
+func (c *verifySummaryCollector) runStepWithOutcome(name string, fn func() (stepOutcome, error)) error {
 	startedAt := time.Now()
-	slowTests, err := fn()
+	outcome, err := fn()
 
 	step := VerifyStepSummary{
 		Name:       name,
 		Status:     verifySummaryStatusPass,
 		DurationMS: durationMS(time.Since(startedAt)),
-		SlowTests:  slowTests,
+		SlowTests:  outcome.slowTests,
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		step.Status = verifySummaryStatusFail
 		step.Error = err.Error()
+		step.FailedTests = outcome.failedTests
+	case outcome.skipped:
+		step.Status = verifySummaryStatusSkipped
 	}
 
 	c.summary.Steps = append(c.summary.Steps, step)
 	return err
 }
 
-func (c *verifySummaryCollector) runBucket(bucket fullE2EBucketSpec, fn func() error) error {
-	startedAt := time.Now()
-	err := fn()
+// recordStepNotRun records a step the profile did not start, and why.
+func (c *verifySummaryCollector) recordStepNotRun(name string, reason string) {
+	c.summary.Steps = append(c.summary.Steps, VerifyStepSummary{
+		Name:   name,
+		Status: verifySummaryStatusNotRun,
+		Error:  reason,
+	})
+}
 
-	summary := E2EBucketSummary{
+// runBucket runs one full-suite bucket; fn returns the bucket's failed
+// top-level tests with its error.
+func (c *verifySummaryCollector) runBucket(bucket fullE2EBucketSpec, fn func() ([]string, error)) error {
+	startedAt := time.Now()
+	failedTests, err := fn()
+
+	summary := newE2EBucketSummary(bucket)
+	summary.Status = verifySummaryStatusPass
+	summary.DurationMS = durationMS(time.Since(startedAt))
+	if err != nil {
+		summary.Status = verifySummaryStatusFail
+		summary.Error = err.Error()
+		summary.FailedTests = failedTests
+	}
+
+	c.summary.E2EFullBuckets = append(c.summary.E2EFullBuckets, summary)
+	return err
+}
+
+// recordBucketsNotRun records buckets the profile did not start, and why, so
+// the summary lists every bucket and "did not run" never reads as absent.
+func (c *verifySummaryCollector) recordBucketsNotRun(buckets []fullE2EBucketSpec, reason string) {
+	for _, bucket := range buckets {
+		summary := newE2EBucketSummary(bucket)
+		summary.Status = verifySummaryStatusNotRun
+		summary.Error = reason
+		c.summary.E2EFullBuckets = append(c.summary.E2EFullBuckets, summary)
+	}
+}
+
+func newE2EBucketSummary(bucket fullE2EBucketSpec) E2EBucketSummary {
+	return E2EBucketSummary{
 		Name:       bucket.Name,
 		Kind:       string(bucket.Kind),
 		RunPattern: fullE2EBucketRunPattern(bucket.TestNames),
 		Parallel:   bucket.Parallel,
 		Timeout:    bucket.Timeout,
-		Status:     verifySummaryStatusPass,
-		DurationMS: durationMS(time.Since(startedAt)),
 	}
-	if err != nil {
-		summary.Status = verifySummaryStatusFail
-		summary.Error = err.Error()
-	}
-
-	c.summary.E2EFullBuckets = append(c.summary.E2EFullBuckets, summary)
-	return err
 }
 
 func (c *verifySummaryCollector) recordClassifiedRerun(
@@ -139,8 +177,10 @@ func (c *verifySummaryCollector) renderText() string {
 	for _, step := range c.summary.Steps {
 		builder.WriteString(renderSummaryLine(step.Name, step.Status, step.DurationMS, step.Error))
 		builder.WriteString(renderSlowTestLines(step.SlowTests))
+		builder.WriteString(renderFailedTestLines(step.FailedTests))
 	}
-	for _, bucket := range c.summary.E2EFullBuckets {
+	for i := range c.summary.E2EFullBuckets {
+		bucket := &c.summary.E2EFullBuckets[i]
 		errorText := bucket.Error
 		if bucket.Parallel > 0 {
 			if errorText == "" {
@@ -150,6 +190,7 @@ func (c *verifySummaryCollector) renderText() string {
 			}
 		}
 		builder.WriteString(renderSummaryLine(bucket.Name, bucket.Status, bucket.DurationMS, errorText))
+		builder.WriteString(renderFailedTestLines(bucket.FailedTests))
 	}
 	fmt.Fprintf(&builder, "quirk events: %d\n", c.summary.QuirkEventCount)
 
@@ -198,6 +239,15 @@ func renderSlowTestLines(slowTests []StressSlowTestSummary) string {
 			formatDurationMS(slow.TotalElapsedMS),
 			formatDurationMS(slow.MaxElapsedMS),
 		)
+	}
+
+	return builder.String()
+}
+
+func renderFailedTestLines(failedTests []string) string {
+	var builder strings.Builder
+	for _, test := range failedTests {
+		fmt.Fprintf(&builder, "  failed test: %s\n", test)
 	}
 
 	return builder.String()

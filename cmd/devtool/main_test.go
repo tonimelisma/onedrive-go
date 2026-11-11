@@ -90,6 +90,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--ci-max-reruns", "1",
 		"--unit-timeout", "50m",
 		"--failed-log", "/tmp/ci.log",
+		"--check-format",
 	})
 
 	require.NoError(t, cmd.Execute())
@@ -111,6 +112,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 1, got.DODCIMaxReruns)
 	assert.Equal(t, 50*time.Minute, got.UnitTimeout)
 	assert.Equal(t, "/tmp/ci.log", got.FailedTestLog)
+	assert.True(t, got.CheckFormat)
 }
 
 // Validates: R-6.10.14

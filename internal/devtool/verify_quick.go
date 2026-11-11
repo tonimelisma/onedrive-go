@@ -109,7 +109,7 @@ func runPRLaneVerification(
 	}
 	switch {
 	case plan.runQuickChecks:
-		steps = append(steps, verifyStep{"format", runFormat})
+		steps = append(steps, verifyStep{"format", formatStep(plan.checkFormat)})
 		steps = append(steps, repoRuleSteps()...)
 		steps = append(steps, verifyStep{"build", runBuild}, verifyStep{"tagged vet", runTaggedVet})
 	case plan.runPlatformChecks:

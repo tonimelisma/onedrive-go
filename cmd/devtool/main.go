@@ -127,6 +127,7 @@ type verifyFlags struct {
 	dodCIMaxReruns     int
 	unitTimeout        time.Duration
 	failedTestLog      string
+	checkFormat        bool
 }
 
 func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
@@ -181,6 +182,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		DODCITimeout:       f.dodCITimeout,
 		DODCIMaxReruns:     f.dodCIMaxReruns,
 		FailedTestLog:      f.failedTestLog,
+		CheckFormat:        f.checkFormat,
 		Stdout:             cmd.OutOrStdout(),
 		Stderr:             cmd.ErrOrStderr(),
 	}
@@ -212,6 +214,12 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&f.summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
 	cmd.Flags().StringVar(&f.failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
+	cmd.Flags().BoolVar(
+		&f.checkFormat,
+		"check-format",
+		false,
+		"list the files the formatters would change and fail when there are any, instead of rewriting them",
+	)
 	cmd.Flags().BoolVar(
 		&f.classifyLiveQuirks,
 		"classify-live-quirks",
