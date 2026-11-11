@@ -44,15 +44,10 @@ func loadStatusLiveOverlay(
 			continue
 		}
 
-		ts, err := graph.TokenSourceFromPath(ctx, tokenPath, logger)
+		client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
 		if err != nil {
+			logger.Debug("status: loading sign-in for live overlay", "account", entry.Email, "error", err)
 			overlays[entry.Email] = statusLiveAuthOverlay(err)
-			continue
-		}
-
-		client, err := newGraphClientWithHTTP(cc.GraphBaseURL, cc.runtime().BootstrapMeta(), ts, logger)
-		if err != nil {
-			logger.Debug("status: creating graph client for live overlay", "account", entry.Email, "error", err)
 			continue
 		}
 		attachAccountAuthProof(client, recorder, entry.Email, "status")

@@ -20,6 +20,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
@@ -100,7 +101,7 @@ func newIntegrationClient(t *testing.T) *Client {
 		slog.String("token_path", tokenPath),
 	)
 
-	ts, err := TokenSourceFromPath(ctx, tokenPath, logger)
+	ts, err := TokenSourceFromPath(ctx, tokenPath, graphtransport.AuthClient(), logger)
 	if errors.Is(err, ErrNotLoggedIn) {
 		t.Skipf("no token for drive %q at %s -- run bootstrap first", drive, tokenPath)
 	}

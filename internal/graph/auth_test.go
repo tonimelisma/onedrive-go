@@ -417,7 +417,7 @@ func TestLoadToken_InvalidJSON(t *testing.T) {
 func TestTokenSourceFromPath_NoFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	_, err := TokenSourceFromPath(t.Context(), path, slog.Default())
+	_, err := TokenSourceFromPath(t.Context(), path, offlineAuthClient(t), slog.Default())
 	assert.ErrorIs(t, err, ErrNotLoggedIn)
 }
 
@@ -434,7 +434,7 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 
 	require.NoError(t, tokenfile.Save(path, tok))
 
-	ts, err := TokenSourceFromPath(t.Context(), path, slog.Default())
+	ts, err := TokenSourceFromPath(t.Context(), path, offlineAuthClient(t), slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -450,7 +450,7 @@ func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenfile.FilePerms))
 
-	_, err := TokenSourceFromPath(t.Context(), path, slog.Default())
+	_, err := TokenSourceFromPath(t.Context(), path, offlineAuthClient(t), slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }

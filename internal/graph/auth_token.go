@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	stdsync "sync"
 	"time"
 
@@ -16,15 +17,31 @@ import (
 
 // TokenSourceFromPath loads a saved token from the given path and returns a
 // TokenSource with auto-refresh and auto-persistence via OnTokenChange.
-// Returns ErrNotLoggedIn if no token file exists at the path.
+// Returns ErrNotLoggedIn if no token file exists at the path, and an error if
+// authHTTP is nil.
 //
 // The returned TokenSource binds ctx to the underlying oauth2 token source.
 // ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
 // will fail. Callers should pass context.Background() for long-lived sessions.
+// authHTTP sends every refresh (graphtransport.AuthClient in production), so a
+// stalled token endpoint fails the refresh at that client's deadline.
+//
+// Production callers reach this through driveops.SessionRuntime, which keeps
+// one source per sign-in file (R-6.8.27).
 //
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
-func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Logger) (TokenSource, error) {
+func TokenSourceFromPath(
+	ctx context.Context,
+	tokenPath string,
+	authHTTP *http.Client,
+	logger *slog.Logger,
+) (TokenSource, error) {
+	authCtx, err := withAuthClient(ctx, authHTTP)
+	if err != nil {
+		return nil, err
+	}
+
 	tok, err := loadSavedToken(tokenPath)
 	if err != nil {
 		return nil, err
@@ -37,7 +54,7 @@ func TokenSourceFromPath(ctx context.Context, tokenPath string, logger *slog.Log
 		slog.Bool("expired", expired),
 	)
 
-	return newTokenBridge(ctx, oauthConfig(tokenPath, logger), tok, logger), nil
+	return newTokenBridge(authCtx, oauthConfig(tokenPath, logger), tok, logger), nil
 }
 
 // CheckSavedLogin reports whether tokenPath holds a usable saved login,
