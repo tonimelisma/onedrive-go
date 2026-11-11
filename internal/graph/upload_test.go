@@ -828,7 +828,20 @@ type sessionUploadRecorder struct {
 	readBacks      []createdItemReadBack
 	deleteStatuses []int
 	reads          int
+	// createStatus, when set, refuses the create with that status and an
+	// invalidRequest body, as OneDrive refused a path it counts as too long
+	// (live, 2026-11-02).
+	createStatus int
+	// sessionLandsThenDrops makes the session request land without an
+	// answer: OneDrive opens the session, which moves the empty item's eTag
+	// to sessionLandedETag, and the connection drops before the response
+	// (live, 2026-11-10, LI-20261110-01).
+	sessionLandsThenDrops bool
 }
+
+// sessionLandedETag is the empty item's eTag once a session request that
+// lost its answer has landed (sessionLandsThenDrops).
+const sessionLandedETag = `"session-landed"`
 
 // createdItemReadBack is one scripted answer to a read-back of the created
 // item: the item with exactly this eTag and size, or an error status.
@@ -878,6 +891,50 @@ func (rec *sessionUploadRecorder) serveReadBack(t *testing.T, w http.ResponseWri
 	writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","eTag":%q,"size":%d,"file":{}}`, read.etag, read.size)
 }
 
+// serveCreate records a create of the new file and answers it with the
+// created item, or with createStatus when that is set. The caller holds mu.
+func (rec *sessionUploadRecorder) serveCreate(t *testing.T, w http.ResponseWriter, r *http.Request, body []byte) {
+	t.Helper()
+
+	rec.createBodies = append(rec.createBodies, string(body))
+	rec.createURLs = append(rec.createURLs, r.URL.RawPath+"|"+r.URL.Path)
+	if rec.createStatus != 0 {
+		w.WriteHeader(rec.createStatus)
+		writeTestResponse(t, w, `{"error":{"code":"invalidRequest","message":"scripted create refusal"}}`)
+
+		return
+	}
+	serveCreateFile(t, w, r, "small-item")
+}
+
+// serveSessionCreate records a session request on the created item and opens
+// a session on uploadBase, answers sessionStatus when that is not 200, or
+// lands it without an answer (sessionLandsThenDrops). The caller holds mu.
+func (rec *sessionUploadRecorder) serveSessionCreate(
+	t *testing.T, w http.ResponseWriter, r *http.Request, body []byte, sessionStatus int, uploadBase string,
+) {
+	t.Helper()
+
+	rec.sessionURLs = append(rec.sessionURLs, r.URL.Path)
+	rec.sessionMatch = append(rec.sessionMatch, r.Header.Get("If-Match"))
+	rec.sessionBodies = append(rec.sessionBodies, string(body))
+	if rec.sessionLandsThenDrops {
+		rec.currentETag = sessionLandedETag
+		answerWithNothing(t, w, r, nil)
+
+		return
+	}
+	if sessionStatus != http.StatusOK {
+		w.WriteHeader(sessionStatus)
+		writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	writeTestResponsef(t, w, `{"uploadUrl":"%s/upload-session","expirationDateTime":"2030-01-01T00:00:00Z"}`, uploadBase)
+}
+
 func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionStatus int) *httptest.Server {
 	t.Helper()
 
@@ -895,26 +952,13 @@ func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionSta
 
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/children"):
-			rec.createBodies = append(rec.createBodies, string(body))
-			rec.createURLs = append(rec.createURLs, r.URL.RawPath+"|"+r.URL.Path)
-			serveCreateFile(t, w, r, "small-item")
+			rec.serveCreate(t, w, r, body)
 		case r.Method == http.MethodDelete:
 			rec.serveDelete(t, w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/items/small-item"):
 			rec.serveReadBack(t, w)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "createUploadSession"):
-			rec.sessionURLs = append(rec.sessionURLs, r.URL.Path)
-			rec.sessionMatch = append(rec.sessionMatch, r.Header.Get("If-Match"))
-			rec.sessionBodies = append(rec.sessionBodies, string(body))
-			if sessionStatus != http.StatusOK {
-				w.WriteHeader(sessionStatus)
-				writeTestResponse(t, w, `{"error":{"code":"accessDenied"}}`)
-
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-			writeTestResponsef(t, w, `{"uploadUrl":"%s/upload-session","expirationDateTime":"2030-01-01T00:00:00Z"}`, srv.URL)
+			rec.serveSessionCreate(t, w, r, body, sessionStatus, srv.URL)
 		case r.Method == http.MethodPut && r.URL.Path == "/upload-session":
 			rec.chunkBodies = append(rec.chunkBodies, string(body))
 			w.WriteHeader(http.StatusCreated)

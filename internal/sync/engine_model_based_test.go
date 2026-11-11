@@ -305,6 +305,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	}
 	if chaos != nil {
 		chaos.concurrentWrite = run.concurrentRemoteWrite
+		chaos.churnPlaceholder = func(itemID string) { run.remote.churnETag(itemID) }
 	}
 	run.adoptEngine(h.eng)
 	crashRng := rand.New(rand.NewPCG(seed^0xc2b2ae3d27d4eb4f, seed)) //nolint:gosec // deterministic test RNG
