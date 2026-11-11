@@ -284,7 +284,7 @@ func closeEngineSyncStoreOnStartupFailure(
 		if storeOwnedByEngine != nil && *storeOwnedByEngine {
 			return
 		}
-		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil && logger != nil {
+		if closeErr := store.Close(ctx); closeErr != nil && logger != nil {
 			logger.Debug("could not close sync store after engine startup failure",
 				slog.Any("error", closeErr),
 			)

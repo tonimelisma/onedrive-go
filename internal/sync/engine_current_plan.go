@@ -418,7 +418,9 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 	defer func() {
-		if cleanupErr := cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
+		// The scratch store's close runs its checkpoint detached under its
+		// own bound, so a canceled ctx does not skip the cleanup.
+		if cleanupErr := cleanup(ctx); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
 		}
 	}()

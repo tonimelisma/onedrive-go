@@ -27,7 +27,7 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 	if err != nil {
 		return fmt.Errorf("create fresh sync store: %w", err)
 	}
-	if err := store.Close(context.WithoutCancel(ctx)); err != nil {
+	if err := store.Close(ctx); err != nil {
 		return fmt.Errorf("close fresh sync store: %w", err)
 	}
 
@@ -62,7 +62,7 @@ func RebindSyncRoot(ctx context.Context, dbPath string, logger *slog.Logger) (er
 		return fmt.Errorf("open sync store: %w", err)
 	}
 	defer func() {
-		if closeErr := store.Close(context.WithoutCancel(ctx)); closeErr != nil && err == nil {
+		if closeErr := store.Close(ctx); closeErr != nil && err == nil {
 			err = fmt.Errorf("close sync store: %w", closeErr)
 		}
 	}()

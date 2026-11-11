@@ -143,6 +143,13 @@ func openSyncStoreWithDriver(
 	return store, nil
 }
 
+// StoreCloseCheckpointTimeout bounds the WAL checkpoint Close runs detached
+// from its caller's cancellation. A checkpoint is local I/O that takes
+// milliseconds; the bound exists so a store whose disk stopped answering
+// cannot hold a close forever, and it leaves room inside the watch control
+// plane's bound on an engine close for the rest of Engine.Close.
+const StoreCloseCheckpointTimeout = 10 * time.Second
+
 // Close checkpoints the WAL and closes the underlying database connection.
 // The explicit checkpoint ensures cross-process readers (for example `status`
 // after `sync`) see all committed data when they open a new connection to the
@@ -151,8 +158,11 @@ func (s *SyncStore) Close(ctx context.Context) error {
 	// Close usually runs during shutdown, when ctx is already canceled. The
 	// checkpoint is short local I/O that cross-process readers depend on, so
 	// it must not be skipped (or reported as a failure) just because the
-	// caller is stopping.
-	if err := s.Checkpoint(context.WithoutCancel(ctx)); err != nil {
+	// caller is stopping; it runs detached, under its own bound, so callers
+	// pass their context as it is.
+	checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StoreCloseCheckpointTimeout)
+	defer cancel()
+	if err := s.Checkpoint(checkpointCtx); err != nil {
 		s.logger.Debug("checkpoint failed on close", slog.Any("error", err))
 	}
 

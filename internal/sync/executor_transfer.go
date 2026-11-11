@@ -601,7 +601,7 @@ func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action
 // The item exists on OneDrive from the moment the create answers, whatever
 // happens to the action after, so the record is written on a context that
 // keeps the action's values but not its cancellation, bounded by
-// outcomeCommitTimeout like a finished action's outcome commit. On the
+// OutcomeCommitTimeout like a finished action's outcome commit. On the
 // action's own context a shutdown landing right after the create failed the
 // write, and only the intent was left (live, e2e
 // TestE2E_SyncWatch_PauseResume).
@@ -620,7 +620,7 @@ func (e *executor) recordPendingCreate(
 		pending := pendingCreateOf(action, driveID, parentID)
 		pending.ItemID, pending.CreatedETag = itemID, createdETag
 
-		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeCommitTimeout)
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
 		defer cancel()
 
 		return e.pendingCreates.RecordPendingCreate(recordCtx, pending)

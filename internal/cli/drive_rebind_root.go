@@ -41,7 +41,7 @@ folder now. Type REBIND to confirm, or use --yes for non-interactive use.`,
 }
 
 func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.Reader, yes bool) error {
-	cfg, cid, err := resolveDriveForStateChange(ctx, cc, "rebind", "rebind the sync folder")
+	cfg, cid, err := resolveDriveForStateChange(ctx, cc, "rebind", rebindRootAction)
 	if err != nil {
 		return err
 	}
@@ -51,10 +51,7 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 		return fmt.Errorf("cannot determine state DB path for drive %q", cid)
 	}
 
-	drive := cfg.Drives[cid]
-	// A configured "~/..." path is expanded before the folder is counted;
-	// unexpanded, the count read 0 for a full folder (live, 2026-11-04).
-	syncDir := config.ExpandTilde(config.EffectiveSyncDir(cfg, cid, drive.SyncDir, cc.Logger))
+	syncDir := driveSyncDir(cfg, cid, cc.Logger)
 	// An unreadable state is exactly when a rebind may be needed, so it is
 	// not a reason to refuse; the count is shown as unknown.
 	synced, err := syncengine.SyncedFileCount(ctx, dbPath, cc.Logger)
@@ -70,8 +67,17 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 		return err
 	}
 
-	if err := syncengine.RebindSyncRoot(ctx, dbPath, cc.Logger); err != nil {
-		return fmt.Errorf("rebind sync folder: %w", err)
+	// A rebind runs exactly when the folder at the sync path is not the one
+	// the state records, so both folders' locks count: an engine started
+	// before the move still holds the recorded one, and one starting now
+	// would take the one at the path.
+	if err := changeDriveStateUnderFolderLock(ctx, syncDir, dbPath, rebindRootAction, cc.Logger, func() error {
+		if rebindErr := syncengine.RebindSyncRoot(ctx, dbPath, cc.Logger); rebindErr != nil {
+			return fmt.Errorf("rebind sync folder: %w", rebindErr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	if cc.Flags.JSON {
@@ -85,6 +91,9 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 
 // unknownFileCount marks a synced-file count the state could not provide.
 const unknownFileCount = -1
+
+// rebindRootAction completes "cannot ..." in the rebind's refusals.
+const rebindRootAction = "rebind the sync folder"
 
 // driveRebindRootJSONOutput is `drive rebind-root --json`. synced_files is
 // -1 when the sync state could not be read.

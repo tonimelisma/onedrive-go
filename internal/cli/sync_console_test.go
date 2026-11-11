@@ -205,6 +205,30 @@ func TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError(t *testing.T) {
 	assert.Contains(t, commandErrorText(err, false), "Authentication required")
 }
 
+// A pass whose every drive synced still fails when a drive's sync state did
+// not close afterwards: the engine may still hold its store, and only the
+// process exit releases it. A user's stop does not turn that into 130.
+//
+// Validates: R-6.3.9
+func TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced(t *testing.T) {
+	t.Parallel()
+
+	result := multisync.RunOnceResult{
+		Startup: multisync.StartupSelectionSummary{Results: []multisync.MountStartupResult{{
+			DisplayName: "Personal",
+			Status:      multisync.MountStartupRunnable,
+		}}},
+		Reports: []*multisync.MountReport{{DisplayName: "Personal", Report: &syncengine.Report{}}},
+		Stuck:   fmt.Errorf("Personal: %w (its sync state did not close within 15 s)", multisync.ErrSyncStuck),
+	}
+
+	err := runOnceResultError(result)
+
+	require.ErrorIs(t, err, multisync.ErrSyncStuck)
+	assert.Equal(t, exitFailure, commandExitCode(err, false))
+	assert.Equal(t, exitFailure, commandExitCode(err, true))
+}
+
 // Validates: R-6.6.22
 func TestSyncConsole_MultiDriveNamesEachDrive(t *testing.T) {
 	t.Parallel()

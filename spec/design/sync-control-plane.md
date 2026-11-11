@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified], R-6.3.9 [verified]
 
 ## Control Socket Exposure
 
@@ -55,7 +55,7 @@ runtime package that implements it.
 - Does Not Own: Parent-drive Graph discovery, shortcut placeholder mutation, parent sync-dir shortcut alias filesystem policy, single-mount content observation, planning, execution, retry/trial policy, or sync-store persistence semantics.
 - Source of Truth: The current `config.Holder` snapshot, the CLI-compiled standalone mount configs, plus the runtime runner set, run-owned parent child-work snapshot cache, and `runners` map owned by the active one-shot/watch runtime.
 - Allowed Side Effects: Session creation, engine construction/closure, child artifact cleanup scoped by parent snapshot, Unix control-socket bind/unlink, per-mount goroutine startup, live perf capture, and control-plane logging.
-- Mutable Runtime Owner: One-shot and watch each own their current parent child-work snapshots. `RunWatch` owns the live `runners` map. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount.
+- Mutable Runtime Owner: One-shot and watch each own their current parent child-work snapshots. `RunWatch` owns the live `runners` map, the runner generation counter and each runner's stop deadline and stuck mark. Each `watchRunner` owns one cancel function and one completion channel for exactly one mount, and one generation that its events carry.
 - Error Boundary: The control plane converts mount startup into structured per-mount startup outcomes, returns one-shot startup classification separately from completed `MountReport` values, and keeps watch-runner failures isolated to the affected mount or log path. Engine-internal errors remain inside the single-mount boundary.
 
 ## Verified By
@@ -73,6 +73,11 @@ runtime package that implements it.
 | Watch mode announces each drive start failure once and again only when its reason changes or the drive has started in between, including the carried-over CLI config failures; repeats of the same shortcut-refresh or cleanup failure stay at DEBUG. | `TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges`, `TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn` |
 | A removed shared folder whose final sync did not finish cleanly keeps its local copy, and multisync says so in one plain Info line naming the folder (not its mount ID), repeated only when the reason changes; unchanged repeats from watch passes go to Debug. The memory is mutex-guarded because one-shot parents finalize their children concurrently. | `TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges` |
 | A watch runner that exits with an error is restarted after exponential backoff from the RunWatch loop's own wake-up timer, warned about once per distinct error with the retry delay, and starts over after a healthy run; stale events from runners the orchestrator already stopped, and canceled final drains, produce no warning. | `TestHandleWatchRunnerEvent_BacksOffAndWarnsOncePerDistinctRunnerFailure`, `TestHandleWatchRunnerEvent_HealthyRunResetsBackoff`, `TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires`, `TestRunnerRestartDelay_DoublesUpToTheCap`, `TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner`, `TestStartWatchRunner_CanceledFinalDrainSendsNoEvent`, `TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot` |
+| Every runner event carries its runner's generation, and an event from a runner that was stopped or replaced under the same mount ID changes nothing: a replaced drive's queued failure, a normal shortcut child's failure after a final drain took its place, a replaced parent's snapshot. A canceled runner never blocks on the event channel. A shortcut republished with only its run mode changed to a final drain restarts as a final drain (R-6.3.9). | `TestHandleWatchRunnerEvent_EventFromReplacedRunnerIsIgnored`, `TestHandleWatchRunnerEvent_EventFromReplacedFinalDrainChildIsIgnored`, `TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents`, `TestStartWatchRunner_CancelledRunnerDoesNotBlockOnAFullEventChannel`, `TestApplyWatchMountSetForParent_NormalToFinalDrainRestartsChild`, `TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren` |
+| Every stop of a watch runner goes through `retireWatchRunner`, whose waits are bounded: 45 s for the runner to return and 15 s for its engine to close. A runner that misses either fails closed (it stays in the runner set, its engine stays open, nothing starts under its ID, one Error line with every goroutine's stack) and the watch ends with `ErrSyncStuck`, on a reload, a removed or paused drive, a retired shortcut, a drive's exit and shutdown alike; drives stopped together share one bound. The owner lock is held until every runner has stopped (R-6.3.9, R-2.9.4). | `TestRetireWatchRunner_TimeoutFailsClosed`, `TestRetireWatchRunner_EngineCloseTimeoutFailsClosed`, `TestWatchRunnerStopPaths_ARunnerThatDoesNotStopFailsClosed`, `TestRetireAllWatchRunners_StuckDrivesShareOneStopBound`, `TestRunWatch_StuckRunnerOnReloadEndsTheWatchWithAnError`, `TestRunWatch_StuckRunnerOnShutdownEndsTheWatchWithAnError`, `TestRunWatch_OwnerLockHeldUntilRunnersDrain`, `internal/cli/failure_class_test.go` (`TestCommandExitCode`) |
+| A one-shot run closes its engines with the watch's bounded close on a detached context; an engine whose close runs over fails the run with `ErrSyncStuck` (exit 1) while the pass's reports stand, and a shortcut whose engine did not close is neither acknowledged nor cleaned up in that run (R-6.3.9). | `TestRunOnce_AnEngineThatDoesNotCloseFailsTheRun`, `TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged`, `internal/cli/sync_console_test.go` (`TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced`) |
+| Every context the engine or the control plane detaches from cancellation carries a deadline, so the stop and close bounds rest on bounded waits (R-6.3.9). | `internal/sync/detached_context_test.go` (`TestDetachedContexts_AlwaysCarryADeadline`, `TestUnboundedDetachedContexts_FlagsOnlyTheUnboundedForm`) |
+| A `WatchReloaded` event states its outcome (`ReloadApplied`, `ReloadKeptPreviousSettings`), and the CLI's service status follows the outcome, not `Err` (R-6.6.32). | `TestRunWatch_ReportsLifecycleTransitions`, `internal/cli/sync_notify_test.go` (`TestSyncNotifier_ReloadStatusFollowsTheStatedOutcome`) |
 | A panic in one mount's runner goroutine (watch loop or final drain) is recovered, logged once at Error with its stack, and becomes that runner's error, so the mount is backed off and restarted while its siblings keep running; one-shot `MountRunner` panics take the same path. | `TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt`, `TestMountRunner_Run_PanicIsLoggedAtErrorWithStack`, `TestMountRunner_Run_Panic`, `TestMountRunner_Run_PanicWithError` |
 | A reload the watch owner cannot apply is answered with `reload_failed` instead of `reloaded`, and the running drives keep their previous settings. Another sync owning the socket is one process-level startup failure, not one per drive, and its message names the way out rather than the socket path. | `TestOrchestrator_Reload_InvalidConfig`, `TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives` |
 | Control-socket reload applies add/remove/pause/expired-pause/filter diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry`, `TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount` |
@@ -386,6 +391,10 @@ until the resume. It listens for:
   Socket). `RunWatch` returns the error, so the watch exits 1 through the
   same drain as any other return
 
+The loop also ends when a runner it had to stop did not stop within its
+bound (see Stopping a runner): the reload, reconcile or event handler that
+met it returns `ErrSyncStuck`, and so does `RunWatch`.
+
 Pause semantics come from `config.Drive.IsPaused()` and
 `config.ClearExpiredPauses()` for configured parents. Managed child mounts
 inherit the parent drive state and have no independent pause state. The control
@@ -419,9 +428,73 @@ arms one timer for the earliest pending restart and reconciles when it fires,
 so a backed-off drive does not wait for the next reconcile tick. The exit is
 logged once per distinct error as "Stopped syncing <drive>; retrying in <delay>"
 (a lost sync folder is INFO, because the restart's start failure is what gets
-announced). An event from a runner the orchestrator already stopped is
-ignored, and a final drain the orchestrator canceled sends no event, so
+announced). A final drain the orchestrator canceled sends no event, so
 reloads and parent changes never surface "context canceled".
+
+Every runner gets a generation from a counter the RunWatch goroutine owns
+(`startNextWatchRunner`), and every event it sends carries it, including the
+parent child-work snapshots its parent sink publishes (the sink is attached
+to the mount spec with the generation before the runner starts). An event
+whose generation is not that of the runner now under its mount ID came from
+a runner the orchestrator already stopped or replaced, and is ignored: before
+the generation, a reload that replaced a failed runner under the same ID
+applied the old runner's queued failure to the new one and waited for the new
+one to exit, and a normal shortcut child's failure was taken for the result
+of the final drain that replaced it. A parent snapshot event must also still
+match the cached snapshot. A runner's sends give up once the runner is
+canceled, so a canceled runner never holds its `done` open on a full event
+channel while the loop waits for it.
+
+#### Stopping a runner
+
+`retireWatchRunner` is the only code that stops a watch runner, whatever
+asked for it: a reload, a removed or paused drive, a shortcut retired or
+replaced by its parent's snapshot, a parent's exit (its children), a runner
+that exited on its own, and the end of the watch (`retireAllWatchRunners`).
+It cancels the runner, waits for its goroutine, closes its engine on a
+context detached from the watch's cancellation, and removes it, and both
+waits are bounded:
+
+| Bound | Value | Why |
+| --- | --- | --- |
+| Runner returns after its cancel | 45 s (`watchRunnerStopTimeout` = `syncengine.OutcomeCommitTimeout` + 15 s) | what a canceled engine still waits for is its detached store writes, each bounded by `OutcomeCommitTimeout` (30 s) |
+| Engine closes | 15 s (`engineCloseTimeout` = `syncengine.StoreCloseCheckpointTimeout` + 5 s) | the store close's checkpoint (bounded at 10 s inside `SyncStore.Close`), the stale upload-session sweep and the database close; `Engine.Close` does not take its context into the sweep, so the bound is on the wait |
+
+The arithmetic. A canceled engine's remaining waits are the detached store
+writes of its drain: the commit of work that finished as the cancel landed,
+the record of a created item, clearing a succeeded action's retry work, the
+findings observed before the shutdown (sync-engine.md, Detached store
+writes). Each runs on `context.WithTimeout(context.WithoutCancel(ctx),
+OutcomeCommitTimeout)`; `TestDetachedContexts_AlwaysCarryADeadline` keeps
+any detached context in `internal/sync` and `internal/multisync` from going
+without a deadline. A healthy write takes milliseconds and waits at most
+SQLite's 5 s busy timeout for a lock, so a healthy stop takes well under a
+second. The stop bound covers one write running to its 30 s limit plus 15 s
+for everything else; a store slow enough to need two is wedged, and ending
+the watch is then the intended outcome, not a false alarm. The close bound
+holds the checkpoint's own 10 s bound plus 5 s for the sweep and the close.
+
+A one-shot run closes its engines with the same bounded close
+(`closeEngineWithin`, shared with the watch): a close that runs over is
+logged once with every goroutine's stack, the run's `RunOnceResult.Stuck`
+wraps `ErrSyncStuck`, the pass's reports stand, and the command exits 1. A
+shortcut whose engine did not close gets neither its final-drain
+acknowledgement nor its artifact cleanup in that run, since both act on a
+store its engine may still be writing; the next run retries them.
+
+The stop bound runs from the runner's first cancel, so the drain at the end
+of the watch, which cancels every runner before it waits for any, waits for
+all of them at most once. A runner that misses a bound fails closed: it is
+marked stuck and stays in `runners`, so nothing is started under its mount
+ID and its engine, which may still be writing its store under the sync-root
+lock, is never closed under it; every goroutine's stack is logged once at
+Error; and the error, wrapping `ErrSyncStuck`, ends the watch with
+exit status 1, also on a user's stop (R-6.3.9, R-6.6.27). Exiting is the
+only way to end a goroutine that ignores its cancellation, and it releases
+every lock the engine holds; where the filesystem cannot lock the sync root
+(R-2.9.5), the orchestrator's refusal to start a replacement is the only
+thing keeping the store single-owner. The stuck goroutine, and a close that
+ran over, are left to that exit.
 
 The runner goroutine is a panic boundary. `runWatchRunnerEngine` recovers a
 panic from the engine's `RunWatch` (or a final-drain child's `RunOnce`) and
@@ -448,6 +521,15 @@ compared with the path's and a mismatch retries
 (`TestStartControlSocketServer_RacingOwnersYieldExactlyOne`,
 `TestStartControlSocketServer_LockReleasedOnCloseAndOnlyThen`,
 `TestLockFileStillAtPath_DetectsAnUnlinkedOrReplacedLock`).
+
+Only the owner closes the server, after its drives have stopped: `RunOnce`
+and `RunWatch` defer the close so it runs after their runners are done, and
+nothing closes it when the context is canceled. A goroutine that did, at the
+first signal, released the lock while the drives were still draining into
+their stores, so `drive reset-sync-state` or a second sync could start
+against a store still being written (`TestRunWatch_OwnerLockHeldUntilRunnersDrain`).
+During the drain the socket stays up; a command the loop no longer takes is
+answered `busy`.
 
 That lock covers one control socket. Each engine also holds an exclusive
 `flock` on a data-dir lock file named after its sync root's device and inode
@@ -580,7 +662,11 @@ HTTP 422 and `code="reload_failed"`, so `pause`, `resume`, `drive add` and
 `login` do not report that the running sync picked up their change. Drives
 that fail to start under a config that did load are startup results, not a
 reload failure. A successful reload releases pending restart backoff waits,
-because the user asked for the current config to be applied now.
+because the user asked for the current config to be applied now. A reload
+that has to stop a drive that does not stop within its bound ends there,
+before it starts anything: the client is answered HTTP 500 `internal_error`
+("the running sync is stopping"), and the watch ends with
+`ErrSyncStuck`.
 
 Removed or newly paused mounts are stopped and closed. Newly added or newly
 resumed mounts are started when they are runnable; incompatible-store mounts
@@ -605,9 +691,9 @@ The control plane has one mutable runtime structure in watch mode: the active
 runner set.
 
 - The `RunWatch` select loop is the single writer for the `runners` map.
-- `startWatchRunner` creates one goroutine per running mount. That goroutine owns closing the runner's `done` channel exactly once on exit.
+- `startWatchRunner` creates one goroutine per running mount. That goroutine owns closing the runner's `done` channel exactly once on exit. `closeEngineWithin` starts the goroutine that closes an engine (a stopped watch runner's, or a one-shot pass's) and its caller owns it through the wait of up to `engineCloseTimeout`; a runner goroutine or close goroutine that outlives its bound is left to the process exit that the stuck error causes.
 - The control command channel is internal to `RunWatch`; socket handlers send commands into that channel and wait for one response.
-- The control plane owns two timers, both read only by the RunWatch loop: the reconcile ticker (default every 5 minutes) and a one-shot wake-up for the earliest backed-off runner restart. Both are injectable for tests. Reload, stop, and perf capture are event-driven through control-socket requests and context cancellation.
+- The control plane owns four timers, all read only by the RunWatch goroutine: the reconcile ticker (default every 5 minutes), a one-shot wake-up for the earliest backed-off runner restart, a one-shot wake-up for the earliest timed-pause expiry, and the bound `retireWatchRunner` arms on one stop or close. All are injectable for tests (`reconcileTicks`, `restartTimer`, `retireTimer`). Reload, stop, and perf capture are event-driven through control-socket requests and context cancellation.
 - `watchReportState` (announced start failures, per-key last warnings, restart backoff) is owned by the RunWatch goroutine alone and needs no lock; it is reset at each RunWatch start and is disposable.
 - The control plane owns live perf registration for active mounts, but not the
   counters themselves. `internal/perf` owns the aggregate/live snapshot state;
@@ -673,14 +759,22 @@ an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
   engine seal new admission and follow its normal shutdown path
 - second signal forces exit
 
-No timer escalates the first signal; forced exit is owned only by the second
-signal.
+The first signal is bounded by the stop and close bounds of Stopping a
+runner: a drive that has not stopped 45 s after it ends the watch with
+`ErrSyncStuck` and exit status 1 instead of 130, inside systemd's
+default 90 s stop timeout, and a `Restart=on-failure` unit starts a fresh
+process. The second signal still forces exit at once.
 
 `OrchestratorConfig.WatchLifecycle` reports `RunWatch`'s transitions to the
 CLI (`watch_lifecycle.go`, R-6.6.32): `WatchReady` once startup finished with
-at least one runner, `WatchReloading` and `WatchReloaded` (with `Err` when the
-previous settings were kept) around every control-socket reload, and
-`WatchStopping` before the runners drain. The hook runs on the watch-loop
+at least one runner, `WatchReloading` and `WatchReloaded` around every
+control-socket reload, and `WatchStopping` before the runners drain. A
+`WatchReloaded` states its outcome in `Reload`: `ReloadApplied` (the drive
+set is filled in) or `ReloadKeptPreviousSettings` (with the reason in
+`Err`). The CLI switches on the outcome and never infers it from `Err`, so a
+new kind of reload error cannot be reported as one that kept the previous
+settings. A reload that ends the watch because a drive did not stop reports
+no `WatchReloaded`; `WatchStopping` follows it. The hook runs on the watch-loop
 goroutine that owns the runner set, so its `SyncRoots` and `Skipped` are a
 consistent snapshot; it must not block. A watch that fails to start reports
 nothing. The CLI turns these into systemd notifications; multisync knows

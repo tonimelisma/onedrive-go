@@ -8,8 +8,13 @@ import (
 
 type parentChildWorkNotify func(context.Context, mountID, syncengine.ShortcutChildWorkSnapshot) error
 
+// attachParentChildWorkSink points a parent mount's child-work publications at
+// the run's snapshot cache. In watch mode each changed snapshot also becomes a
+// runner event stamped with generation, the generation of the runner about to
+// start for mount; one-shot passes no event channel and generation 0.
 func (o *Orchestrator) attachParentChildWorkSink(
 	mount *mountSpec,
+	generation uint64,
 	cache *parentChildWorkSnapshots,
 	watchEvents chan<- watchRunnerEvent,
 	notify parentChildWorkNotify,
@@ -20,11 +25,12 @@ func (o *Orchestrator) attachParentChildWorkSink(
 	if mount.parent == nil {
 		return
 	}
-	mount.parent.childWorkSink = o.parentChildWorkSinkForMount(mount, cache, watchEvents, notify)
+	mount.parent.childWorkSink = o.parentChildWorkSinkForMount(mount, generation, cache, watchEvents, notify)
 }
 
 func (o *Orchestrator) parentChildWorkSinkForMount(
 	mount *mountSpec,
+	generation uint64,
 	cache *parentChildWorkSnapshots,
 	watchEvents chan<- watchRunnerEvent,
 	notify parentChildWorkNotify,
@@ -40,6 +46,7 @@ func (o *Orchestrator) parentChildWorkSinkForMount(
 			select {
 			case watchEvents <- watchRunnerEvent{
 				mountID:               parent.id(),
+				generation:            generation,
 				parentSnapshot:        normalized,
 				parentSnapshotChanged: true,
 			}:

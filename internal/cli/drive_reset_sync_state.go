@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -92,7 +93,7 @@ func runDriveResetSyncStateWithInput(
 	stdin io.Reader,
 	yes bool,
 ) error {
-	_, cid, err := resolveDriveForStateChange(ctx, cc, "reset", "reset sync state")
+	cfg, cid, err := resolveDriveForStateChange(ctx, cc, "reset", resetSyncStateAction)
 	if err != nil {
 		return err
 	}
@@ -107,8 +108,14 @@ func runDriveResetSyncStateWithInput(
 		return fmt.Errorf("cannot determine state DB path for drive %q", cid)
 	}
 
-	if err := syncengine.ResetStateDB(ctx, dbPath, cc.Logger); err != nil {
-		return fmt.Errorf("reset sync state DB: %w", err)
+	syncDir := driveSyncDir(cfg, cid, cc.Logger)
+	if err := changeDriveStateUnderFolderLock(ctx, syncDir, dbPath, resetSyncStateAction, cc.Logger, func() error {
+		if resetErr := syncengine.ResetStateDB(ctx, dbPath, cc.Logger); resetErr != nil {
+			return fmt.Errorf("reset sync state DB: %w", resetErr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	if cc.Flags.JSON {
@@ -126,6 +133,52 @@ func runDriveResetSyncStateWithInput(
 type driveResetSyncStateJSONOutput struct {
 	Drive string `json:"drive"`
 	Reset bool   `json:"reset"`
+}
+
+// resetSyncStateAction completes "cannot ..." in the reset's refusals.
+const resetSyncStateAction = "reset sync state"
+
+// driveSyncDir is the folder a configured drive syncs into, the way its
+// engine resolves it. A "~/..." path is expanded: unexpanded it named no
+// folder, and the rebind's file count read 0 for a full one (live,
+// 2026-11-04).
+func driveSyncDir(cfg *config.Config, cid driveid.CanonicalID, logger *slog.Logger) string {
+	drive := cfg.Drives[cid]
+	return config.ExpandTilde(config.EffectiveSyncDir(cfg, cid, drive.SyncDir, logger))
+}
+
+// changeDriveStateUnderFolderLock runs change, an offline rewrite of the
+// drive's state store at dbPath (named by action), while holding every
+// sync-folder lock an engine with that store open could hold
+// (syncengine.LockDriveForOfflineChange): the folder now at the drive's sync
+// path, and the folder the store records. The owner probe only sees an owner
+// that holds the control socket; an engine still draining or closing its
+// store after its owner stopped answering, or one run by another
+// configuration sharing the data directory, holds only these locks. Callers
+// take them after their prompt, so a person reading it does not hold the
+// folders against a sync that starts meanwhile.
+func changeDriveStateUnderFolderLock(
+	ctx context.Context,
+	syncDir string,
+	dbPath string,
+	action string,
+	logger *slog.Logger,
+	change func() error,
+) (err error) {
+	release, err := syncengine.LockDriveForOfflineChange(ctx, config.DefaultDataDir(), syncDir, dbPath, logger)
+	switch {
+	case errors.Is(err, syncengine.ErrSyncRootInUse):
+		return fmt.Errorf("cannot %s: %w; stop that sync first", action, err)
+	case err != nil:
+		return fmt.Errorf("lock sync folder: %w", err)
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release sync folder lock: %w", releaseErr))
+		}
+	}()
+
+	return change()
 }
 
 // ensureNoLiveSyncOwner refuses an offline state mutation (named by action)
