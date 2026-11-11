@@ -2,6 +2,7 @@ package graph
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -472,4 +473,151 @@ func TestCreateUploadSessionForItem_PreconditionFailureIsNeverRetriedUncondition
 	require.ErrorIs(t, err, ErrPreconditionFailed)
 	assert.Equal(t, int32(1), posts.Load())
 	assert.Zero(t, gets.Load())
+}
+
+// createAnswerFunc is how the fake server of the create-outcome test answers
+// one request. cancel cancels the caller's context.
+type createAnswerFunc func(t *testing.T, w http.ResponseWriter, r *http.Request, cancel context.CancelFunc)
+
+// answerWithStatus answers with a Graph error of the given status and code.
+func answerWithStatus(status int, code string) createAnswerFunc {
+	return func(t *testing.T, w http.ResponseWriter, _ *http.Request, _ context.CancelFunc) {
+		t.Helper()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		writeTestResponsef(t, w, `{"error":{"code":%q,"message":"refused"}}`, code)
+	}
+}
+
+// answerWithNothing takes the request and hangs up without a response.
+func answerWithNothing(t *testing.T, w http.ResponseWriter, _ *http.Request, _ context.CancelFunc) {
+	t.Helper()
+
+	hj, ok := w.(http.Hijacker)
+	if !assert.True(t, ok) {
+		return
+	}
+	conn, _, err := hj.Hijack()
+	if assert.NoError(t, err) {
+		assert.NoError(t, conn.Close())
+	}
+}
+
+// answerAfterTheCallerGaveUp reads the whole request, then has the caller
+// cancel while the server still holds it: the create was received, and no
+// answer ever leaves.
+func answerAfterTheCallerGaveUp(t *testing.T, _ http.ResponseWriter, r *http.Request, cancel context.CancelFunc) {
+	t.Helper()
+
+	// Not require: this runs on the server's goroutine, not the test's.
+	if _, err := io.ReadAll(r.Body); !assert.NoError(t, err) {
+		return
+	}
+	cancel()
+	<-r.Context().Done()
+}
+
+// answerCreatedWithoutItem accepts the create and names no item.
+func answerCreatedWithoutItem(t *testing.T, w http.ResponseWriter, _ *http.Request, _ context.CancelFunc) {
+	t.Helper()
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// answerWithEmptyListing lists a folder that does not show the new file.
+func answerWithEmptyListing(t *testing.T, w http.ResponseWriter, _ *http.Request, _ context.CancelFunc) {
+	t.Helper()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	writeTestResponse(t, w, `{"value":[]}`)
+}
+
+// Validates: R-5.6.15
+//
+// A create that ended without an answer naming its item may have made the
+// empty file, and sync keeps its create intent on exactly those failures. A
+// refusal says the create did not happen: it never carries the mark, or a
+// plain 409 for someone else's file could be read as a lost answer.
+func TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		create  createAnswerFunc
+		listing createAnswerFunc // the read-back after a create without an item; nil: never listed
+		expired bool             // the caller's deadline has passed before the request
+		unknown bool
+		also    error // the cause that must stay readable
+	}{
+		{name: "no response", create: answerWithNothing, unknown: true},
+		{
+			name:   "500",
+			create: answerWithStatus(http.StatusInternalServerError, "generalException"), unknown: true, also: ErrServerError,
+		},
+		{
+			name:   "503",
+			create: answerWithStatus(http.StatusServiceUnavailable, "serviceNotAvailable"), unknown: true, also: ErrServerError,
+		},
+		{
+			name:   "504",
+			create: answerWithStatus(http.StatusGatewayTimeout, "gatewayTimeout"), unknown: true, also: ErrServerError,
+		},
+		{name: "408", create: answerWithStatus(http.StatusRequestTimeout, "requestTimeout"), unknown: true},
+		{name: "canceled context", create: answerAfterTheCallerGaveUp, unknown: true, also: context.Canceled},
+		{name: "expired context", create: answerWithNothing, expired: true, unknown: true, also: context.DeadlineExceeded},
+		{
+			name:    "created, and the read-back fails",
+			create:  answerCreatedWithoutItem,
+			listing: answerWithStatus(http.StatusInternalServerError, "generalException"), unknown: true, also: ErrServerError,
+		},
+		{
+			name:    "created, and not listed yet",
+			create:  answerCreatedWithoutItem,
+			listing: answerWithEmptyListing, unknown: true,
+		},
+		{name: "409", create: answerWithStatus(http.StatusConflict, "nameAlreadyExists"), also: ErrConflict},
+		{name: "429", create: answerWithStatus(http.StatusTooManyRequests, "activityLimitReached"), also: ErrThrottled},
+		{name: "400", create: answerWithStatus(http.StatusBadRequest, "invalidRequest"), also: ErrBadRequest},
+		{name: "403", create: answerWithStatus(http.StatusForbidden, "accessDenied"), also: ErrForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.expired {
+				var release context.CancelFunc
+				ctx, release = context.WithDeadline(ctx, time.Now().Add(-time.Minute))
+				defer release()
+			}
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					tc.create(t, w, r, cancel)
+
+					return
+				}
+				if assert.NotNil(t, tc.listing, "the folder is only read after a create that named no item") {
+					tc.listing(t, w, r, cancel)
+				}
+			}))
+			defer srv.Close()
+
+			item, err := newNoRetryTestClient(t, srv.URL).CreateFile(ctx, driveid.New("d"), "parent", "a.txt")
+			require.Error(t, err)
+			assert.Nil(t, item)
+			if tc.unknown {
+				require.ErrorIs(t, err, ErrCreateOutcomeUnknown)
+			} else {
+				require.NotErrorIs(t, err, ErrCreateOutcomeUnknown)
+			}
+			if tc.also != nil {
+				require.ErrorIs(t, err, tc.also)
+			}
+			// No content was sent. The transfer layer answers a completed
+			// upload by checking the file against the content, which would
+			// fail the empty file and drop the mark.
+			require.NotErrorIs(t, err, ErrUploadCompletedWithoutItem)
+		})
+	}
 }

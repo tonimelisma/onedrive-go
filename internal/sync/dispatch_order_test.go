@@ -163,6 +163,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ContextCancellation,
 		TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
 		TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
+		TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile,
 		TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting,
 		TestRunOnce_DeltaExpired_AutoRetry,
 		TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes,

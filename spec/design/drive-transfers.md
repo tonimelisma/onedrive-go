@@ -328,6 +328,18 @@ failed removal left a stranger's empty file (live, e2e
 since it may be gone; a hook failure there is Debug, and the session's error
 is what the caller sees
 (`TestSessionUpload_FailedSessionRecordsTheItemTheCreateMade`).
+The hook cannot run for a create whose answer never arrived: there is no item
+to name. The Graph client marks that failure `graph.ErrCreateOutcomeUnknown`
+([graph-client.md](graph-client.md)), and the transfer manager's wrapping
+keeps the mark (`%w`), so the caller can tell "nothing was created" from "not
+known" and keep its intent for the second (R-5.6.15,
+[sync-execution.md](sync-execution.md),
+`TestTransferManager_Upload_CreateOutcomeUnknownKeepsItsMark`). A create that
+succeeded without naming its item, and that its folder does not list yet, is
+that failure and not `graph.ErrUploadCompletedWithoutItem`: no content was
+sent, and looking the name up to check it against the content failed the
+empty file as a bad upload and dropped the mark. A zero-byte create never runs
+the hook either: the created item is the whole file.
 CLI `put` onto an existing name overwrites that file by ID with If-Match on
 the eTag just listed, and refuses an existing folder (R-1.3.8,
 `TestPutFile_ExistingFileIsOverwrittenByIDConditionally`).
