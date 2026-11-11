@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // SimpleUploadToItem overwrites an existing file by item ID using a single PUT
@@ -223,7 +224,7 @@ func (c *Client) doRawUpload(
 		graphErr := buildGraphError(
 			resp.StatusCode,
 			resp.Header.Get("request-id"),
-			parseRetryAfter(resp),
+			retry.ResponseRetryAfter(resp, time.Now()),
 			errBody,
 		)
 		graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
