@@ -8,15 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 )
 
 type VerifyProfile string
 
 const (
-	defaultCoverageThreshold         = 75.5
 	defaultCoveragePattern           = "onedrive-go-cover.*"
 	fullE2ECompileStepName           = "e2e-full compile"
 	fullE2ECompileArtifactName       = "onedrive-go-e2e-full.test"
@@ -137,6 +134,7 @@ type E2EBucketSummary struct {
 }
 
 type StressSlowTestSummary struct {
+	Package        string `json:"package,omitempty"`
 	Test           string `json:"test"`
 	Runs           int    `json:"runs"`
 	TotalElapsedMS int64  `json:"total_elapsed_ms"`
@@ -236,9 +234,9 @@ func runVerifyProfileWithEnv(
 			}
 		}
 	}()
-	coverageThreshold := opts.CoverageThreshold
-	if coverageThreshold == 0 {
-		coverageThreshold = defaultCoverageThreshold
+	coverageThreshold, err := resolveCoverageThreshold(plan, opts.RepoRoot, opts.CoverageThreshold)
+	if err != nil {
+		return err
 	}
 
 	coverageFile, cleanup, err := prepareCoverageFile(plan, opts.CoverageFile)
@@ -576,7 +574,7 @@ func runUnitTests(
 	timeout time.Duration,
 	stdout, stderr io.Writer,
 ) error {
-	if err := writeStatus(stdout, "==> go test -race -coverprofile\n"); err != nil {
+	if err := writeStatus(stdout, "==> go test -race -coverpkg=./... -coverprofile\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
 	if err := runner.Run(
@@ -593,6 +591,11 @@ func runUnitTests(
 		// then past it. A deadline with headroom fails a real hang, not a
 		// slow runner.
 		"-timeout="+timeout.String(),
+		// Every package's tests count toward every package's statements.
+		// Without it a statement counts only when a test of its own package
+		// runs it, so code another package's tests exercise reads as
+		// uncovered and the total understates what the suite proves.
+		"-coverpkg=./...",
 		"-coverprofile="+coverageFile,
 		"./...",
 	); err != nil {
@@ -686,66 +689,6 @@ func runVerifySteps(
 	}
 
 	return nil
-}
-
-func runCoverageGate(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	env []string,
-	coverageFile string,
-	coverageThreshold float64,
-	stdout io.Writer,
-) error {
-	if err := writeStatus(stdout, "==> coverage\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	report, err := runner.Output(ctx, repoRoot, env, "go", "tool", "cover", "-func="+coverageFile)
-	if err != nil {
-		return fmt.Errorf("coverage report: %w", err)
-	}
-
-	if writeErr := writeStatus(stdout, string(report)); writeErr != nil {
-		return fmt.Errorf("write coverage report: %w", writeErr)
-	}
-
-	coverageTotal, err := parseCoverageTotal(string(report))
-	if err != nil {
-		return err
-	}
-
-	// A negative threshold reports coverage without gating on it. The gate is
-	// a single authoritative number owned by one platform; secondary
-	// platforms compile a different file set (build-tagged sources) and would
-	// legitimately land on a different percentage.
-	if coverageThreshold < 0 {
-		return writeStatus(stdout, fmt.Sprintf("coverage gate disabled (total %.1f%%)\n", coverageTotal))
-	}
-
-	if coverageTotal < coverageThreshold {
-		return fmt.Errorf("coverage gate failed: %.1f%% < %.1f%%", coverageTotal, coverageThreshold)
-	}
-
-	return nil
-}
-
-func parseCoverageTotal(report string) (float64, error) {
-	for _, line := range strings.Split(report, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != "total:" {
-			continue
-		}
-
-		value := strings.TrimSuffix(fields[2], "%")
-		coverageTotal, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return 0, fmt.Errorf("parse coverage total %q: %w", value, err)
-		}
-
-		return coverageTotal, nil
-	}
-
-	return 0, fmt.Errorf("parse coverage total: total line not found")
 }
 
 func runIntegration(

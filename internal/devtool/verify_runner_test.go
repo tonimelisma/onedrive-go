@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	writeRequirementsBackedReadme(t, repoRoot)
+	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -57,13 +59,12 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	stderr := &bytes.Buffer{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyDefault,
-		CoverageThreshold: 76.0,
-		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
-		UnitTimeout:       25 * time.Minute,
-		Stdout:            stdout,
-		Stderr:            stderr,
+		RepoRoot:     repoRoot,
+		Profile:      VerifyDefault,
+		CoverageFile: filepath.Join(repoRoot, "cover.out"),
+		UnitTimeout:  25 * time.Minute,
+		Stdout:       stdout,
+		Stderr:       stderr,
 	})
 	require.NoError(t, err)
 
@@ -81,9 +82,13 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 		assertCommandHasEnvVar(t, command, "GOOS="+goos)
 	}
 
-	// --unit-timeout reaches go test as given, whatever the host's core count.
+	// --unit-timeout reaches go test as given, whatever the host's core count,
+	// and coverage counts a statement whichever package's tests execute it.
 	assert.Equal(t,
-		[]string{"test", "-race", "-timeout=25m0s", "-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./..."},
+		[]string{
+			"test", "-race", "-timeout=25m0s", "-coverpkg=./...",
+			"-coverprofile=" + filepath.Join(repoRoot, "cover.out"), "./...",
+		},
 		runner.runCommands[cmdUnitTests].args,
 	)
 	assert.Equal(t, "test", runner.runCommands[cmdE2EFullCompile].args[0])
@@ -186,6 +191,7 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	writeRequirementsBackedReadme(t, repoRoot)
+	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -194,12 +200,11 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyPublic,
-		CoverageThreshold: 76.0,
-		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
-		Stdout:            &bytes.Buffer{},
-		Stderr:            &bytes.Buffer{},
+		RepoRoot:     repoRoot,
+		Profile:      VerifyPublic,
+		CoverageFile: filepath.Join(repoRoot, "cover.out"),
+		Stdout:       &bytes.Buffer{},
+		Stderr:       &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
@@ -557,6 +562,7 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	writeRequirementsBackedReadme(t, repoRoot)
+	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -566,13 +572,12 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 
 	stdout := &bytes.Buffer{}
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyPublic,
-		CoverageThreshold: 76.0,
-		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
-		SummaryJSONPath:   summaryPath,
-		Stdout:            stdout,
-		Stderr:            &bytes.Buffer{},
+		RepoRoot:        repoRoot,
+		Profile:         VerifyPublic,
+		CoverageFile:    filepath.Join(repoRoot, "cover.out"),
+		SummaryJSONPath: summaryPath,
+		Stdout:          stdout,
+		Stderr:          &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
@@ -807,6 +812,8 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"./internal/multisync",
 	}, runner.runCommands[0].args)
 
+	// Both sync steps name the tree, not the one directory, so a package
+	// extracted from internal/sync stays under stress.
 	assert.Equal(t, "go", runner.runCommands[1].name)
 	assert.Equal(t, []string{
 		"test",
@@ -815,7 +822,7 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"-shuffle=on",
 		"-timeout=40m",
 		"-run", stressSyncConcurrencyPattern,
-		"./internal/sync",
+		"./internal/sync/...",
 	}, runner.runCommands[1].args)
 
 	assert.Equal(t, "go", runner.combinedCommands[0].name)
@@ -826,10 +833,83 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"-count=3",
 		"-shuffle=on",
 		"-timeout=40m",
-		"./internal/sync",
+		"./internal/sync/...",
 	}, runner.combinedCommands[0].args)
 }
 
+// Validates: R-6.10.1, R-6.10.8
+//
+// go test exits 0 when a -run pattern matches nothing, so the x50 step would
+// stay green after a rename took every concurrency test out of the pattern.
+// Over the tree, a package without a match is fine; no match anywhere fails
+// the step, and the profile stops there.
+func TestRunVerifyStressFailsWhenConcurrencyPatternMatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		runStdoutFunc: func(args []string) string {
+			if !slices.Contains(args, "-run") {
+				return ""
+			}
+
+			return strings.Join([]string{
+				"ok  \tgithub.com/tonimelisma/onedrive-go/internal/sync\t0.3s [no tests to run]",
+				"ok  \tgithub.com/tonimelisma/onedrive-go/internal/sync/planner\t0.1s [no tests to run]",
+				"",
+			}, "\n")
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: t.TempDir(),
+		Profile:  VerifyStress,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync concurrency race x50 matched no tests in any package")
+	assert.Empty(t, runner.combinedCommands, "the profile stops at the step that verified nothing")
+}
+
+// Validates: R-6.10.8
+//
+// The x3 step runs a tree, so two packages can each hold a test of one name.
+// Keyed by name alone their timings would merge into one entry that belongs
+// to neither.
+func TestSummarizeStressSlowTestsKeysByPackage(t *testing.T) {
+	t.Parallel()
+
+	output := []byte(strings.Join([]string{
+		`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestShutdown","Elapsed":2.0}`,
+		`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync/planner","Test":"TestShutdown","Elapsed":0.5}`,
+		`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestShutdown","Elapsed":1.0}`,
+	}, "\n"))
+
+	slowTests := summarizeStressSlowTests(output, stressSlowTestLimit)
+
+	require.Len(t, slowTests, 2)
+	assert.Equal(t, StressSlowTestSummary{
+		Package:        "github.com/tonimelisma/onedrive-go/internal/sync",
+		Test:           "TestShutdown",
+		Runs:           2,
+		TotalElapsedMS: 3000,
+		MaxElapsedMS:   2000,
+	}, slowTests[0])
+	assert.Equal(t, StressSlowTestSummary{
+		Package:        "github.com/tonimelisma/onedrive-go/internal/sync/planner",
+		Test:           "TestShutdown",
+		Runs:           1,
+		TotalElapsedMS: 500,
+		MaxElapsedMS:   500,
+	}, slowTests[1])
+
+	var printed bytes.Buffer
+	require.NoError(t, writeStressSlowTestSummary(&printed, slowTests))
+	assert.Contains(t, printed.String(),
+		"github.com/tonimelisma/onedrive-go/internal/sync/planner TestShutdown runs=1 total=500ms max=500ms")
+}
+
+// Validates: R-6.10.8
 func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	t.Parallel()
 
@@ -837,7 +917,7 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	summaryPath := filepath.Join(t.TempDir(), "stress-verify-summary.json")
 	runner := &fakeRunner{
 		combinedOutputs: map[string][]byte{
-			"go test -json -race -count=3 -shuffle=on -timeout=40m ./internal/sync": []byte(strings.Join([]string{
+			"go test -json -race -count=3 -shuffle=on -timeout=40m ./internal/sync/...": []byte(strings.Join([]string{
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestFast","Elapsed":0.125}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.5}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.0}`,
@@ -857,13 +937,14 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, stdout.String(), "slowest completed sync race tests")
-	assert.Contains(t, stdout.String(), "TestSlow runs=2 total=2.5s max=1.5s")
+	assert.Contains(t, stdout.String(), "github.com/tonimelisma/onedrive-go/internal/sync TestSlow runs=2 total=2.5s max=1.5s")
 	assert.Contains(t, stdout.String(), "sync race x3: pass")
 
 	var summary VerifySummary
 	readVerifySummaryFile(t, summaryPath, &summary)
 	step := requireVerifySummaryStep(t, summary, "sync race x3")
 	require.Len(t, step.SlowTests, 3)
+	assert.Equal(t, "github.com/tonimelisma/onedrive-go/internal/sync", step.SlowTests[0].Package)
 	assert.Equal(t, "TestSlow", step.SlowTests[0].Test)
 	assert.Equal(t, 2, step.SlowTests[0].Runs)
 	assert.EqualValues(t, 2500, step.SlowTests[0].TotalElapsedMS)
@@ -949,69 +1030,6 @@ func TestRunVerifyFailedTestRequiresLogPath(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--failed-log is required")
-}
-
-// Validates: R-6.10.4
-func TestParseCoverageTotal(t *testing.T) {
-	t.Parallel()
-
-	total, err := parseCoverageTotal("pkg/foo\t80.0%\ntotal:\t(statements)\t76.2%\n")
-	require.NoError(t, err)
-	assert.InDelta(t, 76.2, total, 0.001)
-}
-
-// Validates: R-6.10.4
-func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
-
-	runner := &fakeRunner{
-		outputs: map[string][]byte{
-			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t75.9%\n"),
-		},
-	}
-
-	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyPublic,
-		CoverageThreshold: 76.0,
-		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
-		Stdout:            &bytes.Buffer{},
-		Stderr:            &bytes.Buffer{},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "coverage gate failed")
-}
-
-// Validates: R-6.10.4
-//
-// A negative threshold reports coverage without gating, so a secondary
-// platform leg can run the same suite without owning the coverage number.
-func TestRunVerifyNegativeCoverageThresholdReportsWithoutGating(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
-
-	runner := &fakeRunner{
-		outputs: map[string][]byte{
-			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t12.3%\n"),
-		},
-	}
-
-	stdout := &bytes.Buffer{}
-	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyPublic,
-		CoverageThreshold: -1,
-		CoverageFile:      filepath.Join(repoRoot, "cover.out"),
-		Stdout:            stdout,
-		Stderr:            &bytes.Buffer{},
-	})
-	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "coverage gate disabled (total 12.3%)")
 }
 
 // Validates: R-6.10.1

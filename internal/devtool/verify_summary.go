@@ -193,7 +193,7 @@ func renderSlowTestLines(slowTests []StressSlowTestSummary) string {
 		fmt.Fprintf(
 			&builder,
 			"  slow test: %s runs=%d total=%s max=%s\n",
-			slow.Test,
+			slow.name(),
 			slow.Runs,
 			formatDurationMS(slow.TotalElapsedMS),
 			formatDurationMS(slow.MaxElapsedMS),

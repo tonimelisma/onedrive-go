@@ -415,6 +415,7 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	writeRequirementsBackedReadme(t, repoRoot)
+	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverageFile := filepath.Join(repoRoot, "cover.out")
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
@@ -423,14 +424,13 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 	}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:          repoRoot,
-		Profile:           VerifyDefault,
-		CoverageThreshold: 76.0,
-		CoverageFile:      coverageFile,
-		DOD:               true,
-		DODStage:          DODStagePrePR,
-		Stdout:            &bytes.Buffer{},
-		Stderr:            &bytes.Buffer{},
+		RepoRoot:     repoRoot,
+		Profile:      VerifyDefault,
+		CoverageFile: coverageFile,
+		DOD:          true,
+		DODStage:     DODStagePrePR,
+		Stdout:       &bytes.Buffer{},
+		Stderr:       &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 

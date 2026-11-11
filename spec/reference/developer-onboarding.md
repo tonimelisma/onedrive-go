@@ -584,7 +584,7 @@ The file-family split inside `internal/devtool` is also worth knowing:
 
 | File family | Role |
 | --- | --- |
-| `verify.go`, `verify_e2e.go`, `verify_stress.go`, `verify_summary.go` | Verification profile orchestration, E2E orchestration, stress profiles, summaries |
+| `verify.go`, `verify_e2e.go`, `verify_stress.go`, `verify_coverage.go`, `verify_summary.go` | Verification profile orchestration, E2E orchestration, stress profiles, the coverage gate (its number is read from R-6.10.4), summaries |
 | `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
 | `cleanup_audit.go` | Read-only git cleanup classification |

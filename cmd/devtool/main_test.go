@@ -47,7 +47,7 @@ func TestNewVerifyCmdLeavesTheProfileToTheVerifierByDefault(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	assert.Equal(t, testRepoRoot, got.RepoRoot)
 	assert.Empty(t, got.Profile)
-	assert.InDelta(t, defaultCoverageThreshold, got.CoverageThreshold, 0.001)
+	assert.Zero(t, got.CoverageThreshold, "no threshold given: the gate uses the number requirement R-6.10.4 states")
 	assert.False(t, got.DOD)
 	assert.Equal(t, devtool.DefaultDODRecentMerged, got.DODRecentMerged)
 	assert.Zero(t, got.DODCITimeout, "no hard cap given: the wait derives one from the stall window")
