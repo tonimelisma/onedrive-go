@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // configFilePermissions is the mode for config files: owner read/write only.
@@ -208,9 +205,7 @@ func EnsureDriveInConfigDetailed(path string, cid driveid.CanonicalID, logger *s
 // Value formatting: booleans ("true"/"false") are written without quotes;
 // all other values are written as quoted strings.
 func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
-	return withConfigMutationLock(path, false, func() error {
-		return setDriveKeySnapshot(path, canonicalID, key, value)
-	})
+	return defaultConfigLocker().setDriveKey(path, canonicalID, key, value)
 }
 
 func setDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key, value string) error {
@@ -760,49 +755,6 @@ func stringPointersEqual(left *string, right *string) bool {
 		return left == right
 	}
 	return *left == *right
-}
-
-// withConfigMutationLock serializes config read-modify-write entrypoints that
-// participate in this package. Existing-file operations lock the parent
-// directory when it exists, even if config.toml itself is currently missing.
-// If the parent directory is missing, the underlying mutation produces its
-// historical missing-file result instead of creating directories just to lock.
-func withConfigMutationLock(path string, createDir bool, fn func() error) (err error) {
-	root, _, err := fsroot.OpenPath(path)
-	if err != nil {
-		return fmt.Errorf("opening config lock root: %w", err)
-	}
-	if createDir {
-		if mkErr := root.MkdirAll(configDirPermissions); mkErr != nil {
-			return fmt.Errorf("creating config lock directory: %w", mkErr)
-		}
-	}
-
-	lockFile, err := localpath.Open(filepath.Dir(path))
-	if err != nil {
-		if !createDir && errors.Is(err, os.ErrNotExist) {
-			return fn()
-		}
-		return fmt.Errorf("opening config lock directory: %w", err)
-	}
-	defer func() {
-		closeErr := lockFile.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
-
-	if flockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); flockErr != nil {
-		return fmt.Errorf("locking config file: %w", flockErr)
-	}
-	defer func() {
-		unlockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-		if err == nil {
-			err = unlockErr
-		}
-	}()
-
-	return fn()
 }
 
 // atomicWriteFile writes data to a temporary file in the same directory as

@@ -151,14 +151,7 @@ func UpdateCatalog(update func(*Catalog) error) error {
 }
 
 func UpdateCatalogForDataDir(dataDir string, update func(*Catalog) error) error {
-	catalog, err := LoadCatalogForDataDir(dataDir)
-	if err != nil {
-		return err
-	}
-	if err := update(catalog); err != nil {
-		return err
-	}
-	return SaveCatalogForDataDir(dataDir, catalog)
+	return defaultConfigLocker().updateCatalog(dataDir, update)
 }
 
 func (c *Catalog) normalize() {
