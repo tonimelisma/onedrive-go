@@ -340,6 +340,21 @@ Static verification is a first-class architectural constraint, not a best-effort
   run may legitimately persist retryable transient `retry_work` when one exact
   upload hits a live 5xx service outage, and the next sync pass is the
   contract-owned recovery path.
+- Every one-shot `sync` in a live test whose assertions read only the end state
+  goes through a converge helper in `e2e/e2e_test.go`. Both helpers run their
+  passes through a `syncRunner`, the drive selection of the pass: the default
+  drive, one named drive (`...ForDrive`), or every configured drive in one pass
+  (`...AllDrives`). `runSyncThroughTransientFailures` repeats a must-succeed
+  pass while it recorded retry work and left work behind, and returns the last
+  pass's summary and every pass's debug log; it does nothing for delta lag.
+  `requireSyncEventuallyConverges` repeats a pass until the caller's predicate
+  holds, for state that reaches the client only through delta;
+  `syncPassFinishedWork` lets that predicate also require that the pass left no
+  work. A sync whose proof is the pass itself (an `Uploaded` or `Up to date`
+  line, a conflict, a dry run, an idempotence check, a denied write it must
+  record, a resume of a killed transfer) stays one call with a
+  `Single pass by design:` comment saying why: a converge loop around it would
+  hide a regression where a pass that should finish in one go needs two.
 - The manual full E2E suite is layered on top of the fast suite. Its files use `//go:build e2e && e2e_full`, so the canonical invocation is the verifier's `e2e-full` profile, which sets both tags, preserves the fast-then-full ordering, and runs the full shared-folder fixture preflight before the `e2e_full` buckets.
 - `e2e_full` owns the demoted live coverage that no longer runs on every PR: drive-list catalog checks, shared-file discovery checks, richer caller-proof/logout coverage, extended direct file-operation coverage, current condition/status rendering, slower sync state/recovery checks, engine-owned conflict protection, richer shortcut child-mount checks (`TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount`, `TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive`, `TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible`, `TestE2E_Shortcut_RenameReusesChildMountState`, `TestE2E_Shortcut_MoveReusesChildMountState`, `TestE2E_Shortcut_WritableUploadSyncsToSharedTarget`, `TestE2E_Shortcut_ReadOnlyBlockedUploadStatus`, `TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes`, `TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget`, and `TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot`), and websocket startup smoke. Recurring live E2E does not delete manual shortcut placeholders because Microsoft does not document a supported Graph create/recreate contract for Add-to-OneDrive shortcuts; local delete lifecycle remains covered by fake-Graph/unit integration tests. When Graph keeps the shared target reachable but omits the parent Add-to-OneDrive placeholder for the full shortcut fixture budget, shortcut E2Es skip because there is no root placeholder for the product path to observe.
 - `e2e_full` runs as three explicit verifier-owned buckets instead of one monolithic package invocation: `full-parallel-misc` (`-parallel 5` for tests already marked safe), `full-serial-sync`, and `full-serial-watch-shared`. The verifier executes those buckets sequentially after the single full-suite preflight so only the vetted misc bucket regains concurrency. Manual full-suite coverage names current product workflows only: live file operations, sync convergence, engine-owned conflict protection, shortcut child mounts, and websocket startup smoke.

@@ -124,6 +124,10 @@ Current repo policy:
   very first upload-only pass must clear every retryable transient
 - the follow-up sync pass remains the contract-owned recovery path after live
   5xx or provider timing families leave `retry_work`
+- every one-shot sync whose test reads only the end state goes through
+  `runSyncThroughTransientFailures*` or `requireSyncEventuallyConverges*`
+  (default drive, `ForDrive`, `AllDrives`); a sync kept single-pass says why in
+  a `Single pass by design:` comment
 
 Promoted docs:
 

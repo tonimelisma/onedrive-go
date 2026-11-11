@@ -34,7 +34,7 @@ func seedSafetySyncRoot(t *testing.T, cfgPath string, env map[string]string, syn
 		contents[name] = fmt.Sprintf("safety %s %d\n", folder, i)
 		require.NoError(t, os.WriteFile(filepath.Join(localDir, name), []byte(contents[name]), 0o600))
 	}
-	runCLIWithConfig(t, cfgPath, env, "sync")
+	runSyncThroughTransientFailures(t, cfgPath, env)
 	for name := range contents {
 		waitForRemoteReadContains(t, cfgPath, env, "", name, pollTimeout, "ls", "/"+folder)
 	}
@@ -106,11 +106,12 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	assert.Contains(t, stdout+stderr, "deletes for confirmation")
 	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
 
-	runCLIWithConfig(t, cfgPath, env, "sync", "--confirm-deletes")
+	runSyncThroughTransientFailures(t, cfgPath, env, "--confirm-deletes")
 	assert.Eventually(t, func() bool {
 		return len(remoteFileNames(t, cfgPath, env, "/"+folder)) == 0
 	}, pollTimeout, 2*time.Second, "the confirmed deletes are applied on OneDrive")
 
+	// Single pass by design: the one pass after the confirmed deletes must hold nothing.
 	stdout, stderr = runCLIWithConfig(t, cfgPath, env, "sync")
 	assert.NotContains(t, stdout+stderr, "deletes for confirmation", "nothing is held once applied")
 }
@@ -133,11 +134,17 @@ func TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "rm", "/"+folder+"/"+victim)
 
 	// The delete reaches sync through delta, which can lag the rm.
-	require.Eventually(t, func() bool {
-		runCLIWithConfig(t, cfgPath, env, "sync")
-		_, err := os.Stat(localVictim)
-		return os.IsNotExist(err)
-	}, pollTimeout, 3*time.Second, "the remote delete is applied locally")
+	requireSyncEventuallyConverges(
+		t,
+		cfgPath,
+		env,
+		remoteDeletePropagationTimeout,
+		"the remote delete is applied locally",
+		func(result syncAttemptResult) bool {
+			_, err := os.Stat(localVictim)
+			return result.Err == nil && os.IsNotExist(err)
+		},
+	)
 	assert.FileExists(t, filepath.Join(syncDir, folder, "f01.txt"), "the other file stays")
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "trash", "list", "--json")

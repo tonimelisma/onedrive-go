@@ -192,13 +192,14 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	}
 	require.NotEmpty(t, syncDir, "drive list should expose the configured sync_dir for the added read-only shared folder")
 
-	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
+	out, _ := runSyncThroughTransientFailuresForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "--download-only")
 	assert.Contains(t, out, "(download only)")
 
 	blockedLocalPath := filepath.Join(syncDir, "blocked-from-recipient.txt")
 	require.NoError(t, os.MkdirAll(filepath.Dir(blockedLocalPath), 0o700))
 	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
 
+	// Single pass by design: this one pass must record the denied write that status shows next.
 	out, _ = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 
@@ -209,6 +210,7 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	assert.Contains(t, statusOut, "Downloads continue normally.")
 	assert.Contains(t, statusOut, "blocked-from-recipient.txt")
 
+	// Single pass by design: with the write block standing, one download-only pass must still succeed (R-2.14.2).
 	out, _ = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
 	assert.Contains(t, out, "(download only)")
 }
