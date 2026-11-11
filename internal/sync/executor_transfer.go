@@ -124,7 +124,7 @@ func (e *executor) downloadTargetSpelling(action *Action) string {
 	return e.syncTree.SpellingOfParent(action.Path)
 }
 
-// downloadOutcome builds a successful ActionOutcome after a download wrote
+// downloadOutcome builds a successful actionOutcome after a download wrote
 // target, the rooted spelling on disk of action.Path.
 func (e *executor) downloadOutcome(
 	action *Action, target string, driveID driveid.ID, localHash, remoteHash string, size int64,
@@ -157,7 +157,10 @@ func (e *executor) downloadOutcome(
 	// The local half records what the filesystem holds after the download,
 	// not the mtime that was asked for: a filesystem with coarse timestamps
 	// (FAT, SMB, some FUSE mounts) stores a rounded time, and recording the
-	// intended one made every later scan see a local change (D-046).
+	// intended one made every later scan see a local change (D-046). A stat
+	// that fails here (the file went away the moment it landed) is dropped on
+	// purpose and keeps the intended mtime: the download succeeded, and the
+	// next scan observes whatever the path holds.
 	if info, statErr := e.syncTree.Stat(target); statErr == nil {
 		o.LocalMtime = info.ModTime().UnixNano()
 	}
@@ -175,9 +178,10 @@ func (e *executor) downloadOutcome(
 func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutcome {
 	driveID := e.resolveDriveID(action)
 
-	// Always validate the baseline eTag before overwriting a known remote item.
-	// Planning is snapshot-based, so execution must defend against remote drift
-	// regardless of whether the current runtime is one-shot or watch.
+	// Always check the planned remote item against its live state before
+	// overwriting it. Planning is snapshot-based, so execution must defend
+	// against remote drift regardless of whether the current runtime is
+	// one-shot or watch.
 	liveETag, freshnessErr := e.validateRemoteUploadPrecondition(ctx, driveID, action)
 	if freshnessErr != nil {
 		return e.failedOutcomeWithFailure(
@@ -348,35 +352,49 @@ func downloadTransferFailureCapability(err error) permissionCapability {
 	return inferFailureCapabilityFromError(err, permissionCapabilityLocalWrite, permissionCapabilityRemoteRead)
 }
 
-// uploadTransferError translates transfer outcomes that mean "the plan is
-// stale" into sync's stale-precondition error. An invalidated upload session
-// means another writer changed the item mid-upload (L-02): the engine must
-// re-observe it, and may raise a conflict, rather than upload again.
 // uploadTransferError turns the upload answers that mean "remote truth moved
-// on" into a stale precondition, so the engine replans from fresh truth
-// instead of retrying the same request:
-//   - an invalidated session (L-02);
-//   - 412 on a conditional overwrite: the item changed after the preflight
-//     (D-022);
-//   - 409 on a create: OneDrive already holds the name, or one it treats as
-//     the same, and a create never replaces (R-5.6.14). Retried as is, it
-//     failed with "graph: conflict" forever.
+// on" (isRemoteTruthMovedOn) into a stale precondition, so the engine replans
+// from fresh truth instead of retrying the same request. A durable name
+// collision stays what it is. The Graph error stays in the chain for the
+// log; the engine classifies the stale precondition before any status it
+// carries (classifyResult).
 func uploadTransferError(err error) error {
 	var nameTaken *remoteNameTakenError
 	if errors.As(err, &nameTaken) {
 		return err
 	}
-	if errors.Is(err, driveops.ErrUploadSessionInvalidated) ||
-		errors.Is(err, graph.ErrPreconditionFailed) ||
-		errors.Is(err, graph.ErrConflict) {
+	if isRemoteTruthMovedOn(err) {
 		return fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
 	}
 
 	return err
 }
 
+// isRemoteTruthMovedOn reports an upload answer that proves the item or its
+// name changed on OneDrive after planning:
+//   - an invalidated session: another writer changed the item mid-upload
+//     (L-02);
+//   - 412 on a conditional overwrite: the item changed after the preflight
+//     (D-022);
+//   - 409 on a create: OneDrive already holds the name, or one it treats as
+//     the same, and a create never replaces (R-5.6.14). Retried as is, it
+//     failed with "graph: conflict" forever.
+func isRemoteTruthMovedOn(err error) bool {
+	return errors.Is(err, driveops.ErrUploadSessionInvalidated) ||
+		errors.Is(err, graph.ErrPreconditionFailed) ||
+		errors.Is(err, graph.ErrConflict)
+}
+
+// uploadTransferFailureCapability names the side whose truth an upload
+// failure is about. A stale precondition OneDrive's answer proved is a
+// remote-write precondition, as a remote delete's or move's post-preflight
+// 412 is; one the source check proved (the file changed while it was read)
+// is a local-read one. Both were counted as local-read before.
 func uploadTransferFailureCapability(err error) permissionCapability {
-	if errors.Is(err, errActionPreconditionChanged) {
+	switch {
+	case errors.Is(err, errActionPreconditionChanged) && isRemoteTruthMovedOn(err):
+		return permissionCapabilityRemoteWrite
+	case errors.Is(err, errActionPreconditionChanged):
 		return permissionCapabilityLocalRead
 	}
 
@@ -656,6 +674,11 @@ func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action)
 //     taken by that attempt's file, not listed yet, so the intent stays for
 //     the attempt or the observation that sees it.
 //
+// A read that fails while resolving (the store, the folder listing) is that
+// read's failure, classified by its own answer: it proves nothing about the
+// plan. Joined to the 409 it read as a stale precondition under the 409's
+// status, which hid a throttled or failing listing.
+//
 // keepIntent tells the caller to leave the intent of this path in place.
 func (e *executor) resolveCreateConflict(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
@@ -664,7 +687,8 @@ func (e *executor) resolveCreateConflict(
 	if e.pendingCreates != nil {
 		pending, found, readErr := e.pendingCreates.PendingCreateAt(ctx, action.Path)
 		if readErr != nil {
-			return nil, priorIntent, errors.Join(conflictErr, readErr)
+			return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: reading its pending create: %w",
+				action.Path, readErr)
 		}
 		if found && pending.ItemID != "" {
 			uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, pending.ItemID, source, localPath)
@@ -677,7 +701,8 @@ func (e *executor) resolveCreateConflict(
 	name := filepath.Base(action.Path)
 	children, listErr := e.items.ListChildren(ctx, driveID, parentID)
 	if listErr != nil {
-		return nil, priorIntent, errors.Join(conflictErr, listErr)
+		return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: listing its folder: %w",
+			action.Path, listErr)
 	}
 	for i := range children {
 		child := &children[i]
@@ -735,7 +760,7 @@ func (e *executor) claimLostCreate(
 	pending := pendingCreateOf(action, driveID, parentID)
 	pending.ItemID, pending.CreatedETag = child.ID, child.ETag
 	if recordErr := e.pendingCreates.RecordPendingCreate(ctx, pending); recordErr != nil {
-		return nil, true, errors.Join(conflictErr, recordErr)
+		return nil, true, fmt.Errorf("claiming the empty file of the lost create of %s: %w", action.Path, recordErr)
 	}
 	e.logger.Debug("claimed the empty file of a create whose answer was lost",
 		slog.String("path", action.Path), slog.String("item_id", child.ID))

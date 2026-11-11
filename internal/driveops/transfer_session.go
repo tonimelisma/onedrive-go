@@ -85,7 +85,9 @@ const cancelSessionTimeout = 10 * time.Second
 //     the item up first: when it already holds these bytes the upload
 //     committed and is adopted, instead of uploading the whole file again,
 //     possibly forever for a file whose commit outlasts the response timeout
-//     (D-036).
+//     (D-036). A lookup that fails leaves the outcome unknown: the record
+//     stays, and the error carries the lookup's failure only
+//     (uploadOutcomeUnknownError).
 //   - A session that is gone before its expiry while the item holds other
 //     bytes was invalidated by a concurrent change (L-02):
 //     ErrUploadSessionInvalidated, never a blind restart.
@@ -304,7 +306,7 @@ func (tm *TransferManager) persistedSessionUploadOnce(ctx context.Context, up *p
 		if lookupErr != nil {
 			// Unknown outcome: keep the record, the next attempt resumes
 			// or looks again.
-			return nil, fmt.Errorf("uploading %s: %w", up.localPath, errors.Join(err, lookupErr))
+			return nil, outcomeUnknownAfter(fmt.Sprintf("uploading %s: %s", up.localPath, err), lookupErr)
 		}
 		if adopted {
 			tm.deleteSession(driveStr, up.key)
@@ -369,7 +371,7 @@ func (tm *TransferManager) resumePersistedSession(
 	if lookupErr != nil {
 		// Unknown outcome: keep the record and retry; never conclude
 		// "invalidated" from a lookup that failed.
-		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, errors.Join(resumeErr, lookupErr))
+		return nil, true, outcomeUnknownAfter(fmt.Sprintf("resuming upload of %s: %s", up.localPath, resumeErr), lookupErr)
 	}
 
 	if adopted {

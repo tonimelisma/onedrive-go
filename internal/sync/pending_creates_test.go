@@ -460,21 +460,18 @@ func TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent(t *testin
 	}
 }
 
-// Validates: R-5.6.14, R-5.6.15
+// Validates: R-2.1.7, R-2.8.7, R-5.6.14, R-5.6.15
 //
 // Graph's children route can lag behind an item (LI-20260405-09). In
 // upload-only mode OneDrive's 409 is the first evidence of a differently
 // spelled remote name, and the folder listing names it. When the listing does
-// not show the name yet, the create comes back as a stale precondition, and
-// the collision is reported naming both once the listing shows it. The other
-// device's file is never written to.
-//
-// CURRENT BEHAVIOR, a product defect: the stale precondition is
-// meant to be replanned from fresh truth at once (uploadTransferError,
-// sync-execution.md), but classifyResult reads the completion's HTTP 409
-// before it looks for a stale precondition, so the attempt is recorded as
-// actionable retry work with no condition and waits on the durable curve.
-// Once that is fixed the first pass finds the collision and this test changes.
+// not show the name yet, the create comes back as a stale precondition: it is
+// superseded and replanned in the same run, although its error still carries
+// the 409, and the replanned create finds the collision and reports it naming
+// both. The stale attempt leaves no retry work of its own, and the other
+// device's file is never written to. Classified by its 409 first, the attempt
+// was recorded as anonymous actionable retry work and waited on the durable
+// curve before the collision was found.
 func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -487,8 +484,7 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 		return nil // counts the create, refuses nothing
 	}
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	clock := newManualClock(time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC))
-	installManualClockForTestEngine(eng, clock)
+	installManualClockForTestEngine(eng, newManualClock(time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "STRASSE.txt"), []byte("mine\n"), 0o600))
 
 	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
@@ -497,18 +493,8 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 	lagLeft := remote.invisibleFor["straße.txt"]
 	remote.mu.Unlock()
 	assert.Zero(t, lagLeft, "the 409's listing met the lag")
-	assert.Equal(t, int32(1), creates.Load(), "not replanned in the same run")
-	require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
-	rows, err := eng.baseline.ListRetryWork(t.Context())
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Empty(t, rows[0].ConditionType, "recorded as anonymous actionable work, not as a stale precondition")
-	assert.GreaterOrEqual(t, rows[0].NextRetryAt-clock.Now().UnixNano(), int64(durableRecheckDelay))
-
-	clock.Advance(retryBackoffCeilingForTest)
-	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, int32(2), creates.Load())
+	assert.Equal(t, int32(2), creates.Load(), "the stale create was replanned in the same run")
+	assert.Equal(t, 1, report.Superseded, "the stale 409 is superseded, not a failure")
 	require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	joined := ""
 	for _, e := range report.Errors {
@@ -516,10 +502,11 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 	}
 	assert.True(t, strings.Contains(joined, "straße.txt") && strings.Contains(joined, "STRASSE.txt"),
 		"once listed, the collision names both: %s", joined)
-	rows, err = eng.baseline.ListRetryWork(t.Context())
+	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, issueCaseCollision, rows[0].ConditionType)
+	assert.Equal(t, 1, rows[0].AttemptCount, "the stale attempt recorded no retry work of its own")
 	assert.Equal(t, map[string]string{"straße.txt": "theirs\n"}, remote.tree())
 }
 

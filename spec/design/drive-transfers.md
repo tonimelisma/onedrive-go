@@ -242,7 +242,16 @@ only on positive evidence: it carries the modification time the upload sent
 (to the second) and an eTag other than the one the upload was planned
 against (`UploadOpts.PlannedRemoteETag`); the same size proves nothing,
 since the old version can have it. A lookup that fails is a retryable error
-and the record is kept: nothing is concluded from it. A fragment 404, final
+and the record is kept: nothing is concluded from it. The error says the
+outcome is unknown and carries only the lookup's failure
+(`uploadOutcomeUnknownError`); the answer it followed is named in its text,
+not in its chain. Joined to a final fragment's 409 or 412, the lookup's
+outage or throttle was hidden behind the answer's status, sync read the
+upload as a stale plan, and the upload was looked up a second time
+(`TestUploadFile_FailedLookupAfterAnUncertainFinalFragmentIsAnUnknownOutcome`,
+`TestSessionUpload_FailedLookupAfterAnUncertainFinalFragmentIsAnUnknownOutcome`,
+`TestSessionUpload_FailedLookupAfterAnUncertainResumeIsAnUnknownOutcome`).
+A failure after a create made its item still names that item. A fragment 404, final
 or not, on a fresh or resumed upload is an invalidation unless the item is
 adopted. Names are matched case-insensitively after NFC normalization until
 the WS2 namespace key replaces it; the encapsulated small-file session gets

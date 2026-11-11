@@ -353,6 +353,74 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 	})
 }
 
+// Validates: R-2.8.7, R-5.6.2, R-5.6.14
+//
+// A stale precondition is superseded whatever Graph answer travels in its
+// error chain: the executor has already read that answer as "the plan is
+// stale", and the replan decides from fresh truth. Classified by its status
+// first, a create's 409 resolved as stale became anonymous actionable retry
+// work on the durable curve, and a 412 on a conditional overwrite became
+// transient_conflict retry work.
+func TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries(t *testing.T) {
+	t.Parallel()
+
+	staleAround := func(cause error) error {
+		return fmt.Errorf("%w: %w", errActionPreconditionChanged, cause)
+	}
+	testCases := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "409 on a create resolved as stale",
+			err: uploadTransferError(&graph.GraphError{
+				StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict,
+			}),
+		},
+		{
+			name: "409 resourceModified on a create",
+			err: uploadTransferError(&graph.GraphError{
+				StatusCode: http.StatusConflict, Code: graphCodeResourceModified, Err: graph.ErrConflict,
+			}),
+		},
+		{
+			name: "412 on a conditional overwrite",
+			err: uploadTransferError(&graph.GraphError{
+				StatusCode: http.StatusPreconditionFailed, Code: graphCodeResourceModified, Err: graph.ErrPreconditionFailed,
+			}),
+		},
+		{name: "401", err: staleAround(&graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrUnauthorized})},
+		{name: "403", err: staleAround(&graph.GraphError{StatusCode: http.StatusForbidden, Err: graph.ErrForbidden})},
+		{name: "404", err: staleAround(&graph.GraphError{StatusCode: http.StatusNotFound, Err: graph.ErrNotFound})},
+		{name: "423", err: staleAround(&graph.GraphError{StatusCode: http.StatusLocked, Err: graph.ErrLocked})},
+		{name: "429", err: staleAround(&graph.GraphError{StatusCode: http.StatusTooManyRequests, Err: graph.ErrThrottled})},
+		{name: "503", err: staleAround(&graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError})},
+		{name: "507", err: staleAround(&graph.GraphError{StatusCode: http.StatusInsufficientStorage, Err: graph.ErrServerError})},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.ErrorIs(t, tc.err, errActionPreconditionChanged)
+			r := &actionCompletion{
+				Path:       "stale.txt",
+				ActionType: ActionUpload,
+				DriveID:    driveid.New("drive-classify-stale"),
+				Err:        tc.err,
+				HTTPStatus: extractHTTPStatus(tc.err),
+			}
+			require.NotZero(t, r.HTTPStatus, "the Graph status travels with the stale error")
+
+			assert.Equal(t, resultDecision{
+				Class:       resultSuperseded,
+				Persistence: persistNone,
+				TrialHint:   trialHintReclassify,
+			}, classifyResult(r))
+		})
+	}
+}
+
 // Validates: R-2.10.4
 func TestRuntimeConditionKey_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
