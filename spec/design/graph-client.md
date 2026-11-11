@@ -82,6 +82,7 @@ This keeps domain-specific logic close to its tests without reopening the public
 | Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go` (`TestDo_ErrorClassification`, `TestDo_ParsesStructuredGraphErrors`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), `internal/graph/normalize_test.go` |
 | Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/shares_test.go` (`TestResolveShareURL_PreservesRemoteItemIdentity`), `internal/graph/items_test.go` (`TestToItem_SharedOwner_FallbackChain`), `internal/graph/quirks_test.go` (`TestQueryUploadSession_ReturnsNextExpectedRanges`), `internal/graph/upload_test.go` |
 | `@microsoft.graph.downloadUrl` is validated against the content host allow-list before either download route sends a request, the refusal never echoes the URL, and only a loopback base URL (a test fixture) admits loopback pre-auth URLs (R-6.8.22). | `TestDownload_RejectsUntrustedDownloadURL`, `TestValidateDownloadURL`, `TestParseAndValidatePreAuthURL`, `TestNewClient_LoopbackBaseURLAcceptsLoopbackPreAuthURLs` |
+| The 401 refresh-and-retry resends the whole request body, or fails with an error naming the body when it cannot be rewound; it never sends a second request with a consumed body (R-6.8.14). | `TestDo_401WithNonSeekableBodyFailsLoudly`, `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`, `TestDoOnce_401_RefreshSucceeds` |
 | The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
 | Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
 
@@ -545,6 +546,18 @@ Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do(
 Implements: R-6.8.14 [verified], R-6.6.34 [verified]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
+
+The retry resends the caller's body from the start: `rewindBody` seeks it back
+to offset 0. `nil` and `http.NoBody` need nothing; any other body must be an
+`io.Seeker`, and every caller passes a `bytes.Reader`. A body that cannot be
+rewound fails the request with `errBodyNotReplayable` ("rewinding request body
+after 401") before a second request is built, because resending a consumed
+stream would send a PATCH or POST with no body
+(`TestDo_401WithNonSeekableBodyFailsLoudly`,
+`TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`,
+`TestDoOnce_401_RefreshSucceeds`). This is the graph client's own guard: the
+transport's replay check (R-6.8.19, `spec/design/retry.md`) never sees the 401
+retry, which `doOnce` builds as a new request.
 
 Ordinary Graph `401` is intentionally **not** a sync trial or backoff signal.
 The graph boundary gets exactly one lifecycle retry: refresh the saved login
