@@ -426,6 +426,49 @@ func waitForRemoteDeleteDisappearance(
 	)
 }
 
+// waitForRemoteFileContent waits until a download of remotePath holds exactly
+// want. A visible name proves nothing about the content: a new file is created
+// empty and filled by a second request, so `stat` and `ls` answer while the
+// file still has 0 bytes. A test that stops the daemon on the name alone can
+// stop it between the two requests and then read an empty file (LI-20261110-01).
+//
+// Every attempt downloads to the same local path. `get` publishes a download
+// by renaming it over its destination and the content is read only after a
+// `get` that succeeded, so an attempt never reads an earlier attempt's bytes.
+func waitForRemoteFileContent(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	remotePath string,
+	want string,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	localPath := filepath.Join(t.TempDir(), "downloaded")
+	pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		driveID,
+		timeout,
+		timingKindRemoteWriteVisibility,
+		fmt.Sprintf("remote content of %q", remotePath),
+		func(_ string, _ string, err error) bool {
+			if err != nil {
+				return false
+			}
+
+			data, readErr := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
+			return readErr == nil && string(data) == want
+		},
+		"get",
+		remotePath,
+		localPath,
+	)
+}
+
 // getRemoteFile downloads a remote file and returns its content as a string.
 // cfgPath must point to a valid config with the drive section; env overrides
 // (if non-nil) are forwarded to the CLI child process.

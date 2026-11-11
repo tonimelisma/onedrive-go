@@ -45,10 +45,13 @@ type CreatingUploader interface {
 	) (*graph.Item, error)
 }
 
-// PlaceholderRemover deletes an item conditionally. Satisfied by
+// PlaceholderRemover removes the empty item a failed create left: it reads
+// the item and deletes it only while it is still empty, conditional on the
+// eTag just read, and reads again when that eTag moved in between (a bounded
+// number of times). removed is true when the item is gone. Satisfied by
 // *graph.Client.
 type PlaceholderRemover interface {
-	DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
+	RemoveEmptyItem(ctx context.Context, driveID driveid.ID, itemID string) (removed bool, err error)
 }
 
 // ItemUploader overwrites an existing item by item ID. A non-empty ifMatch

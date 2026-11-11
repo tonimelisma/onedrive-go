@@ -40,6 +40,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261110-01 | A failed upload's cleanup was refused with 412 and left an empty file on OneDrive | fixed | product bug | 2026-11-10 | yes |
 | LI-20261029-01 | NFD-named local file was never uploaded on Linux while sync reported success | fixed | product bug | 2026-10-29 | no |
 | LI-20261024-01 | Overlapping live E2E runs against one test account failed each other | fixed | CI configuration | 2026-10-24 | no |
 | LI-20260830-01 | Watch shutdown test intermittently saw watch mode stop before it began draining | fixed | product bug | 2026-08-31 | yes |
@@ -84,6 +85,84 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261110-01: A failed upload's cleanup was refused with 412 and left an empty file on OneDrive
+
+First seen: 2026-10-30
+Last seen: 2026-11-10
+Area: `internal/graph` create-then-upload cleanup, `internal/driveops`
+placeholder removal, `e2e` watch tests
+Suite / test: nightly run `42865435904` on `70301c0e`, job `e2e`,
+`TestE2E_SyncWatch_PauseResume` (`e2e_full`); on 2026-10-30
+`TestE2E_SyncWatch_FileModification` (`e2e_full`)
+Classification: product bug
+Status: fixed
+Recurring: yes
+Summary: On 2026-11-10 the test read back a remote file of 0 bytes where it
+expected the 21 bytes it had written locally. Two defects met. The test
+stopped the daemon as soon as `stat` saw the file's name, and a new file's
+name is visible from the create, before any content: the daemon was stopped
+between the request that creates the empty item and the answer to the one
+that opens its upload session. That alone fails the test, and it is a test
+bug. The product bug is what was left behind: the upload's cleanup read the
+empty item and deleted it conditional on the eTag just read, once; the delete
+answered 412 and the empty file stayed on OneDrive, against R-5.6.14.
+
+Evidence:
+- The daemon's debug log of the run, times in UTC on 2026-11-10: the create
+  by body answered 201 at 18:00:48.058 and `createUploadSession` on the new
+  item was sent at 48.060. The test's `stat` answered 200 at 48.213 and
+  printed `Size: 0 B (0 bytes)`; the test sent SIGTERM. At 48.218 the daemon
+  logged `graceful shutdown: sealing new work admission` with `in_flight=1`
+  and the session request failed with `context canceled`, 0.16 s after it
+  was sent.
+  The cleanup's read answered 200 at 48.487 and its `DELETE` answered 412 at
+  48.805. The daemon logged `failed to remove the empty file a failed upload
+  created` at DEBUG, then `action failed action=upload`, and exited. The
+  test's `get` then wrote 0 bytes.
+- A 412 on an eTag read 0.3 s earlier is explained if the canceled
+  `createUploadSession` still reached the server and opened a session after
+  the read: opening a session on an empty item moves its eTag
+  ([graph-api-quirks.md](graph-api-quirks.md), "An Upload Session Moves An
+  Empty Item's eTag"). The client cannot cancel such a session, because it
+  never received its upload URL.
+- A live probe on Personal on 2026-11-11 confirmed that order. It created an
+  empty item, canceled `createUploadSession` at a set delay after the request
+  was written, and read the item every 0.1 s. Canceled 40, 80 and 160 ms
+  after the write (four rounds), the request failed with `context canceled`
+  and the item's eTag still moved from `,1` to `,2`, 0.24 s to 0.65 s after
+  the client had given up, with the item still 0 bytes. Canceled at once (two
+  rounds), the eTag never moved.
+- Canceling the upload on the first signal is the specified behavior
+  (R-6.3.6). The cleanup runs on a context detached from the canceled one:
+  both of its requests were answered after the cancel.
+- `getRemoteFile` could not tell a placeholder from the file: a `get` of a
+  0-byte item succeeds and yields an empty file.
+- The create hook runs before the session request, so the pending-create
+  record of the item existed when the daemon exited. A later pass would have
+  uploaded into the empty item by ID rather than treat it as a remote file
+  (R-5.6.15); the test had stopped the daemon for good, so nothing did.
+- 2026-10-30, `TestE2E_SyncWatch_FileModification` (#818): the same leftover
+  by another route. The first upload of a new file was abandoned because the
+  file changed during it; opening and canceling its session had moved the
+  empty item's eTag, and the cleanup deleted with the creation eTag: 412, and
+  the empty file stayed. #818 made the cleanup read the eTag back first,
+  still with one read and one delete. No ledger entry was written then.
+
+Fix: `graph.Client.RemoveEmptyItem` reads the item and deletes it while still
+empty, conditional on the eTag just read, and after a 412 reads again: three
+attempts in all, within 10 s on a detached context. It never deletes an item
+that reads back with content or without an eTag, and a 404 counts as removed.
+The Graph client's own cleanup and the transfer manager's (`PlaceholderRemover`)
+both go through it. `TestE2E_SyncWatch_PauseResume` now waits for the remote
+content (`waitForRemoteFileContent`), not the name, before it stops the
+daemon, so it no longer provokes the cleanup; the integration test
+`TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession` does, by
+abandoning the session request on purpose. In nine live rounds on 2026-11-11
+Graph refused the first delete with 412 four times and the second attempt
+removed the item every time. Canonical policy: `spec/design/graph-client.md` (Transfers) and
+`spec/design/drive-transfers.md` (New files and their placeholder).
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [transfers.md](../requirements/transfers.md)
 
 ## LI-20261029-01: NFD-named local file was never uploaded on Linux while sync reported success
 
