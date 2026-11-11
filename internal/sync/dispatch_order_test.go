@@ -287,6 +287,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth,
 		TestRunOnce_AppliedMoveLeavesTheBaselineCurrent,
 		TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline,
+		TestRunOnce_StoreTransactionsCountOnTheRunContextCollector,
 	}
 }
 

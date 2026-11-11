@@ -66,6 +66,7 @@ runtime package that implements it.
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, refuses a start in which no drive could start, and with every drive paused starts, reports ready with the paused drives and idles until a reload resumes one (R-3.4.2). | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts`, `TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed` |
 | The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
+| Each mount's perf collector is carried in that mount's run context, for a watch runner and for a one-shot pass, so what the work records through its context (HTTP requests and retries, store transactions, transfers) shows in that mount's live snapshot and is counted once each in the owner aggregate and the command collector (R-6.6.15). | `TestOrchestrator_MountPerfIncludesContextRecordedMetrics`, `TestOrchestrator_OneShotMountPerfIncludesContextRecordedMetrics`, `internal/sync/engine_perf_context_test.go` (`TestRunOnce_StoreTransactionsCountOnTheRunContextCollector`) |
 | Socket files are permissioned private, ownership is a `flock` on `<socket>.lock` held for the owner's lifetime, stale sockets are replaced only under that lock, and empty hash-runtime socket directories are cleaned up on close. | `TestControlSocketServer_PermissionsStaleCleanupAndRuntimeDirRemoval` |
 | Watch mode announces each drive start failure once and again only when its reason changes or the drive has started in between, including the carried-over CLI config failures; repeats of the same shortcut-refresh or cleanup failure stay at DEBUG. | `TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges`, `TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn` |
 | A removed shared folder whose final sync did not finish cleanly keeps its local copy, and multisync says so in one plain Info line naming the folder (not its mount ID), repeated only when the reason changes; unchanged repeats from watch passes go to Debug. The memory is mutex-guarded because one-shot parents finalize their children concurrently. | `TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges` |
@@ -551,6 +552,19 @@ runner set.
   counters themselves. `internal/perf` owns the aggregate/live snapshot state;
   the control plane only exposes that state through the local socket and
   forwards explicit capture requests into the owning runtime.
+- The control plane puts each mount's collector in that mount's run context:
+  `startWatchRunner` wraps the runner's context and the one-shot work function
+  wraps the context its `MountRunner` hands it. The engine receives the same
+  collector directly for its own phases and counters, but HTTP requests and
+  retries, store transactions and transfers are recorded on whatever collector
+  the context carries, so without the wrap a mount's snapshot shows none of
+  them. The mount collector's parent is the owner's aggregate collector, whose
+  parent is the command collector, so each record is counted once at every
+  level.
+- Work the control plane does for a mount outside the mount's run stays on the
+  command collector only: connecting the session, constructing and closing the
+  engine, and the parent-store steps the orchestrator drives itself (final-drain
+  acknowledgement and child artifact cleanup).
 
 ## `MountRunner`
 
