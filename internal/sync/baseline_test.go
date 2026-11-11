@@ -281,7 +281,7 @@ func seedDurableRecoveryTruth(
 			IssueType: IssueInvalidFilename,
 		}},
 		ManagedIssueTypes: []IssueType{IssueInvalidFilename},
-	}, now))
+	}))
 	require.NoError(t, mgr.UpsertRetryWork(ctx, &RetryWorkRow{
 		Path:         "retry-later.txt",
 		ActionType:   ActionUpload,

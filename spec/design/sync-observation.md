@@ -4,7 +4,7 @@ GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/
 
 LAYER: 2
 
-Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.15.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.12 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.21 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-2.13.2 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified], R-2.2.8 [verified]
+Implements: R-2.1.2 [verified], R-2.2.4 [verified], R-2.15.2 [verified], R-2.15.4 [verified], R-2.4.11 [verified], R-2.4.12 [verified], R-2.4.16 [verified], R-2.8.8 [verified], R-2.8.22 [verified], R-2.8.13 [verified], R-2.8.14 [verified], R-2.8.21 [verified], R-2.8.15 [verified], R-2.8.16 [verified], R-2.8.18 [verified], R-2.8.19 [verified], R-2.8.20 [verified], R-2.11 [verified], R-2.12 [verified], R-2.13.1 [verified], R-2.13.2 [verified], R-6.6.17 [verified], R-6.7.1 [verified], R-6.7.3 [verified], R-6.7.5 [verified], R-6.7.19 [verified], R-6.7.20 [verified], R-6.7.21 [verified], R-6.7.24 [verified], R-6.7.28 [verified], R-6.7.29 [verified], R-6.2.12 [verified], R-6.2.13 [verified], R-6.2.14 [verified], R-6.2.15 [verified], R-2.2.8 [verified]
 
 ## Overview
 
@@ -66,12 +66,13 @@ except that the type had once been public.
 | --- | --- |
 | A full scan refuses a sync folder that is not the one the state was built from (replaced, an emptied mount point, a re-pointed root symlink) and a sync folder that cannot be read, rather than reading either as deletions; every engine validates against an expected identity, parent-issued for shortcut children and store-recorded for primary roots. | `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes`, `TestEngine_SymlinkedSyncDirRepointedIsRefused`, `TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused`, `TestFullScan_RootReadDirEIOReturnsError`, `TestNewEngine_RootTokenDecidesOverInode`, `TestRunOnce_RemoteDeleteAfterRebindingInTheSameEngineSucceeds`, `TestWatchObserver_SeesBindingMadeAfterItWasBuilt`, `TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker`, `TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut`, `TestMarkRoot_TokenThatDoesNotReadBackIsUnsupported`, `TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused`, `TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind`, `TestSameRoot_TokenDecidesWhenRecorded`, `TestSameRoot_BtrfsSubvolumeRootAlsoNeedsDevice`, `TestMarkRoot_FilesystemWithoutXattrsFallsBack`, `TestSameRoot_BirthTimeMustMatchWhenBothSidesKnowOne`, `TestRootIdentity_LinuxBirthTimeIsStatxBtime`, `TestNewEngine_RootWithoutTokenIsRefusedWhenBirthTimeDiffers` |
 | Synced paths the scan cannot represent (replaced by a skipped symlink or special file, renamed to an invalid, too-long or excluded name, unstat-able, unreadable) and mount points of other filesystems are recorded as unavailable truth on the synced path, so nothing is deleted on either side; a watch create of such an entry triggers an immediate safety scan. | `TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline`, `TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete`, `TestFullScan_HashEIOProducesNoUploadAndNoDelete`, `TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault`, `TestIsForeignMountPoint_CrossingRecordsTheBoundary`, `TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted`, `TestFlaggedMountIsGone_MountedButEmptiedDiskIsNotABoundary`, `TestClearSyncRootIdentity_ForgetsRecordedMountPoints`, `TestRootDeviceForScan_UnreadableRootAbortsScan` |
+| A full local scan clears every finding it no longer reports and keeps every one it reports again, an interrupted removal's leftover included; every watch-mode full scan (safety, recovery, and the fallback scan while watching is unavailable) forwards its finding set even when it is empty; every issue type a scan reports is a managed type of the local findings batch, checked against the scanner's source; only a regular file under a set-aside name is reported as an interrupted removal (R-6.4.9, R-2.8.21, R-2.8.22). | `TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover`, `TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone`, `TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet`, `TestWatchRuntime_FallbackScanRecordsAndClearsFindings`, `TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval` |
 | A watch Remove or Rename event becomes a delete only when the exact name is really gone, so a lone MOVED_FROM, an atomic save or a misattributed event never deletes a file that is still there. | `TestHandleDelete_PathThatStillExistsEmitsNoDelete`, `TestHandleFsEvent_DeletePassesFsPath` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
 | Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
-| A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released. | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
+| A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released (R-2.8.22). | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
 | Known-missed local changes (kernel queue overflow, watcher errors, dropped batches or hash requests) arm one coalesced recovery rescan instead of waiting for the periodic safety scan. | `TestWatch_EventOverflowRunsRecoveryScan`, `TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan`, `TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm`, `TestCancelRecoveryScan_StaleTimerFiringIsIgnored`, `TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan`, `TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan`, `TestTrySendLocalObservationBatch_DropRequestsRecoveryScan` |
 | A full scan schedules a replan only when it changes committed truth, and a due scan whose snapshot the runtime cannot take yet is deferred, with one recovery scan armed at the base pace until there is room. | `TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan`, `TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange`, `TestBuildObservationReconcilePlan_ReportsChangeOnlyWhenTheIssueSetDiffers`, `TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations`, `TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch` |
 | A deleted or renamed-away directory drops the watches of its whole subtree, deepest first, so the re-added tree reports its new paths. | `TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst`, `TestWatch_RenamedDirectoryDescendantEventsUseNewPath`, `TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches`, `TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree`, `TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches` |
@@ -607,9 +608,9 @@ Ignore invariants:
 Observation may emit `skippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings through one `ObservationFindingsBatch`
 boundary, and `observation_findings.go` is the single constructor path for
-those batches. Whole-drive scans replace the managed family set for those
-findings, which is the only batch shape in use now that path-scoped
-single-path observation has been removed.
+those batches. A whole-drive scan's batch replaces the stored findings of
+the types it manages; that is the only batch shape (the path-scoped shape
+went with single-path observation, `sync-store.md`).
 
 Observation-owned read-denied subtree boundaries stay boundary-scoped. The
 durable batch records one boundary issue tagged with the matching read
@@ -686,6 +687,42 @@ subtree:
   Before this (2026-11-04) both were written once and never cleared: a
   symlink put back as a file, or a folder unmounted again, stayed unavailable
   truth for good and its edits never uploaded.
+
+Every issue type a local scan reports is a managed type of the local findings
+batch: `invalid_filename`, `path_too_long`, `file_too_large`,
+`case_collision`, `local_read_denied`, `hash_panic`,
+`local_unsyncable_replacement`, `local_mount_boundary` and
+`local_interrupted_removal`. Every full scan re-reports a finding whose cause
+is still there, so the scan that no longer reports one has proven it gone and
+clears it; a type left out keeps its condition after its cause is gone.
+`local_interrupted_removal` was left out until 2026-11-11, so the report of a
+leftover `.detach` file outlived the file for good. The list is checked
+against the scanner's source
+(`TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`):
+every `IssueType` constant named in a production file that builds a
+`skippedItem` must be managed or carry a recorded reason for staying
+unmanaged (none does), and every managed type must be one a local scan
+reports, since a full scan would otherwise delete a condition another writer
+owns. The store enforces the same rule at run time: a batch that reports an
+issue of a type it does not manage is refused, naming the type and the path
+(`sync-store.md`).
+
+Only a regular file is ever set aside by a removal, so only a regular file
+under a `.onedrive-go.*.detach` name is reported as `local_interrupted_removal`.
+A folder, FIFO or other entry with such a name is the user's own: the content
+filter excludes it like every entry with that name (it is neither synced nor
+walked), and nothing is reported. Until 2026-11-11 such a folder was reported
+as a set-aside file.
+
+In watch mode every full scan hands its finding set to the engine through
+`TrySendScanFindings`, the empty set included, because the empty set is what
+clears the last finding: the safety and recovery scans (`runSafetyScan`) and
+the periodic full scan that replaces watching while the watcher is
+unavailable (`runFallbackScan`, `sync-engine.md`). Until 2026-11-11 a safety
+scan forwarded only a non-empty set, so the last finding stayed until the
+next restart, and the fallback scan only logged its set, so while watching
+was unavailable no finding was recorded or cleared. A set dropped on a full
+channel is replaced by the next scan's, which is again the whole set.
 
 A synced item moved *into* an excluded folder is still invisible: the walk
 does not descend excluded folders, so its identity is never seen. That case

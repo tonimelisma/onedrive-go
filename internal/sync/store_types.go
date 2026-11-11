@@ -17,15 +17,14 @@ type ObservationIssue struct {
 	ScopeKey  ScopeKey
 }
 
-// ObservationFindingsBatch is one coherent observation-owned durable batch.
-// The batch replaces the current observation-owned issue set for its managed
-// issue families. Full observation passes manage whole issue families;
-// an exact-path batch may instead manage specific paths without touching
-// unrelated durable findings.
+// ObservationFindingsBatch is one coherent observation-owned durable batch:
+// everything one full observation pass proved for the issue types it
+// manages. Reconciling it replaces the stored issues of exactly those types,
+// so a stored issue the batch does not report again is cleared. Every issue
+// it reports must be of a managed type (buildObservationReconcilePlan).
 type ObservationFindingsBatch struct {
 	Issues            []ObservationIssue
 	ManagedIssueTypes []IssueType
-	ManagedPaths      []string
 }
 
 // ObservationIssueRow represents a row from the observation_issues table.

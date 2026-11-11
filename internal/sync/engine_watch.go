@@ -357,8 +357,10 @@ func (rt *watchRuntime) startObservers(
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
 	rt.startRemoteObserver(ctx, &obsWg, bl, remoteBatches, errs, opts)
 
-	// Channel for forwarding SkippedItems from safety scans to the engine.
-	// Buffered(2) — at most 2 safety scans could overlap before draining.
+	// Carries each watch-mode full scan's finding set (TrySendScanFindings).
+	// Each set is the whole set, so a set dropped on a full buffer costs
+	// nothing the next scan does not resend; two sets cover a scan finishing
+	// while the loop has not yet taken the previous one.
 	skippedCh := make(chan []skippedItem, 2)
 
 	localObs := newLocalObserver(bl, rt.deps.logger, rt.engine.checkWorkers)
@@ -670,8 +672,12 @@ func (rt *watchRuntime) runPeriodicFullScan(
 	}
 }
 
-// runFallbackScan runs one full scan and hands its snapshot to the runtime.
-// It returns false when the context ended.
+// runFallbackScan runs one full scan and hands its snapshot, its events and
+// its finding set to the runtime. The scan stands in for both the watcher and
+// the safety scan, so its findings go exactly as a safety scan's do, the
+// empty set included; it used to log them only, and while watching was
+// unavailable no finding was recorded or cleared. It returns false when the
+// context ended.
 func (rt *watchRuntime) runFallbackScan(
 	ctx context.Context, obs *localObserver, tree *synctree.Root,
 	events chan<- changeEvent, scanFailing *bool,
@@ -697,17 +703,10 @@ func (rt *watchRuntime) runFallbackScan(
 	*scanFailing = false
 
 	obs.TrySendFullLocalSnapshot(ctx, result)
-
-	// Forward events only — skipped items are logged at DEBUG.
-	// The primary scan and safety scan handle persisting observation issues.
 	for i := range result.Events {
 		obs.TrySendChangeEventOnly(ctx, events, &result.Events[i])
 	}
-
-	if len(result.Skipped) > 0 {
-		rt.deps.logger.Debug("periodic scan: skipped items",
-			slog.Int("count", len(result.Skipped)))
-	}
+	obs.TrySendScanFindings(result.Skipped)
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackScanned, Observer: engineDebugObserverLocal})
 
 	return true

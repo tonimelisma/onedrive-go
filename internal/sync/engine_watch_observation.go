@@ -8,7 +8,8 @@ import (
 )
 
 // reconcileSkippedObservationFindings persists a full scan's skipped-file
-// findings and reports whether the persisted issue set changed.
+// findings as the whole local finding set, clearing earlier findings the set
+// lacks, and reports whether the persisted issue set changed.
 func (flow *engineFlow) reconcileSkippedObservationFindings(
 	ctx context.Context,
 	skipped []skippedItem,
@@ -158,7 +159,7 @@ func (flow *engineFlow) applyObservationFindingsBatch(
 		Type: engineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
-	changed, err := eng.baseline.ReconcileObservationFindingsReportingChange(ctx, batch, eng.nowFunc())
+	changed, err := eng.baseline.ReconcileObservationFindingsReportingChange(ctx, batch)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", failureMessage, err)
 	}

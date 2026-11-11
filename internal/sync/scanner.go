@@ -487,12 +487,15 @@ func (o *localObserver) makeWalkFunc(
 					slog.String("path", dbRelPath),
 					slog.String("reason", string(skipItem.Reason)))
 			} else {
-				o.logger.Debug("skipping excluded file", slog.String("name", name))
+				o.logger.Debug("skipping excluded entry", slog.String("path", dbRelPath))
 			}
-			if synctree.IsDetachArtifactName(name) {
+			if synctree.IsDetachArtifactName(name) && d.Type().IsRegular() {
 				// A file set aside by a removal a crash interrupted: user
 				// content left under a hidden name. Report it every scan
 				// until the user deals with it; never delete it (P-4).
+				// Only a regular file is ever set aside, so a folder or a
+				// special file with such a name is the user's own: it stays
+				// excluded like every entry with that name, unreported.
 				*skipped = append(*skipped, skippedItem{
 					Path:   dbRelPath,
 					Reason: issueLocalInterruptedRemoval,

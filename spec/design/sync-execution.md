@@ -611,7 +611,8 @@ before the trashed original is removed (`finishCopiedRestore`, through the
 trash's `syncDir` seam); observation never sees such a sibling. A file that
 cannot be checked in the trash is never purged as empty. A
 `.detach` sibling left by an interrupted run is never cleaned up: every full
-scan reports it as `local_interrupted_removal`.
+scan reports it as `local_interrupted_removal`, and the first full scan that
+no longer finds it clears the report.
 
 The previous version of a file a download replaces is kept the same way: just
 before the finished download is renamed over its target,

@@ -47,7 +47,7 @@ func TestCheckInotifyCapacity_SilentBelowThreshold(t *testing.T) {
 	assert.Empty(t, buf.String(), "should not warn at low usage")
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestClassifyWatcherCreateError_EMFILEIsInotifyInstanceLimit(t *testing.T) {
 	t.Parallel()
 

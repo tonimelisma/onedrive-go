@@ -86,6 +86,9 @@ func (m *mockSyncStateQuerier) QuerySyncState(_ context.Context, _ string, _ syn
 	return m.state
 }
 
+// seedObservationIssueForStatusTest stores one issue. A batch replaces every
+// stored issue of the types it manages, so call it once per type on a store
+// that holds none of that type yet, as every caller does.
 func seedObservationIssueForStatusTest(
 	t *testing.T,
 	store *syncengine.SyncStore,
@@ -98,9 +101,7 @@ func seedObservationIssueForStatusTest(
 		&syncengine.ObservationFindingsBatch{
 			Issues:            []syncengine.ObservationIssue{*issue},
 			ManagedIssueTypes: []syncengine.IssueType{issue.IssueType},
-			ManagedPaths:      []string{issue.Path},
 		},
-		time.Now().UTC(),
 	))
 }
 

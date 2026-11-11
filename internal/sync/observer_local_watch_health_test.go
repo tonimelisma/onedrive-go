@@ -75,7 +75,7 @@ func (w *addErrWatcher) removedPaths() []string {
 // D-078: resource-limit failures fall back instead of ending local sync
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -96,7 +96,7 @@ func TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable(t *testing.T) {
 	assert.Equal(t, []string{root}, watcher.removedPaths(), "the partial watch set is rolled back")
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan(t *testing.T) {
 	t.Parallel()
 
@@ -141,7 +141,7 @@ func TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan(t *testing.T) {
 	}
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	t.Parallel()
 
@@ -574,7 +574,7 @@ func stopWatch(t *testing.T, cancel context.CancelFunc, done <-chan error) {
 	}
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	t.Parallel()
 
@@ -602,7 +602,7 @@ func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	stopWatch(t, cancel, done)
 }
 
-// Validates: R-2.8.12
+// Validates: R-2.8.22
 func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
 	t.Parallel()
 

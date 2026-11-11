@@ -304,7 +304,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	ctx := t.Context()
 
 	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
-	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings, eng.nowFunc()))
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings))
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),

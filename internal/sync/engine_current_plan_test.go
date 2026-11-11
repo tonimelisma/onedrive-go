@@ -93,7 +93,7 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 			IssueType: IssueInvalidFilename,
 		}},
 		ManagedIssueTypes: []IssueType{IssueInvalidFilename},
-	}, eng.nowFunc()))
+	}))
 
 	inputs, err := eng.flow.loadCurrentInputs(ctx, eng.baseline, driveID)
 	require.NoError(t, err)

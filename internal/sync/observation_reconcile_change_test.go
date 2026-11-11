@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Validates: R-2.8.21
@@ -41,7 +42,8 @@ func TestBuildObservationReconcilePlan_ReportsChangeOnlyWhenTheIssueSetDiffers(t
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			plan := buildObservationReconcilePlan(tt.batch, tt.state)
+			plan, err := buildObservationReconcilePlan(tt.batch, tt.state)
+			require.NoError(t, err)
 			assert.Equal(t, tt.changes, plan.changesIssues)
 		})
 	}

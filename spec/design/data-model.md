@@ -150,11 +150,8 @@ does not upsert observation rows directly. The next observation pass is
 responsible for proving and persisting that current-truth problem.
 
 Observation-owned issue rows are reconciled through one observation-batch
-mutation shape. Full observation passes replace their managed current set by
-issue type. The same mutation input also supports scoping reconciliation to an
-exact managed path set, so a narrow probe cannot clear unrelated durable
-observation rows; that mode currently has no caller (see
-[sync-store.md](sync-store.md)).
+mutation shape: a full observation pass replaces the stored issues of the
+issue types it manages (see [sync-store.md](sync-store.md)).
 
 Read-denied subtree boundaries are carried by `ScopeKey` on the corresponding
 issue row instead of a second durable scope table. Derived truth reads use that
