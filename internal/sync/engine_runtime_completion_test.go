@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,6 +336,75 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.False(t, batch.FullRefresh)
+}
+
+// Validates: R-2.8.7
+//
+// A superseded completion never reaches the permission probes, whatever its
+// error chain also carries: the stale verdict decides. Probed first, a stale
+// error holding a 403 or a local permission denial would record permission
+// retry work or a write-denied scope for work the replan replaces.
+func TestEngineFlow_ProcessNormalDecision_StaleCompletionIsNeverProbedForPermissions(t *testing.T) {
+	t.Parallel()
+
+	const remoteRootItemID = "mount-root-id"
+	testCases := []struct {
+		name       string
+		completion actionCompletion
+	}{
+		{
+			name: "local permission denial",
+			completion: actionCompletion{
+				Path:       "accessible/file.txt",
+				ActionType: ActionDownload,
+				Err:        fmt.Errorf("%w: %w", errActionPreconditionChanged, os.ErrPermission),
+			},
+		},
+		{
+			name: "remote 403",
+			completion: actionCompletion{
+				Path:       "Shared/file.txt",
+				ActionType: ActionUpload,
+				HTTPStatus: http.StatusForbidden,
+				Err: fmt.Errorf("%w: %w", errActionPreconditionChanged,
+					&graph.GraphError{StatusCode: http.StatusForbidden, Err: graph.ErrForbidden}),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var probes atomic.Int32
+			eng, syncRoot := newTestEngine(t, &engineMockClient{
+				listItemPermissionsFn: func(context.Context, driveid.ID, string) ([]graph.Permission, error) {
+					probes.Add(1)
+					return []graph.Permission{{Roles: []string{"read"}}}, nil
+				},
+			})
+			eng.remoteRootItemID = remoteRootItemID
+			eng.permHandler.remoteRootItemID = remoteRootItemID
+			flow := testEngineFlow(t, eng)
+			require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
+
+			r := tc.completion
+			r.ErrMsg = r.Err.Error()
+			decision := classifyResult(&r)
+			require.Equal(t, resultSuperseded, decision.Class)
+
+			ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, &r, &Baseline{})
+
+			require.NoError(t, err)
+			assert.Empty(t, ready)
+			assert.Equal(t, 1, flow.results.superseded)
+			assert.Zero(t, probes.Load(), "no remote permission probe")
+			assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
+			blockScopes, err := eng.baseline.ListBlockScopes(t.Context())
+			require.NoError(t, err)
+			assert.Empty(t, blockScopes)
+		})
+	}
 }
 
 // Validates: R-2.10.5

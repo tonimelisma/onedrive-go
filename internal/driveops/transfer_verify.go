@@ -138,6 +138,30 @@ func isBusinessLikeDriveID(driveID driveid.ID) bool {
 	return strings.HasPrefix(driveID.String(), businessDriveIDPrefix)
 }
 
+// uploadOutcomeUnknownError is an upload whose answer left its outcome open
+// (a final fragment that may have committed, a session that is gone) and
+// whose lookup of the item then failed. Only the lookup's failure is in the
+// chain, so callers classify it by its own answer (an outage, a throttle, a
+// shutdown). The answer it followed is kept as text for the log: in the
+// chain, a final fragment's 409 or 412 read in sync as a stale plan,
+// replanned at once, and hid the lookup's failure behind its status.
+type uploadOutcomeUnknownError struct {
+	answer    string
+	lookupErr error
+}
+
+// outcomeUnknownAfter is the failure of an upload answered with answer (the
+// text the caller has, its context included) whose lookup then failed.
+func outcomeUnknownAfter(answer string, lookupErr error) error {
+	return &uploadOutcomeUnknownError{answer: answer, lookupErr: lookupErr}
+}
+
+func (e *uploadOutcomeUnknownError) Error() string {
+	return e.answer + "; the upload's outcome is unknown, and looking the item up failed: " + e.lookupErr.Error()
+}
+
+func (e *uploadOutcomeUnknownError) Unwrap() error { return e.lookupErr }
+
 // settleUncertainFinalFragment handles an upload whose last fragment may
 // have committed: the encapsulated small-file session canceled itself, but
 // the item is adopted if it is provably ours (D-036). When it is not, the
@@ -145,13 +169,20 @@ func isBusinessLikeDriveID(driveID driveid.ID) bool {
 // did not land: the empty item is removed now, by its ID (removePlaceholder).
 // The removal reads the eTag it is conditional on itself. The creation eTag
 // no longer matches by then: opening and canceling the session moved it, so
-// that delete always failed with 412 and left the placeholder behind.
+// that delete always failed with 412 and left the placeholder behind. A
+// failed lookup leaves the outcome unknown; the failure still names the item
+// the create made.
 func (tm *TransferManager) settleUncertainFinalFragment(
 	ctx context.Context, target uploadTarget, sent uploadedContent, created *graph.CreatedItemError, uploadErr error,
 ) (*graph.Item, error) {
 	landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, target, sent)
 	if lookupErr != nil {
-		return nil, errors.Join(uploadErr, lookupErr)
+		unknown := outcomeUnknownAfter(uploadErr.Error(), lookupErr)
+		if created != nil && created.Item != nil {
+			return nil, &graph.CreatedItemError{Item: created.Item, Err: unknown}
+		}
+
+		return nil, unknown
 	}
 	if adopted {
 		return landed, nil

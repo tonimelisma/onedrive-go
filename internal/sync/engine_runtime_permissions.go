@@ -28,6 +28,11 @@ func shouldHandleLocalPermission(r *actionCompletion) bool {
 		driveops.ClassifyLocalError(r.Err) == driveops.LocalErrorReadOnly)
 }
 
+// maybeHandlePermissionFailure hands a failure to the permission probes when
+// its error is a permission answer. A superseded completion never is, whatever
+// its error chain also holds: the stale verdict decides (classifyResult), and
+// probing it recorded permission retry work or a write-denied scope for work
+// the replan replaces.
 func (flow *engineFlow) maybeHandlePermissionFailure(
 	ctx context.Context,
 	decision *resultDecision,
@@ -36,6 +41,8 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 	bl *Baseline,
 ) (bool, error) {
 	switch {
+	case decision.Class == errclass.ClassSuperseded:
+		return false, nil
 	case shouldHandleRemote403Permission(r):
 		return flow.handleRemote403PermissionFailure(ctx, decision, current, r, bl)
 	case shouldHandleLocalPermission(r):

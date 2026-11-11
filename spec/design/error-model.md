@@ -129,11 +129,21 @@ Permission recovery follows the same ownership split:
 - `errActionPreconditionChanged` is the sync executor/worker signal for
   "this exact action is obsolete." Worker-start freshness, admission freshness,
   and executor live preconditions may return it; the engine maps it to
-  `superseded`, not ordinary retry. Transient failures while trying to read
-  live precondition truth are not wrapped with this sentinel. Graph conditional
-  mutation mismatches surface first as `graph.ErrPreconditionFailed` from HTTP
-  412; the executor translates that boundary-specific fact into
-  `errActionPreconditionChanged` when it proves a post-preflight stale action.
+  `superseded`, not ordinary retry, before it reads any server answer the
+  same error chain carries (a create's 409, an overwrite's 412), so the status
+  never turns a stale action into retry work. Transient failures while trying
+  to read live precondition truth are not wrapped with this sentinel. Graph
+  conditional mutation mismatches surface first as
+  `graph.ErrPreconditionFailed` from HTTP 412; the executor translates that
+  boundary-specific fact into `errActionPreconditionChanged` when it proves a
+  post-preflight stale action.
+- A read that follows an answer and fails is that read's failure, classified
+  by its own answer, never joined to the answer it followed: the listing that
+  resolves a create's 409 (a file or a folder) and the lookup of an upload
+  whose final fragment may have committed (`driveops`, whose unknown-outcome
+  error names the answer in its text only). Joined, a 409 or 412 hid the
+  read's outage or throttle behind its status and made sync read the action as
+  stale.
 - Retry/backoff consumes the classified result; it does not classify on its
   own.
 - User-facing messaging consumes the classified result; it does not inspect raw
@@ -148,4 +158,5 @@ Permission recovery follows the same ownership split:
 | Shared condition-key normalization, ordering, shared stored-condition projection, and CLI rendering tables | `internal/sync/condition_keys_test.go` (`TestConditionKeyForStoredCondition_RepresentativeMappings`, `TestConditionKeyLess_UsesCanonicalDisplayOrder`, `TestConditionKeyForIssueType_RepresentativeMappings`), `internal/sync/condition_projection_test.go` (`TestProjectStoredConditionGroups_MergesDurableAuthorities`), `internal/cli/status_test.go` (`TestQuerySyncState_PreservesConditionScopeContext`, `TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope`, `TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions`, `TestPrintSyncStateText_WithConditions`), `internal/cli/status_golden_test.go` (`TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`) |
 | Sync result classification foundations | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_SuccessAndShutdown`, `TestClassifyResult_HTTPPersistenceAndScopeRouting`, `TestClassifyResult_LocalPersistenceAndScopeRouting`), `internal/sync/engine_runtime_completion_test.go` (`TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`), `internal/sync/engine_run_once_results_test.go` (`TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry`), `internal/sync/engine_retry_trial_test.go` (`TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldRetriesNow_DoesNotConsultDurableRetryRowsWithoutHeldRuntimeEntry`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestReleaseDueHeldTrialsNow_SkipsScopesWithoutHeldDependencyReadyCandidates`, `TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHeldRuntimeEntry`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`, `TestClearRetryWorkOnSuccess_StoreFailureIsReturned`), `internal/sync/engine_runtime_lifecycle_test.go` (`TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork`), `internal/sync/store_scope_admin_test.go` (`TestPruneBlockScopesWithoutBlockedWork`) |
 | Local errno table and disk-full folding | `internal/driveops/local_errors_test.go` (`TestClassifyLocalError_Table`, `TestDownloadToFile_WriteOutOfSpaceReturnsErrDiskFull`), `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_LocalErrnoTable`), `internal/sync/store_disk_full_test.go` (`TestIsLocalDiskFull_RecognizesRealSQLiteFull`), `internal/cli/error_presentation_test.go` (`TestCommandErrorText_LocalFilesystemConditionsArePlain`) |
+| A stale precondition is classified before any server answer; a failed follow-up read is never joined to the answer it followed | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries`), `internal/sync/executor_create_test.go` (`TestExecutor_Upload_ListingFailureAfterACreateConflictIsClassifiedByItsOwnAnswer`, `TestExecutor_CreateRemoteFolder_ListingFailureAfterAConflictIsClassifiedByItsOwnAnswer`, `TestUploadTransferError_AFailedOutcomeLookupIsNotAStalePrecondition`), `internal/driveops/transfer_outcome_unknown_test.go` (`TestUploadFile_FailedLookupAfterAnUncertainFinalFragmentIsAnUnknownOutcome`, `TestSessionUpload_FailedLookupAfterAnUncertainFinalFragmentIsAnUnknownOutcome`, `TestSessionUpload_FailedLookupAfterAnUncertainResumeIsAnUnknownOutcome`) |
 | Server-answer table | `internal/sync/engine_result_classify_test.go` (`TestClassifyResult_ServerAnswerTable`), `internal/sync/scope_test.go` (`TestScope_FiveRefusalsSetNoServiceScope`, `TestScope_QuotaRecognizedOutsideStatus507`, `TestScopeKeyForResult`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), malware (`TestClassifyResult_MalwareIsPerFileNotReadDenied`) |
