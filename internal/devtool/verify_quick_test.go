@@ -51,17 +51,7 @@ func TestRunVerifyQuickRunsExpectedSteps(t *testing.T) {
 	// No lint (its own CI job), no race, no coverage profile, no compile
 	// guard and no live suite: the repository rules, the builds, the tagged
 	// vets and the short unit tier.
-	assert.Equal(t, []string{
-		"gofumpt -w .",
-		"goimports -local github.com/tonimelisma/onedrive-go",
-		"go build ./...",
-		"go build ./... GOOS=linux",
-		"go build ./... GOOS=darwin",
-		"go build ./... GOOS=freebsd",
-		"go vet -tags=e2e e2e_full",
-		"go vet -tags=integration",
-		"go test -short",
-	}, recordedCommandSequence(runner))
+	assert.Equal(t, quickCommandSequence(), recordedCommandSequence(runner))
 
 	unit := runner.runCommands[len(runner.runCommands)-1]
 	assert.Equal(t, []string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "./..."}, unit.args)
@@ -111,6 +101,52 @@ func TestRunVerifyLintRunsOnlyLint(t *testing.T) {
 	assert.Equal(t, []string{"golangci-lint run --allow-parallel-runners"}, recordedCommandSequence(runner))
 }
 
+// quickCommandSequence is what the quick profile runs, as
+// recordedCommandSequence reports it.
+func quickCommandSequence() []string {
+	return []string{
+		"gofumpt -w .",
+		"goimports -local github.com/tonimelisma/onedrive-go",
+		"go build ./...",
+		"go build ./... GOOS=linux",
+		"go build ./... GOOS=darwin",
+		"go build ./... GOOS=freebsd",
+		"go vet -tags=e2e e2e_full",
+		"go vet -tags=integration",
+		"go test -short",
+	}
+}
+
+// Validates: R-6.10.22
+//
+// The pr profile is the local gate before a pull request: what the required
+// PR check runs on Linux, in one command, on a host too small for the full
+// race tier. Lint goes first because it fails fastest.
+func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRequirementsBackedReadme(t, repoRoot)
+	runner := &fakeRunner{}
+	stdout := &bytes.Buffer{}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: repoRoot,
+		Profile:  VerifyPR,
+		Stdout:   stdout,
+		Stderr:   &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
+	assert.Equal(t, expected, recordedCommandSequence(runner))
+
+	unit := runner.runCommands[len(runner.runCommands)-1]
+	assert.Equal(t, []string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "./..."}, unit.args)
+	assert.Empty(t, runner.outputCommands, "pr runs no race tier and reports no coverage")
+	assert.NotContains(t, stdout.String(), "==> coverage")
+}
+
 // Validates: R-6.10.22
 func TestRunVerifyPlatformRunsHostBuildAndShortTier(t *testing.T) {
 	t.Parallel()
@@ -153,7 +189,7 @@ func TestVerifyShardRejectsBadSpecsAndOtherProfiles(t *testing.T) {
 		Stderr:   &bytes.Buffer{},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--shard applies to the quick and platform profiles only")
+	assert.Contains(t, err.Error(), "--shard applies to the pr, quick and platform profiles only")
 }
 
 // Validates: R-6.10.22

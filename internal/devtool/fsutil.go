@@ -33,6 +33,16 @@ func stat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// lstat is stat that does not follow a symlink at path.
+func lstat(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("lstat %s: %w", path, err)
+	}
+
+	return info, nil
+}
+
 func readDir(path string) ([]os.DirEntry, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
