@@ -395,18 +395,24 @@ func TestDelta_HTTP410_TokenExpired(t *testing.T) {
 // §1: rewindBody edge cases
 // ---------------------------------------------------------------------------
 
-// TestRewindBody_NilBody validates that rewindBody handles nil body gracefully.
-func TestRewindBody_NilBody(t *testing.T) {
-	err := rewindBody(nil)
-	assert.NoError(t, err)
+// TestRewindBody_EmptyBodiesNeedNoRewind validates that nil and http.NoBody,
+// which carry nothing to resend, rewind without error.
+//
+// Validates: R-6.8.14
+func TestRewindBody_EmptyBodiesNeedNoRewind(t *testing.T) {
+	require.NoError(t, rewindBody(nil))
+	require.NoError(t, rewindBody(http.NoBody))
 }
 
-// TestRewindBody_NonSeeker validates that rewindBody is a no-op for non-seekable readers.
-func TestRewindBody_NonSeeker(t *testing.T) {
+// TestRewindBody_NonSeekerIsNotReplayable validates that a non-empty body
+// that is not an io.Seeker is refused rather than resent consumed.
+//
+// Validates: R-6.8.14
+func TestRewindBody_NonSeekerIsNotReplayable(t *testing.T) {
 	reader := strings.NewReader("data")
 	// strings.Reader IS a Seeker, so use a non-seekable wrapper.
 	err := rewindBody(io.NopCloser(reader))
-	assert.NoError(t, err)
+	require.ErrorIs(t, err, errBodyNotReplayable)
 }
 
 // TestRewindBody_FailOnSecondSeek validates the retry error path when
@@ -421,7 +427,7 @@ func TestRewindBody_FailOnSecondSeek(t *testing.T) {
 	// Second seek fails — this is what happens on retry.
 	err = rewindBody(body)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rewinding request body")
+	assert.Contains(t, err.Error(), "seeking request body")
 }
 
 // ---------------------------------------------------------------------------

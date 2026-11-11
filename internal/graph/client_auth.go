@@ -114,8 +114,10 @@ type forceRefresher interface {
 }
 
 // doOnce executes a single HTTP request with authentication. Handles 401 token
-// refresh as an auth lifecycle concern (not transient retry). The body must be
-// seekable (bytes.Reader) if 401 refresh is needed — all callers satisfy this.
+// refresh as an auth lifecycle concern (not transient retry). The retry resends
+// the body from the start, so a body other than nil or http.NoBody must be an
+// io.Seeker (all callers pass a bytes.Reader); any other body fails the retry
+// with errBodyNotReplayable instead of being resent consumed.
 // doOnce reports tokenFresh when a 401 forced a token refresh that
 // succeeded, so the token on the final attempt is known-good.
 func (c *Client) doOnce(
@@ -272,14 +274,16 @@ func (c *Client) retryUnauthorized(
 		return nil, outcome, fmt.Errorf("closing 401 response body: %w", closeErr)
 	}
 
+	// Rewound before the retry is announced or built: a body that cannot be
+	// rewound fails here, and no second request goes out.
+	if rewindErr := rewindBody(body); rewindErr != nil {
+		return nil, outcome, fmt.Errorf("rewinding request body after 401: %w", rewindErr)
+	}
+
 	c.logger.Info("retrying after 401 with refreshed token",
 		slog.String("method", method),
 		slog.String("url", url),
 	)
-
-	if rewindErr := rewindBody(body); rewindErr != nil {
-		return nil, outcome, rewindErr
-	}
 
 	req, err := c.buildAuthorizedRequest(ctx, method, url, body, newTok, extraHeaders)
 	if err != nil {
@@ -296,18 +300,28 @@ func (c *Client) retryUnauthorized(
 	return retryResp, outcome, nil
 }
 
-// rewindBody seeks an io.Reader back to offset 0 if it implements io.Seeker.
-// All callers use bytes.NewReader (which is an io.ReadSeeker), so the body
-// is fully available on 401 refresh. Returns nil when body is nil or not seekable.
+// errBodyNotReplayable reports a 401 refresh-and-retry whose request body
+// cannot be sent again: the first attempt consumed it and it is not an
+// io.Seeker. retry.RetryTransport refuses the same replay at its own boundary.
+var errBodyNotReplayable = errors.New("graph: request body cannot be replayed")
+
+// rewindBody seeks the caller's request body back to offset 0 so the 401
+// retry resends all of it. nil and http.NoBody carry nothing to resend. Any
+// other body must be an io.Seeker: resending a consumed stream sends what the
+// first attempt left of it, nothing, so a PATCH or POST would go out empty.
+// Such a body is errBodyNotReplayable.
 func rewindBody(body io.Reader) error {
-	if body == nil {
+	if body == nil || body == http.NoBody {
 		return nil
 	}
 
-	if seeker, ok := body.(io.Seeker); ok {
-		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("graph: rewinding request body for retry: %w", err)
-		}
+	seeker, ok := body.(io.Seeker)
+	if !ok {
+		return errBodyNotReplayable
+	}
+
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seeking request body: %w", err)
 	}
 
 	return nil
