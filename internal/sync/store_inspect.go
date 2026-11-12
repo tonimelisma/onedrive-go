@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // storeInspector is a read-only sync-state boundary for CLI status and other
@@ -403,4 +407,57 @@ func (i *storeInspector) readCount(ctx context.Context, query string) (int, erro
 	}
 
 	return count, nil
+}
+
+// sqlReadRecordedSyncRoot reads the identity of the sync folder a store
+// records (bindSyncRootIdentityTx).
+const sqlReadRecordedSyncRoot = `SELECT
+		sync_root_bound,
+		sync_root_device,
+		sync_root_inode,
+		sync_root_fsid,
+		sync_root_birth_time,
+		sync_root_token
+	FROM observation_state
+	LIMIT 1`
+
+// readRecordedSyncRoot returns the identity of the sync folder the state
+// store at dbPath records, read-only. recorded is false when there is no
+// store, no observation state row, or no folder bound yet.
+func readRecordedSyncRoot(
+	ctx context.Context,
+	dbPath string,
+	logger *slog.Logger,
+) (identity synctree.RootIdentity, recorded bool, err error) {
+	if _, statErr := localpath.Stat(dbPath); errors.Is(statErr, os.ErrNotExist) {
+		return synctree.RootIdentity{}, false, nil
+	}
+
+	type recordedRoot struct {
+		identity *synctree.RootIdentity
+	}
+	found, err := readWithInspector(dbPath, logger, func(inspector *storeInspector) (recordedRoot, error) {
+		var (
+			bound     int
+			device    int64
+			inode     int64
+			fsid      int64
+			birthTime int64
+			token     string
+		)
+		scanErr := inspector.db.QueryRowContext(ctx, sqlReadRecordedSyncRoot).
+			Scan(&bound, &device, &inode, &fsid, &birthTime, &token)
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return recordedRoot{}, nil
+		}
+		if scanErr != nil {
+			return recordedRoot{}, fmt.Errorf("read recorded sync folder: %w", scanErr)
+		}
+		return recordedRoot{identity: syncRootIdentityFromColumns(bound, device, inode, fsid, birthTime, token)}, nil
+	})
+	if err != nil || found.identity == nil {
+		return synctree.RootIdentity{}, false, err
+	}
+
+	return *found.identity, true, nil
 }

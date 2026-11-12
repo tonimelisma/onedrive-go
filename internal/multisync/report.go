@@ -139,6 +139,10 @@ type StartupWarning struct {
 type RunOnceResult struct {
 	Startup StartupSelectionSummary
 	Reports []*MountReport
+	// Stuck is set when a drive's engine did not close within its bound after
+	// the pass; it wraps ErrSyncStuck. The reports stand, but the command
+	// fails, so the process exits and the engine's locks are released.
+	Stuck error
 }
 
 // MountReport summarizes the result of a single mount's sync run.

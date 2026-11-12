@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
@@ -33,7 +34,20 @@ func mountReportsError(reports []*multisync.MountReport) error {
 	return fmt.Errorf("%d of %d mounts failed: %w", failCount, len(reports), firstErr)
 }
 
+// runOnceResultError is the one-shot command's final error: the drives that
+// failed or were skipped, and a drive whose sync state did not close after
+// the pass (RunOnceResult.Stuck), which fails the command even when every
+// drive synced, so the process exits and the stuck engine's locks go.
 func runOnceResultError(result multisync.RunOnceResult) error {
+	drivesErr := runOnceDrivesError(result)
+	if result.Stuck == nil {
+		return drivesErr
+	}
+
+	return errors.Join(drivesErr, result.Stuck)
+}
+
+func runOnceDrivesError(result multisync.RunOnceResult) error {
 	if result.Startup.AllPaused() {
 		return fmt.Errorf("all selected mounts are paused — run 'onedrive-go resume' to unpause")
 	}

@@ -11,7 +11,8 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// watchRunner holds per-mount state for a running watch-mode engine.
+// watchRunner holds per-mount state for a running watch-mode engine. All
+// fields but done are owned by the RunWatch goroutine.
 type watchRunner struct {
 	mount     *mountSpec
 	engine    engineRunner
@@ -21,42 +22,55 @@ type watchRunner struct {
 	// startedAt tells a runner that failed straight away from one that ran
 	// for a while first; see runnerHealthyRunDuration.
 	startedAt time.Time
+	// generation tells this runner apart from every other runner started
+	// under its mount ID, and its events carry it. mount may be swapped for
+	// an equivalent spec; the generation never changes.
+	generation uint64
+	// stopRequestedAt is when the runner was first told to stop; its stop
+	// bound runs from then (retireWatchRunner).
+	stopRequestedAt time.Time
+	// stuckErr is set once the runner missed a stop or close bound. A stuck
+	// runner stays in the runner set and is never closed or replaced.
+	stuckErr error
 }
 
 type watchRunnerEvent struct {
-	mountID               mountID
+	mountID mountID
+	// generation is the sending runner's. An event whose generation is not
+	// that of the runner now under mountID came from a runner the
+	// orchestrator already stopped, and changes nothing.
+	generation            uint64
 	report                *syncengine.Report
 	err                   error
 	parentSnapshot        syncengine.ShortcutChildWorkSnapshot
 	parentSnapshotChanged bool
 }
 
-// closeEngine closes one drive's engine. Cancellation is the normal shutdown
-// path and stays at DEBUG; any other close failure means the drive's sync
-// state may not have been written cleanly, which is worth one warning.
-func (o *Orchestrator) closeEngine(ctx context.Context, mount *mountSpec, engine engineRunner) {
-	if engine == nil {
-		return
-	}
-	closeErr := engine.Close(ctx)
-	if closeErr == nil {
-		return
-	}
-	if errors.Is(closeErr, context.Canceled) || errors.Is(closeErr, context.DeadlineExceeded) {
-		o.logger.Debug("close sync engine during shutdown",
-			slog.String("mount_id", mount.id().String()),
-			slog.Any("error", closeErr),
-		)
-		return
-	}
-	o.logger.Warn(fmt.Sprintf("Couldn't close the sync state for %s cleanly", mount.label()),
-		slog.Any("error", closeErr),
-	)
+// startNextWatchRunner starts the runner for mount under the next generation,
+// and points the mount's parent child-work sink at that generation first, so
+// the snapshots the new runner publishes carry it.
+func (o *Orchestrator) startNextWatchRunner(
+	ctx context.Context,
+	mount *mountSpec,
+	mode syncengine.SyncMode,
+	opts syncengine.WatchOptions,
+	runnerEvents chan<- watchRunnerEvent,
+	childWork *parentChildWorkSnapshots,
+) (*watchRunner, error) {
+	generation := o.nextWatchRunnerGeneration()
+	o.attachParentChildWorkSink(mount, generation, childWork, runnerEvents, nil)
+
+	return o.startWatchRunner(ctx, mount, generation, mode, opts, runnerEvents)
 }
 
+// startWatchRunner starts mount's engine on a goroutine of its own. The
+// goroutine reports a failure, or a final drain's result, on runnerEvents,
+// stamped with generation; it gives up on the send once the runner is
+// canceled, because the loop that canceled it may be waiting for done.
 func (o *Orchestrator) startWatchRunner(
 	ctx context.Context,
 	mount *mountSpec,
+	generation uint64,
 	mode syncengine.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
@@ -89,12 +103,13 @@ func (o *Orchestrator) startWatchRunner(
 	done := make(chan struct{})
 
 	wr := &watchRunner{
-		mount:     mount,
-		engine:    engine,
-		parentAck: shortcutParentAckHandleForMount(mount, engine),
-		cancel:    mountCancel,
-		done:      done,
-		startedAt: o.clockNow(),
+		mount:      mount,
+		engine:     engine,
+		parentAck:  shortcutParentAckHandleForMount(mount, engine),
+		cancel:     mountCancel,
+		done:       done,
+		startedAt:  o.clockNow(),
+		generation: generation,
 	}
 
 	go func() {
@@ -116,12 +131,9 @@ func (o *Orchestrator) startWatchRunner(
 				)
 				return
 			}
-			if runnerEvents != nil {
-				select {
-				case runnerEvents <- watchRunnerEvent{mountID: mount.id(), report: report, err: runErr}:
-				case <-ctx.Done():
-				}
-			}
+			sendWatchRunnerEvent(mountCtx, runnerEvents, watchRunnerEvent{
+				mountID: mount.id(), generation: generation, report: report, err: runErr,
+			})
 			return
 		}
 
@@ -131,12 +143,9 @@ func (o *Orchestrator) startWatchRunner(
 				slog.String("mount_id", mount.id().String()),
 				slog.Any("error", runErr),
 			)
-			if runnerEvents != nil {
-				select {
-				case runnerEvents <- watchRunnerEvent{mountID: mount.id(), err: runErr}:
-				case <-ctx.Done():
-				}
-			}
+			sendWatchRunnerEvent(mountCtx, runnerEvents, watchRunnerEvent{
+				mountID: mount.id(), generation: generation, err: runErr,
+			})
 		}
 	}()
 
@@ -146,6 +155,21 @@ func (o *Orchestrator) startWatchRunner(
 	)
 
 	return wr, nil
+}
+
+// sendWatchRunnerEvent hands event to the watch loop, or drops it once
+// runnerCtx is canceled. A canceled runner's event describes a runner the
+// loop is stopping or already stopped, which the generation check would
+// ignore anyway; blocking on a full channel instead held the runner's done
+// open while the loop waited for it.
+func sendWatchRunnerEvent(runnerCtx context.Context, runnerEvents chan<- watchRunnerEvent, event watchRunnerEvent) {
+	if runnerEvents == nil {
+		return
+	}
+	select {
+	case runnerEvents <- event:
+	case <-runnerCtx.Done():
+	}
 }
 
 // runWatchRunnerEngine runs the mount's engine -- the final drain for a
@@ -197,6 +221,9 @@ func (o *Orchestrator) removeMountPerfCollector(mountID string) {
 	o.perfRuntime.RemoveMount(mountID)
 }
 
+// handleWatchRunnerEvent applies one runner event. It returns an error only
+// when a runner it had to stop missed its bound (ErrSyncStuck), which
+// ends the watch.
 func (o *Orchestrator) handleWatchRunnerEvent(
 	ctx context.Context,
 	event watchRunnerEvent,
@@ -205,35 +232,40 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) {
+) error {
 	if event.parentSnapshotChanged {
 		if !parentSnapshotEventIsCurrent(event, runners, childWork) {
 			o.logger.Debug("ignoring stale parent child work snapshot event",
 				slog.String("parent_mount_id", event.mountID.String()),
 			)
-			return
+			return nil
 		}
-		o.reconcileWatchRunnersForParent(ctx, event.mountID, event.parentSnapshot, mode, opts, runners, runnerEvents, childWork)
-		return
+		return o.reconcileWatchRunnersForParent(ctx, event.mountID, event.parentSnapshot, mode, opts, runners, runnerEvents, childWork)
 	}
 
 	wr := runners[event.mountID]
-	if wr == nil {
-		// The orchestrator already stopped this runner (reload, parent
-		// change, or shutdown) and reconciled; the event was queued before
-		// that and describes nothing current.
+	if wr == nil || wr.generation != event.generation {
+		// The orchestrator already stopped the sender (reload, parent
+		// change, or shutdown), and may have started a new runner under the
+		// same mount ID; the event was queued before that and describes
+		// nothing current.
 		o.logger.Debug("ignoring event from a runner that was already stopped",
 			slog.String("mount_id", event.mountID.String()),
+			slog.Uint64("generation", event.generation),
 		)
-		return
+		return nil
 	}
 
-	<-wr.done
-	o.closeEngine(ctx, wr.mount, wr.engine)
-	delete(runners, event.mountID)
+	// The sender has returned or is about to: only its deferred cleanup is
+	// left, so the bounded stop returns at once unless that cleanup hangs.
+	if err := o.retireWatchRunner(ctx, runners, event.mountID); err != nil {
+		return err
+	}
 	if wr.mount != nil && wr.mount.projectionKind() == MountProjectionStandalone {
 		childWork.forget(event.mountID)
-		o.stopChildWatchRunnersForParent(ctx, runners, event.mountID)
+		if _, err := o.stopChildWatchRunnersForParent(ctx, runners, event.mountID); err != nil {
+			return err
+		}
 	}
 
 	if wr.mount.isFinalDrainChild() {
@@ -244,7 +276,7 @@ func (o *Orchestrator) handleWatchRunnerEvent(
 		o.reportWatchRunnerExit(wr, event.err)
 	}
 
-	o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+	return o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 }
 
 // reportWatchRunnerExit records a runner failure for restart backoff and tells
@@ -277,6 +309,10 @@ func (o *Orchestrator) reportWatchRunnerExit(wr *watchRunner, err error) {
 	}
 }
 
+// parentSnapshotEventIsCurrent accepts a parent snapshot event only from the
+// parent runner now running under its mount ID, and only while the snapshot
+// is still the one cached for that parent. Equal content is not enough: a
+// replaced parent's snapshot can equal its successor's cached one.
 func parentSnapshotEventIsCurrent(
 	event watchRunnerEvent,
 	runners map[mountID]*watchRunner,
@@ -287,6 +323,9 @@ func parentSnapshotEventIsCurrent(
 	}
 	wr := runners[event.mountID]
 	if wr == nil || wr.mount == nil || wr.mount.projectionKind() != MountProjectionStandalone {
+		return false
+	}
+	if wr.generation != event.generation {
 		return false
 	}
 	eventSnapshot := syncengine.NormalizeShortcutChildWorkSnapshot(event.mountID.String(), event.parentSnapshot)
@@ -318,7 +357,7 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 		ctx,
 		decisions,
 		[]*MountReport{report},
-		watchParentDrainAckers(runners),
+		watchParentAckers(runners),
 		childWork,
 	)
 	if err != nil {
@@ -335,23 +374,9 @@ func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
 	}
 }
 
-func watchParentDrainAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChildAckHandle {
-	ackers := make(map[mountID]shortcutChildAckHandle)
-	for id, runner := range runners {
-		if runner == nil || runner.mount == nil || runner.mount.projectionKind() != MountProjectionStandalone {
-			continue
-		}
-		if shortcutChildAckHandleIsZero(runner.parentAck) {
-			continue
-		}
-		ackers[id] = runner.parentAck
-	}
-	return ackers
-}
-
-func watchParentArtifactCleanupAckers(
-	runners map[mountID]*watchRunner,
-) map[mountID]shortcutChildAckHandle {
+// watchParentAckers maps each running drive to the handle its shortcut
+// children acknowledge a final drain or an artifact cleanup through.
+func watchParentAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChildAckHandle {
 	ackers := make(map[mountID]shortcutChildAckHandle)
 	for id, runner := range runners {
 		if runner == nil || runner.mount == nil || runner.mount.projectionKind() != MountProjectionStandalone {

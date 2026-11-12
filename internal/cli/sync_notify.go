@@ -64,15 +64,25 @@ func (s *syncNotifier) lifecycle(event multisync.WatchLifecycleEvent) {
 	case multisync.WatchReloading:
 		s.report(s.notifier.Reloading("Reloading the config"))
 	case multisync.WatchReloaded:
-		// systemd waits for READY=1 after RELOADING=1 whatever the outcome.
-		if event.Err != nil {
-			s.report(s.notifier.Ready(s.readyStatus + "; couldn't reload the config, kept the previous settings"))
-			return
-		}
-		s.readyStatus = s.watchingStatus(event)
-		s.report(s.notifier.Ready(s.readyStatus))
+		s.reloaded(event)
 	case multisync.WatchStopping:
 		s.report(s.notifier.Stopping("Stopping"))
+	}
+}
+
+// reloaded answers a finished reload. systemd waits for READY=1 after
+// RELOADING=1 whatever the outcome, so every outcome sends one; the status
+// follows the outcome the watch states, never a guess from Err.
+func (s *syncNotifier) reloaded(event multisync.WatchLifecycleEvent) {
+	switch event.Reload {
+	case multisync.ReloadApplied:
+		s.readyStatus = s.watchingStatus(event)
+		s.report(s.notifier.Ready(s.readyStatus))
+	case multisync.ReloadKeptPreviousSettings:
+		s.report(s.notifier.Ready(s.readyStatus + "; couldn't reload the config, kept the previous settings"))
+	default:
+		// An outcome this side does not name changes nothing it can describe.
+		s.report(s.notifier.Ready(s.readyStatus))
 	}
 }
 

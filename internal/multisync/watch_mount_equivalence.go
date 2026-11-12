@@ -44,11 +44,16 @@ func mountSpecRuntimeEquivalent(current *mountSpec, next *mountSpec) bool {
 		childEngineSpecsEquivalent(current, next)
 }
 
+// childEngineSpecsEquivalent compares what a shortcut child's runner was
+// started with. The run mode is part of it: a shortcut removed on OneDrive is
+// republished with the same engine spec and only its mode changed to a final
+// drain, and a normal runner kept in its place never ran the drain.
 func childEngineSpecsEquivalent(current *mountSpec, next *mountSpec) bool {
 	if current == nil || next == nil || current.child == nil || next.child == nil {
 		return (current == nil || current.child == nil) && (next == nil || next.child == nil)
 	}
-	return syncengine.ShortcutChildEngineSpecsEqual(&current.child.engine, &next.child.engine)
+	return current.child.mode == next.child.mode &&
+		syncengine.ShortcutChildEngineSpecsEqual(&current.child.engine, &next.child.engine)
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {

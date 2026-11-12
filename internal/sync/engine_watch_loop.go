@@ -382,9 +382,13 @@ func (rt *watchRuntime) handleWatchSkippedSignal(
 		return false, nil
 	}
 
+	// Findings observed before a shutdown are still recorded: detached from
+	// the cancellation, under the bound every detached store write has.
 	reconcileCtx := ctx
 	if ctx.Err() != nil {
-		reconcileCtx = context.WithoutCancel(ctx)
+		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+		defer cancel()
+		reconcileCtx = detached
 	}
 
 	changed, err := rt.reconcileSkippedObservationFindings(reconcileCtx, skipped)

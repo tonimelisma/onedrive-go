@@ -89,6 +89,73 @@ func TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB(t *testing.T)
 	require.NoError(t, store.Close(t.Context()))
 }
 
+// holdSyncFolder takes, for the rest of the test, the sync-folder lock an
+// engine syncing syncDir holds.
+func holdSyncFolder(t *testing.T, syncDir string) {
+	t.Helper()
+
+	release, err := syncengine.LockDriveForOfflineChange(t.Context(), config.DefaultDataDir(), syncDir,
+		filepath.Join(t.TempDir(), "engine.db"), testDriveLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, release()) })
+}
+
+// An engine still draining or closing its store after its owner stopped
+// answering on the control socket holds only its sync-folder lock. Every
+// offline change to a drive's state store waits for that lock too, or it
+// rewrites a store the engine is still writing.
+//
+// Validates: R-6.3.9, R-2.9.5
+func TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheFolder(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(ctx context.Context, cc *CLIContext) error
+	}{
+		{
+			name: "drive reset-sync-state",
+			run: func(ctx context.Context, cc *CLIContext) error {
+				return runDriveResetSyncStateWithInput(ctx, cc, bytes.NewBufferString(""), true)
+			},
+		},
+		{
+			name: "drive rebind-root",
+			run: func(ctx context.Context, cc *CLIContext) error {
+				return runDriveRebindRootWithInput(ctx, cc, bytes.NewBufferString(""), true)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setTestDriveHome(t)
+
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			cid := driveid.MustCanonicalID("personal:offline-change@example.com")
+			syncDir := t.TempDir()
+			require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+
+			statePath := config.DriveStatePath(cid)
+			require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+			const kept = "state the engine is still writing"
+			require.NoError(t, os.WriteFile(statePath, []byte(kept), 0o600))
+			holdSyncFolder(t, syncDir)
+
+			cc := &CLIContext{
+				Flags:        CLIFlags{Drive: []string{cid.String()}},
+				Logger:       testDriveLogger(t),
+				OutputWriter: &bytes.Buffer{},
+				StatusWriter: &bytes.Buffer{},
+				CfgPath:      cfgPath,
+			}
+
+			err := tt.run(t.Context(), cc)
+			require.ErrorIs(t, err, syncengine.ErrSyncRootInUse)
+			data, readErr := os.ReadFile(statePath) //nolint:gosec // test-owned temp path
+			require.NoError(t, readErr)
+			assert.Equal(t, kept, string(data), "the state DB is left alone")
+		})
+	}
+}
+
 func TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner(t *testing.T) {
 	cc := liveSyncOwnerContext(t, "personal:reset@example.com")
 

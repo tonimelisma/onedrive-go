@@ -84,8 +84,8 @@ func TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges(t *te
 	runners := make(map[mountID]*watchRunner)
 	childWork := newParentChildWorkSnapshots()
 	reconcile := func() {
-		orch.reconcileWatchRunners(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{},
-			runners, make(chan watchRunnerEvent, 4), childWork)
+		require.NoError(t, orch.reconcileWatchRunners(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{},
+			runners, make(chan watchRunnerEvent, 4), childWork))
 	}
 	t.Cleanup(func() { stopTestRunners(t, runners) })
 
@@ -164,19 +164,22 @@ func newBackoffHarness(t *testing.T) *backoffHarness {
 }
 
 func (h *backoffHarness) reconcile() {
-	h.orch.reconcileWatchRunners(h.t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{},
-		h.runners, h.events, h.childWork)
+	h.t.Helper()
+	require.NoError(h.t, h.orch.reconcileWatchRunners(h.t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{},
+		h.runners, h.events, h.childWork))
 }
 
-// exit makes the running runner fail with err right now.
+// exit makes the running runner fail with err right now. The event carries
+// the runner's generation, as its goroutine's would.
 func (h *backoffHarness) exit(err error) {
 	h.t.Helper()
 	wr := h.runners[h.id]
 	require.NotNil(h.t, wr)
 	wr.cancel()
 	<-wr.done
-	h.orch.handleWatchRunnerEvent(h.t.Context(), watchRunnerEvent{mountID: h.id, err: err},
-		syncengine.SyncBidirectional, syncengine.WatchOptions{}, h.runners, h.events, h.childWork)
+	require.NoError(h.t, h.orch.handleWatchRunnerEvent(h.t.Context(),
+		watchRunnerEvent{mountID: h.id, generation: wr.generation, err: err},
+		syncengine.SyncBidirectional, syncengine.WatchOptions{}, h.runners, h.events, h.childWork))
 }
 
 func (h *backoffHarness) stopWarnings() []string {
@@ -350,7 +353,7 @@ func TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner(t *testing.
 		return nil, assert.AnError
 	}
 
-	orch.handleWatchRunnerEvent(
+	require.NoError(t, orch.handleWatchRunnerEvent(
 		t.Context(),
 		watchRunnerEvent{mountID: mountID(rd.CanonicalID.String()), err: fmt.Errorf("drain: %w", context.Canceled)},
 		syncengine.SyncBidirectional,
@@ -358,7 +361,7 @@ func TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner(t *testing.
 		make(map[mountID]*watchRunner),
 		make(chan watchRunnerEvent, 1),
 		newParentChildWorkSnapshots(),
-	)
+	))
 
 	assert.Empty(t, capture.atLeast(slog.LevelWarn))
 }
@@ -399,7 +402,7 @@ func TestStartWatchRunner_CanceledFinalDrainSendsNoEvent(t *testing.T) {
 	}
 
 	events := make(chan watchRunnerEvent, 1)
-	wr, err := orch.startWatchRunner(t.Context(), childMount, syncengine.SyncBidirectional, syncengine.WatchOptions{}, events)
+	wr, err := orch.startWatchRunner(t.Context(), childMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, events)
 	require.NoError(t, err)
 	<-draining
 	wr.cancel()

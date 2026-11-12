@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	gosync "sync"
@@ -29,9 +30,15 @@ type indexedMountWork struct {
 
 // RunOnce executes a single sync pass for all configured runtime mounts. Each mount
 // runs in its own goroutine via a MountRunner with panic recovery. RunOnce
-// never returns an error — individual mount errors are captured in each
-// syncengine.Report. The caller inspects reports to determine success or failure.
-func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) RunOnceResult {
+// never returns an error: individual mount errors are captured in each
+// MountReport, and an engine that did not close within its bound in
+// RunOnceResult.Stuck. The caller inspects the result to determine success or
+// failure.
+func (o *Orchestrator) RunOnce(
+	ctx context.Context,
+	mode syncengine.SyncMode,
+	opts syncengine.RunOptions,
+) (result RunOnceResult) {
 	if len(o.cfg.StandaloneMounts) == 0 {
 		if len(o.cfg.InitialStartupResults) > 0 {
 			return RunOnceResult{
@@ -47,9 +54,9 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	if err != nil {
 		return processFailureRunOnceResult(err)
 	}
-	if control != nil {
-		defer o.closeControlSocket(ctx, control)
-	}
+	// Closed when every mount's work is done, which is when the owner lock
+	// may go.
+	defer o.closeControlSocket(ctx, control)
 
 	parentMounts, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
 	if err != nil {
@@ -75,7 +82,9 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	childCoordinator.registerParents(parentWork)
 
 	runIndexedParentMountWork(ctx, parentWork, parentReports, childCoordinator)
-	defer o.closeRunOnceParentEngines(ctx, parentWork)
+	defer func() {
+		result.Stuck = errors.Join(result.Stuck, o.closeRunOnceEngines(ctx, parentWork, MountProjectionStandalone))
+	}()
 
 	childCoordinator.wait()
 
@@ -88,6 +97,7 @@ func (o *Orchestrator) RunOnce(ctx context.Context, mode syncengine.SyncMode, op
 	return RunOnceResult{
 		Startup: summarizeStartupResults(startupResults),
 		Reports: allReports,
+		Stuck:   childCoordinator.stuck(),
 	}
 }
 
@@ -170,7 +180,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 			continue
 		}
 
-		o.attachParentChildWorkSink(mount, childWork, nil, notify)
+		o.attachParentChildWorkSink(mount, 0, childWork, nil, notify)
 
 		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
 		if err != nil {
@@ -258,30 +268,30 @@ func (o *Orchestrator) buildEngineWork(
 	}, nil
 }
 
-func (o *Orchestrator) closeRunOnceChildEngines(ctx context.Context, work []indexedMountWork) {
+// closeRunOnceEngines closes the engines of the work items of one projection
+// (the drives, or one drive's shortcuts), each with the same bound as a watch
+// runner's close (closeEngineWithin). An engine whose close runs over is
+// reported once with every goroutine's stack, and the returned error, which
+// joins those reports, wraps ErrSyncStuck: the pass's reports stand, but the
+// command fails so the process exits and the stuck engine's locks go.
+func (o *Orchestrator) closeRunOnceEngines(
+	ctx context.Context,
+	work []indexedMountWork,
+	projection MountProjectionKind,
+) error {
+	var stuck []error
 	for _, item := range work {
-		if item.work.mount == nil || item.work.mount.projectionKind() != MountProjectionChild {
+		mount, engine := item.work.mount, item.work.engine
+		if mount == nil || engine == nil || mount.projectionKind() != projection {
 			continue
 		}
-		o.closeRunOnceEngine(ctx, item.work.mount, item.work.engine)
-	}
-}
-
-func (o *Orchestrator) closeRunOnceParentEngines(ctx context.Context, work []indexedMountWork) {
-	for _, item := range work {
-		if item.work.mount == nil || item.work.mount.projectionKind() != MountProjectionStandalone {
-			continue
+		if !o.closeEngineWithin(ctx, mount, engine) {
+			stuck = append(stuck, o.reportStuckSync(mount, engineCloseStuckDetail()))
 		}
-		o.closeRunOnceEngine(ctx, item.work.mount, item.work.engine)
+		o.removeMountPerfCollector(mount.id().String())
 	}
-}
 
-func (o *Orchestrator) closeRunOnceEngine(ctx context.Context, mount *mountSpec, engine engineRunner) {
-	if mount == nil || engine == nil {
-		return
-	}
-	defer o.removeMountPerfCollector(mount.id().String())
-	o.closeEngine(ctx, mount, engine)
+	return errors.Join(stuck...)
 }
 
 func (o *Orchestrator) finalizeSuccessfulFinalDrainMounts(

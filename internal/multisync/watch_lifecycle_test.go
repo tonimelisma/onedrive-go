@@ -69,6 +69,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 	assert.Equal(t, WatchReloading, nextLifecycleEvent(t, events).Phase)
 	reloaded := nextLifecycleEvent(t, events)
 	assert.Equal(t, WatchReloaded, reloaded.Phase)
+	assert.Equal(t, ReloadApplied, reloaded.Reload)
 	require.NoError(t, reloaded.Err)
 	assert.Equal(t, []string{syncRoot}, reloaded.SyncRoots)
 
@@ -80,6 +81,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 	assert.Equal(t, WatchReloading, nextLifecycleEvent(t, events).Phase)
 	failed := nextLifecycleEvent(t, events)
 	assert.Equal(t, WatchReloaded, failed.Phase)
+	assert.Equal(t, ReloadKeptPreviousSettings, failed.Reload, "the outcome is stated, not left to be read from Err")
 	require.Error(t, failed.Err)
 	assert.Empty(t, failed.SyncRoots)
 

@@ -168,24 +168,14 @@ func startControlSocketServer(ctx context.Context, cfg *controlServerConfig) (*c
 		lock:     lock,
 	}
 
+	// The owner closes the server (Close), and only once its drives have
+	// stopped: closing releases the owner lock, so closing it when the
+	// context is canceled let a reset or a second sync start while a drive
+	// was still draining into its store.
 	go func() {
 		defer close(control.done)
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			reportControlServeEnd(logger, path, cfg.fatal, serveErr)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlCloseTimeout)
-		defer cancel()
-		if closeErr := control.Close(shutdownCtx); closeErr != nil {
-			// Shutdown path: a leftover socket file is detected as stale and
-			// replaced by the next sync, so this is not worth a warning.
-			logger.Debug("close control socket after context cancellation",
-				slog.String("path", path),
-				slog.Any("error", closeErr),
-			)
 		}
 	}()
 
@@ -509,7 +499,7 @@ func controlUnansweredResponse(kind controlCommandKind) controlResponse {
 
 func (o *Orchestrator) handleOneShotControlRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == synccontrol.PathStatus {
-		writeJSON(w, http.StatusOK, o.controlStatus(r.Context(), synccontrol.OwnerModeOneShot))
+		writeJSON(w, http.StatusOK, o.controlStatus(synccontrol.OwnerModeOneShot))
 		return
 	}
 
@@ -631,6 +621,9 @@ func responseStatus(status int) int {
 	return status
 }
 
+// writeJSON writes one control answer. An encode error is dropped on
+// purpose: the status line has already gone out, so the only failure left is
+// a client that went away, and there is nobody left to tell.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -639,8 +632,10 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	}
 }
 
-func (o *Orchestrator) controlStatus(ctx context.Context, mode synccontrol.OwnerMode) synccontrol.StatusResponse {
-	_ = ctx
+// controlStatus is the owner's status answer. Before any runner is up (a
+// one-shot owner that has not set its mounts yet), it names the configured
+// drives; a selection that does not compile names none.
+func (o *Orchestrator) controlStatus(mode synccontrol.OwnerMode) synccontrol.StatusResponse {
 	mounts := o.controlMountIDs()
 	if len(mounts) == 0 {
 		configured, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
@@ -723,6 +718,9 @@ func perfCaptureErrorStatus(err error) (int, synccontrol.ErrorCode) {
 	}
 }
 
+// handleControlCommand answers one command on the watch loop. stopRequested
+// is true for a stop; err is set when a reload had to stop a drive that did
+// not stop within its bound (ErrSyncStuck), which ends the watch.
 func (o *Orchestrator) handleControlCommand(
 	ctx context.Context,
 	cmd *controlCommand,
@@ -731,29 +729,40 @@ func (o *Orchestrator) handleControlCommand(
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) bool {
+) (stopRequested bool, err error) {
 	switch cmd.kind {
 	case controlCommandStatus:
-		cmd.response <- controlResponse{Body: o.controlStatus(ctx, synccontrol.OwnerModeWatch)}
+		cmd.response <- controlResponse{Body: o.controlStatus(synccontrol.OwnerModeWatch)}
 	case controlCommandReload:
-		if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
+		reloadErr := o.reload(ctx, mode, opts, runners, runnerEvents, childWork)
+		switch {
+		case errors.Is(reloadErr, ErrSyncStuck):
+			// The config may be partly applied and the sync is ending; the
+			// client must not read either as a settled reload.
+			cmd.response <- controlResponse{
+				StatusCode: http.StatusInternalServerError,
+				Code:       synccontrol.ErrorInternal,
+				Err:        fmt.Errorf("the running sync is stopping: %w", reloadErr),
+			}
+			return false, reloadErr
+		case reloadErr != nil:
 			// The client that asked for the reload (pause, resume, drive add,
 			// login) must learn the running sync kept its old settings;
 			// answering "reloaded" here made those commands report success.
 			cmd.response <- controlResponse{
 				StatusCode: http.StatusUnprocessableEntity,
 				Code:       synccontrol.ErrorReloadFailed,
-				Err:        fmt.Errorf("the running sync couldn't apply the new config and kept its previous settings: %w", err),
+				Err:        fmt.Errorf("the running sync couldn't apply the new config and kept its previous settings: %w", reloadErr),
 			}
-			return false
+			return false, nil
 		}
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusReloaded}}
 	case controlCommandStop:
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}
-		return true
+		return true, nil
 	}
 
-	return false
+	return false, nil
 }
 
 func closeListenerAndRemoveSocket(listener net.Listener, path string) error {

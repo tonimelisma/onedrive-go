@@ -9,6 +9,10 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
+// reconcileWatchRunners brings the runner set in line with the configured
+// drives and the cached parent snapshots. It returns an error only when a
+// runner it had to stop missed its bound (ErrSyncStuck); a set it
+// could not compute is warned about and leaves the runners as they are.
 func (o *Orchestrator) reconcileWatchRunners(
 	ctx context.Context,
 	mode syncengine.SyncMode,
@@ -16,18 +20,23 @@ func (o *Orchestrator) reconcileWatchRunners(
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) {
+) error {
 	decisions, err := o.buildRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults, childWork)
 	if err != nil {
 		o.warnOnChange(reconcileWarningKey(""),
 			"Couldn't update shared-folder shortcuts; the shortcuts already syncing keep syncing", err)
-		return
+		return nil
 	}
 	o.clearWarnOnChange(reconcileWarningKey(""))
 
-	stopped, started, startResults := o.applyWatchMountSet(ctx, runners, decisions, mode, opts, runnerEvents, childWork)
+	stopped, started, startResults, err := o.applyWatchMountSet(ctx, runners, decisions, mode, opts, runnerEvents, childWork)
+	if err != nil {
+		return err
+	}
 	o.emitStartWarning(startResults, startAnnounceFull)
 	o.logReconcileOutcome("", started, stopped, len(runners), startResults)
+
+	return nil
 }
 
 func reconcileWarningKey(parentID mountID) string {
@@ -59,6 +68,10 @@ func (o *Orchestrator) logReconcileOutcome(
 	o.logger.Info("Updated the set of drives and shortcuts being synced", attrs...)
 }
 
+// applyWatchMountSet stops the runners decisions no longer runs as they are,
+// cleans up removed shortcuts, and starts what is missing. A runner that
+// misses its stop bound ends the pass before anything starts, with an error
+// wrapping ErrSyncStuck.
 func (o *Orchestrator) applyWatchMountSet(
 	ctx context.Context,
 	runners map[mountID]*watchRunner,
@@ -67,13 +80,17 @@ func (o *Orchestrator) applyWatchMountSet(
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) (int, int, []MountStartupResult) {
+) (int, int, []MountStartupResult, error) {
 	runnable := runnableMountMap(decisions.Mounts)
 	restartingParents := parentWatchRunnersNeedingStop(runners, runnable)
 	removeChildRunnablesForParents(runnable, restartingParents)
 	removeCleanupWorkForParents(decisions, restartingParents)
-	stopped := o.stopInactiveWatchRunners(ctx, runners, runnable, childWork, restartingParents)
-	parentArtifactAckers := watchParentArtifactCleanupAckers(runners)
+	stopped, err := o.stopInactiveWatchRunners(ctx, runners, runnable, childWork, restartingParents)
+	if err != nil {
+		o.setControlMountIDs(sortedRunnerMountIDs(runners))
+		return stopped, 0, nil, err
+	}
+	parentArtifactAckers := watchParentAckers(runners)
 	o.reportShortcutCleanup(o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork))
 	started, startResults := o.startReloadWatchRunners(
 		ctx,
@@ -87,7 +104,7 @@ func (o *Orchestrator) applyWatchMountSet(
 	)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
-	return stopped, started, startResults
+	return stopped, started, startResults, nil
 }
 
 // reportShortcutCleanup warns about a failed removed-shortcut cleanup once
@@ -102,6 +119,9 @@ func (o *Orchestrator) reportShortcutCleanup(err error) {
 	o.warnOnChange(key, "Couldn't clean up local state for removed shortcuts; will retry", err)
 }
 
+// reconcileWatchRunnersForParent applies one parent's new child-work snapshot
+// to that parent's shortcut children. Like reconcileWatchRunners, it returns
+// an error only when a child it had to stop missed its bound.
 func (o *Orchestrator) reconcileWatchRunnersForParent(
 	ctx context.Context,
 	parentID mountID,
@@ -111,15 +131,14 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) {
+) error {
 	if parentID == "" {
-		o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
-		return
+		return o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 	}
 	parents, err := buildStandaloneMountSpecs(o.cfg.StandaloneMounts)
 	if err != nil {
 		o.warnParentReconcileFailure(parentID, err)
-		return
+		return nil
 	}
 	var parent *mountSpec
 	for i := range parents {
@@ -129,14 +148,17 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		}
 	}
 	if parent == nil {
-		stopped := o.stopChildWatchRunnersForParent(ctx, runners, parentID)
-		childWork.forget(parentID)
+		stopped, stopErr := o.stopChildWatchRunnersForParent(ctx, runners, parentID)
 		o.setControlMountIDs(sortedRunnerMountIDs(runners))
+		if stopErr != nil {
+			return stopErr
+		}
+		childWork.forget(parentID)
 		o.logger.Debug("stopped shortcuts of a drive that is no longer selected",
 			slog.String("parent_mount_id", parentID.String()),
 			slog.Int("stopped", stopped),
 		)
-		return
+		return nil
 	}
 	publications := map[mountID]syncengine.ShortcutChildWorkSnapshot{
 		parentID: syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot),
@@ -144,10 +166,10 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 	decisions, err := o.buildRuntimeWorkFromParentSnapshots([]*mountSpec{parent}, publications)
 	if err != nil {
 		o.warnParentReconcileFailure(parentID, err)
-		return
+		return nil
 	}
 	o.clearWarnOnChange(reconcileWarningKey(parentID))
-	stopped, started, startResults := o.applyWatchMountSetForParent(
+	stopped, started, startResults, err := o.applyWatchMountSetForParent(
 		ctx,
 		runners,
 		parentID,
@@ -157,8 +179,13 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		runnerEvents,
 		childWork,
 	)
+	if err != nil {
+		return err
+	}
 	o.emitStartWarning(startResults, startAnnouncePartial)
 	o.logReconcileOutcome(parentID, started, stopped, len(runners), startResults)
+
+	return nil
 }
 
 func (o *Orchestrator) warnParentReconcileFailure(parentID mountID, err error) {
@@ -190,11 +217,15 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) (int, int, []MountStartupResult) {
+) (int, int, []MountStartupResult, error) {
 	childMounts := filterMountSpecsByProjection(decisions.Mounts, MountProjectionChild)
 	runnable := runnableMountMap(childMounts)
-	stopped := o.stopInactiveChildWatchRunnersForParent(ctx, runners, parentID, runnable)
-	parentArtifactAckers := watchParentArtifactCleanupAckers(runners)
+	stopped, err := o.stopInactiveChildWatchRunnersForParent(ctx, runners, parentID, runnable)
+	if err != nil {
+		o.setControlMountIDs(sortedRunnerMountIDs(runners))
+		return stopped, 0, nil, err
+	}
+	parentArtifactAckers := watchParentAckers(runners)
 	o.reportShortcutCleanup(o.purgeShortcutChildArtifactsForDecisions(ctx, decisions, parentArtifactAckers, childWork))
 	started, startResults := o.startReloadWatchRunners(
 		ctx,
@@ -207,7 +238,7 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 		childWork,
 	)
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
-	return stopped, started, startResults
+	return stopped, started, startResults, nil
 }
 
 func runnableMountMap(mounts []*mountSpec) map[mountID]*mountSpec {
@@ -246,8 +277,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 			continue
 		}
 
-		o.attachParentChildWorkSink(mount, childWork, runnerEvents, nil)
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
+		wr, err := o.startNextWatchRunner(ctx, mount, mode, opts, runnerEvents, childWork)
 		if err != nil {
 			// Reported through the startup result, once per distinct
 			// failure, by emitStartWarning.
