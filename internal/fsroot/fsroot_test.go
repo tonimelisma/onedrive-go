@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,6 +70,25 @@ func TestRoot_AtomicWrite_WritesFileAtomically(t *testing.T) {
 	assert.Empty(t, matches, "temporary files should be cleaned up after a successful rename")
 }
 
+// An atomic write creates the root, the folders above it and those on the way
+// to the target with dirPerm, so a caller has no root to create first.
+func TestRoot_AtomicWrite_CreatesMissingFoldersWithDirPerm(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	rootDir := filepath.Join(base, "state", "accounts")
+	root, err := Open(rootDir)
+	require.NoError(t, err)
+
+	require.NoError(t, root.AtomicWrite("nested/token.json", []byte("{}"), 0o600, 0o700, ".token-*.tmp"))
+
+	for _, dir := range []string{filepath.Join(base, "state"), rootDir, filepath.Join(rootDir, "nested")} {
+		info, statErr := os.Stat(dir)
+		require.NoError(t, statErr)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+	}
+}
+
 func TestRoot_AtomicWrite_RejectsRootEscape(t *testing.T) {
 	t.Parallel()
 
@@ -110,9 +130,8 @@ func TestRoot_FileLifecycleOperations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(readData))
 
-	temp, tempName, err := root.CreateTemp("nested", ".managed-*.tmp")
+	tempName, err := createTempThroughHandle(root, "nested", ".managed-*.tmp")
 	require.NoError(t, err)
-	require.NoError(t, temp.Close())
 	assert.Equal(t, "nested", filepath.Dir(tempName))
 
 	require.NoError(t, root.Rename("nested/item.txt", "renamed.txt"))
@@ -161,6 +180,7 @@ func TestRoot_ReadDirRoot(t *testing.T) {
 	assert.Equal(t, "root.txt", entries[0].Name())
 }
 
+// Validates: R-6.4.10
 func TestRoot_MissingPathsNormalizeToNotExist(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +202,268 @@ func TestRoot_MissingPathsNormalizeToNotExist(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, entries)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// Validates: R-6.4.10
+//
+// A create always targets a missing name, so the name is still absent after
+// any failed create. Only a failure that itself says the name is missing may
+// read as absence: a denied folder, a full disk or a read-only mount reported
+// as "does not exist" is invisible to the handling each needs.
+func TestRoot_OpenFile_CreateFailureKeepsItsErrno(t *testing.T) {
+	t.Parallel()
+
+	errInjected := errors.New("injected failure without an errno")
+
+	testCases := []struct {
+		name    string
+		failure error
+	}{
+		{name: "permission denied", failure: syscall.EACCES},
+		{name: "disk full", failure: syscall.ENOSPC},
+		{name: "read-only filesystem", failure: syscall.EROFS},
+		{name: "failure without an errno", failure: errInjected},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, err := Open(t.TempDir())
+			require.NoError(t, err)
+
+			fake := interposeFakeHandle(root)
+			fake.openFile = func(name string, _ int, _ os.FileMode) (*os.File, error) {
+				return nil, &os.PathError{Op: "openat", Path: name, Err: testCase.failure}
+			}
+
+			file, err := root.OpenFile("absent.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			require.ErrorIs(t, err, testCase.failure)
+			require.NotErrorIs(t, err, os.ErrNotExist, "the name is absent, but that is not why the create failed")
+			assert.Nil(t, file)
+		})
+	}
+}
+
+// Validates: R-6.4.10
+//
+// Creating a log file in a folder the user cannot write says "permission
+// denied", not "does not exist".
+func TestRoot_OpenFile_PermissionDeniedIsNotNotExist(t *testing.T) {
+	t.Parallel()
+
+	root := readOnlyRoot(t)
+
+	file, err := root.OpenFile("onedrive-go.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.NotErrorIs(t, err, os.ErrNotExist)
+	assert.Nil(t, file)
+}
+
+// Validates: R-6.4.10
+//
+// Writing config or a token into a folder the user cannot write says
+// "permission denied", not "does not exist".
+func TestRoot_AtomicWrite_PermissionDeniedIsNotNotExist(t *testing.T) {
+	t.Parallel()
+
+	root := readOnlyRoot(t)
+
+	err := root.AtomicWrite("config.toml", []byte("payload"), 0o600, 0o700, ".config-*.tmp")
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.NotErrorIs(t, err, os.ErrNotExist)
+}
+
+// readOnlyRoot returns a managed root on a folder the test cannot write. The
+// superuser writes into any folder, so a test that needs one skips as root.
+func readOnlyRoot(t *testing.T) *Root {
+	t.Helper()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser can write into a read-only folder")
+	}
+
+	dir := t.TempDir()
+	// Searchable but not writable: a lookup inside still answers "absent",
+	// which is the condition under which a refused create used to read as one.
+	//nolint:gosec // a test folder is made read-only on purpose; it keeps its search bit.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	// Cleanups run last in, first out, so the folder is writable again before
+	// t.TempDir removes it.
+	t.Cleanup(func() {
+		//nolint:gosec // a test folder gets its owner's write access back so t.TempDir can remove it.
+		assert.NoError(t, os.Chmod(dir, 0o700))
+	})
+
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	return root
+}
+
+// Validates: R-6.4.10
+//
+// No entry can exist below a file, which ENOTDIR says for a parent that is
+// not a directory: that is absence. An existing file that an operation needed
+// to be a directory is there, so its ENOTDIR is kept.
+func TestRoot_NameBelowAFileIsNotExist(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "plain"), []byte("file"), 0o600))
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	_, err = root.Stat("plain/state.db")
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	file, err := root.Open("plain/state.db")
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Nil(t, file)
+
+	require.ErrorIs(t, root.Remove("plain/state.db"), os.ErrNotExist)
+
+	entries, err := root.ReadDir("plain")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, os.ErrNotExist, "an existing file listed as a directory is not absent")
+	assert.Nil(t, entries)
+}
+
+// Validates: R-6.4.10
+//
+// Nothing can exist beneath a file. A root that is a file, or that lies below
+// one, therefore has every name beneath it absent, whatever the operation. A
+// listing of a root that is a file finds it there but not a directory, as a
+// listing of any other file does; a root below a file is not there at all.
+func TestRoot_RootThatIsAFileHasNothingBeneathIt(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "plain")
+	require.NoError(t, os.WriteFile(plain, []byte("file"), 0o600))
+	belowFile := filepath.Join(plain, "below")
+
+	for _, rootDir := range []string{plain, belowFile} {
+		root, err := Open(rootDir)
+		require.NoError(t, err)
+
+		_, err = root.Stat("state.db")
+		require.ErrorIs(t, err, os.ErrNotExist, rootDir)
+
+		data, err := root.ReadFile("state.db")
+		require.ErrorIs(t, err, os.ErrNotExist, rootDir)
+		assert.Nil(t, data)
+
+		require.ErrorIs(t, root.Remove("state.db"), os.ErrNotExist, rootDir)
+		require.ErrorIs(t, root.Rename("state.db", "moved.db"), os.ErrNotExist, rootDir)
+	}
+
+	fileRoot, err := Open(plain)
+	require.NoError(t, err)
+	entries, err := fileRoot.ReadDir("")
+	require.ErrorIs(t, err, syscall.ENOTDIR, "a root that is a file is there, and it is not a directory")
+	require.NotErrorIs(t, err, os.ErrNotExist)
+	assert.Nil(t, entries)
+
+	missingRoot, err := Open(belowFile)
+	require.NoError(t, err)
+	entries, err = missingRoot.ReadDir("")
+	require.ErrorIs(t, err, os.ErrNotExist, "a root below a file is not there")
+	assert.Nil(t, entries)
+}
+
+// fifoAnswerTimeout bounds how long an operation on a root that is a FIFO may
+// take. It answers from a stat, so it is immediate; opening the FIFO would
+// block until a writer appeared, which is forever. The bound is long because
+// only a failing run waits for it, and a loaded host must not fail a good one.
+const fifoAnswerTimeout = 10 * time.Second
+
+// Validates: R-6.4.10
+//
+// A root that is not a directory is recognized by a stat before anything
+// opens it: os.OpenRoot opens the path for reading, which blocks forever on a
+// FIFO. A name beneath such a root is absent, and a listing of it reports
+// ENOTDIR, as for a root that is a regular file.
+func TestRoot_RootThatIsAFIFOAnswersWithoutOpeningIt(t *testing.T) {
+	t.Parallel()
+
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("FIFOs not available on this filesystem: %v", err)
+	}
+	root, err := Open(fifo)
+	require.NoError(t, err)
+
+	type answers struct {
+		statErr error
+		listErr error
+	}
+	answered := make(chan answers, 1)
+	go func() {
+		_, statErr := root.Stat("state.db")
+		_, listErr := root.ReadDir("")
+		answered <- answers{statErr: statErr, listErr: listErr}
+	}()
+
+	select {
+	case got := <-answered:
+		require.ErrorIs(t, got.statErr, os.ErrNotExist)
+		require.ErrorIs(t, got.listErr, syscall.ENOTDIR)
+		require.NotErrorIs(t, got.listErr, os.ErrNotExist)
+	case <-time.After(fifoAnswerTimeout):
+		// Hold the FIFO open for writing: the blocked open, and every one
+		// after it, then returns, so the goroutine ends before the test fails.
+		//nolint:gosec // the test opens the FIFO it created under t.TempDir.
+		writer, openErr := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if openErr == nil {
+			<-answered
+			require.NoError(t, writer.Close())
+		}
+		require.FailNow(t, "an operation on a root that is a FIFO blocked instead of answering")
+	}
+}
+
+// When the read and the close of a managed file both fail, each failure keeps
+// the step and the name it belongs to.
+func TestRoot_ReadFile_ReportsReadAndCloseFailures(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o600))
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	fake := interposeFakeHandle(root)
+	fake.open = fake.openThenReturnClosed
+
+	data, err := root.ReadFile("state.json")
+	require.ErrorIs(t, err, os.ErrClosed)
+	assert.Contains(t, err.Error(), "reading state.json")
+	assert.Contains(t, err.Error(), "closing state.json")
+	assert.Nil(t, data)
+}
+
+// An open whose root handle then fails to close hands back no file, so it
+// closes the file itself and reports both failures with what each was doing.
+func TestRoot_Open_ReportsRootAndFileCloseFailures(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o600))
+	root, err := Open(dir)
+	require.NoError(t, err)
+
+	errRootClose := errors.New("root close failed")
+	fake := interposeFakeHandle(root)
+	fake.open = fake.openThenReturnClosed
+	fake.closeErr = errRootClose
+
+	file, err := root.Open("state.json")
+	require.ErrorIs(t, err, errRootClose)
+	require.ErrorIs(t, err, os.ErrClosed)
+	assert.Contains(t, err.Error(), "closing root")
+	assert.Contains(t, err.Error(), "closing state.json")
+	assert.Nil(t, file)
 }
 
 func TestRoot_OpenAndOpenFile_RejectRootEscape(t *testing.T) {
@@ -356,6 +638,7 @@ type fakeRootHandle struct {
 	open     func(name string) (*os.File, error)
 	rename   func(oldname, newname string) error
 	remove   func(name string) error
+	closeErr error // returned by Close once the real handle is closed
 
 	created []string
 	removed []string
@@ -434,6 +717,28 @@ func (h *fakeRootHandle) createThenReturnClosed(name string, flag int, perm os.F
 	}
 
 	return file, nil
+}
+
+func (h *fakeRootHandle) Close() error {
+	if err := h.rootHandle.Close(); err != nil {
+		return fmt.Errorf("closing the real handle: %w", err)
+	}
+
+	return h.closeErr
+}
+
+// openThenReturnClosed opens name for real and hands back the handle already
+// closed, so the first read, sync or close through it fails.
+func (h *fakeRootHandle) openThenReturnClosed(name string) (*os.File, error) {
+	opened, err := h.rootHandle.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s for the fake: %w", name, err)
+	}
+	if closeErr := opened.Close(); closeErr != nil {
+		return nil, fmt.Errorf("closing %s for the fake: %w", name, closeErr)
+	}
+
+	return opened, nil
 }
 
 // createThenReturnReadOnly creates the temp file for real and hands back a
@@ -642,12 +947,32 @@ func TestRoot_CreateTemp_RefusesSymlinkedDir(t *testing.T) {
 
 	f := newEscapeFixture(t)
 
-	temp, _, err := f.root.CreateTemp("sub", ".managed-*.tmp")
-	if err == nil {
-		require.NoError(t, temp.Close())
-	}
+	_, err := createTempThroughHandle(f.root, "sub", ".managed-*.tmp")
 	require.Error(t, err, "a temp file must not be created through a symlinked directory")
 	assert.Empty(t, f.outsideEntryNames(t), "nothing may be created outside the managed root")
+}
+
+// Validates: R-6.4.10
+//
+// A name beneath a symlink that leaves the root is refused for reads too, and
+// the refusal never reads as absence, which callers take as permission to
+// create.
+func TestRoot_Stat_RefusesSymlinkedParent(t *testing.T) {
+	t.Parallel()
+
+	f := newEscapeFixture(t)
+	f.writeOutside(t, "present.txt", "OUTSIDE")
+
+	_, err := f.root.Stat("sub/present.txt")
+	require.Error(t, err, "a stat must not answer about a file outside the managed root")
+
+	data, err := f.root.ReadFile("sub/present.txt")
+	require.Error(t, err, "a read must not return a file outside the managed root")
+	assert.Nil(t, data)
+
+	_, err = f.root.Stat("sub/missing.txt")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, os.ErrNotExist, "an escape must not read as an absent name")
 }
 
 // Validates: R-6.4.10
@@ -685,7 +1010,7 @@ func TestRoot_AtomicWrite_FollowsSymlinksThatStayInside(t *testing.T) {
 // itself is synced, a crash can leave the target missing or still holding its
 // previous contents even though the new bytes reached the disk -- the one
 // outcome an atomic write exists to rule out.
-func TestAtomicWriteSyncsTargetDirectory(t *testing.T) {
+func TestRoot_AtomicWrite_SyncsTargetDirectory(t *testing.T) {
 	t.Parallel()
 
 	root, err := Open(t.TempDir())
@@ -711,7 +1036,7 @@ func TestAtomicWriteSyncsTargetDirectory(t *testing.T) {
 // A write whose durability cannot be established must say so. The rename has
 // already happened, so the contents are visible, but reporting success would
 // claim a guarantee the filesystem refused to give.
-func TestAtomicWriteReportsDirectorySyncFailure(t *testing.T) {
+func TestRoot_AtomicWrite_ReportsDirectorySyncFailure(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -720,17 +1045,7 @@ func TestAtomicWriteReportsDirectorySyncFailure(t *testing.T) {
 
 	// A closed handle on the real directory makes the sync itself fail.
 	fake := interposeFakeHandle(root)
-	fake.open = func(name string) (*os.File, error) {
-		opened, openErr := fake.rootHandle.Open(name)
-		if openErr != nil {
-			return nil, fmt.Errorf("opening directory for the fake: %w", openErr)
-		}
-		if closeErr := opened.Close(); closeErr != nil {
-			return nil, fmt.Errorf("closing directory for the fake: %w", closeErr)
-		}
-
-		return opened, nil
-	}
+	fake.open = fake.openThenReturnClosed
 
 	err = root.AtomicWrite("state.json", []byte("{}"), 0o600, 0o700, ".state-*.tmp")
 	require.ErrorIs(t, err, os.ErrClosed)
@@ -742,6 +1057,49 @@ func TestAtomicWriteReportsDirectorySyncFailure(t *testing.T) {
 	data, readErr := unfaked.ReadFile("state.json")
 	require.NoError(t, readErr)
 	assert.Equal(t, "{}", string(data))
+}
+
+// Validates: R-6.5.4
+//
+// A filesystem that cannot fsync a directory (FUSE, SMB) answers EINVAL or
+// ENOTSUP. The rename has happened and the file's own bytes were synced, so
+// the write succeeds, as localpath.AtomicWrite does; any other failure of the
+// directory sync is still reported.
+func TestRoot_AtomicWrite_ToleratesUnsupportedDirectorySync(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name  string
+		errno syscall.Errno
+	}{
+		{name: "EINVAL", errno: syscall.EINVAL},
+		{name: "ENOTSUP", errno: syscall.ENOTSUP},
+		{name: "EOPNOTSUPP", errno: syscall.EOPNOTSUPP},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			root, err := Open(dir)
+			require.NoError(t, err)
+
+			var synced []string
+			root.ops.syncDir = func(opened *os.File) error {
+				synced = append(synced, opened.Name())
+
+				return &os.PathError{Op: "sync", Path: opened.Name(), Err: testCase.errno}
+			}
+
+			require.NoError(t, root.AtomicWrite("nested/state.json", []byte("{}"), 0o600, 0o700, ".state-*.tmp"))
+			assert.Equal(t, []string{filepath.Join(dir, "nested")}, synced, "the directory the rename landed in is synced once")
+
+			data, err := root.ReadFile("nested/state.json")
+			require.NoError(t, err)
+			assert.Equal(t, "{}", string(data))
+		})
+	}
 }
 
 // Validates: R-6.4.10
@@ -795,9 +1153,8 @@ func TestRoot_CreateTemp_StopsAfterBoundedNameCollisions(t *testing.T) {
 		return "taken"
 	}
 
-	temp, name, err := root.CreateTemp("", ".managed-*.tmp")
+	name, err := createTempThroughHandle(root, ".", ".managed-*.tmp")
 	require.ErrorIs(t, err, os.ErrExist)
-	assert.Nil(t, temp)
 	assert.Empty(t, name)
 	assert.Equal(t, tempNameAttempts, attempts, "a suffix source that keeps colliding must not loop forever")
 }
@@ -808,10 +1165,28 @@ func TestRoot_CreateTemp_RejectsPatternWithSeparator(t *testing.T) {
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
 
-	temp, _, err := root.CreateTemp("", "../.managed-*.tmp")
-	if err == nil {
-		require.NoError(t, temp.Close())
-	}
+	_, err = createTempThroughHandle(root, ".", "../.managed-*.tmp")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "contains a path separator")
+}
+
+// createTempThroughHandle claims a temp file in cleanDir the way AtomicWrite
+// does, on one rooted handle, closes it and returns its name relative to the
+// root.
+func createTempThroughHandle(root *Root, cleanDir, pattern string) (string, error) {
+	var tempName string
+	err := root.withRoot(func(handle rootHandle) error {
+		temp, name, createErr := root.createTemp(handle, cleanDir, pattern)
+		if createErr != nil {
+			return createErr
+		}
+		tempName = name
+		if closeErr := temp.Close(); closeErr != nil {
+			return fmt.Errorf("closing temp file: %w", closeErr)
+		}
+
+		return nil
+	})
+
+	return tempName, err
 }

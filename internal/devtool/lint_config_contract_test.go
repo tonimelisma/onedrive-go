@@ -1,6 +1,7 @@
 package devtool
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,12 +25,7 @@ import (
 func TestGolangciConfig_DeferErrcheckExclusionStaysScopedToTests(t *testing.T) {
 	t.Parallel()
 
-	root := repoRootFromDevtoolPackage(t)
-	//nolint:gosec // reads a fixed repo-relative config path.
-	raw, err := os.ReadFile(filepath.Join(root, ".golangci.yml"))
-	require.NoError(t, err)
-
-	lines := strings.Split(string(raw), "\n")
+	lines := golangciConfigLines(t)
 
 	found := 0
 
@@ -62,6 +58,126 @@ func TestGolangciConfig_DeferErrcheckExclusionStaysScopedToTests(t *testing.T) {
 
 	require.Positivef(t, found,
 		"expected a scoped defer exclusion to exist; if it was removed entirely, delete this test deliberately")
+}
+
+// Validates: R-6.10.2
+//
+// depguard matches a rule's files patterns against each file's absolute path,
+// anchored, and golangci-lint rewrites nothing in them but ${base-path} and
+// ${config-path}. A pattern written relative to the repository, such as
+// internal/graph/*.go, therefore never matches, and its rule is off without a
+// word: every path-scoped rule here was, the leaf-package rule among them.
+// Each pattern has to start with **/ or be a depguard variable such as $test.
+func TestGolangciConfig_DepguardFilePatternsMatchAbsolutePaths(t *testing.T) {
+	t.Parallel()
+
+	patterns := depguardFilePatterns(golangciConfigLines(t))
+	require.NotEmpty(t, patterns, "expected depguard rules with file patterns")
+
+	for _, pattern := range patterns {
+		bare := strings.TrimPrefix(pattern, "!")
+		assert.Truef(t, strings.HasPrefix(bare, "**/") || strings.HasPrefix(bare, "$"),
+			"depguard files pattern %q never matches: depguard matches absolute paths, so start it with **/", pattern)
+	}
+}
+
+// Validates: R-6.10.2
+//
+// A depguard rule names its packages by folder. A package that is renamed or
+// removed leaves its pattern matching nothing and its rule off for whatever
+// took its place, without a word, so every **/<folder>/*.go pattern has to
+// name a folder that holds a non-test Go file.
+func TestGolangciConfig_DepguardPackagePatternsNameExistingPackages(t *testing.T) {
+	t.Parallel()
+
+	root := repoRootFromDevtoolPackage(t)
+	checked := 0
+
+	for _, pattern := range depguardFilePatterns(golangciConfigLines(t)) {
+		// A negated pattern names its folder all the same.
+		folder, isPackagePattern := strings.CutPrefix(strings.TrimPrefix(pattern, "!"), "**/")
+		if !isPackagePattern || !strings.HasSuffix(folder, "/*.go") {
+			continue
+		}
+		folder = strings.TrimSuffix(folder, "/*.go")
+		checked++
+
+		assert.Truef(t, holdsNonTestGoFile(t, filepath.Join(root, filepath.FromSlash(folder))),
+			"depguard files pattern %q names %s, which holds no non-test Go file", pattern, folder)
+	}
+
+	require.Positive(t, checked, "expected depguard rules that name package folders")
+}
+
+// holdsNonTestGoFile reports whether dir exists and holds a Go file that is
+// not a test.
+func holdsNonTestGoFile(t *testing.T, dir string) bool {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// depguardFilePatterns returns every entry of a files list inside the
+// depguard settings block of the config's lines.
+func depguardFilePatterns(lines []string) []string {
+	var patterns []string
+
+	depguardIndent, filesIndent := -1, -1
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+
+		if depguardIndent < 0 {
+			if trimmed == "depguard:" {
+				depguardIndent = indent
+			}
+
+			continue
+		}
+		if indent <= depguardIndent {
+			break
+		}
+
+		if filesIndent >= 0 && indent > filesIndent && strings.HasPrefix(trimmed, "- ") {
+			patterns = append(patterns, strings.Trim(strings.TrimPrefix(trimmed, "- "), `"'`))
+
+			continue
+		}
+
+		filesIndent = -1
+		if trimmed == "files:" {
+			filesIndent = indent
+		}
+	}
+
+	return patterns
+}
+
+func golangciConfigLines(t *testing.T) []string {
+	t.Helper()
+
+	root := repoRootFromDevtoolPackage(t)
+	//nolint:gosec // reads a fixed repo-relative config path.
+	raw, err := os.ReadFile(filepath.Join(root, ".golangci.yml"))
+	require.NoError(t, err)
+
+	return strings.Split(string(raw), "\n")
 }
 
 func repoRootFromDevtoolPackage(t *testing.T) string {

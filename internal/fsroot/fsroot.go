@@ -4,7 +4,13 @@
 // read and every mutation beneath the root resolves its name through an open
 // os.Root descriptor, so a name whose components lead outside the root,
 // through ".." or a symlink that points elsewhere, fails instead of following
-// the escape.
+// the escape. A failure reads as os.ErrNotExist only when the name is absent;
+// every other failure keeps its own error. Nothing can be beneath a file, so a
+// name whose parent is a file is absent, and so is every name beneath a root
+// that is not a directory or lies below a file; a listing of a directory that
+// is a file, the root included, reports ENOTDIR instead, because that name is
+// there. Whether the root is a directory is decided by a stat of its path
+// before it is opened, because opening a root that is a FIFO would block.
 package fsroot
 
 import (
@@ -16,6 +22,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // tempNameAttempts bounds how many fresh names a temp-file creation tries.
@@ -107,10 +116,14 @@ type tempFile interface {
 // root goes through the handle openRoot returns, so a test substitutes a fake
 // handle rather than a function that takes an absolute path: an absolute path
 // carries no containment. tempSuffix supplies the random part of a temp-file
-// name, a seam so a test can make names collide.
+// name, a seam so a test can make names collide. syncDir flushes a directory
+// already opened through the handle; it is a seam because an fsync has no
+// observable effect and a real directory cannot be made to answer EINVAL or
+// ENOTSUP on demand.
 type rootOps struct {
 	openRoot   func(dir string) (rootHandle, error)
 	tempSuffix func() string
+	syncDir    func(dir *os.File) error
 }
 
 func defaultRootOps() rootOps {
@@ -125,6 +138,7 @@ func defaultRootOps() rootOps {
 			return &osRootHandle{root: root}, nil
 		},
 		tempSuffix: rand.Text,
+		syncDir:    (*os.File).Sync,
 	}
 }
 
@@ -202,10 +216,36 @@ func cleanDirName(dirName string) (string, error) {
 	return cleanRelative(dirName)
 }
 
-// withRoot opens a handle on the managed root, runs op against it, and closes
-// it. Every operation beneath the root goes through a handle opened here, so
-// none joins a name onto the root and hands the result to the os package.
+// rootTarget is what an operation addresses. It decides how a root that is
+// not a directory reads (checkRootIsDirectory).
+type rootTarget int
+
+const (
+	// nameBeneathRoot is a name inside the root. Nothing can be beneath
+	// something that is not a directory, so under such a root the name is
+	// absent.
+	nameBeneathRoot rootTarget = iota
+	// theRootItself is the root as a directory, which a listing of it needs.
+	// A root that is not a directory is there, but it cannot be listed.
+	theRootItself
+)
+
+// withRoot opens a handle on the managed root, runs op on a name beneath it,
+// and closes the handle. Every operation beneath the root goes through a
+// handle opened here, so none joins a name onto the root and hands the result
+// to the os package.
 func (r *Root) withRoot(op func(root rootHandle) error) error {
+	return r.withRootFor(nameBeneathRoot, op)
+}
+
+// withRootFor is withRoot for an operation that addresses target. The root is
+// known to be a directory before it is opened (checkRootIsDirectory); an open
+// that still fails keeps its own error.
+func (r *Root) withRootFor(target rootTarget, op func(root rootHandle) error) error {
+	if err := r.checkRootIsDirectory(target); err != nil {
+		return err
+	}
+
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
 		return fmt.Errorf("opening root %s: %w", r.dir, err)
@@ -228,6 +268,37 @@ func (r *Root) withRoot(op func(root rootHandle) error) error {
 	return nil
 }
 
+// checkRootIsDirectory decides by a stat of the root's path, before anything
+// opens it, whether the root is a directory. It has to come first: os.OpenRoot
+// opens the path for reading, which blocks forever on a FIFO, and it reports a
+// root that is a regular file with a bare "not a directory" error carrying no
+// errno. Absence is decided as normalizeNotExist decides it beneath the root.
+// A root that is missing, or whose path runs through a file, is not there, and
+// neither is anything beneath it. A root that is something other than a
+// directory is there, so a listing of it fails with ENOTDIR, as a listing of
+// any file does; but nothing can be beneath it, so a name beneath it is
+// absent. A stat that fails otherwise is returned as it is. The root is the
+// one path fsroot resolves by name (MkdirAll creates it the same way), so the
+// stat asks about the anchor itself.
+func (r *Root) checkRootIsDirectory(target rootTarget) error {
+	info, err := os.Stat(r.dir)
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("opening root %s: %w", r.dir, err)
+	case errors.Is(err, syscall.ENOTDIR):
+		return fmt.Errorf("opening root %s: a folder on its path is a file: %w", r.dir, os.ErrNotExist)
+	case err != nil:
+		return fmt.Errorf("opening root %s: %w", r.dir, err)
+	case info.IsDir():
+		return nil
+	case target == theRootItself:
+		return fmt.Errorf("opening root %s: %w", r.dir, &os.PathError{Op: "open", Path: r.dir, Err: syscall.ENOTDIR})
+	default:
+		return fmt.Errorf("opening root %s: it is not a directory, so nothing is beneath it: %w", r.dir, os.ErrNotExist)
+	}
+}
+
 func (r *Root) openWithRoot(
 	name string,
 	opener func(root rootHandle, clean string) (*os.File, error),
@@ -248,8 +319,13 @@ func (r *Root) openWithRoot(
 		return nil
 	})
 	if err != nil {
-		if file != nil {
-			return nil, errors.Join(err, file.Close())
+		if file == nil {
+			return nil, err
+		}
+		// The open succeeded but the root failed to close, so the caller gets
+		// no file and this one is released here.
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("closing %s: %w", clean, closeErr))
 		}
 
 		return nil, err
@@ -258,18 +334,24 @@ func (r *Root) openWithRoot(
 	return file, nil
 }
 
+// Open opens name beneath the root for reading. An absent name reports
+// os.ErrNotExist.
 func (r *Root) Open(name string) (*os.File, error) {
 	return r.openWithRoot(name, func(root rootHandle, clean string) (*os.File, error) {
 		return root.Open(clean)
 	})
 }
 
+// OpenFile opens name beneath the root as os.OpenFile does. A create that
+// fails keeps its own error even though the name is still absent.
 func (r *Root) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
 	return r.openWithRoot(name, func(root rootHandle, clean string) (*os.File, error) {
 		return root.OpenFile(clean, flag, perm)
 	})
 }
 
+// ReadFile reads all of name beneath the root. An absent name reports
+// os.ErrNotExist.
 func (r *Root) ReadFile(name string) ([]byte, error) {
 	file, err := r.Open(name)
 	if err != nil {
@@ -279,11 +361,12 @@ func (r *Root) ReadFile(name string) ([]byte, error) {
 	data, readErr := io.ReadAll(file)
 	closeErr := file.Close()
 	if readErr != nil {
+		readErr = fmt.Errorf("reading %s: %w", name, readErr)
 		if closeErr != nil {
-			return nil, errors.Join(readErr, closeErr)
+			return nil, errors.Join(readErr, fmt.Errorf("closing %s: %w", name, closeErr))
 		}
 
-		return nil, fmt.Errorf("reading %s: %w", name, readErr)
+		return nil, readErr
 	}
 
 	if closeErr != nil {
@@ -293,6 +376,8 @@ func (r *Root) ReadFile(name string) ([]byte, error) {
 	return data, nil
 }
 
+// Stat describes name beneath the root, following a symlink that stays inside
+// it. An absent name reports os.ErrNotExist.
 func (r *Root) Stat(name string) (os.FileInfo, error) {
 	clean, err := cleanRelative(name)
 	if err != nil {
@@ -316,16 +401,26 @@ func (r *Root) Stat(name string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// ReadDir lists dirName beneath the root; "" and "." list the root itself. An
+// absent directory, the root included, reports os.ErrNotExist; a directory
+// that is a file, the root included, reports ENOTDIR.
 func (r *Root) ReadDir(dirName string) ([]os.DirEntry, error) {
 	cleanDir, err := cleanDirName(dirName)
 	if err != nil {
 		return nil, err
 	}
 
+	target := nameBeneathRoot
+	if cleanDir == "." {
+		target = theRootItself
+	}
+
 	var entries []os.DirEntry
-	err = r.withRoot(func(root rootHandle) error {
+	err = r.withRootFor(target, func(root rootHandle) error {
 		var readErr error
-		entries, readErr = fs.ReadDir(root.FS(), cleanDir)
+		// An fs.FS takes slash-separated names; the handle's own methods take
+		// the platform's.
+		entries, readErr = fs.ReadDir(root.FS(), filepath.ToSlash(cleanDir))
 		if readErr != nil {
 			return fmt.Errorf("reading directory %s: %w", cleanDir, normalizeNotExist(root, cleanDir, readErr))
 		}
@@ -350,6 +445,8 @@ func (r *Root) MkdirAll(perm os.FileMode) error {
 	return nil
 }
 
+// Remove removes the file or empty directory name beneath the root. An absent
+// name reports os.ErrNotExist.
 func (r *Root) Remove(name string) error {
 	clean, err := cleanRelative(name)
 	if err != nil {
@@ -358,13 +455,15 @@ func (r *Root) Remove(name string) error {
 
 	return r.withRoot(func(root rootHandle) error {
 		if removeErr := root.Remove(clean); removeErr != nil {
-			return fmt.Errorf("removing %s: %w", name, removeErr)
+			return fmt.Errorf("removing %s: %w", name, normalizeNotExist(root, clean, removeErr))
 		}
 
 		return nil
 	})
 }
 
+// Rename renames src to dst, both beneath the root, replacing dst as
+// os.Rename does.
 func (r *Root) Rename(src, dst string) error {
 	cleanSrc, err := cleanRelative(src)
 	if err != nil {
@@ -384,41 +483,13 @@ func (r *Root) Rename(src, dst string) error {
 	})
 }
 
-// CreateTemp creates a new file in dirName beneath the root, named after
-// pattern with its last "*" replaced by a random string (as os.CreateTemp
-// names it), opened for reading and writing with mode 0600. It returns the
-// file and its name relative to the root; the caller closes and removes it.
-func (r *Root) CreateTemp(dirName, pattern string) (*os.File, string, error) {
-	cleanDir, err := cleanDirName(dirName)
-	if err != nil {
-		return nil, "", err
-	}
-
-	var (
-		temp     *os.File
-		tempName string
-	)
-	err = r.withRoot(func(root rootHandle) error {
-		var createErr error
-		temp, tempName, createErr = r.createTempIn(root, cleanDir, pattern)
-
-		return createErr
-	})
-	if err != nil {
-		if temp != nil {
-			return nil, "", errors.Join(err, temp.Close(), r.Remove(tempName))
-		}
-
-		return nil, "", err
-	}
-
-	return temp, tempName, nil
-}
-
-// createTempIn creates a temp file in cleanDir through root. The name is
-// claimed with O_EXCL, so an existing entry of that name, a symlink included,
-// is never opened or replaced; a taken name is retried with a fresh suffix.
-func (r *Root) createTempIn(root rootHandle, cleanDir, pattern string) (*os.File, string, error) {
+// createTemp creates a new file in cleanDir through root, named after pattern
+// with its last "*" replaced by a random string (as os.CreateTemp names it),
+// opened for reading and writing with mode 0600. It returns the file and its
+// name relative to the root. The name is claimed with O_EXCL, so an existing
+// entry of that name, a symlink included, is never opened or replaced; a taken
+// name is retried with a fresh suffix.
+func (r *Root) createTemp(root rootHandle, cleanDir, pattern string) (*os.File, string, error) {
 	tempDir := filepath.Join(r.dir, cleanDir)
 
 	prefix, suffix, err := splitTempPattern(pattern)
@@ -502,7 +573,7 @@ func (r *Root) atomicWriteIn(
 		}
 	}
 
-	temp, tempName, err := r.createTempIn(root, targetDir, pattern)
+	temp, tempName, err := r.createTemp(root, targetDir, pattern)
 	if err != nil {
 		return err
 	}
@@ -531,8 +602,12 @@ func (r *Root) atomicWriteIn(
 // not durable until the directory itself is synced. Without this, a crash
 // right after AtomicWrite can leave the target missing or still holding its
 // previous contents even though the new bytes reached the disk -- the one
-// outcome an atomic write exists to rule out. Every failure is reported,
-// including a filesystem that cannot sync a directory at all.
+// outcome an atomic write exists to rule out. Every failure is reported but
+// one: a filesystem that cannot sync a directory at all (FUSE and SMB mounts
+// answer EINVAL or ENOTSUP) is not an error, by the definition every directory
+// sync in the repository shares (localpath.IsDirSyncUnsupported). There the
+// sync can never succeed, the bytes are synced and the rename is visible, so
+// reporting it would fail every config and token write on such a home folder.
 func (r *Root) syncDirectory(root rootHandle, cleanDir string) error {
 	dirPath := filepath.Join(r.dir, cleanDir)
 
@@ -541,10 +616,10 @@ func (r *Root) syncDirectory(root rootHandle, cleanDir string) error {
 		return fmt.Errorf("opening directory %s to sync: %w", dirPath, err)
 	}
 
-	syncErr := dir.Sync()
+	syncErr := r.ops.syncDir(dir)
 	closeErr := dir.Close()
 
-	if syncErr != nil {
+	if syncErr != nil && !localpath.IsDirSyncUnsupported(syncErr) {
 		return fmt.Errorf("syncing directory %s: %w", dirPath, syncErr)
 	}
 	if closeErr != nil {
@@ -591,16 +666,35 @@ func writeTempFile(temp tempFile, data []byte, filePerm os.FileMode) error {
 }
 
 // normalizeNotExist reports a failed operation on name as os.ErrNotExist when
-// name is absent. The check is a rooted lstat on the same handle, so for a
-// name beneath a symlink that leaves the root it fails with the escape rather
-// than answering about the location outside: a containment failure is never
-// turned into "nothing is here", which callers read as permission to create.
+// name is absent, and returns every other failure as it is.
+//
+// Two answers have to agree. The failure itself must say something is not
+// there (isMissingName): a create always targets a missing name, so a denied
+// folder, a full disk or a read-only mount would otherwise read as "does not
+// exist", which hides each from the handling it needs. Then a rooted lstat on
+// the same handle must find name absent too, because ENOTDIR also answers an
+// operation that wanted a directory and found a file, and that name is there.
+// The lstat resolves through the root, so for a name beneath a symlink that
+// leaves the root it fails with the escape rather than answering about the
+// location outside: a containment failure is never turned into "nothing is
+// here", which callers read as permission to create.
 func normalizeNotExist(root rootHandle, name string, original error) error {
-	if _, statErr := root.Lstat(name); errors.Is(statErr, os.ErrNotExist) {
+	if !isMissingName(original) {
+		return original
+	}
+
+	if _, statErr := root.Lstat(name); isMissingName(statErr) {
 		return os.ErrNotExist
 	}
 
 	return original
+}
+
+// isMissingName reports whether err says a name, or a directory on the way to
+// it, is not there: not-exist, or not-a-directory for a component that is a
+// file, below which nothing can exist.
+func isMissingName(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 func closeWithContext(temp tempFile, action string, cause error) error {

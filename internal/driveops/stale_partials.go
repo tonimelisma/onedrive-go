@@ -1,10 +1,10 @@
 package driveops
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,44 +12,32 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// StalePartialCleanupOptions controls which local subtrees stale partial
-// cleanup may touch. SkipDirs entries are rooted slash paths relative to the
-// sync root. IncludedDirs entries use the same root-relative ancestor/container
-// semantics as sync include filters.
-type StalePartialCleanupOptions struct {
-	SkipDirs            []string
-	IncludedDirs        []string
-	IncludeJunkPartials bool
-}
-
 // CleanStalePartials deletes onedrive-go-owned partial files found under the
-// sync tree. After a sync run completes, any surviving owned partial files are
-// garbage: successful downloads rename them away, failed downloads delete them
-// via removePartialIfNotCanceled, and context cancellation aborts the sync
-// before this function runs. The only edge case is rename failure (B-207),
-// where re-downloading on the next run is acceptable.
+// sync tree, leaving the subtrees opts excludes untouched. After a sync run
+// completes, any surviving owned partial files are garbage: successful
+// downloads rename them away, failed downloads delete them via
+// removePartialIfNotCanceled, and context cancellation aborts the sync before
+// this function runs. The only edge case is rename failure (B-207), where
+// re-downloading on the next run is acceptable.
 //
-// Follows the CleanStale pattern: per-file errors are logged and skipped,
-// returns (count, scanError). The caller logs a summary.
-func CleanStalePartials(tree *synctree.Root, logger *slog.Logger) (int, error) {
-	return CleanStalePartialsWithOptions(tree, logger, StalePartialCleanupOptions{})
-}
-
-// CleanStalePartialsWithOptions deletes stale owned partial files while
-// leaving skipped local subtrees untouched.
-func CleanStalePartialsWithOptions(
+// Like SessionStore.CleanStale it goes on past a partial it cannot remove and
+// returns every such failure, joined with a failed walk, beside the count it
+// did remove. Reporting a failure is the caller's, which says one line for the
+// lot: a line per file here was a Warn for every stuck file after every run.
+func CleanStalePartials(
 	tree *synctree.Root,
 	logger *slog.Logger,
-	opts StalePartialCleanupOptions,
+	opts TransferArtifactCleanupOptions,
 ) (int, error) {
 	deleted := 0
+	var failures []error
 	skipDirs := normalizePartialCleanupSkipDirs(opts.SkipDirs)
 	includedDirs := normalizePartialCleanupDirList(opts.IncludedDirs)
 
 	err := tree.WalkDir(func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Debug only: the local scanner owns reporting unreadable paths,
-			// and this housekeeping walk runs after every sync pass, so a
+			// and this housekeeping walk runs at the end of a sync run, so a
 			// Warn here repeated the same condition on every run.
 			logger.Debug("couldn't check path for leftover download files",
 				slog.String("path", path),
@@ -86,26 +74,26 @@ func CleanStalePartialsWithOptions(
 			return nil
 		}
 
-		if removeErr := tree.Remove(relPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			logger.Warn("couldn't remove a leftover download file",
-				slog.String("path", relPath),
-				slog.Any("error", removeErr),
-			)
+		removeErr := tree.Remove(relPath)
+		switch {
+		case removeErr == nil:
+			logger.Info("deleted stale partial file", slog.String("path", relPath))
 
-			return nil
+			deleted++
+		case errors.Is(removeErr, fs.ErrNotExist):
+			// Gone between the walk and the removal: nothing is left over,
+			// and this cleanup did not remove it.
+		default:
+			failures = append(failures, fmt.Errorf("leftover download file: %w", removeErr))
 		}
-
-		logger.Info("deleted stale partial file", slog.String("path", relPath))
-
-		deleted++
 
 		return nil
 	})
 	if err != nil {
-		return deleted, fmt.Errorf("scanning for partial files: %w", err)
+		failures = append(failures, fmt.Errorf("scanning for partial files: %w", err))
 	}
 
-	return deleted, nil
+	return deleted, errors.Join(failures...)
 }
 
 func normalizePartialCleanupSkipDirs(skipDirs []string) map[string]struct{} {

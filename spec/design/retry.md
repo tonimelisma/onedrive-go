@@ -6,7 +6,9 @@ Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.6 [verified], R-6.8.7 
 
 ## Overview
 
-`internal/retry/` is a small leaf package providing reusable exponential
+`internal/retry/` is a small package, importing no internal package but
+`perf` (each retry and its backoff go to the request's perf collector), which
+the `retry-only-perf` depguard rule holds it to, providing reusable exponential
 backoff policies, the optional HTTP retry transport used by CLI-style callers,
 and the narrow shared throttle-gate primitive that lets callers coordinate
 `Retry-After` deadlines across multiple retry transports. Sync itself does not

@@ -58,7 +58,7 @@ Explicit non-goals:
 | Pre-auth URLs | Secret leakage or SSRF-like misuse | redaction, host/scheme validation of every server-supplied URL (`validateDownloadURL`, `validateUploadURL`, `validateCopyMonitorURL`, `validateSocketIONotificationURL`, the `/content` redirect check), one raw dispatch boundary |
 | Local observation | Symlink escape, invalid names, watch exhaustion | rooted walk/watch helpers, configurable symlink following with cycle guard, inotify limit detection |
 | Unmounted volume, replaced sync folder or mass delete | Every synced file reads as deleted and the deletes propagate | sync state bound to the folder's identity, refused with `drive rebind-root` on mismatch (R-6.2.12); deletes toward an empty side or above max(50, 30 %) held for `sync --confirm-deletes` (R-6.2.5); local deletes and replaced files kept 30 days in a per-drive trash (R-6.4.9) |
-| Logs | Token or pre-auth URL disclosure; other local users reading item names and account details | redaction types, structured logging policy, no secret logging, Socket.IO dial failures stripped of their URL before logging, log files `0600` in `0700` directories and the config file `0600` |
+| Logs | Token or pre-auth URL disclosure; other local users reading item names and account details | redaction types, structured logging policy, no secret logging, Socket.IO dial failures stripped of their URL before logging, log files `0600` in `0700` directories, the config file `0600`, and every folder the client creates for its own state `0700` |
 | SQLite state | Corruption or split-brain state | WAL mode, single durable authority, transactional writes |
 | Resource exhaustion | unbounded response bodies, runaway pagination, too many events | response-body caps, page/depth guards, debounced buffering, bounded workers |
 | Privileged subprocess / signal / SQL entrypoints | hidden side effects or widened trust boundaries | narrow owner packages, linted runtime imports, and package-level tests |
@@ -67,7 +67,7 @@ Explicit non-goals:
 
 - Explicit filesystem trust boundaries are documented in [system.md](system.md) and enforced in code by `fsroot`, `synctree`, and `localpath`.
 - Lexical path validation alone is not containment. `filepath.Clean` rejects a literal `..` but says nothing about a symlinked ancestor, so `synctree` treats a lexically joined absolute path as unsafe for any mutation and routes every side effect through a rooted descriptor instead.
-- Error classification is treated as part of the boundary: a helper that reclassifies a containment failure as "not found" disarms every caller that branches on absence, so `synctree` refuses to normalize an escape into `os.ErrNotExist`.
+- Error classification is treated as part of the boundary: a helper that reclassifies a containment failure as "not found" disarms every caller that branches on absence, so neither `synctree` nor `fsroot` normalizes an escape into `os.ErrNotExist`, and neither reports a create refused for permission, space or a read-only mount as absence.
 - Graph error bodies are size-capped and Graph quirks are normalized at the boundary; see [graph-client.md](graph-client.md).
 - Token files are validated on read and write, and managed-state I/O stays rooted; see [graph-client.md](graph-client.md) and [config.md](config.md).
 - Local observation filters invalid uploads before they become actions, while remote observation remains server-trusting to avoid silent data loss; see [sync-observation.md](sync-observation.md).
@@ -78,7 +78,7 @@ Explicit non-goals:
 
 | Mitigation | Evidence |
 |------------|----------|
-| Rooted filesystem boundaries and atomic replacement writes | `internal/fsroot/fsroot_test.go` (`TestRoot_AtomicWrite_WritesFileAtomically`, `TestRoot_AtomicWrite_RejectsRootEscape`), `internal/localpath/localpath_test.go` (`TestAtomicWrite`, `TestAtomicWrite_CleansTempOnRenameFailure`) |
+| Rooted filesystem boundaries and atomic replacement writes | `internal/fsroot/fsroot_test.go` (`TestRoot_AtomicWrite_WritesFileAtomically`, `TestRoot_AtomicWrite_RejectsRootEscape`, `TestRoot_Remove_RefusesSymlinkedParent`, `TestRoot_Rename_RefusesSymlinkedParent`, `TestRoot_AtomicWrite_RefusesSymlinkedParent`, `TestRoot_Stat_RefusesSymlinkedParent`, `TestRoot_CreateTemp_RefusesSymlinkedDir`, `TestRoot_OpenFile_CreateFailureKeepsItsErrno`), `internal/localpath/localpath_test.go` (`TestAtomicWrite`, `TestAtomicWrite_CleansTempOnRenameFailure`) |
 | Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/graph/download_test.go` (`TestDownload_RejectsUntrustedDownloadURL`), `internal/graph/redaction_test.go` (`TestIsSensitiveURL_SocketIONotificationURLs`), `internal/sync/socketio_test.go` (`TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL`) |
 | Managed token/config file validation and rooted writes | `internal/graph/auth_test.go` (`TestSaveToken_AtomicWrite`, `TestLoadToken_InvalidJSON`), `internal/config/write_test.go` (`TestAtomicWriteFile_WritesFile`) |
 | Owner-only config and log files against other local users | `internal/config/write_test.go` (`TestAtomicWriteFile_SetsPermissions`), `internal/logfile/logfile_test.go` (`TestOpen_Permissions`, `TestOpen_CreatesParentDirs`) |

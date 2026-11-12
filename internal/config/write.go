@@ -18,8 +18,12 @@ import (
 // local users reading it is an actor in the threat model.
 const configFilePermissions = 0o600
 
-// configDirPermissions is the standard permission mode for config directories.
-const configDirPermissions = 0o755
+// configDirPermissions is the mode of a folder the config writers create: the
+// config folder, the data folder the catalog lives in, and any folder above
+// them that is missing. It is owner-only, as the XDG base directory rule asks
+// of a directory created where none existed. A folder that already exists
+// keeps its mode.
+const configDirPermissions = 0o700
 
 // Drive type aliases for readability.
 const (
@@ -759,16 +763,13 @@ func stringPointersEqual(left *string, right *string) bool {
 
 // atomicWriteFile writes data to a temporary file in the same directory as
 // path, then renames it to the target path. This prevents partial writes
-// from corrupting the config file on crash. Parent directories are created
-// as needed. Files are created with configFilePermissions (0600).
+// from corrupting the config file on crash. AtomicWrite creates missing
+// parent directories with configDirPermissions. Files are created with
+// configFilePermissions (0600).
 func atomicWriteFile(path string, data []byte) (err error) {
 	root, name, err := fsroot.OpenPath(path)
 	if err != nil {
 		return fmt.Errorf("opening config root: %w", err)
-	}
-
-	if err := root.MkdirAll(configDirPermissions); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
 	}
 
 	if err := root.AtomicWrite(name, data, configFilePermissions, configDirPermissions, ".config-*.tmp"); err != nil {
