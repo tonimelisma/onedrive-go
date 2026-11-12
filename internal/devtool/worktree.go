@@ -87,7 +87,7 @@ func AddWorktree(ctx context.Context, runner commandRunner, repoRoot, path, bran
 		"-b",
 		branch,
 		path,
-		"origin/main",
+		originMainRef,
 	); err != nil {
 		return fmt.Errorf("worktree add: %w", err)
 	}

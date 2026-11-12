@@ -101,6 +101,13 @@ jobs:
     env:
       VERIFY_SHARD: ${{ matrix.shard }}
     steps:
+      # How long the test tiers take, and the full tier's go test deadline
+      # (20 minutes times ceil(3 / GOMAXPROCS)), depend on the runner's cores,
+      # so the log says how many this one had.
+      - name: Runner cores
+        run: |
+          echo "runner cores: $(getconf _NPROCESSORS_ONLN)"
+
       - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-go@v7.0.0
@@ -141,6 +148,13 @@ jobs:
     timeout-minutes: 45
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
+      # How long the test tiers take, and the full tier's go test deadline
+      # (20 minutes times ceil(3 / GOMAXPROCS)), depend on the runner's cores,
+      # so the log says how many this one had.
+      - name: Runner cores
+        run: |
+          echo "runner cores: $(getconf _NPROCESSORS_ONLN)"
+
       - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-go@v7.0.0
@@ -265,7 +279,12 @@ jobs:
   # pending one, which is rerun rather than raced.
   integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The profile's one go test deadline, 5 minutes, plus the 10 minutes of
+    # setup every job's timeout allows (TestCIJobTimeoutsCoverEveryGoTestDeadline):
+    # exactly that need, because this number sets the pull request's DoD
+    # stall window. Recent runs take about 2 minutes (1.6 to 2.4 over twenty
+    # pull request, dispatch and nightly runs).
+    timeout-minutes: 15
     concurrency:
       group: live-account-integration
       cancel-in-progress: false
@@ -273,12 +292,24 @@ jobs:
       contents: read
       id-token: write # OIDC federation with Azure
     if: vars.AZURE_CLIENT_ID != '' && github.event_name != 'push'
-    env:
-      ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_INTEGRATION }}
-      ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
-
     steps:
       - uses: actions/checkout@v7.0.1
+
+      # This repository's logs are public, and GitHub prints a job-level env
+      # value in the header of every step, so the test drives and the account
+      # allowlist come into this job here only, right after the checkout:
+      # scripts/ci-mask-test-drives.sh masks every spelling of them the job or
+      # its tests can print, lists those spellings for the artifact
+      # redaction, and exports the values and each drive's vault secret and
+      # token file names through GITHUB_ENV, whose headers then show ***.
+      # While they are repository variables, this step's header still shows
+      # the values once; a repository secret of the same name takes precedence
+      # and removes that last occurrence too.
+      - name: Mask the test drive and the account allowlist
+        env:
+          ONEDRIVE_TEST_DRIVE: ${{ secrets.ONEDRIVE_TEST_DRIVE_INTEGRATION || vars.ONEDRIVE_TEST_DRIVE_INTEGRATION }}
+          ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ secrets.ONEDRIVE_ALLOWED_TEST_ACCOUNTS || vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
+        run: ./scripts/ci-mask-test-drives.sh
 
       # Live jobs disable setup-go cache restore because toolchain tar extraction
       # conflicts during cache replay can break the job before tests start.
@@ -325,20 +356,15 @@ jobs:
             --file ".testdata/config.toml" \
             --encoding utf-8
 
-          # Download cache file for this job's drive.
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
-          SECRET_NAME="onedrive-cache-${SANITIZED}"
-
-          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_FILE="token_${SANITIZED_FILE}.json"
-
-          # This repository's logs are public: name the variable, never the
-          # drive, the secret or the token file, which all embed the account.
+          # Download the token of this job's drive, under the secret and file
+          # names the masking script exported. This repository's logs are
+          # public: name the variable, never the drive, the secret or the
+          # token file, which all embed the account.
           echo "Downloading the token of ONEDRIVE_TEST_DRIVE"
           az keyvault secret download \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "$SECRET_NAME" \
-            --file ".testdata/${TOKEN_FILE}" \
+            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
+            --file ".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}" \
             --encoding utf-8
 
           echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
@@ -352,10 +378,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          SANITIZED_FILE=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/:/_/')
-          TOKEN_PATH=".testdata/token_${SANITIZED_FILE}.json"
-          SANITIZED=$(echo "$ONEDRIVE_TEST_DRIVE" | sed 's/[:@._]/-/g')
-          SECRET_NAME="onedrive-cache-${SANITIZED}"
+          TOKEN_PATH=".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}"
 
           if [ ! -f "$TOKEN_PATH" ]; then
             echo "::warning::Token file missing — skipping save"
@@ -365,18 +388,23 @@ jobs:
           echo "Saving rotated token"
           az keyvault secret set \
             --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "$SECRET_NAME" \
+            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
             --file "$TOKEN_PATH" \
             --content-type "application/json" \
             --output none
 
   e2e:
     runs-on: ubuntu-latest
-    # Above the sum of every go test deadline e2e-full can start, its three
-    # classified reruns included, plus setup: every bucket runs even after one
-    # fails, so the deadlines add up (TestCIJobTimeoutsCoverEveryGoTestDeadline).
-    # A healthy nightly takes about 40 minutes; only hangs come near this.
-    timeout-minutes: 180
+    # Per event, the sum of every go test deadline the job's profile can start,
+    # plus setup (TestCIJobTimeoutsCoverEveryGoTestDeadline). A pull request
+    # runs the fast tier, three 10-minute deadlines, and its 40 minutes are
+    # exactly that need, because this number sets the pull request's DoD
+    # stall window. The schedule and manual dispatch run e2e-full: every
+    # bucket runs even after one fails, so the deadlines add up, and with the
+    # three classified reruns and setup they fit inside 180. A healthy nightly
+    # takes about 40 minutes; only hangs come near it. A zero would turn the
+    # expression into its fallback.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 40 || 180 }}
     concurrency:
       group: live-account-e2e
       cancel-in-progress: false
@@ -384,13 +412,29 @@ jobs:
       contents: read
       id-token: write # OIDC federation with Azure
     if: vars.AZURE_CLIENT_ID != '' && github.event_name != 'push'
-    env:
-      ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E }}
-      ONEDRIVE_TEST_DRIVE_2: ${{ vars.ONEDRIVE_TEST_DRIVE_E2E_2 }}
-      ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
-
     steps:
       - uses: actions/checkout@v7.0.1
+
+      # This repository's logs are public, and GitHub prints a job-level env
+      # value in the header of every step, so the test drives and the account
+      # allowlist come into this job here only, right after the checkout:
+      # scripts/ci-mask-test-drives.sh masks every spelling of them the job or
+      # its tests can print, lists those spellings for the artifact
+      # redaction, and exports the values and each drive's vault secret and
+      # token file names through GITHUB_ENV, whose headers then show ***.
+      # While they are repository variables, this step's header still shows
+      # the values once; a repository secret of the same name takes precedence
+      # and removes that last occurrence too.
+      - name: Mask the test drives and the account allowlist
+        env:
+          ONEDRIVE_TEST_DRIVE: ${{ secrets.ONEDRIVE_TEST_DRIVE_E2E || vars.ONEDRIVE_TEST_DRIVE_E2E }}
+          ONEDRIVE_TEST_DRIVE_2: ${{ secrets.ONEDRIVE_TEST_DRIVE_E2E_2 || vars.ONEDRIVE_TEST_DRIVE_E2E_2 }}
+          ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ secrets.ONEDRIVE_ALLOWED_TEST_ACCOUNTS || vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
+          # Which drive holds each shortcut fixture, by variable name, never
+          # by value: the script exports the fixture variables from them.
+          ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE_FROM: ONEDRIVE_TEST_DRIVE
+          ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM: ONEDRIVE_TEST_DRIVE_2
+        run: ./scripts/ci-mask-test-drives.sh
 
       # Live jobs disable setup-go cache restore because toolchain tar extraction
       # conflicts during cache replay can break the job before tests start.
@@ -440,26 +484,23 @@ jobs:
             --file ".testdata/fixtures.env" \
             --encoding utf-8
 
-          # Download token files for each test drive; shared inventory comes from catalog.json.
+          # Download token files for each test drive, under the secret and file
+          # names the masking script exported; shared inventory comes from
+          # catalog.json.
           for DRIVE_VAR in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2; do
-            DRIVE_VAL="${!DRIVE_VAR:-}"
-            if [ -z "$DRIVE_VAL" ]; then
+            SECRET_VAR="${DRIVE_VAR}_VAULT_SECRET"
+            TOKEN_VAR="${DRIVE_VAR}_TOKEN_FILE"
+            if [ -z "${!SECRET_VAR:-}" ]; then
               continue
             fi
-
-            SANITIZED=$(echo "$DRIVE_VAL" | sed 's/[:@._]/-/g')
-            SECRET_NAME="onedrive-cache-${SANITIZED}"
-
-            SANITIZED_FILE=$(echo "$DRIVE_VAL" | sed 's/:/_/')
-            TOKEN_FILE="token_${SANITIZED_FILE}.json"
 
             # Public logs: name the variable, never the drive, the secret or
             # the token file, which all embed the account.
             echo "Downloading the token of ${DRIVE_VAR}"
             az keyvault secret download \
               --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-              --name "$SECRET_NAME" \
-              --file ".testdata/${TOKEN_FILE}" \
+              --name "${!SECRET_VAR}" \
+              --file ".testdata/${!TOKEN_VAR}" \
               --encoding utf-8
           done
 
@@ -471,12 +512,37 @@ jobs:
           # Pull requests run the fast smoke lane; the nightly schedule and
           # manual dispatch run the full live suite.
           profile=e2e
-          extra_args=(--summary-json "${RUNNER_TEMP}/e2e-verify-summary.json")
+          # The summary goes into the debug log directory, the one directory
+          # this job redacts and uploads from.
+          extra_args=(--summary-json /tmp/e2e-debug-logs/e2e-verify-summary.json)
           if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             profile=e2e-full
             extra_args+=(--classify-live-quirks)
           fi
           go run ./cmd/devtool verify "$profile" --e2e-log-dir /tmp/e2e-debug-logs "${extra_args[@]}"
+
+      # Masking covers the log, not the artifacts. The e2e recorders write
+      # drive roles instead of drive identifiers; as a second layer every
+      # spelling the masking script listed is replaced by *** in the debug
+      # log directory before it is uploaded. Every artifact this job uploads
+      # comes from that directory; a test failure message that quotes the
+      # CLI's own output reaches only the job log, which the masks cover.
+      - name: Redact the test drives and accounts in the E2E artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          export MASKS="${RUNNER_TEMP}/onedrive-test-masks"
+          if [ ! -s "${MASKS}" ] || [ ! -d /tmp/e2e-debug-logs ]; then
+            exit 0
+          fi
+          find /tmp/e2e-debug-logs -type f -exec perl -pi -e '
+            BEGIN {
+              open(my $list, "<", $ENV{MASKS}) or die "read $ENV{MASKS}: $!";
+              my @spellings = grep { length } map { chomp; $_ } <$list>;
+              $pattern = join "|", map { quotemeta } sort { length($b) <=> length($a) } @spellings;
+            }
+            s/$pattern/***/g if length $pattern;
+          ' {} +
 
       - name: Upload E2E summaries
         if: always()
@@ -486,7 +552,7 @@ jobs:
           path: |
             /tmp/e2e-debug-logs/timing-summary.json
             /tmp/e2e-debug-logs/quirk-summary.json
-            ${{ runner.temp }}/e2e-verify-summary.json
+            /tmp/e2e-debug-logs/e2e-verify-summary.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -503,16 +569,13 @@ jobs:
         run: |
           set -euo pipefail
           for DRIVE_VAR in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2; do
-            DRIVE_VAL="${!DRIVE_VAR:-}"
-            if [ -z "$DRIVE_VAL" ]; then
+            SECRET_VAR="${DRIVE_VAR}_VAULT_SECRET"
+            TOKEN_VAR="${DRIVE_VAR}_TOKEN_FILE"
+            if [ -z "${!SECRET_VAR:-}" ]; then
               continue
             fi
 
-            SANITIZED_FILE=$(echo "$DRIVE_VAL" | sed 's/:/_/')
-            TOKEN_PATH=".testdata/token_${SANITIZED_FILE}.json"
-            SANITIZED=$(echo "$DRIVE_VAL" | sed 's/[:@._]/-/g')
-            SECRET_NAME="onedrive-cache-${SANITIZED}"
-
+            TOKEN_PATH=".testdata/${!TOKEN_VAR}"
             if [ ! -f "$TOKEN_PATH" ]; then
               echo "::warning::Token file for ${DRIVE_VAR} missing — skipping save"
               continue
@@ -521,7 +584,7 @@ jobs:
             echo "Saving rotated token for ${DRIVE_VAR}"
             az keyvault secret set \
               --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-              --name "$SECRET_NAME" \
+              --name "${!SECRET_VAR}" \
               --file "$TOKEN_PATH" \
               --content-type "application/json" \
               --output none

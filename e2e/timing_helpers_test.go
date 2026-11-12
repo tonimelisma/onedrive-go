@@ -119,10 +119,14 @@ func recordTimingEvent(
 	}
 }
 
+// record keeps one event. What it writes names each configured drive by role
+// (redactTimingEvent); the debug log stays under the test's own name.
 func (r *e2eTimingRecorder) record(event e2eTimingEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	debugLog := filepath.Join(r.logDir, debugLogFileName(event.TestName))
+	event = redactTimingEvent(event)
 	r.events = append(r.events, event)
 	if err := appendTimingEvent(r.eventsPath(), event); err != nil {
 		return err
@@ -138,15 +142,23 @@ func (r *e2eTimingRecorder) record(event e2eTimingEvent) error {
 	}
 
 	if event.TestName != "" {
-		if err := appendDebugLogChunk(
-			filepath.Join(r.logDir, sanitizeTestName(event.TestName)+".log"),
-			formatTimingDebugLine(event),
-		); err != nil {
+		if err := appendDebugLogChunk(debugLog, formatTimingDebugLine(event)); err != nil {
 			return fmt.Errorf("append timing debug log: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// redactTimingEvent names every configured drive in a timing event by role:
+// the summary is uploaded as a CI artifact of a public repository.
+func redactTimingEvent(event e2eTimingEvent) e2eTimingEvent {
+	event.TestName = suiteDriveRoles.Redact(event.TestName)
+	event.Description = suiteDriveRoles.Redact(event.Description)
+	event.DriveID = suiteDriveRoles.Role(event.DriveID)
+	event.Command = suiteDriveRoles.Redact(event.Command)
+
+	return event
 }
 
 func (r *e2eTimingRecorder) eventsPath() string {
@@ -411,7 +423,66 @@ func TestE2ETimingRecorderAppendsDebugLogLine(t *testing.T) {
 		Outcome:     timingOutcomeSuccess,
 	}))
 
-	data := mustReadFile(t, filepath.Join(dir, sanitizeTestName("TestTimingDebug")+".log"))
+	data := mustReadFile(t, filepath.Join(dir, debugLogFileName("TestTimingDebug")))
 	assert.Contains(t, string(data), "TIMING kind=remote_write_visibility")
 	assert.Contains(t, string(data), "cmd=stat /timing.txt")
+}
+
+// Validates: R-6.10.27
+//
+// The timing and quirk summaries and the debug logs are CI artifacts of a
+// public repository, file names included. A recorded drive, command line or
+// test name naming the configured drive is written with the drive's role
+// instead, and a debug log of a test named after the drive is named by the
+// role. The messages name files by their redacted names and never print what
+// a file holds.
+func TestE2ERecordersRecordRolesNotDrives(t *testing.T) {
+	dir := t.TempDir()
+	timing, err := newE2ETimingRecorder(dir)
+	require.NoError(t, err)
+	quirks, err := newE2EQuirkRecorder(dir)
+	require.NoError(t, err)
+
+	namedAfterDrive := "TestNamedAfterADrive/" + drive
+	require.NoError(t, timing.record(e2eTimingEvent{
+		TestName:    namedAfterDrive,
+		Kind:        timingKindRemoteWriteVisibility,
+		Description: "write on " + drive,
+		DriveID:     drive,
+		Command:     "stat --drive " + drive + " /roles.txt",
+		TimeoutMS:   1000,
+		DurationMS:  10,
+		Attempts:    1,
+		Outcome:     timingOutcomeSuccess,
+	}))
+	require.NoError(t, quirks.record(&e2eQuirkEvent{
+		Phase:      quirkPhaseAuthPreflight,
+		TestName:   "TestE2E_AuthPreflight_Fast/" + sanitizeTestName(drive),
+		Operation:  "GET /me/drive drive=" + drive,
+		Source:     quirkSourceAuthPreflight,
+		Outcome:    quirkOutcomeFailed,
+		FinalError: "auth preflight failed for " + drive,
+	}))
+	require.NoError(t, appendDebugLogChunk(filepath.Join(dir, debugLogFileName(namedAfterDrive)), "CMD: ls --drive "+drive+" /\n"))
+
+	_, account, ok := strings.Cut(drive, ":")
+	require.True(t, ok)
+	account = strings.ToLower(account)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := suiteDriveRoles.Redact(entry.Name())
+		names = append(names, name)
+		// Not NotContains or Contains: they print both strings on failure,
+		// and the account must not reach the public log.
+		//nolint:testifylint // NotContainsf would print the account
+		assert.Falsef(t, strings.Contains(strings.ToLower(entry.Name()), account), "the file name %s names the account", name)
+		data := strings.ToLower(string(mustReadFile(t, filepath.Join(dir, entry.Name()))))
+		//nolint:testifylint // NotContainsf would print the account
+		assert.Falsef(t, strings.Contains(data, account), "%s names the account", name)
+		//nolint:testifylint // Containsf would print the file, which may hold the account
+		assert.Truef(t, strings.Contains(data, "drive-1"), "%s names the drive by role", name)
+	}
+	assert.Contains(t, names, "TestNamedAfterADrive_drive-1.log", "the debug log of a test named after the drive is named by role")
 }

@@ -323,9 +323,13 @@ func requireShortcutFixtureWithSharedDiscovery(
 		require.FailNowf(t, "unknown shortcut fixture kind", "kind=%s", kind)
 	}
 
+	// Nothing guesses which configured drive holds a shortcut: the repository
+	// names no test account. CI's masking step sets both variables from its
+	// drives by role.
 	require.NotEmptyf(t, fixture.ParentDrive,
-		"shortcut fixture missing: set ONEDRIVE_TEST_SHORTCUT_%s_PARENT_DRIVE in exported env, root .env, or .testdata/fixtures.env",
-		shortcutFixtureEnvStem(kind))
+		"shortcut fixture missing: set %s and %s (the drives that hold the writable and the read-only shortcut) "+
+			"in exported env, root .env, or .testdata/fixtures.env",
+		testutil.WritableShortcutParentDriveEnvVar, testutil.ReadOnlyShortcutParentDriveEnvVar)
 	require.NotEmptyf(t, fixture.ShortcutName,
 		"shortcut fixture missing: set ONEDRIVE_TEST_SHORTCUT_%s_NAME in exported env, root .env, or .testdata/fixtures.env",
 		shortcutFixtureEnvStem(kind))
@@ -411,8 +415,8 @@ func waitForShortcutSharedItem(
 			message := fmt.Sprintf(
 				"shortcut fixture %q did not appear in shared --json for %s with shared_by_email=%s within %v; last_items=%d last_err=%v",
 				fixture.ShortcutName,
-				fixture.ParentEmail,
-				fixture.SharerEmail,
+				suiteDriveRoles.Redact(fixture.ParentEmail),
+				suiteDriveRoles.Redact(fixture.SharerEmail),
 				shortcutFixturePropagationTimeout,
 				len(lastListing.Items),
 				lastErr,
@@ -492,7 +496,7 @@ func requireActiveShortcutChild(
 	require.Failf(t,
 		"active shortcut child mount missing",
 		"parent=%s shortcut=%q remote=%s/%s",
-		fixture.ParentDrive,
+		suiteDriveRoles.Role(fixture.ParentDrive),
 		fixture.ShortcutName,
 		fixture.SharedItem.RemoteDriveID,
 		fixture.SharedItem.RemoteItemID,
@@ -747,7 +751,7 @@ func skipShortcutRootPlaceholderOmission(
 		failureTitle,
 		decision.Reason,
 		fixture.ShortcutName,
-		fixture.ParentDrive,
+		suiteDriveRoles.Role(fixture.ParentDrive),
 		elapsed,
 		pollState.RootNames,
 		pollState.LastErr,
@@ -1014,9 +1018,9 @@ func discoverSharedFolderFixture(_ *testing.T, selector string) (resolvedSharedF
 	recipientDriveID, ok := liveConfig.DriveIDForEmail(ref.AccountEmail)
 	if !ok {
 		return resolvedSharedFolderFixture{}, fmt.Errorf(
-			"shared fixture recipient %q does not match any configured drive (%v)",
-			ref.AccountEmail,
-			liveConfig.CandidateDriveIDs(),
+			"shared fixture recipient %s does not match any configured drive (%s)",
+			suiteDriveRoles.Redact(ref.AccountEmail),
+			suiteDriveRoles.Redact(fmt.Sprint(liveConfig.CandidateDriveIDs())),
 		)
 	}
 
@@ -1161,12 +1165,13 @@ func copyFixtureFile(src, dst string, perm os.FileMode) error {
 func sharedListForRecipientRaw(cfgPath string, env map[string]string, recipientEmail string) (sharedListE2EOutput, error) {
 	_, stdout, stderr, err := execCLI(cfgPath, env, "", "--account", recipientEmail, "shared", "--json")
 	if err != nil {
-		return sharedListE2EOutput{}, fmt.Errorf("shared --json for %s: %w (%s)", recipientEmail, err, strings.TrimSpace(stderr))
+		return sharedListE2EOutput{}, fmt.Errorf("shared --json for %s: %w (%s)",
+			suiteDriveRoles.Redact(recipientEmail), err, strings.TrimSpace(stderr))
 	}
 
 	var parsed sharedListE2EOutput
 	if err := json.Unmarshal([]byte(stdout), &parsed); err != nil {
-		return sharedListE2EOutput{}, fmt.Errorf("parse shared --json for %s: %w", recipientEmail, err)
+		return sharedListE2EOutput{}, fmt.Errorf("parse shared --json for %s: %w", suiteDriveRoles.Redact(recipientEmail), err)
 	}
 
 	return parsed, nil
@@ -1219,9 +1224,9 @@ func waitForDriveListSharedSelectorVisible(
 
 		if time.Now().After(deadline) {
 			t.Skipf(
-				"provider_skip=%s live drive list shared discovery did not expose selector %q within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
+				"provider_skip=%s live drive list shared discovery did not expose selector %s within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
 				liveProviderSkipDriveListSharedOmitted,
-				selector,
+				suiteDriveRoles.Redact(selector),
 				pollTimeout,
 				lastStdout,
 				lastStderr,

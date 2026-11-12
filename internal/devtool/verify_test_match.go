@@ -3,7 +3,6 @@ package devtool
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -152,8 +151,8 @@ func assertTestsMatchedInTree(output string, stepDescription string) error {
 		return nil
 	}
 
-	for _, line := range strings.Split(output, "\n") {
-		if lineShowsSelectedTest(strings.TrimSpace(line)) {
+	for line := range strings.Lines(output) {
+		if lineShowsSelectedTest(line) {
 			return nil
 		}
 	}
@@ -170,26 +169,23 @@ func assertTestsMatchedInTree(output string, stepDescription string) error {
 // output it is an event naming a test that passed, failed or skipped. A
 // skipped test was still selected, and plain output cannot tell it apart.
 func lineShowsSelectedTest(line string) bool {
-	if strings.HasPrefix(line, "{") {
-		var event goTestJSONEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return false
-		}
-
+	text, event, isEvent := decodeGoTestLogLine(line)
+	if isEvent {
 		switch event.Action {
-		case verifySummaryStatusPass, verifySummaryStatusFail, goTestActionSkip:
+		case goTestActionPass, goTestActionFail, goTestActionSkip:
 			return event.Test != ""
 		default:
 			return false
 		}
 	}
 
+	trimmed := strings.TrimSpace(text)
 	switch {
-	case strings.HasPrefix(line, "ok ") || strings.HasPrefix(line, "ok\t"):
-		return !strings.Contains(line, noTestsRanMarker)
-	case strings.HasPrefix(line, "FAIL\t"),
-		strings.HasPrefix(line, "--- PASS"),
-		strings.HasPrefix(line, "--- FAIL"):
+	case strings.HasPrefix(text, rawGoTestPackagePassPrefix):
+		return !strings.Contains(text, noTestsRanMarker)
+	case strings.HasPrefix(text, rawGoTestPackageFailPrefix),
+		strings.HasPrefix(trimmed, "--- PASS"),
+		strings.HasPrefix(trimmed, rawGoTestFailurePrefix):
 		return true
 	default:
 		return false

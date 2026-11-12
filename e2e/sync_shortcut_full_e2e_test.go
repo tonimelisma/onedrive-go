@@ -358,7 +358,7 @@ func requireShortcutChildAtPath(
 	require.Failf(t,
 		"shortcut child mount missing at projection path",
 		"parent=%s shortcut=%q relative_path=%q remote=%s/%s",
-		fixture.ParentDrive,
+		suiteDriveRoles.Role(fixture.ParentDrive),
 		fixture.ShortcutName,
 		relativeLocalPath,
 		fixture.SharedItem.RemoteDriveID,

@@ -193,6 +193,12 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 	assert.Equal(t, "https://1drv.ms/f/env", cfg.Fixtures.SharedFolderLink)
 }
 
+// Validates: R-6.10.27
+//
+// The shortcut fixtures' folder names have defaults; their parent drives do
+// not. Nothing guesses which configured drive holds a shortcut: the
+// repository names no test account, so the parent drives come only from
+// their variables, and each sharer is the other fixture's parent account.
 func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
 	for _, key := range []string{
 		"ONEDRIVE_TEST_DRIVE",
@@ -212,22 +218,51 @@ func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
 
 	moduleRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
-		"ONEDRIVE_TEST_DRIVE=personal:kikkelimies123@outlook.com\n"+
-			"ONEDRIVE_TEST_DRIVE_2=personal:testitesti18@outlook.com\n",
+		"ONEDRIVE_TEST_DRIVE=personal:first@example.com\n"+
+			"ONEDRIVE_TEST_DRIVE_2=personal:second@example.com\n",
 	), 0o600))
 
 	cfg, err := LoadLiveTestConfig(moduleRoot)
 	require.NoError(t, err)
 
-	assert.Equal(t, "personal:testitesti18@outlook.com", cfg.Fixtures.WritableShortcutParentDrive)
+	assert.Empty(t, cfg.Fixtures.WritableShortcutParentDrive, "no configured drive is guessed as a shortcut's parent")
+	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutParentDrive)
+	assert.Empty(t, cfg.Fixtures.WritableShortcutSharerEmail)
+	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutSharerEmail)
 	assert.Equal(t, "Kikkeli Shared Test Folder", cfg.Fixtures.WritableShortcutName)
-	assert.Equal(t, "kikkelimies123@outlook.com", cfg.Fixtures.WritableShortcutSharerEmail)
 	assert.Equal(t, "shortcut-sentinel.txt", cfg.Fixtures.WritableShortcutSentinelPath)
-	assert.Equal(t, "personal:kikkelimies123@outlook.com", cfg.Fixtures.ReadOnlyShortcutParentDrive)
 	assert.Equal(t, "Read-only Shared Folder", cfg.Fixtures.ReadOnlyShortcutName)
-	assert.Equal(t, "testitesti18@outlook.com", cfg.Fixtures.ReadOnlyShortcutSharerEmail)
 	assert.Equal(t, "shortcut-sentinel.txt", cfg.Fixtures.ReadOnlyShortcutSentinelPath)
 	assert.Equal(t, "Testi2 Shared Folder", cfg.Fixtures.StandaloneSharedFolderName)
+
+	t.Setenv(ReadOnlyShortcutParentDriveEnvVar, "personal:first@example.com")
+	t.Setenv(WritableShortcutParentDriveEnvVar, "personal:second@example.com")
+	cfg, err = LoadLiveTestConfig(moduleRoot)
+	require.NoError(t, err)
+
+	assert.Equal(t, "personal:second@example.com", cfg.Fixtures.WritableShortcutParentDrive)
+	assert.Equal(t, "first@example.com", cfg.Fixtures.WritableShortcutSharerEmail)
+	assert.Equal(t, "personal:first@example.com", cfg.Fixtures.ReadOnlyShortcutParentDrive)
+	assert.Equal(t, "second@example.com", cfg.Fixtures.ReadOnlyShortcutSharerEmail)
+}
+
+// Validates: R-6.10.27
+//
+// A .env file that cannot be read is an error the loader returns; a missing
+// one is not. Only the harness wrappers exit.
+func TestLoadDotEnvFile_ReturnsErrors(t *testing.T) {
+	require.NoError(t, LoadDotEnvFile(filepath.Join(t.TempDir(), ".missing")))
+
+	unreadable := filepath.Join(t.TempDir(), "dir-not-file")
+	require.NoError(t, os.MkdirAll(unreadable, 0o700))
+	err := LoadDotEnvFile(unreadable)
+	require.ErrorContains(t, err, unreadable)
+
+	t.Setenv("ONEDRIVE_TEST_ENV_FILE_KEY", "")
+	envPath := filepath.Join(t.TempDir(), ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte("=no key\nONEDRIVE_TEST_ENV_FILE_KEY='set'\n"), 0o600))
+	require.NoError(t, LoadDotEnvFile(envPath))
+	assert.Equal(t, "set", os.Getenv("ONEDRIVE_TEST_ENV_FILE_KEY"))
 }
 
 func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {
@@ -344,6 +379,94 @@ func TestValidateAllowlist(t *testing.T) {
 	ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
 }
 
+// Validates: R-6.10.27
+//
+// Entries are comma-separated and trimmed, and a drive must match one
+// exactly.
+func TestAllowlistIncludes(t *testing.T) {
+	t.Parallel()
+
+	const allowlist = " personal:user@example.com ,business:user@contoso.com"
+	assert.True(t, AllowlistIncludes(allowlist, "personal:user@example.com"))
+	assert.True(t, AllowlistIncludes(allowlist, "business:user@contoso.com"))
+	assert.False(t, AllowlistIncludes(allowlist, "personal:user@contoso.com"))
+	assert.False(t, AllowlistIncludes(allowlist, "user@example.com"), "an entry is a whole drive, not a part of one")
+	assert.False(t, AllowlistIncludes("", "personal:user@example.com"))
+	assert.False(t, AllowlistIncludes(allowlist, ""))
+}
+
+// Validates: R-6.10.27
+//
+// The live suites run in public CI logs. A refused drive names the variables
+// to check and never their values.
+func TestCheckDriveAllowed_NamesTheVariablesAndNoValue(t *testing.T) {
+	const (
+		drive     = "personal:someone@example.test"
+		allowlist = "business:other@example.test"
+	)
+
+	t.Setenv(AllowedTestAccountsEnvVar, allowlist)
+	err := CheckDriveAllowed("ONEDRIVE_TEST_DRIVE_2", drive)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ONEDRIVE_TEST_DRIVE_2")
+	assert.Contains(t, err.Error(), AllowedTestAccountsEnvVar)
+	for _, value := range []string{drive, allowlist, "someone", "other@example.test"} {
+		assert.NotContains(t, err.Error(), value)
+	}
+
+	err = CheckDriveAllowed("ONEDRIVE_TEST_DRIVE", "")
+	require.ErrorContains(t, err, "ONEDRIVE_TEST_DRIVE is not set")
+
+	t.Setenv(AllowedTestAccountsEnvVar, "")
+	err = CheckDriveAllowed("ONEDRIVE_TEST_DRIVE", drive)
+	require.ErrorContains(t, err, AllowedTestAccountsEnvVar+" is not set")
+	assert.NotContains(t, err.Error(), drive)
+
+	t.Setenv(AllowedTestAccountsEnvVar, allowlist+", "+drive)
+	require.NoError(t, CheckDriveAllowed("ONEDRIVE_TEST_DRIVE", drive))
+}
+
+// Validates: R-6.10.27
+//
+// What the live suites record ends up in public CI artifacts. Every spelling
+// of a configured drive a recorded line can hold, the identifier, the account
+// address, the file-name form and the lower-cased and percent-encoded forms,
+// becomes the drive's role.
+func TestDriveRoles_RecordedLinesHoldNoConfiguredDrive(t *testing.T) {
+	t.Parallel()
+
+	const (
+		first  = "personal:Alice.A@example.test"
+		second = "business:bob_b@example.test"
+	)
+	roles := NewDriveRoles(first, second)
+
+	assert.Equal(t, "drive-1", roles.Role(first))
+	assert.Equal(t, "drive-2", roles.Role(second))
+	assert.Equal(t, "ls --drive drive-1 /", roles.Redact("ls --drive "+first+" /"))
+	assert.Equal(t, "account drive-2-account signed in", roles.Redact("account bob_b@example.test signed in"))
+
+	recorded := []string{
+		"stat --drive " + first + " /e2e-file.txt",
+		"TestE2E_AuthPreflight_Fast/personal_Alice.A@example.test",
+		"GET /me/drive drive=" + second,
+		`{"account":"alice.a@example.test","drive":"personal:alice.a@example.test"}`,
+		"https://graph.microsoft.com/v1.0/users/Alice.A%40example.test/drive and personal%3AAlice.A%40example.test",
+		"token_business_bob_b@example.test.json",
+	}
+	for _, line := range recorded {
+		redacted := strings.ToLower(roles.Redact(line))
+		for _, value := range []string{"alice.a@example.test", "alice.a%40example.test", "bob_b@example.test"} {
+			assert.NotContains(t, redacted, value, "line %q", line)
+		}
+	}
+
+	var unset DriveRoles
+	assert.Equal(t, "ls --drive "+first, unset.Redact("ls --drive "+first), "with no drives configured, nothing changes")
+	assert.Equal(t, "drive-1", NewDriveRoles(first, "").Role(first))
+	assert.Empty(t, NewDriveRoles(first).Role(""))
+}
+
 func TestTokenFileName(t *testing.T) {
 	assert.Equal(t, "token_personal_user@example.com.json", TokenFileName("personal:user@example.com"))
 }
@@ -411,4 +534,47 @@ func TestCopyCatalogFile_CopiesManagedCatalog(t *testing.T) {
 	catalogData, err := localpath.ReadFile(filepath.Join(dstDir, "catalog.json"))
 	require.NoError(t, err)
 	assert.JSONEq(t, catalog, string(catalogData))
+}
+
+// Validates: R-6.10.27
+//
+// The repository is public, so no tracked file may spell a test account. A
+// finding names the file, the line and the account's role, never the
+// address, and matches any case and the percent-encoded form.
+func TestFindTestAccounts_NamesFileLineAndRoleNeverTheAddress(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	files := map[string]string{
+		"docs/a.md":   "intro\nclean line\nsee /users/Alice.A%40example.test/drive here\n",
+		"code/b.go":   "const x = \"ALICE.A@EXAMPLE.TEST\"\n",
+		"c.txt":       "bob_b@example.test and alice.a@example.test\n",
+		"clean.txt":   "user@example.com\n",
+		"binary.bin":  "alice.a@example.test\x00\x01",
+		"deleted.txt": "",
+	}
+	for name, content := range files {
+		if name == "deleted.txt" {
+			continue
+		}
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(content), 0o600))
+	}
+
+	findings, err := FindTestAccounts(root,
+		[]string{"docs/a.md", "code/b.go", "c.txt", "clean.txt", "binary.bin", "deleted.txt"},
+		[]string{"personal:Alice.A@example.test", "", "business:bob_b@example.test", " personal:Alice.A@example.test "})
+	require.NoError(t, err)
+
+	assert.Equal(t, []AccountFinding{
+		{File: "docs/a.md", Line: 3, Account: "drive-1-account"},
+		{File: "code/b.go", Line: 1, Account: "drive-1-account"},
+		{File: "c.txt", Line: 1, Account: "drive-1-account"},
+		{File: "c.txt", Line: 1, Account: "drive-2-account"},
+		{File: "binary.bin", Line: 1, Account: "drive-1-account"},
+	}, findings)
+	for _, finding := range findings {
+		assert.NotContains(t, strings.ToLower(finding.String()), "example.test")
+	}
+	assert.Equal(t, "docs/a.md:3 spells drive-1-account", findings[0].String())
 }

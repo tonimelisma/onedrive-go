@@ -1,28 +1,18 @@
 package devtool
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
 const (
-	repoModulePath         = "github.com/tonimelisma/onedrive-go"
-	failedTestPackageE2E   = "./e2e/..."
-	failedTestE2ETimeout   = "15m"
-	rawGoTestFailurePrefix = "--- FAIL:"
-	rawGoTestPackagePrefix = "FAIL"
-	rawGoTestPassPrefix    = "ok"
-	// goTestShufflePrefix starts the line a test binary run with -shuffle
-	// prints first: `-test.shuffle <seed>`.
-	goTestShufflePrefix = "-test.shuffle "
-	goTestActionOutput  = "output"
+	repoModulePath       = "github.com/tonimelisma/onedrive-go"
+	failedTestPackageE2E = "./e2e/..."
+	failedTestE2ETimeout = "15m"
 )
 
 type failedGoTestTarget struct {
@@ -51,7 +41,7 @@ func runFailedTestVerification(
 		if err != nil {
 			return fmt.Errorf("read failed test log %s: %w", failedLogPath, err)
 		}
-		target, err := lastFailedGoTestTarget(strings.NewReader(string(data)))
+		target, err := lastFailedGoTestTarget(string(data))
 		if err != nil {
 			return err
 		}
@@ -59,191 +49,31 @@ func runFailedTestVerification(
 		if err != nil {
 			return err
 		}
-		if err := writeStatus(stdout, "==> go "+strings.Join(args, " ")+"\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
+		if statusErr := writeStatus(stdout, "==> go "+strings.Join(args, " ")+"\n"); statusErr != nil {
+			return fmt.Errorf("write status: %w", statusErr)
 		}
-		if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", args...); err != nil {
-			return fmt.Errorf("rerun failed test: %w", err)
+		// A test renamed or deleted since the failing run matches nothing,
+		// and go test exits 0 on that: the rerun must fail instead of
+		// reporting the failure fixed.
+		if strings.HasSuffix(args[len(args)-1], "/...") {
+			return runGoTestMatchingTree(ctx, runner, repoRoot, env, stdout, stderr, "rerun failed test", args...)
 		}
-		return nil
+		_, err = runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "rerun failed test", args...)
+
+		return err
 	})
 }
 
-func lastFailedGoTestTarget(r io.Reader) (failedGoTestTarget, error) {
-	scanner := bufio.NewScanner(r)
-	scan := failedLogScan{seedByPackage: make(map[string]string)}
-	for scanner.Scan() {
-		if line := strings.TrimSpace(scanner.Text()); line != "" {
-			scan.observe(line)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return failedGoTestTarget{}, fmt.Errorf("scan failed test log: %w", err)
-	}
-
-	last := scan.last
-	if last.Package == "" && last.Test == "" {
+// lastFailedGoTestTarget is the rerun target of the failure a go test log
+// settled last, with the shuffle seed its package ran with.
+func lastFailedGoTestTarget(log string) (failedGoTestTarget, error) {
+	parsed := parseGoTestLog(log)
+	last, ok := parsed.lastFailure()
+	if !ok {
 		return failedGoTestTarget{}, fmt.Errorf("verify failed-test: no failed Go test found in log")
 	}
-	last.ShuffleSeed = scan.seedByPackage[normalizeFailedGoTestPackage(last.Package)]
 
-	return last, nil
-}
-
-// failedLogScan walks a go test log, raw or -json, keeping the last failed
-// target and the shuffle seed each package printed.
-type failedLogScan struct {
-	last          failedGoTestTarget
-	seedByPackage map[string]string
-	// pendingRawSeed is a raw seed line not yet followed by its package's
-	// result line: raw output names the package only at the end.
-	pendingRawSeed string
-}
-
-func (s *failedLogScan) observe(line string) {
-	if pkg, seed, ok := shuffleSeedFromJSONLine(line); ok {
-		s.seedByPackage[normalizeFailedGoTestPackage(pkg)] = seed
-		return
-	}
-	if target, ok := failedGoTestTargetFromJSONLine(line); ok {
-		s.last = mergeFailedGoTestTarget(s.last, target)
-		return
-	}
-	if seed, ok := shuffleSeedFromOutput(line); ok {
-		s.pendingRawSeed = seed
-		return
-	}
-	if test, ok := failedGoTestNameFromRawLine(line); ok {
-		s.last.Test = test
-		return
-	}
-	if pkg, ok := failedGoTestPackageFromRawLine(line); ok {
-		s.last.Package = pkg
-		s.claimRawSeed(pkg)
-		return
-	}
-	if pkg, ok := passedGoTestPackageFromRawLine(line); ok {
-		s.claimRawSeed(pkg)
-	}
-}
-
-// claimRawSeed gives the pending raw seed line to the package whose result
-// line closes its output.
-func (s *failedLogScan) claimRawSeed(pkg string) {
-	if s.pendingRawSeed == "" {
-		return
-	}
-
-	s.seedByPackage[normalizeFailedGoTestPackage(pkg)] = s.pendingRawSeed
-	s.pendingRawSeed = ""
-}
-
-// shuffleSeedFromJSONLine reads the seed from a -json output event that
-// carries the shuffle line.
-func shuffleSeedFromJSONLine(line string) (string, string, bool) {
-	start := strings.Index(line, "{")
-	if start < 0 {
-		return "", "", false
-	}
-
-	var event struct {
-		Action  string
-		Package string
-		Output  string
-	}
-	if err := json.Unmarshal([]byte(line[start:]), &event); err != nil || event.Action != goTestActionOutput {
-		return "", "", false
-	}
-	seed, ok := shuffleSeedFromOutput(event.Output)
-	if !ok || event.Package == "" {
-		return "", "", false
-	}
-
-	return event.Package, seed, true
-}
-
-// shuffleSeedFromOutput reads the seed from a `-test.shuffle <seed>` line. The
-// seed must be an integer, because it goes back onto a command line.
-func shuffleSeedFromOutput(output string) (string, bool) {
-	seed, ok := strings.CutPrefix(strings.TrimSpace(output), goTestShufflePrefix)
-	if !ok {
-		return "", false
-	}
-	if _, err := strconv.ParseInt(seed, 10, 64); err != nil {
-		return "", false
-	}
-
-	return seed, true
-}
-
-func mergeFailedGoTestTarget(last failedGoTestTarget, next failedGoTestTarget) failedGoTestTarget {
-	if next.Test != "" {
-		return next
-	}
-	if next.Package == "" {
-		return last
-	}
-	if last.Test != "" && (last.Package == "" || normalizeFailedGoTestPackage(last.Package) == normalizeFailedGoTestPackage(next.Package)) {
-		last.Package = next.Package
-		return last
-	}
-	return next
-}
-
-func failedGoTestTargetFromJSONLine(line string) (failedGoTestTarget, bool) {
-	start := strings.Index(line, "{")
-	if start < 0 {
-		return failedGoTestTarget{}, false
-	}
-	var event struct {
-		Action  string
-		Package string
-		Test    string
-	}
-	if err := json.Unmarshal([]byte(line[start:]), &event); err != nil {
-		return failedGoTestTarget{}, false
-	}
-	if event.Action != "fail" {
-		return failedGoTestTarget{}, false
-	}
-	if event.Package == "" && event.Test == "" {
-		return failedGoTestTarget{}, false
-	}
-	return failedGoTestTarget{Package: event.Package, Test: event.Test}, true
-}
-
-func failedGoTestNameFromRawLine(line string) (string, bool) {
-	if !strings.HasPrefix(line, rawGoTestFailurePrefix) {
-		return "", false
-	}
-	rest := strings.TrimSpace(strings.TrimPrefix(line, rawGoTestFailurePrefix))
-	if rest == "" {
-		return "", false
-	}
-	name := strings.Fields(rest)[0]
-	return strings.TrimSpace(name), name != ""
-}
-
-func failedGoTestPackageFromRawLine(line string) (string, bool) {
-	if !strings.HasPrefix(line, rawGoTestPackagePrefix) {
-		return "", false
-	}
-	fields := strings.Fields(line)
-	if len(fields) < 2 || fields[0] != rawGoTestPackagePrefix {
-		return "", false
-	}
-	return fields[1], fields[1] != ""
-}
-
-// passedGoTestPackageFromRawLine reads the package of an `ok <pkg> <time>`
-// result line.
-func passedGoTestPackageFromRawLine(line string) (string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 2 || fields[0] != rawGoTestPassPrefix {
-		return "", false
-	}
-
-	return fields[1], true
+	return failedGoTestTarget{Package: last.pkg, Test: last.test, ShuffleSeed: parsed.shuffleSeed(last.pkg)}, nil
 }
 
 // failedGoTestRerunArgs builds the rerun of one failed test. It keeps the

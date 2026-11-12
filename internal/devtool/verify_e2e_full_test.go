@@ -168,22 +168,44 @@ func TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure(t *testing.T)
 func TestRunVerifyE2EFullDoesNotRerunAuthPreflightWithoutItsTestFailing(t *testing.T) {
 	t.Parallel()
 
-	authKey := goCommandKey(authE2EPreflightArgs())
-	runner := &fakeRunner{
-		runErrByKey: map[string]error{authKey: assert.AnError},
-		runStdoutFunc: func(args []string) string {
-			if goCommandKey(args) != authKey {
-				return ""
-			}
-
-			return "e2e/helpers.go:12:2: undefined: missingHelper\nFAIL\t" + testE2EPackage + " [build failed]\n"
+	cases := []struct {
+		name   string
+		output string
+	}{
+		{
+			name:   "a build failure",
+			output: "e2e/helpers.go:12:2: undefined: missingHelper\nFAIL\t" + testE2EPackage + " [build failed]\n",
+		},
+		{
+			// The panic names the preflight test as running, but a test killed
+			// at the deadline did not fail by its own verdict.
+			name: "the preflight hanging until the deadline",
+			output: "panic: test timed out after 10m0s\n\trunning tests:\n\t\t" + authPreflightTestName + " (10m0s)\n\n" +
+				"FAIL\t" + testE2EPackage + "\t600.123s\n",
 		},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	summary, _, err := runE2EFullForTest(t, runner, true)
-	require.ErrorIs(t, err, errE2EPreflight)
-	require.Len(t, runner.runCommands, 1, "a failure that is not the preflight test failing is not rerun")
-	assert.Empty(t, summary.ClassifiedReruns)
+			authKey := goCommandKey(authE2EPreflightArgs())
+			runner := &fakeRunner{
+				runErrByKey: map[string]error{authKey: assert.AnError},
+				runStdoutFunc: func(args []string) string {
+					if goCommandKey(args) != authKey {
+						return ""
+					}
+
+					return tc.output
+				},
+			}
+
+			summary, _, err := runE2EFullForTest(t, runner, true)
+			require.ErrorIs(t, err, errE2EPreflight)
+			require.Len(t, runner.runCommands, 1, "a failure that is not the preflight test failing is not rerun")
+			assert.Empty(t, summary.ClassifiedReruns)
+		})
+	}
 }
 
 // Validates: R-6.10.26

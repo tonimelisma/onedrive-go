@@ -120,9 +120,14 @@ multi-worktree merge and cleanup cases, fast-forwards root `main`, removes the
 `.worktreeinclude` entries and then the increment worktree and branch, waits
 for the push-to-`main` CI run of the merge commit to succeed (every push to
 `main` runs the quick lane), and runs `cleanup-audit`. Both CI waits go on
-while any check changes state and fail after the longest job timeout plus 10
+while any check changes state and fail after the longest timeout of the jobs
+that run for the awaited event (a pull request, or a push after merge) plus 10
 minutes without a change; a job the runner cancelled in the run of the commit
-they wait for is rerun, at most twice (`--ci-max-reruns`).
+they wait for is rerun, at most twice (`--ci-max-reruns`). A check that has
+not started while its job waits in a concurrency group gets one whole run of
+that group instead. A GitHub request that fails with an HTTP 5xx, a dropped
+connection or a network that cannot reach GitHub is repeated with backoff, at
+most four attempts in all.
 
 ## Release readiness
 

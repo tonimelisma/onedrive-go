@@ -583,7 +583,7 @@ Observed CI evidence:
   seconds later, so the failure window was transient rather than a durable
   auth rejection
 - local `verify default` on April 8, 2026 hit the same family in
-  `TestE2E_AuthPreflight_Fast/personal_kikkelimies123@outlook.com`: `/me`
+  `TestE2E_AuthPreflight_Fast/drive-1`: `/me`
   succeeded, then 10 consecutive `/me/drives = 403 accessDenied` responses
   exhausted the strict 30-second preflight window
 - request IDs from that failed strict-preflight window:
@@ -636,7 +636,7 @@ Strict auth preflight used to treat `GET /me` as a one-shot proof while only
 polling `/me/drives`. Local verifier evidence on April 9, 2026 broadened the
 auth-preflight quirk family: `GET /me` returned HTTP 504 `GatewayTimeout` with
 message `ProfileException` for
-`TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com`, request ID
+`TestE2E_AuthPreflight_Fast/drive-2`, request ID
 `446dc036-f752-4805-9c33-d637eb70975d`, and an immediate rerun later passed.
 
 Repo policy:

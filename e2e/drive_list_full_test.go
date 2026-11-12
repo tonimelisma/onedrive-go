@@ -92,7 +92,7 @@ func TestE2E_DriveList_AllFlag(t *testing.T) {
 			t.Skipf(
 				"live drive list --json --all did not expose the default-visible available drives within %v; Graph search omitted them on this run\nexpected canonical ids: %v\nlast stdout: %s\nlast stderr: %s",
 				pollTimeout,
-				expectedAvailable,
+				suiteDriveRoles.Redact(fmt.Sprint(expectedAvailable)),
 				lastOut,
 				lastErr,
 			)
@@ -165,12 +165,12 @@ func TestE2E_DriveList_StaleStateDB(t *testing.T) {
 		if avail.CanonicalID == drive {
 			found = true
 			assert.True(t, avail.HasStateDB,
-				"removed drive %s should have has_state_db=true", drive)
+				"removed drive %s should have has_state_db=true", suiteDriveRoles.Role(drive))
 
 			break
 		}
 	}
 
 	assert.True(t, found,
-		"removed drive %s should appear in available array", drive)
+		"removed drive %s should appear in available array", suiteDriveRoles.Role(drive))
 }

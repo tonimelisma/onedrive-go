@@ -1,7 +1,6 @@
 package devtool
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,6 +53,9 @@ type NightlyOptions struct {
 	Key    string
 	Stdout io.Writer
 	Now    func() time.Time
+	// Sleep waits out the backoff before a GitHub request is repeated; nil
+	// waits on the real clock.
+	Sleep func(context.Context, time.Duration) error
 }
 
 type nightlyClaim struct {
@@ -70,22 +72,6 @@ type nightlyClaim struct {
 type nightlyClaimRef struct {
 	SHA   string
 	Claim nightlyClaim
-}
-
-//nolint:tagliatelle // gh owns these camelCase JSON keys.
-type nightlyRun struct {
-	DatabaseID int64  `json:"databaseId"`
-	Conclusion string `json:"conclusion"`
-	HeadSHA    string `json:"headSha"`
-	CreatedAt  string `json:"createdAt"`
-	URL        string `json:"url"`
-}
-
-//nolint:tagliatelle // gh owns these camelCase JSON keys.
-type nightlyJob struct {
-	DatabaseID int64  `json:"databaseId"`
-	Name       string `json:"name"`
-	Conclusion string `json:"conclusion"`
 }
 
 type nightlyDisposition string
@@ -126,7 +112,7 @@ func RunNightly(ctx context.Context, runner commandRunner, opts NightlyOptions) 
 			}
 			owner = branch
 		}
-		return checkNightly(ctx, runner, opts.RepoRoot, owner, now, stdout)
+		return checkNightly(ctx, runner, newGHClient(runner, opts.Sleep), opts.RepoRoot, owner, now, stdout)
 	case NightlyActionRelease:
 		return releaseNightlyClaim(ctx, runner, opts.RepoRoot, opts.Branch, opts.Key, stdout)
 	default:
@@ -139,12 +125,13 @@ func RunNightly(ctx context.Context, runner commandRunner, opts NightlyOptions) 
 func checkNightly(
 	ctx context.Context,
 	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	owner string,
 	now func() time.Time,
 	stdout io.Writer,
 ) error {
-	run, found, err := loadLatestNightlyRun(ctx, runner, repoRoot)
+	run, found, err := loadLatestNightlyRun(ctx, gh, repoRoot)
 	if err != nil {
 		return err
 	}
@@ -154,7 +141,7 @@ func checkNightly(
 
 	keys := []string{}
 	if run.Conclusion != checkConclusionSuccess {
-		keys, err = loadNightlyFailureKeys(ctx, runner, repoRoot, run)
+		keys, err = loadNightlyFailureKeys(ctx, gh, repoRoot, &run)
 		if err != nil {
 			return err
 		}
@@ -167,17 +154,17 @@ func checkNightly(
 
 	results := make([]nightlyKeyResult, 0, len(keys))
 	for _, key := range keys {
-		result, resolveErr := resolveNightlyKey(ctx, runner, repoRoot, key, owner, run, now)
+		result, resolveErr := resolveNightlyKey(ctx, runner, repoRoot, key, owner, &run, now)
 		if resolveErr != nil {
 			return resolveErr
 		}
 		results = append(results, result)
 	}
-	if err := pruneNightlyClaims(ctx, runner, repoRoot, keys, run, now); err != nil {
+	if err := pruneNightlyClaims(ctx, runner, repoRoot, keys, &run, now); err != nil {
 		return err
 	}
 
-	if err := writeStatus(stdout, formatNightlyReport(run, results)); err != nil {
+	if err := writeStatus(stdout, formatNightlyReport(&run, results)); err != nil {
 		return err
 	}
 	unclaimed := []string{}
@@ -196,7 +183,7 @@ func checkNightly(
 	return nil
 }
 
-func formatNightlyReport(run nightlyRun, results []nightlyKeyResult) string {
+func formatNightlyReport(run *githubRun, results []nightlyKeyResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "nightly: run %d on %s concluded %s (%s)\n", run.DatabaseID, shortSHA(run.HeadSHA), run.Conclusion, run.URL)
 	for _, result := range results {
@@ -231,7 +218,7 @@ func resolveNightlyKey(
 	repoRoot string,
 	key string,
 	owner string,
-	run nightlyRun,
+	run *githubRun,
 	now func() time.Time,
 ) (nightlyKeyResult, error) {
 	for attempt := 0; attempt < nightlyCASAttempts; attempt++ {
@@ -279,7 +266,7 @@ func decideNightlyKey(
 	key string,
 	owner string,
 	claim *nightlyClaim,
-	run nightlyRun,
+	run *githubRun,
 	at time.Time,
 ) (bool, nightlyKeyResult, error) {
 	mine := nightlyKeyResult{Key: key, Disposition: nightlyMine, Detail: "new claim"}
@@ -356,7 +343,7 @@ func pruneNightlyClaims(
 	runner commandRunner,
 	repoRoot string,
 	failing []string,
-	run nightlyRun,
+	run *githubRun,
 	now func() time.Time,
 ) error {
 	claims, err := syncNightlyClaims(ctx, runner, repoRoot)
@@ -445,12 +432,13 @@ func heldNightlyClaims(ctx context.Context, runner commandRunner, repoRoot strin
 
 // requireNightlyClaimsInPR is the pre-merge gate: an increment may not merge
 // while it holds a nightly claim its pull request does not account for.
-func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) error {
-	out, err := runner.Output(
-		ctx, repoRoot, os.Environ(), githubCLI, "pr", "view", strconv.Itoa(prNumber), "--json", "body,headRefName",
+func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghClient, repoRoot string, prNumber int) error {
+	out, err := gh.output(
+		ctx, repoRoot, fmt.Sprintf("nightly gh pr view %d", prNumber),
+		"pr", "view", strconv.Itoa(prNumber), "--json", "body,headRefName",
 	)
 	if err != nil {
-		return fmt.Errorf("nightly gh pr view %d: %w", prNumber, err)
+		return err
 	}
 	var pr struct {
 		Body        string `json:"body"`
@@ -586,9 +574,9 @@ func swapNightlyClaim(
 
 // loadLatestNightlyRun returns the newest scheduled run on main that reached
 // a verdict. Canceled and in-flight runs say nothing about the tree.
-func loadLatestNightlyRun(ctx context.Context, runner commandRunner, repoRoot string) (nightlyRun, bool, error) {
-	out, err := runner.Output(
-		ctx, repoRoot, os.Environ(), githubCLI,
+func loadLatestNightlyRun(ctx context.Context, gh ghClient, repoRoot string) (githubRun, bool, error) {
+	out, err := gh.output(
+		ctx, repoRoot, "nightly run list",
 		"run", "list",
 		"--workflow", nightlyWorkflowFile,
 		"--event", "schedule",
@@ -598,39 +586,38 @@ func loadLatestNightlyRun(ctx context.Context, runner commandRunner, repoRoot st
 		"--json", "databaseId,conclusion,headSha,createdAt,url",
 	)
 	if err != nil {
-		return nightlyRun{}, false, fmt.Errorf("nightly run list: %w", err)
+		return githubRun{}, false, err
 	}
-	var runs []nightlyRun
+	var runs []githubRun
 	if err := json.Unmarshal(out, &runs); err != nil {
-		return nightlyRun{}, false, fmt.Errorf("decode nightly run list: %w", err)
+		return githubRun{}, false, fmt.Errorf("decode nightly run list: %w", err)
 	}
 	sort.SliceStable(runs, func(i, j int) bool { return runs[i].CreatedAt > runs[j].CreatedAt })
-	for _, run := range runs {
-		if run.Conclusion == checkConclusionSuccess || run.Conclusion == checkConclusionFailure {
-			return run, true, nil
+	for i := range runs {
+		if runs[i].Conclusion == checkConclusionSuccess || runs[i].Conclusion == checkConclusionFailure {
+			return runs[i], true, nil
 		}
 	}
-	return nightlyRun{}, false, nil
+	return githubRun{}, false, nil
 }
 
 // loadNightlyFailureKeys names what failed in a run: each failing top-level
 // test, or the job itself when its log names no test (a build or setup
 // failure). The aggregate job only repeats the jobs it waits for.
-func loadNightlyFailureKeys(ctx context.Context, runner commandRunner, repoRoot string, run nightlyRun) ([]string, error) {
-	out, err := runner.Output(
-		ctx, repoRoot, os.Environ(), githubCLI, "run", "view", strconv.FormatInt(run.DatabaseID, 10), "--json", "jobs",
-	)
+func loadNightlyFailureKeys(ctx context.Context, gh ghClient, repoRoot string, run *githubRun) ([]string, error) {
+	runID := strconv.FormatInt(run.DatabaseID, 10)
+	out, err := gh.output(ctx, repoRoot, "nightly run view "+runID, "run", "view", runID, "--json", "jobs")
 	if err != nil {
-		return nil, fmt.Errorf("nightly run view %d: %w", run.DatabaseID, err)
+		return nil, err
 	}
 	var view struct {
-		Jobs []nightlyJob `json:"jobs"`
+		Jobs []githubJob `json:"jobs"`
 	}
 	if decodeErr := json.Unmarshal(out, &view); decodeErr != nil {
 		return nil, fmt.Errorf("decode nightly run view %d: %w", run.DatabaseID, decodeErr)
 	}
 
-	failed := []nightlyJob{}
+	failed := []githubJob{}
 	for _, job := range view.Jobs {
 		if job.Conclusion == checkConclusionFailure {
 			failed = append(failed, job)
@@ -641,14 +628,14 @@ func loadNightlyFailureKeys(ctx context.Context, runner commandRunner, repoRoot 
 		if job.Name == nightlyAggregateJob && len(failed) > 1 {
 			continue
 		}
-		log, logErr := runner.Output(
-			ctx, repoRoot, os.Environ(), githubCLI,
+		log, logErr := gh.output(
+			ctx, repoRoot, "nightly job log "+job.Name,
 			"api", "repos/{owner}/{repo}/actions/jobs/"+strconv.FormatInt(job.DatabaseID, 10)+"/logs",
 		)
 		if logErr != nil {
-			return nil, fmt.Errorf("nightly job log %s: %w", job.Name, logErr)
+			return nil, logErr
 		}
-		tests := failedTopLevelTests(string(log))
+		tests := parseGoTestLog(string(log)).failedTopLevelTests()
 		if len(tests) == 0 {
 			seen[nightlyJobKeyPrefix+sanitizeNightlyKey(job.Name)] = true
 			continue
@@ -663,30 +650,6 @@ func loadNightlyFailureKeys(ctx context.Context, runner commandRunner, repoRoot 
 	}
 	sort.Strings(keys)
 	return keys, nil
-}
-
-func failedTopLevelTests(log string) []string {
-	tests := []string{}
-	seen := map[string]bool{}
-	scanner := bufio.NewScanner(strings.NewReader(log))
-	const maxLogLine = 4 * 1024 * 1024
-	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), maxLogLine)
-	for scanner.Scan() {
-		line := scanner.Text()
-		name := ""
-		if target, ok := failedGoTestTargetFromJSONLine(line); ok {
-			name = target.Test
-		} else if idx := strings.Index(line, rawGoTestFailurePrefix); idx >= 0 {
-			name, _ = failedGoTestNameFromRawLine(line[idx:])
-		}
-		name, _, _ = strings.Cut(name, "/")
-		if !strings.HasPrefix(name, "Test") || seen[name] {
-			continue
-		}
-		seen[name] = true
-		tests = append(tests, name)
-	}
-	return tests
 }
 
 // sanitizeNightlyKey maps a test or job name onto one git ref path component.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -47,6 +48,13 @@ type claimRemote struct {
 	ancestors  map[string]bool
 	beforePush func(remote *claimRemote)
 	pushes     []string
+	// jobLogErrs are the failures the job-log fetch of a job id answers
+	// with, in order, before it returns the log; jobLogCalls counts the
+	// fetches.
+	jobLogErrs  map[string][]error
+	jobLogCalls map[string]int
+	// sleeps records the backoffs the check waited out.
+	sleeps recordedSleeps
 }
 
 func newClaimRemote(t *testing.T, conclusion string) *claimRemote {
@@ -57,13 +65,15 @@ func newClaimRemote(t *testing.T, conclusion string) *claimRemote {
 		nightlyTestRunID, conclusion, nightlyTestRunHead,
 	)
 	return &claimRemote{
-		t:         t,
-		refs:      map[string]string{},
-		commits:   map[string]string{},
-		runs:      runs,
-		jobs:      `{"jobs":[]}`,
-		jobLogs:   map[string]string{},
-		ancestors: map[string]bool{},
+		t:           t,
+		refs:        map[string]string{},
+		commits:     map[string]string{},
+		runs:        runs,
+		jobs:        `{"jobs":[]}`,
+		jobLogs:     map[string]string{},
+		ancestors:   map[string]bool{},
+		jobLogErrs:  map[string][]error{},
+		jobLogCalls: map[string]int{},
 	}
 }
 
@@ -114,6 +124,11 @@ func (r *claimRemote) Output(_ context.Context, _ string, _ []string, name strin
 		return []byte(r.jobs), nil
 	case strings.HasPrefix(joined, "gh api repos/{owner}/{repo}/actions/jobs/"):
 		id := strings.TrimSuffix(strings.TrimPrefix(args[1], "repos/{owner}/{repo}/actions/jobs/"), "/logs")
+		r.jobLogCalls[id]++
+		if failures := r.jobLogErrs[id]; len(failures) > 0 {
+			r.jobLogErrs[id] = failures[1:]
+			return nil, failures[0]
+		}
 		return []byte(r.jobLogs[id]), nil
 	case strings.HasPrefix(joined, "gh pr view"):
 		body, err := json.Marshal(map[string]string{"body": r.prBody, "headRefName": r.prBranch})
@@ -195,6 +210,7 @@ func runNightlyCheck(t *testing.T, remote *claimRemote) (string, error) {
 		Branch:   nightlyTestOwner,
 		Stdout:   &stdout,
 		Now:      nightlyTestNow,
+		Sleep:    remote.sleeps.sleep,
 	})
 	return stdout.String(), err
 }
@@ -213,9 +229,53 @@ func TestNightlyFailureKeysNameTestsOrJobs(t *testing.T) {
 		`{"Action":"fail","Package":"example/internal/sync"}` + "\n"
 	remote.jobLogs["5"] = "the build failed before any test ran\n"
 
-	keys, err := loadNightlyFailureKeys(t.Context(), remote, "/repo", nightlyRun{DatabaseID: nightlyTestRunID})
+	keys, err := loadNightlyFailureKeys(t.Context(), newGHClient(remote, nil), "/repo", &githubRun{DatabaseID: nightlyTestRunID})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"TestE2E_RapidFileChurn", "TestPlanner", "job-verify-full--macos-latest"}, keys)
+}
+
+// Validates: R-6.10.23
+//
+// GitHub answers a share of requests with a 5xx, and one such answer to a
+// job-log fetch used to end the DoD start stage. The fetch is repeated after
+// a backoff and the check goes on.
+func TestNightlyCheck_RetriesAJobLog5xxThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	remote := failingNightlyRemote(t)
+	remote.jobLogErrs["1"] = []error{githubBadGateway()}
+
+	out, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, remote.jobLogCalls["1"])
+	assert.Equal(t, githubBackoffs()[:1], remote.sleeps.waits)
+	claim, ok := remote.claim(nightlyTestKey)
+	require.True(t, ok)
+	assert.Equal(t, nightlyTestOwner, claim.Owner)
+	assert.Contains(t, out, nightlyTestKey+": claimed by this increment")
+}
+
+// Validates: R-6.10.23
+//
+// When GitHub keeps failing, the check gives up after the retry bound and
+// says so: which call, and what GitHub answered. It claims nothing, since it
+// does not know what failed.
+func TestNightlyCheck_SaysGitHubFailedAfterTheRetryBound(t *testing.T) {
+	t.Parallel()
+
+	remote := failingNightlyRemote(t)
+	remote.jobLogErrs["1"] = slices.Repeat([]error{githubBadGateway()}, githubAttempts+1)
+
+	_, err := runNightlyCheck(t, remote)
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "nightly job log e2e")
+	assert.Contains(t, err.Error(), fmt.Sprintf("GitHub answered HTTP 502 on all %d attempts", githubAttempts))
+	assert.Equal(t, githubAttempts, remote.jobLogCalls["1"])
+	assert.Equal(t, githubBackoffs(), remote.sleeps.waits)
+	assert.Empty(t, remote.pushes)
+	assert.Empty(t, remote.refs)
 }
 
 // Validates: R-6.10.23
@@ -351,7 +411,7 @@ func TestNightlyCheckFailsWhenNoIncrementCanOwnTheFailure(t *testing.T) {
 
 	remote := failingNightlyRemote(t)
 	var stdout bytes.Buffer
-	err := checkNightly(t.Context(), remote, "/repo", "", nightlyTestNow, &stdout)
+	err := checkNightly(t.Context(), remote, newGHClient(remote, nil), "/repo", "", nightlyTestNow, &stdout)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), nightlyTestKey)
 	assert.Contains(t, stdout.String(), "UNCLAIMED")
@@ -403,13 +463,13 @@ func TestNightlyPreMergeGateRequiresHeldClaimsInPRBody(t *testing.T) {
 	remote.seed("TestSomeoneElses", nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
 
 	remote.prBody = "## Summary\nUnrelated change."
-	err := requireNightlyClaimsInPR(t.Context(), remote, "/repo", 7)
+	err := requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), nightlyTestKey)
 	assert.NotContains(t, err.Error(), "TestSomeoneElses")
 
 	remote.prBody = "## Nightly failures\n- " + nightlyTestKey + ": reruns sync until it converges."
-	require.NoError(t, requireNightlyClaimsInPR(t.Context(), remote, "/repo", 7))
+	require.NoError(t, requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7))
 }
 
 // Validates: R-6.10.23

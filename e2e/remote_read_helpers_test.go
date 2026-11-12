@@ -58,7 +58,7 @@ func waitForSharedRootListingVisibleWithin(
 		driveID,
 		timeout,
 		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("shared-root listing visibility for %q", driveID),
+		"shared-root listing visibility for "+suiteDriveRoles.Role(driveID),
 		func(_ string, _ string, err error) bool {
 			return err == nil
 		},

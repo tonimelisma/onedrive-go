@@ -2,7 +2,6 @@ package devtool
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,9 +23,6 @@ const stressSyncTree = "./internal/sync/..."
 // expected; the step fails only when no package has one.
 const stressSyncConcurrencyPattern = "TestRunWatch|TestWatch|TestOneShot|TestWorkerPool|Shutdown|Drain|Concurren|Cancel"
 
-// goTestActionSkip is the `go test -json` action of a test that skipped.
-const goTestActionSkip = "skip"
-
 type stressCommandSpec struct {
 	stepName         string
 	statusLine       string
@@ -45,16 +41,6 @@ type stressTestTiming struct {
 	runs           int
 	totalElapsedMS int64
 	maxElapsedMS   int64
-}
-
-// goTestJSONEvent matches the stable field names emitted by `go test -json`.
-//
-//nolint:tagliatelle // Go owns these capitalized JSON keys.
-type goTestJSONEvent struct {
-	Action  string  `json:"Action"`
-	Package string  `json:"Package"`
-	Test    string  `json:"Test"`
-	Elapsed float64 `json:"Elapsed"`
 }
 
 func runStress(
@@ -220,20 +206,12 @@ func runStressCommandWithSlowTests(
 func summarizeStressSlowTests(output []byte, limit int) []StressSlowTestSummary {
 	totals := make(map[stressTestKey]*stressTestTiming)
 
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for line := range strings.Lines(string(output)) {
+		_, event, isEvent := decodeGoTestLogLine(line)
+		if !isEvent || event.Test == "" {
 			continue
 		}
-
-		var event goTestJSONEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-		if event.Test == "" {
-			continue
-		}
-		if event.Action != verifySummaryStatusPass && event.Action != verifySummaryStatusFail {
+		if event.Action != goTestActionPass && event.Action != goTestActionFail {
 			continue
 		}
 

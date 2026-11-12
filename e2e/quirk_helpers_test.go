@@ -108,16 +108,33 @@ func newE2EQuirkRecorder(logDir string) (*e2eQuirkRecorder, error) {
 	return recorder, nil
 }
 
+// record keeps one event, with every configured drive named by role
+// (redactQuirkEvent).
 func (r *e2eQuirkRecorder) record(event *e2eQuirkEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.events = append(r.events, *event)
-	if err := appendQuirkEvent(r.eventsPath(), event); err != nil {
+	redacted := redactQuirkEvent(event)
+	r.events = append(r.events, redacted)
+	if err := appendQuirkEvent(r.eventsPath(), &redacted); err != nil {
 		return err
 	}
 
 	return r.writeSummaryLocked()
+}
+
+// redactQuirkEvent names every configured drive in a quirk event by role: a
+// CLI command line carries `--drive <id>`, an auth preflight subtest is named
+// after its drive, and the summary is uploaded as a CI artifact of a public
+// repository.
+func redactQuirkEvent(event *e2eQuirkEvent) e2eQuirkEvent {
+	redacted := *event
+	redacted.TestName = suiteDriveRoles.Redact(event.TestName)
+	redacted.Operation = suiteDriveRoles.Redact(event.Operation)
+	redacted.QuirkOrReason = suiteDriveRoles.Redact(event.QuirkOrReason)
+	redacted.FinalError = suiteDriveRoles.Redact(event.FinalError)
+
+	return redacted
 }
 
 func (r *e2eQuirkRecorder) writeSummaryLocked() error {
@@ -271,7 +288,7 @@ func recordAuthPreflightDecisionEvent(
 	recordQuirkEvent(t, &e2eQuirkEvent{
 		Phase:         quirkPhaseAuthPreflight,
 		TestName:      t.Name(),
-		Operation:     fmt.Sprintf("GET %s drive=%s", endpoint, driveID),
+		Operation:     fmt.Sprintf("GET %s drive=%s", endpoint, suiteDriveRoles.Role(driveID)),
 		Source:        quirkSourceAuthPreflight,
 		QuirkOrReason: summarizeReasons(reasons),
 		AttemptCount:  len(attempts),

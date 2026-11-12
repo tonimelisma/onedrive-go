@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -191,8 +192,8 @@ func runCLIWithConfigForDrive(
 
 	resolvedDriveID := resolveDriveSelection(env, driveID)
 	stdout, stderr, err := runCLICore(t, cfgPath, env, resolvedDriveID, args...)
-	require.NoErrorf(t, err, "CLI command %v (drive=%s) failed\nstdout: %s\nstderr: %s",
-		args, resolvedDriveID, stdout, stderr)
+	require.NoErrorf(t, err, "CLI command %s (drive=%s) failed\nstdout: %s\nstderr: %s",
+		suiteDriveRoles.Redact(fmt.Sprint(args)), suiteDriveRoles.Role(resolvedDriveID), stdout, stderr)
 
 	return stdout, stderr
 }

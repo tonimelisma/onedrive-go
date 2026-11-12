@@ -93,15 +93,18 @@ func classifyTransientAuthPreflightFailure(attempt authPreflightAttempt) authPre
 	}
 }
 
+// formatAuthPreflightFailure describes a failed auth preflight of the drive
+// whose role is driveRole: the message reaches the public CI log, so it names
+// the role, never the drive.
 func formatAuthPreflightFailure(
-	driveID string,
+	driveRole string,
 	endpoint string,
 	elapsed time.Duration,
 	attempts []authPreflightAttempt,
 ) string {
 	var builder strings.Builder
 	_, _ = fmt.Fprintf(&builder, "auth preflight failed for %s endpoint=%s failed_calls=%d elapsed=%s",
-		driveID, endpoint, len(attempts), elapsed.Round(time.Millisecond))
+		driveRole, endpoint, len(attempts), elapsed.Round(time.Millisecond))
 
 	for i, attempt := range attempts {
 		decision := classifyAuthPreflightAttempt(endpoint, attempt)

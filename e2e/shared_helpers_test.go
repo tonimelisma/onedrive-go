@@ -16,7 +16,7 @@ import (
 func recipientEmailFromCanonicalDriveID(driveID string) (string, error) {
 	parts := strings.SplitN(driveID, ":", 2)
 	if len(parts) != 2 || parts[1] == "" {
-		return "", fmt.Errorf("parse recipient email from drive ID %q", driveID)
+		return "", fmt.Errorf("parse recipient email from drive ID %s", suiteDriveRoles.Redact(driveID))
 	}
 
 	return parts[1], nil

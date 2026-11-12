@@ -340,8 +340,8 @@ Evidence:
   `expiry=2026-08-23T07:17:30.886Z expired=false`, so this is not credential
   expiry.
 - `e2e` job `97152688313`: `TestE2E_AuthPreflight_Fast` failed for
-  `personal_kikkelimies123@outlook.com` and
-  `personal_testitesti18@outlook.com` with 43 occurrences of the same
+  `drive-1` and
+  `drive-2` with 43 occurrences of the same
   `serviceReadOnly` / `Database Is Read Only` pair.
 - `verify (ubuntu-latest)` and `verify (macos-latest)` on the same commit were
   unaffected; both legs passed fully.
@@ -475,7 +475,7 @@ Evidence:
   `remoteItemID`.
 - The same run successfully downloaded the sentinel file through the shared
   selector.
-- Repeated parent root listings for `personal:testitesti18@outlook.com`
+- Repeated parent root listings for `drive-2`
   omitted only the writable shortcut placeholder while other root items and
   shortcut fixtures remained visible.
 - A narrow Graph attempt to recreate the missing `remoteItem` shortcut
@@ -651,7 +651,7 @@ Evidence:
   helper with empty decoded drive rows or `missing status drive`.
 - The corresponding debug stdout for `TestE2E_Status_JSON` contained
   `summary.total_mounts: 1` and a standalone row under `accounts[].mounts` for
-  `personal:kikkelimies123@outlook.com`, matching the documented status
+  `drive-1`, matching the documented status
   contract in [cli.md](../design/cli.md).
 - On April 24, 2026, the narrowed local rerun
   `go test -tags='e2e e2e_full' -race -run '^(TestE2E_Status_ConditionLifecycle|TestE2E_Status_FilteredDriveIsSubsetOfAllDrives|TestE2E_Status_JSON_ConditionDetails|TestE2E_Status_NoLegacyHistorySurface|TestE2E_Status_JSONShape|TestE2E_Status_JSON|TestE2E_Status_PerDrive_NoConditionsOrRetries)$' -count=1 -v ./e2e/...`
@@ -871,7 +871,7 @@ Evidence:
   showed the sync engine observing and downloading unrelated top-level siblings
   such as `benchmarks` and `Read-only Shared Folder` into the local test tree.
   The selected drive was already
-  `shared:testitesti18@outlook.com:<driveID>:<itemID>`, which isolated the
+  `shared:drive-2-account:<driveID>:<itemID>`, which isolated the
   problem to config/session resolution rather than test selection.
 - Config inspection showed `buildResolvedDrive` only preserving shared
   `RemoteRootItemID` on the fallback branch that also derived `DriveID` from the
@@ -984,9 +984,9 @@ Evidence:
   `2026-04-22T14:42:40-07:00` on the same recipient account logged
   `search_count=11`, `ignored_count=8`, and `actionable_count=3`, and its JSON
   output included both configured shared-folder fixture selectors exactly:
-  `shared:kikkelimies123@outlook.com:bd50cf43646e28e6:BD50CF43646E28E6!s2c217defed3e4551a5a24a3b5d13e577`
+  `shared:drive-1-account:bd50cf43646e28e6:BD50CF43646E28E6!s2c217defed3e4551a5a24a3b5d13e577`
   and
-  `shared:kikkelimies123@outlook.com:bd50cf43646e28e6:BD50CF43646E28E6!sc28fe6110ea0419394f1ce27d20a3790`.
+  `shared:drive-1-account:bd50cf43646e28e6:BD50CF43646E28E6!sc28fe6110ea0419394f1ce27d20a3790`.
 - The fixture selectors in `.testdata/fixtures.env` already matched those
   exact IDs, which ruled out stale fixture configuration and isolated the
   failure to one provider search-visibility window.
@@ -1001,7 +1001,7 @@ Evidence:
   `TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter` after the status,
   sync-conflict, and nested-deletion failures had been fixed. A focused rerun
   showed `drive add "Testi2 Shared Folder" --account
-  kikkelimies123@outlook.com` completed the Graph search with
+  drive-1-account` completed the Graph search with
   `search_count=7`, `ignored_count=7`, and `actionable_count=0`, then returned
   the documented `no shared folders matching ... Graph shared discovery ...`
   error even though the known fixture had been visible to the preceding
@@ -1126,7 +1126,7 @@ drive metadata.
 Evidence:
 - Local `go run ./cmd/devtool verify default` on April 16, 2026 failed the
   fast E2E auth preflight setup while scrubbing root artifacts for
-  `personal:testitesti18@outlook.com`, with
+  `drive-2`, with
   `create drive session: drive ID not resolved ... re-run 'onedrive-go login'`.
 - Inspecting the shared local `.testdata/` bundle showed `token_*.json` and
   `config.toml`, but no `drive_*.json` files, even though
@@ -1625,7 +1625,7 @@ Evidence:
   seconds under the old production retry budget, before a later `whoami`
   command in the same run succeeded again.
 - Local `go run ./cmd/devtool verify default` on April 8, 2026 failed
-  `TestE2E_AuthPreflight_Fast/personal_kikkelimies123@outlook.com` after 10
+  `TestE2E_AuthPreflight_Fast/drive-1` after 10
   consecutive `/me/drives = 403 accessDenied` responses over 29.942 seconds.
 - Request IDs from that April 8 strict-preflight failure:
   `312b53d7-f478-48c4-9f36-363067a2c1b6`,
@@ -1639,11 +1639,11 @@ Evidence:
   `24529051-0dd1-49a9-a908-f0c1b53930e4`,
   `a7fe6793-d731-4c0d-b6f5-a424e9de2d45`
 - Local `go run ./cmd/devtool verify default` on April 9, 2026 failed
-  `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` when
+  `TestE2E_AuthPreflight_Fast/drive-2` when
   `GET /me` returned HTTP 504 `GatewayTimeout` with message
   `ProfileException` and request ID `446dc036-f752-4805-9c33-d637eb70975d`.
 - Local `go run ./cmd/devtool verify default` on April 10, 2026 failed
-  `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` after 10
+  `TestE2E_AuthPreflight_Fast/drive-2` after 10
   consecutive `/me/drives = 403 accessDenied` responses over about 30.2
   seconds with request IDs
   `33133131-635a-459d-ae94-27ad662726fc`,
@@ -1657,7 +1657,7 @@ Evidence:
   `003f4e1e-0183-4168-8d9d-6c392e6406d0`, and
   `79db09a2-6d40-4a44-ba9a-73d1119690ac`.
 - Local `go run ./cmd/devtool verify default` on April 19, 2026 failed
-  `TestE2E_AuthPreflight_Fast/personal_testitesti18@outlook.com` when
+  `TestE2E_AuthPreflight_Fast/drive-2` when
   `GET /me` again returned HTTP 504 `GatewayTimeout` with message
   `ProfileException` and request ID `fff6e081-d5f3-4caf-b745-24583b661130`
   before the rest of the repo gates had already passed.
@@ -1669,7 +1669,7 @@ Evidence:
   `GET /me`, confirming the failure was another transient profile endpoint
   outage rather than a durable credential or product regression.
 - PR #661 CI run `25069006652` on April 28, 2026 failed the separate required
-  `e2e` and `integration` jobs for `personal:testitesti18@outlook.com` while
+  `e2e` and `integration` jobs for `drive-2` while
   the local and CI default verifier jobs passed. The `e2e` job saw 10
   consecutive `/me/drives = 403 accessDenied` responses over the strict
   30-second auth-preflight window; the `integration` job exhausted the
