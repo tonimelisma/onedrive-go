@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -52,16 +53,34 @@ import (
 // reaches OneDrive and its answer is lost on the way back (live, 2026-11-11,
 // during a network outage). The intent row closes that window: it names the
 // path before the request, and an empty file observed at that path within
-// pendingCreateIntentTTL of the intent is the placeholder, whose ID is then
-// recorded.
+// pendingCreateIntentTTL of the intent, and not already synced, is the
+// placeholder, whose ID is then recorded.
 //
 // The intent is cleared when the attempt ends with nothing left to recognize:
 // OneDrive refused the create, the attempt failed before it asked, or the
 // file was complete as created (a zero-byte file, whose create hook never
 // runs). It is kept when the attempt was canceled, and when its create ended
 // without an answer (graph.ErrCreateOutcomeUnknown: no response, a 5xx, a
-// 408): the create may have landed, or may still land. It expires so a stale
-// one cannot claim a stranger's empty file long after.
+// 408): the create may have landed, or may still land.
+//
+// A kept intent ends in one of three ways. Observation claims the empty file
+// at its path, or meets something else there and drops it. A retry of the
+// create claims it on a 409. Or no create at that path is ever retried and
+// no item appears there: the create never reached OneDrive and the user then
+// renamed or deleted the file. Such an intent stayed for good, and while
+// fresh it could claim an empty file a stranger made at that path, which the
+// next pass then deleted since the local file was gone (model test, chaos
+// seeds 9 and 11). The step after planning therefore prunes intents
+// (pruneAbandonedCreateIntents). One past pendingCreateIntentTTL claims
+// nothing and goes after any plan. One whose path a complete local scan
+// finds empty goes only after a pass that observed OneDrive before the local
+// tree (a one-shot sync, a watch bootstrap): that observation ran first, so
+// an intent whose create landed has been claimed by then and names its item.
+// A watch replan observes the local tree only, so a long-running watch keeps
+// such an intent: the change batch that shows a landed create claims it, and
+// one that never landed goes at the next start or once it expires. A create
+// that lands after its intent was dropped shows up as an empty remote file
+// and is downloaded, the lesser harm.
 //
 // Observation is one of two places that claim the file of a kept intent. The
 // executor is the other: a retry of the create gets 409 from the file the
@@ -69,10 +88,12 @@ import (
 // it records that empty file as the pending create and uploads into it by ID
 // with If-Match (resolveCreateConflict in executor_transfer.go). Both ask the
 // same of the file: at the intent's path, live, a file, empty, within the
-// TTL. A 409 without such an intent never claims anything.
+// TTL (PendingCreate.intentIsFresh). Observation also passes over a file the
+// baseline already holds (claimIntendedPlaceholderTx). A 409 without such an
+// intent never claims anything.
 
 // pendingCreateIntentTTL is how long an intent without an item ID can claim
-// an empty file observed at its path.
+// an empty file observed at its path. Past it the intent is pruned.
 const pendingCreateIntentTTL = 72 * time.Hour
 
 // PendingCreate is one recorded, not yet confirmed create. ItemID is empty
@@ -86,6 +107,14 @@ type PendingCreate struct {
 	LocalSize   int64
 	LocalHash   string
 	IntendedAt  int64 // Unix nanoseconds; when the create was decided
+}
+
+// intentIsFresh reports whether the intent was recorded within
+// pendingCreateIntentTTL of now, so that an empty file at its path can still
+// be the file its create made. Observation's claim, the executor's claim on a
+// 409 and the prune all ask this one question.
+func (p *PendingCreate) intentIsFresh(now time.Time) bool {
+	return p.IntendedAt > 0 && now.Sub(time.Unix(0, p.IntendedAt)) <= pendingCreateIntentTTL
 }
 
 // RecordPendingCreateIntent durably records that a create at pending.Path is
@@ -135,11 +164,6 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *PendingCre
 	return nil
 }
 
-// ClearPendingCreate drops the record of itemID.
-func (s *SyncStore) ClearPendingCreate(ctx context.Context, itemID string) error {
-	return deletePendingCreateTx(ctx, s.db, itemID)
-}
-
 // ClearPendingCreateIntent drops an intent at path that never became an
 // item: the attempt ended, by success or by a failure that says nothing was
 // created, without the create hook firing (it fires for a failure that names
@@ -154,6 +178,177 @@ func (s *SyncStore) ClearPendingCreateIntent(ctx context.Context, path string) e
 	return nil
 }
 
+// passObservation is what a pass observed before it planned. It bounds what
+// the prune of create intents may conclude from that plan's truth.
+type passObservation int
+
+const (
+	// passRefreshedLocalOnly is a watch replan: it refreshes local truth and
+	// plans on the OneDrive changes the observers committed before it. The
+	// empty file of a create whose answer was lost may not have been in a
+	// change batch yet, so nothing is concluded from its absence.
+	passRefreshedLocalOnly passObservation = iota
+	// passObservedRemoteThenLocal is a one-shot sync or a watch bootstrap:
+	// OneDrive is observed, then the local tree, then the pass plans. Every
+	// empty file of a create that landed before the pass has been claimed by
+	// the time the prune runs.
+	passObservedRemoteThenLocal
+)
+
+// claimedLandedCreates reports whether the pass's own remote observation ran
+// before its plan, and so claimed the empty file of every create that landed.
+func (o passObservation) claimedLandedCreates() bool {
+	switch o {
+	case passObservedRemoteThenLocal:
+		return true
+	case passRefreshedLocalOnly:
+		return false
+	default:
+		return false
+	}
+}
+
+// pruneAbandonedCreateIntents deletes the intents without an item ID that no
+// create will claim any more. It runs once a plan has been built, after the
+// observations that plan was built from were committed, so a row that names
+// an item is never touched here (observation drops it once the item holds
+// content or is gone).
+//
+//   - Past pendingCreateIntentTTL an intent claims nothing, so it is deleted
+//     whatever the pass observed.
+//   - After a pass that observed OneDrive before the local tree, an intent
+//     whose file is gone is deleted: local truth is complete, the scan visits
+//     the path, local and remote truth are both available there, and
+//     local_state holds no entry at it. That pass's remote observation
+//     claimed the file of a create that landed, so no create at that path
+//     will be retried or claimed, and the intent could only claim a
+//     stranger's empty file.
+//
+// A watch replan observes the local tree only, so a long-running watch keeps
+// a fresh intent whose file is gone: the change batch that shows a landed
+// create claims it and the next replan deletes the placeholder, and an intent
+// whose create never landed goes at the next start or once it expires.
+//
+// scanned reports whether a full local scan visits path at all: a path the
+// content filter hides or a shortcut root reserves is never in local_state,
+// so its absence there proves nothing. Read boundaries on either side, case
+// collisions and other observation issues that block truth keep an intent the
+// same way, as suspect local truth keeps every one.
+func (s *SyncStore) pruneAbandonedCreateIntents(
+	ctx context.Context, observed passObservation, scanned func(path string) bool,
+) (err error) {
+	tx, err := beginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("sync: beginning the prune of abandoned create intents: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback the prune of abandoned create intents")
+	}()
+
+	intents, err := listCreateIntentsTx(ctx, tx)
+	if err != nil || len(intents) == 0 {
+		return err
+	}
+	fileGone, err := createIntentFileGoneTx(ctx, tx, observed, scanned)
+	if err != nil {
+		return err
+	}
+
+	now := s.nowFunc()
+	for i := range intents {
+		intent := &intents[i]
+		expired := !intent.intentIsFresh(now)
+		abandoned := expired
+		if !expired {
+			if abandoned, err = fileGone(intent.Path); err != nil {
+				return err
+			}
+		}
+		if !abandoned {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, intent.Path); err != nil {
+			return fmt.Errorf("sync: dropping the abandoned create intent at %s: %w", intent.Path, err)
+		}
+		s.logger.Debug("dropped a create intent no create will claim",
+			slog.String("path", intent.Path), slog.Bool("expired", expired))
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing the prune of abandoned create intents: %w", err)
+	}
+
+	return nil
+}
+
+// createIntentFileGoneTx returns the test of whether the committed truth of
+// a pass proves that the file of an intent at a path is gone. It proves
+// nothing anywhere when the pass did not observe OneDrive before it planned
+// or local truth is not complete, and nothing at a path the scan does not
+// visit or whose local or remote truth is unavailable.
+func createIntentFileGoneTx(
+	ctx context.Context, tx sqlTxRunner, observed passObservation, scanned func(path string) bool,
+) (func(path string) (bool, error), error) {
+	provesNothing := func(string) (bool, error) { return false, nil }
+	if !observed.claimedLandedCreates() {
+		return provesNothing, nil
+	}
+	state, err := readObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if !state.LocalTruthComplete {
+		return provesNothing, nil
+	}
+	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading observation issues for the create intents: %w", err)
+	}
+	availability := newTruthAvailabilityIndex(issues)
+
+	return func(path string) (bool, error) {
+		status := availability.StatusForPath(path)
+		if !scanned(path) || !status.Local.IsAvailable() || !status.Remote.IsAvailable() {
+			return false, nil
+		}
+
+		return localStateIsEmptyAtTx(ctx, tx, path)
+	}, nil
+}
+
+// listCreateIntentsTx returns the rows that record only an intent.
+func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner) ([]PendingCreate, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path, intended_at FROM pending_creates WHERE item_id = '' ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing create intents: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var intents []PendingCreate
+	for rows.Next() {
+		var intent PendingCreate
+		if err := rows.Scan(&intent.Path, &intent.IntendedAt); err != nil {
+			return nil, fmt.Errorf("sync: reading a create intent: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: listing create intents: %w", err)
+	}
+
+	return intents, nil
+}
+
+// localStateIsEmptyAtTx reports whether local_state holds no entry at path.
+func localStateIsEmptyAtTx(ctx context.Context, tx sqlTxRunner, path string) (bool, error) {
+	var entries int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM local_state WHERE path = ?`, path).Scan(&entries); err != nil {
+		return false, fmt.Errorf("sync: reading local_state at %s: %w", path, err)
+	}
+
+	return entries == 0, nil
+}
+
 // PendingCreateAt returns the recorded create at path; found is false when
 // there is none.
 func (s *SyncStore) PendingCreateAt(ctx context.Context, path string) (pending PendingCreate, found bool, err error) {
@@ -163,11 +358,7 @@ func (s *SyncStore) PendingCreateAt(ctx context.Context, path string) (pending P
 const sqlSelectPendingCreate = `SELECT item_id, drive_id, path, parent_id, created_etag, local_size, local_hash, intended_at
 	FROM pending_creates`
 
-type pendingCreateExecer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
-func deletePendingCreateTx(ctx context.Context, tx pendingCreateExecer, itemID string) error {
+func deletePendingCreateTx(ctx context.Context, tx sqlTxRunner, itemID string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id = ?`, itemID); err != nil {
 		return fmt.Errorf("sync: clearing pending create of item %s: %w", itemID, err)
 	}
@@ -240,9 +431,8 @@ const (
 )
 
 // classifyObservedPlaceholderTx decides how observation treats item when it
-// has a pending-create record.
-// now decides whether an intent without an item ID is still fresh enough to
-// claim an empty file observed at its path.
+// has a pending-create record. now decides whether an intent without an item
+// ID is still fresh enough to claim an empty file observed at its path.
 func classifyObservedPlaceholderTx(
 	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
 ) (*PendingCreate, placeholderDecision, error) {
@@ -372,10 +562,16 @@ func adoptPlaceholderTx(
 
 // claimIntendedPlaceholderTx matches an observed item against an intent at
 // its path that has no item ID yet. An empty, live file observed there
-// within pendingCreateIntentTTL of the intent is the placeholder the dying
-// process created: the row takes its ID and eTag. Anything else at the path
-// (content, a folder, a deletion) or an expired intent means no placeholder
-// of ours is there, and the intent is dropped.
+// within pendingCreateIntentTTL of the intent, and not already synced, is the
+// placeholder the dying process created: the row takes its ID and eTag.
+// Anything else at the path (content, a folder, a deletion) or an expired
+// intent means no placeholder of ours is there, and the intent is dropped.
+//
+// So does an empty file the baseline already holds: the client knows it, so
+// it is no create whose answer was lost. It is a zero-byte file whose create
+// completed (such a create never runs the hook) while its intent outlived it,
+// because the attempt was canceled as it succeeded or the clear failed.
+// Claimed, the record named a file that stays empty, and nothing dropped it.
 func claimIntendedPlaceholderTx(
 	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
 ) (PendingCreate, bool, error) {
@@ -384,9 +580,16 @@ func claimIntendedPlaceholderTx(
 	if err != nil || !found {
 		return PendingCreate{}, false, err
 	}
-	fresh := pending.IntendedAt > 0 && now.Sub(time.Unix(0, pending.IntendedAt)) <= pendingCreateIntentTTL
 	isEmptyFile := !item.IsDeleted && item.ItemType == ItemTypeFile && !item.SizeUnknown && item.Size == 0
-	if !fresh || !isEmptyFile {
+	claimable := pending.intentIsFresh(now) && isEmptyFile
+	if claimable {
+		synced, syncedErr := baselineHoldsItemTx(ctx, tx, item.ItemID)
+		if syncedErr != nil {
+			return PendingCreate{}, false, syncedErr
+		}
+		claimable = !synced
+	}
+	if !claimable {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, item.Path); err != nil {
 			return PendingCreate{}, false, fmt.Errorf("sync: dropping pending create intent at %s: %w", item.Path, err)
 		}
@@ -401,4 +604,14 @@ func claimIntendedPlaceholderTx(
 	pending.CreatedETag = item.ETag
 
 	return pending, true, nil
+}
+
+// baselineHoldsItemTx reports whether the baseline has a row for itemID.
+func baselineHoldsItemTx(ctx context.Context, tx sqlTxRunner, itemID string) (bool, error) {
+	var rows int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM baseline WHERE item_id = ?`, itemID).Scan(&rows); err != nil {
+		return false, fmt.Errorf("sync: reading the baseline of %s: %w", itemID, err)
+	}
+
+	return rows > 0, nil
 }

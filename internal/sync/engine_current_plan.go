@@ -32,7 +32,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 		return nil, err
 	}
 
-	return r.reconcileRuntimeStateStage(ctx, build)
+	return r.reconcileRuntimeStateStage(ctx, build, passObservedRemoteThenLocal)
 }
 
 func (r *oneShotRunner) runDryRunCurrentPlan(
@@ -82,9 +82,12 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 		return nil, err
 	}
 
-	return rt.reconcileRuntimeStateStage(ctx, build)
+	return rt.reconcileRuntimeStateStage(ctx, build, passObservedRemoteThenLocal)
 }
 
+// runSteadyStateCurrentPlan plans on the local truth the replan just
+// refreshed and the remote truth the observers committed before it: this pass
+// observed the local tree only.
 func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	ctx context.Context,
 	bl *Baseline,
@@ -100,7 +103,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 		return nil, err
 	}
 
-	return rt.reconcileRuntimeStateStage(ctx, build)
+	return rt.reconcileRuntimeStateStage(ctx, build, passRefreshedLocalOnly)
 }
 
 type currentObservation struct {
@@ -686,15 +689,17 @@ func (flow *engineFlow) buildCurrentPlanStage(
 
 // reconcileRuntimeStateStage turns a built current plan into the runtime-start
 // handoff by reconciling durable held-work state and loading the surviving
-// retry/block-scope rows the runtime owns.
+// retry/block-scope rows the runtime owns. observed is what the pass observed
+// before it planned.
 func (flow *engineFlow) reconcileRuntimeStateStage(
 	ctx context.Context,
 	build *builtCurrentPlan,
+	observed passObservation,
 ) (*runtimePlan, error) {
 	if build == nil {
 		return nil, fmt.Errorf("sync: reconciling runtime state: missing current plan build")
 	}
-	if err := flow.reconcileRuntimeState(ctx, build.Plan); err != nil {
+	if err := flow.reconcileRuntimeState(ctx, build.Plan, observed); err != nil {
 		return nil, err
 	}
 
@@ -728,7 +733,7 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 	}
 }
 
-func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionPlan) error {
+func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionPlan, observed passObservation) error {
 	if err := flow.deps.store.ReplaceHeldDeletes(ctx, plan.HeldDeletes); err != nil {
 		return fmt.Errorf("sync: recording held deletes: %w", err)
 	}
@@ -739,8 +744,33 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionP
 	if err := flow.deps.store.PruneBlockScopesWithoutBlockedWork(ctx); err != nil {
 		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
 	}
+	// Observation claims the empty file of an intent whose create landed.
+	// After a pass that observed OneDrive before the local tree, an intent
+	// still without an item is judged by its age and the local scan; after a
+	// watch replan, which observed the local tree only, by its age alone, and
+	// the change batch that shows a landed create still claims it.
+	if err := flow.deps.store.pruneAbandonedCreateIntents(ctx, observed, flow.engine.localScanCoverage()); err != nil {
+		return fmt.Errorf("sync: pruning abandoned create intents: %w", err)
+	}
 
 	return nil
+}
+
+// localScanCoverage returns the test of whether a full local scan visits a
+// path: the content filter hides some paths, and a shortcut root reserves its
+// subtree for the shortcut's own sync (shouldObserveWithFilter). local_state
+// never holds such a path, which says nothing about a file there.
+func (e *Engine) localScanCoverage() func(path string) bool {
+	filter := newContentFilter(e.contentFilter)
+	protectedRoots := e.currentProtectedRoots()
+
+	return func(path string) bool {
+		if _, reserved := protectedRootPathReservation(path, protectedRoots); reserved {
+			return false
+		}
+
+		return filter.Visible(path, ItemTypeFile)
+	}
 }
 
 func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]RetryWorkRow, []*BlockScope, error) {

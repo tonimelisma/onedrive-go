@@ -384,7 +384,7 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 			Type: ActionUpload,
 			Path: "keep.txt",
 		}},
-	})
+	}, passObservedRemoteThenLocal)
 	require.NoError(t, err)
 
 	retries, err := eng.baseline.ListRetryWork(ctx)

@@ -695,6 +695,176 @@ func TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL(t *testing.T
 
 // Validates: R-5.6.15
 //
+// A zero-byte file is complete as created, so its create hook never runs and
+// only the intent names the path. When that intent outlives the create (the
+// create succeeded as a shutdown canceled the attempt, which keeps a canceled
+// attempt's intent, or the clear failed), the next observation of the file
+// claimed it as a placeholder although the baseline already held it as
+// synced: the record then named an empty file that stays empty, and nothing
+// ever dropped it. A file the baseline holds is not a lost create's, and the
+// intent is dropped instead.
+func TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "empty.txt", ParentID: "root"}))
+	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO baseline
+		(item_id, path, parent_id, item_type, local_hash, remote_hash, local_size, remote_size, etag)
+		VALUES ('created', 'empty.txt', 'root', 'file', ?, ?, 0, 0, '"c,1"')`, emptyQuickXor, emptyQuickXor)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+		DriveID: driveID, ItemID: "created", ParentID: "root", Path: "empty.txt", ItemType: ItemTypeFile,
+		Hash: emptyQuickXor, Size: 0, ETag: `"c,1"`,
+	}}, "t1", driveID))
+
+	_, found, err := mgr.PendingCreateAt(t.Context(), "empty.txt")
+	require.NoError(t, err)
+	assert.False(t, found, "the intent of a create that completed is dropped, not turned into a placeholder record")
+	path, _, synced := readBaselineRow(t, mgr, "created")
+	require.True(t, synced)
+	assert.Equal(t, "empty.txt", path)
+}
+
+// createIntentPruneCase is one intent and what the pass that prunes it saw.
+type createIntentPruneCase struct {
+	name          string
+	path          string
+	localFile     bool          // the local scan found a file at path
+	readDenied    string        // the scan could not read this folder
+	remoteDenied  string        // OneDrive refused to list this folder
+	suspect       bool          // local truth was marked suspect after the scan
+	unscanned     bool          // the content filter or a shortcut root keeps path out of the scan
+	localOnlyPass bool          // a watch replan: local truth refreshed, OneDrive not observed
+	namesItem     bool          // the row records the item the create made
+	prunedAfter   time.Duration // since the intent was recorded
+	wantKept      bool
+	why           string
+}
+
+// Validates: R-5.6.15
+//
+// An intent without an item that no create will ever retry stayed for good:
+// the create ended without an answer, the user renamed the file away, and no
+// item appeared at the path (model test, chaos seeds 9 and 11). While fresh
+// it could still claim an empty file a stranger made there, and with the
+// local file gone the next pass deleted that file. Pruned after planning, such
+// an intent is dropped once a pass that observed OneDrive and then a complete
+// local scan finds nothing at its path, and any intent past its TTL is dropped
+// whatever the pass saw. A path the scan could not see or OneDrive would not
+// list, local truth marked suspect, a pass that did not observe OneDrive
+// (whose next change batch may still show the create's empty file), and a row
+// that names an item all keep the row.
+func TestPruneAbandonedCreateIntents_DropsWhatNoCreateWillClaim(t *testing.T) {
+	t.Parallel()
+
+	const deniedFolder = "Private"
+	fresh, expired := time.Minute, pendingCreateIntentTTL+time.Minute
+	for _, tc := range []createIntentPruneCase{
+		{
+			name: "no file at its path", path: "doc.txt", prunedAfter: fresh,
+			why: "nothing at the path will retry the create",
+		},
+		{
+			name: "past its TTL with its file still there and local truth suspect", path: "doc.txt",
+			localFile: true, suspect: true, prunedAfter: expired, why: "an expired intent claims nothing",
+		},
+		{
+			name: "past its TTL in a pass that did not observe OneDrive", path: "doc.txt",
+			localOnlyPass: true, prunedAfter: expired, why: "expiry needs no observation",
+		},
+		{
+			name: "its file still there", path: "doc.txt", localFile: true, prunedAfter: fresh,
+			wantKept: true, why: "the create of that file is retried",
+		},
+		{
+			name: "below a folder the scan could not read", path: deniedFolder + "/doc.txt", readDenied: deniedFolder,
+			prunedAfter: fresh, wantKept: true, why: "unreadable is not absent",
+		},
+		{
+			name: "below a folder OneDrive would not list", path: deniedFolder + "/doc.txt", remoteDenied: deniedFolder,
+			prunedAfter: fresh, wantKept: true, why: "an unobservable remote path may hold the create's empty file",
+		},
+		{
+			name: "a pass that did not observe OneDrive", path: "doc.txt", localOnlyPass: true, prunedAfter: fresh,
+			wantKept: true, why: "the change batch that shows a landed create claims it",
+		},
+		{
+			name: "local truth suspect", path: "doc.txt", suspect: true, prunedAfter: fresh,
+			wantKept: true, why: "a suspect scan proves no absence",
+		},
+		{
+			name: "a path the scan does not cover", path: "doc.txt", unscanned: true, prunedAfter: fresh,
+			wantKept: true, why: "a path the scan never visits proves no absence",
+		},
+		{
+			name: "a row that names its item", path: "doc.txt", namesItem: true, prunedAfter: expired,
+			wantKept: true, why: "a recorded item is dropped by observation only",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runCreateIntentPruneCase(t, &tc)
+		})
+	}
+}
+
+// runCreateIntentPruneCase records tc's intent, the local and remote truth
+// its pass saw, prunes, and checks whether the row is still there.
+func runCreateIntentPruneCase(t *testing.T, tc *createIntentPruneCase) {
+	t.Helper()
+
+	intendedAt := time.Date(2026, 11, 1, 23, 0, 0, 0, time.UTC)
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	store.setNowFunc(func() time.Time { return intendedAt })
+	pending := &PendingCreate{DriveID: driveID, Path: tc.path, ParentID: "root"}
+	require.NoError(t, store.RecordPendingCreateIntent(ctx, pending))
+	if tc.namesItem {
+		pending.ItemID, pending.CreatedETag = "placeholder", `"p,1"`
+		require.NoError(t, store.RecordPendingCreate(ctx, pending))
+	}
+	scanned := []localStateRow{{Path: "keep.txt", ItemType: ItemTypeFile, Hash: "keep-hash", Size: 5}}
+	if tc.localFile {
+		scanned = append(scanned, localStateRow{Path: tc.path, ItemType: ItemTypeFile, Hash: "my-hash", Size: 9})
+	}
+	require.NoError(t, store.ReplaceLocalState(ctx, scanned))
+	if tc.readDenied != "" {
+		seedObservationIssueRowForTest(t, store, &ObservationIssue{
+			Path: tc.readDenied, DriveID: driveID, IssueType: issueLocalReadDenied, ScopeKey: sKPermLocalRead(tc.readDenied),
+		})
+	}
+	if tc.remoteDenied != "" {
+		seedObservationIssueRowForTest(t, store, &ObservationIssue{
+			Path: tc.remoteDenied, DriveID: driveID, IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead(tc.remoteDenied),
+		})
+	}
+	if tc.suspect {
+		require.NoError(t, store.MarkLocalTruthSuspect(ctx, "watch overflow"))
+	}
+	store.setNowFunc(func() time.Time { return intendedAt.Add(tc.prunedAfter) })
+	observed := passObservedRemoteThenLocal
+	if tc.localOnlyPass {
+		observed = passRefreshedLocalOnly
+	}
+
+	require.NoError(t, store.pruneAbandonedCreateIntents(ctx, observed, func(path string) bool {
+		return !tc.unscanned || path != tc.path
+	}))
+
+	kept, found, err := store.PendingCreateAt(ctx, tc.path)
+	require.NoError(t, err)
+	require.Equal(t, tc.wantKept, found, tc.why)
+	if tc.namesItem {
+		assert.Equal(t, "placeholder", kept.ItemID)
+	}
+}
+
+// Validates: R-5.6.15
+//
 // An attempt that ends without creating anything (the create itself failed)
 // clears its intent, and an intent at the path of a placeholder already
 // recorded keeps the placeholder's ID.

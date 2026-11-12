@@ -430,18 +430,57 @@ the creating request in flight (live, 2026-11-01: OneDrive created the empty
 item two seconds after the kill, so no hook recorded it): an empty file
 observed at the intended path within `pendingCreateIntentTTL` (72 h) is
 claimed as the placeholder, `claimIntendedPlaceholderTx`, and adopted like a
-recorded one; content at the path or an expired intent drops the intent, and
-an attempt known to have created nothing clears it. An attempt that was
+recorded one; content at the path, an expired intent, or an empty file the
+baseline already holds drops the intent. The last is a zero-byte file whose
+create completed (it never runs the hook) while its intent outlived it,
+canceled as it succeeded or with a failed clear; claimed, the record named a
+file that stays empty and was never dropped
+(`TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds`). An
+attempt known to have created nothing clears the intent. An attempt that was
 canceled, or whose create ended without an answer
 (`graph.ErrCreateOutcomeUnknown`), is not known to: its create may have
-landed or may still land, so the intent is kept and expires
-(`TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded`,
+landed or may still land, so the intent is kept. The runtime-state step
+that follows planning prunes the intents no create will claim
+(`pruneAbandonedCreateIntents`, one transaction), told by its caller what
+the pass observed before it planned (`passObservation`):
+
+- after any plan, every intent past the TTL;
+- after a pass that observed OneDrive and then the local tree (a one-shot
+  sync, a watch bootstrap), also every intent whose path a complete local
+  scan (`local_truth_complete`) visits and finds empty, with local and
+  remote truth both available there. That pass's remote observation ran
+  first and claimed the empty file of every create that had landed, so an
+  intent still without an item is one whose create never reached OneDrive,
+  and the user renamed or deleted the file. Nothing retries it, and the
+  intent stayed for good, able to claim an empty file a stranger made at
+  that path, which the next pass then deleted (model test, chaos seeds 9
+  and 11).
+
+A watch replan refreshes the local tree only and plans on the OneDrive
+changes the observers committed before it, so a long-running watch keeps a
+fresh intent whose file is gone: a create whose answer was lost may have
+landed without a change batch showing it yet, and dropped at that point its
+empty file would have been downloaded as a stranger's. The batch that shows
+it claims it, and the next replan deletes the placeholder; an intent whose
+create never landed goes at the next start or once it expires. A path the
+content filter hides or a shortcut root reserves, a read boundary on either
+side or another issue that blocks truth, and suspect local truth also keep
+the intent: absence there proves nothing. A row that names an item is never
+pruned. A create that lands after its intent was dropped reads as an empty
+remote file and is downloaded, the lesser harm
+(`TestPruneAbandonedCreateIntents_DropsWhatNoCreateWillClaim`,
+`TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped`,
+`TestRunOnce_EmptyItemOfAKilledCreateWhoseFileWasDeletedIsRemoved`,
+`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`;
+`TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded`,
 `TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL`,
 `TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem`,
 `TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted`,
 `TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile`, and the
 `upload.created_unrecorded` crash point). The executor is the second place
-that claims on an intent, with the same test and no schema of its own: a
+that claims on an intent, with the same freshness test
+(`PendingCreate.intentIsFresh`, which the prune asks too) and no schema of
+its own: a
 retry of the create that gets 409, at a path that held an intent without an
 item before the retry and within the same 72 h, records the file of exactly
 that name, live and empty, with `RecordPendingCreate` and uploads into it by

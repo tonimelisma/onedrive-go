@@ -326,7 +326,11 @@ apart stops a debug-only read from re-introducing the production coupling.
 4. compute SQL structural diff and reconciliation once
 5. build the current actionable set in Go from structural reconciliation plus
    explicit truth-availability overlays
-6. reconcile durable retry/blocker state to that actionable set
+6. reconcile durable retry/blocker state to that actionable set, and drop
+   the create intents no create will claim: expired ones, and, since this
+   pass observed OneDrive before the local tree
+   (`passObservedRemoteThenLocal`), those whose file the scan found gone
+   ([sync-store.md](sync-store.md), Pending creates)
 7. commit any ready publication-only actions directly through the store and
    drain publication-only dependents before worker dispatch
 8. execute remaining concrete work once using the same blocker/trial admission
@@ -644,6 +648,16 @@ runtime state, then append the resulting concrete worker frontier through the
 watch-owned frontier helpers. DirtyBuffer emits only a coarse
 dirty/full-refresh scheduler signal, and that signal feeds only this
 steady-state replan path; it does not define a second planning model.
+
+A steady-state replan observed the local tree only (`passRefreshedLocalOnly`),
+so its runtime-state step drops expired create intents and nothing else. A
+create whose answer was lost may have landed without a change batch showing
+it yet; the fresh intent stays for the batch that does, which claims the
+empty file, and the next replan deletes the placeholder. An intent whose
+create never landed and whose file is gone stays until the next start, whose
+bootstrap observes OneDrive first and drops it, or until it expires
+([sync-store.md](sync-store.md), Pending creates;
+`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`).
 
 Bootstrap uses that same outer owner after the initial
 observe/build/reconcile/start-runtime handoff. The only bootstrap-specific semantics
