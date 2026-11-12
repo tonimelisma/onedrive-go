@@ -221,6 +221,50 @@ func TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree(t *te
 	assert.Equal(t, issueLocalReadOnly, scope.ConditionType())
 }
 
+// The boundary scope every issue type names for denied-boundary evidence.
+// The table must name every declared member, so a new permission condition
+// gets its scope on purpose instead of the zero scope a default handed it.
+// The zero scope is "no boundary scope": the store refuses blocked work
+// without a scope, so boundary evidence of such a type fails loudly, and a
+// trial falls back to its own scope.
+// Validates: R-2.10.13, R-2.14.1
+func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
+	t.Parallel()
+
+	const boundary = "Shared/Docs"
+	scopeFor := func(issueType IssueType) ScopeKey {
+		return scopeKeyForPermissionEvidence(permissionEvidence{
+			Kind:         permissionEvidenceBoundaryDenied,
+			BoundaryPath: boundary,
+			IssueType:    issueType,
+		})
+	}
+
+	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
+		issueTypeVerdictGroup[ScopeKey]{verdict: sKPermLocalRead(boundary), members: []IssueType{issueLocalReadDenied}},
+		issueTypeVerdictGroup[ScopeKey]{verdict: SKPermLocalWrite(boundary), members: []IssueType{issueLocalWriteDenied}},
+		issueTypeVerdictGroup[ScopeKey]{verdict: SKLocalReadOnly(boundary), members: []IssueType{issueLocalReadOnly}},
+		issueTypeVerdictGroup[ScopeKey]{verdict: SKPermRemoteWrite(boundary), members: []IssueType{IssueRemoteWriteDenied}},
+		issueTypeVerdictGroup[ScopeKey]{
+			// A remote read denial is a boundary observation finds, never probe
+			// evidence; every other member is not a permission condition.
+			verdict: ScopeKey{},
+			members: []IssueType{
+				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
+				IssueUnauthorized, issueRemoteReadDenied, IssueQuotaExceeded, issueRateLimited,
+				issueCaseCollision, issueRemoteNameTwin, issueDiskFull, issueServiceOutage,
+				issueFileTooLargeForSpace, issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement,
+				issueLocalMountBoundary, issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueLocalFileTooLarge,
+				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
+				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity, issueRequestTimeout,
+				issueTransientConflict, issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,
+			},
+		},
+	), scopeFor)
+
+	assert.True(t, scopeFor(issueTypeOutsideTheEnum).IsZero(), "a value outside the enum names no boundary scope")
+}
+
 // Validates: R-2.10.61
 func TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFile(t *testing.T) {
 	t.Parallel()

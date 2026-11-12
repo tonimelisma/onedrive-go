@@ -53,20 +53,82 @@ func conditionKeyForStoredCondition(conditionType IssueType, scopeKey ScopeKey) 
 }
 
 // conditionKeyForRuntimeResult maps one execution-time classified result into
-// the shared condition family used by logs, watch summaries, and status.
+// the shared condition family used by logs, watch summaries, and status. A
+// transient runtime condition (a timeout, a conflict, a locked item) is an
+// expected failure that is retried, so it has no family; it used to be filed
+// as the unexpected condition. A failure with no condition at all is the
+// unexpected condition, and a result that is not a failure has none.
 func conditionKeyForRuntimeResult(class errclass.Class, conditionType IssueType) ConditionKey {
 	if key, ok := conditionKeyForIssueType(conditionType); ok {
 		return key
 	}
-
-	if class == errclass.ClassRetryableTransient ||
-		class == errclass.ClassScopeBlockingTransient ||
-		class == errclass.ClassActionable ||
-		class == errclass.ClassFatal {
-		return ConditionUnexpectedCondition
+	if conditionType != "" {
+		// conditionKeyForIssueType names no family only for the transient
+		// members and the empty value.
+		return ""
 	}
 
-	return ""
+	switch class {
+	case errclass.ClassRetryableTransient,
+		errclass.ClassScopeBlockingTransient,
+		errclass.ClassActionable,
+		errclass.ClassFatal:
+		return ConditionUnexpectedCondition
+	case errclass.ClassInvalid,
+		errclass.ClassSuccess,
+		errclass.ClassShutdown,
+		errclass.ClassSuperseded:
+		return ""
+	default:
+		return ""
+	}
+}
+
+// conditionClearsAutomatically reports whether a condition of this family
+// clears without the user: OneDrive limiting requests or being unavailable,
+// which sync waits out. Such a condition is said at Info and never makes the
+// watch condition summary a warning. The switch names every ConditionKey (the
+// exhaustive linter holds it to that), so a new family is decided on purpose;
+// a key outside the set is not known to clear by itself, so it is reported as
+// something the user may need to act on.
+func conditionClearsAutomatically(key ConditionKey) bool {
+	switch key {
+	case ConditionRateLimited, ConditionServiceOutage:
+		return true
+	case ConditionAuthenticationRequired,
+		ConditionQuotaExceeded,
+		ConditionRemoteWriteDenied,
+		ConditionRemoteReadDenied,
+		ConditionLocalReadDenied,
+		ConditionLocalWriteDenied,
+		ConditionInvalidFilename,
+		ConditionPathTooLong,
+		ConditionFileTooLarge,
+		ConditionCaseCollision,
+		ConditionRemoteNameTwin,
+		ConditionDiskFull,
+		ConditionHashError,
+		ConditionFileTooLargeForSpace,
+		ConditionLocalNameTooLong,
+		ConditionLocalReadOnly,
+		ConditionDeletesHeld,
+		ConditionLocalUnsyncable,
+		ConditionLocalMountBoundary,
+		ConditionLocalInterrupted,
+		ConditionRemoteFolderUnverified,
+		ConditionLocalFileTooLarge,
+		ConditionLocalBusy,
+		ConditionLocalCrossDevice,
+		ConditionUnsupportedOperation,
+		ConditionMalwareDetected,
+		ConditionLocalDatabaseOpen,
+		ConditionUploadVerification,
+		ConditionDownloadIntegrity,
+		ConditionUnexpectedCondition:
+		return false
+	default:
+		return false
+	}
 }
 
 // ConditionKeyLess reports whether left should sort before right in stable
@@ -82,6 +144,11 @@ func ConditionKeyLess(left, right ConditionKey) bool {
 	return string(left) < string(right)
 }
 
+// conditionKeyForIssueTypeOrScope is the family of a record's own condition,
+// or, when that names none (the empty value or a transient member), the
+// family of its scope's default condition. A record that still has none is
+// the unexpected condition; only a record with neither a condition nor a
+// scope has no key.
 func conditionKeyForIssueTypeOrScope(
 	issueType IssueType,
 	scopeKey ScopeKey,
@@ -150,50 +217,90 @@ func conditionKeyRank(key ConditionKey) int {
 	return len(ordered)
 }
 
+// conditionKeyForIssueType is the condition family an issue type belongs to,
+// in one switch that names every IssueType (the exhaustive linter holds it to
+// that), so a new member gets a family, or none, on purpose. ok is false only
+// where no family is named: for the transient runtime members, which no store
+// keeps and whose results conditionKeyForRuntimeResult groups by their class,
+// and for the empty value, which means "no condition". A value outside the
+// enum, which the stores refuse and so only a programming error makes, is
+// ConditionUnexpectedCondition: a lookup used to miss it and let a caller
+// file it under whatever it tried next, a scope's condition included.
+//
+//nolint:gocyclo,funlen // one case per member: the family table of the enum
 func conditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
-	// Keep the condition-family classifier exhaustive in one local table so
-	// callers do not have to think in separate "core" and "filesystem"
-	// taxonomies.
-	for _, mapping := range [...]struct {
-		issueType IssueType
-		key       ConditionKey
-	}{
-		{issueType: IssueUnauthorized, key: ConditionAuthenticationRequired},
-		{issueType: IssueQuotaExceeded, key: ConditionQuotaExceeded},
-		{issueType: issueServiceOutage, key: ConditionServiceOutage},
-		{issueType: issueRateLimited, key: ConditionRateLimited},
-		{issueType: IssueRemoteWriteDenied, key: ConditionRemoteWriteDenied},
-		{issueType: issueRemoteReadDenied, key: ConditionRemoteReadDenied},
-		{issueType: issueLocalReadDenied, key: ConditionLocalReadDenied},
-		{issueType: issueLocalWriteDenied, key: ConditionLocalWriteDenied},
-		{issueType: IssueInvalidFilename, key: ConditionInvalidFilename},
-		{issueType: issuePathTooLong, key: ConditionPathTooLong},
-		{issueType: issueFileTooLarge, key: ConditionFileTooLarge},
-		{issueType: issueCaseCollision, key: ConditionCaseCollision},
-		{issueType: issueRemoteNameTwin, key: ConditionRemoteNameTwin},
-		{issueType: issueDiskFull, key: ConditionDiskFull},
-		{issueType: issueHashPanic, key: ConditionHashError},
-		{issueType: issueFileTooLargeForSpace, key: ConditionFileTooLargeForSpace},
-		{issueType: issueLocalNameTooLong, key: ConditionLocalNameTooLong},
-		{issueType: issueLocalReadOnly, key: ConditionLocalReadOnly},
-		{issueType: issueDeletesHeld, key: ConditionDeletesHeld},
-		{issueType: issueLocalUnsyncableReplacement, key: ConditionLocalUnsyncable},
-		{issueType: issueLocalMountBoundary, key: ConditionLocalMountBoundary},
-		{issueType: issueLocalInterruptedRemoval, key: ConditionLocalInterrupted},
-		{issueType: issueRemoteFolderUnverifiable, key: ConditionRemoteFolderUnverified},
-		{issueType: issueLocalFileTooLarge, key: ConditionLocalFileTooLarge},
-		{issueType: issueLocalBusy, key: ConditionLocalBusy},
-		{issueType: issueLocalCrossDevice, key: ConditionLocalCrossDevice},
-		{issueType: issueUnsupportedOperation, key: ConditionUnsupportedOperation},
-		{issueType: issueMalwareDetected, key: ConditionMalwareDetected},
-		{issueType: issueLocalDatabaseOpen, key: ConditionLocalDatabaseOpen},
-		{issueType: issueUploadVerification, key: ConditionUploadVerification},
-		{issueType: issueDownloadIntegrity, key: ConditionDownloadIntegrity},
-	} {
-		if mapping.issueType == issueType {
-			return mapping.key, true
-		}
+	switch issueType {
+	case IssueInvalidFilename:
+		return ConditionInvalidFilename, true
+	case issuePathTooLong:
+		return ConditionPathTooLong, true
+	case issueFileTooLarge:
+		return ConditionFileTooLarge, true
+	case issueHashPanic:
+		// The stored name is narrower than its use (issue_types.go).
+		return ConditionHashError, true
+	case IssueUnauthorized:
+		return ConditionAuthenticationRequired, true
+	case IssueRemoteWriteDenied:
+		return ConditionRemoteWriteDenied, true
+	case issueRemoteReadDenied:
+		return ConditionRemoteReadDenied, true
+	case IssueQuotaExceeded:
+		return ConditionQuotaExceeded, true
+	case issueRateLimited:
+		return ConditionRateLimited, true
+	case issueLocalReadDenied:
+		return ConditionLocalReadDenied, true
+	case issueLocalWriteDenied:
+		return ConditionLocalWriteDenied, true
+	case issueCaseCollision:
+		return ConditionCaseCollision, true
+	case issueRemoteNameTwin:
+		return ConditionRemoteNameTwin, true
+	case issueDiskFull:
+		return ConditionDiskFull, true
+	case issueServiceOutage:
+		return ConditionServiceOutage, true
+	case issueFileTooLargeForSpace:
+		return ConditionFileTooLargeForSpace, true
+	case issueLocalNameTooLong:
+		return ConditionLocalNameTooLong, true
+	case issueLocalReadOnly:
+		return ConditionLocalReadOnly, true
+	case issueDeletesHeld:
+		return ConditionDeletesHeld, true
+	case issueLocalUnsyncableReplacement:
+		return ConditionLocalUnsyncable, true
+	case issueLocalMountBoundary:
+		return ConditionLocalMountBoundary, true
+	case issueRemoteFolderUnverifiable:
+		return ConditionRemoteFolderUnverified, true
+	case issueLocalInterruptedRemoval:
+		return ConditionLocalInterrupted, true
+	case issueLocalFileTooLarge:
+		return ConditionLocalFileTooLarge, true
+	case issueLocalBusy:
+		return ConditionLocalBusy, true
+	case issueLocalCrossDevice:
+		return ConditionLocalCrossDevice, true
+	case issueUnsupportedOperation:
+		return ConditionUnsupportedOperation, true
+	case issueMalwareDetected:
+		return ConditionMalwareDetected, true
+	case issueLocalDatabaseOpen:
+		return ConditionLocalDatabaseOpen, true
+	case issueUploadVerification:
+		return ConditionUploadVerification, true
+	case issueDownloadIntegrity:
+		return ConditionDownloadIntegrity, true
+	case issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected,
+		"":
+		return "", false
+	default:
+		return ConditionUnexpectedCondition, true
 	}
-
-	return "", false
 }

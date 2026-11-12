@@ -1,15 +1,15 @@
-// Package sync owns the single mounted content-root runtime, including local observation
-// collision handling.
+// The local observer's case-collision handling.
 //
 // Contents:
 //   - HasCaseCollisionCached: cached per-directory collision check
-//   - dirNameCache maintenance (update/remove)
+//   - DirNameCache maintenance (updateDirNameCache, removeDirNameCache, populateDirNameCache)
 //   - buildPeerRelPath: collision peer path construction
 //   - onDiskSiblingName: a stored name's spelling on disk, for re-emission
 //
 // Related files:
 //   - observer_local_handlers.go: event handlers that call these methods
-//   - scanner.go:                 FullScan's DetectCaseCollisions (authoritative)
+//   - scanner.go:                 FullScan's detectCaseCollisions (authoritative)
+
 package sync
 
 import (

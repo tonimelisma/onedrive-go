@@ -3,6 +3,7 @@ package sync
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,71 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 )
+
+// The line said when a block scope of each condition starts. The groups must
+// name every declared member, so a new condition is worded on purpose, and
+// its level is pinned: one that clears without the user (throttling, an
+// outage) is Info, and a default that warned for it would read as something
+// to act on.
+// Validates: R-6.6.30
+func TestBlockScopeActivationLine_EveryMemberIsDecided(t *testing.T) {
+	t.Parallel()
+
+	type scopeLine struct{ clearsAutomatically, generic bool }
+	const retryIn = "1m"
+	key := SKPermLocalWrite("Docs")
+	lineFor := func(conditionType IssueType) scopeLine {
+		line, clearsAutomatically := blockScopeActivationLine(key, conditionType, retryIn)
+		assert.Contains(t, line, retryIn, "%q names when it is checked again", conditionType)
+
+		return scopeLine{
+			clearsAutomatically: clearsAutomatically,
+			generic:             strings.Contains(line, "("+strings.ReplaceAll(string(conditionType), "_", " ")+")"),
+		}
+	}
+
+	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
+		issueTypeVerdictGroup[scopeLine]{
+			verdict: scopeLine{clearsAutomatically: true},
+			members: []IssueType{issueRateLimited, issueServiceOutage},
+		},
+		issueTypeVerdictGroup[scopeLine]{
+			// Worded for what the user can do about it.
+			verdict: scopeLine{},
+			members: []IssueType{IssueQuotaExceeded, issueDiskFull, issueLocalReadOnly},
+		},
+		issueTypeVerdictGroup[scopeLine]{
+			verdict: scopeLine{generic: true},
+			members: []IssueType{
+				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
+				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueLocalReadDenied,
+				issueLocalWriteDenied, issueCaseCollision, issueRemoteNameTwin, issueFileTooLargeForSpace,
+				issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
+				issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueLocalFileTooLarge, issueLocalBusy,
+				issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen,
+				issueUploadVerification, issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict,
+				issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,
+			},
+		},
+	), lineFor)
+
+	assert.Equal(t, scopeLine{generic: true}, lineFor(issueTypeOutsideTheEnum), "a value outside the enum")
+}
+
+// The block-scope line's level is the family's verdict, the one the watch
+// condition summary reads: an issue type whose family clears automatically
+// is said at Info, every other at Warn.
+// Validates: R-6.6.30
+func TestBlockScopeActivationLine_AgreesWithTheFamilyVerdict(t *testing.T) {
+	t.Parallel()
+
+	const retryIn = "1m"
+	for _, member := range issueTypeConstantsInSource(t) {
+		_, clearsAutomatically := blockScopeActivationLine(SKService(), member, retryIn)
+		key, hasFamily := conditionKeyForIssueType(member)
+		assert.Equal(t, hasFamily && conditionClearsAutomatically(key), clearsAutomatically, "%q", member)
+	}
+}
 
 // Validates: R-2.10.5
 func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testing.T) {

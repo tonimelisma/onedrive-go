@@ -69,8 +69,8 @@ func watchConditionSummaryFingerprint(summary watchConditionSummary) string {
 
 // watchConditionSummaryAddsActionable reports whether the summary contains a
 // condition kind absent from the previous fingerprint that the user may need
-// to act on. Throttling and service outages are handled automatically and
-// never make this summary a warning.
+// to act on. A condition that clears automatically (throttling, a service
+// outage; conditionClearsAutomatically) never makes this summary a warning.
 func watchConditionSummaryAddsActionable(summary watchConditionSummary, previousFingerprint string) bool {
 	previous := make(map[string]struct{})
 	for _, key := range strings.Split(previousFingerprint, "|") {
@@ -79,7 +79,7 @@ func watchConditionSummaryAddsActionable(summary watchConditionSummary, previous
 
 	for i := range summary.Counts {
 		key := summary.Counts[i].Key
-		if key == ConditionRateLimited || key == ConditionServiceOutage {
+		if conditionClearsAutomatically(key) {
 			continue
 		}
 		if _, seen := previous[string(key)]; !seen {
@@ -90,44 +90,79 @@ func watchConditionSummaryAddsActionable(summary watchConditionSummary, previous
 	return false
 }
 
-// conditionLabels names each condition kind in user words for console text;
-// the noun ("file"/"files") is prepended by conditionLabel. A function, not a
-// package-level map, so the table cannot be mutated; it runs only when the
-// watch summary changes.
-func conditionLabels() map[ConditionKey]string {
-	return map[ConditionKey]string{
-		ConditionInvalidFilename:        "with names OneDrive does not allow",
-		ConditionPathTooLong:            "with paths too long for OneDrive",
-		ConditionFileTooLarge:           "too large for OneDrive",
-		ConditionCaseCollision:          "whose names OneDrive treats as the same name",
-		ConditionRemoteNameTwin:         "that OneDrive keeps as two items under one name here",
-		ConditionLocalReadDenied:        "that cannot be read locally",
-		ConditionLocalWriteDenied:       "that cannot be written locally",
-		ConditionRemoteWriteDenied:      "in read-only shared folders",
-		ConditionRemoteReadDenied:       "in OneDrive folders you cannot read",
-		ConditionQuotaExceeded:          "waiting for OneDrive storage space",
-		ConditionDiskFull:               "waiting for local disk space",
-		ConditionFileTooLargeForSpace:   "waiting for local disk space",
-		ConditionLocalNameTooLong:       "with names too long for this computer",
-		ConditionLocalReadOnly:          "on a read-only local filesystem",
-		ConditionDeletesHeld:            "whose deletion is held until you confirm it",
-		ConditionLocalUnsyncable:        "renamed or replaced into something sync cannot use",
-		ConditionLocalMountBoundary:     "on another filesystem inside the sync folder",
-		ConditionLocalInterrupted:       "left set aside by an interrupted removal",
-		ConditionRemoteFolderUnverified: "too large to verify before deleting on OneDrive",
-		ConditionLocalFileTooLarge:      "too large for the local filesystem",
-		ConditionLocalBusy:              "busy on this computer",
-		ConditionLocalCrossDevice:       "that would move across a mount point",
-		ConditionUnsupportedOperation:   "that OneDrive refuses to handle",
-		ConditionMalwareDetected:        "that OneDrive flagged as malware",
-		ConditionLocalDatabaseOpen:      "that are databases open in an application",
-		ConditionUploadVerification:     "that OneDrive stored differently than uploaded",
-		ConditionDownloadIntegrity:      "that OneDrive served differently than it describes",
-		ConditionRateLimited:            "waiting while OneDrive limits requests",
-		ConditionServiceOutage:          "waiting for OneDrive to become available",
-		ConditionAuthenticationRequired: "waiting for sign-in",
-		ConditionHashError:              "that could not be checked",
-		ConditionUnexpectedCondition:    "with unexpected errors",
+// conditionLabelText names a condition kind in user words for console text;
+// conditionLabel prepends the noun ("file"/"files"). The switch names every
+// ConditionKey (the exhaustive linter holds it to that), so a new key is
+// labeled on purpose; ok is false only for a key outside the set, which
+// conditionLabel words by its own name.
+//
+//nolint:gocyclo,funlen // one case per member: the label table of the enum
+func conditionLabelText(key ConditionKey) (label string, ok bool) {
+	switch key {
+	case ConditionInvalidFilename:
+		return "with names OneDrive does not allow", true
+	case ConditionPathTooLong:
+		return "with paths too long for OneDrive", true
+	case ConditionFileTooLarge:
+		return "too large for OneDrive", true
+	case ConditionCaseCollision:
+		return "whose names OneDrive treats as the same name", true
+	case ConditionRemoteNameTwin:
+		return "that OneDrive keeps as two items under one name here", true
+	case ConditionLocalReadDenied:
+		return "that cannot be read locally", true
+	case ConditionLocalWriteDenied:
+		return "that cannot be written locally", true
+	case ConditionRemoteWriteDenied:
+		return "in read-only shared folders", true
+	case ConditionRemoteReadDenied:
+		return "in OneDrive folders you cannot read", true
+	case ConditionQuotaExceeded:
+		return "waiting for OneDrive storage space", true
+	case ConditionDiskFull, ConditionFileTooLargeForSpace:
+		return "waiting for local disk space", true
+	case ConditionLocalNameTooLong:
+		return "with names too long for this computer", true
+	case ConditionLocalReadOnly:
+		return "on a read-only local filesystem", true
+	case ConditionDeletesHeld:
+		return "whose deletion is held until you confirm it", true
+	case ConditionLocalUnsyncable:
+		return "renamed or replaced into something sync cannot use", true
+	case ConditionLocalMountBoundary:
+		return "on another filesystem inside the sync folder", true
+	case ConditionLocalInterrupted:
+		return "left set aside by an interrupted removal", true
+	case ConditionRemoteFolderUnverified:
+		return "too large to verify before deleting on OneDrive", true
+	case ConditionLocalFileTooLarge:
+		return "too large for the local filesystem", true
+	case ConditionLocalBusy:
+		return "busy on this computer", true
+	case ConditionLocalCrossDevice:
+		return "that would move across a mount point", true
+	case ConditionUnsupportedOperation:
+		return "that OneDrive refuses to handle", true
+	case ConditionMalwareDetected:
+		return "that OneDrive flagged as malware", true
+	case ConditionLocalDatabaseOpen:
+		return "that are databases open in an application", true
+	case ConditionUploadVerification:
+		return "that OneDrive stored differently than uploaded", true
+	case ConditionDownloadIntegrity:
+		return "that OneDrive served differently than it describes", true
+	case ConditionRateLimited:
+		return "waiting while OneDrive limits requests", true
+	case ConditionServiceOutage:
+		return "waiting for OneDrive to become available", true
+	case ConditionAuthenticationRequired:
+		return "waiting for sign-in", true
+	case ConditionHashError:
+		return "that could not be checked", true
+	case ConditionUnexpectedCondition:
+		return "with unexpected errors", true
+	default:
+		return "", false
 	}
 }
 
@@ -137,7 +172,7 @@ func conditionLabel(key ConditionKey, count int) string {
 	if count == 1 {
 		files = "file"
 	}
-	if label, ok := conditionLabels()[key]; ok {
+	if label, ok := conditionLabelText(key); ok {
 		return files + " " + label
 	}
 

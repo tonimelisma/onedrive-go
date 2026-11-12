@@ -1,6 +1,7 @@
-// Package sync owns the single mounted content-root runtime, including the debounced dirty
-// scheduler that turns local and remote observations into "refresh/replan now"
-// signals. It does not buffer planner semantics or preserve event history.
+// The debounced dirty scheduler of the mounted content-root runtime: it turns
+// local and remote observations into "refresh/replan now" signals. It does not
+// buffer planner semantics or preserve event history.
+
 package sync
 
 import (

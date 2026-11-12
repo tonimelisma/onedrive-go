@@ -1,4 +1,5 @@
-// Package sync defines sync-domain enums and shared value vocabulary.
+// Sync-domain enums and shared value vocabulary.
+
 package sync
 
 import (

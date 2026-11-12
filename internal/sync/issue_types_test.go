@@ -36,10 +36,23 @@ func issueTypeConstantsInSource(t *testing.T) []IssueType {
 func issueTypeConstantsByName(t *testing.T) map[string]IssueType {
 	t.Helper()
 
-	parsed, err := parser.ParseFile(token.NewFileSet(), "issue_types.go", nil, parser.SkipObjectResolution)
+	members := make(map[string]IssueType)
+	for name, value := range stringConstantsOfType(t, "issue_types.go", "IssueType") {
+		members[name] = IssueType(value)
+	}
+
+	return members
+}
+
+// stringConstantsOfType maps the name of every constant of the string type
+// typeName that file declares to its value, read from the source.
+func stringConstantsOfType(t *testing.T, file, typeName string) map[string]string {
+	t.Helper()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
-	members := make(map[string]IssueType)
+	constants := make(map[string]string)
 	for _, decl := range parsed.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
@@ -50,22 +63,99 @@ func issueTypeConstantsByName(t *testing.T) map[string]IssueType {
 			if !ok {
 				continue
 			}
-			typeName, ok := value.Type.(*ast.Ident)
-			if !ok || typeName.Name != "IssueType" {
+			declaredType, ok := value.Type.(*ast.Ident)
+			if !ok || declaredType.Name != typeName {
 				continue
 			}
 			for i := range value.Values {
 				lit, ok := value.Values[i].(*ast.BasicLit)
-				require.True(t, ok, "IssueType constant %s is not a string literal", value.Names[i].Name)
+				require.True(t, ok, "%s constant %s is not a string literal", typeName, value.Names[i].Name)
 				unquoted, unquoteErr := strconv.Unquote(lit.Value)
 				require.NoError(t, unquoteErr)
-				members[value.Names[i].Name] = IssueType(unquoted)
+				constants[value.Names[i].Name] = unquoted
 			}
 		}
 	}
-	require.NotEmpty(t, members)
+	require.NotEmpty(t, constants, "%s declares no %s constant", file, typeName)
 
-	return members
+	return constants
+}
+
+// issueTypeOutsideTheEnum is a value no IssueType member has. The stores
+// refuse one, so in production only a programming error makes it; the tests
+// use it to pin what each per-issue-type decision says about one. It is
+// untyped: a package-level IssueType constant, even in a test file, is a
+// member to the exhaustive linter.
+const issueTypeOutsideTheEnum = "not_an_issue_type"
+
+// conditionKeyOutsideTheSet is a value no ConditionKey constant has, untyped
+// for the same reason.
+const conditionKeyOutsideTheSet = "not_a_condition_key"
+
+// requireEveryConstantDecided checks a decision made per member of an enum
+// against want, a table that must give every constant of the string type
+// typeName that file declares its verdict and name nothing else. A new member
+// fails the test until it is decided on purpose, here as well as in the
+// decision's exhaustive switch.
+func requireEveryConstantDecided[K ~string, V any](t *testing.T, file, typeName string, want map[K]V, decide func(K) V) {
+	t.Helper()
+
+	declared := stringConstantsOfType(t, file, typeName)
+	names := make([]string, 0, len(declared))
+	for name := range declared {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	require.Len(t, want, len(declared), "the table must give every %s member a verdict and name nothing else", typeName)
+	for _, name := range names {
+		member := K(declared[name])
+		verdict, ok := want[member]
+		require.True(t, ok, "no verdict for %s (%q)", name, member)
+		assert.Equal(t, verdict, decide(member), "verdict for %s (%q)", name, member)
+	}
+}
+
+// requireEveryIssueTypeDecided is requireEveryConstantDecided over the
+// IssueType members issue_types.go declares.
+func requireEveryIssueTypeDecided[V any](t *testing.T, want map[IssueType]V, decide func(IssueType) V) {
+	t.Helper()
+
+	requireEveryConstantDecided(t, "issue_types.go", "IssueType", want, decide)
+}
+
+// verdictGroup is the members of a per-member decision that share one
+// verdict.
+type verdictGroup[K comparable, V any] struct {
+	verdict V
+	members []K
+}
+
+// issueTypeVerdictGroup is a verdictGroup of issue types.
+type issueTypeVerdictGroup[V any] = verdictGroup[IssueType, V]
+
+// verdictTable flattens groups into the table requireEveryConstantDecided
+// reads, refusing a member two groups name.
+func verdictTable[K comparable, V any](t *testing.T, groups ...verdictGroup[K, V]) map[K]V {
+	t.Helper()
+
+	want := make(map[K]V)
+	for _, group := range groups {
+		for _, member := range group.members {
+			_, named := want[member]
+			require.False(t, named, "%v is in two verdict groups", member)
+			want[member] = group.verdict
+		}
+	}
+
+	return want
+}
+
+// issueTypeVerdicts is verdictTable over issue types.
+func issueTypeVerdicts[V any](t *testing.T, groups ...issueTypeVerdictGroup[V]) map[IssueType]V {
+	t.Helper()
+
+	return verdictTable(t, groups...)
 }
 
 // Validates: R-2.5.6
