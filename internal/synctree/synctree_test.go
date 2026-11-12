@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // Validates: R-2.10, R-6.2
@@ -106,7 +108,7 @@ func TestRoot_FileLifecycleOperations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dir, root.Path())
 
-	require.NoError(t, root.MkdirAll("nested", 0o700))
+	require.NoError(t, root.MkdirAll("nested"))
 
 	file, err := root.OpenFile(filepath.Join("nested", "file.txt"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
@@ -161,7 +163,7 @@ func TestRoot_MkdirAllNoFollow_CreatesComponents(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAllNoFollow(filepath.Join("shortcuts", "docs"), 0o700))
+	require.NoError(t, root.MkdirAllNoFollow(filepath.Join("shortcuts", "docs")))
 
 	assert.DirExists(t, filepath.Join(dir, "shortcuts", "docs"))
 }
@@ -177,7 +179,7 @@ func TestRoot_MkdirAllNoFollow_RejectsSymlinkedAncestor(t *testing.T) {
 		t.Skipf("symlink not available on this filesystem: %v", symlinkErr)
 	}
 
-	err = root.MkdirAllNoFollow(filepath.Join("linked", "docs"), 0o700)
+	err = root.MkdirAllNoFollow(filepath.Join("linked", "docs"))
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnsafePath)
 	assert.NoDirExists(t, filepath.Join(outside, "docs"))
@@ -506,7 +508,7 @@ func TestRoot_RemoveAllAndChtimes(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAll(filepath.Join("nested", "child"), 0o700))
+	require.NoError(t, root.MkdirAll(filepath.Join("nested", "child")))
 
 	file, err := root.OpenFile(filepath.Join("nested", "child", "file.txt"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	require.NoError(t, err)
@@ -685,6 +687,28 @@ func TestRoot_Rename_FailureInjection(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, renameErr)
 	assert.Contains(t, err.Error(), "renaming")
+}
+
+// MkdirAll goes through its seam like every other rooted mutation, and asks
+// it for the user-tree folder mode: a caller has no mode to pass.
+//
+// Validates: R-2.10, R-5.10.2
+func TestRoot_MkdirAll_FailureInjection(t *testing.T) {
+	t.Parallel()
+
+	root, err := Open(t.TempDir())
+	require.NoError(t, err)
+
+	var requested os.FileMode
+	root.ops.mkdirAll = func(_ rootHandle, name string, perm os.FileMode) error {
+		requested = perm
+		return &os.PathError{Op: "mkdirat", Path: name, Err: syscall.ENOSPC}
+	}
+
+	err = root.MkdirAll("new-folder")
+	require.ErrorIs(t, err, syscall.ENOSPC)
+	assert.Contains(t, err.Error(), "creating directory new-folder")
+	assert.Equal(t, localpath.UserTreeDirPerm, requested)
 }
 
 type fakeRootHandle struct {
@@ -890,7 +914,7 @@ func TestRoot_CreateFailureKeepsItsErrno(t *testing.T) {
 			require.ErrorIs(t, err, errno)
 			require.NotErrorIs(t, err, os.ErrNotExist)
 
-			err = root.MkdirAll("new-folder", 0o700)
+			err = root.MkdirAll("new-folder")
 			require.ErrorIs(t, err, errno)
 			require.NotErrorIs(t, err, os.ErrNotExist)
 		})

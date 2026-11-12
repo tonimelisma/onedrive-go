@@ -19,7 +19,7 @@ func TestReadWriteLifecycle(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "nested", "file.txt")
 
-	require.NoError(t, Mkdir(filepath.Dir(target), 0o700))
+	require.NoError(t, MkdirAll(filepath.Dir(target), 0o700))
 
 	file, err := OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 	require.NoError(t, err)
@@ -334,10 +334,6 @@ func TestRejectsEmptyPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "path is empty")
 
 	err = MkdirAll("", 0o700)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "path is empty")
-
-	err = Mkdir("", 0o700)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path is empty")
 

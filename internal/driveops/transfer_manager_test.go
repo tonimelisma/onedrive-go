@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -2149,27 +2150,32 @@ func tmDownloadWriting(content []byte) *tmSimpleDownloader {
 	}
 }
 
+// Downloads used to be 0600 and new parents 0700 whatever the umask, which
+// broke group sharing (Samba, shared folders) for every file. The test runs
+// under a umask that leaves group write, so a 0755 parent cannot pass for a
+// 0775 one as it can under the usual 022.
+//
 // Validates: R-5.10.2
 func TestDownloadToFile_NewFileAndParentHonourUmask(t *testing.T) {
 	t.Parallel()
+	if !synctest.RunUnderUmask(t, synctest.GroupWritableUmask) {
+		return
+	}
 
 	content := []byte("new file")
-	umask := probeUmask()
 	targetPath := filepath.Join(t.TempDir(), "newdir", "file.txt")
 
 	_, err := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil).DownloadToFile(
 		t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{RemoteHash: tmHashBytes(content)})
 	require.NoError(t, err)
 
-	// Downloads used to be 0600 and new parents 0700 whatever the umask,
-	// which broke group sharing (Samba, shared folders) for every file.
 	fileInfo, err := os.Stat(targetPath)
 	require.NoError(t, err)
-	assert.Equal(t, 0o666&^umask, fileInfo.Mode().Perm())
+	assert.Equal(t, os.FileMode(0o664), fileInfo.Mode().Perm(), "0666 minus the umask")
 
 	dirInfo, err := os.Stat(filepath.Dir(targetPath))
 	require.NoError(t, err)
-	assert.Equal(t, 0o777&^umask, dirInfo.Mode().Perm())
+	assert.Equal(t, os.FileMode(0o775), dirInfo.Mode().Perm(), "0777 minus the umask")
 }
 
 // Validates: R-5.10.2

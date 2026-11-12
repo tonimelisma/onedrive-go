@@ -55,7 +55,7 @@ Download and upload transfer infrastructure shared by file operations and sync.
 ## R-5.10 Download Write Path [verified]
 
 - R-5.10.1: A download shall be durable before it is reported: the partial's bytes are flushed to disk (fsync) before the rename, and the target's directory is flushed after it, so a power cut cannot leave an empty or zero-filled file that the baseline already records as synced. [verified]
-- R-5.10.2: A download that replaces a file shall keep that file's permission bits (never setuid, setgid or sticky); a new file shall get 0666 minus the umask and a folder the CLI creates 0777 minus the umask. Partials stay 0600 while they are written. [verified]
+- R-5.10.2: A download that replaces a file shall keep that file's permission bits (never setuid, setgid or sticky); a new file shall get 0666 minus the umask. Partials stay 0600 while they are written. Every folder the client creates in a user's tree shall get 0777 minus the umask, as the files in it do: a folder sync creates below the sync folder (a folder OneDrive holds, a shared folder's shortcut folder, a parent a moved shortcut folder needs), a folder `get` creates for a folder download, a missing parent of a `get` target, and a missing parent of a file restored from the trash. The sync folder the client creates is 0700, and the client's own state keeps its own modes (R-6.8.23). A folder that already exists keeps its mode. [verified]
 - R-5.10.3: A sync download shall write only inside the sync root and shall never create a parent folder: a parent that is missing or no longer a folder makes the download a stale precondition. CLI `get` creates missing parents. [verified]
 
 ## R-5.9 Download Routes [verified]

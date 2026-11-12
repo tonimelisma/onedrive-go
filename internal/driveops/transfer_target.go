@@ -46,15 +46,12 @@ type TargetFS interface {
 type localTarget struct{}
 
 // LocalTarget returns the TargetFS for arbitrary local paths (CLI get). It
-// creates missing parent directories with 0777 minus the umask.
+// creates a missing parent directory as a folder in the user's tree:
+// localpath.UserTreeDirPerm, 0777 minus the umask (R-5.10.2).
 func LocalTarget() TargetFS { return localTarget{} }
 
-// newDirPerms is the mode requested for a created parent; the kernel applies
-// the umask, as for any other program creating a directory (P-8).
-const newDirPerms = 0o777
-
 func (localTarget) PrepareParent(dir string) error {
-	if err := localpath.MkdirAll(dir, newDirPerms); err != nil {
+	if err := localpath.MkdirAll(dir, localpath.UserTreeDirPerm); err != nil {
 		return fmt.Errorf("creating parent dir %s: %w", dir, err)
 	}
 
