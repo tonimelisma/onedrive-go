@@ -54,7 +54,9 @@ Contributors without test accounts can run `go run ./cmd/devtool verify public`,
 which is the same without the live suite.
 
 CI is tiered. Every pull request and every push to `main` runs the quick lane
-in parallel jobs: `verify lint`, and `verify quick` (format, the repo rules,
+in parallel jobs: `verify lint` (golangci-lint, then a pinned actionlint over
+`.github/workflows`, which `go run` fetches itself, so nothing is installed
+for it), and `verify quick` (format, the repo rules,
 the builds and `go test -short`, split into shards with `--shard k/n`) on
 Linux plus `verify platform` (host build and the same short tier) on macOS. `-short` skips the tests marked exhaustive (randomized
 model runs, replays, the reverse-dispatch re-run of every scenario, the
@@ -65,10 +67,12 @@ suite) runs nightly and on manual dispatch, so a data race or a coverage
 drop can reach `main` and be caught by the next nightly run. Before a PR,
 `go run ./cmd/devtool verify pr` (lint, then quick) is the local gate, and it
 is what the `pre-pr` stage below runs; `verify default` still runs
-everything, on a host that can finish it (its race-tier deadline grows on
-hosts with fewer than 3 cores, and `--unit-timeout` overrides it). devtool
-runs every command with the Go toolchain `go.mod` pins, so a newer system Go
-does not change what is built or linted.
+everything, and takes more than an hour on a 2-core host (its race-tier
+deadline is 20 minutes, or 180 core-minutes divided by the cores on a host
+with fewer than 3, and `--unit-timeout` overrides it). devtool
+runs every command, and builds the benchmark's subject, with the Go toolchain
+`go.mod` pins, so a newer system Go does not change what is built, linted or
+measured.
 
 ## How a change is made
 

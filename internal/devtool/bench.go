@@ -612,6 +612,14 @@ func prepareOnedriveGoBenchSubject(
 		return preparedBenchSubject{}, err
 	}
 
+	// The subject is built with the toolchain go.mod pins, as every verify
+	// profile builds, not with whatever Go the host has installed: a newer
+	// host Go would measure a binary CI never builds.
+	toolchain, err := pinnedGoToolchain(repoRoot)
+	if err != nil {
+		return preparedBenchSubject{}, err
+	}
+
 	buildRoot, err := mkdirTemp(os.TempDir(), "onedrive-go-bench-*")
 	if err != nil {
 		return preparedBenchSubject{}, fmt.Errorf("create build root: %w", err)
@@ -621,7 +629,7 @@ func prepareOnedriveGoBenchSubject(
 	buildOut, buildErr := runner.CombinedOutput(
 		ctx,
 		repoRoot,
-		os.Environ(),
+		withPinnedToolchain(os.Environ(), toolchain),
 		"go",
 		"build",
 		"-o",

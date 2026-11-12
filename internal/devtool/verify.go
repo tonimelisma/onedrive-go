@@ -85,7 +85,10 @@ const (
 	fullE2ESerialSyncTimeout        = "40m"
 	fullE2ESerialWatchSharedTimeout = "40m"
 	// classifiedRerunTimeout bounds the one-test rerun of a known live quirk.
-	classifiedRerunTimeout       = "10m"
+	classifiedRerunTimeout = "10m"
+	// integrationTimeout bounds the integration tier, whose runs take about
+	// two minutes.
+	integrationTimeout           = "5m"
 	stressMultisyncTimeout       = "20m"
 	stressSyncConcurrencyTimeout = "40m"
 	stressSyncTimeout            = "40m"
@@ -410,7 +413,7 @@ func prepareCoverageFile(plan verifyPlan, coverageFile string) (string, func() e
 	}
 
 	return coverageFile, func() error {
-		if err := remove(coverageFile); err != nil && !os.IsNotExist(err) {
+		if err := remove(coverageFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove coverage file %s: %w", coverageFile, err)
 		}
 
@@ -437,7 +440,8 @@ func runPublicVerification(
 	// The full tier runs every step and reports every failure. A lint or rule
 	// failure says nothing about the tests, and on the nightly, the one run of
 	// this tier, stopping there would hide the tests' state for a day.
-	publicSteps := []verifyStep{{"format", formatStep(plan.checkFormat)}, {"lint", runLint}}
+	publicSteps := []verifyStep{{"format", formatStep(plan.checkFormat)}}
+	publicSteps = append(publicSteps, lintSteps()...)
 	publicSteps = append(publicSteps, repoRuleSteps()...)
 	publicSteps = append(publicSteps, verifyStep{"build", runBuild})
 	stepsErr := runEveryVerifyStep(ctx, runner, repoRoot, env, collector, stdout, stderr, publicSteps)
@@ -692,13 +696,11 @@ func runUnitTests(
 	if err := writeStatus(stdout, "==> go test -race -coverpkg=./... -coverprofile\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := runner.Run(
-		ctx,
-		repoRoot,
-		env,
-		stdout,
-		stderr,
-		"go",
+
+	// Through the empty-run guard like every go test step: a tier in which no
+	// package ran a test fails, instead of handing the coverage gate a profile
+	// of nothing. The coverage gate reads the profile file, not this output.
+	_, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "unit tests",
 		"test",
 		"-race",
 		// Explicit, not go test's 10-minute default: internal/sync under
@@ -713,11 +715,9 @@ func runUnitTests(
 		"-coverpkg=./...",
 		"-coverprofile="+coverageFile,
 		"./...",
-	); err != nil {
-		return fmt.Errorf("unit tests: %w", err)
-	}
+	)
 
-	return nil
+	return err
 }
 
 const (
@@ -733,27 +733,37 @@ const (
 	// push the macOS deadline past it and let the job, not go test, end a
 	// hang, without the goroutine dump.
 	unitTestReferenceCores = 3
+
+	// unitTestSmallHostCoreBudget is the deadline of a host with fewer cores
+	// than the reference, as core time: the deadline is the budget divided by
+	// the cores. It is measured, not scaled from the base: a host that small
+	// is a developer's machine, slower per core than a CI runner and doing
+	// other work beside the run. On a shared 2-core host internal/sync took
+	// 63 minutes under -race with -coverpkg, 126 core-minutes, where twice the
+	// base deadline (40 minutes) had ended it as a hang. 180 leaves that run
+	// about 40% of headroom: 90 minutes on 2 cores, 180 on one.
+	unitTestSmallHostCoreBudget = 180 * time.Minute
 )
 
-// unitTestTimeoutForCores scales the full tier's go test deadline to the cores
-// the run may use. The race tier is CPU-bound, so a host with fewer cores than
-// the reference needs proportionally longer: a fixed deadline that fits a CI
-// runner fails a healthy run on a 2-core host. The multiplier is
-// ceil(reference / cores), which is never below one, so more cores than the
-// reference do not shorten the deadline a real hang is measured against.
+// unitTestTimeoutForCores is the full tier's go test deadline for the cores the
+// run may use. The race tier is CPU-bound, and a deadline that fits a CI runner
+// fails a healthy run on a 2-core host, so a host below the reference gets
+// unitTestSmallHostCoreBudget divided by its cores. A host at the reference or
+// above keeps the base deadline: more cores do not shorten the deadline a real
+// hang is measured against, and the CI job timeouts are set above it.
 func unitTestTimeoutForCores(cores int) time.Duration {
 	if cores < 1 {
 		cores = 1
 	}
+	if cores >= unitTestReferenceCores {
+		return unitTestBaseTimeout
+	}
 
-	// Integer ceiling of reference/cores.
-	multiplier := (unitTestReferenceCores + cores - 1) / cores
-
-	return unitTestBaseTimeout * time.Duration(multiplier)
+	return unitTestSmallHostCoreBudget / time.Duration(cores)
 }
 
 // resolveUnitTestTimeout returns the explicit deadline (`--unit-timeout`) when
-// one was given, else the deadline scaled to cores.
+// one was given, else the deadline for the cores.
 func resolveUnitTestTimeout(explicit time.Duration, cores int) time.Duration {
 	if explicit > 0 {
 		return explicit
@@ -767,6 +777,12 @@ func resolveUnitTestTimeout(explicit time.Duration, cores int) time.Duration {
 type verifyStep struct {
 	name string
 	run  func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error
+}
+
+// lintSteps are the lint profile's steps, which every profile that lints runs:
+// golangci-lint over the Go code, then actionlint over the workflow files.
+func lintSteps() []verifyStep {
+	return []verifyStep{{"lint", runLint}, {"workflow lint", runWorkflowLint}}
 }
 
 // repoRuleSteps are the repository's static rules: the output-boundary,
@@ -837,6 +853,15 @@ func runEveryVerifyStep(
 	return errors.Join(stepErrs...)
 }
 
+// The integration tier's build tag and the name prefix of its tests. The tier
+// runs `-run=^TestIntegration_`, and the test-convention check holds every
+// test of a file built with the tag to the prefix, so the pattern cannot
+// silently leave a new integration test out.
+const (
+	integrationBuildTag   = "integration"
+	integrationTestPrefix = "TestIntegration_"
+)
+
 func runIntegration(
 	ctx context.Context,
 	runner commandRunner,
@@ -849,24 +874,22 @@ func runIntegration(
 		if err := writeStatus(stdout, "==> go test -tags=integration\n"); err != nil {
 			return fmt.Errorf("write status: %w", err)
 		}
-		if err := runner.Run(
-			ctx,
-			repoRoot,
-			env,
-			stdout,
-			stderr,
-			"go",
+
+		// The integration tests only: graph's untagged unit tests belong to
+		// the unit tiers, and running them here would pass the tier when no
+		// integration test ran. The test-convention check keeps every test of
+		// an integration-tagged file under the prefix this pattern selects.
+		_, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "integration tests",
 			"test",
-			"-tags=integration",
+			"-tags="+integrationBuildTag,
 			"-race",
 			"-v",
-			"-timeout=5m",
+			"-run=^"+integrationTestPrefix,
+			"-timeout="+integrationTimeout,
 			"./internal/graph/...",
-		); err != nil {
-			return fmt.Errorf("integration tests: %w", err)
-		}
+		)
 
-		return nil
+		return err
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,38 @@ func TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail(t *testing.T)
 	assertVerifySummaryHasStep(t, summary, fullE2ECompileStepName)
 }
 
+// Validates: R-6.10.26
+//
+// The full tier's go test over ./... passed a run in which no package ran a
+// test, and the coverage gate then measured whatever profile it was given.
+func TestRunVerifyPublicFailsAUnitTierThatRanNoTest(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRequirementsBackedReadme(t, repoRoot)
+	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
+	coverFile := filepath.Join(repoRoot, "cover.out")
+	runner := &fakeRunner{
+		outputs: map[string][]byte{"go tool cover -func=" + coverFile: []byte("total:\t(statements)\t90.0%\n")},
+		runStdoutFunc: func(args []string) string {
+			if slices.Contains(args, "-coverprofile="+coverFile) {
+				return "?   \t" + repoModulePath + "\t[no test files]\n"
+			}
+
+			return passingGoTestOutput(args)
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:     repoRoot,
+		Profile:      VerifyPublic,
+		CoverageFile: coverFile,
+		Stdout:       &bytes.Buffer{},
+		Stderr:       &bytes.Buffer{},
+	})
+	require.ErrorContains(t, err, "unit tests matched no tests")
+}
+
 // Validates: R-6.10.8, R-6.10.26
 func TestRunVerifyStressRunsEveryStepAfterOneFails(t *testing.T) {
 	t.Parallel()
@@ -171,6 +204,5 @@ func TestRunVerifyStressRunsEveryStepAfterOneFails(t *testing.T) {
 		Stderr:   &bytes.Buffer{},
 	})
 	require.ErrorContains(t, err, "stress tests")
-	require.Len(t, runner.runCommands, 2, "the sync x50 step still runs")
-	require.Len(t, runner.combinedCommands, 1, "the sync x3 step still runs")
+	require.Len(t, runner.runCommands, 3, "the sync x50 and x3 steps still run")
 }
