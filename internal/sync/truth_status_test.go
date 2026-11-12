@@ -73,66 +73,82 @@ func TestTruthAvailabilityIndex_StatusForPath_UsesObservationEvidence(t *testing
 }
 
 // The verdict of every issue type on the truth of the path its observation
-// issue names. The table must name every declared member, so a new member
-// gets a deliberate verdict here as well as in the exhaustive switch.
-// Validates: R-6.2.14, R-6.2.15
+// issue names, and on OneDrive's truth beneath it. The groups must name every
+// declared member, so a new member gets a deliberate verdict here as well as
+// in the exhaustive switch.
+// Validates: R-6.2.14, R-6.2.15, R-2.12.6
 func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 	t.Parallel()
 
-	type verdict struct{ local, remote bool }
-	verdicts := map[IssueType]verdict{
-		// The scan found the path but cannot represent it: unknown, not absent.
-		IssueInvalidFilename:            {local: true},
-		issuePathTooLong:                {local: true},
-		issueFileTooLarge:               {local: true},
-		issueCaseCollision:              {local: true},
-		issueHashPanic:                  {local: true},
-		issueLocalReadDenied:            {local: true},
-		issueLocalUnsyncableReplacement: {local: true},
-		issueLocalMountBoundary:         {local: true},
-		// OneDrive's side of the path is the unknown one.
-		issueRemoteReadDenied: {remote: true},
-		issueRemoteNameTwin:   {remote: true},
-		// An internal name the content filter hides from planning on both
-		// sides: no synced path reads as deleted through it.
-		issueLocalInterruptedRemoval: {},
-		// Runtime conditions that retry_work or a block scope carries;
-		// observation never stores them.
-		IssueUnauthorized:             {},
-		IssueRemoteWriteDenied:        {},
-		IssueQuotaExceeded:            {},
-		issueRateLimited:              {},
-		issueLocalWriteDenied:         {},
-		issueDiskFull:                 {},
-		issueServiceOutage:            {},
-		issueFileTooLargeForSpace:     {},
-		issueLocalNameTooLong:         {},
-		issueLocalReadOnly:            {},
-		issueDeletesHeld:              {},
-		issueRemoteFolderUnverifiable: {},
-		issueLocalFileTooLarge:        {},
-		issueLocalBusy:                {},
-		issueLocalCrossDevice:         {},
-		issueUnsupportedOperation:     {},
-		issueMalwareDetected:          {},
-		issueLocalDatabaseOpen:        {},
-		issueUploadVerification:       {},
-		issueDownloadIntegrity:        {},
-		issueRequestTimeout:           {},
-		issueTransientConflict:        {},
-		issueTransientNotFound:        {},
-		issueResourceLocked:           {},
-		issueTransferURLRejected:      {},
-	}
+	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
+		issueTypeVerdictGroup[observationIssueTruthVerdict]{
+			// The scan found the path but cannot represent it: unknown, not absent.
+			verdict: observationIssueTruthVerdict{blocksLocal: true},
+			members: []IssueType{
+				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueCaseCollision,
+				issueHashPanic, issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
+			},
+		},
+		issueTypeVerdictGroup[observationIssueTruthVerdict]{
+			// OneDrive's side of the path is the unknown one; a folder's subtree
+			// is covered by the issue's read scope key, not by its type.
+			verdict: observationIssueTruthVerdict{blocksRemote: true},
+			members: []IssueType{issueRemoteReadDenied},
+		},
+		issueTypeVerdictGroup[observationIssueTruthVerdict]{
+			// OneDrive keeps two items under the path, so its side of the path
+			// and of everything beneath it is unknown; a twin has no scope key.
+			verdict: observationIssueTruthVerdict{blocksRemote: true, boundsRemoteSubtree: true},
+			members: []IssueType{issueRemoteNameTwin},
+		},
+		issueTypeVerdictGroup[observationIssueTruthVerdict]{
+			// An internal name the content filter hides from planning on both
+			// sides, and runtime conditions that retry_work or a block scope
+			// carries and observation never stores.
+			verdict: observationIssueTruthVerdict{},
+			members: []IssueType{
+				issueLocalInterruptedRemoval, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded,
+				issueRateLimited, issueLocalWriteDenied, issueDiskFull, issueServiceOutage,
+				issueFileTooLargeForSpace, issueLocalNameTooLong, issueLocalReadOnly, issueDeletesHeld,
+				issueRemoteFolderUnverifiable, issueLocalFileTooLarge, issueLocalBusy, issueLocalCrossDevice,
+				issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen, issueUploadVerification,
+				issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict, issueTransientNotFound,
+				issueResourceLocked, issueTransferURLRejected,
+			},
+		},
+	), func(member IssueType) observationIssueTruthVerdict {
+		verdict := truthVerdictForIssueType(member)
+		assert.Equal(t, verdict.blocksLocal, observationIssueBlocksLocalTruth(member), "local truth under %q", member)
+		assert.Equal(t, verdict.blocksRemote, observationIssueBlocksRemoteTruth(member), "remote truth under %q", member)
 
-	members := issueTypeConstantsInSource(t)
-	require.Len(t, verdicts, len(members), "the table must give every IssueType member a verdict")
-	for _, member := range members {
-		want, ok := verdicts[member]
-		require.True(t, ok, "no verdict for %q", member)
-		assert.Equal(t, want.local, observationIssueBlocksLocalTruth(member), "local truth under %q", member)
-		assert.Equal(t, want.remote, observationIssueBlocksRemoteTruth(member), "remote truth under %q", member)
-	}
+		return verdict
+	})
+
+	assert.Equal(t, observationIssueTruthVerdict{blocksLocal: true, blocksRemote: true},
+		truthVerdictForIssueType(issueTypeOutsideTheEnum),
+		"a value outside the enum is unknown on both sides of its path; no read scope key says what subtree it covers")
+}
+
+// A remote twin bounds OneDrive's truth of its path and everything beneath
+// it by its type, with no scope key; an issue whose type does not bound a
+// subtree blocks only its own path.
+// Validates: R-2.12.6, R-6.2.14
+func TestTruthAvailabilityIndex_OnlyASubtreeBoundingTypeBlocksDescendants(t *testing.T) {
+	t.Parallel()
+
+	index := newTruthAvailabilityIndex([]ObservationIssueRow{
+		{Path: "Twins", IssueType: issueRemoteNameTwin},
+		{Path: "Odd", IssueType: issueTypeOutsideTheEnum},
+	})
+
+	twinChild := index.StatusForPath("Twins/inner/file.txt")
+	assert.Equal(t, truthAvailabilityBlockedObservationIssue, twinChild.Remote.Availability)
+	assert.Equal(t, issueRemoteNameTwin, twinChild.Remote.IssueType)
+	assert.True(t, twinChild.Local.IsAvailable())
+
+	oddChild := index.StatusForPath("Odd/file.txt")
+	assert.True(t, oddChild.Remote.IsAvailable())
+	assert.True(t, oddChild.Local.IsAvailable())
 }
 
 // A value outside the enum (the store refuses one, so only a programming
@@ -143,7 +159,7 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 func TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	const outsideTheEnum IssueType = "not_an_issue_type"
+	const outsideTheEnum IssueType = issueTypeOutsideTheEnum
 	require.False(t, outsideTheEnum.isMember())
 	assert.True(t, observationIssueBlocksLocalTruth(outsideTheEnum))
 
@@ -152,5 +168,30 @@ func TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable(t *te
 	}).StatusForPath("docs/report.txt")
 	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Local.Availability)
 	assert.Equal(t, outsideTheEnum, status.Local.IssueType)
-	assert.True(t, status.Remote.IsAvailable())
+}
+
+// The same value leaves the path's OneDrive truth unavailable too. Before,
+// remote truth was blocked by two equality tests, so any value they did not
+// name read as "not blocking": a remote side that might be absent for a
+// reason no member names was planned from as if it were known.
+// Validates: R-6.2.14
+func TestObservationIssueBlocksRemoteTruth_ValueOutsideTheEnumIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	const outsideTheEnum IssueType = issueTypeOutsideTheEnum
+	require.False(t, outsideTheEnum.isMember())
+	assert.True(t, observationIssueBlocksRemoteTruth(outsideTheEnum))
+
+	index := newTruthAvailabilityIndex([]ObservationIssueRow{
+		{Path: "docs/report.txt", IssueType: outsideTheEnum},
+	})
+	status := index.StatusForPath("docs/report.txt")
+	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Remote.Availability)
+	assert.Equal(t, pathTruthSourceObservationIssue, status.Remote.Source)
+	assert.Equal(t, outsideTheEnum, status.Remote.IssueType)
+	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Local.Availability)
+
+	sibling := index.StatusForPath("docs/other.txt")
+	assert.True(t, sibling.Local.IsAvailable(), "the value blocks the path it names, not its neighbors")
+	assert.True(t, sibling.Remote.IsAvailable())
 }

@@ -1,8 +1,9 @@
-// Package sync owns the single mounted content-root runtime, including local observation.
+// The local observer of the mounted content-root runtime: its type, the
+// filesystem watcher seam and the watch entry point.
 //
 // Contents:
-//   - LocalObserver struct + NewLocalObserver constructor
-//   - FsWatcher interface + fsnotifyWrapper adapter
+//   - localObserver struct + newLocalObserver constructor
+//   - fsWatcher interface + fsnotifyWrapper adapter
 //   - Watch() entry point + AddWatchesRecursive
 //   - Event channel management (TrySend, DroppedEvents, LastActivity)
 //
@@ -10,6 +11,7 @@
 //   - observer_local_handlers.go:  watch event loop + fsnotify event handlers
 //   - observer_local_collisions.go: case collision detection helpers (cache, peers)
 //   - scanner.go:                   FullScan, walk/hash/filter logic
+
 package sync
 
 import (

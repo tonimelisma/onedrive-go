@@ -1,5 +1,5 @@
-// Package sync persists sync baseline, observation issues, retry work,
-// block-scope, and observation cadence state.
+// The sync store: SyncStore, which persists baseline, observation issues,
+// retry work, block-scope and observation cadence state, and its lifecycle.
 //
 // Contents:
 //   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
@@ -19,6 +19,7 @@
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
 //   - store_reset.go:              explicit delete-and-recreate helper
+
 package sync
 
 import (

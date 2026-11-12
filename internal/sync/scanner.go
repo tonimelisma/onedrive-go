@@ -1,20 +1,21 @@
-// Package sync owns sync-engine runtime, including local observation and
-// scanner helpers that the merged engine/executor package now shares directly.
+// Local observation's full scan and the scanner helpers it shares with the
+// watch-mode handlers.
 //
 // Contents:
-//   - FullScan:              orchestrates walk + hash phases → ScanResult
-//   - hashPhase:             parallel hash computation for discovered files
-//   - makeWalkFunc:          builds the filepath.WalkDir callback
-//   - classifyLocalChange:   compares local state against baseline
-//   - detectDeletions:       finds baseline entries missing from walk
-//   - ComputeStableHash:     double-stat hash for actively-written files
+//   - FullScan:                orchestrates walk + hash phases → scanResult
+//   - hashPhase:               parallel hash computation for discovered files
+//   - makeWalkFunc:            builds the filepath.WalkDir callback
+//   - classifyObservedInfo:    classifies one observed entry against baseline
+//   - detectDeletions:         finds baseline entries missing from walk
+//   - computeStableHashWith:   double-stat hash for actively-written files
 //   - shouldObserveWithFilter: unified observation filter (Stage 1: name + path)
-//   - IsOversizedFile:       Stage 2 observation filter (file size > 250GB)
-//   - ValidateOneDriveName:  returns reason + detail for invalid names
+//   - IsOversizedFile:         Stage 2 observation filter (file size > 250GB)
+//   - validateOneDriveName:    returns reason + detail for invalid names
 //
 // Related files:
-//   - observer_local.go:          LocalObserver struct and Watch() entry point
+//   - observer_local.go:          localObserver struct and Watch() entry point
 //   - observer_local_handlers.go: watch-mode event handlers
+
 package sync
 
 import (

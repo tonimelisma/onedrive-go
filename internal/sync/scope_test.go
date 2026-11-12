@@ -319,9 +319,9 @@ func TestScopeKey_StringRoundTrip(t *testing.T) {
 		// String() produces the expected wire format.
 		assert.Equal(t, tt.wire, tt.key.String(), "%s String()", tt.name)
 
-		// ParseScopeKey round-trips back to the original key.
+		// parseScopeKey round-trips back to the original key.
 		parsed := parseScopeKey(tt.wire)
-		assert.Equal(t, tt.key, parsed, "%s ParseScopeKey round-trip", tt.name)
+		assert.Equal(t, tt.key, parsed, "%s parseScopeKey round-trip", tt.name)
 	}
 }
 

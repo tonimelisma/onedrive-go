@@ -1,5 +1,6 @@
-// Package sync defines sync-domain issue type constants shared across the
-// observer, engine, store, and CLI layers.
+// The sync-domain issue type vocabulary, shared across the observer, engine,
+// store, and CLI layers.
+
 package sync
 
 import "fmt"
@@ -17,16 +18,27 @@ type IssueType string
 // Issue type constants for sync conditions. Scanner-detectable issues
 // (invalid_filename, path_too_long, file_too_large) are caught at
 // observation time by shouldObserve / processEntry. Runtime issues
-// are detected during execution by the engine. A new member must be added to
-// isMember and given a verdict in observationIssueBlocksLocalTruth; the
-// exhaustive linter fails until both name it.
+// are detected during execution by the engine. Every decision made per issue
+// type is a switch that names every member, its default answering only a
+// value outside the enum: membership (isMember), truth
+// (truthVerdictForIssueType), condition family (conditionKeyForIssueType),
+// retry curve, permission boundary scope and block-scope wording. A new
+// member does not pass the exhaustive linter until each of them decides it,
+// and each has a test that reads the members from this file.
 const (
 	// Scanner-detectable (observation-time).
 	IssueInvalidFilename IssueType = "invalid_filename"
 	issuePathTooLong     IssueType = "path_too_long"
 	issueFileTooLarge    IssueType = "file_too_large"
 
-	// Scanner-detectable (hash phase).
+	// Scanner-detectable (hash phase). The name is narrower than its use: the
+	// scanner records it for a panic in a hash worker and for any error but
+	// "not found" and "permission denied" while reading a file to hash it
+	// (scanner.go), so it means "the content could not be read or checked".
+	// Users see it as the condition ConditionHashError ("hash_error",
+	// conditionKeyForIssueType). The stored value is kept: renaming it
+	// changes what observation_issues holds, which needs a store generation
+	// of its own.
 	issueHashPanic IssueType = "hash_panic"
 
 	// Runtime (execution-time).

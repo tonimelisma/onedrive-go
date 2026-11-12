@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-6.6.7
+// Validates: R-6.6.7, R-6.6.12
 func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +54,35 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn(t *testing.T)
 	assert.Equal(t, 0, succeeded)
 	assert.Equal(t, 0, failed)
 	assert.Empty(t, errs)
+}
+
+// A failure kept as retry work with no condition is summarized in a group of
+// its own, named as the store reads such a row (a transient failure), apart
+// from the failures that name their condition.
+// Validates: R-6.6.12
+func TestEngineFlow_LogFailureSummary_GroupsFailuresWithNoConditionApart(t *testing.T) {
+	t.Parallel()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	flow := testEngineFlow(t, eng)
+
+	for i, condition := range []IssueType{"", issueServiceOutage, ""} {
+		flow.recordError(&resultDecision{
+			Persistence:   persistRetryWork,
+			ConditionType: condition,
+		}, &actionCompletion{
+			Path:   fmt.Sprintf("unclassified-%02d.txt", i),
+			ErrMsg: "connection reset",
+		})
+	}
+	flow.logFailureSummary()
+
+	output := logBuf.String()
+	assert.Equal(t, 2, strings.Count(output, "condition_type="+noConditionSummaryGroup+" "))
+	assert.Equal(t, 1, strings.Count(output, "condition_type=service_outage "))
+	assert.NotContains(t, output, "condition_type= ", "no failure is logged without a group")
 }
 
 // Validates: R-2.10.33

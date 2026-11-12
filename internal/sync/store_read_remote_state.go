@@ -1,11 +1,12 @@
-// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
+// Remote mirror reads of the sync store.
 //
 // Contents:
-//   - ListRemoteState:          current remote mirror rows
-//   - GetRemoteStateByPath:     point lookup by path
-//   - GetRemoteStateByID:       point lookup by item ID
-//   - queryRemoteStateRows:     shared multi-row remote_state scanner
-//   - scanRemoteStateRowWithQuerier: shared single-row remote_state scanner
+//   - ListRemoteState:                current remote mirror rows
+//   - GetRemoteStateByPath:           point lookup by path
+//   - GetRemoteStateByID:             point lookup by item ID
+//   - queryRemoteStateRowsWithRunner: shared multi-row remote_state scanner
+//   - scanRemoteStateRowWithQuerier:  shared single-row remote_state scanner
+
 package sync
 
 import (

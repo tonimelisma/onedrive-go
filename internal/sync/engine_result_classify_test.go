@@ -434,6 +434,29 @@ func TestRuntimeConditionKey_RepresentativeMappings(t *testing.T) {
 	assert.Equal(t, ConditionKey(""), conditionKeyForRuntimeResult(errclass.ClassSuperseded, ""))
 }
 
+// A transient runtime condition is an expected failure that is retried: its
+// result has no condition family. It used to be logged with condition_key
+// unexpected_condition, the key of a failure nothing explains.
+// Validates: R-6.6.13, R-6.8.16
+func TestRuntimeConditionKey_TransientConditionsHaveNoFamily(t *testing.T) {
+	t.Parallel()
+
+	for _, condition := range []IssueType{
+		issueRequestTimeout, issueTransientConflict, issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,
+	} {
+		assert.Empty(t, conditionKeyForRuntimeResult(resultRequeue, condition), "%q", condition)
+	}
+
+	// The classifier gives a 408 such a condition, so its decision carries no key.
+	timedOut := classifyResult(&actionCompletion{
+		HTTPStatus: http.StatusRequestTimeout,
+		Err:        errors.New("the request timed out"),
+	})
+	assert.Equal(t, resultRequeue, timedOut.Class)
+	assert.Equal(t, issueRequestTimeout, timedOut.ConditionType)
+	assert.Empty(t, timedOut.ConditionKey)
+}
+
 // Validates: R-2.10.4
 func TestPermissionCapabilityFallbacks(t *testing.T) {
 	t.Parallel()

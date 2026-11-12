@@ -32,9 +32,8 @@ func (ph *permissionHandler) handleLocalPermission(
 			)
 		}
 
-		return ph.localFilePermissionEvidence(
+		return localFilePermissionEvidence(
 			r.Path,
-			r.ActionType,
 			issueType,
 			"sync root directory not accessible (check filesystem permissions)",
 		)
@@ -52,12 +51,7 @@ func (ph *permissionHandler) handleLocalPermission(
 			slog.Any("error", absErr),
 		)
 
-		return ph.localFilePermissionEvidence(
-			r.Path,
-			r.ActionType,
-			issueType,
-			"file not accessible (check filesystem permissions)",
-		)
+		return localFilePermissionEvidence(r.Path, issueType, localFileNotAccessibleReason)
 	}
 	parentDir := filepath.Dir(absPath)
 
@@ -68,21 +62,11 @@ func (ph *permissionHandler) handleLocalPermission(
 			// per-file denial that only the file's own retry revisits
 			// (R-2.10.13; live on 2026-11-03 with a chmod 555 folder).
 			if relParent, relErr := ph.syncTree.Rel(parentDir); relErr == nil {
-				return ph.localDirectoryPermissionEvidence(
-					storedPathOf(relParent),
-					r.Path,
-					r.ActionType,
-					issueType,
-				)
+				return localDirectoryPermissionEvidence(storedPathOf(relParent), r.Path, issueType)
 			}
 		}
 
-		return ph.localFilePermissionEvidence(
-			r.Path,
-			r.ActionType,
-			issueType,
-			"file not accessible (check filesystem permissions)",
-		)
+		return localFilePermissionEvidence(r.Path, issueType, localFileNotAccessibleReason)
 	}
 
 	boundary := ph.deepestDeniedBoundary(parentDir)
@@ -93,30 +77,18 @@ func (ph *permissionHandler) handleLocalPermission(
 			slog.Any("error", relErr),
 		)
 
-		return ph.localFilePermissionEvidence(
-			r.Path,
-			r.ActionType,
-			issueType,
-			"file not accessible (check filesystem permissions)",
-		)
+		return localFilePermissionEvidence(r.Path, issueType, localFileNotAccessibleReason)
 	}
 
-	return ph.localDirectoryPermissionEvidence(
-		storedPathOf(relBoundary),
-		r.Path,
-		r.ActionType,
-		issueType,
-	)
+	return localDirectoryPermissionEvidence(storedPathOf(relBoundary), r.Path, issueType)
 }
 
-func (ph *permissionHandler) localFilePermissionEvidence(
-	path string,
-	actionType actionType,
-	issueType IssueType,
-	errMsg string,
-) permissionEvidence {
-	_ = actionType
+// localFileNotAccessibleReason is the reason recorded for a file the local
+// probe could not attribute to a denied folder.
+const localFileNotAccessibleReason = "file not accessible (check filesystem permissions)"
 
+// localFilePermissionEvidence is a denial of the file at path itself.
+func localFilePermissionEvidence(path string, issueType IssueType, errMsg string) permissionEvidence {
 	return permissionEvidence{
 		Kind:        permissionEvidenceFileDenied,
 		TriggerPath: path,
@@ -125,14 +97,9 @@ func (ph *permissionHandler) localFilePermissionEvidence(
 	}
 }
 
-func (ph *permissionHandler) localDirectoryPermissionEvidence(
-	boundaryPath string,
-	triggerPath string,
-	actionType actionType,
-	issueType IssueType,
-) permissionEvidence {
-	_ = actionType
-
+// localDirectoryPermissionEvidence is a denial at the folder boundaryPath,
+// found while acting on triggerPath beneath it.
+func localDirectoryPermissionEvidence(boundaryPath, triggerPath string, issueType IssueType) permissionEvidence {
 	return permissionEvidence{
 		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: boundaryPath,

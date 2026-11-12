@@ -373,30 +373,91 @@ func (flow *engineFlow) logBlockScopeActivated(
 		return
 	}
 
-	retryIn := waitText(interval)
-	switch conditionType { //nolint:exhaustive // the scopes with their own wording; the default words every other condition
+	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, waitText(interval))
+	if clearsAutomatically {
+		flow.deps.logger.Info(line, fields...)
+		return
+	}
+
+	flow.deps.logger.Warn(line, fields...)
+}
+
+// blockScopeActivationLine is the line said when a block scope of a condition
+// starts, and whether the condition clears without the user, which makes the
+// line Info rather than Warn. That verdict is the condition family's
+// (conditionClearsAutomatically), the same one that keeps the watch condition
+// summary below a warning, so the two cannot disagree; a condition with no
+// family is not known to clear by itself.
+func blockScopeActivationLine(key ScopeKey, conditionType IssueType, retryIn string) (line string, clearsAutomatically bool) {
+	family, hasFamily := conditionKeyForIssueType(conditionType)
+
+	return blockScopeActivationWording(key, conditionType, retryIn), hasFamily && conditionClearsAutomatically(family)
+}
+
+// blockScopeActivationWording words the activation line of a condition's
+// block scope. It decides every IssueType by name (the exhaustive linter
+// holds the switch to that), so a new condition is worded on purpose. The
+// conditions with no wording of their own, like a value outside the enum,
+// are named in words after the scope.
+func blockScopeActivationWording(key ScopeKey, conditionType IssueType, retryIn string) string {
+	switch conditionType {
 	case issueRateLimited:
-		flow.deps.logger.Info("OneDrive is limiting requests; pausing affected transfers and retrying in "+retryIn, fields...)
+		return "OneDrive is limiting requests; pausing affected transfers and retrying in " + retryIn
 	case issueServiceOutage:
-		flow.deps.logger.Info("OneDrive is temporarily unavailable; pausing transfers and retrying in "+retryIn, fields...)
+		return "OneDrive is temporarily unavailable; pausing transfers and retrying in " + retryIn
 	case IssueQuotaExceeded:
-		flow.deps.logger.Warn("OneDrive storage is full; uploads are paused until space is freed (checking again in "+retryIn+")",
-			fields...)
+		return "OneDrive storage is full; uploads are paused until space is freed (checking again in " + retryIn + ")"
 	case issueDiskFull:
 		// The same scope covers the min_free_space reserve and a real
 		// ENOSPC/EDQUOT write (inodes included); the per-file error names
 		// which one, so this line names both limits.
-		flow.deps.logger.Warn("The local disk is full or below the min_free_space reserve; downloads are paused "+
-			"until there is room (checking again in "+retryIn+")",
-			fields...)
+		return "The local disk is full or below the min_free_space reserve; downloads are paused " +
+			"until there is room (checking again in " + retryIn + ")"
 	case issueLocalReadOnly:
-		flow.deps.logger.Warn("The local filesystem holding "+key.Humanize()+" is read-only; local changes there are "+
-			"paused until it is writable again (checking again in "+retryIn+")",
-			fields...)
+		return "The local filesystem holding " + key.Humanize() + " is read-only; local changes there are " +
+			"paused until it is writable again (checking again in " + retryIn + ")"
+	case IssueInvalidFilename,
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueHashPanic,
+		IssueUnauthorized,
+		IssueRemoteWriteDenied,
+		issueRemoteReadDenied,
+		issueLocalReadDenied,
+		issueLocalWriteDenied,
+		issueCaseCollision,
+		issueRemoteNameTwin,
+		issueFileTooLargeForSpace,
+		issueLocalNameTooLong,
+		issueDeletesHeld,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
+		issueRemoteFolderUnverifiable,
+		issueLocalInterruptedRemoval,
+		issueLocalFileTooLarge,
+		issueLocalBusy,
+		issueLocalCrossDevice,
+		issueUnsupportedOperation,
+		issueMalwareDetected,
+		issueLocalDatabaseOpen,
+		issueUploadVerification,
+		issueDownloadIntegrity,
+		issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected:
+		return pausedScopeLine(key, conditionType, retryIn)
 	default:
-		flow.deps.logger.Warn("Paused syncing "+key.Humanize()+" ("+strings.ReplaceAll(string(conditionType), "_", " ")+
-			"); checking again in "+retryIn, fields...)
+		return pausedScopeLine(key, conditionType, retryIn)
 	}
+}
+
+// pausedScopeLine is the activation line of a block scope whose condition
+// has no wording of its own: the scope, and the condition in words.
+func pausedScopeLine(key ScopeKey, conditionType IssueType, retryIn string) string {
+	return "Paused syncing " + key.Humanize() + " (" + strings.ReplaceAll(string(conditionType), "_", " ") +
+		"); checking again in " + retryIn
 }
 
 // discardScope atomically removes the block scope and deletes blocked retry

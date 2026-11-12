@@ -697,10 +697,12 @@ func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
 	return retryDelayForCondition(decision.ConditionType)
 }
 
-// retryDelayForCondition is the backoff curve for retry work of a condition.
-// A transient failure follows the reconcile curve, which starts at one
-// second. Two conditions do not clear by themselves and wait from
-// durableRecheckDelay, doubling to an hour:
+// retryDelayForCondition is the backoff curve for retry work of a condition,
+// decided for every IssueType by name (the exhaustive linter holds the switch
+// to that), so a new condition is put on a curve on purpose. A transient
+// failure follows the reconcile curve, which starts at one second. Two
+// conditions do not clear by themselves and wait from durableRecheckDelay,
+// doubling to an hour, whatever class records them:
 //   - a name collision clears when the user renames one of the two names or
 //     the other one goes away online. On the one-second curve it was "held"
 //     only while the next pass began within a second of the failure, so a
@@ -712,13 +714,59 @@ func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
 //     relists up to remoteFolderDeleteListLimit items before it fails again,
 //     so on the one-second curve a watch session relisted 10,000 items on
 //     every pass.
+//
+// Every other member clears by itself (a timeout, a conflict, a busy file),
+// is held under its block scope until the scope's trial passes (throttling,
+// an outage, a full drive or disk), is recorded as ClassActionable, which
+// retryDelayForDecision already puts on the durable curve, or never becomes
+// retry work (a sign-in failure, which stops the run, and the members only
+// observation reports). A failure with no condition is transient. A value
+// outside the enum is not known to clear by itself, so it waits on the
+// durable curve: a hot retry loop is the failure this curve exists to
+// prevent.
 func retryDelayForCondition(condition IssueType) func(int) time.Duration {
-	switch condition { //nolint:exhaustive // only the two conditions that do not clear by themselves wait longer
+	switch condition {
 	case issueCaseCollision, issueRemoteFolderUnverifiable:
 		return durableRecheckRetryDelay
+	case IssueInvalidFilename,
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueHashPanic,
+		IssueUnauthorized,
+		IssueRemoteWriteDenied,
+		issueRemoteReadDenied,
+		IssueQuotaExceeded,
+		issueRateLimited,
+		issueLocalReadDenied,
+		issueLocalWriteDenied,
+		issueRemoteNameTwin,
+		issueDiskFull,
+		issueServiceOutage,
+		issueFileTooLargeForSpace,
+		issueLocalNameTooLong,
+		issueLocalReadOnly,
+		issueDeletesHeld,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
+		issueLocalInterruptedRemoval,
+		issueLocalFileTooLarge,
+		issueLocalBusy,
+		issueLocalCrossDevice,
+		issueUnsupportedOperation,
+		issueMalwareDetected,
+		issueLocalDatabaseOpen,
+		issueUploadVerification,
+		issueDownloadIntegrity,
+		issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected,
+		"":
+		return retry.ReconcilePolicy().Delay
+	default:
+		return durableRecheckRetryDelay
 	}
-
-	return retry.ReconcilePolicy().Delay
 }
 
 func durableRecheckRetryDelay(attempt int) time.Duration {

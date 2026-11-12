@@ -36,12 +36,38 @@ an observation issue, the condition type of a retry_work row, a scope's
 default condition, and the condition of a runtime result decision, including
 the transient ones (`request_timeout`, `transient_conflict`, ...) that no
 store keeps. A member's value is the persisted string. `isMember()` is the
-membership list. The exhaustive linter holds it and
-`observationIssueBlocksLocalTruth` (sync-store.md) to every member, so a new
-member does not pass lint until it has a verdict on local truth; the three
-switches that pick out a few members on purpose (the retry curve, the
-block-scope wording, the permission boundary scope) say so in an explained
-`//nolint:exhaustive`. The stores
+membership list. Every decision made per issue type is a switch that names
+every member, its `default` answering only a value outside the enum, so the
+exhaustive linter fails until a new member is decided in each: membership
+(`isMember`), truth
+availability (`truthVerdictForIssueType`, sync-store.md), the condition family
+(`conditionKeyForIssueType`), the retry curve (`retryDelayForCondition`), the
+permission boundary scope (`scopeKeyForPermissionEvidence`) and the
+block-scope activation wording (`blockScopeActivationWording`). None of them
+carries a `//nolint:exhaustive`; until 2026-11-11 the last three did, remote
+truth was two equality tests and the condition family a lookup table, so a
+member they did not name fell through to "not blocking", "no family", the
+one-second curve or a warning. Each switch has a test that reads the members
+from `issue_types.go` and states every member's verdict, and each states a
+verdict for a value outside the enum, which only a programming error can
+make: unavailable truth on both sides of its path,
+`ConditionUnexpectedCondition` (under any scope, rather than the scope's own
+condition), the durable curve, no boundary scope, the generic line.
+
+`ConditionKey` is held the same way. Whether a condition clears without the
+user (`conditionClearsAutomatically`, here: throttling and an outage) is one
+switch over every key; the block-scope line takes its level from it through
+the issue type's family, and the watch condition summary reads it to stay
+below a warning, so the two cannot disagree. A key outside the set is not
+known to clear by itself. Each key's console label is a switch over every key
+too (`conditionLabelText`, sync-engine.md). Their tests read the keys from
+`condition_keys.go` (`stringConstantsOfType`).
+
+`hash_panic` is narrower than its use: the scanner records it for a panic in
+a hash worker and for a file it could not read to hash, and users see it as
+the condition `hash_error` (`ConditionHashError`). The stored value keeps its
+name, because a rename changes what `observation_issues` holds and so needs a
+store generation of its own; the comment at the constant says so. The stores
 convert to and from the stored string at their own boundary and refuse a
 value that is not a member (sync-store.md); elsewhere a value becomes a plain
 string only as a log attribute or in CLI output.
@@ -80,6 +106,7 @@ and makes the family order a strict downward chain, which is what
 | Scope keys own their own blocking, path-coverage, and rendering policy rather than exporting raw fields for callers to interpret. | `TestScopeKey_BlocksAction`, `TestScopeKey_CoveredPath`, `TestScopeKey_CoveredPathMatchesFamilyAccessors`, `TestScopeKey_Humanize`, `TestScopeKey_IsGlobal`, `TestDescribeScopeKey_Service` |
 | Action types answer their own direction; an action type no case lists has none (the zero direction), never a guessed one. | `TestActionTypeDirection` |
 | Every declared `IssueType` constant is a member and parses back to itself, with no two sharing a value; any other stored string, the empty one included, does not parse. | `TestIssueType_EveryDeclaredConstantIsAMemberAndParses`, `TestParseIssueType_RefusesAValueNoMemberHas` |
+| Every issue type, read from source, has a stated condition family or none (the transient runtime members, whose retried results then carry no `condition_key` rather than the unexpected one); a value outside the enum is the unexpected condition under any scope, never "no family"; every declared condition key has a display rank of its own. The engine's per-issue-type decisions are held the same way (sync-engine.md). | `TestConditionKeyForIssueType_EveryMemberIsDecided`, `TestConditionKeyForStoredCondition_ValueOutsideTheEnumIsUnexpectedUnderAnyScope`, `TestRuntimeConditionKey_TransientConditionsHaveNoFamily`, `TestConditionKeyRank_EveryDeclaredKeyHasItsOwnRank`, `TestConditionClearsAutomatically_EveryKeyIsDecided` |
 | `Baseline.GetCaseVariants` returns a copy of its sibling index under the read lock, so the watch observer can iterate it while workers commit outcomes through `Put` (R-6.3.4). | `TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut` |
 | The bundled junk list (`isBundledJunkName`, on by default through config, R-2.4.14) covers OS metadata, editor/IDE temporaries, Office `~$` owner files and SQLite `-wal`/`-shm`/`-journal` sidecars of databases whose name has an extension, so ordinary names such as `travel-journal` keep syncing. The `4913`, `~*` and `*~` rules match only a file leaf (`isBundledJunkFileName`), never a folder or a path component. | `TestContentFilter_ExtendedJunkList`, `TestContentFilter_FileOnlyJunkRulesKeepFolders` |
 | The runtime arms its timers through the engine clock, so a test clock controls retry, trial, and refresh timing coherently. | `TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimerInWatchMode`, `TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerImmediately`, `TestCancelPendingTimers` |

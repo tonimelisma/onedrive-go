@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, failure, and scope state.
+// Baseline persistence of the sync store.
 //
 // Contents:
 //   - Load:                    read baseline table into memory
@@ -18,6 +18,7 @@
 // Related files:
 //   - store.go:             SyncStore type definition and lifecycle
 //   - store_write_observation.go: CommitObservation advances the observation cursor
+
 package sync
 
 import (

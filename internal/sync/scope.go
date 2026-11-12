@@ -1,9 +1,8 @@
-// Package sync owns the single mounted content-root runtime, including scope-state helpers
-// used by execution and scope-lifecycle flows.
+// Scope-state helpers used by execution and scope-lifecycle flows.
 //
-// ScopeState maintains sliding windows for scope escalation. The engine
+// scopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each action completion; when a threshold is crossed,
-// it returns a ScopeUpdateResult and the engine creates a BlockScope.
+// it returns a scopeUpdateResult and the engine creates a BlockScope.
 //
 // Detection thresholds for shared blocker activation:
 //   - throttle:target:* (429) — immediate, single response
@@ -13,9 +12,9 @@
 // Trial interval computation is centralized in scope lifecycle policy helpers,
 // not in detection code.
 //
-// Type definitions (ScopeKey, ScopeKeyKind, BlockScope, ScopeUpdateResult,
-// BlockScopeStore) live in the sync package and share the same ownership
-// boundary as the engine and store code that use them.
+// The types it works with live in the sync domain: ScopeKey and ScopeKeyKind
+// in scope_key.go, BlockScope and scopeUpdateResult in scope_block.go.
+
 package sync
 
 import (
@@ -48,7 +47,7 @@ type scopeState struct {
 	logger  *slog.Logger
 }
 
-// newScopeState creates a ScopeState with the given clock and logger.
+// newScopeState creates a scopeState with the given clock and logger.
 func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
 	return &scopeState{
 		windows: make(map[ScopeKey]*slidingWindow),
@@ -58,7 +57,7 @@ func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
 }
 
 // UpdateScope feeds an action completion into scope detection. Returns a
-// ScopeUpdateResult indicating whether a new block scope should be created.
+// scopeUpdateResult indicating whether a new block scope should be created.
 //
 // Per the sync-engine scope taxonomy and activation rules:
 //   - 429 → immediate target-drive throttle block (server signal)
@@ -113,12 +112,12 @@ func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
 }
 
 // RecordSuccess resets the two global failure windows that any success
-// disproves: own-quota and service availability. Per §7.3.1, "A success from
-// any path in the scope shall reset the unique-path failure counter."
+// disproves: own-quota and service availability. A success from any path in
+// the scope resets its unique-path failure counter.
 //
 // It deliberately takes no action argument. Per-drive and per-path scopes
 // (throttle, local/remote permission) are not cleared here — clearing those is
-// owned by the trial admission path via ScopeAdmissionDecision.ClearScopeKey,
+// owned by the trial admission path via admissionDecision.ClearScopeKey,
 // which knows which specific blocked scope a trial was admitted against. Doing
 // it in both places would give two owners for one transition.
 func (ss *scopeState) RecordSuccess() {
@@ -127,7 +126,7 @@ func (ss *scopeState) RecordSuccess() {
 }
 
 // checkWindow adds a failure to the named sliding window and returns a
-// ScopeUpdateResult indicating whether the threshold was crossed.
+// scopeUpdateResult indicating whether the threshold was crossed.
 func (ss *scopeState) checkWindow(
 	sk ScopeKey, path string, threshold int, window time.Duration,
 	conditionType IssueType,

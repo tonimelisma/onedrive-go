@@ -106,25 +106,38 @@ func availablePathTruthSideStatus() pathTruthSideStatus {
 }
 
 func observationIssueBlocksTruth(issueType IssueType) bool {
-	return observationIssueBlocksLocalTruth(issueType) || observationIssueBlocksRemoteTruth(issueType)
+	verdict := truthVerdictForIssueType(issueType)
+	return verdict.blocksLocal || verdict.blocksRemote
 }
 
-// observationIssueBlocksLocalTruth reports whether an observation issue at a
-// path makes that path's local truth unavailable, so the planner reads the
-// path as unknown rather than absent. The switch names every IssueType (the
-// exhaustive linter holds it to that), so a new member needs a verdict here.
+// observationIssueTruthVerdict is what an observation issue of one type says
+// about the truth of the path it names: which side of the path is unknown
+// rather than absent, and whether OneDrive's side of everything beneath the
+// path is unknown too. A read scope key on the issue can bound a subtree as
+// well (truthReadBoundaryIssues); this verdict is what the type alone says.
+type observationIssueTruthVerdict struct {
+	blocksLocal         bool
+	blocksRemote        bool
+	boundsRemoteSubtree bool
+}
+
+// truthVerdictForIssueType decides every truth verdict of an issue type in
+// one switch that names every IssueType (the exhaustive linter holds it to
+// that), so a new member is decided on both sides at once instead of falling
+// through an equality test that did not name it.
 //
-// The second group is false: remote_read_denied and remote_name_twin block
-// remote truth instead; local_interrupted_removal sits at an internal name the
-// content filter hides from planning on both sides, so no synced path can
-// read as deleted through it;
-// and every other member is a runtime condition that retry_work or a block
-// scope carries and observation never stores.
+// The last member group blocks nothing: local_interrupted_removal sits at an
+// internal name the content filter hides from planning on both sides, so no
+// synced path can read as deleted through it; every other member there is a
+// runtime condition that retry_work or a block scope carries and observation
+// never stores.
 //
 // A value outside the enum cannot come from the store, which refuses an
-// unknown stored issue type (parseIssueType). Should one appear anyway, the
-// path is treated as unavailable: unknown is not absent (D-005).
-func observationIssueBlocksLocalTruth(issueType IssueType) bool {
+// unknown stored issue type (parseIssueType). Should one appear anyway, its
+// path is unavailable on both sides: unknown is not absent (D-005). It bounds
+// no subtree by its type, because nothing says what it would cover; the
+// subtree boundaries are read scope keys and remote twins.
+func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict {
 	switch issueType {
 	case IssueInvalidFilename,
 		issuePathTooLong,
@@ -134,10 +147,16 @@ func observationIssueBlocksLocalTruth(issueType IssueType) bool {
 		issueLocalReadDenied,
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary:
-		return true
-	case issueRemoteReadDenied,
-		issueRemoteNameTwin,
-		issueLocalInterruptedRemoval,
+		// The scan found the path but cannot represent it.
+		return observationIssueTruthVerdict{blocksLocal: true}
+	case issueRemoteReadDenied:
+		// A folder's subtree is bounded by the issue's read scope key.
+		return observationIssueTruthVerdict{blocksRemote: true}
+	case issueRemoteNameTwin:
+		// OneDrive keeps two items under the path; the twin has no scope key,
+		// so its type is what bounds the subtree it holds twice.
+		return observationIssueTruthVerdict{blocksRemote: true, boundsRemoteSubtree: true}
+	case issueLocalInterruptedRemoval,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		IssueQuotaExceeded,
@@ -163,14 +182,23 @@ func observationIssueBlocksLocalTruth(issueType IssueType) bool {
 		issueTransientNotFound,
 		issueResourceLocked,
 		issueTransferURLRejected:
-		return false
+		return observationIssueTruthVerdict{}
 	default:
-		return true
+		return observationIssueTruthVerdict{blocksLocal: true, blocksRemote: true}
 	}
 }
 
+// observationIssueBlocksLocalTruth reports whether an observation issue at a
+// path makes that path's local truth unavailable, so the planner reads the
+// path as unknown rather than absent (truthVerdictForIssueType).
+func observationIssueBlocksLocalTruth(issueType IssueType) bool {
+	return truthVerdictForIssueType(issueType).blocksLocal
+}
+
+// observationIssueBlocksRemoteTruth reports whether an observation issue at a
+// path makes that path's OneDrive truth unavailable (truthVerdictForIssueType).
 func observationIssueBlocksRemoteTruth(issueType IssueType) bool {
-	return issueType == issueRemoteReadDenied || issueType == issueRemoteNameTwin
+	return truthVerdictForIssueType(issueType).blocksRemote
 }
 
 func truthReadBoundaryIssues(observationIssues []ObservationIssueRow, local bool) []ObservationIssueRow {
@@ -180,11 +208,12 @@ func truthReadBoundaryIssues(observationIssues []ObservationIssueRow, local bool
 
 	var boundaries []ObservationIssueRow
 	for i := range observationIssues {
+		issue := observationIssues[i]
 		switch {
-		case local && observationIssues[i].ScopeKey.IsPermLocalRead():
-			boundaries = append(boundaries, observationIssues[i])
-		case !local && (observationIssues[i].ScopeKey.IsPermRemoteRead() || observationIssues[i].IssueType == issueRemoteNameTwin):
-			boundaries = append(boundaries, observationIssues[i])
+		case local && issue.ScopeKey.IsPermLocalRead():
+			boundaries = append(boundaries, issue)
+		case !local && (issue.ScopeKey.IsPermRemoteRead() || truthVerdictForIssueType(issue.IssueType).boundsRemoteSubtree):
+			boundaries = append(boundaries, issue)
 		}
 	}
 
@@ -200,8 +229,9 @@ func mostSpecificObservationReadBoundary(
 
 	for i := range boundaries {
 		scopePath := boundaries[i].ScopeKey.CoveredPath()
-		if boundaries[i].IssueType == issueRemoteNameTwin {
-			// A remote twin blocks its path and subtree; it has no scope key.
+		if truthVerdictForIssueType(boundaries[i].IssueType).boundsRemoteSubtree {
+			// A type that bounds the subtree by itself has no scope key: it
+			// covers its own path and everything beneath it.
 			scopePath = boundaries[i].Path
 		}
 		if !scopePathMatches(path, scopePath) {

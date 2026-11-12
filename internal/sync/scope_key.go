@@ -83,7 +83,7 @@ func (sk ScopeKey) IsZero() bool {
 }
 
 // Wire-format strings for scope keys stored in SQLite scope_key columns.
-// Used by String() and ParseScopeKey() — the only serialization boundary.
+// Used by String() and parseScopeKey() — the only serialization boundary.
 const (
 	wireThrottleTarget  = "throttle:target:"
 	wireService         = "service"
@@ -98,7 +98,7 @@ const (
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
-// ParseScopeKey is the inverse.
+// parseScopeKey is the inverse.
 func (sk ScopeKey) String() string {
 	switch sk.Kind {
 	case ScopeThrottleTarget:

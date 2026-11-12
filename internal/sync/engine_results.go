@@ -6,13 +6,25 @@ import (
 	"time"
 )
 
+// failureSummaryEntry is one failure of a pass that was kept as retry work,
+// as the end-of-pass summary groups it.
 type failureSummaryEntry struct {
-	issueType string
-	path      string
-	errMsg    string
+	// group is the summary group and the condition_type log value: the
+	// decision's condition, or noConditionSummaryGroup.
+	group  string
+	path   string
+	errMsg string
 }
 
-const fallbackFailureSummaryIssueType = "transient_failure"
+// noConditionSummaryGroup is the summary group, and the condition_type log
+// value, of retry work whose failure names no condition; the store keeps such
+// a row as a transient failure. It is a log value, not an IssueType: no
+// member has it and no store holds it.
+const noConditionSummaryGroup = "transient_failure"
+
+// overdueTrialDelay is the wait armed for a trial that is already due: it
+// fires at once, through the same timer and channel as every other trial.
+const overdueTrialDelay = time.Millisecond
 
 // armRetryTimer arms the retry timer for the next held-retry release. It
 // queries the earliest held retry deadline from the current runtime and sets
@@ -70,8 +82,8 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 }
 
 // recordError increments the failed counter, preserves the raw error for the
-// final SyncReport, and records the classified transient-failure shape needed
-// for end-of-pass WARN aggregation.
+// final SyncReport, and records a failure kept as retry work for the
+// end-of-pass summary (logFailureSummary).
 func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) {
 	f.results.failed++
 	if r == nil {
@@ -95,16 +107,17 @@ func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) 
 	}
 
 	// The summary groups log lines by condition, so it keeps the condition as
-	// the log key it becomes, with a key of its own for a failure that has none.
-	conditionType := string(decision.ConditionType)
-	if conditionType == "" {
-		conditionType = fallbackFailureSummaryIssueType
+	// the log value it becomes, with a group of its own for a failure that has
+	// none.
+	group := string(decision.ConditionType)
+	if group == "" {
+		group = noConditionSummaryGroup
 	}
 
 	f.results.summaries = append(f.results.summaries, failureSummaryEntry{
-		issueType: conditionType,
-		path:      r.Path,
-		errMsg:    errMsg,
+		group:  group,
+		path:   r.Path,
+		errMsg: errMsg,
 	})
 }
 
@@ -123,62 +136,46 @@ func (f *engineFlow) logFailureSummary() {
 		return
 	}
 
-	type group struct {
-		items []failureSummaryEntry
-		count int
-		paths []string
+	type summaryGroup struct {
+		items       []failureSummaryEntry
+		samplePaths []string
 	}
-	groups := make(map[string]*group, len(summaries))
+	const sampleCount = 3
+	groups := make(map[string]*summaryGroup, len(summaries))
 	for _, summary := range summaries {
-		key := summary.issueType
-		if key == "" {
-			key = fallbackFailureSummaryIssueType
-		}
-		g, ok := groups[key]
+		g, ok := groups[summary.group]
 		if !ok {
-			g = &group{}
-			groups[key] = g
+			g = &summaryGroup{}
+			groups[summary.group] = g
 		}
-		g.count++
 		g.items = append(g.items, summary)
-		if summary.path != "" {
-			const sampleCount = 3
-			if len(g.paths) < sampleCount {
-				g.paths = append(g.paths, summary.path)
-			}
+		if summary.path != "" && len(g.samplePaths) < sampleCount {
+			g.samplePaths = append(g.samplePaths, summary.path)
 		}
 	}
 
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
 	}
-	sort.Strings(keys)
+	sort.Strings(names)
 
 	const aggregateThreshold = 10
-	for _, key := range keys {
-		g := groups[key]
-		if g.count > aggregateThreshold {
+	for _, name := range names {
+		g := groups[name]
+		if len(g.items) > aggregateThreshold {
 			f.engine.logger.Info("Some files will be retried on the next sync",
-				slog.String("condition_type", key),
-				slog.Int("count", g.count),
-				slog.Any("sample_paths", g.paths),
+				slog.String("condition_type", name),
+				slog.Int("count", len(g.items)),
+				slog.Any("sample_paths", g.samplePaths),
 			)
-			for _, item := range g.items {
-				f.engine.logger.Debug("sync retry work",
-					slog.String("condition_type", key),
-					slog.String("path", item.path),
-					slog.String("error", item.errMsg),
-				)
-			}
-		} else {
-			for _, item := range g.items {
-				f.engine.logger.Debug("sync retry work",
-					slog.String("condition_type", key),
-					slog.String("path", item.path),
-					slog.String("error", item.errMsg),
-				)
-			}
+		}
+		for _, item := range g.items {
+			f.engine.logger.Debug("sync retry work",
+				slog.String("condition_type", name),
+				slog.String("path", item.path),
+				slog.String("error", item.errMsg),
+			)
 		}
 	}
 }
@@ -239,7 +236,7 @@ func (rt *watchRuntime) armTrialTimer() {
 
 	delay := earliest.Sub(rt.deps.now())
 	if delay <= 0 {
-		delay = 1 * time.Millisecond // fire immediately
+		delay = overdueTrialDelay
 	}
 
 	// Non-blocking send to the buffered(1) channel. If a signal is already

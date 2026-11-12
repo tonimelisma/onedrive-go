@@ -1,4 +1,4 @@
-// Package sync persists sync baseline, observation, failure, scope-block, and metadata state.
+// Remote observation persistence of the sync store.
 //
 // Contents:
 //   - CommitObservation:        atomically persist remote mirror state + advance observation cursor
@@ -11,6 +11,7 @@
 // Related files:
 //   - store.go:            SyncStore type definition and lifecycle
 //   - store_observation_state.go: observation state helpers
+
 package sync
 
 import (

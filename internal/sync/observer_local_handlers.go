@@ -1,18 +1,18 @@
-// Package sync owns the single mounted content-root runtime, including local observation
-// event handlers.
+// The local observer's watch-mode event handlers.
 //
 // Contents:
-//   - watchLoop:    main select loop (fsnotify events, errors, safety scan, ctx)
-//   - handleEvent:  fsnotify event → ChangeEvent routing
-//   - handleCreate: new file/dir → hash + emit + recursive watch add
-//   - handleWrite:  file modification → debounced hash + emit
-//   - handleRemove: file/dir removal → emit delete + remove watches
-//   - HashAndEmit:  hash computation with retry + event emission
+//   - watchLoop:     main select loop (fsnotify events, errors, safety scan, ctx)
+//   - HandleFsEvent: fsnotify event → changeEvent routing
+//   - handleCreate:  new file/dir → hash + emit + recursive watch add
+//   - handleWrite:   file modification → debounced hash + emit
+//   - HandleDelete:  file/dir removal → emit delete + remove watches
+//   - HashAndEmit:   hash computation with retry + event emission
 //
 // Related files:
-//   - observer_local.go:            LocalObserver struct, constructor, Watch() entry point
+//   - observer_local.go:            localObserver struct, constructor, Watch() entry point
 //   - observer_local_collisions.go: case collision detection helpers (cache, peers)
 //   - scanner.go:                   FullScan, walk/hash/filter logic
+
 package sync
 
 import (

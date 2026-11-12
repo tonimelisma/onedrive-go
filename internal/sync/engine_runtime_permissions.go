@@ -246,8 +246,17 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 	return nil
 }
 
+// scopeKeyForPermissionEvidence is the boundary scope a permission probe's
+// evidence names, decided for every IssueType by name (the exhaustive linter
+// holds the switch to that), so a new permission condition gets its scope on
+// purpose. The zero scope means "no boundary scope": a remote read denial is a
+// boundary observation finds rather than probe evidence, and every other
+// member, like a value outside the enum, is not a permission condition. The
+// store refuses blocked work without a scope, so boundary evidence of such a
+// type fails loudly instead of being parked nowhere, and a scope trial falls
+// back to its own scope (applyTrialPermissionEvidence).
 func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
-	switch evidence.IssueType { //nolint:exhaustive // only the permission issue types name a boundary scope
+	switch evidence.IssueType {
 	case issueLocalReadDenied:
 		return sKPermLocalRead(evidence.BoundaryPath)
 	case issueLocalWriteDenied:
@@ -256,6 +265,39 @@ func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
 		return SKLocalReadOnly(evidence.BoundaryPath)
 	case IssueRemoteWriteDenied:
 		return SKPermRemoteWrite(evidence.BoundaryPath)
+	case issueRemoteReadDenied,
+		IssueInvalidFilename,
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueHashPanic,
+		IssueUnauthorized,
+		IssueQuotaExceeded,
+		issueRateLimited,
+		issueCaseCollision,
+		issueRemoteNameTwin,
+		issueDiskFull,
+		issueServiceOutage,
+		issueFileTooLargeForSpace,
+		issueLocalNameTooLong,
+		issueDeletesHeld,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
+		issueRemoteFolderUnverifiable,
+		issueLocalInterruptedRemoval,
+		issueLocalFileTooLarge,
+		issueLocalBusy,
+		issueLocalCrossDevice,
+		issueUnsupportedOperation,
+		issueMalwareDetected,
+		issueLocalDatabaseOpen,
+		issueUploadVerification,
+		issueDownloadIntegrity,
+		issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected:
+		return ScopeKey{}
 	default:
 		return ScopeKey{}
 	}
