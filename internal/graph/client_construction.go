@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,11 +20,11 @@ func NewClient(
 	logger *slog.Logger, userAgent string,
 ) (*Client, error) {
 	if token == nil {
-		return nil, fmt.Errorf("graph.NewClient: token source must not be nil")
+		return nil, errors.New("graph.NewClient: token source must not be nil")
 	}
 
 	if httpClient == nil {
-		return nil, fmt.Errorf("graph.NewClient: HTTP client must not be nil")
+		return nil, errors.New("graph.NewClient: HTTP client must not be nil")
 	}
 
 	if logger == nil {
@@ -54,7 +55,7 @@ func NewClient(
 			downloadMetadata:     retry.DownloadMetadataPolicy(),
 			createFolderReadback: retry.PathVisibilityPolicy(),
 			simpleUploadMtime:    retry.SimpleUploadMtimePatchPolicy(),
-			uploadSessionCreate:  retry.UploadSessionCreatePolicy(),
+			fileCreate:           retry.FileCreatePolicy(),
 			copyDestination:      retry.CopyDestinationPolicy(),
 		},
 		validators: newURLValidators(baseURL),

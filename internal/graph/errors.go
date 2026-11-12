@@ -1,5 +1,7 @@
-// Package graph provides an HTTP client for the Microsoft Graph API
-// with automatic retry, rate limiting, and error classification.
+// Package graph is the client for the Microsoft Graph API: authentication,
+// request construction, Graph quirk normalization and error classification.
+// Generic retry and throttle coordination belong to the HTTP transport
+// (internal/retry), not to this package.
 package graph
 
 import (
@@ -92,10 +94,11 @@ var (
 	ErrProviderReadOnly = errors.New("graph: provider is in a read-only window")
 
 	// ErrCreateOutcomeUnknown marks a file create that ended without an answer
-	// naming its item: no response, a 5xx or 408, a canceled or expired
-	// context, or a success whose item could not be read. The empty file may
-	// exist on OneDrive, or may still appear there. A definite refusal (any
-	// other 4xx, 409 and 429 included) never carries it. Sync keeps its create
+	// naming its item: no response, a 5xx or 408, a context that ended while
+	// the request was out, or a success whose item could not be read. The
+	// empty file may exist on OneDrive, or may still appear there. A definite
+	// refusal (any other 4xx, 409 and 429 included) never carries it, and
+	// neither does a create that never left the client. Sync keeps its create
 	// intent on it, so the empty file is recognized as its own (R-5.6.15).
 	ErrCreateOutcomeUnknown = errors.New("graph: create outcome unknown")
 )
@@ -239,8 +242,8 @@ func quirkSymptom(quirk string) string {
 		return "did not yet accept the new sign-in"
 	case QuirkCopyDestinationTransient404:
 		return "kept reporting the copy's destination folder as missing"
-	case QuirkUploadSessionCreateTransient404:
-		return "kept reporting the upload's destination folder as missing"
+	case QuirkFileCreateTransient404:
+		return "kept reporting the new file's folder as missing"
 	case QuirkSimpleUploadMtimeTransient404:
 		return "kept reporting the just-uploaded file as missing while setting its modified time"
 	case QuirkDownloadMetadataTransient404:

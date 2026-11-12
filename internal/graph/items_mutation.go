@@ -42,7 +42,7 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 		return nil, fmt.Errorf("graph: marshaling create folder request: %w", err)
 	}
 
-	resp, err := c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bodyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +220,7 @@ func (c *Client) MoveItemIfMatch(
 		return nil, fmt.Errorf("graph: marshaling move request: %w", err)
 	}
 
-	resp, err := c.doRequest(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes), ifMatchHeaders(opts.IfMatch))
+	resp, err := c.doRequest(ctx, http.MethodPatch, path, bodyBytes, ifMatchHeaders(opts.IfMatch))
 	if err != nil {
 		if !sent.IsZero() {
 			return nil, relabelTimestampRangeError(err, sent)
@@ -251,6 +251,12 @@ type updateFileSystemInfoRequest struct {
 func (c *Client) UpdateFileSystemInfo(
 	ctx context.Context, driveID driveid.ID, itemID string, mtime time.Time,
 ) (*Item, error) {
+	// Refused before anything is logged or sent: OneDrive would replace a
+	// zero time with the current one.
+	if mtime.IsZero() {
+		return nil, errors.New("graph: UpdateFileSystemInfo needs a modification time")
+	}
+
 	c.logger.Debug("updating fileSystemInfo",
 		slog.String("drive_id", driveID.String()),
 		slog.String("item_id", itemID),
@@ -258,10 +264,6 @@ func (c *Client) UpdateFileSystemInfo(
 	)
 
 	path := fmt.Sprintf("/drives/%s/items/%s", driveID, itemID)
-
-	if mtime.IsZero() {
-		return nil, errors.New("graph: UpdateFileSystemInfo needs a modification time")
-	}
 
 	sent := c.sendableMtime(mtime)
 	info := c.newFileSystemInfo(sent)
@@ -273,7 +275,7 @@ func (c *Client) UpdateFileSystemInfo(
 		return nil, fmt.Errorf("graph: marshaling fileSystemInfo request: %w", err)
 	}
 
-	resp, err := c.do(ctx, http.MethodPatch, path, bytes.NewReader(bodyBytes))
+	resp, err := c.do(ctx, http.MethodPatch, path, bodyBytes)
 	if err != nil {
 		return nil, relabelTimestampRangeError(err, sent)
 	}

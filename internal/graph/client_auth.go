@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,12 +11,32 @@ import (
 	"strings"
 )
 
-// do executes an authenticated HTTP request against the Graph API.
-// The caller is responsible for closing the response body on success.
+// errRequestNotSent marks a request that never left the client: the token
+// source failed, the context had already ended, or the request could not be
+// built. OneDrive saw nothing, so nothing the request asked for happened. On
+// the 401 path the request not sent is the retry, and the attempt before it
+// was refused. doPreAuth marks the same failures of a pre-authenticated
+// request, and the quirk retry a backoff whose context ended. Callers that
+// must know whether a write may have landed (a file create, an upload's last
+// fragment) test for it with errors.Is.
+var errRequestNotSent = errors.New("request not sent")
+
+// headerContentType and contentTypeJSON are how an authenticated request
+// declares a JSON body.
+const (
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
+)
+
+// do executes an authenticated HTTP request against the Graph API. body is
+// the whole JSON request body, nil for none. Every attempt, the transport's
+// and the 401 retry included, is built from those bytes, so a request goes
+// out again exactly as it first did; a body that cannot be replayed cannot be
+// passed. The caller is responsible for closing the response body on success.
 // On error, returns a *GraphError wrapping a sentinel (use errors.Is to classify).
 // Retry is handled by the HTTP transport layer — this method makes exactly one
 // logical attempt (plus one 401 token refresh if applicable).
-func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+func (c *Client) do(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
 	return c.doRequest(ctx, method, path, body, nil)
 }
 
@@ -33,7 +54,7 @@ func (c *Client) doGetWithHeaders(
 // reads the error body and returns a *GraphError. No retry loop — that's the
 // transport's responsibility.
 func (c *Client) doRequest(
-	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header,
+	ctx context.Context, method, path string, body []byte, extraHeaders http.Header,
 ) (*http.Response, error) {
 	return c.doRequestVia(ctx, method, path, body, extraHeaders, requestRoute{client: c.httpClient})
 }
@@ -48,8 +69,9 @@ type requestRoute struct {
 	keepRedirect bool
 }
 
+// doRequestVia is doRequest dispatched through route.
 func (c *Client) doRequestVia(
-	ctx context.Context, method, path string, body io.Reader, extraHeaders http.Header, route requestRoute,
+	ctx context.Context, method, path string, body []byte, extraHeaders http.Header, route requestRoute,
 ) (*http.Response, error) {
 	url := c.baseURL + path
 
@@ -114,14 +136,13 @@ type forceRefresher interface {
 }
 
 // doOnce executes a single HTTP request with authentication. Handles 401 token
-// refresh as an auth lifecycle concern (not transient retry). The retry resends
-// the body from the start, so a body other than nil or http.NoBody must be an
-// io.Seeker (all callers pass a bytes.Reader); any other body fails the retry
-// with errBodyNotReplayable instead of being resent consumed.
+// refresh as an auth lifecycle concern (not transient retry); the retry is
+// built from the same body bytes as the first attempt. A failure before a
+// request leaves carries errRequestNotSent.
 // doOnce reports tokenFresh when a 401 forced a token refresh that
 // succeeded, so the token on the final attempt is known-good.
 func (c *Client) doOnce(
-	ctx context.Context, method, url string, body io.Reader, extraHeaders http.Header, client *http.Client,
+	ctx context.Context, method, url string, body []byte, extraHeaders http.Header, client *http.Client,
 ) (resp *http.Response, tokenFresh bool, err error) {
 	c.logger.Debug("preparing request",
 		slog.String("method", method),
@@ -130,7 +151,7 @@ func (c *Client) doOnce(
 
 	tok, err := c.token.Token()
 	if err != nil {
-		return nil, false, fmt.Errorf("obtaining token: %w", err)
+		return nil, false, fmt.Errorf("%w: obtaining token: %w", errRequestNotSent, err)
 	}
 
 	req, err := c.buildAuthorizedRequest(ctx, method, url, body, tok, extraHeaders)
@@ -173,28 +194,43 @@ func (c *Client) doOnce(
 	return resp, outcome.tokenFresh, nil
 }
 
+// buildAuthorizedRequest builds one attempt of an authenticated request, its
+// body a fresh reader over body's bytes, so http.NewRequest also gives it the
+// exact Content-Length and the GetBody a retrying transport replays. It fails
+// with errRequestNotSent when the request cannot leave: the context has
+// already ended (net/http would refuse to send it), or the request cannot be
+// built.
 func (c *Client) buildAuthorizedRequest(
 	ctx context.Context,
 	method string,
 	url string,
-	body io.Reader,
+	body []byte,
 	token string,
 	extraHeaders http.Header,
 ) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%w: %w", errRequestNotSent, context.Cause(ctx))
+	}
+
+	var reqBody io.Reader
+	if len(body) > 0 {
+		reqBody = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("%w: creating request: %w", errRequestNotSent, err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", c.userAgent)
 
-	// Implicit default: when a body is present, Content-Type is set to
-	// application/json. All Graph API mutation endpoints (PATCH, POST) expect
-	// JSON. Upload endpoints override this via extraHeaders or use pre-auth
-	// URLs that bypass doOnce entirely (B-159).
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	// A request with a body declares it JSON: every authenticated Graph
+	// mutation (PATCH, POST) takes JSON. A body-less request that must still
+	// declare it passes the header in extraHeaders (RestoreItem); content
+	// uploads go through doRawUpload or pre-authenticated URLs instead.
+	if len(body) > 0 {
+		req.Header.Set(headerContentType, contentTypeJSON)
 	}
 
 	// Merge caller-supplied headers (e.g., Prefer for delta queries).
@@ -225,12 +261,15 @@ type unauthorizedRetry struct {
 	tokenFresh bool // a forced refresh succeeded, so the account sign-in is good
 }
 
+// retryUnauthorized sends the request once more after a 401, with a token
+// other than the rejected one. Every failure before that retry leaves carries
+// errRequestNotSent: the one request sent was refused.
 func (c *Client) retryUnauthorized(
 	ctx context.Context,
 	client *http.Client,
 	method string,
 	url string,
-	body io.Reader,
+	body []byte,
 	extraHeaders http.Header,
 	token string,
 	resp *http.Response,
@@ -244,7 +283,7 @@ func (c *Client) retryUnauthorized(
 		// The 401 response is not handed back on an error, so it is closed
 		// here; leaving it open leaked the connection.
 		return nil, unauthorizedRetry{}, errors.Join(
-			fmt.Errorf("refreshing token after 401: %w", err), closeUnauthorizedBody(resp))
+			fmt.Errorf("%w: refreshing token after 401: %w", errRequestNotSent, err), closeUnauthorizedBody(resp))
 	}
 
 	// A token different from the rejected one was just issued (by this
@@ -260,7 +299,7 @@ func (c *Client) retryUnauthorized(
 			// invalid_grant arrives here as ErrLoginExpired+ErrUnauthorized:
 			// the sign-in really is gone, which is the only fatal 401.
 			return nil, outcome, errors.Join(
-				fmt.Errorf("refreshing token after 401: %w", err), closeUnauthorizedBody(resp))
+				fmt.Errorf("%w: refreshing token after 401: %w", errRequestNotSent, err), closeUnauthorizedBody(resp))
 		}
 		outcome.tokenFresh = true
 		if newTok == token {
@@ -271,24 +310,20 @@ func (c *Client) retryUnauthorized(
 	}
 
 	if closeErr := resp.Body.Close(); closeErr != nil {
-		return nil, outcome, fmt.Errorf("closing 401 response body: %w", closeErr)
+		return nil, outcome, fmt.Errorf("%w: closing 401 response body: %w", errRequestNotSent, closeErr)
 	}
 
-	// Rewound before the retry is announced or built: a body that cannot be
-	// rewound fails here, and no second request goes out.
-	if rewindErr := rewindBody(body); rewindErr != nil {
-		return nil, outcome, fmt.Errorf("rewinding request body after 401: %w", rewindErr)
+	// Built before the retry is announced: a request that cannot be built
+	// fails here, and no second request goes out.
+	req, err := c.buildAuthorizedRequest(ctx, method, url, body, newTok, extraHeaders)
+	if err != nil {
+		return nil, outcome, fmt.Errorf("building retry request: %w", err)
 	}
 
 	c.logger.Info("retrying after 401 with refreshed token",
 		slog.String("method", method),
 		slog.String("url", url),
 	)
-
-	req, err := c.buildAuthorizedRequest(ctx, method, url, body, newTok, extraHeaders)
-	if err != nil {
-		return nil, outcome, fmt.Errorf("building retry request: %w", err)
-	}
 
 	retryResp, err := c.dispatchRequestWith(client, req)
 	if err != nil {
@@ -298,31 +333,4 @@ func (c *Client) retryUnauthorized(
 	outcome.retried = true
 
 	return retryResp, outcome, nil
-}
-
-// errBodyNotReplayable reports a 401 refresh-and-retry whose request body
-// cannot be sent again: the first attempt consumed it and it is not an
-// io.Seeker. retry.RetryTransport refuses the same replay at its own boundary.
-var errBodyNotReplayable = errors.New("graph: request body cannot be replayed")
-
-// rewindBody seeks the caller's request body back to offset 0 so the 401
-// retry resends all of it. nil and http.NoBody carry nothing to resend. Any
-// other body must be an io.Seeker: resending a consumed stream sends what the
-// first attempt left of it, nothing, so a PATCH or POST would go out empty.
-// Such a body is errBodyNotReplayable.
-func rewindBody(body io.Reader) error {
-	if body == nil || body == http.NoBody {
-		return nil
-	}
-
-	seeker, ok := body.(io.Seeker)
-	if !ok {
-		return errBodyNotReplayable
-	}
-
-	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("seeking request body: %w", err)
-	}
-
-	return nil
 }

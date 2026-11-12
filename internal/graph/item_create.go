@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,11 +40,14 @@ import (
 //
 // That engine has to know which failures may have left a file behind. A
 // CreateFile failure that does not say whether the create landed carries
-// ErrCreateOutcomeUnknown: no answer at all (a dropped connection, a canceled
-// or expired context), a 5xx, a 408, and any failure after a 2xx answer that
-// did not yield the item. A definite refusal (409, 429, any other 4xx) does
-// not. Sync keeps its record of the intended create through the first kind
-// (R-5.6.15), so the empty file such a create left is recognized as its own.
+// ErrCreateOutcomeUnknown: no answer at all (a dropped connection, a context
+// that ended while the request was out), a 5xx, a 408, and any failure after
+// a 2xx answer that did not yield the item. A definite refusal (409, 429, any
+// other 4xx) does not, and neither does a create that was never sent (the
+// token source failed, the context had already ended, the request could not
+// be built, or the retry after a refusal never left). Sync keeps its record
+// of the intended create through the first kind (R-5.6.15), so the empty file
+// such a create left is recognized as its own.
 //
 // L-01 measured the cost: the POST makes an empty item that already carries
 // the empty-content quickXorHash, and an upload session on that item with
@@ -64,9 +66,9 @@ type createFileRequest struct {
 // CreateFile creates an empty file named name under parentID. It never
 // replaces: an existing item with that name, or with a name OneDrive treats
 // as the same, fails with ErrConflict. A transient 404 for a just-created
-// parent is retried like the upload-session create it replaces. A failure
-// that leaves open whether the file was created wraps
-// ErrCreateOutcomeUnknown.
+// parent is retried (QuirkFileCreateTransient404). A failure that leaves open
+// whether the file was created wraps ErrCreateOutcomeUnknown; one before the
+// create left the client never does.
 func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	c.logger.Debug("creating file",
 		slog.String("drive_id", driveID.String()),
@@ -82,11 +84,11 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 	path := fmt.Sprintf("/drives/%s/items/%s/children", driveID, parentID)
 
 	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
-		name:   QuirkUploadSessionCreateTransient404,
-		policy: c.policies.uploadSessionCreate,
-		match:  isTransientUploadSessionCreateError,
+		name:   QuirkFileCreateTransient404,
+		policy: c.policies.fileCreate,
+		match:  isTransientFileCreateError,
 	}, func() (*http.Response, error) {
-		return c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bytes.NewReader(bodyBytes))
+		return c.do(retry.WithReplaySafe(ctx), http.MethodPost, path, bodyBytes)
 	})
 	if err != nil {
 		if createOutcomeUnknown(err) {
@@ -111,11 +113,26 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 }
 
 // createOutcomeUnknown reports whether err, the failure of the request that
-// creates a file, leaves open whether the file was created. Any answer short
-// of a definite refusal does: no answer at all (a transport failure, a
-// canceled or expired context: nothing that is a *GraphError), a 5xx, or a
-// 408. A 4xx other than 408 is a refusal: nothing was created.
+// creates a file, leaves open whether the file was created. A request that
+// never left (errRequestNotSent) created nothing, and so did every attempt
+// the graph client itself made before it in the same call: doOnce sends again
+// only after a 401 and the quirk retry only after a 404 itemNotFound, both
+// refusals. Any other answer short of a definite refusal leaves it open: no
+// answer at all (a transport failure, a context that ended while the request
+// was out: nothing that is a *GraphError), a 5xx, or a 408. A 4xx other than
+// 408 is a refusal: nothing was created.
+//
+// Only the answers the graph client sees are judged. A retrying transport
+// makes attempts of its own inside one dispatch, and CreateFile marks its
+// request replay safe, so under the CLI's transport a 5xx attempt can sit
+// unseen before the last refusal or before a retry that was not sent. Sync,
+// the only reader of ErrCreateOutcomeUnknown, uses a transport that retries
+// nothing (R-6.8.8), so there every attempt is one the client saw.
 func createOutcomeUnknown(err error) bool {
+	if errors.Is(err, errRequestNotSent) {
+		return false
+	}
+
 	var graphErr *GraphError
 	if !errors.As(err, &graphErr) {
 		return true
