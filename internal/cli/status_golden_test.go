@@ -138,7 +138,7 @@ func TestStatusOutputGoldenText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, goldenDefaultStatusAccounts(), false))
+	require.NoError(t, printStatusText(&buf, goldenDefaultStatusAccounts()))
 	assertGoldenFile(t, "status_text.golden", buf.Bytes())
 }
 
@@ -149,7 +149,7 @@ func TestStatusOutputGoldenTextVerbose(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, goldenStatusAccounts(), false))
+	require.NoError(t, printStatusText(&buf, goldenStatusAccounts()))
 	assertGoldenFile(t, "status_text_verbose.golden", buf.Bytes())
 }
 

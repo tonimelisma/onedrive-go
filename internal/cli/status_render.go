@@ -91,7 +91,7 @@ func printStatusJSON(w io.Writer, accounts []statusAccount) error {
 	return nil
 }
 
-func printStatusText(w io.Writer, accounts []statusAccount, history bool) error {
+func printStatusText(w io.Writer, accounts []statusAccount) error {
 	accounts = normalizeStatusAccounts(accounts)
 	summary := computeSummary(accounts)
 	if shouldPrintStatusSummary(&summary, len(accounts)) {
@@ -104,7 +104,7 @@ func printStatusText(w io.Writer, accounts []statusAccount, history bool) error 
 	}
 
 	for i := range accounts {
-		if err := printAccountStatus(w, &accounts[i], i > 0, history); err != nil {
+		if err := printAccountStatus(w, &accounts[i], i > 0); err != nil {
 			return err
 		}
 	}
@@ -179,7 +179,7 @@ func shouldPrintStatusSummary(summary *statusSummary, accountCount int) bool {
 	return false
 }
 
-func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, history bool) error {
+func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool) error {
 	if acct == nil {
 		return nil
 	}
@@ -206,7 +206,7 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool, his
 		normalizeStatusDrives(drives)
 	}
 	for i := range drives {
-		if err := printDriveStatus(w, &drives[i], history, 0); err != nil {
+		if err := printDriveStatus(w, &drives[i], 0); err != nil {
 			return err
 		}
 	}
@@ -255,7 +255,7 @@ func statusAccountLabel(acct *statusAccount) string {
 	return fmt.Sprintf("%s <%s>", acct.DisplayName, acct.Email)
 }
 
-func printDriveStatus(w io.Writer, drive *statusDrive, history bool, depth int) error {
+func printDriveStatus(w io.Writer, drive *statusDrive, depth int) error {
 	if drive == nil {
 		return nil
 	}
@@ -277,11 +277,11 @@ func printDriveStatus(w io.Writer, drive *statusDrive, history bool, depth int) 
 		return err
 	}
 	if drive.SyncState != nil {
-		if err := printSyncStateText(w, layout.detailIndent, drive.SyncState, history); err != nil {
+		if err := printSyncStateText(w, layout.detailIndent, drive.SyncState); err != nil {
 			return err
 		}
 	}
-	return printSharedFolderStatuses(w, layout, drive.SharedFolders, history, depth)
+	return printSharedFolderStatuses(w, layout, drive.SharedFolders, depth)
 }
 
 func printDriveFolder(w io.Writer, layout statusDriveTextLayout, drive *statusDrive) error {
@@ -318,7 +318,6 @@ func printSharedFolderStatuses(
 	w io.Writer,
 	layout statusDriveTextLayout,
 	sharedFolders []statusDrive,
-	history bool,
 	depth int,
 ) error {
 	if len(sharedFolders) == 0 {
@@ -328,7 +327,7 @@ func printSharedFolderStatuses(
 		return err
 	}
 	for i := range sharedFolders {
-		if err := printDriveStatus(w, &sharedFolders[i], history, depth+1); err != nil {
+		if err := printDriveStatus(w, &sharedFolders[i], depth+1); err != nil {
 			return err
 		}
 	}
@@ -442,25 +441,7 @@ func statusFallbackDriveName(drive *statusDrive) string {
 	return statusDriveNameOneDrive
 }
 
-func printMountStatus(w io.Writer, mount *statusMount) error {
-	if mount == nil {
-		return nil
-	}
-	drives := []statusDrive{*mount}
-	normalizeStatusDrives(drives)
-	return printDriveStatus(w, &drives[0], false, 0)
-}
-
-func statusMountLabel(mount *statusMount) string {
-	if mount == nil {
-		return ""
-	}
-	drives := []statusDrive{*mount}
-	normalizeStatusDrives(drives)
-	return statusDriveLabel(&drives[0])
-}
-
-func printSyncStateText(w io.Writer, indent string, ss *syncStateInfo, history bool) error {
+func printSyncStateText(w io.Writer, indent string, ss *syncStateInfo) error {
 	if ss == nil {
 		return nil
 	}
@@ -472,7 +453,7 @@ func printSyncStateText(w io.Writer, indent string, ss *syncStateInfo, history b
 		if err := printSyncStateStoreLines(w, indent, ss); err != nil {
 			return err
 		}
-		if err := printDriveSyncSections(w, indent, ss, history); err != nil {
+		if err := printDriveSyncSections(w, indent, ss); err != nil {
 			return err
 		}
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"path/filepath"
@@ -53,12 +54,11 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 	assert.Equal(t, 1, decoded.Summary.RuntimeActiveDrives)
 }
 
-// Validates: R-2.3.3, R-2.9.3
-//
-// A sync owns the socket but did not answer: status used to drop the live
-// state without a word, so a drive the watch was syncing read as pending
-// with nothing to say why.
-func TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer(t *testing.T) {
+// busyRuntimeStatusCommand configures one drive whose running sync holds the
+// control socket but answers every status request with busy, and returns a
+// status command context whose stderr is the second buffer.
+func busyRuntimeStatusCommand(t *testing.T) (*CLIContext, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
 	setTestDriveHome(t)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -77,6 +77,17 @@ func TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer(t *testing.T) {
 	var out, status bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
 	cc.StatusWriter = &status
+
+	return cc, &out, &status
+}
+
+// Validates: R-2.3.3, R-2.9.3
+//
+// A sync owns the socket but did not answer: status used to drop the live
+// state without a word, so a drive the watch was syncing read as pending
+// with nothing to say why.
+func TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer(t *testing.T) {
+	cc, out, status := busyRuntimeStatusCommand(t)
 	cc.Flags.JSON = true
 
 	require.NoError(t, runStatusCommand(t.Context(), cc, false))
@@ -85,6 +96,23 @@ func TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded), "the note goes to stderr, so stdout stays one JSON document")
 	assert.Empty(t, decoded.Summary.RuntimeOwner)
 	assert.Equal(t, "Note: the running sync did not answer in time, so its live state is not shown.\n", status.String())
+}
+
+// Validates: R-2.9.3, R-6.3.6
+//
+// A status the user stopped says nothing about the running sync: its control
+// socket request ended with the command, which is no news about the sync.
+// It used to print "could not read the running sync's live state (... context
+// canceled)" after the local state.
+func TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync(t *testing.T) {
+	cc, out, status := busyRuntimeStatusCommand(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.NoError(t, runStatusCommand(ctx, cc, false))
+	assert.Contains(t, out.String(), "Account: Busy Runtime User <busy-runtime@example.com>")
+	assert.Empty(t, status.String())
 }
 
 // Validates: R-2.3.3
