@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -168,4 +169,121 @@ func TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, complete)
 	assert.Equal(t, "done", item.ID)
+}
+
+// gatedReader holds its one Read open until release is closed, then answers
+// err: a body read that is still running when its attempt is abandoned.
+type gatedReader struct {
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (g *gatedReader) Read([]byte) (int, error) {
+	close(g.entered)
+	<-g.release
+
+	return 0, g.err
+}
+
+// newTestStallWatchdog returns a watchdog whose timer never fires by itself,
+// so a test reads whether it is armed without racing the clock.
+func newTestStallWatchdog(t *testing.T) *stallWatchdog {
+	t.Helper()
+
+	client := &Client{transferStallTimeout: time.Hour}
+	_, watchdog := client.watchTransfer(t.Context())
+	t.Cleanup(watchdog.stop)
+
+	return watchdog
+}
+
+// Validates: R-6.8.20
+func TestStallWatchdog_AWaitThatStartsDuringAReadLeavesTheTimerStopped(t *testing.T) {
+	// The transport reads an abandoned attempt's body on its own goroutine
+	// while the retry wait starts on the caller's. Whichever comes first, once
+	// both have returned nothing is expected to move, so the timer must be
+	// stopped. A read that found its attempt current and armed the timer after
+	// the wait had stopped it left the timer running through the wait: a
+	// Retry-After longer than the stall timeout failed the upload as stalled.
+	const rounds = 20000
+
+	one := make([]byte, 1)
+	body := bytes.NewReader(bytes.Repeat([]byte("u"), rounds))
+	for round := range rounds {
+		watchdog := newRoundStallWatchdog()
+		reader := watchdog.reader(body)
+
+		start := make(chan struct{})
+		var both sync.WaitGroup
+		both.Go(func() {
+			<-start
+			_, err := reader.Read(one)
+			assert.NoError(t, err)
+		})
+		both.Go(func() {
+			<-start
+			watchdog.waitStarts()
+		})
+		close(start)
+		both.Wait()
+
+		armed := watchdog.timer.Stop()
+		watchdog.stop()
+		require.Falsef(t, armed, "round %d: the timer runs although the retry wait has started", round)
+	}
+}
+
+// newRoundStallWatchdog is newTestStallWatchdog for a test that makes
+// thousands: the caller stops each one itself instead of queuing a cleanup.
+func newRoundStallWatchdog() *stallWatchdog {
+	client := &Client{transferStallTimeout: time.Hour}
+	_, watchdog := client.watchTransfer(context.Background())
+
+	return watchdog
+}
+
+// Validates: R-6.8.20
+func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *testing.T) {
+	watchdog := newTestStallWatchdog(t)
+
+	// The first attempt's body is inside a read when its request is abandoned.
+	abandoned := &gatedReader{entered: make(chan struct{}), release: make(chan struct{}), err: io.EOF}
+	first := watchdog.reader(abandoned)
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, err := first.Read(make([]byte, 1))
+		assert.ErrorIs(t, err, io.EOF)
+	}()
+	<-abandoned.entered
+
+	// The retry wait starts and ends, and the next attempt's body moves.
+	watchdog.waitStarts()
+	second := watchdog.reader(bytes.NewReader([]byte("uu")))
+	_, err := second.Read(make([]byte, 1))
+	require.NoError(t, err)
+
+	// Only now does the abandoned read end.
+	close(abandoned.release)
+	<-firstDone
+
+	// The next attempt is mid-body. Were the watchdog disarmed here, a
+	// connection that went quiet now would hold its worker for good.
+	assert.True(t, watchdog.timer.Stop(),
+		"the abandoned attempt's read disarmed the watchdog of the attempt that replaced it")
+}
+
+// Validates: R-6.8.20
+func TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded(t *testing.T) {
+	watchdog := newTestStallWatchdog(t)
+	reader := watchdog.reader(bytes.NewReader([]byte("uu")))
+
+	// The transport can still be reading the request body after the call
+	// that owns the transfer has returned.
+	watchdog.stop()
+	_, err := reader.Read(make([]byte, 1))
+	require.NoError(t, err)
+
+	assert.False(t, watchdog.timer.Stop(), "a read after the transfer ended left a timer running")
 }
