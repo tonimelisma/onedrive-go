@@ -133,7 +133,7 @@ func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 // file, and each report used to WARN again, so one badly named file warned
 // every 5 minutes forever. Only a newly skipped file warns.
 //
-// Validates: R-6.6.30
+// Validates: R-6.6.30, R-6.6.7
 func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	t.Parallel()
 
@@ -162,7 +162,7 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 // "Not syncing 11 files: the name starts with a space (examples=...)", the
 // first file's detail standing in for all of them.
 //
-// Validates: R-6.6.30
+// Validates: R-6.6.30, R-6.6.7
 func TestEngineFlow_SkippedFindings_GroupedWarningNamesTheWholeGroup(t *testing.T) {
 	t.Parallel()
 

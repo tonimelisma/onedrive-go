@@ -1,8 +1,6 @@
-// Package sync owns the single mounted content-root runtime, including pure helpers for
-// active-scope evaluation used by watch-mode execution and its tests.
-//
-// This file contains the pure helper functions for evaluating active scope
-// blocks once watch-mode runtime ownership moved fully into the engine.
+// Deterministic helpers that evaluate active scope blocks for watch-mode
+// execution and its tests.
+
 package sync
 
 import (
