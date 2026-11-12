@@ -41,8 +41,9 @@ type Engine struct {
 	dataDir         string
 	syncRoot        string
 	syncTree        *synctree.Root
-	// rootLock holds the sync root for the engine's lifetime (R-2.9.5).
-	rootLock *syncRootLock
+	// locks hold the sync root and the state store for the engine's lifetime
+	// (R-2.9.5).
+	locks engineLocks
 	// syncRootIdentity is the one owner of the identity the sync folder must
 	// match; the executor and every observer read it, never a copy.
 	syncRootIdentity       *syncRootIdentity
@@ -152,17 +153,17 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("%w: %s is missing or is not a folder", ErrMountRootUnavailable, cfg.SyncRoot)
 	}
 
-	// The root lock comes first and goes last: a second engine is refused
-	// before it opens (and possibly migrates or checkpoints) the store, and
-	// the store is closed before the next owner can start. Deferred cleanups
-	// run in reverse, so the store's startup-failure close runs before this
-	// release.
-	rootLock, err := acquireSyncRootLock(syncRootLockDataDir(cfg), cfg.SyncRoot, cfg.Logger, cfg.rootLockFlock)
+	// The folder and store locks come first and go last (engine_locks.go): a
+	// second engine is refused before it opens (and possibly migrates or
+	// checkpoints) the store, and the store is closed before the next owner
+	// can start. Deferred cleanups run in reverse, so the store's
+	// startup-failure close runs before this release.
+	locks, err := acquireEngineLocks(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", err)
 	}
 	storeOwnedByEngine := false
-	defer releaseSyncRootLockOnStartupFailure(cfg.Logger, rootLock, &storeOwnedByEngine)
+	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
 	bm, err := openEngineSyncStore(ctx, cfg.DBPath, cfg.Logger)
 	if err != nil {
@@ -216,7 +217,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		syncRoot:               cfg.SyncRoot,
 		syncTree:               syncTree,
 		syncRootIdentity:       rootIdentity,
-		rootLock:               rootLock,
+		locks:                  locks,
 		driveID:                cfg.DriveID,
 		driveType:              cfg.DriveType,
 		remoteRootItemID:       cfg.RemoteRootItemID,
@@ -424,8 +425,9 @@ func (e *Engine) nextRuntimeRunID() string {
 }
 
 // Close releases resources held by the engine. Nil-safe for observer
-// references set during RunWatch, cleans stale upload sessions, and
-// closes the database connection last. Safe to call more than once.
+// references set during RunWatch, cleans stale upload sessions, closes the
+// database connection, and only then releases the store and folder locks.
+// Safe to call more than once.
 func (e *Engine) Close(ctx context.Context) error {
 	// Clean stale upload session files (best-effort).
 	if e.sessionStore != nil {
@@ -440,11 +442,11 @@ func (e *Engine) Close(ctx context.Context) error {
 		}
 	}
 
-	// The folder stays locked until the state store is closed, so the next
-	// owner never starts against a store this engine is still writing.
+	// The folder and the store stay locked until the store is closed, so the
+	// next owner never starts against a store this engine is still writing.
 	defer func() {
-		if releaseErr := e.rootLock.release(); releaseErr != nil {
-			e.logger.Debug("release sync folder lock", slog.Any("error", releaseErr))
+		if releaseErr := e.locks.release(); releaseErr != nil {
+			e.logger.Debug("release engine locks", slog.Any("error", releaseErr))
 		}
 	}()
 

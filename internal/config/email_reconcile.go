@@ -19,6 +19,19 @@ type CanonicalIDRename struct {
 	To   driveid.CanonicalID
 }
 
+// StateDBMove is one state DB an account email change renames, by path.
+type StateDBMove struct {
+	From string
+	To   string
+}
+
+// StateDBMover renames state DBs, each with its whole file family, under the
+// lock that excludes every engine using them, and refuses every move while
+// any of them is in use. internal/sync owns that lock and the family
+// (syncengine.MoveStateDBs); config plans the renames but cannot import it,
+// so the caller passes the mover in.
+type StateDBMover func(moves []StateDBMove) error
+
 // EmailReconcileResult reports the deterministic renames applied for one
 // account email change. CLI callers use this to remap exact selectors for the
 // current invocation after config/data have been rewritten.
@@ -62,12 +75,15 @@ func (r *EmailReconcileResult) RemapCanonicalID(cid driveid.CanonicalID) (drivei
 // ReconcileAccountEmail detects an account rename by matching the stable Graph
 // user GUID to stored catalog accounts of the same account type. When the
 // current Graph email differs, it rewrites owned config sections, token/state
-// paths, and catalog ownership from the old email to the current one.
+// paths, and catalog ownership from the old email to the current one. The
+// state DBs move through moveStateDBs, first: one an engine still has open
+// refuses the whole change before anything is renamed.
 func ReconcileAccountEmail(
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
 	currentEmail string,
+	moveStateDBs StateDBMover,
 	logger *slog.Logger,
 ) (EmailReconcileResult, error) {
 	result := EmailReconcileResult{
@@ -103,7 +119,7 @@ func ReconcileAccountEmail(
 		return result, err
 	}
 
-	if err := plan.apply(configPath); err != nil {
+	if err := plan.apply(configPath, moveStateDBs); err != nil {
 		return result, err
 	}
 	if err := reconcileCatalogEmail(accountRenames, currentEmail); err != nil {
@@ -125,6 +141,9 @@ type emailReconcilePlan struct {
 type managedPathRename struct {
 	source string
 	target string
+	// isStateDB marks a state DB, which moves with its whole file family
+	// under its store lock (StateDBMover), never by a plain rename here.
+	isStateDB bool
 }
 
 func (p *emailReconcilePlan) hasChanges() bool {
@@ -228,7 +247,7 @@ func buildEmailReconcilePlan(
 	}
 
 	for from, to := range plan.driveRenameMap {
-		addPathRename(plan, DriveStatePath(from), DriveStatePath(to))
+		addStateDBRename(plan, DriveStatePath(from), DriveStatePath(to))
 	}
 
 	for _, oldEmail := range oldEmails {
@@ -335,11 +354,11 @@ func collectStateRenames(
 		switch managedFileDriveType(name, "state_", ".db") {
 		case driveid.DriveTypePersonal:
 			if ownedOldAccountOfType(ownedOldAccounts, driveid.DriveTypePersonal, oldEmail) {
-				addPathRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
+				addStateDBRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
 			}
 		case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
 			if ownedOldAccountOfType(ownedOldAccounts, driveid.DriveTypeBusiness, oldEmail) {
-				addPathRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
+				addStateDBRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
 			}
 		case driveid.DriveTypeShared:
 			targeted, err := sharedStateOwnedByRenamedAccount(path, ownedOldAccounts)
@@ -351,7 +370,7 @@ func collectStateRenames(
 				continue
 			}
 			if targeted {
-				addPathRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
+				addStateDBRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
 			}
 		}
 	}
@@ -443,21 +462,26 @@ func pathRenameExists(renames []managedPathRename, source string) bool {
 	return false
 }
 
+// addPathRename plans the rename of one managed file (a token).
 func addPathRename(plan *emailReconcilePlan, source string, target string) {
-	if source == "" || target == "" || source == target {
+	addManagedRename(plan, managedPathRename{source: source, target: target})
+}
+
+// addStateDBRename plans the move of one state DB.
+func addStateDBRename(plan *emailReconcilePlan, source string, target string) {
+	addManagedRename(plan, managedPathRename{source: source, target: target, isStateDB: true})
+}
+
+func addManagedRename(plan *emailReconcilePlan, rename managedPathRename) {
+	if rename.source == "" || rename.target == "" || rename.source == rename.target {
 		return
 	}
 
-	for i := range plan.pathRenames {
-		if plan.pathRenames[i].source == source {
-			return
-		}
+	if pathRenameExists(plan.pathRenames, rename.source) {
+		return
 	}
 
-	plan.pathRenames = append(plan.pathRenames, managedPathRename{
-		source: source,
-		target: target,
-	})
+	plan.pathRenames = append(plan.pathRenames, rename)
 }
 
 func rewriteManagedEmailPath(path string, oldEmail string, newEmail string) string {
@@ -540,8 +564,28 @@ func validateManagedRename(source string, target string) error {
 	}
 }
 
-func (p *emailReconcilePlan) apply(configPath string) error {
+// apply performs a validated plan. The state DBs move first, through
+// moveStateDBs, which refuses every move while an engine has one open; only
+// then are tokens renamed and config sections rewritten, so a refusal leaves
+// every old name in place for the next try.
+func (p *emailReconcilePlan) apply(configPath string, moveStateDBs StateDBMover) error {
+	var stateMoves []StateDBMove
 	for _, rename := range p.pathRenames {
+		if rename.isStateDB {
+			stateMoves = append(stateMoves, StateDBMove{From: rename.source, To: rename.target})
+		}
+	}
+	if len(stateMoves) > 0 {
+		// The mover is the caller's and wraps its own error.
+		if err := moveStateDBs(stateMoves); err != nil {
+			return err
+		}
+	}
+
+	for _, rename := range p.pathRenames {
+		if rename.isStateDB {
+			continue
+		}
 		if err := renameManagedPathIfPresent(rename.source, rename.target); err != nil {
 			return err
 		}

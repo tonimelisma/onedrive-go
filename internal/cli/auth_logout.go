@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -70,16 +71,14 @@ func resolveLogoutAccountWithCatalog(
 	)
 }
 
+// joinAccountViewEmails lists the accounts' emails, one per indented line.
 func joinAccountViewEmails(entries []accountView) string {
-	result := ""
+	emails := make([]string, 0, len(entries))
 	for i := range entries {
-		if i > 0 {
-			result += "\n  "
-		}
-		result += entries[i].Email
+		emails = append(emails, entries[i].Email)
 	}
 
-	return result
+	return strings.Join(emails, "\n  ")
 }
 
 // logoutJSONOutput is `logout --json`: the account signed out, the drives
@@ -94,17 +93,19 @@ type logoutJSONOutput struct {
 }
 
 // executeLogout performs the actual logout: finds affected drives, deletes
-// token, and optionally purges config sections and state databases. The
-// human confirmation goes to w; the returned result is what --json prints.
+// the token, removes their config sections, tells a running watch, and with
+// purge then deletes their state databases. The human confirmation goes to
+// the result writer; the returned result is what --json prints.
 func executeLogout(
+	ctx context.Context,
+	cc *CLIContext,
 	cfg *config.Config,
 	stored *config.Catalog,
-	cfgPath string,
-	w io.Writer,
 	account string,
 	purge bool,
-	logger *slog.Logger,
 ) (logoutJSONOutput, error) {
+	w := cc.resultWriter()
+	logger := cc.Logger
 	affected := drivesForAccount(cfg, account)
 	result := logoutJSONOutput{Account: account, Purged: purge, Drives: make([]string, 0, len(affected))}
 	for _, cid := range affected {
@@ -121,11 +122,35 @@ func executeLogout(
 		return result, err
 	}
 
-	if purge {
-		return result, executePurgeLogout(cfgPath, w, account, affected, logger)
+	// Each drive's folder as its engine locked it, read before the config
+	// forgets it, for the purge's lock.
+	syncDirs := make(map[driveid.CanonicalID]string, len(affected))
+	for _, cid := range affected {
+		syncDirs[cid] = driveSyncDir(cfg, cid, logger)
 	}
 
-	return result, executePlainLogout(cfgPath, w, account, affected, logger)
+	removedDrives, configErr := removeAccountDriveConfigs(cc.CfgPath, affected, logger)
+	if len(removedDrives) > 0 {
+		// The reload retires the drives' runners, which closes their stores
+		// before a purge deletes them.
+		notifyDaemonIfRunning(ctx, cc)
+	}
+
+	if purge {
+		return result, executePurgeLogout(ctx, w, account, affected, removedDrives, syncDirs, configErr, logger)
+	}
+	if configErr != nil {
+		return result, fmt.Errorf("removing drive configs: %w", configErr)
+	}
+
+	return result, executePlainLogout(w, account, logger)
+}
+
+// logoutPurgeCommand is the command that finishes a purge logout whose
+// state databases were kept: once the account is gone it finds them by
+// email (purgeOrphanedFiles).
+func logoutPurgeCommand(account string) string {
+	return "onedrive-go logout --purge --account " + account
 }
 
 // removeLogoutToken deletes the account's saved login, reporting whether
@@ -162,38 +187,51 @@ func removeLogoutToken(
 	return false, writef(w, "Token already removed for %s.\n", account)
 }
 
+// executePurgeLogout deletes the state databases of a logged-out account:
+// those of the configured drives whose section is gone (removedDrives; a
+// drive whose section could not be removed keeps its state, configErr says
+// why) and any the account left behind earlier, then removes the account
+// from the catalog. Every step runs whatever an earlier one returned, and
+// the command fails with all of them: a store an engine still has open is
+// kept, and its error names the logout that finishes the purge.
 func executePurgeLogout(
-	cfgPath string,
+	ctx context.Context,
 	w io.Writer,
 	account string,
 	affected []driveid.CanonicalID,
+	removedDrives []driveid.CanonicalID,
+	syncDirs map[driveid.CanonicalID]string,
+	configErr error,
 	logger *slog.Logger,
 ) error {
-	if err := purgeAccountDrives(w, cfgPath, affected, logger); err != nil {
-		return fmt.Errorf("purging account drives: %w", err)
+	var errs []error
+	if configErr != nil {
+		errs = append(errs, fmt.Errorf("removing drive configs: %w", configErr))
 	}
-	if err := purgeOrphanedFiles(w, account, logger); err != nil {
-		return fmt.Errorf("purging orphaned files: %w", err)
+	rerun := logoutPurgeCommand(account)
+	if err := deleteAccountDriveStates(ctx, w, removedDrives, syncDirs, rerun, logger); err != nil {
+		errs = append(errs, fmt.Errorf("purging account drives: %w", err))
 	}
-
+	handled := make(map[string]bool, len(affected))
+	for _, cid := range affected {
+		handled[config.DriveStatePath(cid)] = true
+	}
+	if err := purgeOrphanedFiles(ctx, w, account, handled, logger); err != nil {
+		errs = append(errs, fmt.Errorf("purging orphaned files: %w", err))
+	}
 	if err := config.ApplyPurgeLogout(config.DefaultDataDir(), account); err != nil {
-		return fmt.Errorf("updating catalog after purge logout: %w", err)
+		errs = append(errs, fmt.Errorf("updating catalog after purge logout: %w", err))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
 	}
 
 	return writeln(w, "Sync directories untouched — your files remain on disk.")
 }
 
-func executePlainLogout(
-	cfgPath string,
-	w io.Writer,
-	account string,
-	affected []driveid.CanonicalID,
-	logger *slog.Logger,
-) error {
-	if err := removeAccountDriveConfigs(cfgPath, affected, logger); err != nil {
-		return fmt.Errorf("removing drive configs: %w", err)
-	}
-
+// executePlainLogout finishes a logout without --purge, after the drives'
+// config sections were removed: their state databases are kept.
+func executePlainLogout(w io.Writer, account string, logger *slog.Logger) error {
 	if err := writeln(w, "\nState databases kept. Run 'onedrive-go login' to re-authenticate."); err != nil {
 		return err
 	}
@@ -207,60 +245,46 @@ func executePlainLogout(
 	return writeln(w, "Sync directories untouched — your files remain on disk.")
 }
 
-// purgeOrphanedFiles removes state databases for the given email. Account and
-// cached profile metadata live in the managed catalog, so purge cleanup only
-// needs to clear retained per-drive state files. Idempotent — ignores files
-// that don't exist. This handles cleanup after a prior non-purge logout where
-// config sections and tokens were removed but state DBs remained.
-func purgeOrphanedFiles(w io.Writer, email string, logger *slog.Logger) error {
-	var errs []error
-
-	// Remove orphaned state databases.
+// purgeOrphanedFiles removes the state databases for the given email that
+// handled does not name (the configured drives' were purged already). Account
+// and cached profile metadata live in the managed catalog, so purge cleanup
+// only needs to clear retained per-drive state. Idempotent: a store that is
+// not there is nothing to do. This handles cleanup after a prior non-purge
+// logout, where config sections and tokens were removed but state DBs
+// remained, and finishes a purge that kept a store an engine had open. Each
+// store goes with its whole family under its store lock (deleteStateDB);
+// their folders are no longer known.
+func purgeOrphanedFiles(
+	ctx context.Context,
+	w io.Writer,
+	email string,
+	handled map[string]bool,
+	logger *slog.Logger,
+) error {
 	paths, err := config.DiscoverStateDBsForEmail(email, logger)
 	if err != nil {
 		return fmt.Errorf("finding state databases to purge: %w", err)
 	}
+
+	var errs []error
+	rerun := logoutPurgeCommand(email)
 	for _, path := range paths {
-		if err := removeOrphanedPath(
-			path,
-			logger,
-			"failed to remove orphaned state DB",
-			"removed orphaned state DB",
-			func(removedPath string) error {
-				return writef(w, "Purged orphaned state DB: %s\n", filepath.Base(removedPath))
-			},
-		); err != nil {
-			errs = append(errs, err)
+		if handled[path] {
+			continue
+		}
+		removed, deleteErr := deleteStateDB(ctx, path, "", rerun, logger)
+		if deleteErr != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", filepath.Base(path), deleteErr))
+			continue
+		}
+		if removed {
+			if writeErr := writef(w, "Purged orphaned state DB: %s\n", filepath.Base(path)); writeErr != nil {
+				errs = append(errs, writeErr)
+			}
 		}
 	}
 
 	return errors.Join(errs...)
-}
-
-func removeOrphanedPath(
-	path string,
-	logger *slog.Logger,
-	warnMsg string,
-	infoMsg string,
-	onRemoved func(path string) error,
-) error {
-	removed, err := removeManagedPath(path)
-	if err != nil {
-		logger.Warn(warnMsg, "path", path, "error", err)
-		return fmt.Errorf("removing %s: %w", path, err)
-	}
-	if !removed {
-		return nil
-	}
-
-	logger.Info(infoMsg, "path", path)
-	if onRemoved != nil {
-		if err := onRemoved(path); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // drivesForAccount returns all canonical IDs whose email matches the given account.
@@ -278,7 +302,9 @@ func drivesForAccount(cfg *config.Config, account string) []driveid.CanonicalID 
 
 // canonicalIDForToken picks a canonical ID to use for token path derivation.
 // SharePoint drives share the business token, so we prefer a non-sharepoint ID.
-// DriveTokenPath handles the SharePoint→business mapping internally.
+// DriveTokenPath handles the SharePoint→business mapping internally. An
+// account that cannot form a business ID gives the zero ID on purpose: the
+// caller then finds the token through the catalog (removeLogoutToken).
 func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid.CanonicalID {
 	for _, cid := range driveIDs {
 		if !cid.IsSharePoint() {

@@ -40,7 +40,7 @@ are inserted, updated, pruned, and validated.
 | `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_UnreadableDataDirIsReported`, `TestManagedPathExists_DistinguishesAbsentFromUnreadable`, `TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
 | `trash list/restore/empty` read and change one configured drive's local trash offline; restore never overwrites and empty needs `--confirm`. | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites` |
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears only the recorded sync-folder fingerprint, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
-| `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root`, the two offline changes to a drive's state store, refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or the folder its state records (R-6.3.9). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheFolder` |
+| `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root` refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or its state store (R-6.3.9). `drive remove --purge` and `logout --purge` remove the config sections, tell a running watch, and then delete each state store under the same locks, keeping one an engine still has open and naming the command that finishes (R-3.3.8, R-3.1.4). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive`, `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestLogoutPurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestLogoutPurge_NotifiesTheWatchBeforeDeleting` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive`, `TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor` |
@@ -657,21 +657,38 @@ refuses on it as on any probe that could not tell.
 
 The probe sees only an owner that holds the control socket. After the
 confirmation, `drive reset-sync-state` and `drive rebind-root` both run
-their change through `changeDriveStateUnderFolderLock`, which holds every
-sync-folder lock an engine with that store open could hold
-(`syncengine.LockDriveForOfflineChange`, the engine's own `flock`) for the
-length of the change, so they refuse with `ErrSyncRootInUse` while an engine
-still has the drive's store open: one still draining or closing after its
-owner stopped answering, or one run by another configuration that shares
-the data directory. Two folders count. The folder now at the sync path is
-the one an engine of this configuration locks; the folder the store records
-is the one an engine that started before that folder was moved or replaced
-still holds. A rebind exists for exactly that case, so for it the two
-differ, and both are locked. A sync folder that does not exist and a store
-that records none add no lock. These are the only commands behind the owner
-probe (`resolveDriveForStateChange`); `drive remove --purge` and
-`logout --purge` delete state stores without either and are planned
-separately [planned].
+their change through `changeDriveStateUnderLock`, which holds the locks an
+engine with that store open holds (`syncengine.LockDriveForOfflineChange`,
+the engine's own `flock`s, in its order: the folder now at the sync path,
+then the store) for the length of the change. They refuse with
+`ErrSyncRootInUse` or `ErrSyncStoreInUse` ("cannot ...; stop that sync
+first") while an engine still has the drive's store open: one still draining
+or closing after its owner stopped answering, one run by another
+configuration that shares the data directory, and one that started before
+its folder was moved or replaced, which is the case a rebind exists for. The
+store lock finds all three, with nothing recorded about the folder; the
+folder lock keeps a new engine of this configuration from starting
+mid-change. These two are the only commands behind the owner probe
+(`resolveDriveForStateChange`).
+
+`drive remove --purge` and `logout --purge` delete state stores in a fixed
+order. The drive's config section goes first, then the running watch is told
+(`notifyDaemonIfRunning`; its reload retires the drive's runner, which closes
+the store, within the runner stop bound), and only then is the store's whole
+file family deleted under the same locks (`deleteStateDB`, folder lock from
+the drive's sync folder as the config named it, none for orphaned state).
+While an engine still has the store open (a runner that did not stop in
+time, another configuration's engine), the store is kept and the command
+fails, through the error path main prints, with what was done, what was
+kept and why, and the command that finishes once that sync has stopped:
+`onedrive-go drive remove --purge --drive <id>` (which purges the drive's
+orphaned state) or `onedrive-go logout --purge --account <email>` (which
+finds the account's remaining stores by email). The other drives of a
+logout are purged anyway, and the logout still removes the account and its
+drives from the catalog; `drive remove` keeps a kept drive's catalog record
+until the finishing purge prunes it. Deleting first, as before, removed a
+store under a runner still writing it. Plain `logout` tells the watch too,
+after removing the sections.
 
 `status` says, on stderr, when a sync holds the socket but its live state is
 missing: "the running sync did not answer in time" for an unresponsive owner,
@@ -683,7 +700,7 @@ syncing read as pending with no reason given.
 
 `pause` and `resume` remain config mutations owned by the CLI. After writing
 config, the CLI asks a running watch owner to reload (`notifyDaemonWithOptions`,
-also used by `drive add`, `drive remove` and `login`) and says what happened,
+also used by `drive add`, `drive remove`, `login` and `logout`) and says what happened,
 one sentence per outcome:
 
 | Outcome | Message |
@@ -712,12 +729,14 @@ refusing all cleanup.
 
 ## State DB Handling
 
-The CLI owns the only destructive operator surface for per-drive sync state:
-`onedrive-go drive reset-sync-state --drive <drive>`.
+The CLI owns the only recreate surface for per-drive sync state,
+`onedrive-go drive reset-sync-state --drive <drive>`; the purges above are the
+only other commands that delete it.
 
 - `--drive` is mandatory and must resolve to exactly one configured drive
 - the default flow requires typing `RESET`; `--yes` is the non-interactive bypass
-- the command refuses to run while that drive has a live sync owner
+- the command refuses to run while that drive has a live sync owner, or while
+  any engine holds the drive's sync folder or its state store
 - the command deletes only the selected drive's state DB family and recreates a
   fresh canonical DB immediately
 
@@ -811,7 +830,7 @@ OneDrive content mutation. Operational side effects from command setup,
 authenticated Graph access, managed state open/checkpoint, and scratch
 planning are still allowed.
 
-`login`, `drive add`, and `drive remove` ask a running watch owner to reload
+`login`, `logout`, `drive add`, and `drive remove` ask a running watch owner to reload
 configuration through the control socket after successful config mutation. The
 daemon process is not restarted; `internal/multisync` diffs the new mount set
 and starts, stops, or keeps per-drive runners in place.

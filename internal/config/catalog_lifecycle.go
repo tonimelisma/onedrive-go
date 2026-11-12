@@ -170,10 +170,8 @@ func PruneDriveAfterPurge(dataDir string, cid driveid.CanonicalID) error {
 			return nil
 		}
 
-		drive.RetainedStatePresent = false
 		accountCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
 		if drive.PrimaryForAccount || (err == nil && accountOwnsPrimaryDrive(catalog, accountCID, cid)) {
-			catalog.UpsertDrive(&drive)
 			return nil
 		}
 

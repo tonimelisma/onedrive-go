@@ -68,15 +68,16 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 	}
 
 	// A rebind runs exactly when the folder at the sync path is not the one
-	// the state records, so both folders' locks count: an engine started
-	// before the move still holds the recorded one, and one starting now
-	// would take the one at the path.
-	if err := changeDriveStateUnderFolderLock(ctx, syncDir, dbPath, rebindRootAction, cc.Logger, func() error {
-		if rebindErr := syncengine.RebindSyncRoot(ctx, dbPath, cc.Logger); rebindErr != nil {
-			return fmt.Errorf("rebind sync folder: %w", rebindErr)
-		}
-		return nil
-	}); err != nil {
+	// the state records. An engine started before the move holds the store
+	// lock, whatever folder it syncs; one starting now would take the lock of
+	// the folder at the path.
+	if err := changeDriveStateUnderLock(ctx, syncDir, dbPath, refuseOfflineChange(rebindRootAction), cc.Logger,
+		func() error {
+			if rebindErr := syncengine.RebindSyncRoot(ctx, dbPath, cc.Logger); rebindErr != nil {
+				return fmt.Errorf("rebind sync folder: %w", rebindErr)
+			}
+			return nil
+		}); err != nil {
 		return err
 	}
 

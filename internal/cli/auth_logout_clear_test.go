@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"log/slog"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,8 +44,7 @@ func TestExecutePlainLogout_ClearsPersistedAuthRequirement(t *testing.T) {
 
 	var out bytes.Buffer
 
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, executePlainLogout(cfgPath, &out, email, nil, slog.New(slog.DiscardHandler)))
+	require.NoError(t, executePlainLogout(&out, email, slog.New(slog.DiscardHandler)))
 
 	required, err = config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), email)
 	require.NoError(t, err)

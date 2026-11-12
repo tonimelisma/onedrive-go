@@ -7,6 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func (cc *CLIContext) probeAccountIdentity(
@@ -42,7 +43,7 @@ func (cc *CLIContext) probeAccountIdentity(
 		return zero, fmt.Errorf("fetch authenticated user for %s: %w", accountCID, err)
 	}
 
-	result, err := cc.reconcileGraphUser(accountCID, user)
+	result, err := cc.reconcileGraphUser(ctx, accountCID, user)
 	if err != nil {
 		return zero, err
 	}
@@ -50,7 +51,12 @@ func (cc *CLIContext) probeAccountIdentity(
 	return result, nil
 }
 
+// reconcileGraphUser applies an account email change Graph reports. Its
+// state DBs move under their store locks (syncengine.MoveStateDBs); while a
+// sync still has one open nothing is renamed, and the error says to stop
+// that sync and run the command again.
 func (cc *CLIContext) reconcileGraphUser(
+	ctx context.Context,
 	accountCID driveid.CanonicalID,
 	user *graph.User,
 ) (config.EmailReconcileResult, error) {
@@ -58,8 +64,19 @@ func (cc *CLIContext) reconcileGraphUser(
 		return config.EmailReconcileResult{}, nil
 	}
 
-	result, err := config.ReconcileAccountEmail(cc.CfgPath, accountCID, user.ID, user.Email, cc.Logger)
-	if err != nil {
+	moveStateDBs := func(moves []config.StateDBMove) error {
+		if err := syncengine.MoveStateDBs(ctx, config.DefaultDataDir(), moves, cc.Logger); err != nil {
+			return fmt.Errorf("rename sync state: %w", err)
+		}
+		return nil
+	}
+	result, err := config.ReconcileAccountEmail(cc.CfgPath, accountCID, user.ID, user.Email, moveStateDBs, cc.Logger)
+	switch {
+	case isSyncInUse(err):
+		return config.EmailReconcileResult{}, fmt.Errorf(
+			"the account's email changed to %s, but its sync state cannot be renamed while a sync uses it: %w; "+
+				"stop that sync, then run the command again", user.Email, err)
+	case err != nil:
 		return config.EmailReconcileResult{}, fmt.Errorf("reconcile account email: %w", err)
 	}
 

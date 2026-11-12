@@ -621,16 +621,16 @@ Read-denied subtree boundaries do not persist as `block_scopes`. They remain
 tagged on `observation_issues` via `ScopeKey`, and truth-status reads derive
 blocked descendants from those boundary facts.
 
-`store_inspect.go` now owns three read-side shapes:
+`store_inspect.go` now owns two read-side shapes:
 
 - `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
 - `readPathTruthStatus` for derived truth availability over requested paths,
   built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
   materializing fake durable descendant rows
-- `readRecordedSyncRoot` for the sync folder identity a store records, read
-  through the read-only inspector so an offline change can lock that folder
-  (`LockDriveForOfflineChange`, sync-engine.md) without opening the store for
-  writing; a missing store, a missing row or an unbound folder records none
+
+The inspector opens the store `mode=ro` and `query_only` and takes no lock: a
+reader runs beside a live engine. Every writer outside an engine holds the
+store lock first (sync-engine.md, Sync root and store ownership).
 
 `DriveStatusSnapshot.RemoteDriftItems` (status "Remote changes") uses the same
 content test as the planner's `remote_changed` in `sqlite_compare.go`: folders
@@ -686,9 +686,29 @@ Two store-owned helpers isolate DB lifecycle policy:
   index cross-check, which keeps it linear and cheap enough for every open.
   Only damage is `corrupt`: a check that fails for another reason (a
   canceled context, `SQLITE_BUSY`, an I/O or scan error) is an ordinary
-  startup failure, never a reason to reset (`integrityCheckFailure`)
+  startup failure, never a reason to reset (`integrityCheckFailure`). Only an
+  existing store is incompatible, and a family file that cannot be checked
+  (permission denied, an I/O error) is an error, never absent
+  (`stateDBFamilyExists`)
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
-  canonical DB in place
+  canonical DB in place. The family is `config.StateDBFamily` (config owns it
+  with the state DB paths, so its own discovery and the email rename use the
+  same list): the `-wal`, `-shm` and `-journal` sidecars, then the database,
+  last. Every delete or move
+  of a store (reset, purge, a shortcut child's cleanup, an email rename's
+  `moveStateDBFamily`) takes all of them in that order; the reset and the
+  purge used to leave the journal, and the email rename moved the database
+  alone. The database goes last so that a delete cut short leaves a store
+  the rerun still finds and finishes. All of them go because SQLite pairs a
+  write-ahead log with a database by file name alone: a log beside a
+  database that did not write it is replayed into it, which is why a move
+  also deletes every sidecar at its target that the source does not have. A
+  log left alone is deleted when a database is created at that name, so a
+  store created where sidecars remained starts empty
+  (`TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone`). The callers
+  hold the store's offline-change lock (`LockDriveForOfflineChange`)
+  (`TestRemoveStateDBFiles_RemovesALeftoverJournal`,
+  `TestMoveStateDBs_MovesTheWholeFamily`)
 
 Engine startup may use the diagnosis helper, but it must not call the
 destructive reset helper automatically. The explicit CLI reset command owns the

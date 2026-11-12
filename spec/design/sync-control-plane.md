@@ -531,11 +531,18 @@ against a store still being written (`TestRunWatch_OwnerLockHeldUntilRunnersDrai
 During the drain the socket stays up; a command the loop no longer takes is
 answered `busy`.
 
-That lock covers one control socket. Each engine also holds an exclusive
-`flock` on a data-dir lock file named after its sync root's device and inode
-(`internal/sync/engine_root_lock.go`), so a second configuration sharing the
-data dir and reaching the same folder by any path is refused with
-`ErrSyncRootInUse` (R-2.9.5, `TestEngine_SecondEngineOnSameRootRefused`).
+That lock covers one control socket. Each engine also holds two exclusive
+`flock`s on data-dir lock files (`internal/sync/engine_locks.go`), one named
+after its sync root's device and inode and one after its state DB's path, so
+a second configuration sharing the data dir is refused with
+`ErrSyncRootInUse` when it reaches the same folder by any path, and with
+`ErrSyncStoreInUse` when it names the same store from another folder
+(R-2.9.5, `TestEngine_SecondEngineOnSameRootRefused`,
+`TestEngine_SecondEngineOnSameStoreRefused`). A shortcut child's cleanup
+deletes the child's state DB family only under that store lock: while another
+engine has the store open, the cleanup fails as `state_artifact`, touches
+nothing else of the child, and is retried from the parent's next cleanup
+command (`TestShortcutChildArtifactCleanupExecutor_KeepsTheStateWhileAnEngineHoldsIt`).
 
 The configured socket path normally lives under the app data directory. If that
 absolute path would exceed the platform-safe Unix socket length, config derives

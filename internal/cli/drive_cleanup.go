@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,94 +34,117 @@ func removeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, syncD
 	return writeln(w, "Run 'onedrive-go drive add "+idStr+"' to re-add.")
 }
 
-// purgeDrive deletes the config section and state database for a drive.
-// The token is NOT deleted here — it may be shared with other drives (SharePoint).
-func purgeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, logger *slog.Logger) error {
-	if err := purgeSingleDrive(cfgPath, driveID, logger); err != nil {
-		return err
+// purgeConfiguredDrive removes a configured drive's config section, tells a
+// running watch, whose reload retires the drive's runner within the runner
+// stop bound, and only then deletes the drive's state DB (deleteStateDB),
+// which syncDir's engine had open. The token is NOT deleted here: it may be
+// shared with other drives (SharePoint). A store an engine still has open is
+// kept and the returned error says how to finish.
+func purgeConfiguredDrive(ctx context.Context, cc *CLIContext, cid driveid.CanonicalID, syncDir string) error {
+	if err := config.DeleteDriveSection(cc.CfgPath, cid); err != nil {
+		return fmt.Errorf("removing drive: %w", err)
+	}
+	cc.Logger.Info("removed drive config section", "drive", cid.String())
+	notifyDaemonIfRunning(ctx, cc)
+
+	if _, err := deleteDriveState(ctx, cid, syncDir, cc.Logger); err != nil {
+		return fmt.Errorf("removed %s from the config, but %w", cid.String(), err)
 	}
 
-	if err := writef(w, "Purged config and state for %s.\n", driveID.String()); err != nil {
+	w := cc.resultWriter()
+	if err := writef(w, "Purged config and state for %s.\n", cid.String()); err != nil {
 		return err
 	}
 
 	return writeln(w, "Sync directory untouched — delete manually if desired.")
 }
 
-// purgeOrphanedDriveState removes the retained state DB for a drive that is no
-// longer in config. Unlike purgeSingleDrive (which also removes the drive's
-// config section), this only deletes drive-owned state left behind from a
-// previous `drive remove` without --purge.
-func purgeOrphanedDriveState(w io.Writer, cid driveid.CanonicalID, logger *slog.Logger) error {
-	removed, err := removeDriveDataFiles(cid, logger)
+// purgeOrphanedDriveState removes the retained state DB of a drive that is no
+// longer in the config, left behind by an earlier `drive remove` without
+// --purge. Its folder is no longer known, so only the store is locked.
+func purgeOrphanedDriveState(ctx context.Context, w io.Writer, cid driveid.CanonicalID, logger *slog.Logger) error {
+	removed, err := deleteDriveState(ctx, cid, "", logger)
 	if err != nil {
 		return err
 	}
 
-	if removed == 0 {
+	if !removed {
 		return writef(w, "No orphaned state found for %s.\n", cid.String())
 	}
 
-	return writef(w, "Purged %d orphaned data file(s) for %s.\n", removed, cid.String())
+	return writef(w, "Purged the orphaned sync state for %s.\n", cid.String())
 }
 
-// purgeSingleDrive removes only drive-owned state for one drive: the state DB
-// and config section. Account profiles and drive inventory live in the managed
-// catalog, so `drive remove --purge` may drop the drive record separately
-// without touching the owning account record. Token deletion is handled
-// separately since tokens may be shared (SharePoint).
-func purgeSingleDrive(cfgPath string, canonicalID driveid.CanonicalID, logger *slog.Logger) error {
-	// Remove the config section even when some sync data cannot be deleted,
-	// but report the leftovers so the command does not claim a clean purge.
-	_, dataErr := removeDriveDataFiles(canonicalID, logger)
-
-	if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
-		return fmt.Errorf("deleting drive section: %w", err)
+// deleteDriveState deletes one drive's state DB (deleteStateDB). A kept store
+// names `drive remove --purge` for the drive as the command that finishes,
+// which works once the drive has left the config.
+func deleteDriveState(ctx context.Context, cid driveid.CanonicalID, syncDir string, logger *slog.Logger) (bool, error) {
+	statePath := config.DriveStatePath(cid)
+	if statePath == "" {
+		return false, nil
 	}
 
-	if dataErr != nil {
-		return fmt.Errorf("removed %s from the config, but could not delete all of its sync data: %w", canonicalID.String(), dataErr)
-	}
-
-	return nil
+	return deleteStateDB(ctx, statePath, syncDir, "onedrive-go drive remove --purge --drive "+cid.String(), logger)
 }
 
-// purgeAccountDrives removes drive config sections and state databases for
-// all affected drives. Token deletion is already handled before this call.
-func purgeAccountDrives(w io.Writer, cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) error {
+// deleteAccountDriveStates deletes the state DBs of a logged-out account's
+// drives, after their config sections were removed and a running watch was
+// told (executeLogout). syncDirs holds each drive's folder as its engine
+// locked it. A kept store is an error naming rerun; the other drives are
+// purged anyway.
+func deleteAccountDriveStates(
+	ctx context.Context,
+	w io.Writer,
+	affected []driveid.CanonicalID,
+	syncDirs map[driveid.CanonicalID]string,
+	rerun string,
+	logger *slog.Logger,
+) error {
+	if len(affected) == 0 {
+		return nil
+	}
 	if err := writeln(w); err != nil {
 		return err
 	}
 
 	var errs []error
-
 	for _, cid := range affected {
-		if err := purgeSingleDrive(cfgPath, cid, logger); err != nil {
-			logger.Warn("failed to purge drive", "drive", cid.String(), "error", err)
-			errs = append(errs, fmt.Errorf("purging drive %s: %w", cid.String(), err))
-		} else {
-			if writeErr := writef(w, "Purged config and state for %s.\n", cid.String()); writeErr != nil {
-				errs = append(errs, writeErr)
-			}
+		statePath := config.DriveStatePath(cid)
+		if statePath == "" {
+			continue
+		}
+		if _, err := deleteStateDB(ctx, statePath, syncDirs[cid], rerun, logger); err != nil {
+			errs = append(errs, fmt.Errorf("removed %s from the config, but %w", cid.String(), err))
+			continue
+		}
+		if err := writef(w, "Purged config and state for %s.\n", cid.String()); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	return errors.Join(errs...)
 }
 
-// removeAccountDriveConfigs deletes config sections for all affected drives
-// without removing state databases. Used by regular logout (without --purge).
-func removeAccountDriveConfigs(cfgPath string, affected []driveid.CanonicalID, logger *slog.Logger) error {
+// removeAccountDriveConfigs deletes config sections for all affected drives,
+// collecting failures, and returns the drives whose section it removed. The
+// state databases are left to the caller, which purges only those drives':
+// a drive still in the config keeps its state.
+func removeAccountDriveConfigs(
+	cfgPath string,
+	affected []driveid.CanonicalID,
+	logger *slog.Logger,
+) ([]driveid.CanonicalID, error) {
+	removed := make([]driveid.CanonicalID, 0, len(affected))
 	var errs []error
 
 	for _, cid := range affected {
 		if err := config.DeleteDriveSection(cfgPath, cid); err != nil {
-			logger.Warn("failed to remove drive config section", "drive", cid.String(), "error", err)
 			errs = append(errs, fmt.Errorf("removing drive %s: %w", cid.String(), err))
-		} else {
-			logger.Info("removed drive config section", "drive", cid.String())
+			continue
 		}
+		logger.Info("removed drive config section", "drive", cid.String())
+		removed = append(removed, cid)
 	}
 
-	return errors.Join(errs...)
+	return removed, errors.Join(errs...)
 }

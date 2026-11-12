@@ -101,13 +101,15 @@ func holdSyncFolder(t *testing.T, syncDir string) {
 }
 
 // An engine still draining or closing its store after its owner stopped
-// answering on the control socket holds only its sync-folder lock. Every
-// offline change to a drive's state store waits for that lock too, or it
-// rewrites a store the engine is still writing.
+// answering on the control socket holds only its locks. Every offline change
+// to a drive's state store takes them too, or it rewrites a store the engine
+// is still writing: the folder now at the sync path (an engine of this
+// configuration), and the store itself (an engine of another configuration
+// sharing the data directory, or one started before its folder moved).
 //
 // Validates: R-6.3.9, R-2.9.5
-func TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheFolder(t *testing.T) {
-	tests := []struct {
+func TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive(t *testing.T) {
+	commands := []struct {
 		name string
 		run  func(ctx context.Context, cc *CLIContext) error
 	}{
@@ -124,35 +126,60 @@ func TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheFolder(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setTestDriveHome(t)
+	holders := []struct {
+		name  string
+		hold  func(t *testing.T, syncDir, statePath string)
+		inUse error
+	}{
+		{
+			name: "its folder",
+			hold: func(t *testing.T, syncDir, _ string) {
+				t.Helper()
+				holdSyncFolder(t, syncDir)
+			},
+			inUse: syncengine.ErrSyncRootInUse,
+		},
+		{
+			name: "its store",
+			hold: func(t *testing.T, _, statePath string) {
+				t.Helper()
+				holdDriveState(t, statePath)
+			},
+			inUse: syncengine.ErrSyncStoreInUse,
+		},
+	}
+	for _, command := range commands {
+		for _, holder := range holders {
+			t.Run(command.name+" while an engine holds "+holder.name, func(t *testing.T) {
+				setTestDriveHome(t)
 
-			cfgPath := filepath.Join(t.TempDir(), "config.toml")
-			cid := driveid.MustCanonicalID("personal:offline-change@example.com")
-			syncDir := t.TempDir()
-			require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+				cfgPath := filepath.Join(t.TempDir(), "config.toml")
+				cid := driveid.MustCanonicalID("personal:offline-change@example.com")
+				syncDir := t.TempDir()
+				require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
 
-			statePath := config.DriveStatePath(cid)
-			require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
-			const kept = "state the engine is still writing"
-			require.NoError(t, os.WriteFile(statePath, []byte(kept), 0o600))
-			holdSyncFolder(t, syncDir)
+				statePath := config.DriveStatePath(cid)
+				require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+				const kept = "state the engine is still writing"
+				require.NoError(t, os.WriteFile(statePath, []byte(kept), 0o600))
+				holder.hold(t, syncDir, statePath)
 
-			cc := &CLIContext{
-				Flags:        CLIFlags{Drive: []string{cid.String()}},
-				Logger:       testDriveLogger(t),
-				OutputWriter: &bytes.Buffer{},
-				StatusWriter: &bytes.Buffer{},
-				CfgPath:      cfgPath,
-			}
+				cc := &CLIContext{
+					Flags:        CLIFlags{Drive: []string{cid.String()}},
+					Logger:       testDriveLogger(t),
+					OutputWriter: &bytes.Buffer{},
+					StatusWriter: &bytes.Buffer{},
+					CfgPath:      cfgPath,
+				}
 
-			err := tt.run(t.Context(), cc)
-			require.ErrorIs(t, err, syncengine.ErrSyncRootInUse)
-			data, readErr := os.ReadFile(statePath) //nolint:gosec // test-owned temp path
-			require.NoError(t, readErr)
-			assert.Equal(t, kept, string(data), "the state DB is left alone")
-		})
+				err := command.run(t.Context(), cc)
+				require.ErrorIs(t, err, holder.inUse)
+				assert.Contains(t, err.Error(), "stop that sync first")
+				data, readErr := os.ReadFile(statePath) //nolint:gosec // test-owned temp path
+				require.NoError(t, readErr)
+				assert.Equal(t, kept, string(data), "the state DB is left alone")
+			})
+		}
 	}
 }
 

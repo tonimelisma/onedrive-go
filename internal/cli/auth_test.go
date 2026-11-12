@@ -575,7 +575,7 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	))
 
 	logger := slog.Default()
-	err := purgeOrphanedFiles(io.Discard, "alice@outlook.com", logger)
+	err := purgeOrphanedFiles(t.Context(), io.Discard, "alice@outlook.com", nil, logger)
 	require.NoError(t, err)
 
 	// Alice's retained state should be gone.
