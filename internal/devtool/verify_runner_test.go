@@ -675,6 +675,7 @@ func TestFastE2EExecutionManifestKeepsOnlySmokeLiveTests(t *testing.T) {
 	assert.Contains(t, fastTests, "TestE2E_Sync_DownloadOnly")
 	assert.Contains(t, fastTests, "TestE2E_SyncWatch_WebsocketDisabledLongPollRegression")
 	assert.Contains(t, fastTests, "TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount")
+	assert.Contains(t, fastTests, "TestE2E_TrackedFilesNameNoTestAccount", "only the live jobs know the addresses it looks for")
 
 	assert.NotContains(t, fastTests, "TestE2E_FileOps_Whoami")
 	assert.NotContains(t, fastTests, "TestE2E_FileOps_LsRoot")
@@ -1065,6 +1066,36 @@ func TestRunVerifyFailedTestKeepsRaceAndTheShuffleSeed(t *testing.T) {
 			}, runner.runCommands[0].args)
 		})
 	}
+}
+
+// Validates: R-6.10.26
+//
+// go test exits 0 when -run selects nothing, so the rerun of a test renamed
+// or deleted since the failing run used to report success while running
+// nothing.
+func TestRunFailedTestVerification_PatternThatSelectsNothingFails(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	logPath := filepath.Join(repoRoot, "ci.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"--- FAIL: TestRenamedSince (0.01s)\nFAIL\t"+testSyncPackage+"\t0.101s\n",
+	), 0o600))
+
+	runner := &fakeRunner{runStdoutFunc: func([]string) string {
+		return "testing: warning: no tests to run\nPASS\nok  \t" + testSyncPackage + "\t0.011s [no tests to run]\n"
+	}}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:      repoRoot,
+		Profile:       VerifyFailedTest,
+		FailedTestLog: logPath,
+		Stdout:        &bytes.Buffer{},
+		Stderr:        &bytes.Buffer{},
+	})
+
+	require.ErrorContains(t, err, "matched no tests")
+	require.Len(t, runner.runCommands, 1)
+	assert.Contains(t, runner.runCommands[0].args, "-run=^TestRenamedSince$")
 }
 
 func TestRunVerifyFailedTestRequiresLogPath(t *testing.T) {

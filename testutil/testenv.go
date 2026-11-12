@@ -4,6 +4,7 @@ package testutil
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,12 +25,18 @@ const (
 )
 
 const (
-	defaultWritableShortcutRecipientEmail = "testitesti18@outlook.com"
-	defaultReadOnlyShortcutRecipientEmail = "kikkelimies123@outlook.com"
-	defaultWritableShortcutName           = "Kikkeli Shared Test Folder"
-	defaultReadOnlyShortcutName           = "Read-only Shared Folder"
-	defaultStandaloneSharedFolderName     = "Testi2 Shared Folder"
-	defaultShortcutSentinelPath           = "shortcut-sentinel.txt"
+	defaultWritableShortcutName       = "Kikkeli Shared Test Folder"
+	defaultReadOnlyShortcutName       = "Read-only Shared Folder"
+	defaultStandaloneSharedFolderName = "Testi2 Shared Folder"
+	defaultShortcutSentinelPath       = "shortcut-sentinel.txt"
+
+	// WritableShortcutParentDriveEnvVar and ReadOnlyShortcutParentDriveEnvVar
+	// name the configured drives that hold the two shortcut fixtures. Nothing
+	// guesses them: the repository names no test account, so a run that does
+	// not set them cannot run the shortcut tests. CI's masking script sets
+	// both from the e2e job's drives by role.
+	WritableShortcutParentDriveEnvVar = "ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE"
+	ReadOnlyShortcutParentDriveEnvVar = "ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE"
 )
 
 // LiveFixtures captures durable live Graph fixtures loaded from the test
@@ -59,41 +66,72 @@ type LiveTestConfig struct {
 	Fixtures       LiveFixtures
 }
 
-// LoadDotEnv reads KEY=VALUE pairs from a .env file at the given path.
-// Missing file is not an error (CI sets env vars directly).
-// Existing env vars take precedence over .env values.
-func LoadDotEnv(envPath string) {
+// LoadDotEnvFile reads KEY=VALUE pairs from a .env file at the given path
+// into the process environment. It is the one .env reader of the live suites
+// and the live benchmark. A missing file is not an error (CI sets the
+// variables directly), and a variable already set wins over the file.
+func LoadDotEnvFile(envPath string) (err error) {
 	f, err := localpath.Open(envPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return
+		return fmt.Errorf("open %s: %w", envPath, err)
 	}
-
-	if err := applyDotEnv(f); err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			fatalTestEnv()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close %s: %w", envPath, closeErr)
 		}
+	}()
 
-		fatalTestEnv()
+	if applyErr := applyDotEnv(f); applyErr != nil {
+		return fmt.Errorf("read %s: %w", envPath, applyErr)
 	}
 
-	if err := f.Close(); err != nil {
-		fatalTestEnv()
-	}
+	return nil
 }
 
-// LoadTestEnv loads live-test environment files in repo precedence order.
-// Exported process env wins over both files. Root .env overrides durable
-// fixture defaults from .testdata/fixtures.env.
+// LoadDotEnv is LoadDotEnvFile for a test harness: it exits the process when
+// the file cannot be read.
+func LoadDotEnv(envPath string) {
+	exitOnTestEnvError(LoadDotEnvFile(envPath))
+}
+
+// LoadTestEnvFiles loads the live-test environment files in repo precedence
+// order. Exported process env wins over both files. Root .env overrides
+// durable fixture defaults from .testdata/fixtures.env.
+func LoadTestEnvFiles(moduleRoot string) error {
+	for _, path := range []string{filepath.Join(moduleRoot, ".env"), filepath.Join(moduleRoot, sharedFixtureEnvPath)} {
+		if err := LoadDotEnvFile(path); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// LoadTestEnv is LoadTestEnvFiles for a test harness: it exits the process
+// when a file cannot be read.
 func LoadTestEnv(moduleRoot string) {
-	LoadDotEnv(filepath.Join(moduleRoot, ".env"))
-	LoadDotEnv(filepath.Join(moduleRoot, sharedFixtureEnvPath))
+	exitOnTestEnvError(LoadTestEnvFiles(moduleRoot))
+}
+
+// exitOnTestEnvError ends a test harness that cannot load its environment.
+func exitOnTestEnvError(err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "FATAL: load test environment: %v\n", err)
+	os.Exit(1)
 }
 
 // LoadLiveTestConfig loads the live-test env files and returns a typed view of
 // the resulting configuration. Optional shared-folder fixtures are validated as
 // real shared selectors up front so E2E code does not re-parse raw env vars.
 func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
-	LoadTestEnv(moduleRoot)
+	if err := LoadTestEnvFiles(moduleRoot); err != nil {
+		return LiveTestConfig{}, fmt.Errorf("load live test config: %w", err)
+	}
 
 	cfg := LiveTestConfig{
 		PrimaryDrive:   os.Getenv("ONEDRIVE_TEST_DRIVE"),
@@ -103,11 +141,11 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 			SharedFolderLink:             os.Getenv("ONEDRIVE_TEST_SHARED_FOLDER_LINK"),
 			WritableSharedFolderSelector: os.Getenv("ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER"),
 			ReadOnlySharedFolderSelector: os.Getenv("ONEDRIVE_TEST_READONLY_SHARED_FOLDER"),
-			WritableShortcutParentDrive:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE"),
+			WritableShortcutParentDrive:  os.Getenv(WritableShortcutParentDriveEnvVar),
 			WritableShortcutName:         os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME"),
 			WritableShortcutSharerEmail:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL"),
 			WritableShortcutSentinelPath: os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH"),
-			ReadOnlyShortcutParentDrive:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE"),
+			ReadOnlyShortcutParentDrive:  os.Getenv(ReadOnlyShortcutParentDriveEnvVar),
 			ReadOnlyShortcutName:         os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_NAME"),
 			ReadOnlyShortcutSharerEmail:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL"),
 			ReadOnlyShortcutSentinelPath: os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH"),
@@ -146,18 +184,10 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 	return cfg, nil
 }
 
+// applyShortcutFixtureDefaults fills the shortcut fixture names a run leaves
+// unset. The parent drives have no default: they come only from their
+// variables. Each sharer is the other fixture's parent account.
 func applyShortcutFixtureDefaults(cfg *LiveTestConfig) {
-	if cfg.Fixtures.WritableShortcutParentDrive == "" {
-		if driveID, ok := cfg.DriveIDForEmail(defaultWritableShortcutRecipientEmail); ok {
-			cfg.Fixtures.WritableShortcutParentDrive = driveID
-		}
-	}
-	if cfg.Fixtures.ReadOnlyShortcutParentDrive == "" {
-		if driveID, ok := cfg.DriveIDForEmail(defaultReadOnlyShortcutRecipientEmail); ok {
-			cfg.Fixtures.ReadOnlyShortcutParentDrive = driveID
-		}
-	}
-
 	if cfg.Fixtures.WritableShortcutName == "" {
 		cfg.Fixtures.WritableShortcutName = defaultWritableShortcutName
 	}
@@ -223,6 +253,8 @@ func driveEmailFromCanonicalID(driveID string) string {
 	return parts[1]
 }
 
+// applyDotEnv sets the KEY=VALUE pairs of a .env stream that the
+// environment does not set yet. Its errors name a key, never a value.
 func applyDotEnv(r io.Reader) error {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -241,54 +273,65 @@ func applyDotEnv(r io.Reader) error {
 		value = strings.Trim(value, "\"'")
 
 		// Env vars take precedence over .env file.
-		if os.Getenv(key) == "" {
-			if setErr := os.Setenv(key, value); setErr != nil {
-				return fmt.Errorf("setting environment from .env")
-			}
+		if key == "" || os.Getenv(key) != "" {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("set %s: %w", key, err)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("reading .env file")
+		return fmt.Errorf("scan: %w", err)
 	}
 
 	return nil
 }
 
-func fatalTestEnv() {
-	if _, err := os.Stderr.WriteString("FATAL: test environment setup failed\n"); err != nil {
-		os.Exit(1)
+// AllowedTestAccountsEnvVar names the comma-separated allowlist of the
+// drives live tests may touch.
+const AllowedTestAccountsEnvVar = "ONEDRIVE_ALLOWED_TEST_ACCOUNTS"
+
+// AllowlistIncludes reports whether driveID is an entry of a comma-separated
+// allowlist. Entries are trimmed and must match the whole drive.
+func AllowlistIncludes(allowlist string, driveID string) bool {
+	if driveID == "" {
+		return false
 	}
-
-	os.Exit(1)
-}
-
-// ValidateAllowlist crashes the process if ONEDRIVE_ALLOWED_TEST_ACCOUNTS
-// is not set or if the given drive is not in the allowlist.
-func ValidateAllowlist(driveEnvVar string) {
-	allowlist := os.Getenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS")
-	if allowlist == "" {
-		fmt.Fprintln(os.Stderr, "FATAL: ONEDRIVE_ALLOWED_TEST_ACCOUNTS not set")
-		fmt.Fprintln(os.Stderr, "Set it in .env or as an environment variable.")
-		fmt.Fprintln(os.Stderr, "Example: ONEDRIVE_ALLOWED_TEST_ACCOUNTS=personal:user@outlook.com")
-		os.Exit(1)
-	}
-
-	testDrive := os.Getenv(driveEnvVar)
-	if testDrive == "" {
-		fmt.Fprintf(os.Stderr, "FATAL: %s not set\n", driveEnvVar)
-		os.Exit(1)
-	}
-
-	for _, a := range strings.Split(allowlist, ",") {
-		if strings.TrimSpace(a) == testDrive {
-			return
+	for _, entry := range strings.Split(allowlist, ",") {
+		if strings.TrimSpace(entry) == driveID {
+			return true
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "FATAL: %s=%q is not in ONEDRIVE_ALLOWED_TEST_ACCOUNTS=%q\n",
-		driveEnvVar, testDrive, allowlist)
-	os.Exit(1)
+	return false
+}
+
+// CheckDriveAllowed returns an error unless driveID, the value of the
+// variable driveVar, is set and in the allowlist. The error names the
+// variables and never a value: live suites run in public CI logs.
+func CheckDriveAllowed(driveVar string, driveID string) error {
+	allowlist := os.Getenv(AllowedTestAccountsEnvVar)
+	switch {
+	case strings.TrimSpace(allowlist) == "":
+		return fmt.Errorf("%s is not set; set it in .env or the environment, e.g. %s=personal:user@outlook.com",
+			AllowedTestAccountsEnvVar, AllowedTestAccountsEnvVar)
+	case driveID == "":
+		return fmt.Errorf("%s is not set", driveVar)
+	case !AllowlistIncludes(allowlist, driveID):
+		return fmt.Errorf("the drive in %s is not an entry of %s", driveVar, AllowedTestAccountsEnvVar)
+	default:
+		return nil
+	}
+}
+
+// ValidateAllowlist crashes the process if ONEDRIVE_ALLOWED_TEST_ACCOUNTS
+// is not set or if the drive driveEnvVar names is not in the allowlist.
+func ValidateAllowlist(driveEnvVar string) {
+	if err := CheckDriveAllowed(driveEnvVar, os.Getenv(driveEnvVar)); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // FindModuleRoot walks up from the current directory to find go.mod.

@@ -29,9 +29,7 @@ const (
 )
 
 const (
-	cleanupMainBranchName         = "main"
-	cleanupOriginMainBranchName   = "origin/main"
-	cleanupMainBranchRef          = "refs/heads/main"
+	cleanupMainBranchRef          = "refs/heads/" + mainBranchName
 	cleanupDirtyWorktreeDetail    = "attached worktree has local modifications"
 	cleanupRootMainWorktreeDetail = "root main worktree"
 	cleanupMainBranchDetail       = "main branch"
@@ -160,7 +158,7 @@ func parseGitWorktreePorcelain(output string, repoRoot string) []gitWorktreeStat
 			}
 		}
 
-		state.MainRef = canonicalCleanupPath(state.Path) == canonicalRepoRoot && state.Branch == cleanupMainBranchName
+		state.MainRef = canonicalCleanupPath(state.Path) == canonicalRepoRoot && state.Branch == mainBranchName
 		states = append(states, state)
 	}
 
@@ -352,7 +350,7 @@ func classifyLocalBranchEntry(branch gitBranchState, reachableFromMain bool) Cle
 	}
 
 	switch {
-	case branch.Name == cleanupMainBranchName:
+	case branch.Name == mainBranchName:
 		entry.Classification = CleanupKeepMain
 		entry.Detail = cleanupMainBranchDetail
 	case branch.Dirty:
@@ -379,7 +377,7 @@ func classifyRemoteBranchEntry(branch gitBranchState, reachableFromMain bool) Cl
 	}
 
 	switch {
-	case branch.Name == cleanupOriginMainBranchName:
+	case branch.Name == originMainRef:
 		entry.Classification = CleanupKeepMain
 		entry.Detail = cleanupOriginMainBranchDetail
 	case reachableFromMain:

@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -524,7 +523,7 @@ func runFastE2ESuite(
 			output, err = runFastE2ESuiteOnce(ctx, runner, repoRoot, env, stdout, stderr)
 		}
 
-		return stepOutcome{failedTests: failedTopLevelTests(output)}, err
+		return stepOutcome{failedTests: parseGoTestLog(output).failedTopLevelTests()}, err
 	})
 }
 
@@ -559,7 +558,7 @@ func runFastE2ESuiteWithClassification(
 		return output, nil
 	}
 
-	rerunArgs, incidentID, ok := classifyFastE2EQuirk(failedGoTestsFromJSON([]byte(output)))
+	rerunArgs, incidentID, ok := classifyFastE2EQuirk(parseGoTestLog(output).classifiableFailures())
 	if !ok {
 		return output, err
 	}
@@ -626,8 +625,9 @@ func rerunClassifiedQuirk(
 
 // runE2EPreflightAuth runs the auth preflight. Under --classify-live-quirks a
 // failure is rerun once for LI-20260405-06, but only when it is that quirk's
-// shape, the preflight test itself failing: a build failure, a pattern that
-// matched nothing or a timeout is not rerun.
+// shape, the preflight test itself failing by its own verdict: a build
+// failure, a pattern that matched nothing or a test killed at the deadline is
+// not rerun.
 func runE2EPreflightAuth(
 	ctx context.Context,
 	runner commandRunner,
@@ -644,7 +644,7 @@ func runE2EPreflightAuth(
 
 		args := authE2EPreflightArgs()
 		output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e auth preflight", args...)
-		if err != nil && classifyLiveQuirks && slices.Equal(failedTopLevelTests(output), []string{authPreflightTestName}) {
+		if err != nil && classifyLiveQuirks && isAuthPreflightQuirk(parseGoTestLog(output)) {
 			// The rerun's output decides from here on: it is the attempt whose
 			// result counts, skips included.
 			output, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
@@ -656,7 +656,7 @@ func runE2EPreflightAuth(
 			})
 		}
 		if err != nil {
-			return stepOutcome{failedTests: failedTopLevelTests(output)}, fmt.Errorf("%w: %w", errE2EPreflight, err)
+			return stepOutcome{failedTests: parseGoTestLog(output).failedTopLevelTests()}, fmt.Errorf("%w: %w", errE2EPreflight, err)
 		}
 		if !authPreflightSkipped(output) {
 			return stepOutcome{}, nil
@@ -670,11 +670,29 @@ func runE2EPreflightAuth(
 	})
 }
 
+// isAuthPreflightQuirk reports whether a failed auth preflight has the shape
+// LI-20260405-06 documents: the preflight test, and only it, failed by its own
+// verdict.
+func isAuthPreflightQuirk(log goTestLog) bool {
+	failed := log.classifiableFailures()
+	if len(failed) == 0 {
+		return false
+	}
+	for name := range failed {
+		if top, _, _ := strings.Cut(name, "/"); top != authPreflightTestName {
+			return false
+		}
+	}
+
+	return true
+}
+
 // authPreflightSkipped reports whether go test output shows the auth
 // preflight, or one of its per-drive subtests, skipped.
 func authPreflightSkipped(output string) bool {
-	for _, line := range strings.Split(output, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), goTestSkipPrefix)
+	for line := range strings.Lines(output) {
+		text, _, _ := decodeGoTestLogLine(line)
+		rest, ok := strings.CutPrefix(strings.TrimSpace(text), goTestSkipPrefix)
 		if !ok {
 			continue
 		}
@@ -730,7 +748,7 @@ func runE2EPreflight(
 
 		output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, spec.description, spec.args...)
 		if err != nil {
-			return stepOutcome{failedTests: failedTopLevelTests(output)}, fmt.Errorf("%w: %w", errE2EPreflight, err)
+			return stepOutcome{failedTests: parseGoTestLog(output).failedTopLevelTests()}, fmt.Errorf("%w: %w", errE2EPreflight, err)
 		}
 
 		return stepOutcome{}, nil
@@ -858,29 +876,6 @@ func classifyFullE2EQuirk(bucket fullE2EBucketSpec, failedTests map[string]struc
 	}, websocketRestartIncidentID, websocketRestartTestName, true
 }
 
-func failedGoTestsFromJSON(output []byte) map[string]struct{} {
-	failed := make(map[string]struct{})
-
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		var event goTestJSONEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-		if event.Action != verifySummaryStatusFail || event.Test == "" {
-			continue
-		}
-
-		failed[event.Test] = struct{}{}
-	}
-
-	return failed
-}
-
 func runFullE2EBucket(
 	ctx context.Context,
 	runner commandRunner,
@@ -895,7 +890,7 @@ func runFullE2EBucket(
 
 	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketCommandArgs(bucket)...)
 
-	return failedTopLevelTests(output), err
+	return parseGoTestLog(output).failedTopLevelTests(), err
 }
 
 func runFullE2EBucketWithClassification(
@@ -918,8 +913,9 @@ func runFullE2EBucketWithClassification(
 		return nil, nil
 	}
 
-	failedTests := failedTopLevelTests(output)
-	rerunArgs, incidentID, trigger, ok := classifyFullE2EQuirk(bucket, failedGoTestsFromJSON([]byte(output)))
+	log := parseGoTestLog(output)
+	failedTests := log.failedTopLevelTests()
+	rerunArgs, incidentID, trigger, ok := classifyFullE2EQuirk(bucket, log.classifiableFailures())
 	if !ok {
 		return failedTests, err
 	}

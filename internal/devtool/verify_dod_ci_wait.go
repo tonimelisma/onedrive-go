@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -21,9 +19,9 @@ const (
 	// jobs of the commit it waits for before it fails (`--ci-max-reruns`).
 	DefaultDODCIMaxReruns = 2
 
-	// ciStallMargin is what the stall window adds to the longest job timeout
-	// in the workflow, so a job that runs into its own timeout still changes
-	// state inside the window.
+	// ciStallMargin is what the stall window adds to the longest timeout of
+	// the jobs that run for the awaited event, so a job that runs into its own
+	// timeout still changes state inside the window.
 	ciStallMargin = 10 * time.Minute
 
 	checkConclusionCancelled = "cancelled" //nolint:misspell // GitHub's spelling of the conclusion
@@ -43,20 +41,18 @@ const (
 	ciRunViewFields = "conclusion,headSha,jobs,status,updatedAt,url"
 )
 
-var (
-	// workflowTimeoutPattern matches a `timeout-minutes: N` line of the CI
-	// workflow.
-	workflowTimeoutPattern = regexp.MustCompile(`(?m)^[ \t]*timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$`)
-
-	// actionsRunIDPattern takes the run id out of an Actions check's details
-	// URL: `.../actions/runs/<run id>/job/<job id>`.
-	actionsRunIDPattern = regexp.MustCompile(`/actions/runs/(\d+)(?:/|$)`)
-)
+// actionsRunIDPattern takes the run id out of an Actions check's details URL:
+// `.../actions/runs/<run id>/job/<job id>`.
+var actionsRunIDPattern = regexp.MustCompile(`/actions/runs/(\d+)(?:/|$)`)
 
 // ciWaitConfig is the policy and the clock of one DoD CI wait.
 type ciWaitConfig struct {
 	// stallWindow ends the wait when no check has changed state for this long.
 	stallWindow time.Duration
+	// notStartedWindows replaces stallWindow while a check of one of these
+	// jobs has not started: the job sits in a concurrency group and can wait
+	// for a whole run of the group from another event.
+	notStartedWindows map[string]time.Duration
 	// hardCap ends the wait this long after it began, changing or not.
 	hardCap time.Duration
 	// maxReruns bounds how often the wait reruns canceled jobs.
@@ -68,57 +64,135 @@ type ciWaitConfig struct {
 }
 
 // newCIWaitConfig derives a wait's policy from the stage's options and the CI
-// workflow. With no `--ci-timeout` the cap is one stall window for the first
-// attempt and one for every rerun the wait may issue.
-func newCIWaitConfig(opts *VerifyOptions, repoRoot string, stdout io.Writer) (ciWaitConfig, error) {
+// jobs that run for event. With no `--ci-timeout` the cap is one stall window
+// for the first attempt and one for every rerun the wait may issue, plus the
+// longest wait of a queued check for its concurrency group.
+func newCIWaitConfig(opts *VerifyOptions, repoRoot string, event string, stdout io.Writer) (ciWaitConfig, error) {
 	if opts.DODCIMaxReruns < 0 {
 		return ciWaitConfig{}, fmt.Errorf("dod CI wait: --ci-max-reruns must not be negative, got %d", opts.DODCIMaxReruns)
 	}
 
-	stallWindow, err := ciStallWindow(repoRoot)
+	jobs, err := readCIWorkflowJobs(repoRoot)
+	if err != nil {
+		return ciWaitConfig{}, fmt.Errorf("derive CI stall window: %w", err)
+	}
+	stallWindow, err := ciStallWindow(jobs, event)
+	if err != nil {
+		return ciWaitConfig{}, err
+	}
+	notStartedWindows, err := ciNotStartedWindows(jobs, event)
 	if err != nil {
 		return ciWaitConfig{}, err
 	}
 
 	hardCap := opts.DODCITimeout
 	if hardCap <= 0 {
-		hardCap = time.Duration(opts.DODCIMaxReruns+1) * stallWindow
+		longestQueue := time.Duration(0)
+		for _, window := range notStartedWindows {
+			longestQueue = max(longestQueue, window)
+		}
+		hardCap = time.Duration(opts.DODCIMaxReruns+1)*stallWindow + longestQueue
 	}
 
 	return ciWaitConfig{
-		stallWindow:  stallWindow,
-		hardCap:      hardCap,
-		maxReruns:    opts.DODCIMaxReruns,
-		pollInterval: prCIPollInterval,
-		now:          time.Now,
-		sleep:        sleepContext,
-		stdout:       stdout,
+		stallWindow:       stallWindow,
+		notStartedWindows: notStartedWindows,
+		hardCap:           hardCap,
+		maxReruns:         opts.DODCIMaxReruns,
+		pollInterval:      prCIPollInterval,
+		now:               time.Now,
+		sleep:             sleepContext,
+		stdout:            stdout,
 	}, nil
 }
 
-// ciStallWindow is the longest `timeout-minutes` in the CI workflow plus
-// ciStallMargin. No check can legitimately stay in one state longer than the
-// longest job ahead of it runs, and reading the number from the workflow means
-// lengthening a job there cannot leave the wait giving up on it early.
-func ciStallWindow(repoRoot string) (time.Duration, error) {
-	data, err := readFile(filepath.Join(repoRoot, ciWorkflowPath))
-	if err != nil {
-		return 0, fmt.Errorf("derive CI stall window: %w", err)
-	}
-
-	longest := 0
-	for _, m := range workflowTimeoutPattern.FindAllSubmatch(data, -1) {
-		minutes, convErr := strconv.Atoi(string(m[1]))
-		if convErr != nil {
-			return 0, fmt.Errorf("derive CI stall window: parse %s timeout-minutes %q: %w", ciWorkflowPath, m[1], convErr)
+// ciStallWindow is the longest timeout-minutes among the CI jobs that run
+// for event, plus ciStallMargin. No check can legitimately stay in one state
+// longer than the longest job ahead of it runs, and reading the numbers and
+// the job conditions from the workflow means lengthening a job there cannot
+// leave the wait giving up on it early. A job that does not run for the event
+// does not count: a push to main runs only the PR lane, so the nightly-only
+// jobs' hours say nothing about it. Every job's timeout is read, run or not,
+// so a timeout the reader cannot evaluate fails the stage before it waits.
+func ciStallWindow(jobs []ciWorkflowJob, event string) (time.Duration, error) {
+	longest := time.Duration(0)
+	for _, job := range jobs {
+		timeout, timeoutErr := job.timeoutOn(event)
+		if timeoutErr != nil {
+			return 0, fmt.Errorf("derive CI stall window: %w", timeoutErr)
 		}
-		longest = max(longest, minutes)
+		runs, runsErr := job.runsOn(event)
+		if runsErr != nil {
+			return 0, fmt.Errorf("derive CI stall window: %w", runsErr)
+		}
+		if runs {
+			longest = max(longest, timeout)
+		}
 	}
 	if longest == 0 {
-		return 0, fmt.Errorf("derive CI stall window: %s sets no job timeout-minutes", ciWorkflowPath)
+		return 0, fmt.Errorf("derive CI stall window: no job of %s runs on %s", ciWorkflowPath, event)
 	}
 
-	return time.Duration(longest)*time.Minute + ciStallMargin, nil
+	return longest + ciStallMargin, nil
+}
+
+// ciNotStartedWindows gives every job that runs for event in a concurrency
+// group the stall window of a check of it that has not started: the longest
+// timeout any job of the group has on any event, plus ciStallMargin. Such a
+// check can wait, without any state change, for one whole run of the group
+// from another event, a pull request's e2e behind the nightly's. Once it
+// starts, its state change restarts the window and the event's own applies.
+func ciNotStartedWindows(jobs []ciWorkflowJob, event string) (map[string]time.Duration, error) {
+	groupLongest := map[string]time.Duration{}
+	groupOf := map[string]string{}
+	for _, job := range jobs {
+		group, inGroup, err := job.concurrencyGroup()
+		if err != nil {
+			return nil, fmt.Errorf("derive CI stall window: %w", err)
+		}
+		if !inGroup {
+			continue
+		}
+		longest, err := job.longestTimeout()
+		if err != nil {
+			return nil, fmt.Errorf("derive CI stall window: %w", err)
+		}
+		groupLongest[group] = max(groupLongest[group], longest)
+		runs, err := job.runsOn(event)
+		if err != nil {
+			return nil, fmt.Errorf("derive CI stall window: %w", err)
+		}
+		if runs {
+			groupOf[job.name] = group
+		}
+	}
+
+	windows := make(map[string]time.Duration, len(groupOf))
+	for name, group := range groupOf {
+		windows[name] = groupLongest[group] + ciStallMargin
+	}
+
+	return windows, nil
+}
+
+// stallWindowFor is the stall window while the named checks have not
+// started: the longest of the event's window and the queue window of each
+// such check's job.
+func (c ciWaitConfig) stallWindowFor(notStarted []string) time.Duration {
+	window := c.stallWindow
+	for _, check := range notStarted {
+		window = max(window, c.notStartedWindows[ciCheckJob(check)])
+	}
+
+	return window
+}
+
+// ciCheckJob is the workflow job a check belongs to: the check's name up to
+// the parenthesized values of a matrix leg.
+func ciCheckJob(check string) string {
+	job, _, _ := strings.Cut(strings.ToLower(check), " (")
+
+	return job
 }
 
 // sleepContext waits for d or until ctx ends, whichever comes first.
@@ -141,28 +215,17 @@ type ciSnapshot struct {
 	reason string
 	// pending names the required checks that have not finished, sorted.
 	pending []string
+	// notStarted names those of them that have not started, sorted: any
+	// status but in progress, and a check not yet reported. GitHub has not
+	// shown this repository's pull requests a status for a job waiting in its
+	// concurrency group, so every such status counts.
+	notStarted []string
 	// failedCheck names the failure; failedRunID is the run to examine for
 	// canceled jobs, zero when no rerun could clear the failure.
 	failedCheck string
 	failedRunID int64
 	// fingerprint changes exactly when some check changes state.
 	fingerprint string
-}
-
-// ciRun is `gh run view --json` of one workflow run. Its jobs are those of the
-// run's latest attempt.
-type ciRun struct {
-	Conclusion string
-	HeadSHA    string
-	Jobs       []ciRunJob
-	Status     string
-	UpdatedAt  string
-	URL        string
-}
-
-type ciRunJob struct {
-	Name       string
-	Conclusion string
 }
 
 // ciRunJobs sorts a run's finished jobs by what a wait can do about them.
@@ -201,7 +264,7 @@ func (s ciStep) describe() string {
 
 // ciWait is the state of one DoD CI wait. Its loop in run is the only owner.
 type ciWait struct {
-	runner   commandRunner
+	gh       ghClient
 	repoRoot string
 	target   ciWaitTarget
 	cfg      ciWaitConfig
@@ -222,11 +285,13 @@ type ciWait struct {
 // The wait ends when no check has changed state for the stall window, or at the
 // hard cap.
 func waitForPRCI(ctx context.Context, runner commandRunner, repoRoot string, prNumber int, cfg ciWaitConfig) error {
-	return runCIWait(ctx, runner, repoRoot, ciWaitTarget{
+	gh := newGHClient(runner, cfg.sleep)
+
+	return runCIWait(ctx, gh, repoRoot, ciWaitTarget{
 		label:      prCILabel,
 		failedVerb: "failed",
 		poll: func(ctx context.Context) (ciSnapshot, error) {
-			state, err := loadPullRequestState(ctx, runner, repoRoot, prNumber)
+			state, err := loadPullRequestState(ctx, gh, repoRoot, prNumber)
 			if err != nil {
 				return ciSnapshot{}, err
 			}
@@ -234,7 +299,7 @@ func waitForPRCI(ctx context.Context, runner commandRunner, repoRoot string, prN
 			return classifyPRChecks(state.StatusCheckRollup), nil
 		},
 		headSHA: func(ctx context.Context) (string, error) {
-			return loadPullRequestHead(ctx, runner, repoRoot, prNumber)
+			return loadPullRequestHead(ctx, gh, repoRoot, prNumber)
 		},
 	}, cfg)
 }
@@ -252,11 +317,13 @@ func waitForPostMergePushCI(
 		return fmt.Errorf("dod post-merge: missing merge commit")
 	}
 
-	return runCIWait(ctx, runner, mainRoot, ciWaitTarget{
+	gh := newGHClient(runner, cfg.sleep)
+
+	return runCIWait(ctx, gh, mainRoot, ciWaitTarget{
 		label:      postMergeCILabel,
 		failedVerb: "is not clean",
 		poll: func(ctx context.Context) (ciSnapshot, error) {
-			runs, err := loadMainRunsForCommit(ctx, runner, mainRoot, mergeCommit)
+			runs, err := loadMainRunsForCommit(ctx, gh, mainRoot, mergeCommit)
 			if err != nil {
 				return ciSnapshot{}, err
 			}
@@ -269,10 +336,10 @@ func waitForPostMergePushCI(
 	}, cfg)
 }
 
-func runCIWait(ctx context.Context, runner commandRunner, repoRoot string, target ciWaitTarget, cfg ciWaitConfig) error {
+func runCIWait(ctx context.Context, gh ghClient, repoRoot string, target ciWaitTarget, cfg ciWaitConfig) error {
 	start := cfg.now()
 	wait := &ciWait{
-		runner:         runner,
+		gh:             gh,
 		repoRoot:       repoRoot,
 		target:         target,
 		cfg:            cfg,
@@ -302,7 +369,7 @@ func (w *ciWait) run(ctx context.Context) error {
 		if step.done {
 			return nil
 		}
-		if err := w.checkLimits(step); err != nil {
+		if err := w.checkLimits(step, w.cfg.stallWindowFor(snapshot.notStarted)); err != nil {
 			return err
 		}
 		if err := w.cfg.sleep(ctx, w.cfg.pollInterval); err != nil {
@@ -335,7 +402,7 @@ func (w *ciWait) examineFailure(ctx context.Context, snapshot ciSnapshot) (ciSte
 	}
 
 	runID := snapshot.failedRunID
-	run, err := loadCIRun(ctx, w.runner, w.repoRoot, runID)
+	run, err := loadCIRun(ctx, w.gh, w.repoRoot, runID)
 	if err != nil {
 		return ciStep{}, err
 	}
@@ -370,7 +437,7 @@ func (w *ciWait) examineFailure(ctx context.Context, snapshot ciSnapshot) (ciSte
 		return ciStep{}, fmt.Errorf("%s: %s canceled; reruns used: %d of %d (--ci-max-reruns); %s",
 			failed, strings.Join(jobs.canceled, ", "), w.rerunsUsed, w.cfg.maxReruns, run.URL)
 	}
-	if err := w.rerun(ctx, runID, run, jobs.canceled); err != nil {
+	if err := w.rerun(ctx, runID, &run, jobs.canceled); err != nil {
 		return ciStep{}, err
 	}
 
@@ -378,34 +445,55 @@ func (w *ciWait) examineFailure(ctx context.Context, snapshot ciSnapshot) (ciSte
 }
 
 // rerun asks GitHub to rerun the failed and canceled jobs of a finished run.
-// A rerun is progress: the stall window starts again for the new attempt.
-func (w *ciWait) rerun(ctx context.Context, runID int64, run ciRun, canceled []string) error {
+// A rerun is progress: the stall window starts again for the new attempt. A
+// request GitHub failed transiently is repeated: GitHub refuses to rerun a run
+// that is running, so a repeat cannot start a second attempt, and that
+// refusal after a 5xx means GitHub started the rerun anyway, which the run is
+// read again to confirm.
+func (w *ciWait) rerun(ctx context.Context, runID int64, run *githubRun, canceled []string) error {
 	w.rerunsUsed++
 	w.rerunUpdatedAt[runID] = run.UpdatedAt
 	w.lastChange = w.cfg.now()
 
-	if err := w.runner.Run(
-		ctx, w.repoRoot, os.Environ(), w.cfg.stdout, w.cfg.stdout,
-		githubCLI, "run", "rerun", strconv.FormatInt(runID, 10), "--failed",
-	); err != nil {
-		return fmt.Errorf("%s rerun run %d: %w", w.target.label, runID, err)
+	id := strconv.FormatInt(runID, 10)
+	call := fmt.Sprintf("%s rerun run %s", w.target.label, id)
+	startedEarlier, err := w.gh.outputUnlessDone(ctx, w.repoRoot, call, isRerunAlreadyRunning, "run", "rerun", id, "--failed")
+	if err != nil {
+		return err
+	}
+	if startedEarlier {
+		current, loadErr := loadCIRun(ctx, w.gh, w.repoRoot, runID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if strings.EqualFold(current.Status, checkStatusCompleted) {
+			return fmt.Errorf("%s: GitHub refused the repeat of a failed request as already running, but run %d reads %s",
+				call, runID, strings.ToLower(current.Status))
+		}
 	}
 
 	return writeStatus(w.cfg.stdout, fmt.Sprintf("%s: %s canceled in run %d (%s); rerun %d of %d requested\n",
 		w.target.label, strings.Join(canceled, ", "), runID, run.URL, w.rerunsUsed, w.cfg.maxReruns))
 }
 
-// checkLimits ends a wait that has stalled or reached its hard cap.
-func (w *ciWait) checkLimits(step ciStep) error {
+// checkLimits ends a wait that has stalled for window or reached its hard
+// cap.
+func (w *ciWait) checkLimits(step ciStep, window time.Duration) error {
 	now := w.cfg.now()
-	if now.Sub(w.lastChange) >= w.cfg.stallWindow {
-		return fmt.Errorf("%s stalled: no check changed state for %s; %s", w.target.label, w.cfg.stallWindow, step.describe())
+	if now.Sub(w.lastChange) >= window {
+		return fmt.Errorf("%s stalled: no check changed state for %s; %s", w.target.label, window, step.describe())
 	}
 	if now.Sub(w.start) >= w.cfg.hardCap {
 		return fmt.Errorf("%s timed out after %s: %s", w.target.label, w.cfg.hardCap, step.reason)
 	}
 
 	return nil
+}
+
+// isRerunAlreadyRunning recognizes GitHub's refusal to rerun a run that is
+// running: "This workflow is already running".
+func isRerunAlreadyRunning(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "already running")
 }
 
 // waitingOnFailure keeps waiting for a failed check whose run may yet clear it,
@@ -418,7 +506,7 @@ func waitingOnFailure(snapshot ciSnapshot, why string) ciStep {
 	return ciStep{reason: snapshot.reason + "; " + why, pending: pending}
 }
 
-func classifyCIRunJobs(jobs []ciRunJob) ciRunJobs {
+func classifyCIRunJobs(jobs []githubJob) ciRunJobs {
 	var sorted ciRunJobs
 	for _, job := range jobs {
 		switch strings.ToLower(job.Conclusion) {
@@ -456,6 +544,9 @@ func classifyPRChecks(checks []prCheckRun) ciSnapshot {
 		if status != checkStatusCompleted {
 			if required {
 				snapshot.pending = append(snapshot.pending, name)
+				if status != checkStatusInProgress {
+					snapshot.notStarted = append(snapshot.notStarted, name)
+				}
 				if firstPending == "" {
 					firstPending = check.Name + " is " + status
 				}
@@ -474,6 +565,8 @@ func classifyPRChecks(checks []prCheckRun) ciSnapshot {
 	missing := missingRequiredPRChecks(reported)
 	snapshot.pending = append(snapshot.pending, missing...)
 	sort.Strings(snapshot.pending)
+	snapshot.notStarted = append(snapshot.notStarted, missing...)
+	sort.Strings(snapshot.notStarted)
 
 	switch {
 	case snapshot.failedCheck != "":
@@ -649,10 +742,12 @@ func ciRunIDFromDetailsURL(detailsURL string) int64 {
 	return runID
 }
 
-func loadPullRequestHead(ctx context.Context, runner commandRunner, repoRoot string, prNumber int) (string, error) {
-	out, err := runner.Output(ctx, repoRoot, os.Environ(), githubCLI, "pr", "view", strconv.Itoa(prNumber), "--json", "headRefOid")
+func loadPullRequestHead(ctx context.Context, gh ghClient, repoRoot string, prNumber int) (string, error) {
+	out, err := gh.output(
+		ctx, repoRoot, fmt.Sprintf("dod gh pr view %d head", prNumber), "pr", "view", strconv.Itoa(prNumber), "--json", "headRefOid",
+	)
 	if err != nil {
-		return "", fmt.Errorf("dod gh pr view %d head: %w", prNumber, err)
+		return "", err
 	}
 	var head struct {
 		HeadRefOID string
@@ -667,26 +762,25 @@ func loadPullRequestHead(ctx context.Context, runner commandRunner, repoRoot str
 	return head.HeadRefOID, nil
 }
 
-func loadCIRun(ctx context.Context, runner commandRunner, repoRoot string, runID int64) (ciRun, error) {
+func loadCIRun(ctx context.Context, gh ghClient, repoRoot string, runID int64) (githubRun, error) {
 	id := strconv.FormatInt(runID, 10)
-	out, err := runner.Output(ctx, repoRoot, os.Environ(), githubCLI, "run", "view", id, "--json", ciRunViewFields)
+	out, err := gh.output(ctx, repoRoot, "dod gh run view "+id, "run", "view", id, "--json", ciRunViewFields)
 	if err != nil {
-		return ciRun{}, fmt.Errorf("dod gh run view %s: %w", id, err)
+		return githubRun{}, err
 	}
-	var run ciRun
+	var run githubRun
 	if err := json.Unmarshal(out, &run); err != nil {
-		return ciRun{}, fmt.Errorf("decode gh run view %s: %w", id, err)
+		return githubRun{}, fmt.Errorf("decode gh run view %s: %w", id, err)
 	}
 
 	return run, nil
 }
 
-func loadMainRunsForCommit(ctx context.Context, runner commandRunner, repoRoot string, commit string) ([]githubRun, error) {
-	out, err := runner.Output(
+func loadMainRunsForCommit(ctx context.Context, gh ghClient, repoRoot string, commit string) ([]githubRun, error) {
+	out, err := gh.output(
 		ctx,
 		repoRoot,
-		os.Environ(),
-		githubCLI,
+		"dod post-merge run list",
 		"run",
 		"list",
 		"--branch",
@@ -699,7 +793,7 @@ func loadMainRunsForCommit(ctx context.Context, runner commandRunner, repoRoot s
 		postMergeRunListLimit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("dod post-merge run list: %w", err)
+		return nil, err
 	}
 	var runs []githubRun
 	if err := json.Unmarshal(out, &runs); err != nil {

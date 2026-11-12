@@ -182,8 +182,8 @@ func createIsolatedSharedRoot(t *testing.T, dataDir string) *isolatedSharedRoot 
 	require.NoError(t, err)
 
 	ownerDrive, found := catalog.DriveByCanonicalID(ownerCID)
-	require.Truef(t, found, "missing catalog drive record for %s", drive)
-	require.NotEmpty(t, ownerDrive.RemoteDriveID, "catalog drive record for %s should include remote drive ID", drive)
+	require.Truef(t, found, "missing catalog drive record for %s", suiteDriveRoles.Role(drive))
+	require.NotEmpty(t, ownerDrive.RemoteDriveID, "catalog drive record for %s should include remote drive ID", suiteDriveRoles.Role(drive))
 
 	sharedCID, err := driveid.ConstructShared(ownerCID.Email(), ownerDrive.RemoteDriveID, stat.ID)
 	require.NoError(t, err)
@@ -544,7 +544,7 @@ func TestClassifyFixturePutCommandFailure_KnownConvergenceFamilies(t *testing.T)
 		Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
 		Retry:  true,
 	}, classifyFixturePutCommandFailure(
-		`Error: probe account identity: fetch authenticated user for personal:testitesti18@outlook.com: graph: HTTP 504 (request-id: 50f613df-8467-4734-a771-524f70af34cc): ProfileException`,
+		`Error: probe account identity: fetch authenticated user for personal:user@example.com: graph: HTTP 504 (request-id: 50f613df-8467-4734-a771-524f70af34cc): ProfileException`,
 	))
 }
 
@@ -591,7 +591,7 @@ func TestClassifyFixtureMkdirCommandFailure_KnownConvergenceFamilies(t *testing.
 		Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
 		Retry:  true,
 	}, classifyFixtureMkdirCommandFailure(
-		`Error: probe account identity: fetch authenticated user for personal:testitesti18@outlook.com: graph: HTTP 504 (request-id: 50f613df-8467-4734-a771-524f70af34cc): ProfileException`,
+		`Error: probe account identity: fetch authenticated user for personal:user@example.com: graph: HTTP 504 (request-id: 50f613df-8467-4734-a771-524f70af34cc): ProfileException`,
 	))
 }
 
@@ -877,7 +877,7 @@ func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 
 	t.Logf(
 		"warning: cleanup remote folder failed after retries for drive=%s folder=%s\nstdout: %s\nstderr: %s\nerr: %v",
-		driveID,
+		suiteDriveRoles.Role(driveID),
 		folder,
 		lastStdout,
 		lastStderr,

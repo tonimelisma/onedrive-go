@@ -34,7 +34,7 @@ func configuredSyncDirForCanonicalID(
 		return expandHomePath(parsed.Configured[i].SyncDir, env)
 	}
 
-	require.Failf(t, "configured shared drive not found", "canonical_id=%s", canonicalID)
+	require.Failf(t, "configured shared drive not found", "canonical_id=%s", suiteDriveRoles.Redact(canonicalID))
 	return ""
 }
 

@@ -30,6 +30,7 @@ var (
 	drive2              string // optional second drive for multi-drive E2E tests
 	logDir              string
 	liveConfig          testutil.LiveTestConfig
+	suiteDriveRoles     testutil.DriveRoles
 	suiteTimingRecorder *e2eTimingRecorder
 	suiteQuirkRecorder  *e2eQuirkRecorder
 )
@@ -45,14 +46,16 @@ func TestMain(m *testing.M) {
 	liveConfig = cfg
 	drive = cfg.PrimaryDrive
 	drive2 = cfg.SecondaryDrive
+	suiteDriveRoles = testutil.NewDriveRoles(drive, drive2)
 
 	testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
 
 	// Optional second drive for multi-drive E2E tests. Validated against
-	// allowlist when set; multi-drive tests skip gracefully when empty.
+	// allowlist when set; multi-drive tests skip gracefully when empty. The
+	// suite's output names the variable, never the drive: CI logs are public.
 	if drive2 != "" {
 		testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE_2")
-		fmt.Fprintf(os.Stderr, "E2E multi-drive: drive2=%s\n", drive2)
+		fmt.Fprintln(os.Stderr, "E2E multi-drive: ONEDRIVE_TEST_DRIVE_2 is set")
 	}
 
 	// Set up directory isolation (must be after drive is set, before binary build).
@@ -197,15 +200,20 @@ func scrubRemoteSuiteArtifacts(cfgPath string, drives ...string) error {
 	return nil
 }
 
+// scrubRemoteDriveArtifacts deletes what earlier runs left in a drive's
+// root. Its output names the drive by role: it runs from TestMain, whose
+// output reaches the public CI log.
 func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
+	role := suiteDriveRoles.Role(driveID)
 	_, stdout, stderr, err := execCLI(cfgPath, nil, driveID, "ls", "--json", "/")
 	if err != nil {
-		return fmt.Errorf("listing root for preflight scrub on %s: %w\nstdout: %s\nstderr: %s", driveID, err, stdout, stderr)
+		return fmt.Errorf("listing root for preflight scrub on %s: %w\nstdout: %s\nstderr: %s",
+			role, err, suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 	}
 
 	var items []remoteListJSONItem
 	if err := json.Unmarshal([]byte(stdout), &items); err != nil {
-		return fmt.Errorf("decoding root listing for preflight scrub on %s: %w\nstdout: %s", driveID, err, stdout)
+		return fmt.Errorf("decoding root listing for preflight scrub on %s: %w\nstdout: %s", role, err, suiteDriveRoles.Redact(stdout))
 	}
 
 	for _, item := range items {
@@ -214,11 +222,12 @@ func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
 		}
 
 		remotePath := "/" + item.Name
-		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", driveID, remotePath)
+		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", role, remotePath)
 
 		_, delStdout, delStderr, delErr := execCLI(cfgPath, nil, driveID, "rm", "-r", remotePath)
 		if delErr != nil && !isRemoteNotFoundCleanup(delStderr) {
-			return fmt.Errorf("deleting %s during preflight scrub on %s: %w\nstdout: %s\nstderr: %s", remotePath, driveID, delErr, delStdout, delStderr)
+			return fmt.Errorf("deleting %s during preflight scrub on %s: %w\nstdout: %s\nstderr: %s",
+				remotePath, role, delErr, suiteDriveRoles.Redact(delStdout), suiteDriveRoles.Redact(delStderr))
 		}
 	}
 
@@ -301,9 +310,19 @@ func registerLogDump(t *testing.T) {
 }
 
 func debugLogPath(testName string) string {
-	return filepath.Join(logDir, sanitizeTestName(testName)+".log")
+	return filepath.Join(logDir, debugLogFileName(testName))
 }
 
+// debugLogFileName is a test's debug log file name: the test's name, any
+// configured drive in it replaced by its role first, because the file is a CI
+// artifact of a public repository and its name goes with it.
+func debugLogFileName(testName string) string {
+	return sanitizeTestName(suiteDriveRoles.Redact(testName)) + ".log"
+}
+
+// appendDebugLogChunk appends content to a per-test debug log, with every
+// configured drive named by role: the logs are uploaded as CI artifacts of a
+// public repository, where log masking does not reach.
 func appendDebugLogChunk(path string, content string) (err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the per-test debug log under the suite's own log dir
 	if err != nil {
@@ -316,7 +335,7 @@ func appendDebugLogChunk(path string, content string) (err error) {
 		}
 	}()
 
-	if _, err = f.WriteString(content); err != nil {
+	if _, err = f.WriteString(suiteDriveRoles.Redact(content)); err != nil {
 		return fmt.Errorf("writing debug log %s: %w", path, err)
 	}
 
@@ -704,8 +723,8 @@ func runSyncThroughTransientFailuresWith(t *testing.T, runner syncRunner, args .
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runner.run(t, syncArgs...)
-		require.NoErrorf(t, err, "CLI command %v (drive=%q) failed\nstdout: %s\nstderr: %s",
-			syncArgs, runner.driveID, stdout, stderr)
+		require.NoErrorf(t, err, "CLI command %s (drive=%s) failed\nstdout: %s\nstderr: %s",
+			suiteDriveRoles.Redact(fmt.Sprint(syncArgs)), suiteDriveRoles.Role(runner.driveID), stdout, stderr)
 		stderrAll.WriteString(stderr)
 
 		if attempt == 0 && !syncRecordedRetryWork(stderr) {

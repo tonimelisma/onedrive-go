@@ -179,7 +179,7 @@ func requireStatusDriveByIdentity(
 		return drive
 	}
 
-	require.FailNowf(t, "missing status drive", "drive=%s", canonicalID)
+	require.FailNowf(t, "missing status drive", "drive=%s", suiteDriveRoles.Role(canonicalID))
 	return statusDriveJSON{}
 }
 
