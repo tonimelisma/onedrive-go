@@ -302,3 +302,76 @@ func TestCommitObservation_FolderDeleteRemovesDescendants(t *testing.T) {
 	}
 	require.NotNil(t, readRemoteStateRow(t, mgr.rawDB(), "sib"), "a sibling with the same name prefix stays")
 }
+
+// A remote_state row that cannot be read is a failed read, not an absent row.
+// Taken for absent, the delete of that item committed as a no-op and its row
+// stayed for good; a live observation of it tried to insert it a second time.
+//
+// Validates: R-2.2
+func TestCommitObservation_ARemoteRowThatCannotBeReadFailsTheWindow(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		deleted bool
+	}{
+		{name: "its delete", deleted: true},
+		{name: "a change to it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			mgr := newTestStore(t)
+			ctx := t.Context()
+			driveID := driveid.New(testDriveID)
+			require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: ItemTypeFile, Hash: "hash1", Size: 5,
+			}}, "delta-token-1", driveID))
+			// A size the column can no longer be read back as.
+			_, err := mgr.rawDB().ExecContext(ctx, `UPDATE remote_state SET size = 'five' WHERE item_id = 'item1'`)
+			require.NoError(t, err)
+
+			err = mgr.CommitObservation(ctx, []observedItem{{
+				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: ItemTypeFile,
+				Hash: "hash2", Size: 6, IsDeleted: tc.deleted,
+			}}, "delta-token-2", driveID)
+			require.ErrorContains(t, err, "reading remote_state of item1")
+			assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.rawDB(), testDriveID), "the window is not committed")
+		})
+	}
+}
+
+// ForgetRemoteItem removes a folder's row with its subtree. A row whose item
+// type cannot be read fails the removal: taken for a file, the folder's
+// subtree stayed behind.
+//
+// Validates: R-2.2
+func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "docs", ItemType: ItemTypeFolder},
+		{DriveID: driveID, ItemID: "kid", Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "h", Size: 1},
+		{DriveID: driveID, ItemID: "odd", Path: "odd", ItemType: ItemTypeFolder},
+		{DriveID: driveID, ItemID: "odd-kid", Path: "odd/b.txt", ItemType: ItemTypeFile, Hash: "h2", Size: 1},
+	}, "t1", driveID))
+
+	require.NoError(t, mgr.ForgetRemoteItem(ctx, "dir"))
+	assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), "dir"))
+	assert.Nil(t, readRemoteStateRow(t, mgr.rawDB(), "kid"), "the subtree goes with the folder")
+
+	db := mgr.rawDB()
+	for _, statement := range []string{
+		`PRAGMA ignore_check_constraints = ON`,
+		`UPDATE remote_state SET item_type = 'bundle' WHERE item_id = 'odd'`,
+		`PRAGMA ignore_check_constraints = OFF`,
+	} {
+		_, err := db.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+	require.ErrorContains(t, mgr.ForgetRemoteItem(ctx, "odd"), `"bundle"`)
+	assert.NotNil(t, readRemoteStateRow(t, mgr.rawDB(), "odd-kid"), "nothing is half removed")
+}

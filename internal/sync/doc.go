@@ -5,7 +5,8 @@
 //   - observe_current: refresh remote/local current truth when the entrypoint requires it
 //   - load_current_inputs: read committed planner inputs from the store
 //   - build_current_plan: build the current actionable set and report
-//   - reconcile_runtime_state: prune/load durable retry and scope state
+//   - reconcile_runtime_state: prune/load durable retry and scope state, and
+//     prune the create intents no create will claim
 //   - start_runtime: register the graph, admit ready work, and release due held work
 //   - publication_drain: keep publication-only actions on the engine/store side
 //   - drain_runtime: apply completions, release held work, and append the ready frontier

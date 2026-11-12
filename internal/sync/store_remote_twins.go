@@ -69,8 +69,11 @@ func remoteStateHolderTx(ctx context.Context, tx sqlTxRunner, p string) (string,
 func (s *SyncStore) storedPathForObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) (string, error) {
 	target := item.Path
 	if item.ParentID != "" {
-		parent := s.scanRemoteStateRow(ctx, tx, item.DriveID.String(), item.ParentID)
-		if parent != nil && remoteTwinShadowParent(parent.Path) != "" {
+		parent, found, err := remoteStateRowByIDTx(ctx, tx, item.DriveID.String(), item.ParentID)
+		if err != nil {
+			return "", err
+		}
+		if found && remoteTwinShadowParent(parent.Path) != "" {
 			target = parent.Path + "/" + path.Base(item.Path)
 		}
 	}
