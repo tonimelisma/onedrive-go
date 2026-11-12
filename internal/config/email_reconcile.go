@@ -4,19 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
 // CanonicalIDRename records one exact canonical-ID rewrite.
 type CanonicalIDRename struct {
-	From driveid.CanonicalID
-	To   driveid.CanonicalID
+	From driveid.CanonicalID `json:"from"`
+	To   driveid.CanonicalID `json:"to"`
 }
 
 // StateDBMove is one state DB an account email change renames, by path.
@@ -30,14 +30,19 @@ type StateDBMove struct {
 // any of them is in use. internal/sync owns that lock and the family
 // (syncengine.MoveStateDBs); config plans the renames but cannot import it,
 // so the caller passes the mover in.
-type StateDBMover func(moves []StateDBMove) error
+//
+// A non-nil begin means the moves start a new change: the mover calls it
+// once, holding every source and target store lock, after its checks pass
+// and before its first rename, and stops with its error. begin writes the
+// change's journal, so a store in use refuses with no journal and nothing
+// renamed. A nil begin means a journal already records these moves and the
+// mover finishes them.
+type StateDBMover func(moves []StateDBMove, begin func() error) error
 
 // EmailReconcileResult reports the deterministic renames applied for one
 // account email change. CLI callers use this to remap exact selectors for the
 // current invocation after config/data have been rewritten.
 type EmailReconcileResult struct {
-	UserID         string
-	CurrentAccount driveid.CanonicalID
 	AccountRenames []CanonicalIDRename
 	DriveRenames   []CanonicalIDRename
 }
@@ -74,10 +79,12 @@ func (r *EmailReconcileResult) RemapCanonicalID(cid driveid.CanonicalID) (drivei
 
 // ReconcileAccountEmail detects an account rename by matching the stable Graph
 // user GUID to stored catalog accounts of the same account type. When the
-// current Graph email differs, it rewrites owned config sections, token/state
-// paths, and catalog ownership from the old email to the current one. The
-// state DBs move through moveStateDBs, first: one an engine still has open
-// refuses the whole change before anything is renamed.
+// current Graph email differs, it renames the account's state DBs, token
+// files, config sections and catalog records from the old email to the
+// current one, as one journaled change (email_change_journal.go): the state
+// DBs move first, through moveStateDBs, and one an engine still has open
+// refuses the whole change before anything is renamed or recorded. A change
+// an earlier command left unfinished is finished first.
 func ReconcileAccountEmail(
 	configPath string,
 	currentAccount driveid.CanonicalID,
@@ -86,50 +93,93 @@ func ReconcileAccountEmail(
 	moveStateDBs StateDBMover,
 	logger *slog.Logger,
 ) (EmailReconcileResult, error) {
-	result := EmailReconcileResult{
-		UserID:         userID,
-		CurrentAccount: currentAccount,
-	}
+	return newEmailChanger(moveStateDBs, logger).reconcile(configPath, currentAccount, userID, currentEmail)
+}
 
+func (c *emailChanger) reconcile(
+	configPath string,
+	currentAccount driveid.CanonicalID,
+	userID string,
+	currentEmail string,
+) (EmailReconcileResult, error) {
 	if currentAccount.IsZero() || userID == "" || currentEmail == "" {
-		return result, nil
+		return EmailReconcileResult{}, nil
 	}
-
 	if !currentAccount.IsPersonal() && !currentAccount.IsBusiness() {
-		return result, fmt.Errorf("email reconciliation requires a personal or business account CID")
+		return EmailReconcileResult{}, fmt.Errorf("email reconciliation requires a personal or business account CID")
 	}
 
-	accountRenames, err := matchingAccountRenames(currentAccount, userID, currentEmail, logger)
+	// The common case is no change and no journal: answer it without the lock.
+	pending, err := c.journalExists()
 	if err != nil {
-		return result, err
+		return EmailReconcileResult{}, err
 	}
-	if len(accountRenames) == 0 {
-		return result, nil
+	if !pending {
+		accountRenames, matchErr := matchingAccountRenames(currentAccount, userID, currentEmail, c.logger)
+		if matchErr != nil || len(accountRenames) == 0 {
+			return EmailReconcileResult{}, matchErr
+		}
 	}
 
-	plan, err := buildEmailReconcilePlan(configPath, accountRenames, currentEmail, logger)
+	var result EmailReconcileResult
+	err = c.withLock(func() error {
+		finished, finishErr := c.finishLocked()
+		if finishErr != nil {
+			return finishErr
+		}
+		started, startErr := c.startLocked(configPath, currentAccount, userID, currentEmail)
+		if startErr != nil {
+			return startErr
+		}
+		result = EmailReconcileResult{
+			AccountRenames: slices.Concat(finished.AccountRenames, started.AccountRenames),
+			DriveRenames:   slices.Concat(finished.DriveRenames, started.DriveRenames),
+		}
+
+		return nil
+	})
+
+	return result, err
+}
+
+// startLocked plans a new change from the catalog as it is now, refuses it
+// while any new name is taken, and runs it. The caller holds the email
+// change lock and has finished any change a journal records.
+func (c *emailChanger) startLocked(
+	configPath string,
+	currentAccount driveid.CanonicalID,
+	userID string,
+	currentEmail string,
+) (EmailReconcileResult, error) {
+	accountRenames, err := matchingAccountRenames(currentAccount, userID, currentEmail, c.logger)
+	if err != nil || len(accountRenames) == 0 {
+		return EmailReconcileResult{}, err
+	}
+
+	plan, err := buildEmailReconcilePlan(configPath, accountRenames, currentEmail, c.logger)
 	if err != nil {
-		return result, err
+		return EmailReconcileResult{}, err
 	}
-	if !plan.hasChanges() {
-		return result, nil
+	if validateErr := plan.validate(); validateErr != nil {
+		return EmailReconcileResult{}, validateErr
 	}
-
-	if err := plan.validate(); err != nil {
-		return result, err
-	}
-
-	if err := plan.apply(configPath, moveStateDBs); err != nil {
-		return result, err
-	}
-	if err := reconcileCatalogEmail(accountRenames, currentEmail); err != nil {
-		return result, err
+	journal, err := plan.journal(c.dataDir, configPath)
+	if err != nil {
+		return EmailReconcileResult{}, err
 	}
 
-	result.AccountRenames = plan.accountRenames()
-	result.DriveRenames = plan.driveRenames()
+	begin := func() error {
+		if writeErr := c.writeJournal(journal); writeErr != nil {
+			return writeErr
+		}
 
-	return result, nil
+		return c.reached(emailChangeStepRecorded)
+	}
+	if applyErr := c.apply(journal, begin); applyErr != nil {
+		return EmailReconcileResult{}, applyErr
+	}
+
+	return journal.result(), nil
 }
 
 type emailReconcilePlan struct {
@@ -146,8 +196,51 @@ type managedPathRename struct {
 	isStateDB bool
 }
 
-func (p *emailReconcilePlan) hasChanges() bool {
-	return len(p.accountRenameMap) > 0 || len(p.driveRenameMap) > 0 || len(p.pathRenames) > 0
+// journal is the record of the change p makes: every file rename by its name
+// in dataDir, sorted, so that a resumed change renames the same files and
+// nothing outside the data directory.
+func (p *emailReconcilePlan) journal(dataDir string, configPath string) (*emailChangeJournal, error) {
+	absConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("account email change: resolve config path %s: %w", configPath, err)
+	}
+
+	journal := &emailChangeJournal{
+		SchemaVersion:  emailChangeJournalV1,
+		ConfigPath:     absConfigPath,
+		AccountRenames: p.accountRenames(),
+		DriveRenames:   p.driveRenames(),
+		StateDBMoves:   []journalFileMove{},
+		TokenMoves:     []journalFileMove{},
+	}
+	if journal.DriveRenames == nil {
+		journal.DriveRenames = []CanonicalIDRename{}
+	}
+	for _, rename := range p.pathRenames {
+		from, fromErr := dataDirFileName(dataDir, rename.source)
+		if fromErr != nil {
+			return nil, fromErr
+		}
+		to, toErr := dataDirFileName(dataDir, rename.target)
+		if toErr != nil {
+			return nil, toErr
+		}
+		move := journalFileMove{From: from, To: to}
+		if rename.isStateDB {
+			journal.StateDBMoves = append(journal.StateDBMoves, move)
+		} else {
+			journal.TokenMoves = append(journal.TokenMoves, move)
+		}
+	}
+	byFrom := func(a, b journalFileMove) int { return strings.Compare(a.From, b.From) }
+	slices.SortFunc(journal.StateDBMoves, byFrom)
+	slices.SortFunc(journal.TokenMoves, byFrom)
+
+	if validateErr := journal.validate(); validateErr != nil {
+		return nil, fmt.Errorf("account email change: %w", validateErr)
+	}
+
+	return journal, nil
 }
 
 func (p *emailReconcilePlan) accountRenames() []CanonicalIDRename {
@@ -230,7 +323,7 @@ func buildEmailReconcilePlan(
 	logger *slog.Logger,
 ) (*emailReconcilePlan, error) {
 	plan := &emailReconcilePlan{
-		accountRenameMap: mapsClone(accountRenames),
+		accountRenameMap: maps.Clone(accountRenames),
 		driveRenameMap:   make(map[driveid.CanonicalID]driveid.CanonicalID),
 	}
 
@@ -257,19 +350,6 @@ func buildEmailReconcilePlan(
 	}
 
 	return plan, nil
-}
-
-func mapsClone(src map[driveid.CanonicalID]driveid.CanonicalID) map[driveid.CanonicalID]driveid.CanonicalID {
-	if len(src) == 0 {
-		return nil
-	}
-
-	out := make(map[driveid.CanonicalID]driveid.CanonicalID, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-
-	return out
 }
 
 func collectConfiguredDriveRenames(
@@ -322,10 +402,11 @@ func collectConfiguredDriveRenames(
 			continue
 		}
 
+		// cid is a section of this file, so both names are taken.
 		if _, exists := existingSections[updated.String()]; exists {
-			if _, fromExists := existingSections[cid.String()]; fromExists {
-				return fmt.Errorf("config section rename collision: %q already exists", updated.String())
-			}
+			return fmt.Errorf("account email change: config sections %q and %q both exist in %s, so the first "+
+				"cannot be renamed to the second: remove the one you no longer use and run the command again",
+				cid.String(), updated.String(), configPath)
 		}
 
 		plan.driveRenameMap[cid] = updated
@@ -351,7 +432,7 @@ func collectStateRenames(
 		}
 
 		name := filepath.Base(path)
-		switch managedFileDriveType(name, "state_", ".db") {
+		switch managedFileDriveType(name, stateDBPrefix, stateDBSuffix) {
 		case driveid.DriveTypePersonal:
 			if ownedOldAccountOfType(ownedOldAccounts, driveid.DriveTypePersonal, oldEmail) {
 				addStateDBRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
@@ -378,48 +459,68 @@ func collectStateRenames(
 	return nil
 }
 
-func reconcileCatalogEmail(accountRenames map[driveid.CanonicalID]driveid.CanonicalID, currentEmail string) error {
-	if len(accountRenames) == 0 {
-		return nil
-	}
-
-	return UpdateCatalog(func(catalog *Catalog) error {
-		for from, to := range accountRenames {
-			account, found := catalog.AccountByCanonicalID(from)
-			if found {
-				catalog.DeleteAccount(from)
-				account.CanonicalID = to.String()
-				account.Email = currentEmail
-				account.DriveType = to.DriveType()
-				if account.PrimaryDriveCanonical == from.String() {
-					account.PrimaryDriveCanonical = to.String()
-				}
-				catalog.UpsertAccount(&account)
-			}
-
-			for _, key := range catalog.SortedDriveKeys() {
-				drive := catalog.Drives[key]
-				driveCID, err := driveid.NewCanonicalID(drive.CanonicalID)
-				if err != nil {
-					continue
-				}
-				if drive.OwnerAccountCanonical == from.String() {
-					drive.OwnerAccountCanonical = to.String()
-				}
-				updatedCID, err := driveCID.WithEmail(currentEmail)
-				if err != nil || driveCID.Equal(updatedCID) {
-					catalog.UpsertDrive(&drive)
-					continue
-				}
-				catalog.DeleteDrive(driveCID)
-				drive.CanonicalID = updatedCID.String()
-				drive.DriveType = updatedCID.DriveType()
-				catalog.UpsertDrive(&drive)
+// renameCatalogAccounts is the catalog step of an email change: one atomic
+// catalog write that re-keys each renamed account and the drives it owns.
+// A drive of any other account keeps its key, even one under the same old
+// address with another account type. The step is idempotent: an account
+// already at its new key, whose drives already name it as their owner, is
+// left as it is.
+func renameCatalogAccounts(dataDir string, accountRenames []CanonicalIDRename) error {
+	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+		for i := range accountRenames {
+			if err := renameCatalogAccount(catalog, &accountRenames[i]); err != nil {
+				return err
 			}
 		}
 
 		return nil
 	})
+}
+
+func renameCatalogAccount(catalog *Catalog, rename *CanonicalIDRename) error {
+	from, to := rename.From, rename.To
+	if account, found := catalog.AccountByCanonicalID(from); found {
+		catalog.DeleteAccount(from)
+		account.CanonicalID = to.String()
+		account.Email = to.Email()
+		account.DriveType = to.DriveType()
+		if account.PrimaryDriveCanonical == from.String() {
+			account.PrimaryDriveCanonical = to.String()
+		}
+		catalog.UpsertAccount(&account)
+	}
+
+	for _, key := range catalog.SortedDriveKeys() {
+		drive := catalog.Drives[key]
+		if drive.OwnerAccountCanonical != from.String() {
+			continue
+		}
+		drive.OwnerAccountCanonical = to.String()
+
+		// A drive key that is not a canonical ID, or not under the account's
+		// old address, names no file this change renames: it keeps its key
+		// and only learns its owner's new ID.
+		driveCID, err := driveid.NewCanonicalID(drive.CanonicalID)
+		if err != nil || driveCID.Email() != from.Email() {
+			catalog.UpsertDrive(&drive)
+			continue
+		}
+		renamed, err := driveCID.WithEmail(to.Email())
+		if err != nil {
+			return fmt.Errorf("rewrite catalog drive ID %s: %w", driveCID, err)
+		}
+		catalog.DeleteDrive(driveCID)
+		// A name the catalog derived from the old ID follows the ID. A name
+		// Graph or the user supplied stays.
+		if drive.DisplayName == DefaultDisplayName(driveCID) {
+			drive.DisplayName = DefaultDisplayName(renamed)
+		}
+		drive.CanonicalID = renamed.String()
+		drive.DriveType = renamed.DriveType()
+		catalog.UpsertDrive(&drive)
+	}
+
+	return nil
 }
 
 func ownedOldAccountOfType(
@@ -530,6 +631,9 @@ func sharedStateOwnedByRenamedAccount(path string, ownedOldAccounts map[string]d
 	return false, fmt.Errorf("matching catalog drive missing")
 }
 
+// validate refuses a new change while any new name is taken, before
+// anything is renamed or recorded: with no journal, a file at a new name was
+// there before the change, and renaming onto it would merge two owners.
 func (p *emailReconcilePlan) validate() error {
 	for _, rename := range p.pathRenames {
 		if err := validateManagedRename(rename.source, rename.target); err != nil {
@@ -540,11 +644,9 @@ func (p *emailReconcilePlan) validate() error {
 	return nil
 }
 
+// validateManagedRename refuses a rename whose source and target both exist.
+// addManagedRename keeps empty and identical paths out of a reconcile plan.
 func validateManagedRename(source string, target string) error {
-	if source == "" || target == "" || source == target {
-		return nil
-	}
-
 	_, sourceErr := statManagedPath(source)
 	if errors.Is(sourceErr, os.ErrNotExist) {
 		return nil
@@ -560,64 +662,7 @@ func validateManagedRename(source string, target string) error {
 	case targetErr != nil:
 		return fmt.Errorf("stat target %s: %w", target, targetErr)
 	default:
-		return fmt.Errorf("email reconciliation target already exists: %s", target)
+		return fmt.Errorf("account email change target already exists: %s; it was there before the email "+
+			"changed, so %s cannot be renamed to it: remove %s and run the command again", target, source, target)
 	}
-}
-
-// apply performs a validated plan. The state DBs move first, through
-// moveStateDBs, which refuses every move while an engine has one open; only
-// then are tokens renamed and config sections rewritten, so a refusal leaves
-// every old name in place for the next try.
-func (p *emailReconcilePlan) apply(configPath string, moveStateDBs StateDBMover) error {
-	var stateMoves []StateDBMove
-	for _, rename := range p.pathRenames {
-		if rename.isStateDB {
-			stateMoves = append(stateMoves, StateDBMove{From: rename.source, To: rename.target})
-		}
-	}
-	if len(stateMoves) > 0 {
-		// The mover is the caller's and wraps its own error.
-		if err := moveStateDBs(stateMoves); err != nil {
-			return err
-		}
-	}
-
-	for _, rename := range p.pathRenames {
-		if rename.isStateDB {
-			continue
-		}
-		if err := renameManagedPathIfPresent(rename.source, rename.target); err != nil {
-			return err
-		}
-	}
-
-	if err := RenameDriveSections(configPath, p.driveRenameMap); err != nil {
-		return fmt.Errorf("rename drive sections: %w", err)
-	}
-
-	return nil
-}
-
-func renameManagedPathIfPresent(source string, target string) error {
-	if source == "" || target == "" || source == target {
-		return nil
-	}
-
-	root, sourceName, err := fsroot.OpenPath(source)
-	if err != nil {
-		return fmt.Errorf("open source root for %s: %w", source, err)
-	}
-
-	targetName := filepath.Base(target)
-	if _, err := root.Stat(sourceName); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat source %s: %w", source, err)
-	}
-
-	if err := root.Rename(sourceName, targetName); err != nil {
-		return fmt.Errorf("rename %s to %s: %w", source, target, err)
-	}
-
-	return nil
 }

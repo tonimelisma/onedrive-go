@@ -111,6 +111,7 @@ The system shall support all four drive types:
 
 - R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [verified]
 - R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. A state DB shall move with its whole file family and only while no sync has it open; one in use shall leave every name unchanged and say to stop that sync and run again. [verified]
+- R-3.7.3: An account email change interrupted at any point (a crash, a kill, a failed step) shall be finished by the next command that uses an account, with no sync state lost and nothing deleted at a new name; a name taken when the change starts, or created under an old name while it is unfinished, shall stop it and be named as the one to remove. Until the change is finished, no sync shall start on a drive whose state it moves. [verified]
 
 ## R-3.8 Migration [future]
 

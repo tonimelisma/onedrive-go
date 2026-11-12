@@ -51,10 +51,37 @@ func (cc *CLIContext) probeAccountIdentity(
 	return result, nil
 }
 
-// reconcileGraphUser applies an account email change Graph reports. Its
-// state DBs move under their store locks (syncengine.MoveStateDBs); while a
-// sync still has one open nothing is renamed, and the error says to stop
-// that sync and run the command again.
+// stateDBMover is the state DB mover an account email change uses: the
+// state DBs move under their store locks (syncengine.MoveStateDBs), which
+// internal/config cannot take itself.
+func (cc *CLIContext) stateDBMover(ctx context.Context) config.StateDBMover {
+	return func(moves []config.StateDBMove, begin func() error) error {
+		if err := syncengine.MoveStateDBs(ctx, config.DefaultDataDir(), moves, begin, cc.Logger); err != nil {
+			return fmt.Errorf("rename sync state: %w", err)
+		}
+		return nil
+	}
+}
+
+// finishInterruptedEmailChange finishes an account email change an earlier
+// command was cut short in, before this command reads its config, and remaps
+// this invocation's selectors from the old names (applyEmailReconcileResult).
+// It fails the command when the change cannot be finished: every name the
+// command would resolve may be half renamed.
+func (cc *CLIContext) finishInterruptedEmailChange(ctx context.Context) error {
+	result, err := config.CompleteEmailChange(cc.stateDBMover(ctx), cc.Logger)
+	if err != nil {
+		return fmt.Errorf("finish an interrupted account email change: %w", err)
+	}
+	cc.applyEmailReconcileResult(&result)
+
+	return nil
+}
+
+// reconcileGraphUser applies an account email change Graph reports, as one
+// journaled change (config.ReconcileAccountEmail). While a sync still has
+// one of the account's state DBs open nothing is renamed or recorded, and
+// the error says to stop that sync and run the command again.
 func (cc *CLIContext) reconcileGraphUser(
 	ctx context.Context,
 	accountCID driveid.CanonicalID,
@@ -64,13 +91,8 @@ func (cc *CLIContext) reconcileGraphUser(
 		return config.EmailReconcileResult{}, nil
 	}
 
-	moveStateDBs := func(moves []config.StateDBMove) error {
-		if err := syncengine.MoveStateDBs(ctx, config.DefaultDataDir(), moves, cc.Logger); err != nil {
-			return fmt.Errorf("rename sync state: %w", err)
-		}
-		return nil
-	}
-	result, err := config.ReconcileAccountEmail(cc.CfgPath, accountCID, user.ID, user.Email, moveStateDBs, cc.Logger)
+	result, err := config.ReconcileAccountEmail(
+		cc.CfgPath, accountCID, user.ID, user.Email, cc.stateDBMover(ctx), cc.Logger)
 	switch {
 	case isSyncInUse(err):
 		return config.EmailReconcileResult{}, fmt.Errorf(
@@ -120,12 +142,17 @@ func (cc *CLIContext) applyEmailReconcileResult(result *config.EmailReconcileRes
 		}
 	}
 
-	for i := range cc.Flags.Drive {
-		for j := range result.DriveRenames {
-			rename := result.DriveRenames[j]
+	// The drive selector from ONEDRIVE_GO_DRIVE resolves exactly as --drive
+	// does, so an exact old ID there is remapped too.
+	for j := range result.DriveRenames {
+		rename := result.DriveRenames[j]
+		for i := range cc.Flags.Drive {
 			if cc.Flags.Drive[i] == rename.From.String() {
 				cc.Flags.Drive[i] = rename.To.String()
 			}
+		}
+		if cc.Env.Drive == rename.From.String() {
+			cc.Env.Drive = rename.To.String()
 		}
 	}
 }

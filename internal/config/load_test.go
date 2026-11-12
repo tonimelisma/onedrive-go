@@ -304,8 +304,7 @@ sync_dir = "~/OneDrive"
 
 // Validates: R-4.8.5, R-4.9.2, R-4.9.3
 func TestResolveDrive_EmptyDriveSection_UsesResolvedSyncDirDefault(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := setConfigTestHome(t)
 
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
@@ -325,7 +324,7 @@ func TestResolveDrive_EmptyDriveSection_UsesResolvedSyncDirDefault(t *testing.T)
 
 func TestResolveDrive_NoDrives_Error(t *testing.T) {
 	// Override HOME so token discovery finds nothing on disk.
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := writeTestConfig(t, `log_level = "debug"`)
 	_, _, err := ResolveDrive(
@@ -454,7 +453,7 @@ func TestResolveDrive_InvalidConfigFile(t *testing.T) {
 
 func TestResolveDrive_NoConfigFile(t *testing.T) {
 	// Override HOME so token discovery finds nothing on disk.
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	_, _, err := ResolveDrive(
 		EnvOverrides{ConfigPath: "/nonexistent/config.toml"},

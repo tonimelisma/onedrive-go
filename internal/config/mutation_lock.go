@@ -36,10 +36,14 @@ var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 // wait; production uses defaultConfigLocker.
 //
 // flock locks belong to an open file description, and every acquisition here
-// opens the directory afresh, so a function that holds the lock must never
-// call another locking function: the inner call would wait on the outer one
+// opens the directory afresh, so a function that holds a lock must never take
+// the same directory's lock again: the inner call would wait on the outer one
 // and fail after the timeout. Locked callbacks only read and rewrite their
-// own file.
+// own file, with one exception. An account email change holds the lock on its
+// own folder (emailChanger.withLock), a directory no other lock names, around
+// steps that take the config lock or the catalog lock one after the other.
+// Nothing that holds the config lock or the catalog lock takes the email
+// change lock.
 type configLocker struct {
 	flock        func(fd int, how int) error
 	sleep        func(time.Duration)
