@@ -180,10 +180,21 @@ the client stopped waiting
 create ended without an answer that says whether it landed
 (`graph.ErrCreateOutcomeUnknown`: no response, a 5xx, a 408, a success whose
 item could not be read). That is the window the intent covers, so it is kept
-and expires on its own. Before, the unanswered create cleared its intent, and
-when it had in fact landed the next pass read the empty file as someone
-else's: the user's file was renamed aside as a conflict copy and the empty
-one downloaded (live, 2026-11-11, during a network outage;
+until observation or a retry claims it, or the step after planning drops it:
+once it is past `pendingCreateIntentTTL`, and, after a pass that observed
+OneDrive before the local tree (a one-shot sync, a watch bootstrap), once a
+complete local scan finds no file at its path, since no create there will
+be retried. A watch replan observes the local tree only and keeps a fresh
+intent, so the change batch that shows a landed create still claims it
+([sync-store.md](sync-store.md), Pending creates;
+`TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped`,
+`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`).
+Kept for good, an intent whose file was renamed away could claim an empty
+file a stranger made at that path, and the next pass then deleted it.
+Before, the unanswered create cleared its intent, and when it had in fact
+landed the next pass read the empty file as someone else's: the user's file
+was renamed aside as a conflict copy and the empty one downloaded (live,
+2026-11-11, during a network outage;
 `TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile`).
 `uploadNewFile` checks the unknown outcome before the conflict, and reads the
 path's row before it records the attempt's own intent, so it knows whether an

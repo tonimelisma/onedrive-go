@@ -508,10 +508,13 @@ type pendingCreateStore interface {
 // 5xx, a timeout: graph.ErrCreateOutcomeUnknown) is not known to have created
 // nothing, and its intent stays. The empty file such a create left is then
 // this client's own: observation adopts it, and a retry that gets 409 on it
-// finishes the upload into it (resolveCreateConflict). The intent was cleared
-// here once, and the file read as someone else's: a create conflict, the
-// user's file renamed to a conflict copy and the empty one downloaded in its
-// place (live, 2026-11-11, during a network outage).
+// finishes the upload into it (resolveCreateConflict). When the user renames
+// or deletes the file instead, no retry comes, and the step after planning
+// drops the intent once a pass has observed OneDrive and then found the file
+// gone, or once it expires (pruneAbandonedCreateIntents). The intent was
+// cleared here once, and the file read as someone else's: a create conflict,
+// the user's file renamed to a conflict copy and the empty one downloaded in
+// its place (live, 2026-11-11, during a network outage).
 func (e *executor) uploadNewFile(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
 ) (*driveops.UploadResult, error) {
@@ -560,11 +563,11 @@ func (e *executor) priorCreateIntent(ctx context.Context, action *Action) (bool,
 	if err != nil {
 		return false, fmt.Errorf("reading the pending create at %s: %w", action.Path, err)
 	}
-	if !found || pending.ItemID != "" || pending.IntendedAt <= 0 {
+	if !found || pending.ItemID != "" {
 		return false, nil
 	}
 
-	return e.nowFunc().Sub(time.Unix(0, pending.IntendedAt)) <= pendingCreateIntentTTL, nil
+	return pending.intentIsFresh(e.nowFunc()), nil
 }
 
 // pendingCreateOf describes the create of action for the pending-create
@@ -630,7 +633,9 @@ func (e *executor) recordPendingCreate(
 // clearPendingCreateIntent forgets the intent of an attempt that is known to
 // have created nothing (uploadNewFile keeps the intent of one whose create
 // ended without an answer). Best effort: a failure here leaves an intent that
-// expires.
+// observation drops when it sees the file synced or with content, and that
+// the step after planning prunes once the file is gone (after a pass that
+// observed OneDrive first) or the intent is past its TTL.
 //
 // A canceled attempt keeps its intent, quietly. The create may have been in
 // flight when the context was canceled, and OneDrive can still make the item

@@ -446,7 +446,7 @@ func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing
 	build, err := rt.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{}, observed)
 	require.NoError(t, err)
 
-	runtime, err := rt.reconcileRuntimeStateStage(ctx, build)
+	runtime, err := rt.reconcileRuntimeStateStage(ctx, build, passRefreshedLocalOnly)
 	require.NoError(t, err)
 
 	assert.Empty(t, runtime.RetryRows)
