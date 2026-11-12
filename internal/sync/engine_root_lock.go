@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -62,8 +63,13 @@ func syncRootLockPath(dataDir, root string) (string, error) {
 		return "", fmt.Errorf("stat sync folder for locking: no device and inode for %s", root)
 	}
 
-	name := fmt.Sprintf("root-%d-%d.lock", statDeviceNumber(stat.Dev), stat.Ino)
-	return filepath.Join(dataDir, syncRootLocksDir, name), nil
+	return syncRootLockPathFor(dataDir, statDeviceNumber(stat.Dev), stat.Ino), nil
+}
+
+// syncRootLockPathFor names the lock file of the folder with this device and
+// inode, which need not exist any more.
+func syncRootLockPathFor(dataDir string, device, inode uint64) string {
+	return filepath.Join(dataDir, syncRootLocksDir, fmt.Sprintf("root-%d-%d.lock", device, inode))
 }
 
 // statDeviceNumber normalizes Stat_t.Dev, which is uint64 on Linux and
@@ -94,13 +100,19 @@ func isUnsupportedLockErrno(err error) bool {
 func acquireSyncRootLock(
 	dataDir, root string, logger *slog.Logger, flock func(fd int, how int) error,
 ) (*syncRootLock, error) {
-	if flock == nil {
-		flock = syscall.Flock
-	}
-
 	path, err := syncRootLockPath(dataDir, root)
 	if err != nil {
 		return nil, err
+	}
+
+	return lockSyncRootFile(path, root, logger, flock)
+}
+
+// lockSyncRootFile takes the lock file at path for the folder that root
+// names (in messages only).
+func lockSyncRootFile(path, root string, logger *slog.Logger, flock func(fd int, how int) error) (*syncRootLock, error) {
+	if flock == nil {
+		flock = syscall.Flock
 	}
 	if mkErr := localpath.MkdirAll(filepath.Dir(path), syncRootLocksDirPerm); mkErr != nil {
 		return nil, fmt.Errorf("create sync folder lock directory: %w", mkErr)
@@ -131,6 +143,82 @@ func acquireSyncRootLock(
 		closeErr := file.Close()
 		return nil, errors.Join(fmt.Errorf("lock sync folder %s: %w", root, lockErr), closeErr)
 	}
+}
+
+// recordedSyncFolderName stands for the folder a state store records, in
+// messages: its path is not recorded, only its identity.
+const recordedSyncFolderName = "the sync folder this sync state was built from"
+
+// LockDriveForOfflineChange takes, outside any engine, every sync-folder lock
+// an engine using the state store at dbPath could hold, for an offline change
+// to that store (drive reset-sync-state, drive rebind-root). It returns
+// ErrSyncRootInUse while an engine in any process holds one of them: one
+// still draining or closing its store after its owner stopped answering on
+// the control socket, or one run by another configuration sharing dataDir,
+// which must be the data directory the engines use.
+//
+// Two folders count. The folder now at syncRoot is the one an engine started
+// from this configuration locks, so holding it also keeps a new engine from
+// opening the store during the change. The folder the store records is the
+// one an engine that bound this store locked when it started: if that folder
+// was moved or replaced since, which is when rebind-root is run, the engine
+// still holds the old folder's lock, keyed by the recorded device and inode,
+// and the folder at syncRoot is a different one. When both are the same
+// folder it is locked once.
+//
+// A missing folder at syncRoot (no inode to key the lock on, and no engine
+// can start on it) adds no lock, and neither does a store that records no
+// folder or cannot be read (no store yet, another schema before a reset);
+// a store that cannot be read is logged. On a filesystem that cannot lock,
+// the locks are warned about and the change goes ahead, as an engine does.
+// The returned release drops every lock taken.
+func LockDriveForOfflineChange(
+	ctx context.Context,
+	dataDir, syncRoot, dbPath string,
+	logger *slog.Logger,
+) (release func() error, err error) {
+	var locks []*syncRootLock
+	releaseAll := func() error {
+		var releaseErr error
+		for i := len(locks) - 1; i >= 0; i-- {
+			releaseErr = errors.Join(releaseErr, locks[i].release())
+		}
+		return releaseErr
+	}
+
+	currentPath, err := syncRootLockPath(dataDir, syncRoot)
+	switch {
+	case err == nil:
+		lock, lockErr := lockSyncRootFile(currentPath, syncRoot, logger, nil)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		locks = append(locks, lock)
+	case errors.Is(err, os.ErrNotExist):
+		// Nothing at the path: no engine of this configuration can start.
+	default:
+		return nil, err
+	}
+
+	recorded, isRecorded, readErr := readRecordedSyncRoot(ctx, dbPath, logger)
+	if readErr != nil && logger != nil {
+		logger.Debug("could not read the sync folder the sync state records; locking only the folder at its path",
+			slog.String("db_path", dbPath),
+			slog.Any("error", readErr),
+		)
+	}
+	if isRecorded {
+		recordedPath := syncRootLockPathFor(dataDir, recorded.Device, recorded.Inode)
+		if recordedPath != currentPath {
+			lock, lockErr := lockSyncRootFile(recordedPath, recordedSyncFolderName, logger, nil)
+			if lockErr != nil {
+				return nil, errors.Join(lockErr, releaseAll())
+			}
+			locks = append(locks, lock)
+		}
+	}
+
+	return releaseAll, nil
 }
 
 // releaseSyncRootLockOnStartupFailure releases the root lock when engine

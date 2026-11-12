@@ -119,10 +119,18 @@ type Orchestrator struct {
 	// clients. Durable recovery remains in parent shortcut_roots.
 	shortcutCleanupDiagnostics []synccontrol.ShortcutCleanupDiagnostic
 	reconcileTicks             func(time.Duration) (<-chan time.Time, func())
-	// restartTimer arms the one-shot wake-up for the earliest backed-off
-	// watch runner restart. Injectable so tests control time.
+	// restartTimer arms the RunWatch loop's one-shot wake-ups: the earliest
+	// backed-off runner restart and the earliest timed-pause expiry.
+	// Injectable so tests control time.
 	restartTimer func(time.Duration) (<-chan time.Time, func())
-	// now is the clock for restart backoff; nil means time.Now.
+	// retireTimer arms the bound on one watch runner's stop or one engine's
+	// close (retireWatchRunner). Injectable so a test fires it by hand.
+	retireTimer func(time.Duration) (<-chan time.Time, func())
+	// lastRunnerGeneration is the generation given to the newest watch
+	// runner. Owned by the RunWatch goroutine, which starts every runner.
+	lastRunnerGeneration uint64
+	// now is the clock for restart backoff and for how long a stopping
+	// runner has had; nil means time.Now.
 	now func() time.Time
 	// controlTimeouts are the control server's deadlines; tests shorten them.
 	controlTimeouts controlTimeouts
@@ -184,11 +192,12 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			ticker := time.NewTicker(interval)
 			return ticker.C, ticker.Stop
 		},
-		restartTimer: newRestartTimer,
+		restartTimer: newOneShotTimer,
+		retireTimer:  newOneShotTimer,
 	}
 }
 
-func newRestartTimer(delay time.Duration) (<-chan time.Time, func()) {
+func newOneShotTimer(delay time.Duration) (<-chan time.Time, func()) {
 	timer := time.NewTimer(delay)
 	return timer.C, func() { timer.Stop() }
 }

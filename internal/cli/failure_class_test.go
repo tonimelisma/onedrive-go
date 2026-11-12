@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/multisync"
 )
 
 // Validates: R-6.8.16
@@ -66,6 +67,17 @@ func TestCommandExitCode(t *testing.T) {
 			name: "text alone never classifies",
 			err:  errors.New("graph: not logged in; invalid configuration"),
 			want: exitFailure,
+		},
+		// Validates: R-6.3.9
+		// A drive that did not stop ends the watch with 1, so a service
+		// manager restarts it, and a user's stop that met one is no clean
+		// interrupt either.
+		{name: "stuck drive", err: fmt.Errorf("stop: %w", multisync.ErrSyncStuck), want: exitFailure},
+		{
+			name:          "stuck drive on a user stop",
+			err:           fmt.Errorf("stop: %w", multisync.ErrSyncStuck),
+			stopRequested: true,
+			want:          exitFailure,
 		},
 	}
 

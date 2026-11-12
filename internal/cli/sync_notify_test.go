@@ -121,9 +121,9 @@ func TestRunSyncDaemon_NotifiesSystemdOfLifecycle(t *testing.T) {
 	orch := &lifecycleOrchestrator{release: release, events: []multisync.WatchLifecycleEvent{
 		{Phase: multisync.WatchReady, SyncRoots: []string{syncDir}},
 		{Phase: multisync.WatchReloading},
-		{Phase: multisync.WatchReloaded, SyncRoots: []string{syncDir}},
+		{Phase: multisync.WatchReloaded, Reload: multisync.ReloadApplied, SyncRoots: []string{syncDir}},
 		{Phase: multisync.WatchReloading},
-		{Phase: multisync.WatchReloaded, Err: errors.New("bad toml")},
+		{Phase: multisync.WatchReloaded, Reload: multisync.ReloadKeptPreviousSettings, Err: errors.New("bad toml")},
 		{Phase: multisync.WatchStopping},
 	}}
 
@@ -275,6 +275,33 @@ func TestSyncNotifierWatchingStatus(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, s.watchingStatus(tt.event), tt.name)
 	}
+}
+
+// The status after a reload follows the outcome the watch states. An applied
+// reload that also carries an error (no such reload exists today) is not
+// reported as one that kept the previous settings, which is what reading the
+// outcome from Err did.
+//
+// Validates: R-6.6.32, R-6.3.9
+func TestSyncNotifier_ReloadStatusFollowsTheStatedOutcome(t *testing.T) {
+	socket := newFakeNotifySocket(t)
+	s := newSyncNotifier(socket.notifier(map[string]string{}), slog.New(slog.DiscardHandler), nil)
+	s.readyStatus = "Watching /old"
+
+	s.lifecycle(multisync.WatchLifecycleEvent{
+		Phase:     multisync.WatchReloaded,
+		Reload:    multisync.ReloadApplied,
+		SyncRoots: []string{"/new"},
+		Err:       errors.New("not a reason to keep anything"),
+	})
+	assert.Equal(t, "READY=1\nSTATUS=Watching /new", socket.next())
+
+	s.lifecycle(multisync.WatchLifecycleEvent{
+		Phase:  multisync.WatchReloaded,
+		Reload: multisync.ReloadKeptPreviousSettings,
+		Err:    errors.New("bad toml"),
+	})
+	assert.Equal(t, "READY=1\nSTATUS=Watching /new; couldn't reload the config, kept the previous settings", socket.next())
 }
 
 // Validates: R-6.6.32

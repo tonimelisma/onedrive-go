@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified]
+Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified]
 
 ## Overview
 
@@ -1066,6 +1066,50 @@ macOS `~/Library/CloudStorage` (R-2.9.5, R-2.9.6,
 `TestSyncRootLock_ReleasedWhenStartupFailsAfterTakingIt`,
 `TestWarnAboutForeignSyncClients`).
 
+`LockDriveForOfflineChange` takes, outside any engine, every lock an engine
+using a given state store could hold, for an offline change to that store
+(`drive reset-sync-state`, `drive rebind-root`), so the change and such an
+engine exclude each other in both directions. Two folders count: the one now
+at the sync path, which an engine of this configuration locks (holding it
+also keeps a new engine from opening the store mid-change), and the one the
+store records (read-only, `readRecordedSyncRoot`), whose lock is named by the
+recorded device and inode and so needs no folder there: an engine started
+before that folder was moved or replaced still holds it, which is exactly
+the situation rebind-root is for. The same folder is locked once; a missing
+folder or a store that records none (or cannot be read, as before a reset of
+an incompatible store) adds no lock (R-2.9.5, R-6.3.9,
+`TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheFolderAtItsPath`,
+`TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheRecordedFolder`,
+`TestLockDriveForOfflineChange_NoFolderAndNoStoreTakeNoLock`).
+
+### Detached store writes
+
+A few store accesses run on a context detached from the engine's
+cancellation, because a shutdown must not drop the record of work that
+already happened or skip a cleanup. Every one of them carries a deadline, in
+the same expression that detaches it:
+
+| Access | Where | Bound |
+| --- | --- | --- |
+| commit of a completed action's outcome | `worker.go` `commitOutcome` | `OutcomeCommitTimeout` (30 s) |
+| record of an item a create made | `executor_transfer.go` `recordPendingCreate` | `OutcomeCommitTimeout` |
+| clearing a succeeded action's retry work | `engine_retry_trial.go` `clearRetryWorkOnActionSuccess` | `OutcomeCommitTimeout` |
+| findings observed before a shutdown | `engine_watch_loop.go` `handleWatchSkippedSignal` | `OutcomeCommitTimeout` |
+| persisted-invariant checks (tests and debug only) | `engine_runtime_invariants.go` | `OutcomeCommitTimeout` |
+| the WAL checkpoint in `SyncStore.Close` | `store.go` | `StoreCloseCheckpointTimeout` (10 s) |
+
+Callers of `SyncStore.Close` (engine close, startup failure, reset, rebind,
+the dry-run scratch store) pass their context as it is: Close detaches the
+checkpoint itself. A healthy transaction takes milliseconds and waits at most
+SQLite's 5 s busy timeout for a lock; the bounds only keep a store whose disk
+stopped answering from holding a shutdown forever, and the watch control
+plane's stop and close bounds are derived from them
+(`sync-control-plane.md`, Stopping a runner).
+`TestDetachedContexts_AlwaysCarryADeadline` fails on any
+`context.WithoutCancel` in `internal/sync` or `internal/multisync` production
+code that is not the first argument of `context.WithTimeout` or
+`context.WithDeadline` (R-6.3.9).
+
 ### Permission recovery
 
 Permission blockers are revalidated automatically; there is no manual retry or
@@ -1327,8 +1371,11 @@ reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
   once per distinct error, and the initial pass's periodic "waiting for the
   remaining changes" line repeats only when its counts move.
 - A worker commits a finished action's outcome on a context detached from
-  shutdown (bounded by `outcomeCommitTimeout`), so Ctrl-C between the
-  transfer and its commit cannot drop the record of work already done. The
+  shutdown (bounded by `OutcomeCommitTimeout`), so Ctrl-C between the
+  transfer and its commit cannot drop the record of work already done. That
+  bound is the longest a canceled engine waits on its store, and the watch
+  control plane derives its bound on a drive's stop from it
+  (`sync-control-plane.md`, Stopping a runner). The
   record of a new file's created item is written the same way (R-5.6.15,
   `TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled`).
 - Shutdown is quiet: cancellation and repeat-fatal errors in shutdown

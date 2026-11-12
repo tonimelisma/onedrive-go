@@ -94,7 +94,9 @@ func (s *SyncStore) createScratchPlanningStore(
 	}
 
 	if err := scratch.applyScratchPlanningSeed(ctx, seed); err != nil {
-		cleanupErr := cleanup(context.WithoutCancel(ctx))
+		// The cleanup only closes the scratch store, whose close runs its
+		// checkpoint detached under its own bound, and removes a temp folder.
+		cleanupErr := cleanup(ctx)
 		if cleanupErr != nil {
 			return nil, nil, errors.Join(
 				fmt.Errorf("sync: seeding scratch planning store: %w", err),

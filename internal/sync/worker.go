@@ -31,10 +31,16 @@ func poolWorkerCount(requested int, serialize bool) int {
 	return max(requested, minWorkers)
 }
 
-// outcomeCommitTimeout bounds the shutdown-detached commit of a completed
-// action's outcome. One baseline transaction is milliseconds; the bound only
-// exists so a wedged store cannot block shutdown forever.
-const outcomeCommitTimeout = 30 * time.Second
+// OutcomeCommitTimeout bounds every store access the engine runs detached
+// from shutdown: the commit of a completed action's outcome, the record of a
+// created item, clearing a succeeded action's retry work, the findings
+// observed before the shutdown, and the invariant checks. One transaction is
+// milliseconds (and waits at most SQLite's 5 s busy timeout for a lock); the
+// bound only exists so a store whose disk stopped answering cannot block
+// shutdown forever. It is the longest one detached wait of a canceled engine
+// can take, so the watch control plane derives its bound on a drive's stop
+// from it.
+const OutcomeCommitTimeout = 30 * time.Second
 
 // workerPool spawns goroutines that pull TrackedActions from the dispatch
 // channel, execute them, persist success outcomes, and send completions back
@@ -212,7 +218,7 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	// The transfer already happened, so the commit is detached from both the
 	// action and the pool context: a shutdown (Ctrl-C) landing between
 	// transfer completion and commit must not drop the record of work that
-	// is already done. outcomeCommitTimeout bounds the detached commit so a
+	// is already done. OutcomeCommitTimeout bounds the detached commit so a
 	// wedged store cannot hold shutdown hostage.
 	if outcome.Success {
 		mutation := mutationFromActionOutcome(&outcome)
@@ -236,9 +242,9 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 
 // commitOutcome persists a completed action's baseline mutation on a context
 // that keeps the caller's values but not its cancellation, bounded by
-// outcomeCommitTimeout.
+// OutcomeCommitTimeout.
 func (wp *workerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
-	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeCommitTimeout)
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
 	defer cancel()
 
 	return wp.baseline.CommitMutation(commitCtx, mutation)

@@ -355,7 +355,12 @@ after planning. Dry-run engine startup uses the normal durable sync-store open
 path, so schema creation, observation-state materialization, and close-time WAL
 checkpointing remain normal operational side effects. Generic checkpointing is
 WAL-only; semantic cleanup for observation issues, retry work, or block scopes
-belongs to the reconciliation helpers that own those rows.
+belongs to the reconciliation helpers that own those rows. `Close` runs its
+checkpoint detached from the caller's cancellation (a close during shutdown
+still checkpoints) and bounded by `StoreCloseCheckpointTimeout` (10 s), so
+callers pass their context as it is and a disk that stopped answering cannot
+hold a close forever; the watch control plane's engine close bound is that
+bound plus 5 s.
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.
@@ -610,12 +615,16 @@ Read-denied subtree boundaries do not persist as `block_scopes`. They remain
 tagged on `observation_issues` via `ScopeKey`, and truth-status reads derive
 blocked descendants from those boundary facts.
 
-`store_inspect.go` now owns two read-side shapes:
+`store_inspect.go` now owns three read-side shapes:
 
 - `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
 - `readPathTruthStatus` for derived truth availability over requested paths,
   built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
   materializing fake durable descendant rows
+- `readRecordedSyncRoot` for the sync folder identity a store records, read
+  through the read-only inspector so an offline change can lock that folder
+  (`LockDriveForOfflineChange`, sync-engine.md) without opening the store for
+  writing; a missing store, a missing row or an unbound folder records none
 
 `DriveStatusSnapshot.RemoteDriftItems` (status "Remote changes") uses the same
 content test as the planner's `remote_changed` in `sqlite_compare.go`: folders

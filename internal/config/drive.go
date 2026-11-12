@@ -332,12 +332,11 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 	return dirs
 }
 
-// ResolveAccountNames returns org_name and display_name for a drive's parent
-// account using the catalog account record. Returns empty strings if the
-// account record is unavailable.
 // EffectiveSyncDir returns the directory a drive will actually sync into:
 // configuredSyncDir when the user set one, otherwise the computed runtime
-// default.
+// default. A configured value comes back as written, so a caller that opens
+// the folder expands a leading "~" (ExpandTilde); the default is expanded
+// already.
 //
 // Read surfaces must use this rather than the raw configured value. A drive
 // that relies on the default has an empty sync_dir in config, so reporting the
@@ -366,6 +365,9 @@ func EffectiveSyncDir(
 	return syncDir
 }
 
+// ResolveAccountNames returns org_name and display_name for a drive's parent
+// account using the catalog account record. Returns empty strings if the
+// account record is unavailable.
 func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
 	acctCID := accountCIDForDrive(cid)
 	if acctCID.IsZero() {

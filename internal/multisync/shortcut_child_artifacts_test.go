@@ -320,7 +320,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
 	assert.Contains(t, err.Error(), "parent mount personal:parent@example.com is unavailable for child artifact cleanup acknowledgement")
-	diagnostics := orch.controlStatus(context.Background(), synccontrol.OwnerModeOneShot).ShortcutCleanupFailures
+	diagnostics := orch.controlStatus(synccontrol.OwnerModeOneShot).ShortcutCleanupFailures
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, shortcutCleanupDiagnosticParentAckFailed, diagnostics[0].Phase)
 }

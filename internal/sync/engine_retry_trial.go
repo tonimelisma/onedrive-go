@@ -77,9 +77,12 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	// The action has already succeeded, so recording that is bookkeeping of
 	// a finished effect: like the outcome commit it runs detached from
 	// cancellation, or a shutdown that lands between the effect and this
-	// write would leave the row behind and fail the completion.
+	// write would leave the row behind and fail the completion. It has the
+	// outcome commit's bound too, so a wedged store cannot hold a shutdown.
+	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	defer cancel()
 	if err := flow.resolveRetryWorkAndLogResolution(
-		context.WithoutCancel(ctx),
+		clearCtx,
 		retryWorkKeyForAction(action),
 		retryResolutionSourceActionSuccess,
 	); err != nil {

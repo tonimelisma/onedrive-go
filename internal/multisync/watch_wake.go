@@ -24,7 +24,7 @@ func (w *watchRestartWake) arm() {
 	}
 	timer := w.orchestrator.restartTimer
 	if timer == nil {
-		timer = newRestartTimer
+		timer = newOneShotTimer
 	}
 	w.ch, w.cancel = timer(delay)
 }
@@ -56,7 +56,7 @@ func (w *watchPauseExpiryWake) arm() {
 	}
 	timer := w.orchestrator.restartTimer
 	if timer == nil {
-		timer = newRestartTimer
+		timer = newOneShotTimer
 	}
 	w.ch, w.cancel = timer(delay)
 }

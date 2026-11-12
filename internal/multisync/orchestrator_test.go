@@ -1133,7 +1133,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{rd})
 	require.NoError(t, err)
 
-	wr, err := orch.startWatchRunner(ctx, mounts[0], syncengine.SyncDownloadOnly, syncengine.WatchOptions{}, nil)
+	wr, err := orch.startWatchRunner(ctx, mounts[0], 1, syncengine.SyncDownloadOnly, syncengine.WatchOptions{}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.True(t, captured.Mount.enableWebsocket())
@@ -1200,6 +1200,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 	wr, err := orch.startWatchRunner(
 		t.Context(),
 		childMount,
+		1,
 		syncengine.SyncDownloadOnly,
 		syncengine.WatchOptions{},
 		runnerEvents,
@@ -2106,7 +2107,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 		return &mockEngine{}, nil
 	}
 
-	orch.reconcileWatchRunnersForParent(
+	require.NoError(t, orch.reconcileWatchRunnersForParent(
 		t.Context(),
 		mountID(firstParent.CanonicalID.String()),
 		nextSnapshot,
@@ -2115,7 +2116,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 		runners,
 		nil,
 		childWork,
-	)
+	))
 
 	assert.Equal(t, []string{"stop-first", "start-first"}, events)
 	assert.Contains(t, runners, secondChildMount.id())
@@ -2140,9 +2141,10 @@ func TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents(t *testing.T) {
 	parentMount := parentMounts[0]
 
 	tests := []struct {
-		name    string
-		cache   func(*parentChildWorkSnapshots)
-		runners map[mountID]*watchRunner
+		name            string
+		cache           func(*parentChildWorkSnapshots)
+		runners         map[mountID]*watchRunner
+		eventGeneration uint64
 	}{
 		{
 			name: "parent runner already gone",
@@ -2166,6 +2168,25 @@ func TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents(t *testing.T) {
 				},
 			},
 		},
+		{
+			// Validates: R-6.3.9
+			// The snapshot equals the cached one, but it was published by
+			// the parent runner this one replaced.
+			name: "replacement parent runner, equal snapshot, older generation",
+			cache: func(childWork *parentChildWorkSnapshots) {
+				childWork.receive(parentID, staleSnapshot)
+			},
+			runners: map[mountID]*watchRunner{
+				parentID: {
+					mount:      parentMount,
+					engine:     &mockEngine{},
+					cancel:     func() {},
+					done:       make(chan struct{}),
+					generation: 2,
+				},
+			},
+			eventGeneration: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2177,10 +2198,11 @@ func TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents(t *testing.T) {
 			childWork := newParentChildWorkSnapshots()
 			tt.cache(childWork)
 
-			orch.handleWatchRunnerEvent(
+			require.NoError(t, orch.handleWatchRunnerEvent(
 				t.Context(),
 				watchRunnerEvent{
 					mountID:               parentID,
+					generation:            tt.eventGeneration,
 					parentSnapshot:        staleSnapshot,
 					parentSnapshotChanged: true,
 				},
@@ -2189,7 +2211,7 @@ func TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents(t *testing.T) {
 				tt.runners,
 				nil,
 				childWork,
-			)
+			))
 
 			assert.NotContains(t, tt.runners, mountID(config.ChildMountID(parentID.String(), "binding-stale")))
 		})
@@ -2252,7 +2274,7 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	stopped, started, startResults := orch.applyWatchMountSet(
+	stopped, started, startResults, err := orch.applyWatchMountSet(
 		ctx,
 		runners,
 		newDecisions,
@@ -2261,6 +2283,7 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 		nil,
 		newParentChildWorkSnapshots(),
 	)
+	require.NoError(t, err)
 
 	assert.Empty(t, summarizeStartupResults(startResults).SkippedResults())
 	assert.Equal(t, 1, stopped)
@@ -2341,7 +2364,7 @@ func TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild(t 
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	stopped, started, startResults := orch.applyWatchMountSet(
+	stopped, started, startResults, err := orch.applyWatchMountSet(
 		ctx,
 		runners,
 		nextDecisions,
@@ -2350,6 +2373,7 @@ func TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild(t 
 		nil,
 		childWork,
 	)
+	require.NoError(t, err)
 
 	assert.Empty(t, summarizeStartupResults(startResults).SkippedResults())
 	assert.Equal(t, 2, stopped)
@@ -2431,7 +2455,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	orch.handleWatchRunnerEvent(
+	require.NoError(t, orch.handleWatchRunnerEvent(
 		ctx,
 		watchRunnerEvent{mountID: parentMount.id(), err: errors.New("parent stopped")},
 		syncengine.SyncBidirectional,
@@ -2439,7 +2463,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 		runners,
 		make(chan watchRunnerEvent, 4),
 		childWork,
-	)
+	))
 
 	require.True(t, childCanceled)
 	assert.NotContains(t, runners, childMount.id())
@@ -2449,14 +2473,14 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 	assert.NotContains(t, runners, parentMount.id())
 
 	clock.advance(runnerRestartBaseDelay)
-	orch.reconcileWatchRunners(
+	require.NoError(t, orch.reconcileWatchRunners(
 		ctx,
 		syncengine.SyncBidirectional,
 		syncengine.WatchOptions{},
 		runners,
 		make(chan watchRunnerEvent, 4),
 		childWork,
-	)
+	))
 	assert.Equal(t, []mountID{parentMount.id()}, restarted)
 
 	cancel()
@@ -2668,6 +2692,7 @@ type mockEngine struct {
 	closed       bool
 	runOnceFn    func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
 	runWatchFn   func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
+	closeFn      func(ctx context.Context) error
 	ackDrainFn   func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error)
 	ackCleanupFn func(ctx context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error)
 }
@@ -2694,7 +2719,10 @@ func (m *mockEngine) RunWatch(ctx context.Context, mode syncengine.SyncMode, opt
 	return fmt.Errorf("watch context: %w", ctx.Err())
 }
 
-func (m *mockEngine) Close(context.Context) error {
+func (m *mockEngine) Close(ctx context.Context) error {
+	if m.closeFn != nil {
+		return m.closeFn(ctx)
+	}
 	m.closed = true
 	return nil
 }

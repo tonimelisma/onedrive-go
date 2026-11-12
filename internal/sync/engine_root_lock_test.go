@@ -73,6 +73,100 @@ func TestEngine_SecondEngineOnSameRootRefused(t *testing.T) {
 	require.NoError(t, third.Close(t.Context()))
 }
 
+// recordSyncFolder makes the store at dbPath record folder as its sync
+// folder, as its first committed local snapshot does.
+func recordSyncFolder(t *testing.T, dbPath, folder string) {
+	t.Helper()
+
+	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
+	require.NoError(t, err)
+	_, err = store.ReadObservationState(t.Context())
+	require.NoError(t, err)
+	info, err := os.Stat(folder)
+	require.NoError(t, err)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	require.True(t, ok)
+	_, err = store.db.ExecContext(t.Context(),
+		"UPDATE observation_state SET sync_root_bound = 1, sync_root_device = ?, sync_root_inode = ?",
+		int64(statDeviceNumber(stat.Dev)), int64(stat.Ino))
+	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
+}
+
+// The offline-change lock is the engine's own lock taken from outside, so an
+// offline state change and an engine on the folder at the sync path exclude
+// each other in both directions.
+//
+// Validates: R-2.9.5, R-6.3.9
+func TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheFolderAtItsPath(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	engineLock, err := acquireSyncRootLock(dataDir, syncRoot, testLogger(t), nil)
+	require.NoError(t, err)
+
+	_, err = LockDriveForOfflineChange(t.Context(), dataDir, syncRoot, dbPath, testLogger(t))
+	require.ErrorIs(t, err, ErrSyncRootInUse, "an engine holds the folder")
+
+	require.NoError(t, engineLock.release())
+	release, err := LockDriveForOfflineChange(t.Context(), dataDir, syncRoot, dbPath, testLogger(t))
+	require.NoError(t, err, "the folder is free once the engine lets go")
+
+	_, err = acquireSyncRootLock(dataDir, syncRoot, testLogger(t), nil)
+	require.ErrorIs(t, err, ErrSyncRootInUse, "no engine starts during the offline change")
+	require.NoError(t, release())
+}
+
+// When the folder the store was built from was moved away and another folder
+// now sits at the sync path (the case rebind-root is for), an engine started
+// before the move still holds the old folder's lock. The offline change
+// takes that lock too, by the recorded device and inode, and on a refusal
+// leaves no lock behind.
+//
+// Validates: R-2.9.5, R-6.3.9
+func TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheRecordedFolder(t *testing.T) {
+	t.Parallel()
+
+	builtFrom := t.TempDir()
+	nowAtPath := t.TempDir()
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	recordSyncFolder(t, dbPath, builtFrom)
+	oldEngine, err := acquireSyncRootLock(dataDir, builtFrom, testLogger(t), nil)
+	require.NoError(t, err)
+
+	_, err = LockDriveForOfflineChange(t.Context(), dataDir, nowAtPath, dbPath, testLogger(t))
+	require.ErrorIs(t, err, ErrSyncRootInUse, "the engine on the folder the state was built from holds the store")
+	engineAtPath, err := acquireSyncRootLock(dataDir, nowAtPath, testLogger(t), nil)
+	require.NoError(t, err, "a refused change leaves the folder at the path unlocked")
+	require.NoError(t, engineAtPath.release())
+
+	require.NoError(t, oldEngine.release())
+	release, err := LockDriveForOfflineChange(t.Context(), dataDir, nowAtPath, dbPath, testLogger(t))
+	require.NoError(t, err)
+	_, err = acquireSyncRootLock(dataDir, builtFrom, testLogger(t), nil)
+	require.ErrorIs(t, err, ErrSyncRootInUse, "the recorded folder is held during the change")
+	_, err = acquireSyncRootLock(dataDir, nowAtPath, testLogger(t), nil)
+	require.ErrorIs(t, err, ErrSyncRootInUse, "so is the folder at the path")
+	require.NoError(t, release())
+}
+
+// No folder at the path and no store take no lock: there is nothing an engine
+// could hold.
+//
+// Validates: R-6.3.9
+func TestLockDriveForOfflineChange_NoFolderAndNoStoreTakeNoLock(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "gone")
+	release, err := LockDriveForOfflineChange(t.Context(), t.TempDir(), missing,
+		filepath.Join(t.TempDir(), "state.db"), testLogger(t))
+	require.NoError(t, err)
+	require.NoError(t, release())
+}
+
 // Validates: R-2.9.5
 func TestSyncRootLock_IsADataDirFileKeyedByDeviceAndInode(t *testing.T) {
 	t.Parallel()

@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified]
 
 ## Overview
 
@@ -40,7 +40,7 @@ are inserted, updated, pruned, and validated.
 | `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_UnreadableDataDirIsReported`, `TestManagedPathExists_DistinguishesAbsentFromUnreadable`, `TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusMount_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_Status_NoLegacyHistorySurface`, `TestE2E_RoundTrip` |
 | `trash list/restore/empty` read and change one configured drive's local trash offline; restore never overwrites and empty needs `--confirm`. | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites` |
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears only the recorded sync-folder fingerprint, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
-| `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner` |
+| `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root`, the two offline changes to a drive's state store, refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or the folder its state records (R-6.3.9). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheFolder` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive`, `TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor` |
@@ -152,7 +152,11 @@ CLI and carries the same sentinel. Composed messages keep their cause through
 causes only when every one is sign-in or every one is config
 (`startupFailureError`): with a mix, restarting can still bring a drive up, so
 it exits 1. One-shot `sync` keeps its first drive failure as the cause
-(`runOnceResultError`).
+(`runOnceResultError`), and joins `RunOnceResult.Stuck` to it: a drive whose
+engine did not close within its bound after the pass fails the command with
+`multisync.ErrSyncStuck` even when every drive synced, exit 1 also on a
+user's stop, so the process exits and the engine's locks go
+(`TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced`).
 
 ## systemd Notify
 
@@ -174,7 +178,11 @@ its own goroutine:
   `STATUS=Watching <roots>` plus "sign-in required for <drive>" or "N drives
   could not start" for the drives that did not start.
 - `WatchReloading` sends `RELOADING=1` and `MONOTONIC_USEC=`; `WatchReloaded`
-  always sends `READY=1` again, saying when the previous settings were kept.
+  always sends `READY=1` again. Its status follows the outcome the event
+  states (`Reload`): the new drive set for `ReloadApplied`, the previous
+  status plus "kept the previous settings" for `ReloadKeptPreviousSettings`.
+  It is never inferred from `Err`
+  (`TestSyncNotifier_ReloadStatusFollowsTheStatedOutcome`).
 - `WatchStopping` sends `STOPPING=1` before the runners drain.
 
 A watch that ends with an error sets a final `STATUS=` ("Sign-in required: run
@@ -646,6 +654,24 @@ client's deadline, as `controlOwnerStateUnresponsive`: a live owner, never
 "no sync" (`controlOwnerDidNotAnswer`). Only a watch owner can be busy, since
 a one-shot owner answers status in the handler. `drive reset-sync-state`
 refuses on it as on any probe that could not tell.
+
+The probe sees only an owner that holds the control socket. After the
+confirmation, `drive reset-sync-state` and `drive rebind-root` both run
+their change through `changeDriveStateUnderFolderLock`, which holds every
+sync-folder lock an engine with that store open could hold
+(`syncengine.LockDriveForOfflineChange`, the engine's own `flock`) for the
+length of the change, so they refuse with `ErrSyncRootInUse` while an engine
+still has the drive's store open: one still draining or closing after its
+owner stopped answering, or one run by another configuration that shares
+the data directory. Two folders count. The folder now at the sync path is
+the one an engine of this configuration locks; the folder the store records
+is the one an engine that started before that folder was moved or replaced
+still holds. A rebind exists for exactly that case, so for it the two
+differ, and both are locked. A sync folder that does not exist and a store
+that records none add no lock. These are the only commands behind the owner
+probe (`resolveDriveForStateChange`); `drive remove --purge` and
+`logout --purge` delete state stores without either and are planned
+separately [planned].
 
 `status` says, on stderr, when a sync holds the socket but its live state is
 missing: "the running sync did not answer in time" for an unresponsive owner,

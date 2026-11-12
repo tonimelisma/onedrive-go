@@ -99,8 +99,22 @@ is one-shot only; then start it again.
 ### Stopping
 
 `systemctl --user stop onedrive-go` (or Ctrl-C when running in a terminal)
-asks onedrive-go to finish in-flight work and exit cleanly; a second signal
-exits immediately. A clean stop exits with status 0.
+asks onedrive-go to stop: transfers in progress are canceled, work that
+already finished is recorded, and it exits; a second signal exits
+immediately. A clean stop exits with status 0.
+
+onedrive-go never waits without limit for a drive to stop. A drive that has
+not stopped 45 seconds after it was told to (on a stop, a reload, or a
+pause), or whose sync state has not closed 15 seconds after that, is logged
+as an error, and onedrive-go exits with status 1. A one-shot `sync` (from
+cron or a timer) whose drive's sync state does not close within those 15
+seconds exits 1 the same way, after reporting the pass. The unit's
+`Restart=on-failure` then starts a fresh process, which picks up where the
+stuck one left off. The 45 seconds fit inside systemd's default stop timeout
+of 90 seconds, so the unit needs no `TimeoutStopSec=`. If it happens, report
+the journal line starting "Syncing ... did not stop when told to" together
+with the matching entry in onedrive-go's log file, which carries the stack of
+every goroutine.
 
 ## macOS
 

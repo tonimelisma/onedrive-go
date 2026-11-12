@@ -9,25 +9,28 @@ import (
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
-// reload applies the config file to the running sync. It returns an error
-// only when nothing could be applied (the config would not load or compile);
-// the running drives then keep their previous settings, and the caller tells
-// the client that asked for the reload. Drives that fail to start under the
-// new config are not a reload failure: they are reported as startup results.
+// reload applies the config file to the running sync. It returns an error in
+// two cases. When nothing could be applied (the config would not load or
+// compile), the running drives keep their previous settings and the caller
+// tells the client that asked for the reload. When a drive the new config
+// stops did not stop within its bound, the error wraps ErrSyncStuck,
+// the reload ends there, and the caller ends the watch; no WatchReloaded is
+// reported, WatchStopping follows. Drives that fail to start under the new
+// config are not a reload failure: they are reported as startup results.
 func (o *Orchestrator) reload(
 	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
 ) error {
-	o.emitWatchLifecycle(WatchReloading, nil, nil, nil)
+	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReloading}, nil, nil)
 
-	newCfg, newSelection, err := o.loadReloadSelection(ctx)
+	newCfg, newSelection, err := o.loadReloadSelection()
 	if err != nil {
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
 			slog.Any("error", err),
 		)
-		o.emitWatchLifecycle(WatchReloaded, nil, nil, err)
+		o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReloaded, Reload: ReloadKeptPreviousSettings, Err: err}, nil, nil)
 
 		return err
 	}
@@ -52,13 +55,13 @@ func (o *Orchestrator) reload(
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
 			slog.Any("error", err),
 		)
-		o.emitWatchLifecycle(WatchReloaded, nil, nil, err)
+		o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReloaded, Reload: ReloadKeptPreviousSettings, Err: err}, nil, nil)
 		return err
 	}
 	// The user asked for the config to be applied now, so drives waiting out
 	// a restart backoff get their next attempt immediately.
 	o.releaseRunnerRestartWaits()
-	stopped, started, startResults := o.applyWatchMountSet(
+	stopped, started, startResults, err := o.applyWatchMountSet(
 		ctx,
 		runners,
 		newMounts,
@@ -67,8 +70,11 @@ func (o *Orchestrator) reload(
 		runnerEvents,
 		childWork,
 	)
+	if err != nil {
+		return err
+	}
 	o.emitStartWarning(startResults, startAnnounceFull)
-	o.emitWatchLifecycle(WatchReloaded, runners, startResults, nil)
+	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReloaded, Reload: ReloadApplied}, runners, startResults)
 
 	o.logger.Info("Reloaded the config",
 		slog.Int("started", started),
@@ -79,13 +85,9 @@ func (o *Orchestrator) reload(
 	return nil
 }
 
-func (o *Orchestrator) loadReloadSelection(
-	ctx context.Context,
-) (*config.Config, StandaloneMountSelection, error) {
-	if ctx == nil {
-		return nil, StandaloneMountSelection{}, fmt.Errorf("reload context is required")
-	}
-
+// loadReloadSelection reads the config file, clears expired timed pauses in
+// it, and compiles the drive selection it describes.
+func (o *Orchestrator) loadReloadSelection() (*config.Config, StandaloneMountSelection, error) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
 		return nil, StandaloneMountSelection{}, fmt.Errorf("loading config for reload: %w", err)

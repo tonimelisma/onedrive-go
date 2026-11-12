@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -18,10 +19,12 @@ const (
 // RunWatch runs all configured runnable mounts in watch mode. On control-socket
 // reload, it re-reads the config file, rebuilds runtime mount specs, and diffs
 // the active mount set: stopped mounts are removed, new mounts are started.
-// Returns nil on clean context cancel or a stop request, and an error when
-// the control server stops on its own: a watch nobody can pause, reload or
-// query must not keep running.
-func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
+// Returns nil on clean context cancel or a stop request. It returns an error
+// when the control server stops on its own (a watch nobody can pause, reload
+// or query must not keep running) and when a drive's sync did not stop within
+// its bound (ErrSyncStuck), whether a reload, a runner exit or the
+// shutdown itself asked it to.
+func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) (err error) {
 	o.watchReportMemory = newWatchReportState()
 	commands := make(chan controlCommand)
 	// fatal carries the end of a helper the watch cannot run without (the
@@ -31,27 +34,23 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	childWork := newParentChildWorkSnapshots()
 	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, fatal, runnerEvents, childWork)
 	if err != nil {
-		if control != nil {
-			o.closeControlSocket(ctx, control)
-		}
 		return err
 	}
-	if control != nil {
-		defer o.closeControlSocket(ctx, control)
-	}
+	// Closed after the drain below, so the owner lock is held until every
+	// drive has stopped: an offline state change or another sync never sees
+	// a drive still writing its store as unowned.
+	defer o.closeControlSocket(ctx, control)
 
 	defer func() {
-		for _, wr := range runners {
-			wr.cancel()
-			<-wr.done
-			o.closeEngine(ctx, wr.mount, wr.engine)
+		if drainErr := o.retireAllWatchRunners(ctx, runners); drainErr != nil {
+			err = errors.Join(err, drainErr)
 		}
 
 		o.logger.Info("Stopped watching for changes")
 	}()
 	// Registered after the drain above so it runs first: the service manager
 	// hears "stopping" before the runners take time to settle.
-	defer o.emitWatchLifecycle(WatchStopping, nil, nil, nil)
+	defer o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchStopping}, nil, nil)
 
 	reconcileTickCh, stopReconcileTicks := o.reconcileTicks(reconcileWatchInterval(opts.PollInterval))
 	defer stopReconcileTicks()
@@ -67,23 +66,29 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	for {
 		restarts.arm()
 		pauseExpiry.arm()
+		// stuckErr is set when a runner this pass had to stop missed its
+		// bound; the watch ends with it, and the deferred drain leaves that
+		// runner alone.
+		var stuckErr error
 		select {
 		case cmd := <-commands:
-			if o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents, childWork) {
+			stopRequested, cmdErr := o.handleControlCommand(ctx, &cmd, mode, opts, runners, runnerEvents, childWork)
+			if stopRequested {
 				return nil
 			}
+			stuckErr = cmdErr
 		case reason := <-reloadTriggers:
-			o.reloadForReason(ctx, reason, mode, opts, runners, runnerEvents, childWork)
+			stuckErr = o.reloadForReason(ctx, reason, mode, opts, runners, runnerEvents, childWork)
 		case <-pauseExpiry.ch:
 			// The reload clears the expired pause from the config and
 			// starts the drive, exactly as a `resume` would.
-			o.reloadForReason(ctx, "timed pause expired", mode, opts, runners, runnerEvents, childWork)
+			stuckErr = o.reloadForReason(ctx, "timed pause expired", mode, opts, runners, runnerEvents, childWork)
 		case event := <-runnerEvents:
-			o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
+			stuckErr = o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
 		case <-reconcileTickCh:
-			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+			stuckErr = o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-restarts.ch:
-			o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+			stuckErr = o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case fatalErr := <-fatal:
 			// The deferred drain still stops the runners and closes the
 			// socket; the caller exits non-zero, so a service manager
@@ -92,23 +97,36 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 		case <-ctx.Done():
 			return nil
 		}
+		if stuckErr != nil {
+			return stuckErr
+		}
 	}
 }
 
 // reloadForReason runs the config reload the loop owes to a trigger it did
-// not ask a client about: a changed file or an expired timed pause. The
-// reload already warned and kept the previous settings when it fails; with
-// no client waiting there is nobody else to tell.
+// not ask a client about: a changed file or an expired timed pause. A reload
+// that could not apply the config already warned and kept the previous
+// settings; with no client waiting there is nobody else to tell. A drive
+// that did not stop is returned, and ends the watch.
 func (o *Orchestrator) reloadForReason(
 	ctx context.Context, reason string, mode syncengine.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner, runnerEvents chan<- watchRunnerEvent, childWork *parentChildWorkSnapshots,
-) {
+) error {
 	o.logger.Info("Reloading the config (" + reason + ")")
-	if err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork); err != nil {
+	err := o.reload(ctx, mode, opts, runners, runnerEvents, childWork)
+	if errors.Is(err, ErrSyncStuck) {
+		return err
+	}
+	if err != nil {
 		o.logger.Debug("config reload failed ("+reason+")", slog.Any("error", err))
 	}
+
+	return nil
 }
 
+// startWatchRuntime binds the control socket and starts the initial runners.
+// On success the caller owns the returned control server and closes it; on
+// failure the server is already closed (and unlinked), and no runner runs.
 func (o *Orchestrator) startWatchRuntime(
 	ctx context.Context,
 	mode syncengine.SyncMode,
@@ -134,7 +152,8 @@ func (o *Orchestrator) startWatchRuntime(
 
 	decisions, err := o.buildStandaloneRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
-		return nil, control, err
+		o.closeControlSocket(ctx, control)
+		return nil, nil, err
 	}
 	o.setControlMountIDs(mountIDsForSpecs(decisions.Mounts))
 
@@ -154,7 +173,10 @@ func (o *Orchestrator) startWatchRuntime(
 	)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
-		return nil, control, err
+		// No drive started, so there is nothing to drain before the owner
+		// lock goes.
+		o.closeControlSocket(ctx, control)
+		return nil, nil, err
 	}
 	if len(runners) == 0 {
 		o.logger.Info("All selected drives are paused; waiting until one is resumed",
@@ -162,7 +184,7 @@ func (o *Orchestrator) startWatchRuntime(
 		)
 	}
 	o.emitStartWarning(startResults, startAnnounceFull)
-	o.emitWatchLifecycle(WatchReady, runners, startResults, nil)
+	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReady}, runners, startResults)
 
 	return runners, control, nil
 }
@@ -195,8 +217,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 			continue
 		}
 
-		o.attachParentChildWorkSink(mount, childWork, runnerEvents, nil)
-		wr, err := o.startWatchRunner(ctx, mount, mode, opts, runnerEvents)
+		wr, err := o.startNextWatchRunner(ctx, mount, mode, opts, runnerEvents, childWork)
 		if err != nil {
 			// The startup result is the user-facing report of this failure
 			// (a StartWarning, or the returned WatchStartupError).

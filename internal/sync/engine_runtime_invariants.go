@@ -24,7 +24,9 @@ func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, key ScopeKe
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertReleasedScope(context.WithoutCancel(ctx), key); err != nil {
+	checkCtx, cancel := detachedInvariantCheckContext(ctx)
+	defer cancel()
+	if err := flow.assertReleasedScope(checkCtx, key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
@@ -33,7 +35,9 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, key ScopeK
 	if !flow.invariantChecksEnabled() {
 		return
 	}
-	if err := flow.assertDiscardedScope(context.WithoutCancel(ctx), key); err != nil {
+	checkCtx, cancel := detachedInvariantCheckContext(ctx)
+	defer cancel()
+	if err := flow.assertDiscardedScope(checkCtx, key); err != nil {
 		panic(fmt.Sprintf("%s: %v", stage, err))
 	}
 }
@@ -98,7 +102,17 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
 	default:
 	}
 
-	return flow.assertPersistedInvariants(context.WithoutCancel(ctx))
+	checkCtx, cancel := detachedInvariantCheckContext(ctx)
+	defer cancel()
+
+	return flow.assertPersistedInvariants(checkCtx)
+}
+
+// detachedInvariantCheckContext keeps ctx's values without its cancellation,
+// so an assertion is not skipped because a shutdown began, bounded like every
+// detached store access so a wedged store cannot hold it.
+func detachedInvariantCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
 }
 
 func (flow *engineFlow) assertWatchRuntimeInvariants() error {

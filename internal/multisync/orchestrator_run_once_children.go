@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -23,17 +24,20 @@ type oneShotChildRuns struct {
 	opts         syncengine.RunOptions
 
 	// mu guards every field below it: cache, parents, parentAckers,
-	// parentDone, snapshots, started, startup, and childReports. Parent and
-	// child mount goroutines all write here as they finish.
-	mu            gosync.Mutex
-	cache         *parentChildWorkSnapshots
-	parents       map[mountID]*mountSpec
-	parentAckers  map[mountID]shortcutChildAckHandle
-	parentDone    map[mountID]bool
-	snapshots     map[mountID]syncengine.ShortcutChildWorkSnapshot
-	started       map[mountID]bool
-	startup       []MountStartupResult
-	childReports  []*MountReport
+	// parentDone, snapshots, started, startup, childReports and stuckCloses.
+	// Parent and child mount goroutines all write here as they finish.
+	mu           gosync.Mutex
+	cache        *parentChildWorkSnapshots
+	parents      map[mountID]*mountSpec
+	parentAckers map[mountID]shortcutChildAckHandle
+	parentDone   map[mountID]bool
+	snapshots    map[mountID]syncengine.ShortcutChildWorkSnapshot
+	started      map[mountID]bool
+	startup      []MountStartupResult
+	childReports []*MountReport
+	// stuckCloses are the shortcut engines that did not close within their
+	// bound (closeRunOnceEngines), one joined error per parent.
+	stuckCloses   []error
 	childRunGroup gosync.WaitGroup
 }
 
@@ -155,6 +159,23 @@ func (c *oneShotChildRuns) startupResults() []MountStartupResult {
 	return results
 }
 
+// appendStuck records the shortcut engines of one parent that did not close.
+func (c *oneShotChildRuns) appendStuck(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stuckCloses = append(c.stuckCloses, err)
+}
+
+// stuck joins the errors of every shortcut engine that did not close.
+func (c *oneShotChildRuns) stuck() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return errors.Join(c.stuckCloses...)
+}
+
 func (c *oneShotChildRuns) reports() []*MountReport {
 	if c == nil {
 		return nil
@@ -202,8 +223,15 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	)
 	c.appendStartup(childStartup.Results...)
 	runIndexedMountWork(ctx, childWork, childReports)
-	c.orchestrator.closeRunOnceChildEngines(ctx, childWork)
+	stuckErr := c.orchestrator.closeRunOnceEngines(ctx, childWork, MountProjectionChild)
 	c.appendReports(childReports...)
+	if stuckErr != nil {
+		// A shortcut whose engine may still be writing its store gets no
+		// cleanup and no final-drain acknowledgement: either would act on
+		// that store. The next run retries both.
+		c.appendStuck(stuckErr)
+		return
+	}
 
 	parentAckers := c.parentAckersFor(parentID)
 	if purgeErr := c.orchestrator.purgeShortcutChildArtifactsForDecisions(
