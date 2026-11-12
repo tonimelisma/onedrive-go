@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -98,7 +100,13 @@ func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger
 
 		return nil, failure
 	}
-	if !stateDBFamilyExists(dbPath) {
+	// Only an existing store is incompatible. One that cannot be checked is
+	// reported as the failure it is, never steered towards a reset.
+	exists, existsErr := stateDBFamilyExists(dbPath)
+	if existsErr != nil {
+		return nil, errors.Join(err, existsErr)
+	}
+	if !exists {
 		return nil, err
 	}
 
@@ -116,14 +124,22 @@ func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger
 	}
 }
 
-func stateDBFamilyExists(dbPath string) bool {
-	for _, candidate := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
-		if _, err := localpath.Stat(candidate); err == nil {
-			return true
+// stateDBFamilyExists reports whether any file of the store at dbPath is on
+// disk (config.StateDBFamily). A file that cannot be checked (permission denied, an
+// I/O error) is an error, not absent: read as absent, an email change would
+// rename a drive's config away from a store it could not see.
+func stateDBFamilyExists(dbPath string) (bool, error) {
+	for _, candidate := range config.StateDBFamily(dbPath) {
+		_, err := localpath.Stat(candidate)
+		switch {
+		case err == nil:
+			return true, nil
+		case !errors.Is(err, os.ErrNotExist):
+			return false, fmt.Errorf("check state DB file %s: %w", candidate, err)
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // checkStoreIntegrity runs PRAGMA quick_check on an open store (R-2.5.8). A

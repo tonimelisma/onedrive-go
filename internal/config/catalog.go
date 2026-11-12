@@ -51,7 +51,6 @@ type CatalogDrive struct {
 	SharedOwnerEmail      string `json:"shared_owner_email,omitempty"`
 	CachedAt              string `json:"cached_at,omitempty"`
 	PrimaryForAccount     bool   `json:"primary_for_account,omitempty"`
-	RetainedStatePresent  bool   `json:"retained_state_present,omitempty"`
 	RemoteDriveID         string `json:"remote_drive_id,omitempty"`
 	SiteID                string `json:"site_id,omitempty"`
 }

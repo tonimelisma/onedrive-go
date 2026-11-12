@@ -34,7 +34,7 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 
 	if !inConfig && purge {
 		logger.Info("purging orphaned drive state", "drive", cid.String())
-		if err := purgeOrphanedDriveState(cc.resultWriter(), cid, logger); err != nil {
+		if err := purgeOrphanedDriveState(ctx, cc.resultWriter(), cid, logger); err != nil {
 			return err
 		}
 		if err := config.PruneDriveAfterPurge(config.DefaultDataDir(), cid); err != nil {
@@ -45,17 +45,21 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 
 	logger.Info("removing drive", "drive", cid.String(), "purge", purge)
 	if purge {
-		if err := purgeDrive(cc.resultWriter(), cc.CfgPath, cid, logger); err != nil {
+		// The catalog keeps the drive's record until its state is gone: a
+		// purge that kept the store is finished by the orphaned-state path
+		// above, which prunes it then.
+		if err := purgeConfiguredDrive(ctx, cc, cid, driveSyncDir(cfg, cid, logger)); err != nil {
 			return err
 		}
 		if err := config.PruneDriveAfterPurge(config.DefaultDataDir(), cid); err != nil {
 			return fmt.Errorf("pruning catalog drive after purge: %w", err)
 		}
-		notifyDaemonIfRunning(ctx, cc)
 		return reportDriveRemove(cc, driveRemoveJSONOutput{Drive: cid.String(), RemovedFromConfig: true, Purged: true})
 	}
 
-	if err := removeDrive(cc.resultWriter(), cc.CfgPath, cid, cfg.Drives[cid].SyncDir, logger); err != nil {
+	// The folder named is the one the drive synced: the configured sync_dir
+	// is empty for a drive on its default folder.
+	if err := removeDrive(cc.resultWriter(), cc.CfgPath, cid, driveSyncDir(cfg, cid, logger), logger); err != nil {
 		return err
 	}
 	notifyDaemonIfRunning(ctx, cc)

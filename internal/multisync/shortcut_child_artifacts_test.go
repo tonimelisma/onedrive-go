@@ -67,6 +67,51 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(
 	assert.Contains(t, err.Error(), "state db locked")
 }
 
+// A child's state store another engine still has open (another
+// configuration's child of the same shortcut, sharing the data directory) is
+// not deleted under it. The cleanup fails as a remaining state artifact and
+// touches nothing else of the child: its catalog record and unfinished
+// uploads stay with its state until a later attempt finds the store free.
+//
+// Validates: R-2.4.8, R-6.3.9
+func TestShortcutChildArtifactCleanupExecutor_KeepsTheStateWhileAnEngineHoldsIt(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-held")
+	statePath := config.MountStatePathForDataDir(dataDir, childMountID)
+	release, err := syncengine.LockDriveForOfflineChange(t.Context(), dataDir, "", statePath,
+		slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	var touched []string
+	executor := shortcutChildArtifactCleanupExecutor{
+		dataDir: dataDir,
+		logger:  slog.New(slog.DiscardHandler),
+		remove: func(path string) error {
+			touched = append(touched, "remove "+path)
+			return nil
+		},
+		pruneCatalogRecord: func(string) error {
+			touched = append(touched, "catalog")
+			return nil
+		},
+		deleteUploadSessions: func(string, string) error {
+			touched = append(touched, "uploads")
+			return nil
+		},
+	}
+
+	err = executor.purge(t.Context(), shortcutChildArtifactScope{mountID: childMountID, localRoot: t.TempDir()})
+	require.ErrorIs(t, err, syncengine.ErrSyncStoreInUse)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupStateArtifactFailure)
+	assert.Empty(t, touched, "nothing of a child whose store is in use is cleaned up")
+
+	require.NoError(t, release())
+	require.NoError(t, executor.purge(t.Context(), shortcutChildArtifactScope{mountID: childMountID}))
+	assert.Len(t, touched, len(config.StateDBFamily(statePath))+2, "a later attempt cleans everything up")
+}
+
 // Validates: R-2.4.8
 func TestShortcutChildArtifactCleanupExecutor_ReturnsCatalogFailure(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())

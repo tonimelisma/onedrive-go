@@ -786,6 +786,27 @@ func TestDiscoverStateDBsForEmailIn_NoSubstringCollision(t *testing.T) {
 	assert.Contains(t, paths, filepath.Join(dir, "state_personal_a@b.com.db"))
 }
 
+// A store is found by any file of its family and named once, by its database
+// path, also when only a log or journal is left of it: that leftover is
+// retained state logout --purge must delete, and nothing else would find it.
+//
+// Validates: R-3.1.4
+func TestDiscoverStateDBsForEmailIn_FindsAStoreByAnyFileOfItsFamily(t *testing.T) {
+	dir := t.TempDir()
+
+	whole := filepath.Join(dir, "state_business_alice@outlook.com.db")
+	for _, path := range []string{whole, whole + "-wal", whole + "-shm"} {
+		require.NoError(t, os.WriteFile(path, []byte{}, 0o600))
+	}
+	leftover := filepath.Join(dir, "state_personal_alice@outlook.com.db")
+	require.NoError(t, os.WriteFile(leftover+"-wal", []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state_personal_bob@outlook.com.db-journal"), []byte{}, 0o600))
+
+	paths, err := discoverStateDBsForEmailIn(dir, "alice@outlook.com", slog.Default())
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{whole, leftover}, paths)
+}
+
 // --- test helpers ---
 
 // writeTokenFile creates a minimal valid token file with the given name in dir.

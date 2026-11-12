@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -664,6 +666,11 @@ func createBenchBidirectionalRuntime(
 	includedDir string,
 	remoteScopePath string,
 ) (benchBidirectionalRuntime, error) {
+	cid, parseErr := driveid.NewCanonicalID(driveID)
+	if parseErr != nil {
+		return benchBidirectionalRuntime{}, fmt.Errorf("parse benchmark drive ID: %w", parseErr)
+	}
+
 	runtimeRoot, err := mkdirTemp(workRoot, "runtime-*")
 	if err != nil {
 		return benchBidirectionalRuntime{}, fmt.Errorf("create benchmark runtime root: %w", err)
@@ -718,14 +725,10 @@ func createBenchBidirectionalRuntime(
 		driveID:          driveID,
 		includedDir:      includedDir,
 		env:              env,
-		stateDBPath:      benchStateDBPath(dataDir, driveID),
+		stateDBPath:      config.DriveStatePathForDataDir(dataDir, cid),
 		remoteScopePath:  remoteScopePath,
 		scopeRelativeDir: includedDir,
 	}, nil
-}
-
-func benchStateDBPath(dataDir string, driveID string) string {
-	return filepath.Join(dataDir, "state_"+strings.ReplaceAll(driveID, ":", "_")+".db")
 }
 
 func (r *benchBidirectionalRuntime) commandSpec(args ...string) benchCommandSpec {

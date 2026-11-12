@@ -842,10 +842,10 @@ sync_dir = "~/OneDrive"
 	assert.Contains(t, err.Error(), "removing drive")
 }
 
-// --- purgeSingleDrive ---
+// --- purgeConfiguredDrive ---
 
 // Validates: R-3.3.8
-func TestPurgeSingleDrive_DeletesDriveStateButPreservesCatalogAccount(t *testing.T) {
+func TestPurgeConfiguredDrive_DeletesDriveStateButPreservesCatalogAccount(t *testing.T) {
 	// Isolate HOME so DriveStatePath uses a temp directory.
 	setTestDriveHome(t)
 	dataDir := config.DefaultDataDir()
@@ -870,8 +870,10 @@ sync_dir = "~/OneDrive"
 `), 0o600))
 
 	// Purge should delete both state DB and config section.
-	err := purgeSingleDrive(cfgPath, cid, testDriveLogger(t))
+	var out bytes.Buffer
+	err := purgeConfiguredDrive(t.Context(), newCommandContext(&out, cfgPath), cid, t.TempDir())
 	require.NoError(t, err)
+	assert.Contains(t, out.String(), "Purged config and state for personal:user@example.com.")
 
 	// State DB file should be gone.
 	_, statErr := os.Stat(statePath)
@@ -907,8 +909,9 @@ sync_dir = "~/Marketing"
 		driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"),
 	}
 
-	err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	removed, err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
 	require.NoError(t, err)
+	assert.Equal(t, affected, removed)
 
 	// Reload and verify 0 drives remain.
 	cfg, loadErr := config.Load(cfgPath, testDriveLogger(t))
@@ -931,10 +934,13 @@ sync_dir = "~/OneDrive"
 		driveid.MustCanonicalID("personal:user@example.com"),   // exists
 	}
 
-	// Continues past the missing one, returns error for it.
-	err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	// Continues past the missing one, returns error for it, and names only
+	// the drive it removed: the caller purges no state of a drive still in
+	// the config.
+	removed, err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "business:nobody@example.com")
+	assert.Equal(t, []driveid.CanonicalID{driveid.MustCanonicalID("personal:user@example.com")}, removed)
 
 	// The existing drive should still have been removed.
 	cfg, loadErr := config.Load(cfgPath, testDriveLogger(t))
@@ -2428,7 +2434,7 @@ func TestPurgeOrphanedDriveState_DeletesStateDB(t *testing.T) {
 	require.NotEmpty(t, statePath)
 	require.NoError(t, os.WriteFile(statePath, []byte("fake-db"), 0o600))
 
-	err := purgeOrphanedDriveState(io.Discard, cid, testDriveLogger(t))
+	err := purgeOrphanedDriveState(t.Context(), io.Discard, cid, testDriveLogger(t))
 	require.NoError(t, err)
 
 	// State DB should be deleted.
@@ -2447,7 +2453,7 @@ func TestPurgeOrphanedDriveState_NoStateDB(t *testing.T) {
 	var out bytes.Buffer
 
 	// No state DB on disk — should succeed with "no orphaned state" message.
-	require.NoError(t, purgeOrphanedDriveState(&out, cid, testDriveLogger(t)))
+	require.NoError(t, purgeOrphanedDriveState(t.Context(), &out, cid, testDriveLogger(t)))
 	assert.Equal(t, "No orphaned state found for personal:user@example.com.\n", out.String())
 
 	_, stateErr := os.Stat(statePath)

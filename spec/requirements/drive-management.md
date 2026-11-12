@@ -7,7 +7,7 @@ Authentication, account management, drive types, and shared drive support.
 - R-3.1.1: When the user runs `login`, the system shall authenticate via device code flow (default). [verified]
 - R-3.1.2: When `--browser` is passed, the system shall use PKCE authorization code flow with localhost callback. [verified]
 - R-3.1.3: When the user runs `logout`, the system shall remove the authentication token and configured drive sections while preserving retained state databases and the managed catalog inventory for that account. [verified]
-- R-3.1.4: When `--purge` is passed with logout, the system shall also delete retained state databases and remove the purged account and owned drives from the managed catalog. `--purge` shall work after a prior non-purge logout. [verified]
+- R-3.1.4: When `--purge` is passed with logout, the system shall also delete retained state databases and remove the purged account and owned drives from the managed catalog. `--purge` shall work after a prior non-purge logout. Logout shall tell a running watch after removing the drives' config sections, and a purge shall delete each state database only then, keeping one a sync still has open and naming the rerun that finishes. [verified]
 - R-3.1.5: When the user runs `status`, the system shall display all known accounts, including accounts with zero configured drives. Each account card shall include account identity when known, configured-drive status rows, and a sign-in-required reason/action only when authentication needs attention. Healthy account authentication state shall be omitted. Status live overlay shall use `/me` only for account display/sign-in proof and shall not enumerate `/me/drives` into the output. [verified]
 - R-3.1.6: When `--json` is passed to `status`, the system shall output structured JSON account cards using `accounts[].drives`, nested `shared_folders`, optional `sign_in_required`, optional configured-drive `storage`, and an overall summary with `total_drives` plus `total_shared_folders` when nonzero. Public status JSON shall not expose `user_id`, `auth_state: ready`, `live_drives`, canonical IDs, mount IDs, namespace IDs, projection kinds, or remote drive IDs. Every drive and nested shared-folder row shall carry `mount_ref`: a stable, opaque per-mount reference that identifies one mount across runs and between sibling rows without revealing any of the identifiers above. [verified]
 - R-3.1.7: When `logout` runs without `--account`, account auto-selection shall use the durable validated account view rather than only configured drives. Plain `logout` shall auto-select only when exactly one known account has a usable saved login. When multiple accounts have usable saved logins, `--account` is required. When no known account has a usable saved login, plain `logout` shall not auto-select an account. [verified]
@@ -74,7 +74,10 @@ The system shall support all four drive types:
   config section and state database) and for available drives that retain a
   state database from a previous removal (deleting only the state database).
   The account token and sync directory are always preserved; the catalog drive
-  record is removed only when no longer needed as retained inventory.
+  record is removed only when no longer needed as retained inventory. The
+  state database is deleted, with its whole file family, only after the config
+  section is removed and a running watch was told; one a sync still has open
+  is kept, and the command fails naming the rerun that finishes.
   [verified]
 - R-3.3.9: When the user runs `drive search <term>`, the system shall search SharePoint sites by name across all business accounts, returning up to 50 matching sites with their document libraries and canonical IDs. When `--account` is passed, the search is restricted to that business account. Business accounts that cannot be searched because authentication is required shall be reported as account-level auth-required results instead of being silently skipped. [verified]
 - R-3.3.10: When `--json` is passed, `drive list` shall output structured JSON with `configured`, `available`, `accounts_requiring_auth`, and `accounts_degraded` arrays. Configured drive entries shall include auth status when authentication is required. [verified]
@@ -107,7 +110,7 @@ The system shall support all four drive types:
 ## R-3.7 Email Change Detection [verified]
 
 - R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [verified]
-- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. [verified]
+- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. A state DB shall move with its whole file family and only while no sync has it open; one in use shall leave every name unchanged and say to stop that sync and run again. [verified]
 
 ## R-3.8 Migration [future]
 
