@@ -1901,7 +1901,7 @@ func TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
 			assert.Equal(t, "Docs/Report.txt", v.Path)
 		}
 	}
-	<-done
+	receiveWithin(t, done, "the concurrent writer to finish")
 
 	variants := baseline.GetCaseVariants("Docs", "report.txt")
 	require.Len(t, variants, 1)

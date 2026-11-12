@@ -20,19 +20,12 @@ func startDrainLoop(t *testing.T) (chan actionCompletion, context.CancelFunc, *t
 
 	results := make(chan actionCompletion, 16)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	bl, err := eng.baseline.Load(ctx)
+	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	cancel, _ := runInBackground(t, t.Context(), func(ctx context.Context) error {
 		defer rt.stopTrialTimer()
 		runResultDrainLoopForTest(ctx, rt, bl, results)
-	}()
-
-	t.Cleanup(func() {
-		cancel()
-		<-done
+		return nil
 	})
 
 	return results, cancel, eng
@@ -146,7 +139,7 @@ func readReadyAction(t *testing.T, ready <-chan *trackedAction) *trackedAction {
 	select {
 	case ta := <-ready:
 		return ta
-	case <-time.After(3 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timed out waiting for action on ready channel")
 	}
 

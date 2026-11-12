@@ -103,23 +103,13 @@ func TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass(t *testing.T)
 	remote.moveAt(t, "doc", "docs-renamed")
 	writeLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- h.eng.RunWatch(ctx, SyncBidirectional, WatchOptions{PollInterval: time.Hour, Debounce: 5 * time.Millisecond})
-	}()
+	cancel, done := runWatchInBackground(t, h.eng, SyncBidirectional, quietWatchOptions())
 
 	require.Eventually(t, func() bool {
 		return remote.tree()["docs-renamed/plan.txt"] == "plan v2 locally\n"
-	}, 10*time.Second, 10*time.Millisecond, "the edit reaches OneDrive with no further event")
+	}, eventWait, 10*time.Millisecond, "the edit reaches OneDrive with no further event")
 
-	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "RunWatch did not return after cancellation")
-	}
+	stopWatch(t, cancel, done)
 	requireScenarioLocalFile(t, h.syncRoot, "docs-renamed/plan.txt", "plan v2 locally\n")
 }
 
@@ -141,24 +131,14 @@ func TestRunWatch_FinishesTheRemoteEditBehindARekey(t *testing.T) {
 	remote.move("item-file", "root", "b.txt")
 	remote.setContent(t, "item-file", "edited online\n")
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- h.eng.RunWatch(ctx, SyncBidirectional, WatchOptions{PollInterval: time.Hour, Debounce: 5 * time.Millisecond})
-	}()
+	cancel, done := runWatchInBackground(t, h.eng, SyncBidirectional, quietWatchOptions())
 
 	require.Eventually(t, func() bool {
 		data, err := os.ReadFile(filepath.Join(h.syncRoot, "b.txt"))
 		return err == nil && string(data) == "edited online\n"
-	}, 10*time.Second, 10*time.Millisecond, "the remote edit is downloaded with no further event")
+	}, eventWait, 10*time.Millisecond, "the remote edit is downloaded with no further event")
 
-	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "RunWatch did not return after cancellation")
-	}
+	stopWatch(t, cancel, done)
 	assert.Zero(t, remote.uploads)
 }
 

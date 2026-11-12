@@ -235,7 +235,6 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 	mockWatcher.events <- fsnotify.Event{
 		Name: filepath.Join(dir, "existing.txt"),
 		Op:   fsnotify.Create,
@@ -249,8 +248,7 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 		// Good — no event emitted.
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.12.2
@@ -273,7 +271,6 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 	mockWatcher.events <- fsnotify.Event{
 		Name: subDir,
 		Op:   fsnotify.Create,
@@ -309,8 +306,7 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	assert.LessOrEqual(t, fileEvents, 1,
 		"case collision should prevent duplicate file events; got %d file events", fileEvents)
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +336,6 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 	mockWatcher.events <- fsnotify.Event{
 		Name: xyzDir,
 		Op:   fsnotify.Create,
@@ -356,8 +351,7 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 		// Good — no directory event emitted.
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.12.2
@@ -384,7 +378,6 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Send Create for "docs" (lowercase) — should collide with "Docs".
 	mockWatcher.events <- fsnotify.Event{
@@ -402,8 +395,7 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 		// Good — no directory event emitted.
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.12.2
@@ -431,7 +423,6 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Send Create for parent directory → triggers scanNewDirectory.
 	mockWatcher.events <- fsnotify.Event{
@@ -466,8 +457,7 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 	assert.LessOrEqual(t, dirEvents, 1,
 		"case collision should suppress one of the colliding subdirectories; got %d dir events", dirEvents)
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +485,6 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Send Create for "file.txt" — should be suppressed (collision with "File.txt").
 	mockWatcher.events <- fsnotify.Event{
@@ -523,7 +512,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	// Expect two events: ChangeCreate for "File.txt" (survivor re-emitted)
 	// and ChangeDelete for "file.txt".
 	var received []changeEvent
-	timeout := time.After(1 * time.Second)
+	timeout := time.After(eventWait)
 
 	for len(received) < 2 {
 		select {
@@ -548,8 +537,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	assert.True(t, hasCreate, "should have re-emitted ChangeCreate for surviving File.txt")
 	assert.True(t, hasDelete, "should have emitted ChangeDelete for deleted file.txt")
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.12.2
@@ -576,7 +564,6 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Send Create for "file.txt" — suppressed, collision with "File.txt".
 	mockWatcher.events <- fsnotify.Event{
@@ -634,8 +621,7 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 		assert.Equal(t, "file.txt", received[0].Name)
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.12.2
@@ -670,18 +656,16 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Trigger safety scan.
 	safetyTickCh <- time.Now()
 
 	select {
 	case <-safetyScanComplete:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "timeout waiting for safety scan completion")
 	}
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	// Both maps should have been cleared by the safety scan.
 	// Safe to read after watchLoop exits (single-goroutine fields).

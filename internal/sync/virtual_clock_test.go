@@ -148,8 +148,7 @@ func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 		default:
 		}
 
-		cancel()
-		require.NoError(t, <-done)
+		stopWatch(t, cancel, done)
 	})
 }
 
@@ -176,8 +175,7 @@ func TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval(t *testing.T)
 		assert.Equal(t, "missed.txt", filepath.ToSlash(ev.Path))
 		assert.Equal(t, changeCreate, ev.Type)
 
-		cancel()
-		require.NoError(t, <-done)
+		stopWatch(t, cancel, done)
 	})
 }
 

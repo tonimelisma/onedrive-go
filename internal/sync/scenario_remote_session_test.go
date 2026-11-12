@@ -41,6 +41,9 @@ type scenarioSessionClient struct {
 	*engineMockClient
 	t      *testing.T
 	remote *moveScenarioRemote
+	// chaos, when set, is the chaos Graph layer between the client and the
+	// fake's sessions (chaosGraph.wrapSessions).
+	chaos *chaosGraph
 }
 
 var (
@@ -70,21 +73,38 @@ func newScenarioSessionEngine(t *testing.T, client *scenarioSessionClient) (*tes
 func (c *scenarioSessionClient) CreateUploadSession(
 	_ context.Context, _ driveid.ID, parentID, name string, _ int64, _ time.Time,
 ) (*graph.UploadSession, error) {
-	return c.remote.createUploadSession(c.t, parentID, name)
+	create := func() (*graph.UploadSession, error) { return c.remote.createUploadSession(c.t, parentID, name) }
+	if c.chaos == nil {
+		return create()
+	}
+
+	return c.chaos.createUploadSession(c.remote, parentID, name, create)
 }
 
 // CreateUploadSessionForItem opens a session on an existing item.
 func (c *scenarioSessionClient) CreateUploadSessionForItem(
 	_ context.Context, _ driveid.ID, itemID, ifMatch string, _ int64, _ time.Time,
 ) (*graph.UploadSession, error) {
-	return c.remote.createUploadSessionForItem(itemID, ifMatch)
+	open := func() (*graph.UploadSession, error) { return c.remote.createUploadSessionForItem(itemID, ifMatch) }
+	if c.chaos == nil {
+		return open()
+	}
+
+	return c.chaos.createUploadSessionForItem(itemID, open)
 }
 
 // UploadFromSession sends the content through a fresh session.
 func (c *scenarioSessionClient) UploadFromSession(
 	_ context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, _ graph.ProgressFunc,
 ) (*graph.Item, error) {
-	return c.remote.uploadThroughSession(c.t, session.UploadURL, content, totalSize, graph.ErrNotFound)
+	upload := func() (*graph.Item, error) {
+		return c.remote.uploadThroughSession(c.t, session.UploadURL, content, totalSize, graph.ErrNotFound)
+	}
+	if c.chaos == nil {
+		return upload()
+	}
+
+	return c.chaos.sessionUpload(chaosOpSessionUpload, session, upload)
 }
 
 // ResumeUpload resumes a recorded session; one OneDrive no longer holds has
@@ -92,16 +112,43 @@ func (c *scenarioSessionClient) UploadFromSession(
 func (c *scenarioSessionClient) ResumeUpload(
 	_ context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, _ graph.ProgressFunc,
 ) (*graph.Item, error) {
-	return c.remote.uploadThroughSession(c.t, session.UploadURL, content, totalSize, graph.ErrUploadSessionExpired)
+	resume := func() (*graph.Item, error) {
+		return c.remote.uploadThroughSession(c.t, session.UploadURL, content, totalSize, graph.ErrUploadSessionExpired)
+	}
+	if c.chaos == nil {
+		return resume()
+	}
+
+	return c.chaos.sessionUpload(chaosOpSessionResume, session, resume)
 }
 
 // CancelUploadSession drops a session.
 func (c *scenarioSessionClient) CancelUploadSession(_ context.Context, session *graph.UploadSession) error {
-	c.remote.mu.Lock()
-	defer c.remote.mu.Unlock()
-	delete(c.remote.sessions, session.UploadURL)
+	cancel := func() error {
+		c.remote.dropSession(session.UploadURL)
+		return nil
+	}
+	if c.chaos == nil {
+		return cancel()
+	}
 
-	return nil
+	return c.chaos.cancelSession(session, cancel)
+}
+
+// dropSession forgets the session at url, open or not.
+func (r *moveScenarioRemote) dropSession(url graph.UploadURL) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.sessions, url)
+}
+
+// holdsSession reports whether the session at url is open.
+func (r *moveScenarioRemote) holdsSession(url graph.UploadURL) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.sessions[url]
+
+	return ok
 }
 
 // createUploadSession creates the empty item and opens a session on it. The

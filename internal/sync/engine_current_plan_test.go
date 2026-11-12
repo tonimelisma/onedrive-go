@@ -347,9 +347,11 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 		})
 	})
 
-	err = rt.bootstrapSync(ctx, SyncDownloadOnly, &watchPipeline{
-		bl:          bl,
-		completions: make(chan actionCompletion),
+	err = runWithin(t, ctx, "bootstrap to fail on the closed store", func(runCtx context.Context) error {
+		return rt.bootstrapSync(runCtx, SyncDownloadOnly, &watchPipeline{
+			bl:          bl,
+			completions: make(chan actionCompletion),
+		})
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record skipped OneDrive items")

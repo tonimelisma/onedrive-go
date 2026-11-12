@@ -41,33 +41,30 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
-	defer func() {
-		cancel()
-		<-done
-	}()
 
 	watcher.errs <- fsnotify.ErrEventOverflow
 
-	first := waitForCapturedTimer(t, timers, "an overflow arms a recovery rescan")
+	first := receiveWithin(t, timers, "an overflow to arm a recovery rescan")
 	assert.Equal(t, recoveryScanDelay, first.delay)
 	first.fn()
 
 	// Before the fix the scan ran here, its snapshot was dropped, and the
 	// drop re-armed the next scan at twice the delay.
-	second := waitForCapturedTimer(t, timers, "a deferred recovery scan re-arms itself")
+	second := receiveWithin(t, timers, "a deferred recovery scan to re-arm itself")
 	assert.Equal(t, int32(0), scans.Load(), "no scan runs while its result would be dropped")
 	assert.Equal(t, recoveryScanDelay, second.delay, "a deferral is not a storm: the pace does not double")
 
 	// The runtime drains its channel; the next due scan runs and lands.
-	<-batches
+	receiveWithin(t, batches, "the batch the runtime had not taken")
 	second.fn()
 
-	snapshot := receiveBatch(t, batches, "recovery full snapshot once the runtime has room")
+	snapshot := receiveWithin(t, batches, "recovery full snapshot once the runtime has room")
 	require.True(t, snapshot.fullSnapshot)
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
 	// The after-scan hook runs once the snapshot is handed over, on the
 	// observer's goroutine; the receive above does not wait for it.
-	assert.Eventually(t, func() bool { return scans.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Eventually(t, func() bool { return scans.Load() == 1 }, eventWait, 10*time.Millisecond)
+	stopWatch(t, cancel, done)
 }
 
 // The periodic safety scan is deferred the same way, and leaves a recovery
@@ -98,35 +95,20 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
-	defer func() {
-		cancel()
-		<-done
-	}()
 
 	tick <- time.Now()
 
-	recovery := waitForCapturedTimer(t, timers, "a deferred safety scan arms a recovery scan")
+	recovery := receiveWithin(t, timers, "a deferred safety scan to arm a recovery scan")
 	assert.Equal(t, int32(0), scans.Load(), "the safety scan does not run while its result would be dropped")
 	assert.Equal(t, recoveryScanDelay, recovery.delay)
 
-	<-batches
+	receiveWithin(t, batches, "the batch the runtime had not taken")
 	recovery.fn()
 
-	snapshot := receiveBatch(t, batches, "full snapshot once the runtime has room")
+	snapshot := receiveWithin(t, batches, "full snapshot once the runtime has room")
 	require.True(t, snapshot.fullSnapshot)
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
-	assert.Eventually(t, func() bool { return scans.Load() == 1 }, 5*time.Second, 10*time.Millisecond,
+	assert.Eventually(t, func() bool { return scans.Load() == 1 }, eventWait, 10*time.Millisecond,
 		"the after-scan hook runs once the snapshot is handed over")
-}
-
-func waitForCapturedTimer(t *testing.T, timers <-chan capturedTimer, what string) capturedTimer {
-	t.Helper()
-
-	select {
-	case timer := <-timers:
-		return timer
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "timed out waiting for a timer", what)
-		return capturedTimer{}
-	}
+	stopWatch(t, cancel, done)
 }
