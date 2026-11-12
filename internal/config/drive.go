@@ -440,28 +440,82 @@ func discoverTokensIn(dir string, logger *slog.Logger) ([]driveid.CanonicalID, e
 //	"personal:toni@outlook.com" -> "{dataDir}/state_personal_toni@outlook.com.db"
 //	"sharepoint:alice@contoso.com:marketing:Docs" -> "{dataDir}/state_sharepoint_alice@contoso.com_marketing_Docs.db"
 func DriveStatePath(canonicalID driveid.CanonicalID) string {
-	dataDir := DefaultDataDir()
+	return DriveStatePathForDataDir(DefaultDataDir(), canonicalID)
+}
+
+// DriveStatePathForDataDir is DriveStatePath for the data directory dataDir,
+// for a caller that runs onedrive-go with a data directory of its own.
+func DriveStatePathForDataDir(dataDir string, canonicalID driveid.CanonicalID) string {
 	if dataDir == "" || canonicalID.IsZero() {
 		return ""
 	}
 
 	sanitized := strings.ReplaceAll(canonicalID.String(), ":", "_")
 
-	return filepath.Join(dataDir, "state_"+sanitized+".db")
+	return filepath.Join(dataDir, stateDBPrefix+sanitized+stateDBSuffix)
 }
 
-// DiscoverStateDBsForEmail scans the data directory for state database files
-// belonging to the given email address. Returns full file paths. The email
-// match uses an underscore boundary ("_email") to prevent substring collisions
+// stateDBPrefix and stateDBSuffix bracket every state DB's file name in the
+// data directory (DriveStatePath, MountStatePathForDataDir).
+const (
+	stateDBPrefix = "state_"
+	stateDBSuffix = ".db"
+)
+
+// stateDBSidecarSuffixes name the files SQLite keeps beside a state DB, which
+// internal/sync opens in WAL mode: the write-ahead log, its shared-memory
+// index, and the rollback journal a store has before it switches to WAL.
+func stateDBSidecarSuffixes() []string {
+	return []string{"-wal", "-shm", "-journal"}
+}
+
+// StateDBFamily is every file of the state DB at dbPath: its sidecars, then
+// the database itself, last. Every delete or move of a store takes all of
+// them, in this order. The database goes last so that a delete cut short
+// leaves a store the rerun still finds and finishes. All of them go because
+// SQLite pairs a write-ahead log with a database by file name alone: a log
+// beside a database that did not write it is replayed into it. (A log left
+// alone is deleted when a database is created at that name.) Config owns the
+// list, with the state DB paths; internal/sync, internal/multisync and the
+// CLI all delete or move by it.
+func StateDBFamily(dbPath string) []string {
+	sidecars := stateDBSidecarSuffixes()
+	family := make([]string, 0, len(sidecars)+1)
+	for _, suffix := range sidecars {
+		family = append(family, dbPath+suffix)
+	}
+
+	return append(family, dbPath)
+}
+
+// stateDBOfFamilyFile is the file name of the state DB that the file named
+// name belongs to: name itself, or name without its sidecar suffix.
+func stateDBOfFamilyFile(name string) string {
+	for _, suffix := range stateDBSidecarSuffixes() {
+		if trimmed, isSidecar := strings.CutSuffix(name, suffix); isSidecar {
+			return trimmed
+		}
+	}
+
+	return name
+}
+
+// DiscoverStateDBsForEmail scans the data directory for the state DBs
+// belonging to the given email address: every store with any file of its
+// family on disk, returned once by its database path, whether or not the
+// database file itself is there. A log or journal left without its database
+// (by an earlier version's purge, or a database deleted by hand) is still
+// retained state to purge. The email match
+// uses an underscore boundary ("_email") to prevent substring collisions
 // (e.g. "a@b.com" won't match "ba@b.com"). A data directory that cannot be
 // listed is an error, not "no state databases".
 func DiscoverStateDBsForEmail(email string, logger *slog.Logger) ([]string, error) {
 	return discoverStateDBsForEmailIn(DefaultDataDir(), email, logger)
 }
 
-// discoverStateDBsForEmailIn scans dir for state DB files belonging to email.
+// discoverStateDBsForEmailIn scans dir for state DBs belonging to email.
 func discoverStateDBsForEmailIn(dir, email string, logger *slog.Logger) ([]string, error) {
-	return discoverFilesForEmail(dir, "state_", ".db", email, logger)
+	return discoverStateDBsForEmailWithIO(dir, email, logger, defaultConfigIO())
 }
 
 func cloneBoolPointer(value *bool) *bool {

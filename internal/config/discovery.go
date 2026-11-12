@@ -102,25 +102,16 @@ func readDataDirForDiscovery(dir string, logger *slog.Logger, io configIO, kind 
 	return nil, fmt.Errorf("cannot read the data directory %s: %w", dir, err)
 }
 
-// discoverFilesForEmail scans dir for files matching "{prefix}*{suffix}" that
-// contain the given email at an underscore boundary. Returns full file paths.
-// This is the shared implementation behind DiscoverStateDBsForEmail and
-// other email-scoped managed-file discovery. An unreadable data directory is
-// an error, not an empty result (see readDataDirForDiscovery).
-func discoverFilesForEmail(dir, prefix, suffix, email string, logger *slog.Logger) ([]string, error) {
-	return discoverFilesForEmailWithIO(dir, prefix, suffix, email, logger, defaultConfigIO())
-}
-
-func discoverFilesForEmailWithIO(
-	dir, prefix, suffix, email string,
-	logger *slog.Logger,
-	io configIO,
-) ([]string, error) {
+// discoverStateDBsForEmailWithIO is DiscoverStateDBsForEmail over io: each
+// file whose state DB (stateDBOfFamilyFile) is named for email, one path per
+// store, in name order. An unreadable data directory is an error, not an
+// empty result (see readDataDirForDiscovery).
+func discoverStateDBsForEmailWithIO(dir, email string, logger *slog.Logger, io configIO) ([]string, error) {
 	if dir == "" || email == "" {
 		return nil, nil
 	}
 
-	entries, err := readDataDirForDiscovery(dir, logger, io, prefix+"*"+suffix)
+	entries, err := readDataDirForDiscovery(dir, logger, io, stateDBPrefix+"*"+stateDBSuffix)
 	if err != nil || entries == nil {
 		return nil, err
 	}
@@ -128,14 +119,15 @@ func discoverFilesForEmailWithIO(
 	needle := "_" + email
 
 	var paths []string
+	seen := make(map[string]struct{})
 
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 
-		name := e.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		name := stateDBOfFamilyFile(e.Name())
+		if !strings.HasPrefix(name, stateDBPrefix) || !strings.HasSuffix(name, stateDBSuffix) {
 			continue
 		}
 
@@ -143,6 +135,10 @@ func discoverFilesForEmailWithIO(
 			continue
 		}
 
+		if _, found := seen[name]; found {
+			continue
+		}
+		seen[name] = struct{}{}
 		paths = append(paths, filepath.Join(dir, name))
 	}
 

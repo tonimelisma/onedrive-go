@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const stateMountPrefix = "state_mount_"
+const stateMountPrefix = stateDBPrefix + "mount_"
 
 func MountStatePath(mountID string) string {
 	return MountStatePathForDataDir(DefaultDataDir(), mountID)
@@ -19,7 +19,7 @@ func MountStatePathForDataDir(dataDir string, mountID string) string {
 		return ""
 	}
 
-	return filepath.Join(dataDir, stateMountPrefix+ref+".db")
+	return filepath.Join(dataDir, stateMountPrefix+ref+stateDBSuffix)
 }
 
 // MountRef returns a stable, opaque reference for a mount.

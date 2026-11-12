@@ -148,9 +148,9 @@ account currently has a usable saved login.
 | `login` | write saved login, upsert account/primary-drive catalog records, append primary drive section |
 | `drive add` | register the drive in the catalog and append one drive section |
 | `drive remove` | delete one drive section only |
-| `drive remove --purge` | delete one drive section plus drive-owned retained state; prune the catalog drive record when no longer needed |
+| `drive remove --purge` | delete one drive section, then (after a running watch is told) drive-owned retained state under the store lock; prune the catalog drive record when no longer needed, and keep it while a kept store remains |
 | `logout` | delete saved login and all configured drive sections for the selected account |
-| `logout --purge` | `logout` durable mutations plus delete retained state DBs and purge the selected account/drives from the catalog, using best-effort recovery when validated state cannot load |
+| `logout --purge` | `logout` durable mutations plus delete retained state DBs (after a running watch is told, under the store lock) and purge the selected account/drives from the catalog, using best-effort recovery when validated state cannot load |
 | external token deletion | removes saved login only; catalog/state may still keep the account known |
 | invalid/unreadable token file | keeps the saved-login file path but moves the derived account state to `auth_required_invalid_saved_login`; a token file that cannot be checked (unreadable data directory) lands in the same state with reason `saved_login_unreadable` |
 | persisted catalog auth requirement creation | keeps other durable facts intact but moves the derived account state to `auth_required_sync_rejected` |
@@ -320,12 +320,48 @@ email, it:
 
 - finds stored personal/business catalog accounts with the same `UserID`
 - computes exact old → new canonical-ID rewrites
-- renames owned managed files (`token_*`, `state_*`)
+- moves owned state DBs (`state_*`) first, through the `StateDBMover` its
+  caller passes in
+- renames owned token files (`token_*`)
 - rewrites catalog account IDs and owned drive ownership/canonical IDs
 - rewrites config section headers in place through `RenameDriveSections()`
 
+A state DB is never renamed here. It moves with its whole file family under
+the store lock that excludes every engine using it, which `internal/sync`
+owns (`syncengine.MoveStateDBs`) and config cannot import, so the CLI passes
+that mover in. The mover takes every source's and target's lock before it
+moves anything, and the state DBs move before any token, section or catalog
+record: a store a sync still has open refuses the whole change and every old
+name stays, consistent for the next try (R-3.7.2,
+`TestReconcileAccountEmail_AStateDBInUseChangesNothing`,
+`TestReconcileGraphUser_RefusesWhileASyncUsesTheState`). Renaming the
+database file alone under a live engine left its log behind under the old
+name.
+
 Ownership stays in `config` because the package already owns canonical-ID to
 path mapping, token-owner resolution, and text-level config mutation.
+
+Config also owns the state DB file family, `StateDBFamily` (the `-wal`,
+`-shm` and `-journal` sidecars, then the database), beside
+`DriveStatePath`/`DriveStatePathForDataDir` and `MountStatePathForDataDir`;
+`internal/sync`, `internal/multisync` and the CLI delete and move stores by
+it. `DiscoverStateDBsForEmail` finds a store by any file of its family and
+returns it once, by its database path, whether or not the database file is
+there, so a log or journal that outlived its database (the reset and the
+purge used to leave the journal) is retained state `logout --purge` deletes
+(`TestDiscoverStateDBsForEmailIn_FindsAStoreByAnyFileOfItsFamily`,
+`TestLogoutPurge_RemovesALoneSidecarOfTheAccount`). The email rename plans
+such a name too, and `MoveStateDBs` deletes its files under the store lock
+instead of moving them: sidecars without their database are not a store, and
+left where they are they would sit under an email no account has any more,
+where no command looks
+(`TestMoveStateDBs_RemovesTheLeftoversOfAStoreWithoutItsDatabase`,
+`TestMoveStateDBs_KeepsLeftoversWhileTheirStoreIsLocked`).
+
+An email change cut short between two renames of one store is finished by
+the next run, which still finds the database under the old name. That run
+does not keep a log that had already moved (it deletes the sidecars it finds
+at the target), so the store falls back to its last checkpoint.
 
 The reconciliation planner is conservative about authority:
 

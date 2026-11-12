@@ -40,13 +40,13 @@ func TestDiscoverCIDFiles_SortedOutput(t *testing.T) {
 	assert.Equal(t, "personal:z@example.com", ids[1].String())
 }
 
-func TestDiscoverFilesForEmail_EmptyInputs(t *testing.T) {
+func TestDiscoverStateDBsForEmail_EmptyInputs(t *testing.T) {
 	dir := t.TempDir()
 
-	paths, err := discoverFilesForEmail("", "state_", ".db", "a@b.com", slog.Default())
+	paths, err := discoverStateDBsForEmailIn("", "a@b.com", slog.Default())
 	require.NoError(t, err)
 	assert.Nil(t, paths)
-	paths, err = discoverFilesForEmail(dir, "state_", ".db", "", slog.Default())
+	paths, err = discoverStateDBsForEmailIn(dir, "", slog.Default())
 	require.NoError(t, err)
 	assert.Nil(t, paths)
 }
@@ -73,7 +73,7 @@ func TestDiscoverCIDFiles_ReadDirError(t *testing.T) {
 	assert.Contains(t, logBuf.String(), "cannot read the data directory")
 
 	logBuf.Reset()
-	paths, err := discoverFilesForEmailWithIO("/data", "state_", ".db", "a@b.com", logger, configIO{
+	paths, err := discoverStateDBsForEmailWithIO("/data", "a@b.com", logger, configIO{
 		readManagedDir: func(path string) ([]os.DirEntry, error) {
 			return nil, fmt.Errorf("reading managed directory %s: %w", path, fs.ErrPermission)
 		},

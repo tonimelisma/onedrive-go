@@ -1045,43 +1045,73 @@ Write-side shared permission blockers are first-class persisted
 carried on `observation_issues` via `ScopeKey`, not a second persisted scope
 table.
 
-### Sync root ownership
+### Sync root and store ownership
 
-Before it opens the state store, `newEngine` takes an exclusive,
-non-blocking `flock` on `<data dir>/locks/root-<st_dev>-<st_ino>.lock`
-(`engine_root_lock.go`) and holds it until `Close` has closed the store; on a
-startup failure the store's close also runs first. Keying the file by the
-root's device and inode means a symlink, bind mount or second configuration
-sharing the data dir contends for the same lock, and a refused engine never
-touches its store. The lock is a regular file in the data dir rather than a
-lock on the folder itself because `flock` on a directory descriptor fails on
-Linux NFS (`EBADF`) and some FUSE filesystems (`ENOSYS`). Lock files are
-never removed. Errnos that mean "cannot lock here" (`ENOTSUP`, `EOPNOTSUPP`,
-`ENOLCK`, `EINVAL`, `EBADF`, `ENOSYS`) are a warning, not a failure. Startup
-also warns when the root carries another sync client's marker or sits under
-macOS `~/Library/CloudStorage` (R-2.9.5, R-2.9.6,
-`TestEngine_SecondEngineOnSameRootRefused`,
+Before it opens the state store, `newEngine` takes two exclusive,
+non-blocking `flock`s in the data dir's `locks` folder (`engine_locks.go`)
+and holds both until `Close` has closed the store; on a startup failure the
+store's close also runs first. The order is fixed, for engines and offline
+changes alike: the sync-root lock, then the store lock, then the store
+opens; release is in reverse (store lock, then root lock), after the store
+has closed. No attempt waits (`LOCK_NB`), so no order can deadlock; the one
+order means whoever comes second is refused on the same lock.
+
+- The **root lock**, `root-<st_dev>-<st_ino>.lock`, keys on the sync folder's
+  device and inode, so a symlink, bind mount or second configuration sharing
+  the data dir that reaches the same folder contends for it
+  (`ErrSyncRootInUse`): two engines never sync one folder.
+- The **store lock**, `store-<digest>.lock`, keys on the state DB's path (its
+  absolute path with the symlinks of its existing folders resolved), so every
+  engine that names one store contends for it whatever folder it syncs
+  (`ErrSyncStoreInUse`): two configurations sharing a data dir with different
+  `sync_dir`s for one drive open one store, which the root lock alone let
+  both write. The name does not depend on the store existing, so a store that
+  is deleted and recreated keeps its lock.
+
+A refused engine never touches its store; a store lock refused after the
+root lock was taken releases the root lock. The locks are regular files in
+the data dir rather than locks on the folder itself because `flock` on a
+directory descriptor fails on Linux NFS (`EBADF`) and some FUSE filesystems
+(`ENOSYS`). Lock files are never removed. Errnos that mean "cannot lock
+here" (`ENOTSUP`, `EOPNOTSUPP`, `ENOLCK`, `EINVAL`, `EBADF`, `ENOSYS`) are a
+warning per lock, not a failure. Startup also warns when the root carries
+another sync client's marker or sits under macOS `~/Library/CloudStorage`
+(R-2.9.5, R-2.9.6, `TestEngine_SecondEngineOnSameRootRefused`,
+`TestEngine_SecondEngineOnSameStoreRefused`,
 `TestSyncRootLock_IsADataDirFileKeyedByDeviceAndInode`,
-`TestSyncRootLock_UnsupportedFilesystemWarnsAndContinues`,
-`TestSyncRootLock_ReleasedOnlyAfterTheStoreCloses`,
-`TestSyncRootLock_ReleasedWhenStartupFailsAfterTakingIt`,
+`TestSyncStoreLock_NamesOneFilePerStore`,
+`TestEngineLocks_UnsupportedFilesystemWarnsAndContinues`,
+`TestEngineLocks_ReleasedInReverseOnlyAfterTheStoreCloses`,
+`TestEngineLocks_ReleasedWhenStartupFailsAfterTakingThem`,
 `TestWarnAboutForeignSyncClients`).
 
-`LockDriveForOfflineChange` takes, outside any engine, every lock an engine
-using a given state store could hold, for an offline change to that store
-(`drive reset-sync-state`, `drive rebind-root`), so the change and such an
-engine exclude each other in both directions. Two folders count: the one now
-at the sync path, which an engine of this configuration locks (holding it
-also keeps a new engine from opening the store mid-change), and the one the
-store records (read-only, `readRecordedSyncRoot`), whose lock is named by the
-recorded device and inode and so needs no folder there: an engine started
-before that folder was moved or replaced still holds it, which is exactly
-the situation rebind-root is for. The same folder is locked once; a missing
-folder or a store that records none (or cannot be read, as before a reset of
-an incompatible store) adds no lock (R-2.9.5, R-6.3.9,
+`LockDriveForOfflineChange` takes, outside any engine and in the same order,
+the locks an engine using a given store holds, for every offline change to
+that store, so the change and such an engine exclude each other in both
+directions: the lock of the folder now at the sync path, then the store
+lock. The store lock is what finds an engine still draining or closing after
+its owner stopped answering, one of another configuration sharing the data
+dir, and one started before its folder was moved or replaced (the case
+`drive rebind-root` is for), with nothing recorded about that folder; the
+folder lock keeps a new engine of this configuration from starting
+mid-change. An empty or missing sync path adds no folder lock; the store
+lock needs no store. Its callers, each the only code path that opens,
+deletes, resets or replaces a state DB family outside an engine:
+
+| Change | Caller | Folder locked |
+| --- | --- | --- |
+| reset, rebind | `drive reset-sync-state`, `drive rebind-root` (`changeDriveStateUnderLock`) | the drive's sync folder |
+| purge | `drive remove --purge`, `logout --purge` (`deleteStateDB`), after the config section is removed and the watch told | the drive's sync folder, none for orphaned state |
+| shortcut child cleanup | multisync `shortcutChildArtifactCleanupExecutor.purge` | none: a replacement child may sync the folder |
+| email rename | `MoveStateDBs` via `config.ReconcileAccountEmail` | none; every source and target store first, all or nothing |
+
+Read-only inspectors (`status`, the rebind's file count) take no lock: they
+open the store `mode=ro` and `query_only`, which SQLite runs beside a live
+writer (R-2.9.5, R-6.3.9,
 `TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheFolderAtItsPath`,
-`TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheRecordedFolder`,
-`TestLockDriveForOfflineChange_NoFolderAndNoStoreTakeNoLock`).
+`TestLockDriveForOfflineChange_ContendsWithAnEngineWhoseFolderMoved`,
+`TestLockDriveForOfflineChange_WithoutAFolderTakesTheStoreLock`,
+`TestMoveStateDBs_RefusesEveryMoveWhileOneStoreIsInUse`).
 
 ### Detached store writes
 

@@ -109,12 +109,13 @@ func runDriveResetSyncStateWithInput(
 	}
 
 	syncDir := driveSyncDir(cfg, cid, cc.Logger)
-	if err := changeDriveStateUnderFolderLock(ctx, syncDir, dbPath, resetSyncStateAction, cc.Logger, func() error {
-		if resetErr := syncengine.ResetStateDB(ctx, dbPath, cc.Logger); resetErr != nil {
-			return fmt.Errorf("reset sync state DB: %w", resetErr)
-		}
-		return nil
-	}); err != nil {
+	if err := changeDriveStateUnderLock(ctx, syncDir, dbPath, refuseOfflineChange(resetSyncStateAction), cc.Logger,
+		func() error {
+			if resetErr := syncengine.ResetStateDB(ctx, dbPath, cc.Logger); resetErr != nil {
+				return fmt.Errorf("reset sync state DB: %w", resetErr)
+			}
+			return nil
+		}); err != nil {
 		return err
 	}
 
@@ -147,54 +148,71 @@ func driveSyncDir(cfg *config.Config, cid driveid.CanonicalID, logger *slog.Logg
 	return config.ExpandTilde(config.EffectiveSyncDir(cfg, cid, drive.SyncDir, logger))
 }
 
-// changeDriveStateUnderFolderLock runs change, an offline rewrite of the
-// drive's state store at dbPath (named by action), while holding every
-// sync-folder lock an engine with that store open could hold
-// (syncengine.LockDriveForOfflineChange): the folder now at the drive's sync
-// path, and the folder the store records. The owner probe only sees an owner
-// that holds the control socket; an engine still draining or closing its
-// store after its owner stopped answering, or one run by another
-// configuration sharing the data directory, holds only these locks. Callers
-// take them after their prompt, so a person reading it does not hold the
-// folders against a sync that starts meanwhile.
-func changeDriveStateUnderFolderLock(
+// changeDriveStateUnderLock runs change, an offline change to the drive's
+// state store at dbPath, while holding the locks an engine with that store
+// open holds (syncengine.LockDriveForOfflineChange): the folder now at
+// syncDir ("" when the drive's folder is no longer known), then the store.
+// The owner probe only sees an owner that holds the control socket; an
+// engine still draining or closing its store after its owner stopped
+// answering, one run by another configuration sharing the data directory,
+// and one started before its folder was moved hold only these locks. While
+// one does, change does not run and refused says what that means for the
+// command. Callers take the locks after their prompt, so a person reading it
+// does not hold them against a sync that starts meanwhile.
+func changeDriveStateUnderLock(
 	ctx context.Context,
 	syncDir string,
 	dbPath string,
-	action string,
+	refused func(inUse error) error,
 	logger *slog.Logger,
 	change func() error,
 ) (err error) {
 	release, err := syncengine.LockDriveForOfflineChange(ctx, config.DefaultDataDir(), syncDir, dbPath, logger)
 	switch {
-	case errors.Is(err, syncengine.ErrSyncRootInUse):
-		return fmt.Errorf("cannot %s: %w; stop that sync first", action, err)
+	case isSyncInUse(err):
+		return refused(err)
 	case err != nil:
-		return fmt.Errorf("lock sync folder: %w", err)
+		return fmt.Errorf("lock sync state: %w", err)
 	}
 	defer func() {
 		if releaseErr := release(); releaseErr != nil {
-			err = errors.Join(err, fmt.Errorf("release sync folder lock: %w", releaseErr))
+			err = errors.Join(err, fmt.Errorf("release sync state lock: %w", releaseErr))
 		}
 	}()
 
 	return change()
 }
 
+// isSyncInUse reports a refusal of the engine locks: an engine holds the
+// drive's folder or its store.
+func isSyncInUse(err error) bool {
+	return errors.Is(err, syncengine.ErrSyncRootInUse) || errors.Is(err, syncengine.ErrSyncStoreInUse)
+}
+
+// refuseOfflineChange is how reset and rebind refuse while an engine holds
+// the drive (action completes "cannot ...").
+func refuseOfflineChange(action string) func(inUse error) error {
+	return func(inUse error) error {
+		return fmt.Errorf("cannot %s: %w; stop that sync first", action, inUse)
+	}
+}
+
 // ensureNoLiveSyncOwner refuses an offline state mutation (named by action)
 // while a sync owner holds the drive: the owner's next commit would race it.
 func ensureNoLiveSyncOwner(ctx context.Context, canonicalID driveid.CanonicalID, action string) error {
 	probe, err := probeControlOwner(ctx)
-	// An owner that did not answer is still an owner: refuse, as for a probe
-	// that could not tell.
-	if err != nil && (probe.state == controlOwnerStateProbeFailed || probe.state == controlOwnerStateUnresponsive) {
+	switch probe.state {
+	case controlOwnerStateProbeFailed, controlOwnerStateUnresponsive:
+		// An owner that did not answer is still an owner: refuse, as for a
+		// probe that could not tell.
 		return fmt.Errorf("probe control owner: %w", err)
-	}
-	if probe.state != controlOwnerStateWatchOwner && probe.state != controlOwnerStateOneShotOwner {
+	case controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
+		// No owner holds the socket, and none can bind a path that cannot be
+		// used. An engine that holds no socket still holds its locks, which
+		// the change takes next (changeDriveStateUnderLock).
 		return nil
-	}
-	if probe.client == nil {
-		return nil
+	case controlOwnerStateWatchOwner, controlOwnerStateOneShotOwner:
+		// An owner answered, with its status (probe.client).
 	}
 
 	for _, drive := range probe.client.status.Mounts {

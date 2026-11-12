@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -18,6 +19,23 @@ const (
 	emailReconcileTestBusinessUser  = "Business User"
 	emailReconcileTestDriveBusiness = "drive-business"
 )
+
+// stateDBMoverForTest stands in for the sync package's mover, which config
+// cannot import: it renames each database file, as that mover does once it
+// holds the stores' locks, and records what it was asked to move.
+func stateDBMoverForTest(t *testing.T, moved *[]StateDBMove) StateDBMover {
+	t.Helper()
+
+	return func(moves []StateDBMove) error {
+		for _, move := range moves {
+			if err := os.Rename(move.From, move.To); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err //nolint:wrapcheck // test double reports the rename as it is
+			}
+			*moved = append(*moved, move)
+		}
+		return nil
+	}
+}
 
 func writeManagedFixture(t *testing.T, path string, data []byte) {
 	t.Helper()
@@ -163,16 +181,50 @@ func TestReconcileAccountEmail_RenamesOwnedArtifacts(t *testing.T) {
 	logger := testLogger(t)
 	fixture := seedEmailReconcileFixture(t)
 
+	var moved []StateDBMove
 	result, err := ReconcileAccountEmail(
 		fixture.configPath,
 		fixture.newBusiness,
 		emailReconcileTestUser123,
 		"renamed@example.com",
+		stateDBMoverForTest(t, &moved),
 		logger,
 	)
 	require.NoError(t, err)
 
 	assertEmailReconcileFixtureRenamed(t, logger, &fixture, &result)
+	assert.ElementsMatch(t, []StateDBMove{
+		{From: DriveStatePath(fixture.oldBusiness), To: DriveStatePath(fixture.newBusiness)},
+		{From: DriveStatePath(fixture.oldSharePoint), To: DriveStatePath(fixture.newSharePoint)},
+		{From: DriveStatePath(fixture.oldShared), To: DriveStatePath(fixture.newShared)},
+	}, moved, "every state DB is moved by the mover, which locks it, never renamed here")
+}
+
+// A state DB an engine still has open refuses the mover, and the email
+// change then renames nothing at all: the state DBs move first, before any
+// token, config section or catalog record, so a refusal leaves the old
+// names consistent for the next try.
+//
+// Validates: R-3.7.2, R-6.3.9
+func TestReconcileAccountEmail_AStateDBInUseChangesNothing(t *testing.T) {
+	setTestDataDir(t)
+	logger := testLogger(t)
+	fixture := seedEmailReconcileFixture(t)
+	inUse := errors.New("another onedrive-go sync is already using this sync state")
+
+	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+		"renamed@example.com", func([]StateDBMove) error { return inUse }, logger)
+	require.ErrorIs(t, err, inUse)
+
+	assert.FileExists(t, DriveTokenPath(fixture.oldBusiness), "the token keeps its name")
+	assert.NoFileExists(t, DriveTokenPath(fixture.newBusiness))
+	assert.FileExists(t, DriveStatePath(fixture.oldBusiness), "the state DB keeps its name")
+	cfg, loadErr := Load(fixture.configPath, logger)
+	require.NoError(t, loadErr)
+	assert.Contains(t, cfg.Drives, fixture.oldBusiness, "the config keeps the old section")
+	assert.NotContains(t, cfg.Drives, fixture.newBusiness)
+	_, found := loadCatalogAccount(t, fixture.oldBusiness)
+	assert.True(t, found, "the catalog keeps the old account")
 }
 
 // Validates: R-3.7.1, R-3.7.2
@@ -194,7 +246,9 @@ func TestReconcileAccountEmail_NoOpWhenEmailUnchanged(t *testing.T) {
 sync_dir = "~/Business"
 `))
 
-	result, err := ReconcileAccountEmail(configPath, current, emailReconcileTestUser123, "user@example.com", logger)
+	var moved []StateDBMove
+	result, err := ReconcileAccountEmail(configPath, current, emailReconcileTestUser123, "user@example.com",
+		stateDBMoverForTest(t, &moved), logger)
 	require.NoError(t, err)
 	assert.False(t, result.Changed())
 	assert.FileExists(t, DriveTokenPath(current))
@@ -220,11 +274,13 @@ func TestReconcileAccountEmail_IdempotentRerun(t *testing.T) {
 sync_dir = "~/Business"
 `))
 
-	first, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", logger)
+	var moved []StateDBMove
+	mover := stateDBMoverForTest(t, &moved)
+	first, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
 	require.NoError(t, err)
 	require.True(t, first.Changed())
 
-	second, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", logger)
+	second, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
 	require.NoError(t, err)
 	assert.False(t, second.Changed())
 }
@@ -250,7 +306,9 @@ func TestReconcileAccountEmail_CollisionFailsWithoutMutation(t *testing.T) {
 sync_dir = "~/Business"
 `))
 
-	_, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", logger)
+	var moved []StateDBMove
+	_, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com",
+		stateDBMoverForTest(t, &moved), logger)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "target already exists")
 	assert.FileExists(t, DriveTokenPath(oldBusiness))

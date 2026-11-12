@@ -43,7 +43,7 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 		return fmt.Errorf("discovering account: %w", err)
 	}
 
-	if _, reconcileErr := cc.reconcileGraphUser(canonicalID, user); reconcileErr != nil {
+	if _, reconcileErr := cc.reconcileGraphUser(ctx, canonicalID, user); reconcileErr != nil {
 		cleanupPendingToken(cc, tempPath, "reconciliation failure")
 		return reconcileErr
 	}
@@ -339,7 +339,7 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 		}
 
 		logger.Info("logout started", "account", account, "purge", purge)
-		return logoutAndReport(cc, validated.Config, validated.Catalog, account, purge)
+		return logoutAndReport(ctx, cc, validated.Config, validated.Catalog, account, purge)
 	}
 
 	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, warnings, err)
@@ -356,13 +356,20 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 	}
 
 	logger.Info("logout started with degraded state recovery", "account", account, "purge", purge)
-	return logoutAndReport(cc, cfg, catalog, account, purge)
+	return logoutAndReport(ctx, cc, cfg, catalog, account, purge)
 }
 
 // logoutAndReport runs the logout and prints its result: prose by default,
 // one JSON document under --json.
-func logoutAndReport(cc *CLIContext, cfg *config.Config, catalog *config.Catalog, account string, purge bool) error {
-	result, err := executeLogout(cfg, catalog, cc.CfgPath, cc.resultWriter(), account, purge, cc.Logger)
+func logoutAndReport(
+	ctx context.Context,
+	cc *CLIContext,
+	cfg *config.Config,
+	catalog *config.Catalog,
+	account string,
+	purge bool,
+) error {
+	result, err := executeLogout(ctx, cc, cfg, catalog, account, purge)
 	if err != nil {
 		return err
 	}

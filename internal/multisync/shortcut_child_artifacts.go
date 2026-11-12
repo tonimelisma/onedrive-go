@@ -369,15 +369,24 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	return errors.Join(errs...)
 }
 
+// purge deletes a retired shortcut child's state DB family, catalog record
+// and unfinished uploads. It holds the child's store lock for the whole
+// cleanup (syncengine.LockDriveForOfflineChange): a store another engine
+// still has open, such as another configuration's child of the same
+// shortcut sharing the data directory, refuses it as a remaining state
+// artifact and nothing of the child is touched, so the parent publishes the
+// cleanup again and a later attempt finds the store free. Only the store is
+// locked, not the child's folder: a replacement shortcut's child may already
+// sync that folder, and its folder lock is not this store's.
 func (e shortcutChildArtifactCleanupExecutor) purge(
 	ctx context.Context,
 	scope shortcutChildArtifactScope,
-) error {
+) (err error) {
 	childMountID := strings.TrimSpace(scope.mountID)
-	if strings.TrimSpace(childMountID) == "" {
+	if childMountID == "" {
 		return nil
 	}
-	if ctx != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupSetupFailure,
 			"purge shortcut child artifacts",
@@ -387,39 +396,55 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 	if !config.IsChildMountID(childMountID) {
 		return nil
 	}
-	if err := e.requireConfigured(); err != nil {
-		return err
+	if configErr := e.requireConfigured(); configErr != nil {
+		return configErr
 	}
 
-	var errs []error
-	for _, path := range shortcutChildStateArtifactPaths(e.dataDir, childMountID) {
-		if path == "" {
-			continue
+	statePath := config.MountStatePathForDataDir(e.dataDir, childMountID)
+	release, lockErr := syncengine.LockDriveForOfflineChange(ctx, e.dataDir, "", statePath, e.logger)
+	if lockErr != nil {
+		return classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupStateArtifactFailure,
+			"delete its sync state",
+			lockErr,
+		)
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, classifiedShortcutChildCleanupError(
+				shortcutChildArtifactCleanupStateArtifactFailure,
+				"release its sync state lock",
+				releaseErr,
+			))
 		}
-		if err := e.remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	}()
+
+	var errs []error
+	for _, path := range config.StateDBFamily(statePath) {
+		if removeErr := e.remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			errs = append(errs, classifiedShortcutChildCleanupError(
 				shortcutChildArtifactCleanupStateArtifactFailure,
 				"delete its sync state",
-				err,
+				removeErr,
 			))
 		}
 	}
-	if err := e.pruneCatalogRecord(childMountID); err != nil {
+	if catalogErr := e.pruneCatalogRecord(childMountID); catalogErr != nil {
 		errs = append(errs, classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupCatalogFailure,
 			"forget it in the drive catalog",
-			err,
+			catalogErr,
 		))
 	}
-	if err := e.deleteUploadSessions(childMountID, scope.localRoot); err != nil {
+	if sessionErr := e.deleteUploadSessions(childMountID, scope.localRoot); sessionErr != nil {
 		errs = append(errs, classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupUploadSessionFailure,
 			"discard its unfinished uploads",
-			err,
+			sessionErr,
 		))
 	}
-	if err := errors.Join(errs...); err != nil {
-		return err
+	if cleanupErr := errors.Join(errs...); cleanupErr != nil {
+		return cleanupErr
 	}
 
 	if e.logger != nil {
@@ -446,19 +471,6 @@ func (e shortcutChildArtifactCleanupExecutor) requireConfigured() error {
 		)
 	}
 	return nil
-}
-
-func shortcutChildStateArtifactPaths(dataDir string, childMountID string) []string {
-	statePath := config.MountStatePathForDataDir(dataDir, childMountID)
-	if statePath == "" {
-		return nil
-	}
-	return []string{
-		statePath,
-		statePath + "-wal",
-		statePath + "-shm",
-		statePath + "-journal",
-	}
 }
 
 func pruneShortcutChildCatalogRecord(dataDir string, childMountID string) error {
