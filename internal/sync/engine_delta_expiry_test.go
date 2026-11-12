@@ -202,7 +202,7 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	}}
 
 	recovered := make(chan resyncKind, 1)
-	orphan := changeEvent{Source: sourceRemote, Type: ChangeDelete, ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}
+	orphan := changeEvent{Type: ChangeDelete, ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}
 	obs.SetDeltaExpiredRecovery(func(_ context.Context, kind resyncKind) (remoteObservationBatch, error) {
 		recovered <- kind
 		return remoteObservationBatch{

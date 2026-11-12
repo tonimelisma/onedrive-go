@@ -21,7 +21,7 @@ import (
 //     has not been emptied by a person deleting things one by one; the side
 //     vanished, and every delete toward the other side is held;
 //   - proportional: more deletes (files and folders) toward one side than
-//     max(deleteSafetyMinFiles, deleteSafetyBaselinePercent of baseline items)
+//     max(deleteSafetyMinItems, deleteSafetyBaselinePercent of baseline items)
 //     are held. The unconfirmed deletes sync already ran toward that side
 //     within deleteSafetyWindow count too, against the baseline as it stood
 //     before them, so a deletion spread over many small passes is judged as
@@ -33,7 +33,7 @@ import (
 // observed truth is unchanged and runs on the first pass started with
 // `sync --confirm-deletes`, which releases exactly the recorded held set.
 const (
-	deleteSafetyMinFiles        = 50
+	deleteSafetyMinItems        = 50
 	deleteSafetyBaselinePercent = 30
 	percentDenominator          = 100
 )
@@ -99,10 +99,11 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 			kept = append(kept, *action)
 			continue
 		}
-		if reason, isDelete := reasons[action.Type]; isDelete {
+		side, isDelete := deleteSafetySideOf(action.Type)
+		if reason, isHeldType := reasons[action.Type]; isDelete && isHeldType {
 			held = append(held, heldDelete{
 				Path:     action.Path,
-				Side:     deleteSafetySideFor(action.Type),
+				Side:     side,
 				Reason:   reason,
 				ItemType: deletedItemType(action),
 				ItemID:   action.ItemID,
@@ -144,10 +145,11 @@ func approvedDeleteIndexes(actions []Action, approved []heldDelete) map[int]stru
 	}
 	indexes := make(map[int]struct{})
 	for i := range actions {
-		if actions[i].Type != ActionLocalDelete && actions[i].Type != ActionRemoteDelete {
+		side, isDelete := deleteSafetySideOf(actions[i].Type)
+		if !isDelete {
 			continue
 		}
-		held, ok := byKey[key{path: actions[i].Path, side: deleteSafetySideFor(actions[i].Type)}]
+		held, ok := byKey[key{path: actions[i].Path, side: side}]
 		if !ok {
 			continue
 		}
@@ -200,11 +202,12 @@ func deleteSafetyVerdict(
 	return "", false
 }
 
-// deleteSafetyThreshold is the most file deletes toward one side a pass may
-// run without confirmation.
-func deleteSafetyThreshold(baselineFiles int) int {
-	proportional := (baselineFiles*deleteSafetyBaselinePercent + percentDenominator - 1) / percentDenominator
-	return max(deleteSafetyMinFiles, proportional)
+// deleteSafetyThreshold is the most deletes (files and folders) toward one
+// side a pass may run without confirmation, given the synced items they are
+// judged against.
+func deleteSafetyThreshold(baselineItems int) int {
+	proportional := (baselineItems*deleteSafetyBaselinePercent + percentDenominator - 1) / percentDenominator
+	return max(deleteSafetyMinItems, proportional)
 }
 
 // heldDeleteClosure returns the indexes of every held delete plus every action

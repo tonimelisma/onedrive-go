@@ -100,19 +100,22 @@ func newDependencyIndex(actions []Action) *dependencyIndex {
 
 func (index *dependencyIndex) indexByPath(i int, a *Action, folderDeletesByPath map[string][]int) {
 	index.actionsByPath[a.Path] = append(index.actionsByPath[a.Path], i)
-	switch {
-	case a.Type == ActionFolderCreate:
+	switch a.Type {
+	case ActionFolderCreate:
 		index.folderCreateIdx[a.Path] = i
-	case a.Type == ActionConflictCopy:
+	case ActionConflictCopy:
 		index.conflictCopyIdx[a.Path] = i
-	case isMoveAction(a):
+	case ActionLocalMove, ActionRemoteMove:
 		index.movesByPath[a.Path] = append(index.movesByPath[a.Path], i)
 		index.movesByOldPath[a.OldPath] = append(index.movesByOldPath[a.OldPath], i)
-	case isDeleteAction(a):
+	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
 		index.deleteIdx[a.Path] = i
 		if isSubtreeDelete(a) {
 			folderDeletesByPath[a.Path] = append(folderDeletesByPath[a.Path], i)
 		}
+	case ActionDownload, ActionUpload, ActionBaselineUpdate:
+	default:
+		panic(outsideTheEnum(a.Type))
 	}
 }
 
@@ -166,6 +169,8 @@ func (index *dependencyIndex) indexVacatedNames(actions []Action) {
 			index.vacatedByNameKey[key] = append(index.vacatedByNameKey[key], i)
 		case ActionDownload, ActionUpload, ActionLocalDelete, ActionLocalMove,
 			ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		default:
+			panic(outsideTheEnum(a.Type))
 		}
 	}
 }
@@ -229,8 +234,10 @@ func addParentFolderDep(deps []int, idx int, a *Action, folderCreateIdx map[stri
 	return deps
 }
 
+// addConflictCopyDep makes a local create at a path wait for the conflict copy
+// that moves the local entry there away.
 func addConflictCopyDep(deps []int, idx int, a *Action, conflictCopyIdx map[string]int) []int {
-	if a.Type != ActionDownload && (a.Type != ActionFolderCreate || a.CreateSide != createLocal) {
+	if !createsOnSide(a, moveCoordLocal) {
 		return deps
 	}
 
@@ -244,7 +251,7 @@ func addConflictCopyDep(deps []int, idx int, a *Action, conflictCopyIdx map[stri
 // addSamePathReplacementDep makes the create half of a type-change
 // replacement wait for the delete of the old item at the same path.
 func addSamePathReplacementDep(deps []int, idx int, a *Action, deleteIdx map[string]int) []int {
-	if a.Type != ActionUpload && a.Type != ActionDownload && a.Type != ActionFolderCreate {
+	if _, isCreate := createSide(a); !isCreate {
 		return deps
 	}
 	if delIdx, ok := deleteIdx[a.Path]; ok && delIdx != idx {
@@ -285,7 +292,7 @@ func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Act
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return deps
 	default:
-		return deps
+		panic(outsideTheEnum(a.Type))
 	}
 	if !isSubtreeDelete(a) {
 		return deps
@@ -310,11 +317,17 @@ func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Act
 // would fail with 409 against the old item and only succeed on a later pass.
 // The create therefore waits for the old name to be deleted or moved away.
 func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action, index *dependencyIndex) []int {
-	switch {
-	case a.Type == ActionUpload, a.Type == ActionRemoteMove:
-	case a.Type == ActionFolderCreate && a.CreateSide == CreateRemote:
-	default:
+	switch a.Type {
+	case ActionUpload, ActionRemoteMove:
+	case ActionFolderCreate:
+		if a.CreateSide != CreateRemote {
+			return deps
+		}
+	case ActionDownload, ActionLocalDelete, ActionRemoteDelete, ActionLocalMove,
+		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return deps
+	default:
+		panic(outsideTheEnum(a.Type))
 	}
 	if len(index.vacatedByNameKey) == 0 {
 		return deps
@@ -333,16 +346,22 @@ func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action, 
 // path differs from only under name folding, so a must wait for it.
 func vacatesCaseVariantOf(other, a *Action) bool {
 	var vacated string
-	switch {
-	case other.Type == ActionRemoteDelete:
+	switch other.Type {
+	case ActionRemoteDelete:
 		vacated = other.Path
-	case other.Type == ActionRemoteMove && a.Type != ActionRemoteMove:
-		// Move-to-move edges are skipped: two moves that trade
-		// case-variant names would wait on each other. A blocked rename
-		// fails on its name conflict and is retried instead.
+	case ActionRemoteMove:
+		if a.Type == ActionRemoteMove {
+			// Move-to-move edges are skipped: two moves that trade
+			// case-variant names would wait on each other. A blocked
+			// rename fails on its name conflict and is retried instead.
+			return false
+		}
 		vacated = other.OldPath
-	default:
+	case ActionDownload, ActionUpload, ActionLocalDelete, ActionLocalMove,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return false
+	default:
+		panic(outsideTheEnum(other.Type))
 	}
 	if vacated == a.Path || vacated == a.OldPath || !namekey.EqualPath(vacated, a.Path) {
 		return false
@@ -434,12 +453,31 @@ func moveOrderDependency(a, other *Action) bool {
 	return (isDeleteAction(other) || other.Type == ActionConflictCopy) && other.Path == a.Path
 }
 
+// isDeleteAction reports an action that removes an entry: a local or remote
+// delete, or a cleanup of a baseline row both sides lost.
 func isDeleteAction(a *Action) bool {
-	return a.Type == ActionLocalDelete || a.Type == ActionRemoteDelete || a.Type == ActionCleanup
+	switch a.Type {
+	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
+		return true
+	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate:
+		return false
+	default:
+		panic(outsideTheEnum(a.Type))
+	}
 }
 
+// isMoveAction reports a move on either side.
 func isMoveAction(a *Action) bool {
-	return a.Type == ActionLocalMove || a.Type == ActionRemoteMove
+	switch a.Type {
+	case ActionLocalMove, ActionRemoteMove:
+		return true
+	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return false
+	default:
+		panic(outsideTheEnum(a.Type))
+	}
 }
 
 // movePrecedes reports whether move must run before a.
@@ -477,15 +515,19 @@ func underMoveSource(a, move *Action) bool {
 		!strings.HasPrefix(movedSourcePath(a, move), move.OldPath+"/") {
 		return false
 	}
-	switch {
-	case a.Type == move.Type:
-		return true
-	case isMoveAction(a):
-		return false
-	case move.Type == ActionLocalMove:
+	switch move.Type {
+	case ActionLocalMove:
+		// Local moves by their source and local writes: writesLocally is
+		// true for a local move and false for a remote one.
 		return writesLocally(a)
+	case ActionRemoteMove:
+		return a.Type == ActionRemoteMove || a.Type == ActionRemoteDelete || a.Type == ActionCleanup
+	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
+		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		// Not a move: it vacates no source for anything to lie below.
+		return false
 	default:
-		return a.Type == ActionRemoteDelete || a.Type == ActionCleanup
+		panic(outsideTheEnum(move.Type))
 	}
 }
 
@@ -510,14 +552,14 @@ func createsAtVacatedSource(a, move *Action) bool {
 	}
 	switch move.Type {
 	case ActionRemoteMove:
-		return a.Type == ActionUpload || (a.Type == ActionFolderCreate && a.CreateSide == CreateRemote)
+		return createsOnSide(a, moveCoordRemote)
 	case ActionLocalMove:
-		return a.Type == ActionDownload || (a.Type == ActionFolderCreate && a.CreateSide == createLocal)
+		return createsOnSide(a, moveCoordLocal)
 	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return false
 	default:
-		return false
+		panic(outsideTheEnum(move.Type))
 	}
 }
 

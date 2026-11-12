@@ -14,7 +14,6 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 	t.Parallel()
 
 	batch := localObservationBatchForEvent(&changeEvent{
-		Source:           SourceLocal,
 		Type:             changeCreate,
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
@@ -46,7 +45,6 @@ func TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix(t *testing.T
 	t.Parallel()
 
 	batch := localObservationBatchForEvent(&changeEvent{
-		Source:    SourceLocal,
 		Type:      ChangeDelete,
 		Path:      "gone",
 		ItemType:  ItemTypeFolder,

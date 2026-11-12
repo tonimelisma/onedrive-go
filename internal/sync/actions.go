@@ -24,7 +24,9 @@ func (c DeferredCounts) Total() int {
 
 // AddAction increments the matching deferred bucket for an action type that
 // can be suppressed by sync direction. Conflict-copy and publication-only
-// actions are intentionally ignored.
+// actions are intentionally ignored. A type outside the enum has no bucket and
+// cannot reach here (the plan refuses one first), so it panics rather than
+// vanish uncounted.
 func (c *DeferredCounts) AddAction(action *Action) {
 	if c == nil || action == nil {
 		return
@@ -45,6 +47,29 @@ func (c *DeferredCounts) AddAction(action *Action) {
 		c.RemoteDeletes++
 	case ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return
+	default:
+		panic(outsideTheEnum(action.Type))
+	}
+}
+
+// isPublicationOnlyActionType reports an action type that only publishes to
+// the baseline (a baseline update, a cleanup): the engine applies it from the
+// plan's view, and no worker runs it.
+func isPublicationOnlyActionType(actionType actionType) bool {
+	switch actionType {
+	case ActionBaselineUpdate, ActionCleanup:
+		return true
+	case ActionDownload,
+		ActionUpload,
+		ActionLocalDelete,
+		ActionRemoteDelete,
+		ActionLocalMove,
+		ActionRemoteMove,
+		ActionFolderCreate,
+		ActionConflictCopy:
+		return false
+	default:
+		panic(outsideTheEnum(actionType))
 	}
 }
 

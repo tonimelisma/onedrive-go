@@ -25,10 +25,10 @@ const (
 )
 
 // deleteSafetyWindow is how long an executed, unconfirmed delete keeps
-// counting toward the proportional rule. The hold used to judge each plan
-// alone, so a process removing files below the threshold per pass (a failing
-// disk, a misbehaving app, a cron job) emptied a drive one small batch at a
-// time and was never held. Deletes the user confirmed with
+// counting toward the proportional rule. A hold that judged each plan alone
+// would never stop a process that removes files below the threshold on every
+// pass (a failing disk, a misbehaving app, a cron job) and so empties a drive
+// one small batch at a time. Deletes the user confirmed with
 // `sync --confirm-deletes` are not counted: the confirmation reviewed them.
 const deleteSafetyWindow = 24 * time.Hour
 
@@ -43,11 +43,23 @@ type heldDelete struct {
 	ItemID string
 }
 
-func deleteSafetySideFor(deleteType actionType) deleteSafetySide {
-	if deleteType == ActionLocalDelete {
-		return deleteSafetySideLocal
+// deleteSafetySideOf reports whether an action type deletes a synced item, and
+// the side it removes content from: the planner's hold and its confirmation
+// matching, and the store's delete ledger, all ask it. A cleanup removes only
+// the baseline row of an item both sides already lost, so it is no such
+// delete.
+func deleteSafetySideOf(action actionType) (deleteSafetySide, bool) {
+	switch action {
+	case ActionLocalDelete:
+		return deleteSafetySideLocal, true
+	case ActionRemoteDelete:
+		return deleteSafetySideRemote, true
+	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove, ActionFolderCreate,
+		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return "", false
+	default:
+		panic(outsideTheEnum(action))
 	}
-	return deleteSafetySideRemote
 }
 
 // countHeldDeletesBySide splits held deletes into the side each would remove

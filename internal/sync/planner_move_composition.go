@@ -1447,6 +1447,8 @@ func pathsVacatedByPlan(actions []Action) map[moveCoord]map[string]bool {
 		case ActionRemoteDelete:
 			vacated[moveCoordRemote][actions[i].Path] = true
 		case ActionDownload, ActionUpload, ActionFolderCreate, ActionBaselineUpdate, ActionCleanup:
+		default:
+			panic(outsideTheEnum(actions[i].Type))
 		}
 	}
 
@@ -1482,16 +1484,29 @@ func createSide(action *Action) (moveCoord, bool) {
 	case ActionUpload:
 		return moveCoordRemote, true
 	case ActionFolderCreate:
-		if action.CreateSide == createLocal {
+		switch action.CreateSide {
+		case createLocal:
 			return moveCoordLocal, true
+		case CreateRemote:
+			return moveCoordRemote, true
+		default:
+			panic(outsideTheEnum(action.CreateSide))
 		}
-		return moveCoordRemote, true
 	case ActionLocalMove, ActionRemoteMove, ActionLocalDelete, ActionRemoteDelete,
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return moveCoordBaseline, false
 	default:
-		return moveCoordBaseline, false
+		panic(outsideTheEnum(action.Type))
 	}
+}
+
+// createsOnSide reports whether an action creates an entry on side: a download
+// or a local folder create locally, an upload or a remote folder create on
+// OneDrive.
+func createsOnSide(action *Action, side moveCoord) bool {
+	created, isCreate := createSide(action)
+
+	return isCreate && created == side
 }
 
 // dropReconciliationOfComposedMoves removes reconciliation work for an item
@@ -1514,11 +1529,19 @@ func dropReconciliationOfComposedMoves(actions []Action, composition *moveCompos
 	kept := actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
-		switch {
-		case action.Type == ActionBaselineUpdate && (moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID]):
-			continue
-		case moved[moveCoordLocal][action.ItemID] && (action.Type == ActionDownload || action.Type == ActionConflictCopy):
-			continue
+		switch action.Type {
+		case ActionBaselineUpdate:
+			if moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID] {
+				continue
+			}
+		case ActionDownload, ActionConflictCopy:
+			if moved[moveCoordLocal][action.ItemID] {
+				continue
+			}
+		case ActionUpload, ActionLocalDelete, ActionRemoteDelete, ActionLocalMove, ActionRemoteMove,
+			ActionFolderCreate, ActionCleanup:
+		default:
+			panic(outsideTheEnum(action.Type))
 		}
 		kept = append(kept, *action)
 	}

@@ -307,11 +307,13 @@ func (wp *workerPool) dispatchAction(
 			Error:   errPublicationOnlyActionType,
 		}
 	default:
+		// The plan refuses an action outside the enum before it is admitted
+		// (validatePlannedActions); dispatch fails one rather than run it.
 		return actionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
-			Error:   errUnknownActionType,
+			Error:   fmt.Errorf("%w: %s", errUnknownActionType, outsideTheEnum(action.Type)),
 		}
 	}
 }

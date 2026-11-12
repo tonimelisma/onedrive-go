@@ -7,9 +7,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// planner is a pure decision engine that transforms SQLite-owned comparison
-// and reconciliation rows plus baseline state into an ordered ActionPlan. It
-// performs no I/O.
+// planner is a deterministic decision engine that transforms SQLite-owned
+// comparison and reconciliation rows plus baseline state into an ordered
+// actionPlan. It performs no I/O apart from logging.
 type planner struct {
 	logger *slog.Logger
 }
@@ -18,15 +18,15 @@ type plannerMountContext struct {
 	DriveID driveid.ID
 }
 
-// newPlanner creates a Planner with the given logger.
+// newPlanner creates a planner with the given logger.
 func newPlanner(logger *slog.Logger) *planner {
 	return &planner{logger: logger}
 }
 
-// actionAllowedInMode lists every action a mode admits. An action type or
-// folder create side no case lists is never admitted, in any mode: an
-// unlisted value is a bug, and admitting it would run work no mode rule
-// approved.
+// actionAllowedInMode lists every action a mode admits. A value outside the
+// action type or folder create side enum cannot reach it (the plan refuses
+// one first, validatePlannedActions); admitting or deferring one would decide
+// work no mode rule names, so its defaults panic.
 func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	switch action.Type {
 	case ActionDownload:
@@ -48,7 +48,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 		case CreateRemote:
 			return mode != SyncDownloadOnly
 		default:
-			return false
+			panic(outsideTheEnum(action.CreateSide))
 		}
 	case ActionConflictCopy:
 		// Conflict-copy is only safe when the paired remote-winner download
@@ -58,7 +58,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	case ActionBaselineUpdate, ActionCleanup:
 		return true
 	default:
-		return false
+		panic(outsideTheEnum(action.Type))
 	}
 }
 
@@ -196,6 +196,8 @@ func preserveParentFoldersForRunnableDescendants(actions []Action, mode SyncMode
 			ActionFolderCreate,
 			ActionConflictCopy,
 			ActionBaselineUpdate:
+		default:
+			panic(outsideTheEnum(action.Type))
 		}
 	}
 
@@ -207,10 +209,7 @@ func isFolderDelete(action *Action) bool {
 		return false
 	}
 
-	isDelete := action.Type == ActionLocalDelete ||
-		action.Type == ActionRemoteDelete ||
-		action.Type == ActionCleanup
-	return isDelete && deletedItemType(action) == ItemTypeFolder
+	return isDeleteAction(action) && deletedItemType(action) == ItemTypeFolder
 }
 
 // deletedItemType is the type of the item a delete removes: the side it
@@ -232,11 +231,16 @@ func deletedItemType(action *Action) ItemType {
 		}
 	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove,
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+	default:
+		panic(outsideTheEnum(action.Type))
 	}
 
 	return resolveItemType(action.View)
 }
 
+// runnableSubtreeActionRequiresParent reports whether an admitted action below
+// parentPath needs the folder to exist: anything but a delete or cleanup,
+// which removes an entry and never needs its parent (addParentFolderDep).
 func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mode SyncMode) bool {
 	prefix := parentPath + "/"
 
@@ -245,7 +249,7 @@ func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mo
 		if !strings.HasPrefix(action.Path, prefix) || !actionAllowedInMode(action, mode) {
 			continue
 		}
-		if actionRequiresParentFolder(action.Type) {
+		if !isDeleteAction(action) {
 			return true
 		}
 	}
@@ -253,14 +257,8 @@ func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mo
 	return false
 }
 
-func actionRequiresParentFolder(actionType actionType) bool {
-	return actionType != ActionLocalDelete &&
-		actionType != ActionCleanup &&
-		actionType != ActionRemoteDelete
-}
-
-// countByType counts actions grouped by ActionType. Exported for use by the
-// sync engine when building pass reports from plan counts.
+// countByType counts actions grouped by action type, for the plan summary log
+// and the engine's pass report.
 func countByType(actions []Action) map[actionType]int {
 	counts := make(map[actionType]int)
 	for i := range actions {

@@ -468,24 +468,6 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	)
 }
 
-func isPublicationOnlyActionType(actionType actionType) bool {
-	switch actionType {
-	case ActionBaselineUpdate, ActionCleanup:
-		return true
-	case ActionDownload,
-		ActionUpload,
-		ActionLocalDelete,
-		ActionRemoteDelete,
-		ActionLocalMove,
-		ActionRemoteMove,
-		ActionFolderCreate,
-		ActionConflictCopy:
-		return false
-	}
-
-	panic(fmt.Sprintf("unknown action type %d", actionType))
-}
-
 func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *trackedAction) error {
 	mutation, err := publicationMutationFromAction(&ta.Action, flow.engine.driveID)
 	if err == nil {
