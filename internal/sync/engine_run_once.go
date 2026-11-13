@@ -26,10 +26,15 @@ const oneShotMaxPasses = 4
 //  7. Build DepGraph, start worker pool
 //  8. Wait for completion, commit delta token
 //
+// When the run ends, the follow-up work of the last pass's plan is added to
+// LeftForNextSync (planFollowUp.leftWhenTheRunEnds), and the report counts
+// the observation issues that keep a file unsynced (Report.UnsyncedIssues)
+// and the files an interrupted removal set aside (Report.InterruptedRemovals).
 // A dry run is always one pass: it executes nothing, so a second pass would
-// see the same truth. The returned report covers every pass. A timer
-// callback that panics during the run ends it with an error wrapping
-// panicguard.ErrPanic, beside the report it has (beginRun).
+// see the same truth, and it leaves them untouched. The returned report covers
+// every pass (Report says which of its counts add up and which are the last
+// pass's). A timer callback that panics during the run ends it with an error
+// wrapping panicguard.ErrPanic, beside the report it has (beginRun).
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (_ *Report, err error) {
 	runCtx, end := e.beginRun(ctx)
 	defer func() { err = end(err) }()
@@ -47,7 +52,7 @@ func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 		slog.Bool("dry_run", opts.DryRun),
 	)
 
-	bl, err := e.runRunOnceStartup(ctx, runner)
+	bl, err := runner.runStartupStage(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +68,8 @@ func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 	}
 
 	var total *Report
+	var last oneShotPass
+	stoppedAtPassBound := false
 	executed := false
 	for pass := 1; ; pass++ {
 		result, err := e.runOneShotLivePass(ctx, runner, bl, mode, opts)
@@ -74,12 +81,14 @@ func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 			return total, err
 		}
 		executed = executed || result.executed
+		last = result
 
 		reason, again := e.oneShotFollowUp(ctx, pass, result)
 		if !again {
 			reason, again = e.oneShotScopeWait(ctx, runner, pass, result)
 		}
 		if !again {
+			stoppedAtPassBound = pass >= e.oneShotPasses() && oneShotFollowUpWanted(ctx, result)
 			break
 		}
 		e.logger.Debug("running a follow-up sync pass for work the previous pass left",
@@ -109,7 +118,41 @@ func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 		runner.postSyncHousekeeping(ctx)
 	}
 
+	if leftErr := e.reportWhatTheRunLeft(ctx, total, last, stoppedAtPassBound); leftErr != nil {
+		return total, leftErr
+	}
+
 	return total, nil
+}
+
+// reportWhatTheRunLeft adds to a live run's report what only a later run or
+// the user can finish beyond its own actions: the follow-up work of the plan
+// the last pass ran (planFollowUp.leftWhenTheRunEnds) and the issues the
+// store holds after it (readIssuesTheRunLeft).
+func (e *Engine) reportWhatTheRunLeft(ctx context.Context, total *Report, last oneShotPass, stoppedAtPassBound bool) error {
+	if total == nil {
+		return nil
+	}
+
+	total.LeftForNextSync += last.followUp.leftWhenTheRunEnds(stoppedAtPassBound)
+	return e.readIssuesTheRunLeft(ctx, total)
+}
+
+// readIssuesTheRunLeft reads, from the snapshot `status` reads and with
+// status's own filter, the observation issues that keep a file unsynced
+// (DriveStatusSnapshot.unsyncedIssueCount), so the one-shot exit status
+// cannot say done while `status` lists such a file (R-6.6.28), and the files
+// an interrupted removal set aside (interruptedRemovalCount). A store that
+// cannot be read fails the run: nothing would then prove it left nothing.
+func (e *Engine) readIssuesTheRunLeft(ctx context.Context, report *Report) error {
+	snapshot, err := e.baseline.ReadDriveStatusSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("sync: reading the issues the run left: %w", err)
+	}
+	report.UnsyncedIssues = snapshot.unsyncedIssueCount()
+	report.InterruptedRemovals = snapshot.interruptedRemovalCount()
+
+	return nil
 }
 
 // oneShotPass is what one live pass of RunOnce did.
@@ -126,17 +169,10 @@ type oneShotPass struct {
 // the summary already says they will be retried), a canceled run, or the pass
 // bound.
 func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPass) (string, bool) {
-	if result.report == nil || ctx.Err() != nil {
+	if !oneShotFollowUpWanted(ctx, result) {
 		return "", false
 	}
-	f := result.followUp
-	superseded := result.report.Superseded
-	switch {
-	case !f.pending() && superseded == 0:
-		return "", false
-	case superseded == 0 && (result.report.Succeeded == 0 || result.report.Failed > 0):
-		return "", false
-	case pass >= e.oneShotPasses():
+	if pass >= e.oneShotPasses() {
 		e.logger.Debug("sync pass limit reached; the next sync finishes the remaining work",
 			slog.Int("passes", pass),
 		)
@@ -148,7 +184,28 @@ func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPa
 	// folder changed online, fault round of 2026-11-03): the next pass plans
 	// it against the fresh truth, so a one-shot run makes that pass itself
 	// instead of answering "will be retried on the next sync".
-	return fmt.Sprintf("renames=%d deferred=%d dropped=%d superseded=%d", f.Renames, f.Deferred, f.Dropped, superseded), true
+	f := result.followUp
+	return fmt.Sprintf("renames=%d deferred=%d dropped=%d superseded=%d",
+		f.Renames, f.Deferred, f.Dropped, result.report.Superseded), true
+}
+
+// oneShotFollowUpWanted reports whether the pass left work another pass can
+// finish: the plan has a follow-up or the pass superseded actions, the run
+// was not canceled, and the pass made progress without a failure. Only the
+// pass bound can then stop the run (oneShotFollowUp).
+func oneShotFollowUpWanted(ctx context.Context, result oneShotPass) bool {
+	if result.report == nil || ctx.Err() != nil {
+		return false
+	}
+	superseded := result.report.Superseded
+	switch {
+	case !result.followUp.pending() && superseded == 0:
+		return false
+	case superseded == 0 && (result.report.Succeeded == 0 || result.report.Failed > 0):
+		return false
+	default:
+		return true
+	}
 }
 
 // oneShotScopeWaitLimit is the longest a one-shot sync waits for a paused
@@ -268,12 +325,7 @@ func (e *Engine) runOneShotLivePass(
 	report := runtime.Report
 
 	if len(plan.Actions) == 0 {
-		if report.DeferredByMode.Total() > 0 || report.HeldLocalDeletes+report.HeldRemoteDeletes > 0 {
-			report.Duration = e.since(passStart)
-			e.logRunOnceCompletion(report)
-			return oneShotPass{report: report}, nil
-		}
-		return oneShotPass{report: e.completeRunOnceWithoutChanges(passStart, mode, opts)}, nil
+		return e.passWithoutActions(passStart, mode, opts, runtime), nil
 	}
 
 	// Execute plan: run workers, drain results (failures, 403s, upload issues).
@@ -289,6 +341,21 @@ func (e *Engine) runOneShotLivePass(
 	e.logRunOnceCompletion(report)
 
 	return oneShotPass{report: report, followUp: plan.FollowUp, executed: true}, nil
+}
+
+// passWithoutActions is the pass of a plan with nothing to execute. It keeps
+// the plan's follow-up: a plan whose every action was dropped until the next
+// pass has no action to run, and that dropped work is still the next sync's.
+func (e *Engine) passWithoutActions(passStart time.Time, mode SyncMode, opts RunOptions, runtime *runtimePlan) oneShotPass {
+	report := runtime.Report
+	if report.DeferredByMode.Total() == 0 && report.HeldLocalDeletes+report.HeldRemoteDeletes == 0 {
+		report = e.completeRunOnceWithoutChanges(passStart, mode, opts)
+	} else {
+		report.Duration = e.since(passStart)
+		e.logRunOnceCompletion(report)
+	}
+
+	return oneShotPass{report: report, followUp: runtime.Plan.FollowUp}
 }
 
 func (e *Engine) runOnceDryRun(
@@ -309,13 +376,6 @@ func (e *Engine) runOnceDryRun(
 	return e.completeDryRunReport(start, runtime.Report), nil
 }
 
-func (e *Engine) runRunOnceStartup(
-	ctx context.Context,
-	runner *oneShotRunner,
-) (*Baseline, error) {
-	return runner.runStartupStage(ctx)
-}
-
 func (r *oneShotRunner) executePreparedPlan(
 	ctx context.Context,
 	runtime *runtimePlan,
@@ -332,16 +392,21 @@ func (r *oneShotRunner) executePreparedPlan(
 	}
 
 	// Invariant: the current actionable-set builder always returns one
-	// dependency slice per action. Assert here to catch regressions early.
+	// dependency slice per action. A plan that breaks it is a planner bug:
+	// none of it runs, every action counts as failed, so the one-shot sync
+	// exits 1 (R-6.6.28), and the violation is said at Error, the one place
+	// the user learns why; nothing else reports it.
 	if len(plan.Actions) != len(plan.Deps) {
-		r.deps.logger.Debug("plan invariant violation: Actions/Deps length mismatch",
+		r.deps.logger.Error("Sync did not run its plan: an internal check failed; please report this as a bug",
 			slog.Int("actions", len(plan.Actions)),
 			slog.Int("deps", len(plan.Deps)),
 		)
 
-		report.Failed = len(plan.Actions)
-		report.Errors = append(report.Errors,
-			fmt.Errorf("plan invariant violation: %d actions but %d deps", len(plan.Actions), len(plan.Deps)))
+		report.setPassCounts(len(plan.Actions), passCounts{
+			failed: len(plan.Actions),
+			errors: append(report.Errors,
+				fmt.Errorf("plan invariant violation: %d actions but %d deps", len(plan.Actions), len(plan.Deps))),
+		})
 
 		return nil
 	}
@@ -374,9 +439,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, cancel, bl, pool.Completions(), initialOutbox)
 	pool.Stop()
 	if drainErr != nil {
-		report.Succeeded, report.Failed, report.Errors = r.resultStats()
-		report.Superseded = r.supersededCount()
-		report.LeftForNextSync = max(0, len(plan.Actions)-report.Succeeded-report.Failed)
+		r.recordPassCounts(report, len(plan.Actions))
 		report.Errors = append(report.Errors, drainErr)
 		return drainErr
 	}
@@ -385,9 +448,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// bulk sync produces WARN summaries instead of per-item noise (R-6.6.12).
 	r.logFailureSummary()
 
-	report.Succeeded, report.Failed, report.Errors = r.resultStats()
-	report.Superseded = r.supersededCount()
-	report.LeftForNextSync = max(0, len(plan.Actions)-report.Succeeded-report.Failed)
+	r.recordPassCounts(report, len(plan.Actions))
 	return nil
 }
 
@@ -399,16 +460,14 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 ) ([]*trackedAction, bool, error) {
 	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl)
 	if err != nil {
-		report.Succeeded, report.Failed, report.Errors = r.resultStats()
-		report.Superseded = r.supersededCount()
+		r.recordPassCounts(report, len(runtime.Plan.Actions))
 		report.Errors = append(report.Errors, err)
 		return nil, true, err
 	}
 
 	if !dispatched {
 		r.logFailureSummary()
-		report.Succeeded, report.Failed, report.Errors = r.resultStats()
-		report.Superseded = r.supersededCount()
+		r.recordPassCounts(report, len(runtime.Plan.Actions))
 		return nil, true, nil
 	}
 

@@ -5,7 +5,9 @@
 - **stdout** carries results: listings, file details, `status`, and with
   `--json` only JSON.
 - **stderr** carries everything else: progress, warnings, prompts, errors and
-  status lines such as "Syncing ~/OneDrive with …".
+  confirmations such as "Paused … until …". `sync` is the one command whose
+  progress is its result: its "Syncing ~/OneDrive with …" line, the line per
+  file and the summary go to stdout, and only failures and warnings to stderr.
 
 `-q`/`--quiet` drops informational output; warnings and errors still print.
 Transfer progress bars appear only when stderr is a terminal and neither
@@ -67,15 +69,27 @@ Each line is one JSON object with an `event` field:
 | `start` | One-shot sync begins, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `dry_run`, `paused` |
 | `watching` | `sync --watch` is running, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `paused` |
 | `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `status`, `error` |
-| `summary` | A drive's one-shot pass finished | `drive`, `status`, `duration_ms`, `counts`, `failed`, `will_retry`, `dry_run`, `error` |
+| `summary` | A drive's one-shot sync finished; `failed`, `will_retry` and `still_open` are what its last pass left | `drive`, `status`, `duration_ms`, `counts`, `failed`, `will_retry`, `still_open`, `dry_run`, `error` |
 | `stopped` | `sync --watch` stopped | |
 
 - `mode` is `bidirectional`, `download_only` or `upload_only`.
 - `action` is `download`, `upload`, `delete_local`, `delete_remote`,
   `move_local`, `move_remote`, `create_folder` or `conflict_copy`.
 - `status` on an `activity` is `done`, `planned` (dry run), `will_retry` or
-  `failed`; on a `summary` it is `done` or `failed`.
+  `failed`. On a `summary` it is `done`, `incomplete` (the drive left files
+  unsynced, and the run exits 1) or `failed` (the drive could not sync;
+  `error` says why).
 - `counts` maps the same `action` names to how many were done.
+- On a `summary`, `failed`, `will_retry` and `still_open` describe what the
+  run's last pass left, each file once: `failed` counts the files whose
+  action failed and is not retried by itself, `will_retry` the work waiting
+  to be retried or left for the next sync, and `still_open` the files an
+  issue listed by `status` keeps unsynced (a name OneDrive does not allow, a
+  folder that cannot be read). A sync can make more than one pass, and a
+  file an earlier pass failed and a later pass finished is in none of them.
+  `still_open` never counts work waiting to be retried: all such work is work
+  the run itself attempted or held, already in `failed` or `will_retry`.
+  They are the numbers of the text summary.
 - Held deletes are not part of the `summary` object; read `status --json` and
   look for an issue with `type` `deletes_held`.
 
@@ -88,7 +102,7 @@ onedrive-go sync --json | jq -c 'select(.event == "activity" and .status == "fai
 | Code | Meaning | Retry unchanged? |
 | --- | --- | --- |
 | 0 | Success, or `sync --watch` stopped normally | |
-| 1 | Any other failure, including network, throttling and server errors | May work |
+| 1 | Any other failure, including network, throttling and server errors, and a one-shot `sync` that left a file unsynced | May work |
 | 2 | Command-line mistake: unknown command or flag, wrong arguments, conflicting flags | No |
 | 77 | Sign-in required: no saved login, or Microsoft rejected or revoked it (sysexits `EX_NOPERM`) | No: run `onedrive-go login` |
 | 78 | Invalid configuration: unreadable or invalid file, a `--drive` that matches nothing, no drives configured (sysexits `EX_CONFIG`) | No: fix the config |
@@ -97,9 +111,17 @@ onedrive-go sync --json | jq -c 'select(.event == "activity" and .status == "fai
 The code is chosen from the kind of error, never from its message text, so it
 is safe to branch on. `sync` run as root without `--allow-root` is a
 command-line mistake (2). One-shot `sync` exits non-zero when a selected drive
-could not sync at all; problems with individual files are printed, kept, and
-reported by `status` rather than failing every run. `sync --watch` exits 77 or
-78 only when every drive that could not start failed for that same reason.
+could not sync at all, and exits 1 when a drive it ran left a file unsynced:
+a file action failed, work is waiting to be retried, or a condition `status`
+lists keeps a file from syncing. It exits 0 only when `status` would list
+nothing left for the drives it ran, so a condition that needs you (a name
+OneDrive does not allow, a read-only shared folder) makes every run exit 1
+until it is dealt with. Work `--upload-only` or `--download-only` holds back,
+deletes held for `--confirm-deletes`, conflict copies, a paused drive beside
+one that ran, and `--dry-run` do not fail the run. A drive that needs a new
+sign-in or has an invalid configuration still exits 77 or 78. `sync --watch`
+exits 77 or 78 only when every drive that could not start failed for that
+same reason.
 
 ## Environment variables
 

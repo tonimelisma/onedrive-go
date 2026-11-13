@@ -43,7 +43,8 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 		{
 			Identity: MountIdentity{MountID: "failed"},
 			Report: &syncengine.Report{
-				Failed: 1,
+				Failed:         1,
+				LastPassFailed: 1,
 				Errors: []error{
 					fmt.Errorf("upload blocked"),
 				},

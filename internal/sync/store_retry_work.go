@@ -27,9 +27,11 @@ const (
 		FROM retry_work
 		WHERE blocked = 1
 		ORDER BY scope_key, path, old_path, action_type`
-	// sqlListRetryWorkRetrying matches the "Retrying" count in status: timed
-	// retries of transient failures. Work a user-clearable condition refused
-	// is listed under that condition instead (sqlListRetryWorkActionable).
+	// sqlListRetryWorkRetrying is the one definition of what status counts as
+	// "Retrying": timed retries of transient failures from the third attempt.
+	// The count is the rows it lists (DriveStatusSnapshot.RetryingItems). Work
+	// a user-clearable condition refused is listed under that condition
+	// instead (sqlListRetryWorkActionable).
 	sqlListRetryWorkRetrying = `SELECT ` + sqlSelectRetryWorkCols + `
 		FROM retry_work
 		WHERE blocked = 0 AND attempt_count >= 3 AND condition_type = ''
@@ -401,17 +403,6 @@ func (s *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, e
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	return scanRetryWorkRows(rows)
-}
-
-func (s *SyncStore) CountRetryingWork(ctx context.Context) (int, error) {
-	var count int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3 AND condition_type = ''`,
-	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("sync: counting retry_work rows: %w", err)
-	}
-
-	return count, nil
 }
 
 func (s *SyncStore) PruneRetryWorkToCurrentActions(

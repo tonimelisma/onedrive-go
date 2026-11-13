@@ -194,7 +194,7 @@ func namingCorpus() []string {
 	}
 }
 
-// Validates: R-2.11.4, R-2.12.2, R-2.12.3, R-2.13.2
+// Validates: R-2.11.4, R-2.12.2, R-2.12.3, R-2.13.2, R-6.6.28
 //
 // Each corpus name uploads, comes back from OneDrive's listing as itself (up
 // to Unicode form), arrives under its own name on a second client, and a
@@ -248,7 +248,9 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	}
 
 	// Single pass by design: the next pass on each client must change nothing.
-	assertSyncLeavesLocalTreeStable(t, cfgPath, env, filepath.Join(syncDir, "corpus"), "sync")
+	// The first client keeps the names OneDrive cannot hold and the case
+	// variants unsynced, so its pass exits 1 (R-6.6.28).
+	assertSyncLeavesLocalTreeStableLeavingConditions(t, cfgPath, env, filepath.Join(syncDir, "corpus"), "sync")
 	// Single pass by design: the next pass on each client must change nothing.
 	assertSyncLeavesLocalTreeStable(t, otherCfg, otherEnv, filepath.Join(otherDir, "corpus"), "sync")
 }

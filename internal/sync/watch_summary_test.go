@@ -25,7 +25,7 @@ func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 	assert.Equal(t, []watchConditionCount{
 		{Key: ConditionServiceOutage, Count: 3},
 		{Key: ConditionDiskFull, Count: 4},
-	}, watchConditionCounts([]storedConditionGroup{
+	}, watchConditionCounts([]StoredConditionGroup{
 		{ConditionKey: "", Count: 5},
 		{ConditionKey: ConditionServiceOutage, Count: 0},
 		{ConditionKey: ConditionServiceOutage, Count: 1},

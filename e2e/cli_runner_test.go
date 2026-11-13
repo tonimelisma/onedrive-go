@@ -60,7 +60,9 @@ func execCLI(
 // runCLICore is the shared implementation for all testing-aware CLI runner
 // helpers. It delegates process execution to execCLI, then records quirk and
 // debug-log output for the specific test invocation. driveID="" omits --drive
-// so callers can intentionally exercise all-drives mode.
+// so callers can intentionally exercise all-drives mode. A sync pass that left
+// only what the account held before the suite started comes back as the pass
+// without it (settleStandingSyncConditions).
 func runCLICore(
 	t *testing.T,
 	cfgPath string,
@@ -74,7 +76,7 @@ func runCLICore(
 	recordCLIQuirkEvents(t, fullArgs, stderr, err)
 	logCLIExecution(t, fullArgs, stdout, stderr)
 
-	return stdout, stderr, err
+	return settleStandingSyncConditions(t, fullArgs, stdout, stderr, err)
 }
 
 // runCLIBestEffort runs a CLI command whose failure must not fail the test:

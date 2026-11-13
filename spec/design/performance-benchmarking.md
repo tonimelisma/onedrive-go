@@ -478,6 +478,13 @@ Per-sample proof metrics are stored in integer microseconds and bytes:
 - stdout/stderr byte counts
 - failure excerpt only when the sample failed
 
+A timed one-shot `sync` that exits non-zero fails its sample, including one
+that finished but left work (it exits 1, R-6.6.28): such a run is not a
+measurement of a full sync. Its excerpt starts with the sync's summary line,
+which says what it left, before the tail of its error output
+(`classifyBenchProcessFailure`,
+`TestClassifyBenchProcessFailure_ASyncThatLeftWorkFailsWithItsSummary`).
+
 For this first scenario, explanation metrics come from the command's existing
 performance summary log line captured on stderr. Skip-config commands such as
 `drive list` do not switch into config-driven log-file routing, so the runner

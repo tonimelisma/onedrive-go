@@ -30,6 +30,7 @@ const (
 	quirkSourceCLIDebugStderr    = "cli_debug_stderr"
 	quirkSourceAuthPreflight     = "auth_preflight_retry"
 	quirkSourceFixtureRecurrence = "fixture_recurrence"
+	quirkSourceStandingCondition = "standing_sync_condition"
 
 	quirkOutcomeLogged    = "logged"
 	quirkOutcomeFailed    = "failed"

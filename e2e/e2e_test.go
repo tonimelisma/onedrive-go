@@ -33,6 +33,10 @@ var (
 	suiteDriveRoles     testutil.DriveRoles
 	suiteTimingRecorder *e2eTimingRecorder
 	suiteQuirkRecorder  *e2eQuirkRecorder
+
+	// suiteStandingConditions is what a sync of the suite's drives leaves
+	// unsynced before any test has created anything.
+	suiteStandingConditions testutil.StandingSyncConditions
 )
 
 func TestMain(m *testing.M) {
@@ -95,6 +99,7 @@ func TestMain(m *testing.M) {
 			abortSuitef(cleanupIsolation, tmpDir, "scrubbing E2E remote artifacts: %v", err)
 		}
 	}
+	recordStandingSyncConditions(cleanupIsolation, tmpDir, drive, drive2)
 
 	// Run tests, then clean up explicitly. os.Exit does not run defers,
 	// so we must call cleanup before exiting to preserve rotated tokens.
@@ -277,16 +282,20 @@ func shouldAddDebug(args []string) bool {
 func logCLIExecution(t *testing.T, args []string, stdout, stderr string) {
 	t.Helper()
 
-	entry := fmt.Sprintf(
+	if err := appendDebugLogChunk(debugLogPath(t.Name()), cliExecutionLogEntry(args, stdout, stderr)); err != nil {
+		t.Logf("warning: cannot write debug log: %v", err)
+	}
+}
+
+// cliExecutionLogEntry is the debug-log record of one CLI invocation.
+func cliExecutionLogEntry(args []string, stdout, stderr string) string {
+	return fmt.Sprintf(
 		"=== %s ===\nCMD: %s\n--- STDOUT ---\n%s\n--- STDERR ---\n%s\n\n",
 		time.Now().Format(time.RFC3339),
 		strings.Join(args, " "),
 		stdout,
 		stderr,
 	)
-	if err := appendDebugLogChunk(debugLogPath(t.Name()), entry); err != nil {
-		t.Logf("warning: cannot write debug log: %v", err)
-	}
 }
 
 // registerLogDump registers a cleanup that dumps the debug log on test failure.
@@ -620,6 +629,7 @@ func requireSyncEventuallyConvergesWith(
 
 	for attempt := 0; ; attempt++ {
 		last.Stdout, last.Stderr, last.Err = runner.run(t, syncArgs...)
+		requireLeftWorkExitsNonZero(t, last)
 		if ready(last) {
 			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
 				timeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
@@ -645,34 +655,165 @@ func requireSyncEventuallyConvergesWith(
 	}
 }
 
-// syncLeftWorkPattern matches the one-shot summary of a pass that ended with
-// work unfinished: an action failed, or was left for the next sync.
-var syncLeftWorkPattern = regexp.MustCompile(`\d+ failed|will be retried on the next sync`)
+// syncLeftWorkPattern matches the one-shot summary of a drive whose run left
+// work: an action failed, work was left for the next sync, or the store
+// still holds a condition that keeps a file unsynced. Such a run exits 1
+// (R-6.6.28).
+var syncLeftWorkPattern = regexp.MustCompile(`\d+ failed|will be retried on the next sync|still not synced`)
 
-// syncRecordedRetryWork reports whether a sync's debug log recorded an action
-// as retry work, which the client leaves for the next sync by design
-// (R-6.6.28, R-6.8.15) and still exits zero.
-func syncRecordedRetryWork(stderr string) bool {
-	return strings.Contains(stderr, `msg="sync retry work"`)
-}
+// syncLeftWorkErrorPattern matches the command error of a one-shot sync that
+// left work, for one selected drive or for several.
+var syncLeftWorkErrorPattern = regexp.MustCompile(`left \d+ files? unsynced|drives left files unsynced`)
 
-// syncPassFinishedWork reports whether a pass exited zero and left no work
-// for the next sync. A requireSyncEventuallyConverges predicate that waits
-// for remote state and then reads what the same pass uploaded checks it, so
-// the loop also runs through a transient failure on another action.
+// syncPassFinishedWork reports whether a pass exited zero and left no work.
+// A requireSyncEventuallyConverges predicate that waits for remote state and
+// then reads what the same pass uploaded checks it, so the loop also runs
+// through a transient failure on another action.
 func syncPassFinishedWork(result syncAttemptResult) bool {
 	return result.Err == nil && !syncLeftWorkPattern.MatchString(result.Stdout)
 }
 
+// requireLeftWorkExitsNonZero checks one half of the one-shot contract on
+// every pass: a summary that says the run left work comes with a non-zero
+// exit (R-6.6.28). The other half, that a non-zero exit comes with such a
+// summary, holds only where no drive error is expected; the helpers that
+// need a pass to succeed check it themselves.
+func requireLeftWorkExitsNonZero(t *testing.T, result syncAttemptResult) {
+	t.Helper()
+
+	if syncLeftWorkPattern.MatchString(result.Stdout) {
+		require.Errorf(t, result.Err, "a one-shot sync whose summary says it left work must exit non-zero\nstdout: %s\nstderr: %s",
+			result.Stdout, result.Stderr)
+	}
+}
+
+// syncRetryableWorkPattern matches the part of a one-shot summary a later
+// pass can finish without the user: failed actions and work left for the
+// next sync. A condition the store holds ("still not synced") is not in it.
+var syncRetryableWorkPattern = regexp.MustCompile(`\d+ failed|will be retried on the next sync`)
+
+// runSyncUntilOnlyConditionsRemain runs a one-shot sync on the default drive
+// for a test that made a condition the scan records on purpose (a name or a
+// path OneDrive refuses). It runs again while a pass left work a later pass
+// can finish (a transient failure), and returns the first pass whose only
+// left work is what the store still holds. That pass exits 1: a file stays
+// unsynced (R-6.6.28). It returns that pass's summary (stdout) and debug log
+// (stderr).
+func runSyncUntilOnlyConditionsRemain(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
+	t.Helper()
+
+	runner := syncRunnerForDrive(cfgPath, env, "")
+	syncArgs := append([]string{"sync"}, args...)
+	deadline := time.Now().Add(transientGraphRetryTimeout)
+
+	for attempt := 0; ; attempt++ {
+		stdout, stderr, err := runner.run(t, syncArgs...)
+		if !syncRetryableWorkPattern.MatchString(stdout) {
+			requireSyncLeftWork(t, stdout, stderr, err)
+			return stdout, stderr
+		}
+		requireLeftWorkExitsNonZero(t, syncAttemptResult{Stdout: stdout, Stderr: stderr, Err: err})
+
+		if time.Now().After(deadline) {
+			require.Failf(t, "runSyncUntilOnlyConditionsRemain: timed out",
+				"%v still left retryable work after %v and %d passes\nlast stdout: %s\nlast stderr: %s",
+				syncArgs, transientGraphRetryTimeout, attempt+1, stdout, stderr)
+		}
+
+		sleepForLiveTestPropagation(pollBackoff(attempt))
+	}
+}
+
+// requireSyncExitMatchesSummary checks the one-shot contract on one pass: it
+// exits non-zero exactly when its summary says it left work (R-6.6.28). A
+// non-zero exit without that summary is a drive that could not sync, which
+// fails the test. It reports whether the pass left work.
+func requireSyncExitMatchesSummary(
+	t *testing.T,
+	runner syncRunner,
+	syncArgs []string,
+	stdout, stderr string,
+	err error,
+) bool {
+	t.Helper()
+
+	// --quiet drops the summary; the command error still says it.
+	leftWork := syncLeftWorkPattern.MatchString(stdout) || syncLeftWorkErrorPattern.MatchString(stderr)
+	require.Equalf(t, leftWork, err != nil,
+		"CLI command %s (drive=%s): a one-shot sync exits non-zero exactly when its summary says it left work\n"+
+			"err: %v\nstdout: %s\nstderr: %s",
+		suiteDriveRoles.Redact(fmt.Sprint(syncArgs)), suiteDriveRoles.Role(runner.driveID), err, stdout, stderr)
+
+	return leftWork
+}
+
+// runSyncPass runs one one-shot sync pass on the default drive for a test
+// whose proof is that pass itself (a line it prints, a tree it leaves alone,
+// a session it resumes). The pass may leave work a transient failure causes:
+// it then exits 1 and says so, and the test's own assertion on the pass
+// decides. A pass that exits non-zero without saying it left work is a drive
+// that could not sync and fails the test. It returns the pass's summary
+// (stdout) and debug log (stderr).
+func runSyncPass(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
+	t.Helper()
+
+	return runSyncPassWith(t, syncRunnerForDrive(cfgPath, env, ""), args...)
+}
+
+// runSyncPassForDrive is runSyncPass against one named drive.
+func runSyncPassForDrive(t *testing.T, cfgPath string, env map[string]string, driveID string, args ...string) (string, string) {
+	t.Helper()
+
+	return runSyncPassWith(t, syncRunnerForDrive(cfgPath, env, driveID), args...)
+}
+
+// runSyncPassAllDrives is runSyncPass with every configured drive.
+func runSyncPassAllDrives(t *testing.T, cfgPath string, env map[string]string, args ...string) (string, string) {
+	t.Helper()
+
+	return runSyncPassWith(t, syncRunnerAllDrives(cfgPath, env), args...)
+}
+
+func runSyncPassWith(t *testing.T, runner syncRunner, args ...string) (string, string) {
+	t.Helper()
+
+	syncArgs := append([]string{"sync"}, args...)
+	stdout, stderr, err := runner.run(t, syncArgs...)
+	requireSyncExitMatchesSummary(t, runner, syncArgs, stdout, stderr, err)
+
+	return stdout, stderr
+}
+
+// syncExitLeftWork is the exit status of a one-shot sync that finished but
+// left work (R-6.6.28, R-6.6.31).
+const syncExitLeftWork = 1
+
+// requireSyncLeftWork checks that a one-shot sync pass finished but left
+// work: it exits 1, its summary says what was left, and its error says the
+// run left files unsynced.
+func requireSyncLeftWork(t *testing.T, stdout, stderr string, err error) {
+	t.Helper()
+
+	var exitErr *exec.ExitError
+	require.ErrorAsf(t, err, &exitErr, "a sync that left work must exit non-zero\nstdout: %s\nstderr: %s", stdout, stderr)
+	require.Equalf(t, syncExitLeftWork, exitErr.ExitCode(), "stderr: %s", stderr)
+	require.Regexp(t, syncLeftWorkPattern, stdout)
+	require.Contains(t, stderr, "unsynced", "the command error says the run left files unsynced")
+}
+
 // runSyncThroughTransientFailures runs a one-shot sync on the default drive
-// that must succeed, and runs it again while the run left work behind after
-// recording retry work (a dropped connection or a 5xx on one transfer). One
-// live sync is not a proof that every action ran: a test that asserts the
-// remote result of a single pass fails on the network's bad minute rather
-// than on the client. A first pass that records no retry work is returned as
-// it is. It returns the last pass's summary (stdout) and the debug log
-// (stderr) of every pass, in order. It does nothing for delta lag: a remote
-// change not yet in delta needs requireSyncEventuallyConverges.
+// that must finish its work, and runs it again while a pass left work (a
+// dropped connection or a 5xx on one transfer). One live sync is not a proof
+// that every action ran: a test that asserts the remote result of a single
+// pass fails on the network's bad minute rather than on the client. Every
+// pass must say it left work exactly when it exits non-zero (R-6.6.28): an
+// exit without that summary is a drive that could not sync and fails the
+// test at once. Work that does not clear (a condition the test made on
+// purpose) fails the test at the deadline; a test that expects one runs its
+// sync with runCLIWithConfigAllowError and asserts the exit instead. It
+// returns the last pass's summary (stdout) and the debug log (stderr) of
+// every pass, in order. It does nothing for delta lag: a remote change not
+// yet in delta needs requireSyncEventuallyConverges.
 func runSyncThroughTransientFailures(
 	t *testing.T,
 	cfgPath string,
@@ -723,17 +864,14 @@ func runSyncThroughTransientFailuresWith(t *testing.T, runner syncRunner, args .
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runner.run(t, syncArgs...)
-		require.NoErrorf(t, err, "CLI command %s (drive=%s) failed\nstdout: %s\nstderr: %s",
-			suiteDriveRoles.Redact(fmt.Sprint(syncArgs)), suiteDriveRoles.Role(runner.driveID), stdout, stderr)
+		leftWork := requireSyncExitMatchesSummary(t, runner, syncArgs, stdout, stderr, err)
 		stderrAll.WriteString(stderr)
 
-		if attempt == 0 && !syncRecordedRetryWork(stderr) {
-			return stdout, stderr
-		}
-
-		if !syncLeftWorkPattern.MatchString(stdout) {
-			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
-				transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
+		if !leftWork {
+			if attempt > 0 {
+				recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
+					transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
+			}
 			return stdout, stderrAll.String()
 		}
 

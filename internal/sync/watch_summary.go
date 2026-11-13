@@ -67,7 +67,7 @@ func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteB
 	return remoteGroups
 }
 
-func watchConditionCounts(groups []storedConditionGroup) []watchConditionCount {
+func watchConditionCounts(groups []StoredConditionGroup) []watchConditionCount {
 	if len(groups) == 0 {
 		return nil
 	}

@@ -71,8 +71,10 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(conflictFile, []byte("local edit"), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict.txt", "remote edit")
-	// Single pass by design: this pass's own summary must report the conflict it resolved.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
+	// Single pass by design: this pass's own summary must report the conflict
+	// it resolved; a conflict copy is not work left, and the pass may leave
+	// work a transient failure causes.
+	out, _ := runSyncPass(t, cfgPath, env)
 	assert.Contains(t, out, "Conflict, kept both versions of")
 
 	content := mustReadFile(t, conflictFile)
