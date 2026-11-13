@@ -86,6 +86,10 @@ type remoteObserver struct {
 	// finds the deletes the expired window lost (R-2.15.3). It returns the
 	// batch to emit; the batch's cursor token becomes the watch token.
 	recoverExpiredDelta deltaExpiredRecovery
+
+	// debugEvents is the engine's debug event sink, set by the watch runtime
+	// before Watch; nil reports nothing.
+	debugEvents func(engineDebugEvent)
 }
 
 // deltaExpiredRecovery runs a full refresh for an expired delta token.
@@ -340,7 +344,7 @@ func (o *remoteObserver) Watch(
 	var lastRecovery time.Time
 
 	for {
-		drainWakeSignals(wakeCh)
+		o.drainWakeSignals(wakeCh)
 
 		token := o.CurrentDeltaToken()
 
@@ -643,15 +647,26 @@ func (o *remoteObserver) sleepForWatch(ctx context.Context, delay time.Duration,
 	return watchStepResult{}
 }
 
-func drainWakeSignals(wakeCh <-chan struct{}) {
+// drainWakeSignals drops the wake signals waiting when a poll begins, which
+// that poll covers, and reports how many it dropped to the debug event sink.
+func (o *remoteObserver) drainWakeSignals(wakeCh <-chan struct{}) {
 	if wakeCh == nil {
 		return
 	}
 
+	drained := 0
 	for {
 		select {
 		case <-wakeCh:
+			drained++
 		default:
+			if drained > 0 && o.debugEvents != nil {
+				o.debugEvents(engineDebugEvent{
+					Type:     engineDebugEventRemoteWakesCoalesced,
+					Observer: engineDebugObserverRemote,
+					Count:    drained,
+				})
+			}
 			return
 		}
 	}

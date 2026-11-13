@@ -717,7 +717,12 @@ observable shutdown boundary. If the dirty scheduler closes without
 cancellation, the watch loop reports it as an unexpected scheduler stop rather
 than treating the closed channel as a clean watch-mode exit.
 Engine debug events expose those lifecycle points for tests and diagnostics
-only; they do not own or redirect control flow.
+only; they do not own or redirect control flow. The watch runtime hands its
+sink (`runtimeDeps.emit`) to the watch observers it starts, which report the
+inputs they drop by decision into the same stream (sync-observation.md); the
+stream's vocabulary is therefore in the domain family
+(`domain_debug_events.go`), and `engine_debug_events.go` keeps the sink and
+the engine's own event kinds.
 Watch replan debug events include timestamped pending-replan, old-outbox
 retirement, running-drain, local-observation, planning, new-plan, and
 first-post-replan-dispatch stages. Each event carries outbox, running, and idle

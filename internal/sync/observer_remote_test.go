@@ -1289,28 +1289,34 @@ func noopSleep(_ context.Context, _ time.Duration) error {
 	return nil
 }
 
+// startTestRemoteBatchDrain plays the watch runtime for a remote observer's
+// batches: it forwards each batch's events, applies the batch with apply
+// (nil applies nothing) and acknowledges it. It runs in the background until
+// ctx ends (runInBackground), and its events channel closes then.
 func startTestRemoteBatchDrain(
+	t *testing.T,
 	ctx context.Context,
 	batches <-chan remoteObservationBatch,
 	apply func(remoteObservationBatch) error,
 ) <-chan changeEvent {
-	events := make(chan changeEvent, 32)
+	t.Helper()
 
-	go func() {
+	events := make(chan changeEvent, 32)
+	runInBackground(t, ctx, func(drainCtx context.Context) error {
 		defer close(events)
 
 		for {
 			select {
 			case batch, ok := <-batches:
 				if !ok {
-					return
+					return nil
 				}
 
 				for i := range batch.emitted {
 					select {
 					case events <- batch.emitted[i]:
-					case <-ctx.Done():
-						return
+					case <-drainCtx.Done():
+						return nil
 					}
 				}
 
@@ -1319,11 +1325,11 @@ func startTestRemoteBatchDrain(
 					err = apply(batch)
 				}
 				batch.finishApplied(err)
-			case <-ctx.Done():
-				return
+			case <-drainCtx.Done():
+				return nil
 			}
 		}
-	}()
+	})
 
 	return events
 }
@@ -1431,7 +1437,7 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
-	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, nil)
 	})
@@ -1470,32 +1476,27 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 	wakeCh := make(chan struct{}, 1)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	batches := make(chan remoteObservationBatch, 10)
-	events := startTestRemoteBatchDrain(ctx, batches, nil)
-
-	go func() {
-		received := 0
-		for range events {
-			received++
-			if received == 1 {
-				tryWake(wakeCh)
-			}
-			if received >= 2 {
-				cancel()
-				return
-			}
-		}
-	}()
-
-	err := runWithin(t, ctx, "the wake's second delta cycle to end the watch", func(watchCtx context.Context) error {
+	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Hour, wakeCh, nil)
 	})
-	require.NoError(t, err)
+
+	receiveWithin(t, events, "the first poll's event")
+	tryWake(wakeCh)
+	receiveWithin(t, events, "the event of the poll the wake started")
+	stopWatch(t, cancel, done)
 	assert.Equal(t, 2, fetcher.CallCount(), "wake should trigger a second delta cycle before fallback polling")
 }
 
 // Validates: R-2.8.5
+//
+// Wakes that pile up while a poll is pending collapse into that poll. Both
+// wakes of the burst arrive while the first batch is being applied, which the
+// watch waits for: the first ends the wait after that poll, and the second,
+// still waiting when the next poll begins, is drained into it and reported.
+// Nothing is then left to wake the watch, whose interval is an hour, so the
+// second poll is the last.
 func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 	t.Parallel()
 
@@ -1518,33 +1519,35 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 	})
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	wakeCh := make(chan struct{}, 1)
+	recorder := newDebugEventRecorder()
+	obs.debugEvents = recorder.record
+	const burst = 2
+	wakeCh := make(chan struct{}, burst)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	batches := make(chan remoteObservationBatch, 10)
-	events := startTestRemoteBatchDrain(ctx, batches, nil)
-
-	go func() {
-		received := 0
-		for range events {
-			received++
-			if received == 1 {
+	applied := 0
+	events := startTestRemoteBatchDrain(t, ctx, batches, func(remoteObservationBatch) error {
+		applied++
+		if applied == 1 {
+			for range burst {
 				tryWake(wakeCh)
-				tryWake(wakeCh)
-			}
-			if received == 2 {
-				time.AfterFunc(50*time.Millisecond, cancel)
-				return
 			}
 		}
-	}()
-
-	err := runWithin(t, ctx, "the coalesced wake's delta cycle to end the watch", func(watchCtx context.Context) error {
-		return obs.Watch(watchCtx, "", batches, time.Hour, wakeCh, nil)
+		return nil
 	})
-	require.NoError(t, err)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Hour, wakeCh, testPrimaryWatchBatchHandler(driveID))
+	})
+
+	receiveWithin(t, events, "the first poll's event")
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventRemoteWakesCoalesced && event.Count == burst-1
+	}, "the second poll draining the wake left from the burst")
+	receiveWithin(t, events, "the second poll's event")
+	assert.Empty(t, wakeCh, "no wake is left to start a third poll")
 	assert.Equal(t, 2, fetcher.CallCount(), "burst wakes should collapse into one pending delta cycle")
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-6.8.2
@@ -1575,7 +1578,7 @@ func TestWatch_BackoffOnError(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
-	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Minute, nil, nil)
 	})
@@ -1616,7 +1619,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-token", batches, time.Hour, wakeCh, testPrimaryWatchBatchHandler(driveID))
 	})
-	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 
@@ -1657,7 +1660,7 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
-	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-expired-token", batches, time.Millisecond, nil, nil)
 	})
@@ -1696,7 +1699,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Hour, nil, nil)
 	})
@@ -1740,7 +1743,7 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	pollCount := 0
 	origSleep := obs.clock.Sleep
@@ -2265,7 +2268,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 10)
 	committed := make(chan struct{})
 	var committedOnce sync.Once
-	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
 		err := store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 		committedOnce.Do(func() { close(committed) })
 		return err
@@ -2319,7 +2322,7 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 	defer cancel()
 
 	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 	err := runWithin(t, ctx, "the batch policy failure to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, func(
 			context.Context,
@@ -2415,7 +2418,7 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 	}}
 
 	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 	err := runWithin(t, ctx, "the first poll's sleep to end the watch", func(watchCtx context.Context) error {
@@ -2633,7 +2636,7 @@ func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (
 
 	var emitted []changeEvent
 	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
 		emitted = append(emitted, batch.emitted...)
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
