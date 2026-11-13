@@ -225,19 +225,16 @@ func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey ScopeKey) 
 	return nil
 }
 
+// scopeHasBlockedRetryWork asks the store whether any retry_work row is
+// blocked under scopeKey: a count of that scope's rows, not a listing of
+// every blocked row.
 func (flow *engineFlow) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
-	rows, err := flow.deps.store.ListBlockedRetryWork(ctx)
+	hasBlockedWork, err := flow.deps.store.scopeHasBlockedRetryWork(ctx, scopeKey)
 	if err != nil {
 		return false, fmt.Errorf("sync: checking blocked retry work for scope %s: %w", scopeKey.String(), err)
 	}
 
-	for i := range rows {
-		if rows[i].ScopeKey == scopeKey {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return hasBlockedWork, nil
 }
 
 func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeKey) error {
@@ -550,7 +547,7 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 	}
 
 	nextRetry := time.Time{}
-	if row.NextRetryAt > 0 {
+	if storedTimeIsSet(row.NextRetryAt) {
 		nextRetry = time.Unix(0, row.NextRetryAt)
 	}
 	flow.holdAction(current, heldReasonRetry, ScopeKey{}, nextRetry)

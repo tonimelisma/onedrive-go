@@ -106,7 +106,7 @@ type PendingCreate struct {
 	CreatedETag string
 	LocalSize   int64
 	LocalHash   string
-	IntendedAt  int64 // Unix nanoseconds; when the create was decided
+	IntendedAt  int64 // when the create was decided, as storedTimeNano encodes it
 }
 
 // intentIsFresh reports whether the intent was recorded within
@@ -114,7 +114,7 @@ type PendingCreate struct {
 // be the file its create made. Observation's claim, the executor's claim on a
 // 409 and the prune all ask this one question.
 func (p *PendingCreate) intentIsFresh(now time.Time) bool {
-	return p.IntendedAt > 0 && now.Sub(time.Unix(0, p.IntendedAt)) <= pendingCreateIntentTTL
+	return storedTimeIsSet(p.IntendedAt) && now.Sub(time.Unix(0, p.IntendedAt)) <= pendingCreateIntentTTL
 }
 
 // RecordPendingCreateIntent durably records that a create at pending.Path is
@@ -134,7 +134,7 @@ func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *Pend
 			local_size = excluded.local_size, local_hash = excluded.local_hash,
 			intended_at = excluded.intended_at`,
 		pending.Path, pending.DriveID.String(), pending.ParentID,
-		pending.LocalSize, pending.LocalHash, s.nowFunc().UnixNano(),
+		pending.LocalSize, pending.LocalHash, storedTimeNano(s.nowFunc()),
 	); err != nil {
 		return fmt.Errorf("sync: recording pending create intent at %s: %w", pending.Path, err)
 	}
@@ -154,9 +154,9 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *PendingCre
 		ON CONFLICT(path) DO UPDATE SET
 			item_id = excluded.item_id, drive_id = excluded.drive_id, parent_id = excluded.parent_id,
 			created_etag = excluded.created_etag, local_size = excluded.local_size, local_hash = excluded.local_hash,
-			intended_at = CASE WHEN pending_creates.intended_at > 0 THEN pending_creates.intended_at ELSE excluded.intended_at END`,
+			intended_at = CASE WHEN pending_creates.intended_at <> 0 THEN pending_creates.intended_at ELSE excluded.intended_at END`,
 		pending.Path, pending.ItemID, pending.DriveID.String(), pending.ParentID,
-		pending.CreatedETag, pending.LocalSize, pending.LocalHash, s.nowFunc().UnixNano(),
+		pending.CreatedETag, pending.LocalSize, pending.LocalHash, storedTimeNano(s.nowFunc()),
 	); err != nil {
 		return fmt.Errorf("sync: recording pending create of %s (item %s): %w", pending.Path, pending.ItemID, err)
 	}

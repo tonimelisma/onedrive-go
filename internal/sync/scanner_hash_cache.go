@@ -38,7 +38,7 @@ func (o *localObserver) cachedHashForNewFile(
 		observed.LocalBirthTime != entry.BirthTime {
 		return "", false
 	}
-	if scanStartNano-mtime < nanosPerSecond || scanStartNano-observed.Ctime < nanosPerSecond {
+	if modifiedInRacilyCleanWindow(info.ModTime(), observed.Ctime, scanStartNano) {
 		return "", false
 	}
 

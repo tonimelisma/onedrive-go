@@ -121,7 +121,7 @@ func (s *SyncStore) readScratchPlanningSeed(
 		err = finalizeTxRollback(err, tx, "sync: rollback scratch planning seed read transaction")
 	}()
 
-	observationState, err := s.readObservationStateTx(ctx, tx)
+	observationState, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return scratchPlanningSeed{}, fmt.Errorf("sync: reading scratch planning observation state: %w", err)
 	}

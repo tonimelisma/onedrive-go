@@ -325,6 +325,12 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent,
 		TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt,
 		TestRunOnce_LargeFileWhoseSessionRequestFailedFinishesIntoItsPlaceholder,
+		TestRunOnce_ARemoteFileDated2300DownloadsWithTheLastStorableTime,
+		TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime,
+		TestRunOnce_ALocalFolderForARemoteFolderDated2300GetsTheLastStorableTime,
+		TestRunOnce_ALocalFileDated2300UploadsAndConverges,
+		TestRunOnce_AFileRedatedToTheEpochConverges,
+		TestRunOnce_ARemoteFileDatedTheEpochKeepsItsTimeLocally,
 	}
 }
 

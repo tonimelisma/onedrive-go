@@ -20,7 +20,7 @@ import (
 func TestIsLocalDiskFull_RecognizesRealSQLiteFull(t *testing.T) {
 	t.Parallel()
 
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "full.db"))
+	db, err := sql.Open("sqlite", sqliteFileURI(filepath.Join(t.TempDir(), "full.db"), nil))
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, db.Close()) })
 	db.SetMaxOpenConns(1)

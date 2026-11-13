@@ -10,7 +10,8 @@ import (
 // confirmation, by side and commit time, so the proportional delete-safety
 // rule can count a slow deletion across passes (R-6.2.5). The planner reads
 // the counts inside deleteSafetyWindow; a confirmation clears the side it
-// approved, and rows older than the window are pruned on read.
+// approved, and rows older than the window are pruned when the next delete
+// is recorded, so the planner's read stays read-only.
 
 // recordDeleteLedgerTx appends a committed delete the hold counts to the
 // ledger inside the outcome's own transaction, so a crash leaves the ledger
@@ -31,7 +32,7 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 	now := s.nowFunc()
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO delete_ledger (side, path, item_id, committed_at) VALUES (?, ?, ?, ?)`,
-		string(side), o.Path, o.ItemID, now.UnixNano(),
+		string(side), o.Path, o.ItemID, storedTimeNano(now),
 	); err != nil {
 		return fmt.Errorf("sync: recording delete of %s in the delete ledger: %w", o.Path, err)
 	}
@@ -39,7 +40,7 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 	// the store makes anyway, keeps the planner's read read-only (a dry run
 	// plans too).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM delete_ledger WHERE committed_at < ?`,
-		now.Add(-deleteSafetyWindow).UnixNano()); err != nil {
+		storedTimeNano(now.Add(-deleteSafetyWindow))); err != nil {
 		return fmt.Errorf("sync: pruning the delete ledger: %w", err)
 	}
 
@@ -51,7 +52,7 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 // plan, dry runs included.
 func (s *SyncStore) recentUnconfirmedDeletes(ctx context.Context, since time.Time) (map[deleteSafetySide]int, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT side, COUNT(*) FROM delete_ledger WHERE committed_at >= ? GROUP BY side`, since.UnixNano())
+		`SELECT side, COUNT(*) FROM delete_ledger WHERE committed_at >= ? GROUP BY side`, storedTimeNano(since))
 	if err != nil {
 		return nil, fmt.Errorf("sync: counting recent deletes: %w", err)
 	}

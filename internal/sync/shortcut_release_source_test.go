@@ -7,8 +7,6 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"io/fs"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,40 +95,6 @@ func treeRemovalCallsIn(path, rel string) ([]treeRemovalCall, error) {
 	}
 
 	return found, nil
-}
-
-// walkModuleProductFiles calls visit with every non-test Go file of the module
-// (its path, and its slash-separated path relative to the module root),
-// skipping hidden directories and vendor, and returns how many it visited.
-func walkModuleProductFiles(t *testing.T, visit func(path, rel string) error) int {
-	t.Helper()
-
-	moduleRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	files := 0
-	walkErr := filepath.WalkDir(moduleRoot, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if name := entry.Name(); path != moduleRoot && (strings.HasPrefix(name, ".") || name == "vendor") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		rel, relErr := filepath.Rel(moduleRoot, path)
-		if relErr != nil {
-			return fmt.Errorf("relative path of %s: %w", path, relErr)
-		}
-		files++
-		return visit(path, filepath.ToSlash(rel))
-	})
-	require.NoError(t, walkErr)
-
-	return files
 }
 
 func renderGoExpr(fset *token.FileSet, expr ast.Expr) string {

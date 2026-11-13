@@ -289,7 +289,13 @@ func actionItemType(action *Action) ItemType {
 	return ItemTypeFile
 }
 
-func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *BaselineEntry) {
+// fillMutationFromBaselineDefaults fills from the baseline the facts a
+// publication's view left unknown. A modification time is filled only for a
+// side the view did not observe: an observed 0 is a local file dated exactly
+// the epoch or a remote item with no time, and either way it is the value the
+// planner's comparison reads from current truth, so the baseline's time in
+// its place would differ from current truth on every pass.
+func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *BaselineEntry, remoteObserved bool) {
 	if mutation == nil || baseline == nil {
 		return
 	}
@@ -307,7 +313,7 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 		mutation.LocalSize = baseline.LocalSize
 		mutation.LocalSizeKnown = baseline.LocalSizeKnown
 	}
-	if mutation.LocalMtime == 0 {
+	if mutation.LocalMtime == 0 && !mutation.LocalIdentityObserved {
 		mutation.LocalMtime = baseline.LocalMtime
 	}
 	if !mutation.LocalIdentityObserved {
@@ -324,7 +330,7 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 		mutation.RemoteSize = baseline.RemoteSize
 		mutation.RemoteSizeKnown = baseline.RemoteSizeKnown
 	}
-	if mutation.RemoteMtime == 0 {
+	if !storedTimeIsSet(mutation.RemoteMtime) && !remoteObserved {
 		mutation.RemoteMtime = baseline.RemoteMtime
 	}
 	if mutation.ETag == "" {
@@ -377,7 +383,7 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 			mutation.LocalIdentityObserved = true
 		}
 
-		fillMutationFromBaselineDefaults(mutation, action.View.Baseline)
+		fillMutationFromBaselineDefaults(mutation, action.View.Baseline, action.View.Remote != nil)
 		if action.OldPath != "" && action.OldPath != action.Path {
 			keepPendingContentAcrossRekey(mutation, action.View)
 		}
@@ -417,7 +423,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback outcome transaction for %s", outcome.Path))
 	}()
 
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -499,7 +505,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback refresh local baseline transaction for %s", refresh.Path))
 	}()
 
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}

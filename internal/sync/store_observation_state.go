@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,8 +39,10 @@ const (
 )
 
 type observationState struct {
-	ContentDriveID           driveid.ID
-	Cursor                   string
+	ContentDriveID driveid.ID
+	Cursor         string
+	// NextFullRemoteRefreshAt is when the next full remote refresh is due,
+	// as storedTimeNano encodes it; zero means one is due now.
 	NextFullRemoteRefreshAt  int64
 	LocalTruthComplete       bool
 	LocalTruthRecoveryReason string
@@ -74,7 +77,7 @@ func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
 }
 
 func applyRemoteRefreshSchedule(state *observationState, at time.Time, mode remoteObservationMode) {
-	state.NextFullRemoteRefreshAt = at.Add(remoteRefreshIntervalForMode(mode)).UnixNano()
+	state.NextFullRemoteRefreshAt = storedTimeNano(at.Add(remoteRefreshIntervalForMode(mode)))
 }
 
 func (s *SyncStore) contentDriveIDForRead(
@@ -107,7 +110,7 @@ func contentDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID, e
 	if err := runner.QueryRowContext(ctx,
 		`SELECT content_drive_id FROM observation_state LIMIT 1`,
 	).Scan(&raw); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return driveid.ID{}, nil
 		}
 		return driveid.ID{}, fmt.Errorf("sync: reading content drive ID: %w", err)
@@ -132,50 +135,13 @@ func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
 }
 
 func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState, error) {
-	if _, err := s.db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
-		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
+	state, err := readObservationStateFromTx(ctx, s.db)
+	if err != nil {
+		return nil, err
 	}
+	s.rememberContentDriveID(state.ContentDriveID)
 
-	var (
-		contentDriveID string
-		state          observationState
-		localComplete  int
-		rootBound      int
-		rootDevice     int64
-		rootInode      int64
-		rootFSID       int64
-		rootBirthTime  int64
-		rootToken      string
-		rootRebind     int
-	)
-
-	if err := s.db.QueryRowContext(ctx, sqlReadObservationState).Scan(
-		&contentDriveID,
-		&state.Cursor,
-		&state.NextFullRemoteRefreshAt,
-		&localComplete,
-		&state.LocalTruthRecoveryReason,
-		&rootBound,
-		&rootDevice,
-		&rootInode,
-		&rootFSID,
-		&rootBirthTime,
-		&rootToken,
-		&rootRebind,
-		&state.UndecidedRefreshStreak,
-	); err != nil {
-		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
-	}
-	state.LocalTruthComplete = localComplete != 0
-	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootBirthTime, rootToken)
-	state.SyncRootRebind = rootRebind != 0
-
-	if contentDriveID != "" {
-		state.ContentDriveID = driveid.New(contentDriveID)
-		s.rememberContentDriveID(state.ContentDriveID)
-	}
-
-	return &state, nil
+	return state, nil
 }
 
 func (s *SyncStore) CommitObservationCursor(
@@ -191,7 +157,7 @@ func (s *SyncStore) CommitObservationCursor(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation cursor transaction")
 	}()
 
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -263,8 +229,8 @@ func (s *SyncStore) RecordFullRefreshOrphans(
 				return
 			}
 			state.UndecidedRefreshStreak++
-			deadline := at.Add(undecidedRefreshDelay(state.UndecidedRefreshStreak)).UnixNano()
-			if state.NextFullRemoteRefreshAt == 0 || state.NextFullRemoteRefreshAt > deadline {
+			deadline := storedTimeNano(at.Add(undecidedRefreshDelay(state.UndecidedRefreshStreak)))
+			if !storedTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
 				changed = true
 			}
@@ -298,7 +264,7 @@ func (s *SyncStore) ClampFullRemoteRefreshDeadline(
 		return false, nil
 	}
 
-	deadline := notAfter.UnixNano()
+	deadline := storedTimeNano(notAfter)
 	changed := false
 	err := s.markObservationRefresh(
 		ctx,
@@ -307,7 +273,7 @@ func (s *SyncStore) ClampFullRemoteRefreshDeadline(
 		"sync: rollback full remote refresh clamp transaction",
 		"sync: committing full remote refresh clamp transaction",
 		func(state *observationState) {
-			if state.NextFullRemoteRefreshAt == 0 || state.NextFullRemoteRefreshAt > deadline {
+			if !storedTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
 				changed = true
 			}
@@ -332,7 +298,7 @@ func (s *SyncStore) markObservationRefresh(
 		err = finalizeTxRollback(err, tx, rollbackMessage)
 	}()
 
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -368,13 +334,6 @@ func (s *SyncStore) rememberContentDriveID(id driveid.ID) {
 	defer s.contentDriveMu.Unlock()
 
 	s.cachedContentDriveID = id
-}
-
-func (s *SyncStore) readObservationStateTx(
-	ctx context.Context,
-	tx sqlTxRunner,
-) (*observationState, error) {
-	return readObservationStateFromTx(ctx, tx)
 }
 
 func readObservationStateFromTx(
@@ -589,7 +548,7 @@ func (s *SyncStore) updateObservationState(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation-state update tx")
 	}()
 
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}

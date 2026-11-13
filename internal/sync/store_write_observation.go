@@ -93,7 +93,7 @@ func (s *SyncStore) commitObservationTx(
 	newToken string,
 	driveID driveid.ID,
 ) ([]*BaselineEntry, error) {
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}

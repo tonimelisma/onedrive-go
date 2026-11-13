@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2262,7 +2263,7 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 
 	_, err := tm.DownloadToFile(
 		t.Context(), driveid.New("d1"), "item1", filepath.Join(dir, "f.txt"),
-		DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: time.Now().UnixNano(), Target: target})
+		DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: time.Now(), Target: target})
 	require.NoError(t, err)
 
 	// The baseline commit follows success, so the bytes and the directory
@@ -2271,6 +2272,43 @@ func TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter(t *testing.T) {
 	// The mtime is set before the fsync so the flush makes it durable too.
 	partial := downloadPartialName("f.txt", partialVersionTag(DownloadOpts{RemoteHash: tmHashBytes(content)}))
 	assert.Equal(t, []string{"open-partial", "chtimes", "reopen-partial", "fsync:" + partial, "rename", "syncdir:folder"}, target.steps)
+}
+
+// Validates: R-6.7.34
+func TestDownloadToFile_SetsTheGivenModificationTimeAndLeavesAZeroOneAlone(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("dated")
+	for _, tc := range []struct {
+		name  string
+		mtime time.Time
+	}{
+		{name: "a time in range", mtime: time.Date(2020, 2, 3, 4, 5, 6, 7, time.UTC)},
+		{name: "the last time Unix nanoseconds hold", mtime: time.Unix(0, math.MaxInt64)},
+		{name: "no time", mtime: time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := filepath.Join(t.TempDir(), "folder")
+			require.NoError(t, os.Mkdir(dir, 0o700))
+			target := &recordingTarget{TargetFS: LocalTarget()}
+			tm := newTestTM(tmDownloadWriting(content), &tmMockUploader{}, nil)
+			targetPath := filepath.Join(dir, "f.txt")
+
+			_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath,
+				DownloadOpts{RemoteHash: tmHashBytes(content), RemoteMtime: tc.mtime, Target: target})
+			require.NoError(t, err)
+
+			info, err := os.Stat(targetPath)
+			require.NoError(t, err)
+			if tc.mtime.IsZero() {
+				assert.NotContains(t, target.steps, "chtimes", "a zero time is not set")
+				return
+			}
+			assert.True(t, info.ModTime().Equal(tc.mtime), "set exactly: %s, want %s", info.ModTime(), tc.mtime)
+		})
+	}
 }
 
 // Validates: R-5.10.1

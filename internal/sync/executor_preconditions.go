@@ -225,7 +225,7 @@ func remoteLiveContentMatches(row *remoteStateRow, planned *remoteState) bool {
 	if row.Size != 0 && planned.Size != 0 && row.Size != planned.Size {
 		return false
 	}
-	if row.Mtime != 0 && planned.Mtime != 0 && row.Mtime != planned.Mtime {
+	if storedTimeIsSet(row.Mtime) && storedTimeIsSet(planned.Mtime) && row.Mtime != planned.Mtime {
 		return false
 	}
 
@@ -304,11 +304,6 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		resolvedType = ItemTypeFolder
 	}
 
-	mtime := int64(0)
-	if !item.ModifiedAt.IsZero() {
-		mtime = item.ModifiedAt.UnixNano()
-	}
-
 	// A negative size is not a size (R-2.4.16).
 	size, sizeKnown := item.Size, item.Size >= 0
 	if !sizeKnown {
@@ -323,8 +318,10 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		Hash:      driveops.SelectHash(item),
 		Size:      size,
 		SizeKnown: sizeKnown,
-		Mtime:     mtime,
-		ETag:      item.ETag,
+		// Compared with the planned remote time, which the item converter
+		// stored: the same encoding.
+		Mtime: storedTimeNano(item.ModifiedAt),
+		ETag:  item.ETag,
 	}
 }
 

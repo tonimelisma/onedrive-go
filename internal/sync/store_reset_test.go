@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,7 +89,7 @@ func walDonor(t *testing.T, dir string) string {
 
 	donorPath := filepath.Join(dir, "donor.db")
 	donor, err := sql.Open(sqliteDriverName,
-		"file:"+donorPath+"?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)")
+		sqliteFileURI(donorPath, url.Values{sqlitePragmaParam: {"journal_mode(WAL)", "wal_autocheckpoint(0)"}}))
 	require.NoError(t, err)
 	donor.SetMaxOpenConns(1)
 	t.Cleanup(func() {
@@ -126,7 +127,7 @@ func sqliteHasTable(t *testing.T, db *sql.DB, name string) bool {
 func openPlainSQLite(t *testing.T, dbPath string) *sql.DB {
 	t.Helper()
 
-	db, err := sql.Open(sqliteDriverName, "file:"+dbPath)
+	db, err := sql.Open(sqliteDriverName, sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Close())

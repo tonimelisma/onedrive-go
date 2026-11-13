@@ -41,7 +41,8 @@ func validateBlockScope(block *BlockScope) error {
 // UpsertBlockScope persists a block scope to the block_scopes table.
 // INSERT OR REPLACE — the scope_key is the primary key, so this handles
 // both insert and update. All fields are serialized: ScopeKey.String() for
-// the key, UnixNano for timestamps, nanoseconds for Duration.
+// the key, storedTimeNano for the trial time (a server's Retry-After can put
+// it past 2262), nanoseconds for Duration.
 func (s *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) error {
 	return upsertBlockScopeWithRunner(ctx, s.db, block)
 }
@@ -51,18 +52,13 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 		return err
 	}
 
-	nextTrialAtNano := int64(0)
-	if !block.NextTrialAt.IsZero() {
-		nextTrialAtNano = block.NextTrialAt.UnixNano()
-	}
-
 	_, err := runner.ExecContext(ctx,
 		`INSERT OR REPLACE INTO block_scopes
 			(scope_key, trial_interval, next_trial_at, slow_start_threshold)
 		VALUES (?, ?, ?, ?)`,
 		block.Key.String(),
 		int64(block.TrialInterval),
-		nextTrialAtNano,
+		storedTimeNano(block.NextTrialAt),
 		block.SlowStartThreshold,
 	)
 	if err != nil {

@@ -117,6 +117,11 @@ fallback it uses when the field is absent.
   longest duration instead of wrapping to a negative or tiny wait. This is a
   representation limit, not a cap: no ceiling is applied and the server's
   wait is honored as given (R-2.10.7, R-2.10.14)
+- the saturation survives a restart: the trial deadline such a wait gives a
+  block scope lies past 2262, beyond Unix nanoseconds, and the store writes
+  it as the last storable time, which reads back as the far future, so a
+  reopened store does not find the trial due (sync-store.md, "Stored times",
+  `TestUpsertBlockScope_SaturatedTrialSurvivesAReload`)
 
 ### What the transport says (R-6.6.8)
 

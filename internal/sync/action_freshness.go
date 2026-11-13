@@ -550,7 +550,7 @@ func remoteContentMatchesPlanned(row *remoteStateRow, planned *remoteState) bool
 	if row.Size != planned.Size {
 		return false
 	}
-	if row.Mtime != 0 && planned.Mtime != 0 {
+	if storedTimeIsSet(row.Mtime) && storedTimeIsSet(planned.Mtime) {
 		return row.Mtime == planned.Mtime
 	}
 
