@@ -156,10 +156,11 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	// The folder and store locks come first and go last (engine_locks.go): a
-	// second engine is refused before it opens (and possibly migrates or
-	// checkpoints) the store, and the store is closed before the next owner
-	// can start. Deferred cleanups run in reverse, so the store's
-	// startup-failure close runs before this release.
+	// second engine, or a store an unfinished account email change moves, is
+	// refused before it opens (and possibly migrates or checkpoints) the
+	// store, and the store is closed before the next owner can start.
+	// Deferred cleanups run in reverse, so the store's startup-failure close
+	// runs before this release.
 	locks, err := acquireEngineLocks(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("sync: %w", err)

@@ -445,6 +445,41 @@ func newRootCmd() *cobra.Command {
 	return newRootCmdWithWriters(nil, nil)
 }
 
+// cobraHelpCommandName and cobraCompletionCommandName are the commands cobra
+// adds to the root itself; cobra exports only the names of its hidden
+// completion requests.
+const (
+	cobraHelpCommandName       = "help"
+	cobraCompletionCommandName = "completion"
+)
+
+// commandNeedsNoAccount reports the commands cobra adds itself: help, the
+// shell completion scripts and the hidden completion requests a shell makes.
+// They read and write nothing of onedrive-go's, so they need no CLI context,
+// no config and no finished email change, and work whatever state the data
+// is in. (--help and --version never reach PersistentPreRunE.)
+func commandNeedsNoAccount(cmd *cobra.Command) bool {
+	top := cmd
+	for top.HasParent() && top.Parent().HasParent() {
+		top = top.Parent()
+	}
+	if !top.HasParent() {
+		return false
+	}
+
+	switch top.Name() {
+	case cobraHelpCommandName, cobraCompletionCommandName, cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+		return true
+	default:
+		return false
+	}
+}
+
+// initializeCLIContext is the root's PersistentPreRunE: it builds the
+// CLIContext (Phase 1: flags, logger, config path, env), finishes an account
+// email change an earlier command was cut short in, then resolves a shared
+// target or, for a data command, the drive (Phase 2). The commands cobra adds
+// itself skip all of it (commandNeedsNoAccount).
 func initializeCLIContext(
 	cmd *cobra.Command,
 	args []string,
@@ -457,6 +492,9 @@ func initializeCLIContext(
 		if err := config.CheckDevSafe(); err != nil {
 			return err //nolint:wrapcheck // CheckDevSafe's text is the user-facing message.
 		}
+	}
+	if commandNeedsNoAccount(cmd) {
+		return nil
 	}
 
 	flags := bindings.cliFlags()
@@ -500,6 +538,13 @@ func initializeCLIContext(
 	root := cmd.Root()
 	if root != nil && root != cmd {
 		root.SetContext(ctx)
+	}
+
+	// An account email change an earlier command was cut short in is
+	// finished here, once, before anything resolves a drive or a shared
+	// target by name; a command whose change cannot be finished fails.
+	if err := cc.finishInterruptedEmailChange(ctx); err != nil {
+		return err
 	}
 
 	sharedTarget, found, err := resolveSharedTargetBootstrap(ctx, cmd, args, cc)

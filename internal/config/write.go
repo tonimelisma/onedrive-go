@@ -471,11 +471,25 @@ func deleteDriveSectionIfDriveEqualsSnapshot(
 	return true, atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
+// driveSectionCollisionError is a section rename refused because a section
+// under the new name exists beside the one under the old name. The account
+// email change reads both names from it to say which section to remove.
+type driveSectionCollisionError struct {
+	from string
+	to   string
+}
+
+func (e *driveSectionCollisionError) Error() string {
+	return fmt.Sprintf("config section rename collision: %q already exists beside %q", e.to, e.from)
+}
+
 // RenameDriveSections renames one or more drive section headers in place while
 // preserving their contents, comments, and relative order. A target section
 // that already exists is treated as a collision when the source section also
-// exists, because the config would otherwise end up with two owners for the
-// same canonical ID.
+// exists (*driveSectionCollisionError), because the config would otherwise
+// end up with two owners for the same canonical ID; the file is then left as
+// it is. A source section that does not exist is skipped, so a rename that
+// already happened is done.
 func RenameDriveSections(path string, renames map[driveid.CanonicalID]driveid.CanonicalID) error {
 	if len(renames) == 0 {
 		return nil
@@ -504,6 +518,7 @@ func renameDriveSectionsSnapshot(path string, renames map[driveid.CanonicalID]dr
 		}
 	}
 
+	renamed := false
 	for from, to := range renames {
 		if from.Equal(to) {
 			continue
@@ -519,13 +534,17 @@ func renameDriveSectionsSnapshot(path string, renames map[driveid.CanonicalID]dr
 		case !fromFound:
 			continue
 		case toFound:
-			return fmt.Errorf("config section rename collision: %q already exists", toName)
+			return &driveSectionCollisionError{from: fromName, to: toName}
 		default:
 			lines[fromIdx].sectionName = toName
 			lines[fromIdx].raw = renderSectionHeaderLine(toName)
 			delete(headerIndex, fromName)
 			headerIndex[toName] = fromIdx
+			renamed = true
 		}
+	}
+	if !renamed {
+		return nil
 	}
 
 	return atomicWriteFile(path, []byte(renderLines(lines)))

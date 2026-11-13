@@ -413,7 +413,9 @@ since nothing says what it would cover.
 Administrative write helpers are split by authority:
 
 - store compatibility helpers diagnose incompatible DBs
-- `store_reset.go` owns explicit delete-and-recreate reset
+- `store_reset.go` owns explicit delete-and-recreate reset, the rebind's
+  identity clear, and the file-family move and log fold an account email
+  change uses
 
 ### Pending creates
 
@@ -740,14 +742,30 @@ Two store-owned helpers isolate DB lifecycle policy:
   alone. The database goes last so that a delete cut short leaves a store
   the rerun still finds and finishes. All of them go because SQLite pairs a
   write-ahead log with a database by file name alone: a log beside a
-  database that did not write it is replayed into it, which is why a move
-  also deletes every sidecar at its target that the source does not have. A
-  log left alone is deleted when a database is created at that name, so a
-  store created where sidecars remained starts empty
-  (`TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone`). The callers
-  hold the store's offline-change lock (`LockDriveForOfflineChange`)
+  database that did not write it is replayed into it, which is why a new
+  email change deletes the sidecars at each target before it is recorded
+  (they are a stranger's then). A log left alone is deleted when a database
+  is created at that name, so a store created where sidecars remained starts
+  empty (`TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone`). The
+  callers hold the store's offline-change lock (`LockDriveForOfflineChange`)
   (`TestRemoveStateDBFiles_RemovesALeftoverJournal`,
   `TestMoveStateDBs_MovesTheWholeFamily`)
+- `moveStateDBFamily` renames each family file the source has, the database
+  last, and never deletes or replaces a file at the target: with a journal
+  recording the change, a file at the target was moved there by an earlier
+  run cut short, and a moved log holds commits its database does not have
+  yet. It used to delete a target sidecar the source lacked, so a rerun after
+  the log had moved deleted it and the store fell back to its last checkpoint
+  (`TestMoveStateDBFamily_ResumeAfterSidecarsMovedKeepsTheLog`,
+  `TestMoveStateDBs_AResumedMoveKeepsWhatItAlreadyMoved`). A file at both
+  names is refused, naming the one under the old name. Before a store with a
+  sidecar moves, and while nothing of its family is at the target,
+  `foldStateDBLog` folds its log into the database (the store opened without
+  its schema, a truncating checkpoint, closed), so the family is one file and
+  the move one rename; a file without the SQLite header is not opened, since
+  SQLite takes up a log beside a file before it reads the header, and a
+  failed fold is logged and the family moves as files
+  (`TestMoveStateDBs_FoldsTheLogIntoTheDatabaseBeforeItMoves`)
 
 Engine startup may use the diagnosis helper, but it must not call the
 destructive reset helper automatically. The explicit CLI reset command owns the

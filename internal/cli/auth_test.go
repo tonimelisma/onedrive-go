@@ -173,10 +173,9 @@ func TestDrivesForAccount(t *testing.T) {
 }
 
 func TestFindTokenFallback(t *testing.T) {
-	// findTokenFallback probes the filesystem for existing token files.
-	// We need to create temp files matching the token path pattern.
-	// Since DriveTokenPath uses XDG paths, we test the logic by checking
-	// that it returns the correct prefix based on which file exists.
+	// findTokenFallback probes the data directory for existing token files,
+	// so the test gives it an empty one of its own.
+	setTestDriveHome(t)
 
 	// With no token files on disk, should default to personal.
 	got, err := findTokenFallback("nobody@example.com", slog.Default())
@@ -198,6 +197,10 @@ func writeTokenFallbackFixture(t *testing.T, tokenID driveid.CanonicalID) {
 }
 
 func TestFindTokenFallback_ExistingToken(t *testing.T) {
+	// The fixture writes a token file, so it must land in the test's own data
+	// directory and never in the one the shell's environment names.
+	setTestDriveHome(t)
+
 	tests := []struct {
 		name    string
 		account string
@@ -437,8 +440,7 @@ func TestOpenBrowser_CommandStartFailure(t *testing.T) {
 
 // Validates: R-3.1.4
 func TestResolveLogoutAccount_PurgeAutoSelectsSingleKnownAccountWithoutSavedLogin(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestDriveHome(t)
 
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
@@ -458,8 +460,7 @@ func TestResolveLogoutAccount_PurgeAutoSelectsSingleKnownAccountWithoutSavedLogi
 
 // Validates: R-3.1.3
 func TestResolveLogoutAccount_PlainLogoutRequiresUsableSavedLogin(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestDriveHome(t)
 
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
@@ -479,8 +480,7 @@ func TestResolveLogoutAccount_PlainLogoutRequiresUsableSavedLogin(t *testing.T) 
 
 // Validates: R-3.1.3
 func TestResolveLogoutAccount_AutoSelectsSingleKnownAccountWithUsableSavedLogin(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestDriveHome(t)
 
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_alice@outlook.com.json")
 
@@ -494,8 +494,7 @@ func TestResolveLogoutAccount_AutoSelectsSingleKnownAccountWithUsableSavedLogin(
 
 // Validates: R-3.1.3
 func TestResolveLogoutAccount_MultipleUsableSavedLoginsRequireAccount(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestDriveHome(t)
 
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_alice@outlook.com.json")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_bob@contoso.com.json")
@@ -512,8 +511,7 @@ func TestResolveLogoutAccount_MultipleUsableSavedLoginsRequireAccount(t *testing
 
 // Validates: R-3.1.5
 func TestCatalogAuthRequirements_FindsOfflineAuthRequiredAccounts(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestDriveHome(t)
 
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))
@@ -557,8 +555,7 @@ func TestCatalogAuthRequirements_FindsOfflineAuthRequiredAccounts(t *testing.T) 
 
 // Validates: R-3.1.4
 func TestPurgeOrphanedFiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestDriveHome(t)
 
 	dataDir := config.DefaultDataDir()
 	require.NoError(t, os.MkdirAll(dataDir, 0o700))

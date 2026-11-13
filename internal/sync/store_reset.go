@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -48,28 +49,119 @@ func removeStateDBFiles(dbPath string) error {
 	return nil
 }
 
-// moveStateDBFamily renames every file of the store at from to the same file
-// of the store at to, the database last (config.StateDBFamily). A sidecar the
-// source does not have is removed at the target instead: with no database
-// there it belongs to nothing, and it would be replayed into the moved one.
-// The caller holds both stores' locks and has checked that no database is
-// at to.
-func moveStateDBFamily(from, to string) error {
-	targets := config.StateDBFamily(to)
-	for i, source := range config.StateDBFamily(from) {
-		err := localpath.Rename(source, targets[i])
-		if err == nil {
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("move state DB file %s: %w", source, err)
-		}
-		if removeErr := localpath.Remove(targets[i]); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return fmt.Errorf("remove leftover state DB file %s: %w", targets[i], removeErr)
+// removeStateDBSidecars deletes the sidecars of the store at dbPath, never
+// its database (config.StateDBFamily lists the database last).
+func removeStateDBSidecars(dbPath string) error {
+	family := config.StateDBFamily(dbPath)
+	for _, sidecar := range family[:len(family)-1] {
+		if err := localpath.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove state DB file %s: %w", sidecar, err)
 		}
 	}
 
 	return nil
+}
+
+// moveStateDBFamily renames every file of the store at from that exists to
+// the same file of the store at to, the sidecars first and the database last
+// (config.StateDBFamily). It never deletes or replaces a file at to: one
+// already there was moved there by an earlier run of this move that was cut
+// short (the caller clears a stranger's sidecars before a move goes on
+// record), and a moved log holds commits its database does not have yet. A
+// file at both names is refused, both kept. The caller holds both stores'
+// locks and has checked that no database is at to.
+func moveStateDBFamily(from, to string) error {
+	targets := config.StateDBFamily(to)
+	for i, source := range config.StateDBFamily(from) {
+		sourceExists, err := stateDBFileExists(source)
+		if err != nil {
+			return err
+		}
+		if !sourceExists {
+			continue
+		}
+		targetExists, err := stateDBFileExists(targets[i])
+		if err != nil {
+			return err
+		}
+		if targetExists {
+			return fmt.Errorf("move state DB file %s: %s already exists, moved there by this account email change; "+
+				"%s was created after the account's email changed: remove %s and run the command again",
+				source, targets[i], source, source)
+		}
+		if renameErr := localpath.Rename(source, targets[i]); renameErr != nil {
+			return fmt.Errorf("move state DB file %s: %w", source, renameErr)
+		}
+	}
+
+	return nil
+}
+
+func stateDBFileExists(path string) (bool, error) {
+	_, err := localpath.Lstat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, fmt.Errorf("check state DB file %s: %w", path, err)
+	}
+}
+
+// sqliteHeader is the magic string every SQLite database file starts with.
+const sqliteHeader = "SQLite format 3\x00"
+
+// foldStateDBLog folds the write-ahead log of the store at dbPath into its
+// database with a truncating checkpoint, so that the store is one file and
+// moving it is one rename that no interruption can part. It opens the store
+// without applying the schema, so a store of any generation folds. A file
+// that is not a SQLite database is not opened: SQLite would take up a log
+// beside it, and could delete it, before it read the header. The caller
+// holds the store's lock, logs the outcome and decides what a failure means;
+// the store's own open and close records would only misdescribe a fold.
+func foldStateDBLog(ctx context.Context, dbPath string) error {
+	isSQLite, err := hasSQLiteHeader(dbPath)
+	if err != nil {
+		return err
+	}
+	if !isSQLite {
+		return fmt.Errorf("fold state DB log: %s is not a SQLite database", dbPath)
+	}
+
+	store, err := openSyncStore(ctx, dbPath, slog.New(slog.DiscardHandler), false)
+	if err != nil {
+		return fmt.Errorf("fold state DB log: %w", err)
+	}
+	checkpointErr := store.Checkpoint(ctx)
+	closeErr := store.Close(ctx)
+	if foldErr := errors.Join(checkpointErr, closeErr); foldErr != nil {
+		return fmt.Errorf("fold state DB log of %s: %w", dbPath, foldErr)
+	}
+
+	return nil
+}
+
+func hasSQLiteHeader(dbPath string) (_ bool, err error) {
+	file, err := localpath.OpenRegular(dbPath)
+	if err != nil {
+		return false, fmt.Errorf("open state DB %s: %w", dbPath, err)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close state DB %s: %w", dbPath, closeErr)
+		}
+	}()
+
+	header := make([]byte, len(sqliteHeader))
+	if _, readErr := io.ReadFull(file, header); readErr != nil {
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read state DB %s: %w", dbPath, readErr)
+	}
+
+	return string(header) == sqliteHeader, nil
 }
 
 // RebindSyncRoot forgets the sync-folder fingerprint recorded in one drive's

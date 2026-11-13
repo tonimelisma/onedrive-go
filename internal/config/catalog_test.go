@@ -10,7 +10,7 @@ import (
 )
 
 func TestLoadCatalog_RejectsMissingSchemaVersion(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := CatalogPath()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -22,7 +22,7 @@ func TestLoadCatalog_RejectsMissingSchemaVersion(t *testing.T) {
 }
 
 func TestLoadCatalog_RejectsUnsupportedSchemaVersion(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := CatalogPath()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -34,7 +34,7 @@ func TestLoadCatalog_RejectsUnsupportedSchemaVersion(t *testing.T) {
 }
 
 func TestLoadCatalog_RejectsUnknownFields(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := CatalogPath()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
@@ -46,7 +46,7 @@ func TestLoadCatalog_RejectsUnknownFields(t *testing.T) {
 }
 
 func TestSaveCatalog_WritesSchemaVersion(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	require.NoError(t, SaveCatalog(&Catalog{}))
 	loaded, err := LoadCatalog()
@@ -55,7 +55,7 @@ func TestSaveCatalog_WritesSchemaVersion(t *testing.T) {
 }
 
 func TestLoadCatalog_RejectsTrailingJSON(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := CatalogPath()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
