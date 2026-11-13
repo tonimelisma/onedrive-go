@@ -360,6 +360,53 @@ func TestLoad_EmptyBaseline(t *testing.T) {
 	assert.False(t, idOk)
 }
 
+// Validates: R-2.2.4, R-6.2.4
+//
+// A content change the verified local delete proved is recorded by clearing
+// the row's stored change time and nothing else, in the store and in the
+// cached baseline alike, so the next scan reads the file instead of trusting
+// the row. A path with no row is left alone.
+func TestSyncStore_ForgetBaselineLocalCtime_ClearsOnlyTheChangeTime(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	synced := BaselineMutation{
+		Action:                ActionDownload,
+		Success:               true,
+		Path:                  "docs/readme.md",
+		DriveID:               driveid.New("drive1"),
+		ItemID:                "item1",
+		ItemType:              ItemTypeFile,
+		LocalHash:             "abc123",
+		RemoteHash:            "abc123",
+		LocalSize:             1024,
+		LocalSizeKnown:        true,
+		LocalMtime:            1_700_000_000_000_000_000,
+		LocalCtime:            1_700_000_000_500_000_000,
+		LocalDevice:           7,
+		LocalInode:            42,
+		LocalHasIdentity:      true,
+		LocalIdentityObserved: true,
+	}
+	commitAll(t, mgr, ctx, []BaselineMutation{synced})
+	before, ok := mgr.cachedBaseline().GetByPath(synced.Path)
+	require.True(t, ok)
+	want := *before
+	want.LocalCtime = 0
+
+	require.NoError(t, mgr.ForgetBaselineLocalCtime(ctx, synced.Path))
+	require.NoError(t, mgr.ForgetBaselineLocalCtime(ctx, "no/such/row.txt"))
+
+	cached, ok := mgr.cachedBaseline().GetByPath(synced.Path)
+	require.True(t, ok)
+	assert.Equal(t, want, *cached)
+	require.NoError(t, mgr.reloadBaselineCache(ctx))
+	stored, ok := mgr.cachedBaseline().GetByPath(synced.Path)
+	require.True(t, ok)
+	assert.Equal(t, want, *stored, "the store holds the same row")
+}
+
 // Validates: R-6.5.2
 func TestCommit_Download(t *testing.T) {
 	t.Parallel()

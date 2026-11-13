@@ -19,10 +19,13 @@ const (
 	shortcutRootEventChildFinalDrainClean       shortcutRootLifecycleEvent = "child_final_drain_clean"
 	shortcutRootEventProjectionCleanupFailed    shortcutRootLifecycleEvent = "projection_cleanup_failed"
 	shortcutRootEventProjectionCleanupSucceeded shortcutRootLifecycleEvent = "projection_cleanup_succeeded"
-	shortcutRootEventWaitingReplacementPromote  shortcutRootLifecycleEvent = "waiting_replacement_promote"
-	shortcutRootEventChildArtifactsPurged       shortcutRootLifecycleEvent = "child_artifacts_purged"
-	shortcutRootEventDuplicateTargetDetected    shortcutRootLifecycleEvent = "duplicate_target_detected"
-	shortcutRootEventDuplicateTargetResolved    shortcutRootLifecycleEvent = "duplicate_target_resolved"
+	// shortcutRootEventProjectionNotEmpty: the released alias root still
+	// holds something, so the child's final drain runs again.
+	shortcutRootEventProjectionNotEmpty        shortcutRootLifecycleEvent = "projection_not_empty"
+	shortcutRootEventWaitingReplacementPromote shortcutRootLifecycleEvent = "waiting_replacement_promote"
+	shortcutRootEventChildArtifactsPurged      shortcutRootLifecycleEvent = "child_artifacts_purged"
+	shortcutRootEventDuplicateTargetDetected   shortcutRootLifecycleEvent = "duplicate_target_detected"
+	shortcutRootEventDuplicateTargetResolved   shortcutRootLifecycleEvent = "duplicate_target_resolved"
 )
 
 func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecycleEvent][]ShortcutRootState {

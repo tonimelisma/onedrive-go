@@ -757,9 +757,11 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	require.NotNil(t, parentCall)
 	assert.Equal(t, syncengine.SyncDownloadOnly, parentCall.mode)
 	assert.False(t, parentCall.opts.FullReconcile)
+	assert.False(t, parentCall.opts.ReleaseLocalTree, "a drive is never released")
 	require.NotNil(t, childCall)
 	assert.Equal(t, syncengine.SyncBidirectional, childCall.mode)
 	assert.True(t, childCall.opts.FullReconcile)
+	assert.True(t, childCall.opts.ReleaseLocalTree, "the drain ends by releasing the local tree")
 	assert.NoDirExists(t, childRoot)
 	assertShortcutChildArtifactsPurgedForTest(t, cfg.DataDir, &parent, &child, true)
 }
@@ -797,6 +799,7 @@ func TestBuildEngineWork_FinalDrainChildPreservesDryRunOption(t *testing.T) {
 	require.NotNil(t, report)
 	assert.Equal(t, syncengine.SyncBidirectional, gotMode)
 	assert.True(t, gotOpts.FullReconcile)
+	assert.True(t, gotOpts.ReleaseLocalTree)
 	assert.True(t, gotOpts.DryRun)
 	assert.True(t, report.DryRun)
 }
@@ -1204,6 +1207,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 	case call := <-captured:
 		assert.Equal(t, syncengine.SyncBidirectional, call.mode)
 		assert.True(t, call.opts.FullReconcile)
+		assert.True(t, call.opts.ReleaseLocalTree)
 	case <-time.After(5 * time.Second):
 		require.FailNow(t, "final-drain runner did not run")
 	}

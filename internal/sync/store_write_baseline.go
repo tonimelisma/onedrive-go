@@ -523,6 +523,28 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 	return nil
 }
 
+// ForgetBaselineLocalCtime clears the stored inode change time of the
+// baseline row at path, and nothing else, in the store and in the cached
+// baseline. A local delete's content check proved the file no longer holds
+// what the row records while its stat facts may all still match, and a row
+// without a change time is one the next scan reads instead of trusting
+// (canReuseBaselineHash). A path with no row is left alone.
+func (s *SyncStore) ForgetBaselineLocalCtime(ctx context.Context, path string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE baseline SET local_ctime = 0 WHERE path = ?`, path); err != nil {
+		return fmt.Errorf("sync: forgetting the change time of %s: %w", path, err)
+	}
+	if s.baseline == nil {
+		return nil
+	}
+	if entry, ok := s.baseline.GetByPath(path); ok {
+		forgotten := *entry
+		forgotten.LocalCtime = 0
+		s.baseline.Put(&forgotten)
+	}
+
+	return nil
+}
+
 // classifyMutation is classifyBaselineMutation for one outcome: a
 // publication-only baseline update that carries an old path re-keys the row
 // where both sides already hold the item (D-050), which is a move of the
@@ -730,7 +752,7 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 		LocalIdentityObserved: o.LocalIdentityObserved,
 		ETag:                  o.ETag,
 		KeptLocally:           o.KeptLocally,
-		DeleteConfirmed:       o.DeleteConfirmed,
+		ExemptFromDeleteHold:  o.DeleteConfirmed,
 	}
 }
 

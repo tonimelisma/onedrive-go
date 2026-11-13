@@ -30,11 +30,14 @@ const oneShotMaxPasses = 4
 // LeftForNextSync (planFollowUp.leftWhenTheRunEnds), and the report counts
 // the observation issues that keep a file unsynced (Report.UnsyncedIssues)
 // and the files an interrupted removal set aside (Report.InterruptedRemovals).
-// A dry run is always one pass: it executes nothing, so a second pass would
-// see the same truth, and it leaves them untouched. The returned report covers
-// every pass (Report says which of its counts add up and which are the last
-// pass's). A timer callback that panics during the run ends it with an error
-// wrapping panicguard.ErrPanic, beside the report it has (beginRun).
+// A removed shared folder's final drain (RunOptions.ReleaseLocalTree), whose
+// passes create nothing new locally, then releases its local tree
+// (releaseLocalTree). A dry run is always one pass: it executes nothing, so a
+// second pass would see the same truth, and it leaves them untouched. The
+// returned report covers every pass (Report says which of its counts add up
+// and which are the last pass's). A timer callback that panics during the run
+// ends it with an error wrapping panicguard.ErrPanic, beside the report it has
+// (beginRun).
 func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (_ *Report, err error) {
 	runCtx, end := e.beginRun(ctx)
 	defer func() { err = end(err) }()
@@ -114,15 +117,38 @@ func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*
 		)
 	}
 
-	if executed {
-		runner.postSyncHousekeeping(ctx)
-	}
-
-	if leftErr := e.reportWhatTheRunLeft(ctx, total, last, stoppedAtPassBound); leftErr != nil {
-		return total, leftErr
+	if endErr := e.endOneShotRun(ctx, runner, opts, total, last, stoppedAtPassBound, executed); endErr != nil {
+		return total, endErr
 	}
 
 	return total, nil
+}
+
+// endOneShotRun ends a live run after its last pass: the post-sync
+// housekeeping, what the run left, and a removed shared folder's release of
+// its local tree. A release runs after the transfer-artifact cleanup even when
+// no pass executed anything: a partial an earlier run left would otherwise
+// keep the tree on every drain.
+func (e *Engine) endOneShotRun(
+	ctx context.Context,
+	runner *oneShotRunner,
+	opts RunOptions,
+	total *Report,
+	last oneShotPass,
+	stoppedAtPassBound bool,
+	executed bool,
+) error {
+	if executed || opts.ReleaseLocalTree {
+		runner.postSyncHousekeeping(ctx)
+	}
+	if err := e.reportWhatTheRunLeft(ctx, total, last, stoppedAtPassBound); err != nil {
+		return err
+	}
+	if !opts.ReleaseLocalTree {
+		return nil
+	}
+
+	return e.releaseLocalTree(ctx, total)
 }
 
 // reportWhatTheRunLeft adds to a live run's report what only a later run or

@@ -96,6 +96,34 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	assert.Equal(t, []string{"/y.txt"}, info.Conditions[2].Paths)
 }
 
+// Validates: R-2.4.8, R-2.10.47
+//
+// What a removed shared folder's release kept is a condition of the shared
+// folder's own status: it says the folder was removed from OneDrive, how many
+// items were kept and which, and what the user can do.
+func TestBuildSyncStateInfo_NamesWhatARemovedSharedFolderKept(t *testing.T) {
+	t.Parallel()
+
+	kept := syncengine.IssueType("removed_folder_kept")
+	info := buildSyncStateInfo(&syncengine.DriveStatusSnapshot{
+		ObservationIssues: []syncengine.ObservationIssueRow{
+			{Path: "Docs/link", IssueType: kept},
+			{Path: "Docs/pipe", IssueType: kept},
+		},
+	}, false, defaultVisiblePaths)
+
+	require.Len(t, info.Conditions, 1)
+	condition := info.Conditions[0]
+	assert.Equal(t, string(syncengine.ConditionRemovedFolderKept), condition.ConditionKey)
+	assert.Equal(t, "Kept in a removed shared folder", condition.Title)
+	assert.Contains(t, condition.Reason, "This shared folder was removed from your OneDrive")
+	assert.Contains(t, condition.Reason, "folders that cannot be written to", "it names every kind the release keeps")
+	assert.Contains(t, condition.Reason, "could not be moved to the trash or deleted")
+	assert.Equal(t, 2, condition.Count)
+	assert.Equal(t, []string{"Docs/link", "Docs/pipe"}, condition.Paths)
+	assert.Contains(t, condition.Action, "the next sync then removes the folder")
+}
+
 // Validates: R-2.10.47
 func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T) {
 	t.Parallel()

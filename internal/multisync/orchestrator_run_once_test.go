@@ -51,6 +51,7 @@ func TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges(t *testing.T) {
 	notices := keptDrainNotices(capture)
 	require.Len(t, notices, 1, "an unchanged kept copy is announced once")
 	assert.Contains(t, notices[0].Message, "Keeping the local copy of removed shared folder "+childMount.label())
+	assert.Contains(t, notices[0].Message, ": 2 failed;", "the notice says what keeps the copy")
 	assert.NotContains(t, notices[0].Message, childMount.id().String(), "user text names the folder, not the mount ID")
 	assert.Equal(t, slog.LevelInfo, notices[0].Level)
 

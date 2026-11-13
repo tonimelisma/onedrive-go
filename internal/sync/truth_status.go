@@ -128,9 +128,11 @@ type observationIssueTruthVerdict struct {
 //
 // The last member group blocks nothing: local_interrupted_removal sits at an
 // internal name the content filter hides from planning on both sides, so no
-// synced path can read as deleted through it; every other member there is a
-// runtime condition that retry_work or a block scope carries and observation
-// never stores.
+// synced path can read as deleted through it; removed_folder_kept names what a
+// removed shared folder's release left in place, whose truth is whatever the
+// next scan finds (the release records it after the run's last plan, and every
+// full local scan clears it); every other member there is a runtime condition
+// that retry_work or a block scope carries and observation never stores.
 //
 // A value outside the enum cannot come from the store, which refuses an
 // unknown stored issue type (parseIssueType). Should one appear anyway, its
@@ -157,6 +159,7 @@ func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict 
 		// so its type is what bounds the subtree it holds twice.
 		return observationIssueTruthVerdict{blocksRemote: true, boundsRemoteSubtree: true}
 	case issueLocalInterruptedRemoval,
+		issueRemovedFolderKept,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		IssueQuotaExceeded,

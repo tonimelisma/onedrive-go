@@ -369,6 +369,11 @@ func (flow *engineFlow) observeLocal(
 	}
 
 	obs := eng.buildLocalObserver(bl, eng.logger)
+	// This scan runs no timers. Its racily-clean window is measured on the
+	// run's clock, the one every other time decision of the run reads.
+	if flow.deps.clock != nil {
+		obs.clock = flow.deps.clock
+	}
 	if recordHashes {
 		cache, cacheErr := eng.baseline.newLocalHashCache(ctx)
 		if cacheErr != nil {
@@ -641,7 +646,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 
 	planStart := flow.deps.now()
-	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, bl, mode)
+	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, bl, mode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -796,10 +801,15 @@ func planningBaseline(inputs *currentInputs, fallback *Baseline) *Baseline {
 	return fallback
 }
 
+// buildCurrentActionPlanFromInputs plans the run's actions from the inputs
+// one transaction read. A removed shared folder's final drain
+// (RunOptions.ReleaseLocalTree) plans for a mount that releases its local
+// tree, so it creates nothing new locally (leaveOutNewLocalItems).
 func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentInputs,
 	bl *Baseline,
 	mode SyncMode,
+	opts RunOptions,
 ) (*actionPlan, error) {
 	if inputs.baseline != nil {
 		bl = inputs.baseline
@@ -812,7 +822,8 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.observationIssues,
 		bl,
 		plannerMountContext{
-			DriveID: e.driveID,
+			DriveID:           e.driveID,
+			ReleasesLocalTree: opts.ReleaseLocalTree,
 		},
 		mode,
 	)

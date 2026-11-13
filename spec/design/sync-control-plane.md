@@ -193,10 +193,11 @@ Shortcut lifecycle state is producer-owned:
 | Shortcut binding is healthy | parent root `active` | child runner may start unless parent is paused | current child path |
 | Parent drive is paused | parent root `active` | child runner is paused with the parent | current child path |
 | Binding target cannot be refreshed | parent root `target_unavailable` | no child work command; retry on parent refresh | current child path |
-| Shortcut was authoritatively removed | parent root `removed_final_drain` | child runs a final bidirectional full sync, then stops after parent release | current and reserved paths until finalized |
+| Shortcut was authoritatively removed | parent root `removed_final_drain` | child runs a final bidirectional full sync that ends by releasing its local tree by the local delete rule, then stops after parent release | current and reserved paths until finalized |
 | Clean final drain acknowledged, parent release not yet complete | parent root `removed_release_pending` | child is already drained; release cleanup retries in parent | current and reserved paths until finalized |
 | Removed shortcut final drain cannot reach the shared-folder target | parent root `removed_final_drain` plus child retry/block state | child final-drain runner retries normally; status guides target-access recovery | current and reserved paths until finalized |
-| Removed shortcut cleanup cannot release the alias root | parent root `removed_cleanup_blocked` | child is already drained; release cleanup retries in parent | current and reserved paths until finalized |
+| Released alias root still holds something when the drain is acknowledged | parent root back to `removed_final_drain` (or `same_path_replacement_waiting`) | child runs the final drain again and releases or reports what is there | current and reserved paths until finalized |
+| Removed shortcut cleanup cannot remove the emptied alias root (not a directory, removal refused) | parent root `removed_cleanup_blocked` | child is already drained; release cleanup retries in parent | current and reserved paths until finalized |
 | Parent released the alias root and child artifacts still need purge | parent root `removed_child_cleanup_pending` | no child runner; multisync purges child-owned artifacts and acknowledges completion | none |
 | Same-path replacement arrives before old child finalizes | parent root with `Waiting` replacement | old child drains first, new child starts after parent promotion | shared path remains reserved |
 | Duplicate automatic shortcut to same target in one parent | parent root `duplicate_target` | duplicate root does not publish a child work command | conflicting child paths |
@@ -281,19 +282,25 @@ the child reports retry/block/content failures, root unavailability, target
 access loss, or no mount report, the typed final-drain result is not
 acknowledged and the parent protection remains. The child state DB remains the
 owner of dirty content retry/block state. A result is `clean` only when the
-child's report says its local tree may be removed (`Report.LocalTreeHolds`
+child's report says nothing holds its local tree (`Report.LocalTreeHolds`
 holds nothing: its last pass left no work, it was not a dry run, it holds no
-delete of a local file and no file an interrupted removal set aside), and the
-blocked detail says in counts what holds it
+delete of a local file and no file an interrupted removal set aside, and the
+release that ends the drain, `RunOptions.ReleaseLocalTree`, took the whole
+tree out of the sync folder by the local delete rule, sync-engine.md), and the
+blocked detail says in counts what holds it and names what the release kept:
+content sync does not sync in the folder-not-empty sentence of an ordinary
+folder delete, a folder that cannot be written to in a sentence of its own
 (`TestClassifyShortcutChildDrainReport_CleanOnlyWhenTheLocalTreeMayGo`,
 `TestRunOnce_FinalDrainChildThatLeftWorkKeepsItsLocalCopy`,
 `TestFinalDrain_RunsBidirectionalFullReconcileInOneShotAndWatch`). Only a
 `clean` final-drain result produces an opaque acknowledgement to the live
 parent engine. The parent
-first persists `removed_release_pending`, then idempotently removes/releases
-the alias projection or promotes a waiting replacement. If release cleanup is
-blocked, the parent persists `removed_cleanup_blocked` and retries from that
-durable truth on startup or later parent refresh. When release cleanup
+first persists `removed_release_pending`, then removes the emptied alias root
+only as an empty directory, or promotes a waiting replacement. A root that
+still holds something goes back to the final drain, so the child that owns the
+content runs again. If removing the empty root fails, the parent persists
+`removed_cleanup_blocked` and retries from that durable truth on startup or
+later parent refresh. When release cleanup
 succeeds, the old binding stays in the parent store as
 `removed_child_cleanup_pending`: the alias path is no longer protected and no
 child runner is published, but the parent explicitly publishes a child artifact

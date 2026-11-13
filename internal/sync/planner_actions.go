@@ -81,8 +81,9 @@ func (p *planner) PlanCurrentState(
 // planBuiltActions turns the actions PlanCurrentState built, from the
 // reconciliation rows (reconciled) and by move composition (composed), into
 // the plan: it drops the reconciliation work composition replaces, normalizes,
-// admits by mode and orders. Every one of those steps decides by action type,
-// so the built actions are checked against the enums first
+// admits by mode (and, for a mount that releases its local tree, by
+// leaveOutNewLocalItems) and orders. Every one of those steps decides by
+// action type, so the built actions are checked against the enums first
 // (validatePlannedActions): an action outside them fails the plan, as a row
 // outside the decision table does, before any step can answer it.
 func (p *planner) planBuiltActions(
@@ -107,6 +108,9 @@ func (p *planner) planBuiltActions(
 	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, inputs, composition)
 	droppedCreates := beforeDrop - len(normalizedActions)
 	droppedCreatesInMode := max(0, beforeDropInMode-countActionsAllowedInMode(normalizedActions, mode))
+	if mount.ReleasesLocalTree {
+		normalizedActions = p.leaveOutNewLocalItems(normalizedActions, mode)
+	}
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
@@ -661,6 +665,64 @@ func partitionCurrentActionsForMode(actions []Action, mode SyncMode) ([]Action, 
 	}
 
 	return admitted, deferred
+}
+
+// leaveOutNewLocalItems admits what a plan that releases its local tree may
+// run (plannerMountContext.ReleasesLocalTree): it creates nothing new locally.
+// A download or a local folder create of an item that has no baseline row and
+// no local entry is left out, so the final drain never fetches an item it has
+// not synced, and an entry an earlier release took is never downloaded back.
+// A folder that an admitted action below it needs stays: a synced item
+// OneDrive moved into a new folder moves there, and the release then takes
+// both. What is left out is neither follow-up work nor work left: the tree it
+// would join is going. The plan logs its count once, at Debug.
+func (p *planner) leaveOutNewLocalItems(actions []Action, mode SyncMode) []Action {
+	needed := foldersNeededByAdmittedActions(actions, mode)
+	kept := make([]Action, 0, len(actions))
+	leftOut := 0
+	for i := range actions {
+		action := &actions[i]
+		if createsNewLocalItem(action) && (action.Type != ActionFolderCreate || !needed[action.Path]) {
+			leftOut++
+			continue
+		}
+		kept = append(kept, *action)
+	}
+	if leftOut > 0 && p.logger != nil {
+		p.logger.Debug("plan of a tree being released leaves out items new to it",
+			slog.Int("left_out", leftOut))
+	}
+
+	return kept
+}
+
+// createsNewLocalItem reports a download or a local folder create of an item
+// with no baseline row and no local entry.
+func createsNewLocalItem(action *Action) bool {
+	if action.View == nil || action.View.Baseline != nil || action.View.Local != nil {
+		return false
+	}
+
+	return action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == createLocal)
+}
+
+// foldersNeededByAdmittedActions is every folder above an action the mode
+// admits that needs its parent to exist (anything but a delete or cleanup,
+// as runnableSubtreeActionRequiresParent says) and is not itself a new local
+// item.
+func foldersNeededByAdmittedActions(actions []Action, mode SyncMode) map[string]bool {
+	needed := map[string]bool{}
+	for i := range actions {
+		action := &actions[i]
+		if createsNewLocalItem(action) || isDeleteAction(action) || !actionAllowedInMode(action, mode) {
+			continue
+		}
+		for dir := path.Dir(action.Path); dir != "." && dir != "/" && !needed[dir]; dir = path.Dir(dir) {
+			needed[dir] = true
+		}
+	}
+
+	return needed
 }
 
 func localStateFromSnapshotRow(row *localStateRow) *localState {

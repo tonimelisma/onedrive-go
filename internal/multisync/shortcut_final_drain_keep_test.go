@@ -18,11 +18,12 @@ import (
 // Validates: R-2.4.8, R-6.6.28
 //
 // A clean final drain lets the parent remove the removed shared folder's
-// whole local tree, so the drain is clean only when the child's report says
-// the tree may go: nothing left by its last pass, not a dry run, no delete of
-// a local file held, no file an interrupted removal set aside. Sums over the
-// run's passes (Failed, Errors) decide nothing: a failure an earlier pass
-// had and a later pass redid leaves nothing.
+// emptied root, so the drain is clean only when the child's report says
+// nothing holds the tree: nothing left by its last pass, not a dry run, no
+// delete of a local file held, no file an interrupted removal set aside and
+// nothing its release kept, which the blocked detail names. Sums over the
+// run's passes (Failed, Errors) decide nothing: a failure an earlier pass had
+// and a later pass redid leaves nothing.
 func TestClassifyShortcutChildDrainReport_CleanOnlyWhenTheLocalTreeMayGo(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +58,36 @@ func TestClassifyShortcutChildDrainReport_CleanOnlyWhenTheLocalTreeMayGo(t *test
 			name: "a file an interrupted removal set aside", report: syncengine.Report{InterruptedRemovals: 1},
 			detail: "1 file set aside by an interrupted removal",
 		},
+		{
+			name: "a release that kept content sync does not sync",
+			report: syncengine.Report{KeptNotOnOneDrive: syncengine.KeptEntries{
+				Count: 4, Examples: []string{"Docs/link", "Docs/pipe", ".notes"},
+			}},
+			detail: "folder still contains files that are not on OneDrive (Docs/link, Docs/pipe, .notes and 1 more); " +
+				"move or delete them to finish",
+		},
+		{
+			name: "a release that kept changes it could not upload",
+			report: syncengine.Report{UnsyncedIssues: 1, KeptNotUploaded: syncengine.KeptEntries{
+				Count: 1, Examples: []string{"Docs/edited.txt"},
+			}},
+			detail: "1 change could not be uploaded because the shared folder can no longer be reached (Docs/edited.txt)",
+		},
+		{
+			name: "a release that kept a folder that cannot be written to",
+			report: syncengine.Report{KeptNotWritable: syncengine.KeptEntries{
+				Count: 1, Examples: []string{"Docs"},
+			}},
+			detail: "1 folder cannot be written to (Docs); make it writable to finish",
+		},
+		{
+			name: "a release that kept a synced item its delete could not remove",
+			report: syncengine.Report{KeptNotRemoved: syncengine.KeptEntries{
+				Count: 1, Examples: []string{"Docs/locked.txt"},
+			}},
+			detail: "1 synced item could not be moved to the trash or deleted (Docs/locked.txt); " +
+				"remove it by hand or fix what keeps it, then sync again",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -85,6 +116,9 @@ func TestRunOnce_FinalDrainChildThatLeftWorkKeepsItsLocalCopy(t *testing.T) {
 	}{
 		{name: "left for the next sync", report: syncengine.Report{Uploads: 1, LeftForNextSync: 1}},
 		{name: "an issue that keeps a file unsynced", report: syncengine.Report{UnsyncedIssues: 1}},
+		{name: "a release that kept a symbolic link", report: syncengine.Report{
+			KeptNotOnOneDrive: syncengine.KeptEntries{Count: 1, Examples: []string{"link"}},
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_DATA_HOME", t.TempDir())
@@ -173,5 +207,6 @@ func TestFinalDrain_RunsBidirectionalFullReconcileInOneShotAndWatch(t *testing.T
 	for _, call := range calls {
 		assert.Equal(t, syncengine.SyncBidirectional, call.mode)
 		assert.True(t, call.opts.FullReconcile)
+		assert.True(t, call.opts.ReleaseLocalTree, "the drain ends by releasing the local tree")
 	}
 }

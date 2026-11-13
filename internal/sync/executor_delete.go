@@ -57,9 +57,11 @@ func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(st
 	return ""
 }
 
-// ExecuteLocalDelete removes a local file or folder with S4 safety:
-// for files, verifies hash before delete; mismatch keeps the local file and
-// recreates the remote copy instead of deleting newer content.
+// ExecuteLocalDelete removes a local file or folder with S4 safety: a file
+// leaves only when its content still matches the baseline; a mismatch keeps
+// it and supersedes the delete, so the next plan uploads the newer content
+// instead of deleting it. A removed shared folder's release drives the same
+// delete (engine_shortcut_release.go).
 func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actionOutcome {
 	// The entry is removed by its spelling on disk (R-2.13.2).
 	local := e.syncTree.Spelling(action.Path)
@@ -191,7 +193,7 @@ func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPat
 }
 
 // DeleteLocalFile takes a file out of the sync folder after verifying that it
-// still holds the synced content, and puts it in the drive's trash (P-4).
+// still holds the synced content, and puts it in the drive's trash (R-6.4.9).
 //
 // Verification and removal are bound to one inode (D-010): the file is
 // opened once, its content checked through that descriptor, and only that
@@ -273,18 +275,32 @@ func (e *executor) verifyLocalDeleteContent(action *Action, f *os.File, info os.
 		return fmt.Errorf("hashing %s before delete: %w", action.Path, err)
 	}
 	if currentHash != baselineHash {
-		return fmt.Errorf("%w: local delete hash mismatch for %s (baseline=%s current=%s remote=%s mtime=%d)",
-			errActionPreconditionChanged,
-			action.Path,
-			baselineHash,
-			currentHash,
-			baselineRemoteHash,
-			info.ModTime().UnixNano(),
-		)
+		return &localContentChangedError{
+			path: action.Path,
+			detail: fmt.Sprintf("baseline=%s current=%s remote=%s mtime=%d",
+				baselineHash, currentHash, baselineRemoteHash, info.ModTime().UnixNano()),
+		}
 	}
 
 	return nil
 }
+
+// localContentChangedError reports that a local delete's content check read
+// the file and found it no longer holds the content its baseline row records:
+// a proven fact about the file, which its stat facts may not show. It wraps
+// errActionPreconditionChanged, so the delete is superseded as before, and
+// the engine also clears the row's stored change time, so the next scan reads
+// the file instead of trusting the row (forgetLocalCtimeProvenChanged).
+type localContentChangedError struct {
+	path   string
+	detail string
+}
+
+func (e *localContentChangedError) Error() string {
+	return fmt.Sprintf("%s: local delete hash mismatch for %s (%s)", errActionPreconditionChanged, e.path, e.detail)
+}
+
+func (e *localContentChangedError) Unwrap() error { return errActionPreconditionChanged }
 
 // removeVerifiedLocalFile takes the verified file at rel out of the sync
 // folder: into the trash when the drive has one, otherwise removed.
@@ -463,16 +479,30 @@ func localDeleteUnchangedWithoutHash(entry *BaselineEntry, info os.FileInfo) boo
 // The console prints it after the folder path, so it names at most a few
 // blockers and says what to do instead of dumping the whole list.
 func folderNotEmptyError(blockers []string) error {
-	const maxNamed = 3
-	named := blockers
-	more := ""
-	if len(blockers) > maxNamed {
-		named = blockers[:maxNamed]
-		more = fmt.Sprintf(" and %d more", len(blockers)-maxNamed)
+	return errors.New(folderNotEmptyReason(len(blockers), blockers[:min(len(blockers), folderNotEmptyNamedLimit)]))
+}
+
+// folderNotEmptyNamedLimit is how many blockers the folder-not-empty sentence
+// names.
+const folderNotEmptyNamedLimit = 3
+
+// folderNotEmptyReason is folderNotEmptyError's sentence for count blockers
+// of which named are the first few. A removed shared folder's release that
+// keeps content sync does not manage gives the same sentence
+// (LocalTreeHolds.Reasons).
+func folderNotEmptyReason(count int, named []string) string {
+	return fmt.Sprintf("folder still contains files that are not on OneDrive (%s); move or delete them to finish",
+		namedWithMore(count, named))
+}
+
+// namedWithMore lists named and says how many of count it leaves out.
+func namedWithMore(count int, named []string) string {
+	listed := strings.Join(named, ", ")
+	if count > len(named) {
+		return fmt.Sprintf("%s and %d more", listed, count-len(named))
 	}
 
-	return fmt.Errorf("folder still contains files that are not on OneDrive (%s%s); move or delete them to finish",
-		strings.Join(named, ", "), more)
+	return listed
 }
 
 // validateRemoteDeleteLocalAbsence is the remote-delete mirror of S4: a

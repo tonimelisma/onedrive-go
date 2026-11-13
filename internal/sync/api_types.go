@@ -18,6 +18,13 @@ type (
 		// recorded before this pass (`sync --confirm-deletes`); deletes that
 		// appeared since are judged by the hold again.
 		ConfirmDeletes bool
+		// ReleaseLocalTree makes the run a removed shared folder's final
+		// drain: its passes create nothing new locally (a remote item with
+		// no baseline row and no local entry is not downloaded,
+		// leaveOutNewLocalItems), and once they leave the local tree free,
+		// the run takes the tree out of the sync folder by the local delete
+		// rule and reports what stays (engine_shortcut_release.go, R-2.4.8).
+		ReleaseLocalTree bool
 	}
 	WatchOptions struct {
 		PollInterval time.Duration // remote delta polling interval (0 -> 5m)
@@ -27,8 +34,10 @@ type (
 	// counts of work done add up over the passes: the action counts by type,
 	// Succeeded, Failed, Superseded and Errors. The rest is the state the
 	// last pass ended in: DeferredByMode, the held deletes, LeftForNextSync,
-	// LastPassFailed, LastPassKeptForRetry, and the counts read from the store
-	// after it (UnsyncedIssues, InterruptedRemovals). What the run left
+	// LastPassFailed, LastPassKeptForRetry, the counts read from the store
+	// after it (UnsyncedIssues, InterruptedRemovals), and what a release of
+	// the local tree did after it (Released, KeptNotOnOneDrive,
+	// KeptNotUploaded, KeptNotWritable, KeptNotRemoved). What the run left
 	// (LeftWork) and whether its local tree may be removed (LocalTreeHolds)
 	// are read from that state alone.
 	Report struct {
@@ -77,6 +86,24 @@ type (
 		// unsynced, so it is not work left, but it keeps the local tree from
 		// being removed (LocalTreeHolds). Read with UnsyncedIssues.
 		InterruptedRemovals int
+		// Released is how many synced files and folders the release of the
+		// local tree (RunOptions.ReleaseLocalTree) took out of the sync
+		// folder, each by the local delete rule.
+		Released int
+		// KeptNotOnOneDrive is what the release found in the tree that sync
+		// does not sync (a symbolic link, a special file, an entry the
+		// content filter hides or a name sync reserves) and so kept,
+		// KeptNotUploaded the new or changed files it kept because the shared
+		// folder can no longer be read, KeptNotWritable the synced folders it
+		// removed nothing from because they cannot be written to (their
+		// permissions, or a read-only filesystem), and KeptNotRemoved the
+		// synced entries its local delete could not move to the trash or
+		// delete (a trash that takes nothing, an immutable file). Each keeps
+		// the tree (LocalTreeHolds).
+		KeptNotOnOneDrive KeptEntries
+		KeptNotUploaded   KeptEntries
+		KeptNotWritable   KeptEntries
+		KeptNotRemoved    KeptEntries
 
 		Succeeded int
 		// Failed is every failed action of every pass. What the run left is

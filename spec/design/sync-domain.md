@@ -73,8 +73,13 @@ permission boundary scope (`scopeKeyForPermissionEvidence`), the
 block-scope activation wording (`blockScopeActivationWording`) and whether an
 observation issue leaves a file unsynced, which fails a one-shot sync
 (`issueTypeLeavesFileUnsynced`, R-6.6.28: every member does except
-`deletes_held`, a deliberate hold, and `local_interrupted_removal`, a report
-about a leftover at an internal name sync never syncs;
+`deletes_held`, a deliberate hold, `local_interrupted_removal`, a report
+about a leftover at an internal name sync never syncs, and
+`removed_folder_kept`, what a removed shared folder's release kept: content
+sync does not sync, a synced folder that cannot be written to or a synced
+entry the local delete could not move to the trash or delete, both already
+synced, or a change that can no longer be sent to the shared folder, whose
+own `remote_read_denied` issue already counts;
 `TestIssueTypes_EveryTypeIsClassifiedForOneShotExit`). None of them
 carries a `//nolint:exhaustive`; until 2026-11-11 the last three did, remote
 truth was two equality tests and the condition family a lookup table, so a

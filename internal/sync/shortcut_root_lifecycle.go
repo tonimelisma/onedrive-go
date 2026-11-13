@@ -689,33 +689,70 @@ func (e *Engine) finalizeShortcutRootReleaseRecord(
 	if !shortcutRootStateAwaitsReleaseCleanup(normalized.State) {
 		return []ShortcutRootRecord{normalized}, false, nil
 	}
-	plan := planShortcutRootReleaseCleanup(&normalized, e.removeShortcutRootProjection(normalized.RelativeLocalPath))
+	result := e.removeShortcutRootProjection(normalized.RelativeLocalPath)
+	if result.NotEmpty {
+		// The child released its tree before acknowledging, so something
+		// arrived since; the child, which owns that content, runs again.
+		e.logger.Debug("removed shared folder's local folder is not empty; its final sync runs again",
+			slog.String("path", normalized.RelativeLocalPath))
+	}
+	plan := planShortcutRootReleaseCleanup(&normalized, result)
 	return plan.Records, plan.Changed, plan.Err
 }
 
-func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) error {
+// removeShortcutRootProjection removes a removed shared folder's alias root
+// once the child's final drain has taken its content out by the local delete
+// rule (engine_shortcut_release.go). The root goes only as an empty
+// directory: this engine never walks a tree it does not sync, and a root that
+// still holds something is the child's to release.
+func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) shortcutRootReleaseResult {
 	relativePath, ok := cleanShortcutRootRelativePath(relativeLocalPath)
 	if !ok {
-		return fmt.Errorf("%w: the shared folder's local path leaves the sync folder", synctree.ErrUnsafePath)
+		return shortcutRootReleaseResult{
+			Err: fmt.Errorf("%w: the shared folder's local path leaves the sync folder", synctree.ErrUnsafePath),
+		}
 	}
 	relativePath = e.shortcutRootOnDisk(relativePath)
 	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
-		return fmt.Errorf("checking the removed shared folder's local folder: %w", err)
+		return shortcutRootReleaseResult{Err: fmt.Errorf("checking the removed shared folder's local folder: %w", err)}
 	}
 	state, err := e.syncTree.PathStateNoFollow(relativePath)
 	if err != nil {
-		return fmt.Errorf("reading the removed shared folder's local folder: %w", err)
+		return shortcutRootReleaseResult{Err: fmt.Errorf("reading the removed shared folder's local folder: %w", err)}
 	}
 	if !state.Exists {
-		return nil
+		return shortcutRootReleaseResult{}
 	}
 	if !state.IsDir {
-		return fmt.Errorf("%w: the shared folder's local path is not a directory", synctree.ErrUnsafePath)
+		return shortcutRootReleaseResult{
+			Err: fmt.Errorf("%w: the shared folder's local path is not a directory", synctree.ErrUnsafePath),
+		}
 	}
-	if err := e.syncTree.RemoveTreeNoFollow(relativePath); err != nil {
-		return fmt.Errorf("removing the removed shared folder's local folder: %w", err)
+	if notEmpty, err := e.shortcutRootHoldsEntries(relativePath); err != nil || notEmpty {
+		return shortcutRootReleaseResult{NotEmpty: notEmpty, Err: err}
 	}
-	return nil
+	removeErr := e.syncTree.RemoveEmptyDirNoFollow(relativePath)
+	if removeErr == nil {
+		return shortcutRootReleaseResult{}
+	}
+	// An entry that arrived after the check refuses the removal; that is the
+	// child's again, not a blocked cleanup.
+	if notEmpty, err := e.shortcutRootHoldsEntries(relativePath); err == nil && notEmpty {
+		return shortcutRootReleaseResult{NotEmpty: true}
+	}
+
+	return shortcutRootReleaseResult{Err: fmt.Errorf("removing the removed shared folder's local folder: %w", removeErr)}
+}
+
+// shortcutRootHoldsEntries reports whether the alias root at its on-disk
+// spelling holds any entry.
+func (e *Engine) shortcutRootHoldsEntries(onDisk string) (bool, error) {
+	empty, err := e.syncTree.DirEmptyNoFollow(onDisk)
+	if err != nil {
+		return false, fmt.Errorf("reading the removed shared folder's local folder: %w", err)
+	}
+
+	return !empty, nil
 }
 
 func appendUniqueProtectedRootPaths(paths []string, additions ...string) []string {
