@@ -96,6 +96,10 @@ type moveScenarioRemote struct {
 	// children routes lag behind a create (LI-20260405-07, LI-20260405-09).
 	// Delta and reads by ID see it at once.
 	invisibleFor map[string]int
+	// hashlessEmptyFiles gives every zero-byte file no hash, as a Business
+	// drive does (D-059b): its eTag and modification time are then all a
+	// comparison has.
+	hashlessEmptyFiles bool
 	// sessions are the open upload sessions by URL
 	// (scenario_remote_session_test.go), and sessionFragments every fragment
 	// that reached each of them, for a test to read.
@@ -194,6 +198,9 @@ func (r *moveScenarioRemote) setContent(t *testing.T, id, content string) {
 	}
 	item.Size = int64(len(content))
 	item.QuickXorHash = hashContentQuickXor(t, content)
+	if content == "" && r.hashlessEmptyFiles {
+		item.QuickXorHash = ""
+	}
 	item.ETag = r.nextETag()
 	item.ModifiedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Add(time.Duration(r.etagSeq) * time.Second)
 	r.contents[id] = content
@@ -757,7 +764,8 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 }
 
 // uploadCreating follows the client's two-step create (R-5.6.14): an empty
-// item with conflictBehavior=fail, the hook, then the content by ID. With
+// item with conflictBehavior=fail, the hook, then the content by ID. A
+// zero-byte file is complete as created: the hook never runs for it. With
 // interruptCreates set it stops after the hook, as a process killed mid-upload
 // would, leaving the empty item behind. With loseCreateAnswers set it stops
 // before the hook: the empty item exists and the client never learned its ID.
@@ -790,6 +798,11 @@ func (r *moveScenarioRemote) uploadCreating(
 
 	if loseAnswer {
 		return nil, scenarioCreateAnswerLost(name)
+	}
+	if size == 0 {
+		// Complete as created, as in graph.UploadCreating: no hook, and no
+		// content step to interrupt.
+		return &created, nil
 	}
 	if onCreated != nil {
 		if hookErr := onCreated(&created); hookErr != nil {
@@ -864,13 +877,15 @@ func readScenarioUpload(content io.ReaderAt, size int64) (string, error) {
 // clone is an independent copy of the drive as it is now, recycle bin,
 // versions, change log and open upload sessions included: the OneDrive a
 // crashed client meets when it starts again (crash_points_test.go). The
-// fault knobs are the test's, not OneDrive's, and are not copied.
+// fault knobs are the test's, not OneDrive's, and are not copied; the kind of
+// drive (hashlessEmptyFiles) is OneDrive's and is.
 func (r *moveScenarioRemote) clone() *moveScenarioRemote {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	c := &moveScenarioRemote{
 		driveID:             r.driveID,
+		hashlessEmptyFiles:  r.hashlessEmptyFiles,
 		items:               make(map[string]*graph.Item, len(r.items)),
 		contents:            make(map[string]string, len(r.contents)),
 		etagSeq:             r.etagSeq,

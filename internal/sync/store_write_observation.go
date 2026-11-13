@@ -365,7 +365,7 @@ func (s *SyncStore) processObservedItemWithPlaceholders(
 		if err := deletePendingCreateTx(ctx, tx, item.ItemID); err != nil {
 			return err
 		}
-	case placeholderNotPending, placeholderAdopt, placeholderAdopted:
+	case placeholderNotPending, placeholderAdopt, placeholderAdopted, placeholderSizeUnknown:
 	}
 
 	if err := s.processObservedItem(ctx, tx, item); err != nil {
@@ -377,7 +377,7 @@ func (s *SyncStore) processObservedItemWithPlaceholders(
 		return adoptPlaceholderTx(ctx, tx, item, pending, adopted)
 	case placeholderAdopted:
 		return followAdoptedPlaceholderTx(ctx, tx, item, pending, adopted)
-	case placeholderNotPending, placeholderStale, placeholderResolved:
+	case placeholderNotPending, placeholderStale, placeholderResolved, placeholderSizeUnknown:
 	}
 
 	return nil

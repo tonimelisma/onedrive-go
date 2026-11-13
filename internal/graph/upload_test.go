@@ -848,6 +848,9 @@ type sessionUploadRecorder struct {
 	// to sessionLandedETag, and the connection drops before the response
 	// (live, 2026-11-10, LI-20261110-01).
 	sessionLandsThenDrops bool
+	// fragmentsCompleteWithoutItem answers every fragment 200 with no body:
+	// the upload completed, and the answer does not carry the item.
+	fragmentsCompleteWithoutItem bool
 }
 
 // sessionLandedETag is the empty item's eTag once a session request that
@@ -946,6 +949,22 @@ func (rec *sessionUploadRecorder) serveSessionCreate(
 	writeTestResponsef(t, w, `{"uploadUrl":"%s/upload-session","expirationDateTime":"2030-01-01T00:00:00Z"}`, uploadBase)
 }
 
+// serveFragment records one fragment sent to the session and answers it as
+// the upload's completion: with the item, or with no body at all when
+// fragmentsCompleteWithoutItem is set. The caller holds mu.
+func (rec *sessionUploadRecorder) serveFragment(t *testing.T, w http.ResponseWriter, body []byte) {
+	t.Helper()
+
+	rec.chunkBodies = append(rec.chunkBodies, string(body))
+	if rec.fragmentsCompleteWithoutItem {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","size":%d,
+		"lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`, len(body))
+}
+
 func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionStatus int) *httptest.Server {
 	t.Helper()
 
@@ -970,11 +989,8 @@ func newSessionUploadServer(t *testing.T, rec *sessionUploadRecorder, sessionSta
 			rec.serveReadBack(t, w)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "createUploadSession"):
 			rec.serveSessionCreate(t, w, r, body, sessionStatus, srv.URL)
-		case r.Method == http.MethodPut && r.URL.Path == "/upload-session":
-			rec.chunkBodies = append(rec.chunkBodies, string(body))
-			w.WriteHeader(http.StatusCreated)
-			writeTestResponsef(t, w, `{"id":"small-item","name":"small.txt","size":%d,
-				"lastModifiedDateTime":"2024-07-10T09:00:00Z","file":{}}`, len(body))
+		case r.Method == http.MethodPut && r.URL.Path == testUploadSessionPath:
+			rec.serveFragment(t, w, body)
 		case r.Method == http.MethodPut:
 			rec.simplePuts++
 			w.WriteHeader(http.StatusCreated)

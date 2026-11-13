@@ -317,6 +317,62 @@ func TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone(t *testing.T
 	assert.Equal(t, 2, rec.reads)
 }
 
+// Validates: R-5.6.14, R-5.6.15
+//
+// The failure that names the created item also says whether the cleanup
+// removed it: a removed item can never receive this upload, so the caller's
+// record of it can end at once. An item the cleanup left in place (content
+// landed meanwhile, every delete refused) is not reported removed.
+func TestUpload_FailedContentStepReportsWhetherItRemovedItsEmptyItem(t *testing.T) {
+	refused := http.StatusPreconditionFailed
+	for _, tc := range []struct {
+		name    string
+		rec     *sessionUploadRecorder
+		removed bool
+	}{
+		{name: "deleted", rec: &sessionUploadRecorder{}, removed: true},
+		{
+			name:    "already gone",
+			rec:     &sessionUploadRecorder{readBacks: []createdItemReadBack{{status: http.StatusNotFound}}},
+			removed: true,
+		},
+		{name: "content landed meanwhile", rec: &sessionUploadRecorder{currentSize: 7}},
+		{name: "every delete refused", rec: &sessionUploadRecorder{deleteStatuses: []int{refused, refused, refused}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := failUploadAfterCreate(t, tc.rec)
+
+			var created *CreatedItemError
+			require.ErrorAs(t, err, &created)
+			assert.Equal(t, "small-item", created.Item.ID)
+			assert.Equal(t, tc.removed, created.Removed)
+		})
+	}
+}
+
+// Validates: R-5.6.14
+//
+// A fragment answered 200 without a body says the upload completed: the item
+// holds the content and is no placeholder. Handed to the cleanup, it was read
+// back and deleted whenever that read still showed it empty.
+func TestUpload_CompletedUploadIsNotRemovedAsAPlaceholder(t *testing.T) {
+	rec := &sessionUploadRecorder{fragmentsCompleteWithoutItem: true}
+	srv := newSessionUploadServer(t, rec, http.StatusOK)
+	defer srv.Close()
+
+	content := bytes.Repeat([]byte("x"), ChunkedUploadChunkSize+1)
+	_, err := newTestClient(t, srv.URL).Upload(t.Context(), driveid.New("d"), "parent", "big.bin",
+		bytes.NewReader(content), int64(len(content)), time.Time{}, nil)
+
+	require.ErrorIs(t, err, ErrUploadCompletedWithoutItem)
+	require.False(t, IsFinalFragmentUncertain(err), "a fragment before the last completed the upload")
+	var created *CreatedItemError
+	require.ErrorAs(t, err, &created)
+	assert.False(t, created.Removed)
+	assert.Zero(t, rec.reads, "the completed item is never read back for removal")
+	assert.Equal(t, []string{""}, rec.deleteIfMatch, "only the session is canceled, the item is not deleted")
+}
+
 // Validates: R-5.6.14
 //
 // The sequence of 2026-11-10 (LI-20261110-01) through the HTTP fake, on sync's

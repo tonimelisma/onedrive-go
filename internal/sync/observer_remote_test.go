@@ -2357,7 +2357,8 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+	polledAt := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	obs.clock = &observerTestClock{syncClock: newManualClock(polledAt), sleep: func(ctx context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 1 {
 			cancel()
@@ -2375,8 +2376,71 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Empty(t, batches, "a poll that returned no events hands no batch to the store")
+	require.Len(t, batches, 1, "a poll that returned no events hands over only the time it began")
+	handed := <-batches
+	assert.True(t, handed.pollOnly)
+	assert.Equal(t, polledAt, handed.pollStartedAt)
+	assert.Empty(t, handed.observed, "nothing to commit")
+	assert.Empty(t, handed.emitted, "nothing to replan")
+	assert.Empty(t, handed.cursorToken, "no token to save")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
+}
+
+// Validates: R-5.6.15, R-2.1.2
+//
+// The watch loop drops the create intent of a file that is gone once a poll
+// that began after the attempt ended has been applied, so every batch a poll
+// hands over says when it began, on the observer's clock, before its first
+// page was asked for: a poll with items as well as one that returned none.
+func TestWatch_EveryPollHandsOverTheTimeItBegan(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(synctest.TestDriveID)
+	fetcher := &sequentialFetcher{pages: []mockDeltaPage{
+		{page: &graph.DeltaPage{
+			Items: []graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveID},
+				{ID: "f1", Name: "a.txt", ParentID: "root", DriveID: driveID, Size: 10, QuickXorHash: "hash1"},
+			},
+			DeltaLink: "token-1",
+		}},
+		{page: &graph.DeltaPage{Items: []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, DeltaLink: "token-2"}},
+	}}
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	firstPoll := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	clock := newManualClock(firstPoll)
+	sleeps := 0
+	obs.clock = &observerTestClock{syncClock: clock, sleep: func(ctx context.Context, _ time.Duration) error {
+		sleeps++
+		if sleeps > 1 {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		clock.Advance(time.Minute)
+		return nil
+	}}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 2)
+	handed := make(chan remoteObservationBatch, 2)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
+		handed <- batch
+		return nil
+	})
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	})
+
+	withItems := receiveWithin(t, handed, "the first poll's batch")
+	zeroEvent := receiveWithin(t, handed, "the second poll's batch")
+	stopWatch(t, cancel, done)
+
+	assert.Equal(t, firstPoll, withItems.pollStartedAt)
+	assert.False(t, withItems.pollOnly)
+	assert.NotEmpty(t, withItems.observed)
+	assert.Equal(t, firstPoll.Add(time.Minute), zeroEvent.pollStartedAt)
+	assert.True(t, zeroEvent.pollOnly)
+	assert.Equal(t, "token-1", obs.CurrentDeltaToken(), "the poll that returned nothing keeps the token")
 }
 
 // Regression: a delta window whose only items are deletes of never-synced

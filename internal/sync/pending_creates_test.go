@@ -800,7 +800,7 @@ func TestPruneAbandonedCreateIntents_DropsWhatNoCreateWillClaim(t *testing.T) {
 		},
 		{
 			name: "a row that names its item", path: "doc.txt", namesItem: true, prunedAfter: expired,
-			wantKept: true, why: "a recorded item is dropped by observation only",
+			wantKept: true, why: "a row naming its item at a scanned path ends through observation or an outcome, not its file's absence",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -851,7 +851,7 @@ func runCreateIntentPruneCase(t *testing.T, tc *createIntentPruneCase) {
 		observed = passRefreshedLocalOnly
 	}
 
-	require.NoError(t, store.pruneAbandonedCreateIntents(ctx, observed, func(path string) bool {
+	require.NoError(t, store.prunePendingCreates(ctx, observed, func(path string) bool {
 		return !tc.unscanned || path != tc.path
 	}))
 
@@ -895,10 +895,15 @@ func TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem(t *t
 
 // creatingTestUploader models graph.Client's two-step create for executor
 // tests: create runs where the empty item is made, with the record hook the
-// client calls between the item and its content.
+// client calls between the item and its content. getItem answers the transfer
+// manager's lookups of an upload's item (nil fails them), and every removal
+// of an empty item the transfer manager asks for works and is recorded in
+// removedEmpty.
 type creatingTestUploader struct {
 	executorMockUploader
-	create func(ctx context.Context, onCreated graph.CreatedFunc) (*graph.Item, error)
+	create       func(ctx context.Context, onCreated graph.CreatedFunc) (*graph.Item, error)
+	getItem      func(itemID string) (*graph.Item, error)
+	removedEmpty []string
 }
 
 func (u *creatingTestUploader) UploadCreating(
@@ -906,6 +911,23 @@ func (u *creatingTestUploader) UploadCreating(
 	_ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc, onCreated graph.CreatedFunc,
 ) (*graph.Item, error) {
 	return u.create(ctx, onCreated)
+}
+
+func (u *creatingTestUploader) GetItem(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+	if u.getItem == nil {
+		return nil, fmt.Errorf("GetItem of %s not mocked", itemID)
+	}
+
+	return u.getItem(itemID)
+}
+
+func (u *creatingTestUploader) ListChildren(context.Context, driveid.ID, string) ([]graph.Item, error) {
+	return nil, fmt.Errorf("a create's outcome is looked up by its item ID, never by listing its folder")
+}
+
+func (u *creatingTestUploader) RemoveEmptyItem(_ context.Context, _ driveid.ID, itemID string) (bool, error) {
+	u.removedEmpty = append(u.removedEmpty, itemID)
+	return true, nil
 }
 
 // newPendingCreateTestExecutor returns an executor that uploads through ul and
