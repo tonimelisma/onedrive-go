@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -31,9 +32,10 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 }
 
 // completeLogin is everything login does once the person has signed in:
-// discover the account, save the token and config, and report the result.
-// It is split from the sign-in exchange so it can be tested with a fake
-// Graph server and a token that is already in hand.
+// discover the account, install its token, enroll its primary drive in one
+// config.AddDrive transaction (putting the previous token back if that
+// fails), and report the result. It is split from the sign-in exchange so it
+// can be tested with a fake Graph server and a token that is already in hand.
 func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, tempPath string) error {
 	logger := cc.Logger
 
@@ -54,44 +56,37 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
 	}
 
-	rollbackSnapshot, err := captureLoginRollbackSnapshot(canonicalID, finalTokenPath, cc.CfgPath)
+	restoreToken, err := installLoginToken(tempPath, finalTokenPath)
 	if err != nil {
-		cleanupPendingToken(cc, tempPath, "rollback snapshot failure")
-		return fmt.Errorf("snapshot login rollback state: %w", err)
+		cleanupPendingToken(cc, tempPath, "token install failure")
+		return err
 	}
 
-	if moveErr := moveToken(tempPath, finalTokenPath); moveErr != nil {
-		return moveErr
-	}
+	enrolled, err := config.AddDrive(&config.AddDriveRequest{
+		ConfigPath: cc.CfgPath,
+		DataDir:    config.DefaultDataDir(),
+		Drive:      canonicalID,
+		Login: &config.AccountLogin{
+			UserID:         user.ID,
+			DisplayName:    user.DisplayName,
+			OrgName:        orgName,
+			PrimaryDriveID: primaryDriveID,
+		},
+		MakeSyncDir: materializeDriveSyncDir,
+	}, logger)
+	if err != nil {
+		enrollErr := fmt.Errorf("adding drive %s: %w", canonicalID, err)
+		if restoreErr := restoreToken(); restoreErr != nil {
+			return errors.Join(enrollErr, fmt.Errorf("putting the previous token back: %w", restoreErr))
+		}
 
-	persistLoginMetadata(canonicalID, user, orgName, primaryDriveID, logger)
+		return enrollErr
+	}
 
 	email := canonicalID.Email()
-	syncDir, added, err := config.EnsureDriveInConfig(cc.CfgPath, canonicalID, logger)
-	if err != nil {
-		return fmt.Errorf("configuring drive: %w", err)
-	}
-	if err := materializeDriveSyncDir(syncDir); err != nil {
-		baseErr := fmt.Errorf("creating sync directory: %w", err)
-		if rollbackErr := rollbackLoginSideEffects(cc.CfgPath, canonicalID, &rollbackSnapshot); rollbackErr != nil {
-			logger.Warn("login rollback failed",
-				"canonical_id", canonicalID.String(),
-				"error", rollbackErr,
-			)
-			return errors.Join(baseErr, fmt.Errorf("rollback login side effects: %w", rollbackErr))
-		}
-
-		return baseErr
-	}
-
 	clearLoginAuthRequirement(email, logger)
 
-	if !added {
-		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
-		if err := writef(cc.resultWriter(), "Token refreshed for %s.\n", email); err != nil {
-			return err
-		}
-	} else if err := printLoginSuccess(cc.resultWriter(), canonicalID.DriveType(), email, orgName, syncDir); err != nil {
+	if err := printLoginResult(cc.resultWriter(), canonicalID, orgName, &enrolled, logger); err != nil {
 		return err
 	}
 	notifyDaemonIfRunning(ctx, cc)
@@ -102,8 +97,9 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 			Drive:        canonicalID.String(),
 			DriveType:    canonicalID.DriveType(),
 			Organization: orgName,
-			SyncDir:      syncDir,
-			Added:        added,
+			SyncDir:      enrolled.SyncDir,
+			Added:        enrolled.Added,
+			Completed:    enrolled.Completed,
 		})
 	}
 
@@ -113,7 +109,9 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 // loginJSONOutput is `login --json`. The sign-in prompt (device code or
 // browser URL) still goes to stderr, so a script can show it to the person
 // and read this document from stdout once sign-in finishes. added is false
-// when the account was already configured and only its token was refreshed.
+// when the account was already configured and only its token was refreshed;
+// completed is true when its drive was configured but not fully set up and
+// this login finished it.
 type loginJSONOutput struct {
 	Account      string `json:"account"`
 	Drive        string `json:"drive"`
@@ -121,152 +119,55 @@ type loginJSONOutput struct {
 	Organization string `json:"organization,omitempty"`
 	SyncDir      string `json:"sync_dir"`
 	Added        bool   `json:"added"`
+	Completed    bool   `json:"completed"`
 }
 
-func persistLoginMetadata(
+// installLoginToken moves the pending token to its final path and returns
+// what undoes that for a login whose enrollment then fails: the token that
+// was there before is written back, or the new one removed when there was
+// none. Config and catalog need no undoing; config.AddDrive leaves them as
+// they were when it fails.
+func installLoginToken(pendingPath, tokenPath string) (func() error, error) {
+	previous, hadPrevious, err := readManagedFileIfExists(tokenPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading the previous token: %w", err)
+	}
+
+	if moveErr := moveToken(pendingPath, tokenPath); moveErr != nil {
+		return nil, moveErr
+	}
+
+	return func() error {
+		if !hadPrevious {
+			return removePathIfExists(tokenPath)
+		}
+
+		return writeManagedFile(tokenPath, previous, tokenfile.FilePerms, tokenfile.DirPerms, ".token-*.tmp")
+	}, nil
+}
+
+// printLoginResult prints what the login did: the welcome for a new account,
+// the completed setup of a drive that was configured but not fully set up,
+// or a refreshed token.
+func printLoginResult(
+	w io.Writer,
 	canonicalID driveid.CanonicalID,
-	user *graph.User,
 	orgName string,
-	primaryDriveID driveid.ID,
+	enrolled *config.AddDriveResult,
 	logger *slog.Logger,
-) {
-	if catalogErr := config.RecordLogin(
-		config.DefaultDataDir(),
-		canonicalID,
-		user.ID,
-		user.DisplayName,
-		orgName,
-		primaryDriveID,
-	); catalogErr != nil {
-		logger.Warn("failed to update catalog after login", "error", catalogErr)
-	}
-}
-
-type loginRollbackSnapshot struct {
-	tokenPath string
-	tokenData []byte
-	hadToken  bool
-
-	hadConfigDrive   bool
-	hadConfigSyncDir bool
-
-	catalogAccount    config.CatalogAccount
-	hadCatalogAccount bool
-	catalogDrive      config.CatalogDrive
-	hadCatalogDrive   bool
-}
-
-func captureLoginRollbackSnapshot(
-	canonicalID driveid.CanonicalID,
-	tokenPath string,
-	cfgPath string,
-) (loginRollbackSnapshot, error) {
-	snapshot := loginRollbackSnapshot{tokenPath: tokenPath}
-
-	if tokenPath != "" {
-		tokenData, found, err := readManagedFileIfExists(tokenPath)
-		if err != nil {
-			return loginRollbackSnapshot{}, fmt.Errorf("read token rollback snapshot: %w", err)
-		}
-		snapshot.tokenData = tokenData
-		snapshot.hadToken = found
-	}
-
-	cfg, err := config.LoadOrDefault(cfgPath, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return loginRollbackSnapshot{}, fmt.Errorf("load config rollback snapshot: %w", err)
-	}
-	if drive, found := cfg.Drives[canonicalID]; found {
-		snapshot.hadConfigDrive = true
-		snapshot.hadConfigSyncDir = drive.SyncDir != ""
-	}
-
-	catalog, err := config.LoadCatalog()
-	if err != nil {
-		return loginRollbackSnapshot{}, fmt.Errorf("load catalog rollback snapshot: %w", err)
-	}
-	if account, found := catalog.AccountByCanonicalID(canonicalID); found {
-		snapshot.catalogAccount = account
-		snapshot.hadCatalogAccount = true
-	}
-	if drive, found := catalog.DriveByCanonicalID(canonicalID); found {
-		snapshot.catalogDrive = drive
-		snapshot.hadCatalogDrive = true
-	}
-
-	return snapshot, nil
-}
-
-func rollbackLoginSideEffects(
-	cfgPath string,
-	canonicalID driveid.CanonicalID,
-	snapshot *loginRollbackSnapshot,
 ) error {
-	var errs []error
+	email := canonicalID.Email()
 
-	if err := restoreLoginConfigSnapshot(cfgPath, canonicalID, snapshot); err != nil {
-		errs = append(errs, fmt.Errorf("restore config: %w", err))
-	}
-	if err := restoreLoginCatalogSnapshot(canonicalID, snapshot); err != nil {
-		errs = append(errs, fmt.Errorf("restore catalog: %w", err))
-	}
-	if err := restoreLoginTokenSnapshot(snapshot); err != nil {
-		errs = append(errs, fmt.Errorf("restore token: %w", err))
-	}
-
-	return errors.Join(errs...)
-}
-
-func restoreLoginConfigSnapshot(
-	cfgPath string,
-	canonicalID driveid.CanonicalID,
-	snapshot *loginRollbackSnapshot,
-) error {
 	switch {
-	case !snapshot.hadConfigDrive:
-		if err := config.DeleteDriveSection(cfgPath, canonicalID); err != nil {
-			return fmt.Errorf("delete added drive section: %w", err)
-		}
-	case !snapshot.hadConfigSyncDir:
-		if err := config.DeleteDriveKey(cfgPath, canonicalID, "sync_dir"); err != nil {
-			return fmt.Errorf("delete backfilled sync_dir: %w", err)
-		}
+	case enrolled.Added:
+		return printLoginSuccess(w, canonicalID.DriveType(), email, orgName, enrolled.SyncDir)
+	case enrolled.Completed:
+		return writef(w, "Token refreshed for %s.\nCompleted drive %s -> %s: it was configured but not fully set up.\n",
+			email, canonicalID.String(), enrolled.SyncDir)
+	default:
+		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
+		return writef(w, "Token refreshed for %s.\n", email)
 	}
-
-	return nil
-}
-
-func restoreLoginCatalogSnapshot(canonicalID driveid.CanonicalID, snapshot *loginRollbackSnapshot) error {
-	if err := config.UpdateCatalog(func(catalog *config.Catalog) error {
-		if snapshot.hadCatalogAccount {
-			catalog.UpsertAccount(&snapshot.catalogAccount)
-		} else {
-			catalog.DeleteAccount(canonicalID)
-		}
-
-		if snapshot.hadCatalogDrive {
-			catalog.UpsertDrive(&snapshot.catalogDrive)
-		} else {
-			catalog.DeleteDrive(canonicalID)
-		}
-
-		return nil
-	}); err != nil {
-		return fmt.Errorf("update catalog: %w", err)
-	}
-
-	return nil
-}
-
-func restoreLoginTokenSnapshot(snapshot *loginRollbackSnapshot) error {
-	if snapshot.tokenPath == "" {
-		return nil
-	}
-	if !snapshot.hadToken {
-		return removePathIfExists(snapshot.tokenPath)
-	}
-
-	return writeManagedFile(snapshot.tokenPath, snapshot.tokenData, tokenfile.FilePerms, tokenfile.DirPerms, ".token-*.tmp")
 }
 
 func clearLoginAuthRequirement(email string, logger *slog.Logger) {

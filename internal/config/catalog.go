@@ -55,16 +55,47 @@ type CatalogDrive struct {
 	SiteID                string `json:"site_id,omitempty"`
 }
 
+// ID returns the account's own canonical ID, and whether the record holds one.
+func (a *CatalogAccount) ID() (driveid.CanonicalID, bool) {
+	return parseCatalogID(a.CanonicalID)
+}
+
+// PrimaryDrive returns the canonical ID of the account's primary drive, and
+// whether the record names one.
+func (a *CatalogAccount) PrimaryDrive() (driveid.CanonicalID, bool) {
+	return parseCatalogID(a.PrimaryDriveCanonical)
+}
+
+// Owner returns the canonical ID of the account the drive's record names as
+// its owner, and whether it names one.
+func (d *CatalogDrive) Owner() (driveid.CanonicalID, bool) {
+	return parseCatalogID(d.OwnerAccountCanonical)
+}
+
+// parseCatalogID is the one place a catalog record's ID or reference is
+// parsed. A catalog that was read or written holds only rendered canonical
+// IDs (checkCanonicalIDs), so a value that is set parses; one that does not,
+// which only a catalog built in memory past those checks could hold, reads
+// as not set, and the parse error is dropped on purpose.
+func parseCatalogID(value string) (driveid.CanonicalID, bool) {
+	if value == "" {
+		return driveid.CanonicalID{}, false
+	}
+
+	cid, err := driveid.NewCanonicalID(value)
+	if err != nil {
+		return driveid.CanonicalID{}, false
+	}
+
+	return cid, true
+}
+
 func DefaultCatalog() *Catalog {
 	return &Catalog{
 		SchemaVersion: catalogSchemaV1,
 		Accounts:      make(map[string]CatalogAccount),
 		Drives:        make(map[string]CatalogDrive),
 	}
-}
-
-func CatalogPath() string {
-	return CatalogPathForDataDir(DefaultDataDir())
 }
 
 func CatalogPathForDataDir(dataDir string) string {
@@ -96,6 +127,12 @@ func loadCatalogFromPath(path string) (*Catalog, error) {
 		return nil, fmt.Errorf("reading catalog: %w", err)
 	}
 
+	return decodeCatalog(path, data)
+}
+
+// decodeCatalog strictly decodes one catalog file's bytes (see "Catalog JSON
+// Policy" in config.md); path only names the file in errors.
+func decodeCatalog(path string, data []byte) (*Catalog, error) {
 	var catalog Catalog
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -113,29 +150,109 @@ func loadCatalogFromPath(path string) (*Catalog, error) {
 	}
 
 	catalog.normalize()
+	if err := catalog.checkCanonicalIDs(path); err != nil {
+		return nil, err
+	}
+
 	return &catalog, nil
 }
 
-func SaveCatalog(catalog *Catalog) error {
-	return SaveCatalogForDataDir(DefaultDataDir(), catalog)
+// catalogRepairHint is what a refused catalog tells the user to do. Every
+// command reads the catalog, so the way out is the file itself: correct or
+// remove the entry, or remove the file and sign in again, which rebuilds the
+// account and its primary drive (drive add then completes any other drive
+// config.toml still names).
+const catalogRepairHint = "correct or remove that entry, or remove the file and run 'onedrive-go login' for each account"
+
+// checkCanonicalIDs refuses the whole catalog when a record key, a record's
+// own canonical_id, a drive's owner_account_canonical_id or an account's
+// primary_drive_canonical_id is not a canonical drive ID as CanonicalID.String
+// renders it, or a canonical_id differs from its key. Every lookup goes
+// through String, so a spelling that parses but renders differently (an
+// empty SharePoint site or library, a trailing colon) would never be found.
+// Both reading and writing the catalog run it: a write that would store such
+// a value fails, so a catalog on disk never holds one and no reader needs to
+// guess around it.
+func (c *Catalog) checkCanonicalIDs(path string) error {
+	for _, key := range c.SortedAccountKeys() {
+		account := c.Accounts[key]
+		if err := checkCatalogRecordID(path, "accounts", key, account.CanonicalID); err != nil {
+			return err
+		}
+		if err := checkCatalogReference(path, "accounts", key, "primary_drive_canonical_id", account.PrimaryDriveCanonical); err != nil {
+			return err
+		}
+	}
+
+	for _, key := range c.SortedDriveKeys() {
+		drive := c.Drives[key]
+		if err := checkCatalogRecordID(path, "drives", key, drive.CanonicalID); err != nil {
+			return err
+		}
+		if err := checkCatalogReference(path, "drives", key, "owner_account_canonical_id", drive.OwnerAccountCanonical); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func SaveCatalogForDataDir(dataDir string, catalog *Catalog) error {
-	return saveCatalogToPath(CatalogPathForDataDir(dataDir), catalog)
+// checkCatalogRecordID refuses a record whose key is not a rendered canonical
+// ID or whose canonical_id is not its key.
+func checkCatalogRecordID(path, table, key, canonicalID string) error {
+	if err := checkRenderedCanonicalID(key); err != nil {
+		return fmt.Errorf("catalog %s: %s[%q] key %w; %s", path, table, key, err, catalogRepairHint)
+	}
+	if canonicalID != key {
+		return fmt.Errorf("catalog %s: %s[%q] canonical_id is %q, not the record's key; %s",
+			path, table, key, canonicalID, catalogRepairHint)
+	}
+
+	return nil
 }
 
-func saveCatalogToPath(path string, catalog *Catalog) error {
+// checkCatalogReference refuses a reference to another record that is set
+// but is not a rendered canonical ID. An empty reference is left to
+// LoadValidatedState.
+func checkCatalogReference(path, table, key, field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if err := checkRenderedCanonicalID(value); err != nil {
+		return fmt.Errorf("catalog %s: %s[%q] %s %q %w; %s",
+			path, table, key, field, value, err, catalogRepairHint)
+	}
+
+	return nil
+}
+
+// checkRenderedCanonicalID accepts s only if it parses as a canonical drive
+// ID and is exactly that ID's rendering.
+func checkRenderedCanonicalID(s string) error {
+	cid, err := driveid.NewCanonicalID(s)
+	if err != nil {
+		return fmt.Errorf("is not a drive ID (%w)", err)
+	}
+	if rendered := cid.String(); rendered != s {
+		return fmt.Errorf("is not a drive ID as onedrive-go writes it (%q)", rendered)
+	}
+
+	return nil
+}
+
+// saveCatalogForDataDir writes the whole catalog without taking its lock: the
+// caller holds it (updateCatalog) or plays another process that does (tests).
+// Every other writer goes through UpdateCatalogForDataDir or AddDrive. A
+// catalog the decoder would refuse is not written.
+func saveCatalogForDataDir(dataDir string, catalog *Catalog) error {
+	path := CatalogPathForDataDir(dataDir)
 	if path == "" {
 		return nil
 	}
-	if catalog == nil {
-		catalog = DefaultCatalog()
-	}
 
-	catalog.normalize()
-	data, err := json.MarshalIndent(catalog, "", "  ")
+	data, err := encodeCatalog(path, catalog)
 	if err != nil {
-		return fmt.Errorf("encoding catalog: %w", err)
+		return fmt.Errorf("writing catalog: %w", err)
 	}
 
 	if err := atomicWriteFile(path, data); err != nil {
@@ -145,10 +262,34 @@ func saveCatalogToPath(path string, catalog *Catalog) error {
 	return nil
 }
 
+// encodeCatalog renders the catalog file, refusing what decodeCatalog would
+// refuse (checkCanonicalIDs) so that no writer can store a catalog every
+// later command fails on; path only names the file in errors.
+func encodeCatalog(path string, catalog *Catalog) ([]byte, error) {
+	if catalog == nil {
+		catalog = DefaultCatalog()
+	}
+
+	catalog.normalize()
+	if err := catalog.checkCanonicalIDs(path); err != nil {
+		return nil, err
+	}
+
+	data, err := json.MarshalIndent(catalog, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encoding catalog: %w", err)
+	}
+
+	return data, nil
+}
+
 func UpdateCatalog(update func(*Catalog) error) error {
 	return UpdateCatalogForDataDir(DefaultDataDir(), update)
 }
 
+// UpdateCatalogForDataDir is the catalog's read-modify-write under the
+// catalog lock (see configLocker.updateCatalog). update must not take a config
+// or catalog lock itself.
 func UpdateCatalogForDataDir(dataDir string, update func(*Catalog) error) error {
 	return defaultConfigLocker().updateCatalog(dataDir, update)
 }

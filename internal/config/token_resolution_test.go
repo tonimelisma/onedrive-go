@@ -16,6 +16,17 @@ const (
 	tokenResolutionTestOwnerNameBob  = "Bob"
 )
 
+// tokenAccountCID is TokenAccountCanonicalID with a failure read as no token
+// owner, for the table tests below.
+func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
+	tokenCID, err := TokenAccountCanonicalID(cid)
+	if err != nil {
+		return driveid.CanonicalID{}
+	}
+
+	return tokenCID
+}
+
 func TestDriveTokenPath_Personal(t *testing.T) {
 	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 	assert.NotEmpty(t, path)
