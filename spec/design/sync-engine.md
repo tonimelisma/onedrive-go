@@ -471,24 +471,44 @@ do not replace delta polling and they do not change the full-refresh cadence.
 
 ### Post-Sync Housekeeping
 
-`postSyncHousekeeping` (`engine_housekeeping.go`) runs after the last pass:
-the transfer-artifact cleanup (`driveops.CleanTransferArtifactsWithOptions`,
-owned partials and expired upload sessions) and the local-trash purge. Both
-are best effort, and both report a persistent failure once per streak
-(R-6.6.30):
+`postSyncHousekeeping` (`engine_housekeeping.go`) runs once when a one-shot
+run that executed something ends, and once when a watch's bootstrap sync
+settles: the transfer-artifact cleanup (`driveops.CleanTransferArtifacts`,
+owned partials and expired upload sessions) and the local-trash purge. Watch
+maintenance then repeats only the purge. All of it is best effort, and an
+engine can run a step many times, so a failure that stays would warn each
+time. Each step therefore reports a persistent failure once per streak
+(R-6.6.30) through one helper, `Engine.reportHousekeepingOutcome`: one Warn
+when the streak starts, Debug on repeats, Info once when the step works again.
+What a step did remove is a separate Info with the count, failure or not:
 
 - the artifact cleanup removes every owned partial outside the protected
   roots with no age check, so it runs only when
   `refreshProtectedRootsFromStore` succeeded for this pass. A refresh failure
   skips the cleanup for the pass instead of walking with a stale list, which
-  could delete a child mount's in-flight partials; it is one Warn when the
-  streak starts, Debug on repeats, Info once when the list reads again
+  could delete a child mount's in-flight partials
   (`Engine.protectedRootRefreshFailing`)
-- `purgeExpiredTrash` is one Warn naming the trash directory when a purge
-  starts failing, Debug while it keeps failing, Info once when it works again
+- the partial cleanup and the session cleanup each go on past what they cannot
+  remove and hand every failure back, joined, beside the count they did
+  remove; `driveops` logs no failure itself, because only the engine knows
+  whether one is new (`Engine.partialCleanupFailing`,
+  `Engine.sessionCleanupFailing`). The partial cleanup used to warn once per
+  stuck file and return nothing; each cleanup is now one line with every
+  failure joined. A partial that is gone by the time the cleanup reaches it is
+  neither a failure nor counted
+  (`TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved`,
+  `TestCleanStalePartials_ReturnsEveryPartialItCannotRemove`)
+- `purgeExpiredTrash` names the trash directory on each of its lines
   (`Engine.trashPurgeFailing`); the trash would otherwise grow without bound
   with nothing saying so. Watch maintenance purges at most once per
   `trashPurgeInterval`
+
+`Engine.Close` removes expired upload sessions too. A session it cannot
+remove does not stop the close, but it is one Warn with the count removed: an
+engine closes once, so there is no streak to keep quiet. At Debug, as it once
+was, a session file that can never be removed went unseen. A clean run is an
+Info with the count
+(`TestEngineClose_ReportsStaleSessionCleanupWithTheCount`).
 
 ### Absence Must Be Confirmed
 

@@ -108,7 +108,11 @@ func TestFault_PartialFileCleanup(t *testing.T) {
 	require.NoError(t, os.WriteFile(partialPath, []byte("partial data"), 0o600))
 
 	// CleanTransferArtifacts should remove it.
-	driveops.CleanTransferArtifacts(mustOpenSyncTree(t, syncRoot), nil, testLogger(t))
+	result := driveops.CleanTransferArtifacts(
+		mustOpenSyncTree(t, syncRoot), nil, testLogger(t), driveops.TransferArtifactCleanupOptions{},
+	)
+	require.NoError(t, result.PartialsErr)
+	assert.Equal(t, 1, result.PartialsRemoved)
 
 	_, err := os.Stat(partialPath)
 	assert.True(t, os.IsNotExist(err), ".partial file should be cleaned up")

@@ -86,7 +86,8 @@ func linkUnsupported(err error) bool {
 }
 
 // copyExclusive creates dst (failing if it exists), copies src into it with
-// src's mode, and syncs it. A failed copy removes the partial dst.
+// src's mode, and syncs it. A failed copy removes the partial dst and says so
+// if it cannot.
 func copyExclusive(src, dst string) (err error) {
 	in, err := OpenRegular(src)
 	if err != nil {
@@ -105,8 +106,7 @@ func copyExclusive(src, dst string) (err error) {
 	}
 	defer func() {
 		if err != nil {
-			_ = out.Close()    //nolint:errcheck // error path; the copy error is reported
-			_ = os.Remove(dst) //nolint:errcheck // best-effort removal of a partial copy
+			err = discardPartialCopy(out, dst, err, os.Remove)
 		}
 	}()
 	if _, err = io.Copy(out, in); err != nil {
@@ -122,4 +122,23 @@ func copyExclusive(src, dst string) (err error) {
 		return fmt.Errorf("setting times on %s: %w", dst, err)
 	}
 	return nil
+}
+
+// discardPartialCopy closes out, the partial copy at dst that cause ended, and
+// removes it with remove. A leftover partial copy makes the next attempt find
+// dst taken (ErrTargetExists), so a close or removal that fails is joined to
+// cause; a copy already closed, or already gone, is no further failure.
+func discardPartialCopy(out *os.File, dst string, cause error, remove func(string) error) error {
+	errs := []error{cause}
+	if err := out.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		errs = append(errs, fmt.Errorf("closing partial copy %s: %w", dst, err))
+	}
+	if err := remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("removing partial copy %s: %w", dst, err))
+	}
+	if len(errs) == 1 {
+		return cause
+	}
+
+	return errors.Join(errs...)
 }

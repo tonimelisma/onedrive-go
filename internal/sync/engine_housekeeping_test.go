@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -121,6 +122,77 @@ func newDebugLogBuffer() (*bytes.Buffer, *slog.Logger) {
 	return &buf, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// Validates: R-5.2
+//
+// Closing an engine cleans its stale upload sessions and reports the outcome
+// once, with the count: a session it could not remove is a Warn, a clean run
+// an Info. An engine closes once, so there is no streak to keep quiet here.
+func TestEngineClose_ReportsStaleSessionCleanupWithTheCount(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removal refused", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("the superuser ignores folder modes")
+		}
+
+		logs, logger := newDebugLogBuffer()
+		eng, syncRoot := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+		makeReadOnlyForTest(t, saveStaleEngineSession(t, filepath.Join(filepath.Dir(syncRoot), "data")))
+
+		require.NoError(t, eng.Close(t.Context()))
+
+		require.Equal(t, 1, countLogLines(logs.String(), "failed to clean stale sessions on close"), logs.String())
+		line := logLineWith(logs.String(), "failed to clean stale sessions on close")
+		assert.Contains(t, line, "level=WARN")
+		assert.Contains(t, line, "deleted=0")
+		assert.Contains(t, line, "permission denied")
+	})
+
+	t.Run("removed", func(t *testing.T) {
+		t.Parallel()
+
+		logs, logger := newDebugLogBuffer()
+		eng, syncRoot := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+		saveStaleEngineSession(t, filepath.Join(filepath.Dir(syncRoot), "data"))
+
+		require.NoError(t, eng.Close(t.Context()))
+
+		line := logLineWith(logs.String(), "cleaned stale upload sessions on close")
+		assert.Contains(t, line, "level=INFO")
+		assert.Contains(t, line, "deleted=1")
+	})
+}
+
+// saveStaleEngineSession saves one upload session in the engine's data folder,
+// last written longer ago than StaleSessionAge, and returns the folder that
+// holds it.
+func saveStaleEngineSession(t *testing.T, dataDir string) string {
+	t.Helper()
+
+	store := driveops.NewSessionStore(dataDir, testLogger(t))
+	require.NoError(t, store.Save(engineTestDriveID, "/old.txt", &driveops.SessionRecord{SessionURL: "https://example.com/old"}))
+	saved, err := filepath.Glob(filepath.Join(dataDir, "*", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, saved, 1, "one saved session file")
+	stale := time.Now().Add(-2 * driveops.StaleSessionAge)
+	require.NoError(t, os.Chtimes(saved[0], stale, stale))
+
+	return filepath.Dir(saved[0])
+}
+
+// logLineWith returns the first log line holding needle, or "".
+func logLineWith(logs, needle string) string {
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+
+	return ""
+}
+
 func countLogLines(logs, needle string) int {
 	count := 0
 	for line := range strings.SplitSeq(logs, "\n") {
@@ -227,6 +299,120 @@ func TestPostSyncHousekeeping_CanceledContextIsQuiet(t *testing.T) {
 	flow.postSyncHousekeeping(t.Context())
 	assert.NoFileExists(t, rootPartial, "the next pass cleans up")
 	assert.NotContains(t, logBuf.String(), "transfer cleanup resumes", "a shutdown is no failure streak to recover from")
+}
+
+// Validates: R-6.6.30
+//
+// A leftover download file or an expired upload session file the cleanup
+// cannot remove is still there the next time housekeeping runs. Each of the
+// two is one Warn per failure streak and Debug on repeats; the first run that
+// removes the rest says so at Info, and a new streak warns once more.
+func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+
+	cases := []struct {
+		name      string
+		warn      string
+		repeat    string
+		recovered string
+		// arrange returns an engine and a function that leaves one leftover
+		// for its cleanup and returns the folder holding it.
+		arrange func(t *testing.T, logger *slog.Logger) (*Engine, func() string)
+	}{
+		{
+			name:      "leftover download file",
+			warn:      "Could not remove every leftover download file",
+			repeat:    "could not remove every leftover download file (still failing)",
+			recovered: "leftover download files can be removed again",
+			arrange: func(t *testing.T, logger *slog.Logger) (*Engine, func() string) {
+				t.Helper()
+
+				syncRoot := t.TempDir()
+				locked := filepath.Join(syncRoot, "locked")
+				require.NoError(t, os.Mkdir(locked, 0o700))
+				eng := &Engine{
+					syncTree:      mustOpenSyncTree(t, syncRoot),
+					logger:        logger,
+					contentFilter: ContentFilterConfig{},
+				}
+
+				return eng, func() string {
+					partial := filepath.Join(locked, testOwnedPartialName("stuck.txt"))
+					require.NoError(t, os.WriteFile(partial, []byte("x"), 0o600))
+
+					return locked
+				}
+			},
+		},
+		{
+			name:      "expired upload session file",
+			warn:      "Could not remove every expired upload session file",
+			repeat:    "could not remove every expired upload session file (still failing)",
+			recovered: "expired upload session files can be removed again",
+			arrange: func(t *testing.T, logger *slog.Logger) (*Engine, func() string) {
+				t.Helper()
+
+				dataDir := t.TempDir()
+				eng := &Engine{
+					syncTree:      mustOpenSyncTree(t, t.TempDir()),
+					sessionStore:  driveops.NewSessionStore(dataDir, logger),
+					logger:        logger,
+					contentFilter: ContentFilterConfig{},
+				}
+
+				return eng, func() string { return saveStaleEngineSession(t, dataDir) }
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logs, logger := newDebugLogBuffer()
+			eng, leaveLeftover := tc.arrange(t, logger)
+			flow := &engineFlow{engine: eng}
+			flow.deps = newRuntimeDeps(eng)
+
+			dir := leaveLeftover()
+			leftovers := func() int {
+				entries, err := os.ReadDir(dir)
+				require.NoError(t, err)
+
+				return len(entries)
+			}
+			makeReadOnlyForTest(t, dir)
+
+			flow.postSyncHousekeeping(t.Context())
+			flow.postSyncHousekeeping(t.Context())
+			require.Equal(t, 1, countLogLines(logs.String(), tc.warn), "one Warn per streak: %s", logs.String())
+			assert.Contains(t, logLineWith(logs.String(), tc.warn), "level=WARN")
+			assert.Contains(t, logLineWith(logs.String(), tc.warn), "permission denied")
+			require.Equal(t, 1, countLogLines(logs.String(), tc.repeat), "a repeat in the same streak is Debug")
+			assert.Contains(t, logLineWith(logs.String(), tc.repeat), "level=DEBUG")
+			assert.Equal(t, 1, leftovers(), "what could not be removed stays")
+
+			// Recovery: the folder is writable again, the leftover goes and
+			// the streak ends. A clean pass after that says nothing more.
+			setTestDirPermissions(t, dir, 0o700)
+			flow.postSyncHousekeeping(t.Context())
+			flow.postSyncHousekeeping(t.Context())
+			assert.Zero(t, leftovers())
+			require.Equal(t, 1, countLogLines(logs.String(), tc.recovered), logs.String())
+			assert.Contains(t, logLineWith(logs.String(), tc.recovered), "level=INFO")
+			assert.Equal(t, 1, countLogLines(logs.String(), tc.warn))
+
+			// A new streak is reported once more.
+			leaveLeftover()
+			setTestDirPermissions(t, dir, 0o500)
+			flow.postSyncHousekeeping(t.Context())
+			assert.Equal(t, 2, countLogLines(logs.String(), tc.warn), "a new streak is reported once more")
+		})
+	}
 }
 
 // Validates: R-6.6.30

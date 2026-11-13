@@ -47,6 +47,24 @@ func TestReadWriteLifecycle(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+// When the read and the close of a file both fail, each failure names the
+// step and the path it belongs to.
+func TestReadAndClose_NamesThePathInBothFailures(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	file, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	data, err := readAndClose(file, path)
+	require.ErrorIs(t, err, os.ErrClosed)
+	assert.Contains(t, err.Error(), "reading "+path+":")
+	assert.Contains(t, err.Error(), "closing "+path+":")
+	assert.Nil(t, data)
+}
+
 func TestReadDir(t *testing.T) {
 	t.Parallel()
 

@@ -104,36 +104,82 @@ linters:
             - golang.org/x/sync
             - github.com/mattn/go-isatty
             - golang.org/x/sys
+        # depguard matches files patterns against each file's absolute path,
+        # so a path-scoped rule names its files from "**/"; a pattern relative
+        # to the repository never matches and leaves its rule off
+        # (TestGolangciConfig_DepguardFilePatternsMatchAbsolutePaths), and so
+        # does one naming a folder that holds no package
+        # (TestGolangciConfig_DepguardPackagePatternsNameExistingPackages).
         graph-no-config:
           files:
-            - internal/graph/*.go
+            - "**/internal/graph/*.go"
             - "!$test"
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/config$
               desc: graph boundary must not import internal/config
         driveops-no-sync:
           files:
-            - internal/driveops/*.go
+            - "**/internal/driveops/*.go"
             - "!$test"
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
               desc: driveops must not import internal/sync
         multisync-no-graph:
           files:
-            - internal/multisync/*.go
+            - "**/internal/multisync/*.go"
             - "!$test"
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/graph$
               desc: multisync owns runner lifecycle only and must not call Graph directly
+        # Every package that imports no internal package is held to it.
         leaf-internal:
           files:
-            - internal/driveid/*.go
-            - internal/tokenfile/*.go
-            - internal/retry/*.go
+            - "**/internal/authstate/*.go"
+            - "**/internal/driveid/*.go"
+            - "**/internal/errclass/*.go"
+            - "**/internal/localpath/*.go"
+            - "**/internal/loglevel/*.go"
+            - "**/internal/namekey/*.go"
+            - "**/internal/sdnotify/*.go"
+            - "**/internal/sharedref/*.go"
             - "!$test"
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
               desc: leaf packages must not import other internal packages
+        # A package with one internal dependency is held to that one. In lax
+        # mode an import is refused when a deny prefix matches it, unless an
+        # allow entry matches it with a longer prefix, so the exact allow below
+        # wins over the internal/ deny for that one package alone.
+        tokenfile-only-fsroot:
+          list-mode: lax
+          files:
+            - "**/internal/tokenfile/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/fsroot$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/
+              desc: tokenfile imports no internal package but fsroot, through which every token file is read and written
+        retry-only-perf:
+          list-mode: lax
+          files:
+            - "**/internal/retry/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/perf$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/
+              desc: retry imports no internal package but perf, which counts its retries
+        fsroot-only-localpath:
+          list-mode: lax
+          files:
+            - "**/internal/fsroot/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/localpath$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/
+              desc: fsroot imports no internal package but localpath, for its directory-sync errno test
 
     forbidigo:
       analyze-types: true
