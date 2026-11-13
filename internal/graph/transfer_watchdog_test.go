@@ -3,6 +3,8 @@ package graph
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,7 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 const testStallTimeout = 150 * time.Millisecond
@@ -286,4 +290,38 @@ func TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, watchdog.timer.Stop(), "a read after the transfer ended left a timer running")
+}
+
+// Validates: R-6.3.10
+//
+// The stall timer's callback runs on a goroutine of its own. A panic in it
+// fails the one transfer it watches: the boundary logs it once with its stack
+// and cancels the transfer with the panic's error, and explain returns that
+// error, the transfer's own error kept as text, so the failure is neither a
+// shutdown nor a stall to retry.
+func TestStallWatchdog_ACallbackPanicFailsTheTransferWithIt(t *testing.T) {
+	t.Parallel()
+
+	capture, logger := synctest.NewLogCapture()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	watchdog := &stallWatchdog{timeout: testStallTimeout, logger: logger, cancel: func(cause error) {
+		if errors.Is(cause, ErrTransferStalled) {
+			panic("stall cancel exploded")
+		}
+		cancel(cause)
+	}}
+
+	require.NotPanics(t, watchdog.stalled, "the callback's boundary keeps the panic off the process")
+
+	require.ErrorIs(t, context.Cause(ctx), panicguard.ErrPanic, "the transfer is canceled with the panic's error")
+	err := watchdog.explain(ctx, fmt.Errorf("graph: streaming download content: %w", context.Canceled))
+	require.ErrorIs(t, err, panicguard.ErrPanic)
+	require.NotErrorIs(t, err, context.Canceled, "a panic is not a shutdown")
+	require.NotErrorIs(t, err, ErrTransferStalled, "nor a stall")
+	assert.Contains(t, err.Error(), "streaming download content", "the transfer's own error is kept as text")
+
+	logged := capture.AtLeast(slog.LevelError)
+	require.Len(t, logged, 1, "logged once")
+	assert.Equal(t, "stall cancel exploded", logged[0].Attrs["panic"])
+	assert.Contains(t, logged[0].Attrs["stack"], "TestStallWatchdog_ACallbackPanicFailsTheTransferWithIt")
 }

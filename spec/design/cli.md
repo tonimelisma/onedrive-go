@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.8.28 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified]
 
 ## Overview
 
@@ -49,7 +49,8 @@ are inserted, updated, pruned, and validated.
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusDrive_RendersLifecycleState`, `TestBuildChildStatusDrive_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | The first SIGINT/SIGTERM cancels the command context cooperatively, the second forces exit, and the stop function releases the signal goroutine and its registration whether or not a first signal arrived (R-6.3.6). | `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`, `TestShutdownContext_ParentCancelStopsGoroutine`, `TestShutdownContext_CancelReleasesSignalGoroutine`, `TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine`, `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator` |
 | A recovered panic's `stack` attribute stays in the log file and the `--verbose` console; the default console prints the Error line without it. | `TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole` |
-| Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
+| Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else, a recovered panic included. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
+| A panic ends a command with exit 1 and never Go's 2 (R-6.3.10): on the command's goroutine through the last line of defense in `mainWithWriters` (the log file and stderr both get the stack), in the signal handler, the systemd keepalive or the performance logger through the command's context, and in a one-shot helper as its unit's failure; a watch a panic ended sets its failure `STATUS=`. The shared-target download walks its folders inline, as the plain one does. | `TestMainWithWriters_PanicExitsOne`, `TestWithCommandPanic_AHelpersPanicIsTheCommandsError`, `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`, `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`, `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`, `TestSession_UpdatePanicEndsTheCommandWithThePanic`, `TestSession_CompleteReleasesTheCommandContext`, `TestDownloadTree_DirectoryDescentDoesNotFanOutGoroutines` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
 | Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
@@ -135,7 +136,10 @@ The signal logger writes to the status stream because the configured command
 logger does not exist yet when the handler is installed -- log configuration is
 resolved from flags after the command starts. It renders plain lines
 ("Stopping... (press Ctrl-C again to force quit)"), not log records, because
-the person who pressed Ctrl-C is its reader.
+the person who pressed Ctrl-C is its reader. For the same reason a panic in
+the handler, which cancels the command with the panic as the cause (Exit
+Status), is logged on the console, and its stack reaches the user under the
+error main prints rather than the log file.
 
 ## Exit Status
 
@@ -146,7 +150,7 @@ scripts and service managers:
 | Status | Meaning | Chosen by |
 | --- | --- | --- |
 | 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused) | `err == nil` |
-| 1 | any other failure, transient or not | default |
+| 1 | any other failure, transient or not, and a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure | default; `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation |
 | 2 | command-line mistake | `*usageError` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
 | 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
@@ -172,6 +176,49 @@ engine did not close within its bound after the pass fails the command with
 `multisync.ErrSyncStuck` even when every drive synced, exit 1 also on a
 user's stop, so the process exits and the engine's locks go
 (`TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced`).
+
+A panic never ends the process with Go's exit status 2, which would read as a
+usage error and leave nothing in the log file (R-6.3.10). Every panic is
+recovered at its goroutine's boundary through `panicguard.Recovered`
+(system.md) and travels as an error wrapping `panicguard.ErrPanic`, which
+exits 1, also when it travels with a sign-in or configuration failure that
+alone would exit 77 or 78 (a one-shot pass's drive error joined with a panic
+in `RunOnceResult.Stuck`, a helper's panic joined with the command's own
+error):
+
+- A panic on the command's own goroutine that nothing below recovered meets
+  the last line of defense, a deferred recover in `mainWithWriters`
+  (`reportMainPanic`): logged once through the command logger (the log file
+  when there is one; the signal logger before the command logger exists),
+  the log file closed so the record is on disk, exit 1
+  (`TestMainWithWriters_PanicExitsOne`).
+- A helper goroutine of the command has no error result, so it cancels the
+  command's context with the panic as the cause: the signal handler
+  (`shutdownContext`'s context), the systemd watchdog keepalive (the watch's
+  own context in `runSyncDaemonWithFactory`) and the performance logger (the
+  context `perf.NewSession` returned). `withCommandPanic` makes the cause the
+  command's error, in place of the cancellation it caused or the nil of a
+  command that finished regardless, and `runSyncDaemonWithFactory` returns it
+  from a watch that drained on that cancellation, so the watch logs it and
+  sets its failure `STATUS=`
+  (`TestWithCommandPanic_AHelpersPanicIsTheCommandsError`,
+  `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`,
+  `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`,
+  `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`).
+- A command's one-shot helpers recover into their unit's existing result: a
+  drive listing that panicked is that account's degraded notice, a `get`
+  file's panic is that file's error in the list (the command still fails), a
+  shared item's lookup leaves the item unenriched, a panic while `status`
+  asks for an account's live details is that account's note beside its local
+  state
+  (`TestStatus_APanicAskingOneAccountLeavesItsLocalStateAndTheOthersDetails`),
+  and the sign-in callback server's panic is the login's callback error.
+
+Whatever the path, the error main prints for a command that ended with a
+recovered panic is followed by the panic's stack (`commandFailureText`,
+`panicguard.Stack`): a command run without a log file has nowhere else to
+keep what the bug report needs, and under the journal every line of it
+carries the err priority.
 
 ## systemd Notify
 
@@ -205,9 +252,13 @@ A watch that ends with an error sets a final `STATUS=` ("Sign-in required: run
 `WatchdogSec=`, a goroutine owned by `runSyncDaemonWithFactory` sends
 `WATCHDOG=1` at half the timeout until the watch returns. The keepalive proves
 the process is alive and scheduling, not that every drive is healthy; drive
-health is in `STATUS=` and `status`. Reloads are started by the control socket
-(`pause`, `resume`, `drive add`, `login`); there is no SIGHUP reload, so units
-use `Type=notify`, not `Type=notify-reload`. An example user unit is
+health is in `STATUS=` and `status`. A panic in the keepalive ends the watch
+with the panic (Exit Status): a watch that stopped proving it is alive would
+be killed at systemd's next deadline anyway, with nothing in the log. Reloads
+are started by the control socket (`pause`, `resume`, `drive add`, `login`),
+by an edit of `config.toml`, and by SIGHUP, which the unit's `ExecReload`
+sends; the unit is `Type=notify` with that `ExecReload`, not
+`Type=notify-reload`. An example user unit is
 `contrib/systemd/onedrive-go.service`.
 
 ## Console Output
@@ -556,7 +607,10 @@ condition keys remain private implementation details.
   account at the same time on one context that ends with the budget (cause
   `errStatusLiveBudgetSpent`), and waits for each request it started, which
   ends with its answer or with that context. The retry ladder still runs
-  inside the budget. An account whose `/me` failed for a reason other than
+  inside the budget. Tests replace that context through the
+  `statusLiveBudgetContext` seam and end the budget themselves while the
+  request they are about is in flight, so none waits for the clock or races
+  it. An account whose `/me` failed for a reason other than
   sign-in, or whose storage lookups the budget cut short, keeps what did
   arrive and carries `Unanswered`, the reason in plain words: "OneDrive did not
   answer within 10 s" when the budget ran out, otherwise a throttle, a server

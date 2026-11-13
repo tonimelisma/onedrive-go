@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-2.4
@@ -104,7 +105,7 @@ func TestMountRunner_Run_PanicWithError(t *testing.T) {
 //
 // Validates: R-6.8
 func TestMountRunner_Run_PanicIsLoggedAtErrorWithStack(t *testing.T) {
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	dr := &MountRunner{
 		identity:    testStandaloneMountIdentity(testCanonicalID(t, "personal:panic-log@example.com")),
 		displayName: "Panic Log Drive",
@@ -117,13 +118,13 @@ func TestMountRunner_Run_PanicIsLoggedAtErrorWithStack(t *testing.T) {
 
 	require.Error(t, result.Err)
 	assert.Contains(t, result.Err.Error(), "boom")
-	logged := capture.atLeast(slog.LevelError)
+	logged := capture.AtLeast(slog.LevelError)
 	require.Len(t, logged, 1, "a recovered panic is logged once, at Error")
-	assert.Contains(t, logged[0].attrs["stack"], "goroutine", "the stack travels with the record")
-	assert.Contains(t, logged[0].attrs["stack"], "TestMountRunner_Run_PanicIsLoggedAtErrorWithStack",
+	assert.Contains(t, logged[0].Attrs["stack"], "goroutine", "the stack travels with the record")
+	assert.Contains(t, logged[0].Attrs["stack"], "TestMountRunner_Run_PanicIsLoggedAtErrorWithStack",
 		"the stack is the panicking goroutine's, captured before it unwinds")
-	assert.Equal(t, "Panic Log Drive", logged[0].attrs["drive"])
-	assert.Equal(t, "boom", logged[0].attrs["panic"])
+	assert.Equal(t, "Panic Log Drive", logged[0].Attrs["drive"])
+	assert.Equal(t, "boom", logged[0].Attrs["panic"])
 }
 
 // Validates: R-2.4

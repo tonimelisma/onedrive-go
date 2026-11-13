@@ -41,7 +41,7 @@ func TestWatchConfigReloadTriggers_FileEditsAndSIGHUP(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(path, []byte("# v1\n"), 0o600))
 
-	triggers, stop := watchConfigReloadTriggers(t.Context(), path, 20*time.Millisecond)
+	triggers, stop := watchConfigReloadTriggers(t.Context(), configReloadWatch{path: path, interval: 20 * time.Millisecond})
 	defer stop()
 
 	requireNoTrigger(t, triggers, 100*time.Millisecond)

@@ -14,6 +14,7 @@ import (
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // testWait bounds how long a test waits for something it expects to happen
@@ -92,7 +93,7 @@ func TestHandleWatchRunnerEvent_EventFromReplacedRunnerIsIgnored(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:replaced-runner@example.com", "Replaced")
 	setupXDGIsolation(t, rd.CanonicalID)
 
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -115,7 +116,7 @@ func TestHandleWatchRunnerEvent_EventFromReplacedRunnerIsIgnored(t *testing.T) {
 	}, runners)
 
 	assert.Same(t, replacement, runners[id], "the replacement keeps running")
-	assert.Empty(t, capture.atLeast(slog.LevelWarn), "the old runner's exit is not reported against its replacement")
+	assert.Empty(t, capture.AtLeast(slog.LevelWarn), "the old runner's exit is not reported against its replacement")
 }
 
 // The same race for a shortcut child that a parent snapshot turned into a
@@ -129,7 +130,7 @@ func TestHandleWatchRunnerEvent_EventFromReplacedFinalDrainChildIsIgnored(t *tes
 	parent := testStandaloneMount(t, "personal:replaced-drain@example.com", "Parent")
 	drainMount := finalDrainMount(t, &parent, "binding-replaced")
 
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -275,10 +276,10 @@ func TestRetireWatchRunner_TimeoutFailsClosed(t *testing.T) {
 	assert.Equal(t, []time.Duration{watchRunnerStopTimeout}, armed, "the stop wait runs the full bound")
 	assert.Same(t, wr, h.runners[h.id], "a stuck runner stays in the runner set")
 	assert.False(t, engine.closed, "a stuck runner's engine is not closed under it")
-	errorLogs := h.capture.atLeast(slog.LevelError)
+	errorLogs := h.capture.AtLeast(slog.LevelError)
 	require.Len(t, errorLogs, 1)
-	assert.Contains(t, errorLogs[0].message, "Backoff")
-	assert.Contains(t, errorLogs[0].attrs["stack"], "startWatchRunner", "the dump shows the stuck runner's goroutine")
+	assert.Contains(t, errorLogs[0].Message, "Backoff")
+	assert.Contains(t, errorLogs[0].Attrs["stack"], "startWatchRunner", "the dump shows the stuck runner's goroutine")
 
 	require.ErrorIs(t, h.orch.retireWatchRunner(t.Context(), h.runners, h.id), ErrSyncStuck,
 		"a stuck runner stays stuck")
@@ -323,7 +324,7 @@ func TestRetireWatchRunner_EngineCloseTimeoutFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrSyncStuck)
 	require.ErrorContains(t, err, "sync state did not close")
 	assert.Same(t, wr, h.runners[h.id])
-	assert.Len(t, h.capture.atLeast(slog.LevelError), 1)
+	assert.Len(t, h.capture.AtLeast(slog.LevelError), 1)
 }
 
 // stuckStopFixture is a drive with one shortcut child, on an orchestrator
@@ -331,7 +332,7 @@ func TestRetireWatchRunner_EngineCloseTimeoutFailsClosed(t *testing.T) {
 // The close bound never runs out: the fakes close at once.
 type stuckStopFixture struct {
 	orch      *Orchestrator
-	capture   *logCapture
+	capture   *synctest.LogCapture
 	parent    *mountSpec
 	child     *mountSpec
 	childWork *parentChildWorkSnapshots
@@ -344,7 +345,7 @@ func newStuckStopFixture(t *testing.T, paused bool) *stuckStopFixture {
 
 	parent := testStandaloneMount(t, "personal:stuck-paths@example.com", "StuckPaths")
 	setupXDGIsolation(t, parent.CanonicalID)
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -509,7 +510,7 @@ func TestWatchRunnerStopPaths_ARunnerThatDoesNotStopFailsClosed(t *testing.T) {
 			assert.False(t, engine.closed, "its engine is not closed under it")
 			assert.Zero(t, f.starts, "nothing is started")
 			assert.Zero(t, f.stopped, "a stuck runner is not reported stopped")
-			assert.Len(t, f.capture.atLeast(slog.LevelError), 1)
+			assert.Len(t, f.capture.AtLeast(slog.LevelError), 1)
 		})
 	}
 }
@@ -540,7 +541,7 @@ func TestRetireAllWatchRunners_StuckDrivesShareOneStopBound(t *testing.T) {
 	require.ErrorIs(t, err, ErrSyncStuck)
 	assert.Equal(t, []string{"cancel shortcut", "cancel drive", "wait " + watchRunnerStopTimeout.String()}, events)
 	assert.Len(t, runners, 2)
-	assert.Len(t, f.capture.atLeast(slog.LevelError), 2, "each stuck drive is logged")
+	assert.Len(t, f.capture.AtLeast(slog.LevelError), 2, "each stuck drive is logged")
 }
 
 // stuckWatch is a running watch over one drive whose sync ignores its
@@ -548,7 +549,7 @@ func TestRetireAllWatchRunners_StuckDrivesShareOneStopBound(t *testing.T) {
 type stuckWatch struct {
 	cfg     *OrchestratorConfig
 	cfgPath string
-	capture *logCapture
+	capture *synctest.LogCapture
 	cancel  context.CancelFunc
 	errCh   chan error
 	starts  atomic.Int32
@@ -561,7 +562,7 @@ func startStuckWatch(t *testing.T, cidStr, name string) *stuckWatch {
 	setupXDGIsolation(t, rd.CanonicalID)
 	w := &stuckWatch{cfgPath: writeTestConfig(t, rd.CanonicalID), errCh: make(chan error, 1)}
 	var logger *slog.Logger
-	w.capture, logger = newLogCapture()
+	w.capture, logger = synctest.NewLogCapture()
 	w.cfg = testOrchestratorConfigWithPath(t, w.cfgPath, rd)
 	w.cfg.ControlSocketPath = shortControlSocketPath(t)
 	w.cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -627,7 +628,7 @@ func TestRunWatch_StuckRunnerOnReloadEndsTheWatchWithAnError(t *testing.T) {
 	assert.Equal(t, synccontrol.ErrorInternal, answer.Code)
 	require.ErrorIs(t, w.result(t), ErrSyncStuck)
 	assert.Equal(t, int32(1), w.starts.Load(), "nothing started in place of the stuck drive")
-	assert.Len(t, w.capture.atLeast(slog.LevelError), 1, "the stuck drive is logged once, with the stacks")
+	assert.Len(t, w.capture.AtLeast(slog.LevelError), 1, "the stuck drive is logged once, with the stacks")
 	assert.NoFileExists(t, w.cfg.ControlSocketPath)
 }
 
@@ -644,7 +645,7 @@ func TestRunWatch_StuckRunnerOnShutdownEndsTheWatchWithAnError(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrSyncStuck)
 	require.NotErrorIs(t, err, context.Canceled)
-	assert.Len(t, w.capture.atLeast(slog.LevelError), 1)
+	assert.Len(t, w.capture.AtLeast(slog.LevelError), 1)
 	assert.NoFileExists(t, w.cfg.ControlSocketPath)
 }
 

@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"runtime/debug"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // handleMaintenanceTick processes a periodic watch summary/maintenance tick.
@@ -142,22 +143,18 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Basel
 // learns of it in order and fails the mount. The reasoning is the observer
 // panic's (recoverObserverPanic): a panic is a bug, not a transient refresh
 // failure, and the ordinary retry-when-idle path would repeat it at every
-// refresh interval while the mount's status read healthy. Before this defer
-// the panic took the process down with every other mount.
+// refresh interval while the mount's status read healthy. Unrecovered, the
+// panic would end the process and every other mount with it.
 func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 	r := recover()
 	if r == nil {
 		return
 	}
 
-	rt.deps.logger.Error("panic in full remote refresh",
-		slog.Any("panic", r),
-		slog.String("stack", string(debug.Stack())),
-	)
-
+	panicErr := panicguard.Recovered(rt.deps.logger, "in the full remote refresh", r)
 	result := remoteObservationBatch{
 		source:   remoteObservationBatchFullRefresh,
-		fatalErr: fmt.Errorf("sync: panic in full remote refresh: %v", r),
+		fatalErr: fmt.Errorf("sync: %w", panicErr),
 	}
 	rt.finishFullRemoteRefresh(ctx, &result)
 }

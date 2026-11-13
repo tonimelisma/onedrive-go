@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -27,6 +28,10 @@ const statusLiveBudget = 10 * time.Second
 // did not all arrive: the account, then why, in the user's words. stderr keeps
 // --json stdout one document.
 const statusLiveNoteFormat = "Note: showing what is known locally for %s: %s.\n"
+
+// statusLiveInternalErrorReason is the note's reason for an account whose
+// live details a panic cut short. The log line names the bug.
+const statusLiveInternalErrorReason = "an internal error stopped the request"
 
 // errStatusLiveBudgetSpent is the cause the overlay context ends with when
 // the budget runs out, which tells a request the budget cut short from one
@@ -49,13 +54,16 @@ type configuredStatusDriveClient interface {
 	Drive(context.Context, driveid.ID) (*graph.Drive, error)
 }
 
-// liveOverlayBudget is statusLiveBudget, or the test seam's replacement.
-func liveOverlayBudget(cc *CLIContext) time.Duration {
-	if cc.seams.statusLiveBudget > 0 {
-		return cc.seams.statusLiveBudget
+// liveOverlayBudgetContext is ctx under the live details' budget: it ends
+// with errStatusLiveBudgetSpent as its cause once statusLiveBudget has passed.
+// A test supplies a context it ends itself, so no test waits for the clock or
+// races it.
+func liveOverlayBudgetContext(ctx context.Context, cc *CLIContext) (context.Context, context.CancelFunc) {
+	if cc.seams.statusLiveBudgetContext != nil {
+		return cc.seams.statusLiveBudgetContext(ctx)
 	}
 
-	return statusLiveBudget
+	return context.WithTimeoutCause(ctx, statusLiveBudget, errStatusLiveBudgetSpent)
 }
 
 // loadStatusLiveOverlay asks OneDrive for every account's live details at the
@@ -71,9 +79,8 @@ func loadStatusLiveOverlay(
 	logger := cc.Logger
 	recorder := newAuthProofRecorder(logger)
 	runtime := cc.runtime()
-	budget := liveOverlayBudget(cc)
 
-	askCtx, cancel := context.WithTimeoutCause(ctx, budget, errStatusLiveBudgetSpent)
+	askCtx, cancel := liveOverlayBudgetContext(ctx, cc)
 	defer cancel()
 
 	results := make([]statusAccountLiveOverlay, len(snapshot.Accounts))
@@ -103,9 +110,20 @@ func loadStatusLiveOverlay(
 
 		hasOverlay[i] = true
 		wg.Go(func() {
+			// A panic leaves this account without its live details, as a
+			// failed profile request does, while the other accounts are
+			// asked (R-6.3.10).
+			defer func() {
+				if r := recover(); r != nil {
+					//nolint:errcheck // The note is the account's report; the error is only logged.
+					panicguard.Recovered(logger, "while asking OneDrive for the live details of "+entry.Email, r)
+					results[i] = statusAccountLiveOverlay{Unanswered: statusLiveInternalErrorReason}
+				}
+			}()
+
 			overlay, askErr := statusConfiguredDriveOverlay(askCtx, client, snapshot, entry, logger)
 			if askErr != nil {
-				overlay.Unanswered = statusLiveUnansweredReason(ctx, askCtx, budget, askErr)
+				overlay.Unanswered = statusLiveUnansweredReason(ctx, askCtx, askErr)
 				logStatusLiveFailure(ctx, logger, entry.Email, overlay.Unanswered, askErr)
 			}
 			results[i] = overlay
@@ -127,14 +145,14 @@ func loadStatusLiveOverlay(
 // statusLiveUnansweredReason says in the user's words why OneDrive's live
 // details for an account are missing, or "" when the user stopped the
 // command: a canceled request is expected then, not news.
-func statusLiveUnansweredReason(ctx, askCtx context.Context, budget time.Duration, err error) string {
+func statusLiveUnansweredReason(ctx, askCtx context.Context, err error) string {
 	if ctx.Err() != nil {
 		return ""
 	}
 	// The context's cause, not the error chain: a response body cut off by
 	// the budget reports the context's error without its cause.
 	if errors.Is(context.Cause(askCtx), errStatusLiveBudgetSpent) {
-		return "OneDrive did not answer within " + retry.HumanDuration(budget)
+		return "OneDrive did not answer within " + retry.HumanDuration(statusLiveBudget)
 	}
 
 	var graphErr *graph.GraphError

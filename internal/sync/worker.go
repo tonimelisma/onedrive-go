@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime/debug"
 	stdsync "sync" // used by WaitGroup
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
@@ -114,14 +114,19 @@ func (wp *workerPool) Start(ctx context.Context, total int) {
 		go wp.worker(ctx)
 	}
 
-	go func() {
-		wp.wg.Wait()
-		wp.closeCompletions()
-	}()
+	go wp.closeCompletionsWhenWorkersExit()
 
 	wp.logger.Info("worker pool started",
 		slog.Int("workers", total),
 	)
+}
+
+// closeCompletionsWhenWorkersExit closes the completions channel once every
+// worker has returned, so the engine-owned completion loop ends. Waiting and
+// a close through sync.Once cannot panic, so it needs no boundary.
+func (wp *workerPool) closeCompletionsWhenWorkersExit() {
+	wp.wg.Wait()
+	wp.closeCompletions()
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
@@ -136,7 +141,9 @@ func (wp *workerPool) Stop() {
 }
 
 // worker is the main loop for a single goroutine. It reads from dispatchCh
-// until the context is canceled or all actions are complete.
+// until the context is canceled or all actions are complete. Its panic
+// boundary is safeExecuteAction, around each action; the loop itself only
+// receives.
 func (wp *workerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 
@@ -163,18 +170,11 @@ func (wp *workerPool) worker(ctx context.Context) {
 func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
-			// The stack is captured here because the goroutine that could
+			// Logged with the stack here because the goroutine that could
 			// answer "where" is unwound by the time anyone reads the failed
 			// completion, and the recovered value names only "what".
-			wp.logger.Error("Internal error while syncing "+ta.Action.Path+"; this is a bug, please report it",
-				slog.Any("panic", r),
-			)
-			wp.logger.Debug("worker: panic in action execution",
-				slog.Int64("id", ta.ID),
-				slog.String("path", ta.Action.Path),
-				slog.String("stack", string(debug.Stack())),
-			)
-			panicErr := fmt.Errorf("panic: %v", r)
+			panicErr := panicguard.Recovered(wp.logger, "while syncing "+ta.Action.Path, r,
+				slog.Int64("action_id", ta.ID))
 			wp.sendResult(ctx, ta, nil, panicErr)
 			// NO depGraph.Complete() — engine owns completion decisions.
 		}

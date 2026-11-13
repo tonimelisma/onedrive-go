@@ -26,7 +26,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"sort"
 	"strings"
 	stdsync "sync"
@@ -39,6 +38,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -260,11 +260,27 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 	}
 
 	// mu guards the three result slices below. The walk fans out to workers
-	// bounded by g.SetLimit, and each appends its own findings.
+	// bounded by g.SetLimit, and each appends its own findings through skip and
+	// keep, the only holders of mu, which release it with defer: a worker's
+	// panic boundary records the file through skip, and would wait forever on
+	// a lock a panic left held.
 	var mu stdsync.Mutex
 	var events []changeEvent
 	var rows []localStateRow
 	var skipped []skippedItem
+	skip := func(item skippedItem) {
+		mu.Lock()
+		defer mu.Unlock()
+		skipped = append(skipped, item)
+	}
+	keep := func(ev *changeEvent, row *localStateRow) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ev != nil {
+			events = append(events, *ev)
+		}
+		rows = append(rows, *row)
+	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
@@ -278,19 +294,13 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 			// SkippedItem so the rest of the scan completes normally.
 			defer func() {
 				if r := recover(); r != nil {
-					o.logger.Error("hash phase: panic in worker",
-						slog.String("path", job.dbRelPath),
-						slog.Any("panic", r),
-						slog.String("stack", string(debug.Stack())),
-					)
-
-					mu.Lock()
-					skipped = append(skipped, skippedItem{
+					panicErr := panicguard.Recovered(o.logger, "while hashing "+job.dbRelPath, r,
+						slog.String("path", job.dbRelPath))
+					skip(skippedItem{
 						Path:   job.dbRelPath,
 						Reason: issueHashPanic,
-						Detail: fmt.Sprintf("panic: %v", r),
+						Detail: panicErr.Error(),
 					})
-					mu.Unlock()
 				}
 			}()
 
@@ -307,72 +317,28 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 					slog.String("path", job.dbRelPath), slog.Any("error", err))
 				switch {
 				case errors.Is(err, os.ErrPermission):
-					mu.Lock()
-					skipped = append(skipped, skippedItem{
+					skip(skippedItem{
 						Path:   job.dbRelPath,
 						Reason: issueLocalReadDenied,
 						Detail: "file not readable (check filesystem permissions)",
 					})
-					mu.Unlock()
 				case !errors.Is(err, os.ErrNotExist):
 					// An I/O error is not a content change: without the
-					// issue the empty hash read as "changed", and an upload
-					// that failed the same way was planned on every pass
-					// (D-005). The issue makes the path unavailable truth.
-					mu.Lock()
-					skipped = append(skipped, skippedItem{
+					// issue the empty hash would read as "changed", and an
+					// upload that failed the same way would be planned on
+					// every pass (D-005). The issue makes the path
+					// unavailable truth.
+					skip(skippedItem{
 						Path:   job.dbRelPath,
 						Reason: issueHashPanic,
 						Detail: fmt.Sprintf("could not read the file to check its content (%v)", err),
 					})
-					mu.Unlock()
 				}
 			}
 
-			// For modifies: check if hash matches baseline (no real change).
-			if !job.isNew && hash != "" {
-				if existing, found := o.baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
-					mu.Lock()
-					rows = append(rows, localStateRow{
-						Path:             job.dbRelPath,
-						ItemType:         ItemTypeFile,
-						Hash:             hash,
-						Size:             job.size,
-						Mtime:            job.mtime,
-						Ctime:            job.ctime,
-						LocalDevice:      job.localDevice,
-						LocalInode:       job.localInode,
-						LocalBirthTime:   job.localBirthTime,
-						LocalHasIdentity: job.localHasIdentity,
-					})
-					mu.Unlock()
-					return nil
-				}
-			}
-
-			recorder.addJob(gCtx, &job, hash)
-
-			changeType := changeCreate
-			itemType := ItemTypeFile
-			if !job.isNew {
-				changeType = ChangeModify
-			}
-
-			ev := changeEvent{
-				Type:     changeType,
-				Path:     job.dbRelPath,
-				Name:     job.name,
-				ItemType: itemType,
-				Size:     job.size,
-				Hash:     hash,
-				Mtime:    job.mtime,
-			}
-
-			mu.Lock()
-			events = append(events, ev)
-			rows = append(rows, localStateRow{
+			row := localStateRow{
 				Path:             job.dbRelPath,
-				ItemType:         itemType,
+				ItemType:         ItemTypeFile,
 				Hash:             hash,
 				Size:             job.size,
 				Mtime:            job.mtime,
@@ -381,8 +347,34 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 				LocalInode:       job.localInode,
 				LocalBirthTime:   job.localBirthTime,
 				LocalHasIdentity: job.localHasIdentity,
-			})
-			mu.Unlock()
+			}
+
+			// For modifies: check if hash matches baseline (no real change).
+			if !job.isNew && hash != "" {
+				if existing, found := o.baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
+					keep(nil, &row)
+					return nil
+				}
+			}
+
+			recorder.addJob(gCtx, &job, hash)
+
+			changeType := changeCreate
+			if !job.isNew {
+				changeType = ChangeModify
+			}
+
+			ev := changeEvent{
+				Type:     changeType,
+				Path:     job.dbRelPath,
+				Name:     job.name,
+				ItemType: ItemTypeFile,
+				Size:     job.size,
+				Hash:     hash,
+				Mtime:    job.mtime,
+			}
+
+			keep(&ev, &row)
 
 			return nil
 		})

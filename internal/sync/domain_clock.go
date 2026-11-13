@@ -3,8 +3,12 @@ package sync
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
+	stdsync "sync"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // syncClock is the engine's single time capability. Every time-dependent
@@ -25,13 +29,92 @@ type syncClock interface {
 	Jitter(maxDelay time.Duration) time.Duration
 }
 
-// realClock is the production wall-clock implementation of syncClock.
-type realClock struct{}
+// realClock is the production wall-clock implementation of syncClock. The
+// engine builds one, with its logger and its timer panics, and every timer the
+// engine and its observers start runs on it (newEngine).
+type realClock struct {
+	logger *slog.Logger
+	panics *timerPanics
+}
 
 func (realClock) Now() time.Time { return time.Now() }
 
-func (realClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
-	return realAfterFunc(delay, fn)
+// AfterFunc runs fn on a goroutine of its own once delay has passed, inside
+// the clock's boundary (recoverTimerPanic).
+func (c realClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+	return &realSyncTimer{timer: time.AfterFunc(delay, func() {
+		defer c.recoverTimerPanic()
+		fn()
+	})}
+}
+
+// recoverTimerPanic is the boundary of every timer callback the clock runs. A
+// callback runs outside every run's call stack, so its panic cannot become
+// anyone's return value: it is logged once with its stack and handed to the
+// clock's timer panics, which end the run bound to them. A clock without timer
+// panics, or one whose engine has no run bound, leaves the log line only.
+func (c realClock) recoverTimerPanic() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	c.panics.record(panicguard.Recovered(c.logger, "in a sync timer callback", r))
+}
+
+// timerPanics carries a timer callback's panic to the run it ends. A real
+// clock reports to one (recoverTimerPanic); whoever owns the clock binds each
+// run to it. While a run is bound, the first panic is kept for the run's error
+// and the run's context is canceled plainly, without a cause: the actions in
+// flight then fail as canceled, which reads as a shutdown, so none is recorded
+// as a failure and the next run redoes them. Later panics of the same run are
+// only logged, and a panic while no run is bound is only logged.
+type timerPanics struct {
+	// mu guards cancel and err. Every holder releases it with defer: record
+	// runs inside a recover block.
+	mu     stdsync.Mutex
+	cancel context.CancelFunc
+	err    error
+}
+
+// bind makes cancel the bound run's.
+func (p *timerPanics) bind(cancel context.CancelFunc) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cancel, p.err = cancel, nil
+}
+
+// unbind ends the bound run's binding and returns the panic that ended it, if
+// one did.
+func (p *timerPanics) unbind() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	err := p.err
+	p.cancel, p.err = nil, nil
+
+	return err
+}
+
+// record keeps err for the bound run, unless an earlier panic is kept, and
+// cancels the run.
+func (p *timerPanics) record(err error) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cancel == nil {
+		return
+	}
+	if p.err == nil {
+		p.err = err
+	}
+	p.cancel()
 }
 
 func (realClock) NewTicker(interval time.Duration) syncTicker {
@@ -90,10 +173,6 @@ func (t *realSyncTicker) Stop() {
 	}
 
 	t.ticker.Stop()
-}
-
-func realAfterFunc(delay time.Duration, fn func()) syncTimer {
-	return &realSyncTimer{timer: time.AfterFunc(delay, fn)}
 }
 
 func realNewTicker(interval time.Duration) syncTicker {

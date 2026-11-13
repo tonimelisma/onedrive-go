@@ -4,7 +4,7 @@ GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/
 
 LAYER: 4
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified]
+Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified]
 
 ## Overview
 
@@ -106,7 +106,8 @@ that no longer reports a finding clears it, and the remote batch manages
 | Watch runtime and admission record aggregate stale-work perf counters without exposing paths or IDs. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters` |
 | Watch shutdown enters drain before accepting cancellation-closed intake channels as terminal, and non-canceled scheduler closure is fatal instead of a clean stop, so retry and trial timers stop at the observable shutdown boundary. | `TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase`, `TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
 | The observer-backed watch loop starts through an explicit phase boundary after bootstrap quiescence, so a stale bootstrap phase cannot make steady-state watch exit cleanly without observer intake. | `TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase`, `TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObservers`, `TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning`, `TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError`, `TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean`, `TestStartObservers_RefusalDuringDrainClassifiesAsShutdown` |
-| A panic inside a watch observer or the full-refresh goroutine fails its mount instead of terminating the process, a panic in the socket.io wake source leaves watch polling on its interval, and each is logged at Error with its stack so the failure stays diagnosable after the goroutine is gone. | `TestRecoverObserverPanic_DeliversPanicAsObserverError`, `TestRecoverObserverPanic_CleanExitReportsNothing`, `TestRecoverObserverPanic_FullChannelDoesNotBlock`, `TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing`, `TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing`, `TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning` |
+| A panic inside a watch observer, the full-refresh goroutine or the debounce loop fails its mount instead of terminating the process, a panic in the socket.io wake source leaves watch polling on its interval, a worker's panic fails that action, and each is logged once at Error with its stack (`panicguard.Recovered`) so the failure stays diagnosable after the goroutine is gone (R-6.3.8, R-6.3.10). | `TestRecoverObserverPanic_DeliversPanicAsObserverError`, `TestRecoverObserverPanic_CleanExitReportsNothing`, `TestRecoverObserverPanic_FullChannelDoesNotBlock`, `TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing`, `TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing`, `TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning`, `TestDirtyBuffer_DebounceLoopPanicClosesTheBatchChannel`, `TestWorkerPool_PanicRecovery`, `TestEveryGoroutineHasAPanicBoundary` |
+| A timer callback's panic ends the run `RunOnce` or `RunWatch` bound with an error wrapping `panicguard.ErrPanic`, its actions in flight ending as at a stop; a panic while no run is bound is only logged; every observer the engine builds runs on its one real clock (R-6.3.10). | `TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown`, `TestRunWatch_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown`, `TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged`, `TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt` |
 | The protected roots are the one `Engine` field rewritten while a run is live; the lock keeps the loop's observer construction and the off-loop refreshes race-free (R-6.3.4). | `TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree` (run under `-race`), `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots` |
 | Parent engines persist shortcut-root state, merge that state into protected-root observation filters on startup, route protected-root lifecycle signals through the parent engine, and suppress/report protected roots without turning them into parent content. | `TestNewMountEngine_LoadsPersistedShortcutProtectedRoots`, `TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot`, `TestSyncStore_applyShortcutTopologyPersistsParentShortcutRoots`, `TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler`, `TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot`, `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete` |
 | Parent shortcut-root transitions are table-validated and watch-mode alias lifecycle stays engine-internal before only child work snapshots reach multisync. Ack handles are live-parent capabilities and zero handles fail loudly. | `TestShortcutRootTransitionTableCoversStates`, `TestShortcutRootTransitionMatrixEnumeratesEveryStateAndEvent`, `TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges`, `TestValidateShortcutRootTransitionRejectsIllegalLifecycleEdges`, `TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename`, `TestShortcutChildAckHandleZeroReturnsExplicitErrors` |
@@ -975,12 +976,13 @@ that stopped.
 
 The recovery is registered as the goroutine's last defer so it runs first while
 unwinding, delivering the error before the observer's channels close rather
-than racing a closed-channel exit. Both this path and `MountRunner`'s existing
-recovery log the panic stack: the recovered value names what failed but not
-where, and the goroutine that could answer that is gone by the time anyone
-reads the report.
+than racing a closed-channel exit. Every recovery logs through
+`panicguard.Recovered` (system.md, R-6.3.10): one Error record with the
+panic stack, because the recovered value names what failed but not where, and
+the goroutine that could answer that is gone by the time anyone reads the
+report.
 
-The two other goroutines the watch runtime starts have the same boundary, and
+The other goroutines the watch runtime starts have the same boundary, and
 each delivers the panic through the error path it already had:
 
 - The full-refresh goroutine (`runFullRemoteRefreshAsync`) recovers in
@@ -991,10 +993,34 @@ each delivers the panic through the error path it already had:
   as the observer case, since the ordinary retry-when-idle path would repeat
   the bug at every refresh interval while the mount's status read healthy.
 - The socket.io wake-source goroutine recovers in `runSocketIOWakeSource` and
-  turns the panic into the error its Info "notifications stopped; still
-  checking on the poll interval" path already handles. The wake source is an
-  accelerator, so losing it changes nothing but latency; the panic itself is
-  still logged at Error with its stack.
+  takes the Info "notifications stopped; still checking on the poll interval"
+  path its errors already take. The wake source is an accelerator, so losing
+  it changes nothing but latency; the panic itself is still logged at Error
+  with its stack. A panic of its connection's reader (`readPackets`) ends the
+  connection like a failed read and the wake source with it, since a
+  reconnect would only repeat the bug. The runtime's cleanup cancels the wake
+  source's context directly and waits for its goroutine. Each connection ends
+  in order: the close frame first, so the server sees a normal closure, then
+  the reader's cancel and a wait for the reader, so no reader outlives its
+  connection (`TestSocketIOWakeSource_ConnectionClosesNormallyAndLeavesNoReader`).
+- The debounce loop (`dirtyBuffer.debounceLoop`) ends like any early exit:
+  its batch channel closes outside shutdown, and the loop fails the mount
+  ("dirty scheduler stopped unexpectedly")
+  (`TestDirtyBuffer_DebounceLoopPanicClosesTheBatchChannel`).
+- A worker recovers per action (`safeExecuteAction`): the action fails with
+  the panic as its error and the engine decides, as for any failed action
+  (`TestWorkerPool_PanicRecovery`). A hash worker of a scan records the file
+  as a `hash_panic` skipped item and the scan completes
+  (`TestHashPhase_PanicRecovery`).
+- A timer callback runs on a goroutine of its own, on the engine's one real
+  clock (`wallClock`, built in `newEngine` and handed to every observer the
+  engine builds), whose boundary (`realClock.recoverTimerPanic`) logs the
+  panic and cancels the run that `RunOnce` or `RunWatch` bound (`beginRun`)
+  without a cause, so the actions in flight end as at a stop and the next run
+  redoes them, while the run returns the panic's error and a panic with no run
+  bound is only logged
+  (`TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown`,
+  `TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged`).
 
 The one remaining boundary is outside this package: the per-mount runner
 goroutine multisync starts around `RunWatch` recovers too, so a panic that

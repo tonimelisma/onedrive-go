@@ -140,6 +140,7 @@ linters:
             - "**/internal/localpath/*.go"
             - "**/internal/loglevel/*.go"
             - "**/internal/namekey/*.go"
+            - "**/internal/panicguard/*.go"
             - "**/internal/sdnotify/*.go"
             - "**/internal/sharedref/*.go"
             - "!$test"
@@ -289,6 +290,21 @@ linters:
 
     unparam:
       check-exported: false
+
+    wrapcheck:
+      # The defaults, plus panicguard.Recovered: like errors.New it makes the
+      # error (the account of a recovered panic), so there is nothing to wrap.
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        - .WithMessagef(
+        - .WithStack(
+        - panicguard.Recovered(
 
     whitespace:
       multi-if: false

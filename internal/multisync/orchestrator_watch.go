@@ -9,6 +9,7 @@ import (
 
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -20,37 +21,58 @@ const (
 // reload, it re-reads the config file, rebuilds runtime mount specs, and diffs
 // the active mount set: stopped mounts are removed, new mounts are started.
 // Returns nil on clean context cancel or a stop request. It returns an error
-// when the control server stops on its own (a watch nobody can pause, reload
-// or query must not keep running) and when a drive's sync did not stop within
-// its bound (ErrSyncStuck), whether a reload, a runner exit or the
-// shutdown itself asked it to.
+// when a helper the watch cannot run without ends (the control server or the
+// config file watcher: a watch nobody can pause, reload or query must not
+// keep running), when a drive's sync did not stop within its bound
+// (ErrSyncStuck), whether a reload, a runner exit or the shutdown itself
+// asked it to, and when the loop itself panicked (panicguard.ErrPanic).
 func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) (err error) {
+	// Registered first so it runs last, after the drain and the socket close
+	// below: a panic on the loop leaves its maps and its report memory of
+	// unknown consistency, so the watch does not carry on. The drives stop
+	// first, the panic is logged once with its stack and returned, the CLI
+	// exits 1, and a service manager starts a fresh process (R-6.3.10).
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Join(panicguard.Recovered(o.logger, "in the watch loop", r), err)
+		}
+	}()
+
 	o.watchReportMemory = newWatchReportState()
 	commands := make(chan controlCommand)
 	// fatal carries the end of a helper the watch cannot run without (the
-	// control server). Buffered so the reporter never waits on the loop.
+	// control server, the config file watcher). Buffered so the reporter
+	// never waits on the loop.
 	fatal := make(chan error, 1)
 	runnerEvents := make(chan watchRunnerEvent, watchRunnerEventBuffer)
 	childWork := newParentChildWorkSnapshots()
-	runners, control, err := o.startWatchRuntime(ctx, mode, opts, commands, fatal, runnerEvents, childWork)
+
+	// The drain and the socket close are registered before anything starts,
+	// so whatever ends the watch, a failed or panicking startup included,
+	// stops the drives that started and then closes the socket. Closed after
+	// the drain, so the owner lock is held until every drive has stopped: an
+	// offline state change or another sync never sees a drive still writing
+	// its store as unowned. startWatchRuntime fills runners and control in
+	// place as it starts them.
+	runners := make(map[mountID]*watchRunner)
+	var control *controlSocketServer
+	watching := false
+	defer func() { o.closeControlSocket(ctx, control) }()
+	defer func() {
+		if drainErr := o.drainWatch(ctx, runners, watching); drainErr != nil {
+			err = errors.Join(err, drainErr)
+		}
+	}()
+
+	startResults, err := o.startWatchRuntime(ctx, mode, opts, commands, fatal, runnerEvents, childWork, runners, &control)
 	if err != nil {
 		return err
 	}
-	// Closed after the drain below, so the owner lock is held until every
-	// drive has stopped: an offline state change or another sync never sees
-	// a drive still writing its store as unowned.
-	defer o.closeControlSocket(ctx, control)
-
-	defer func() {
-		if drainErr := o.retireAllWatchRunners(ctx, runners); drainErr != nil {
-			err = errors.Join(err, drainErr)
-		}
-
-		o.logger.Info("Stopped watching for changes")
-	}()
+	watching = true
 	// Registered after the drain above so it runs first: the service manager
 	// hears "stopping" before the runners take time to settle.
 	defer o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchStopping}, nil, nil)
+	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReady}, runners, startResults)
 
 	reconcileTickCh, stopReconcileTicks := o.reconcileTicks(reconcileWatchInterval(opts.PollInterval))
 	defer stopReconcileTicks()
@@ -60,7 +82,12 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	pauseExpiry := watchPauseExpiryWake{orchestrator: o}
 	defer pauseExpiry.stop()
 
-	reloadTriggers, stopReloadTriggers := watchConfigReloadTriggers(ctx, o.configPath(), configFilePollInterval)
+	reloadTriggers, stopReloadTriggers := watchConfigReloadTriggers(ctx, configReloadWatch{
+		path:     o.configPath(),
+		interval: configFilePollInterval,
+		logger:   o.logger,
+		fatal:    fatal,
+	})
 	defer stopReloadTriggers()
 
 	for {
@@ -103,6 +130,18 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, o
 	}
 }
 
+// drainWatch stops every runner the watch started, and says the watch
+// stopped when it got as far as watching: a start that failed ends quietly.
+// It returns the errors of the runners that did not stop within their bound.
+func (o *Orchestrator) drainWatch(ctx context.Context, runners map[mountID]*watchRunner, watching bool) error {
+	drainErr := o.retireAllWatchRunners(ctx, runners)
+	if watching {
+		o.logger.Info("Stopped watching for changes")
+	}
+
+	return drainErr
+}
+
 // reloadForReason runs the config reload the loop owes to a trigger it did
 // not ask a client about: a changed file or an expired timed pause. A reload
 // that could not apply the config already warned and kept the previous
@@ -124,9 +163,11 @@ func (o *Orchestrator) reloadForReason(
 	return nil
 }
 
-// startWatchRuntime binds the control socket and starts the initial runners.
-// On success the caller owns the returned control server and closes it; on
-// failure the server is already closed (and unlinked), and no runner runs.
+// startWatchRuntime binds the control socket and starts the initial runners,
+// and returns the start results the ready event reports. It sets *control
+// once the socket is bound and adds each runner to runners as it starts, so
+// the caller, which closes the one and drains the other on every exit, stops
+// exactly what started, also when the start fails or panics part way.
 func (o *Orchestrator) startWatchRuntime(
 	ctx context.Context,
 	mode syncengine.SyncMode,
@@ -135,25 +176,27 @@ func (o *Orchestrator) startWatchRuntime(
 	fatal chan<- error,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) (map[mountID]*watchRunner, *controlSocketServer, error) {
+	runners map[mountID]*watchRunner,
+	control **controlSocketServer,
+) ([]MountStartupResult, error) {
 	if len(o.cfg.StandaloneMounts) == 0 {
 		if len(o.cfg.InitialStartupResults) > 0 {
-			return nil, nil, &WatchStartupError{
+			return nil, &WatchStartupError{
 				Summary: summarizeStartupResults(o.cfg.InitialStartupResults),
 			}
 		}
-		return nil, nil, fmt.Errorf("no drives selected for sync")
+		return nil, fmt.Errorf("no drives selected for sync")
 	}
 
-	control, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands, fatal)
+	server, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands, fatal)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	*control = server
 
 	decisions, err := o.buildStandaloneRuntimeWorkSet(ctx, o.cfg.StandaloneMounts, o.cfg.InitialStartupResults)
 	if err != nil {
-		o.closeControlSocket(ctx, control)
-		return nil, nil, err
+		return nil, err
 	}
 	o.setControlMountIDs(mountIDsForSpecs(decisions.Mounts))
 
@@ -162,7 +205,7 @@ func (o *Orchestrator) startWatchRuntime(
 		slog.String("mode", mode.String()),
 	)
 
-	runners, startResults := o.startInitialWatchRunners(
+	startResults := o.startInitialWatchRunners(
 		ctx,
 		mode,
 		decisions.Mounts,
@@ -170,13 +213,11 @@ func (o *Orchestrator) startWatchRuntime(
 		opts,
 		runnerEvents,
 		childWork,
+		runners,
 	)
 	startSummary := summarizeStartupResults(startResults)
 	if err := validateInitialWatchStart(runners, startSummary); err != nil {
-		// No drive started, so there is nothing to drain before the owner
-		// lock goes.
-		o.closeControlSocket(ctx, control)
-		return nil, nil, err
+		return nil, err
 	}
 	if len(runners) == 0 {
 		o.logger.Info("All selected drives are paused; waiting until one is resumed",
@@ -184,11 +225,12 @@ func (o *Orchestrator) startWatchRuntime(
 		)
 	}
 	o.emitStartWarning(startResults, startAnnounceFull)
-	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReady}, runners, startResults)
 
-	return runners, control, nil
+	return startResults, nil
 }
 
+// startInitialWatchRunners starts a runner for every mount that is not paused
+// and adds it to runners, and returns every mount's start result.
 func (o *Orchestrator) startInitialWatchRunners(
 	ctx context.Context,
 	mode syncengine.SyncMode,
@@ -197,8 +239,8 @@ func (o *Orchestrator) startInitialWatchRunners(
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
-) (map[mountID]*watchRunner, []MountStartupResult) {
-	runners := make(map[mountID]*watchRunner)
+	runners map[mountID]*watchRunner,
+) []MountStartupResult {
 	startResults := append([]MountStartupResult(nil), initialStartup...)
 
 	for i := range mounts {
@@ -240,7 +282,7 @@ func (o *Orchestrator) startInitialWatchRunners(
 	}
 	o.setControlMountIDs(sortedRunnerMountIDs(runners))
 
-	return runners, startResults
+	return startResults
 }
 
 // validateInitialWatchStart decides whether a watch with no running drive
