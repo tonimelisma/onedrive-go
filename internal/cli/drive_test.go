@@ -470,7 +470,7 @@ func TestPrintDriveListJSON_Empty(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
 	assert.Empty(t, output.Configured)
 	assert.Empty(t, output.Available)
-	assert.Nil(t, output.AccountsRequiringAuth)
+	assert.Empty(t, output.AccountsRequiringAuth)
 	assert.Nil(t, output.AccountsDegraded)
 }
 
@@ -506,6 +506,11 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 	assert.Equal(t, authReasonSyncAuthRejected, output.AccountsRequiringAuth[0].Reason)
 }
 
+// accounts_requiring_auth is always there, [] when every account is signed
+// in, as in `shared` and `drive search`; accounts_degraded is left out when
+// no account is degraded.
+//
+// Validates: R-3.3.10, R-6.6.33
 func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil))
@@ -514,6 +519,8 @@ func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
 	assert.Equal(t, "[]", string(output["configured"]))
 	assert.Equal(t, "[]", string(output["available"]))
+	assert.Equal(t, "[]", string(output["accounts_requiring_auth"]))
+	assert.NotContains(t, output, "accounts_degraded")
 }
 
 // --- driveListEntry ---
@@ -605,7 +612,7 @@ func TestDriveListEntry_HasStateDB_OmittedWhenFalse(t *testing.T) {
 func TestPrintDriveSearchText_Empty(t *testing.T) {
 	// Should not panic with no results.
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, nil, "test query"))
+	require.NoError(t, printDriveSearchText(&buf, nil, "test query", nil))
 }
 
 // Validates: R-3.3.9
@@ -635,7 +642,7 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Wiki", SiteName: "Marketing", LibraryName: "Wiki"},
 	}
 	var buf bytes.Buffer
-	assert.NotPanics(t, func() { require.NoError(t, printDriveSearchText(&buf, results, "marketing")) })
+	assert.NotPanics(t, func() { require.NoError(t, printDriveSearchText(&buf, results, "marketing", nil)) })
 }
 
 // Validates: R-3.3.9
@@ -645,7 +652,7 @@ func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR", LibraryName: "Docs"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, results, "docs"))
+	require.NoError(t, printDriveSearchText(&buf, results, "docs", nil))
 	output := buf.String()
 	// Verify alphabetical sort: HR should appear before Marketing.
 	hrIdx := strings.Index(output, "HR")
@@ -665,7 +672,7 @@ func TestPrintDriveSearchText_DoesNotMutateInput(t *testing.T) {
 	orig1 := results[1].SiteName
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, results, "docs"))
+	require.NoError(t, printDriveSearchText(&buf, results, "docs", nil))
 
 	assert.Equal(t, orig0, results[0].SiteName, "input slice should not be mutated")
 	assert.Equal(t, orig1, results[1].SiteName, "input slice should not be mutated")
@@ -678,13 +685,13 @@ func TestPrintDriveSearchJSON_NoError(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchJSON(&buf, results))
+	require.NoError(t, printDriveSearchJSON(&buf, results, nil))
 
 	var output driveSearchJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
 	require.Len(t, output.Results, 1)
 	assert.Equal(t, results, output.Results)
-	assert.Nil(t, output.AccountsRequiringAuth)
+	assert.Empty(t, output.AccountsRequiringAuth)
 }
 
 // Validates: R-3.3.11
@@ -711,14 +718,18 @@ func TestPrintDriveSearchJSON_IncludesAuthRequiredAccounts(t *testing.T) {
 	assert.Equal(t, authReasonMissingLogin, decoded.AccountsRequiringAuth[0].Reason)
 }
 
+// A search that found nothing and needed no sign-in prints both lists, each
+// as [].
+//
+// Validates: R-3.3.11, R-6.6.33
 func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchJSON(&buf, []driveSearchResult{}))
+	require.NoError(t, printDriveSearchJSON(&buf, nil, nil))
 
-	var output driveSearchJSONOutput
+	var output map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
-	assert.Empty(t, output.Results)
-	assert.Nil(t, output.AccountsRequiringAuth)
+	assert.Equal(t, "[]", string(output["results"]))
+	assert.Equal(t, "[]", string(output["accounts_requiring_auth"]))
 }
 
 // --- searchableBusinessTokenIDs ---
@@ -2347,7 +2358,6 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 	assert.Equal(t, string(authReasonMissingLogin), configured[0].AuthReason)
 	assert.Equal(t, "required", driveAuthLabel(&configured[0]))
 	assert.Equal(t, authStateReady, driveAuthLabel(nil))
-	assert.Nil(t, optionalAuthRequirements(nil))
 
 	var buf bytes.Buffer
 	require.NoError(t, printDriveListSections(&buf, configured, available, []accountAuthRequirement{{

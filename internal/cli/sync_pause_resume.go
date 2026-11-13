@@ -81,6 +81,12 @@ type resumeJSONOutput struct {
 	Drives []resumeJSONDrive `json:"drives"`
 }
 
+func (out resumeJSONOutput) withEmptyLists() resumeJSONOutput {
+	out.Drives = emptyIfNil(out.Drives)
+
+	return out
+}
+
 type resumeJSONDrive struct {
 	Drive  string        `json:"drive"`
 	Result resumeOutcome `json:"result"`
@@ -141,7 +147,7 @@ func resumeSingleDriveWithNow(ctx context.Context, cc *CLIContext, now func() ti
 	if cc.Flags.JSON {
 		return writeJSONDocument(cc.Output(), resumeJSONOutput{
 			Drives: []resumeJSONDrive{{Drive: cid.String(), Result: outcome}},
-		})
+		}.withEmptyLists())
 	}
 
 	return nil
@@ -160,7 +166,7 @@ func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time
 	}
 
 	resumed := 0
-	report := resumeJSONOutput{Drives: []resumeJSONDrive{}}
+	var report resumeJSONOutput
 
 	var errs []error
 
@@ -194,7 +200,7 @@ func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time
 	// Under --json the document reports every drive, including the ones that
 	// failed; the exit status still says the run failed.
 	if cc.Flags.JSON {
-		if err := writeJSONDocument(cc.Output(), report); err != nil {
+		if err := writeJSONDocument(cc.Output(), report.withEmptyLists()); err != nil {
 			errs = append(errs, err)
 		}
 	}

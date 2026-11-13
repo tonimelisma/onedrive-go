@@ -18,7 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func TestPrintStatTextWithOptions(t *testing.T) {
+func TestPrintStatText(t *testing.T) {
 	item := &graph.Item{
 		ID:         "item-123",
 		Name:       "photo.jpg",
@@ -30,7 +30,7 @@ func TestPrintStatTextWithOptions(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatTextWithOptions(&buf, item, statPrintOptions{}))
+	require.NoError(t, printStatText(&buf, item, statPrintOptions{}))
 	output := buf.String()
 
 	assert.Contains(t, output, "photo.jpg")
@@ -40,7 +40,7 @@ func TestPrintStatTextWithOptions(t *testing.T) {
 	assert.Contains(t, output, "image/jpeg")
 }
 
-func TestPrintStatTextWithOptions_Folder(t *testing.T) {
+func TestPrintStatText_Folder(t *testing.T) {
 	item := &graph.Item{
 		ID:         "folder-456",
 		Name:       "Documents",
@@ -51,7 +51,7 @@ func TestPrintStatTextWithOptions_Folder(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatTextWithOptions(&buf, item, statPrintOptions{}))
+	require.NoError(t, printStatText(&buf, item, statPrintOptions{}))
 	output := buf.String()
 
 	assert.Contains(t, output, "Documents")
@@ -75,7 +75,7 @@ func TestPrintStatJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatJSON(&buf, item))
+	require.NoError(t, printStatJSON(&buf, item, statPrintOptions{}))
 	out := buf.String()
 
 	var parsed statJSONOutput
@@ -85,7 +85,7 @@ func TestPrintStatJSON(t *testing.T) {
 	assert.Equal(t, "text/plain", parsed.MimeType)
 }
 
-func TestPrintStatTextWithOptions_ZeroTimestampsRenderUnknown(t *testing.T) {
+func TestPrintStatText_ZeroTimestampsRenderUnknown(t *testing.T) {
 	item := &graph.Item{
 		ID:         "id-zero",
 		Name:       "mystery.txt",
@@ -95,7 +95,7 @@ func TestPrintStatTextWithOptions_ZeroTimestampsRenderUnknown(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatTextWithOptions(&buf, item, statPrintOptions{}))
+	require.NoError(t, printStatText(&buf, item, statPrintOptions{}))
 	output := buf.String()
 
 	assert.Contains(t, output, "Modified: unknown")
@@ -112,7 +112,7 @@ func TestPrintStatJSON_ZeroTimestampsUseEmptyString(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatJSON(&buf, item))
+	require.NoError(t, printStatJSON(&buf, item, statPrintOptions{}))
 
 	var parsed statJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -11,14 +10,21 @@ import (
 // preventing narrow columns when all entries happen to be short.
 const minColumnWidth = 20
 
-// driveListJSONOutput is the structured JSON schema for drive list output.
-// Separates configured and available drives into distinct top-level keys,
-// replacing the flat array that required callers to filter by "source" field.
+// driveListJSONOutput is `drive list --json`. Configured and available drives
+// sit under keys of their own, so a script need not filter on "source".
 type driveListJSONOutput struct {
 	Configured            []driveListEntry         `json:"configured"`
 	Available             []driveListEntry         `json:"available"`
-	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
+	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth"`
 	AccountsDegraded      []accountDegradedNotice  `json:"accounts_degraded,omitempty"`
+}
+
+func (out driveListJSONOutput) withEmptyLists() driveListJSONOutput {
+	out.Configured = emptyIfNil(out.Configured)
+	out.Available = emptyIfNil(out.Available)
+	out.AccountsRequiringAuth = emptyIfNil(out.AccountsRequiringAuth)
+
+	return out
 }
 
 func printDriveListJSON(
@@ -27,15 +33,6 @@ func printDriveListJSON(
 	authRequired []accountAuthRequirement,
 	degraded []accountDegradedNotice,
 ) error {
-	// Initialize nil slices to empty so JSON renders [] not null.
-	if configured == nil {
-		configured = []driveListEntry{}
-	}
-
-	if available == nil {
-		available = []driveListEntry{}
-	}
-
 	out := driveListJSONOutput{
 		Configured:            configured,
 		Available:             available,
@@ -43,14 +40,7 @@ func printDriveListJSON(
 		AccountsDegraded:      degraded,
 	}
 
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
+	return writeJSONDocument(w, out.withEmptyLists())
 }
 
 // driveLabel returns a human-readable label for a drive list entry.

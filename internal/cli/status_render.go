@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -9,9 +8,9 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
-// computeSummary aggregates health information across all status accounts.
+// computeSummary aggregates health information across accounts that
+// normalizeStatusAccounts has normalized.
 func computeSummary(accounts []statusAccount) statusSummary {
-	accounts = normalizeStatusAccounts(accounts)
 	var s statusSummary
 
 	for i := range accounts {
@@ -74,28 +73,23 @@ func addDriveToSummary(s *statusSummary, drive *statusDrive, sharedFolder bool) 
 	}
 }
 
+// newStatusOutput is the status document for accounts, normalized once:
+// normalizeStatusAccounts fills each account and leaves no list nil, and the
+// summary counts the normalized accounts. Both printers start from it.
+func newStatusOutput(accounts []statusAccount) statusOutput {
+	normalized := normalizeStatusAccounts(accounts)
+
+	return statusOutput{Accounts: normalized, Summary: computeSummary(normalized)}
+}
+
 func printStatusJSON(w io.Writer, accounts []statusAccount) error {
-	accounts = normalizeStatusAccounts(accounts)
-	output := statusOutput{
-		Accounts: accounts,
-		Summary:  computeSummary(accounts),
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(output); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
+	return writeJSONDocument(w, newStatusOutput(accounts))
 }
 
 func printStatusText(w io.Writer, accounts []statusAccount) error {
-	accounts = normalizeStatusAccounts(accounts)
-	summary := computeSummary(accounts)
-	if shouldPrintStatusSummary(&summary, len(accounts)) {
-		if err := printSummaryText(w, &summary); err != nil {
+	status := newStatusOutput(accounts)
+	if shouldPrintStatusSummary(&status.Summary, len(status.Accounts)) {
+		if err := printSummaryText(w, &status.Summary); err != nil {
 			return err
 		}
 		if err := writeln(w); err != nil {
@@ -103,8 +97,8 @@ func printStatusText(w io.Writer, accounts []statusAccount) error {
 		}
 	}
 
-	for i := range accounts {
-		if err := printAccountStatus(w, &accounts[i], i > 0); err != nil {
+	for i := range status.Accounts {
+		if err := printAccountStatus(w, &status.Accounts[i], i > 0); err != nil {
 			return err
 		}
 	}
@@ -112,19 +106,20 @@ func printStatusText(w io.Writer, accounts []statusAccount) error {
 	return nil
 }
 
+// normalizeStatusAccounts returns a copy of accounts with each account and
+// drive filled in, and with the two lists status prints without omitempty
+// never nil: the accounts, and each account's drives, so an empty one prints
+// [] rather than null.
 func normalizeStatusAccounts(accounts []statusAccount) []statusAccount {
-	if len(accounts) == 0 {
-		return accounts
-	}
-
 	normalized := make([]statusAccount, len(accounts))
 	copy(normalized, accounts)
 	for i := range normalized {
-		if len(normalized[i].Drives) == 0 && len(normalized[i].Mounts) > 0 {
-			normalized[i].Drives = append([]statusDrive(nil), normalized[i].Mounts...)
-		} else {
-			normalized[i].Drives = append([]statusDrive(nil), normalized[i].Drives...)
+		drives := normalized[i].Drives
+		if len(drives) == 0 {
+			drives = normalized[i].Mounts
 		}
+		normalized[i].Drives = make([]statusDrive, len(drives))
+		copy(normalized[i].Drives, drives)
 		normalizeStatusDrives(normalized[i].Drives)
 		if normalized[i].SignInRequired == nil {
 			setAccountSignInRequired(&normalized[i])

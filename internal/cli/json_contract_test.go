@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,9 +47,17 @@ const (
 // returns what it wrote to stdout. invoke must execute the leaf taken from
 // the real command tree (see runDetachedLeaf), not a freshly built copy, so
 // the test proves the wiring users actually get.
+//
+// schema is the Go type of what invoke's run prints (each line, for
+// jsonLines); otherSchemas are the types the command prints in runs invoke
+// does not make, such as get and put of a folder rather than a file. Together
+// they declare every type the command prints, which the empty-list tests
+// (json_lists_test.go) hold to the rule that no list prints null.
 type jsonContractCase struct {
-	contract jsonContract
-	invoke   func(t *testing.T, leaf *cobra.Command) (stdout string, err error)
+	contract     jsonContract
+	schema       jsonSchema
+	otherSchemas []jsonSchema
+	invoke       func(t *testing.T, leaf *cobra.Command) (stdout string, err error)
 }
 
 // TestCommandTree_EveryLeafHonorsJSON walks the whole command tree and
@@ -81,7 +89,7 @@ func TestCommandTree_EveryLeafHonorsJSON(t *testing.T) {
 			leaf.SetContext(ctx)
 
 			stdout, err := tc.invoke(t, leaf)
-			assertJSONContract(t, tc.contract, stdout, err)
+			assertJSONContract(t, tc.contract, tc.schema, stdout, err)
 		})
 	}
 
@@ -90,16 +98,16 @@ func TestCommandTree_EveryLeafHonorsJSON(t *testing.T) {
 	}
 }
 
-func assertJSONContract(t *testing.T, contract jsonContract, stdout string, err error) {
+func assertJSONContract(t *testing.T, contract jsonContract, schema jsonSchema, stdout string, err error) {
 	t.Helper()
 
 	switch contract {
 	case jsonDocument:
 		require.NoError(t, err)
-		requireSingleJSONDocument(t, stdout)
+		requireSingleJSONDocument(t, schema, stdout)
 	case jsonLines:
 		require.NoError(t, err)
-		requireJSONLines(t, stdout)
+		requireJSONLines(t, schema, stdout)
 	case jsonRejected:
 		// main maps every usageError to exit status 2.
 		var usage *usageError
@@ -108,32 +116,63 @@ func assertJSONContract(t *testing.T, contract jsonContract, stdout string, err 
 	}
 }
 
-func requireSingleJSONDocument(t *testing.T, stdout string) {
+// requireSingleJSONDocument checks stdout is exactly one document of the
+// schema's type, written as writeJSONDocument writes it: opening with { or [
+// as the type says, indented by two spaces, ending in one newline, with no
+// list printed as null.
+func requireSingleJSONDocument(t *testing.T, schema jsonSchema, stdout string) {
 	t.Helper()
+	require.NotNil(t, schema.typ, "a --json document case names the type it prints")
 
 	dec := json.NewDecoder(strings.NewReader(stdout))
 	var doc any
 	require.NoErrorf(t, dec.Decode(&doc), "stdout is not JSON:\n%s", stdout)
 	var extra any
 	require.ErrorIsf(t, dec.Decode(&extra), io.EOF, "stdout has more than one JSON value:\n%s", stdout)
+
+	opening := "{"
+	if schema.typ.Kind() == reflect.Slice {
+		opening = "["
+	}
+	assert.Truef(t, strings.HasPrefix(stdout, opening), "a %s document starts with %s:\n%s", schema.typ, opening, stdout)
+
+	var compact, indented bytes.Buffer
+	require.NoError(t, json.Compact(&compact, []byte(stdout)))
+	require.NoError(t, json.Indent(&indented, compact.Bytes(), "", "  "))
+	assert.Equal(t, indented.String()+"\n", stdout, "a --json document is indented by two spaces and ends in exactly one newline")
+
+	requireMatchesSchema(t, schema, stdout)
+	assert.Emptyf(t, nullListsIn(schema.typ, doc, "$"), "a list in a --json document prints [], never null:\n%s", stdout)
 }
 
-func requireJSONLines(t *testing.T, stdout string) {
+// requireJSONLines checks every stdout line is one compact JSON object of
+// the schema's type ending in a newline, with no list printed as null.
+func requireJSONLines(t *testing.T, schema jsonSchema, stdout string) {
 	t.Helper()
+	require.NotNil(t, schema.typ, "a JSON-lines case names the type of each line")
+	require.NotEmpty(t, stdout, "a JSON-lines command must print at least one line")
+	assert.True(t, strings.HasSuffix(stdout, "\n"), "every JSON line ends in a newline")
 
-	scanner := bufio.NewScanner(strings.NewReader(stdout))
-	lines := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		lines++
+	for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		var compact bytes.Buffer
+		require.NoErrorf(t, json.Compact(&compact, []byte(line)), "stdout line is not JSON: %q", line)
+		assert.Equalf(t, compact.String(), line, "a JSON line is compact")
+
 		var obj map[string]any
 		require.NoErrorf(t, json.Unmarshal([]byte(line), &obj), "stdout line is not a JSON object: %q", line)
+		requireMatchesSchema(t, schema, line)
+		assert.Emptyf(t, nullListsIn(schema.typ, obj, "$"), "a list in a JSON line prints [], never null: %q", line)
 	}
-	require.NoError(t, scanner.Err())
-	require.Positive(t, lines, "a JSON-lines command must print at least one line")
+}
+
+// requireMatchesSchema decodes text into the schema's type, refusing a field
+// the type does not have, so a case cannot name the wrong type.
+func requireMatchesSchema(t *testing.T, schema jsonSchema, text string) {
+	t.Helper()
+
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.DisallowUnknownFields()
+	require.NoErrorf(t, dec.Decode(reflect.New(schema.typ).Interface()), "stdout is not a %s:\n%s", schema.typ, text)
 }
 
 func runnableLeaves(root *cobra.Command) []*cobra.Command {
@@ -265,19 +304,19 @@ func jsonContractCases() map[string]jsonContractCase {
 // accountJSONContractCases: sign-in, status, perf and shared.
 func accountJSONContractCases() map[string]jsonContractCase {
 	return map[string]jsonContractCase{
-		"onedrive-go login": {contract: jsonDocument, invoke: invokeLoginJSON},
-		"onedrive-go logout": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go login": {contract: jsonDocument, schema: schemaOf[loginJSONOutput](), invoke: invokeLoginJSON},
+		"onedrive-go logout": {contract: jsonDocument, schema: schemaOf[logoutJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 			cc, _ := jsonContractConfigContext(t)
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go status": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go status": {contract: jsonDocument, schema: statusOutputSchema(), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, _ := jsonContractConfigContext(t)
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go perf capture": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go perf capture": {contract: jsonDocument, schema: schemaOf[synccontrol.PerfCaptureResponse](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeOneShot},
 				func(w http.ResponseWriter, _ *http.Request) {
@@ -290,7 +329,7 @@ func accountJSONContractCases() map[string]jsonContractCase {
 			cc, _ := jsonContractConfigContext(t)
 			return runDetachedLeaf(t, leaf, cc, "--duration=5s")
 		}},
-		"onedrive-go shared": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go shared": {contract: jsonDocument, schema: schemaOf[sharedListJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, _ := jsonContractConfigContext(t)
 			return runDetachedLeaf(t, leaf, cc)
@@ -301,121 +340,127 @@ func accountJSONContractCases() map[string]jsonContractCase {
 // driveJSONContractCases: the drive subcommands, pause, resume and sync.
 func driveJSONContractCases() map[string]jsonContractCase {
 	return map[string]jsonContractCase{
-		"onedrive-go drive list": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go drive list": {contract: jsonDocument, schema: schemaOf[driveListJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, _ := jsonContractConfigContext(t)
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go drive add": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go drive add": {contract: jsonDocument, schema: schemaOf[driveAddResult](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cid := driveid.MustCanonicalID("business:user@example.com")
 			writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")
 			cc := newCommandContext(&bytes.Buffer{}, filepath.Join(t.TempDir(), "config.toml"))
 			return runDetachedLeaf(t, leaf, cc, cid.String())
 		}},
-		"onedrive-go drive remove": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go drive remove": {contract: jsonDocument, schema: schemaOf[driveRemoveJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go trash list": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go trash list": {contract: jsonDocument, schema: schemaOf[trashListJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go trash restore": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go trash restore": {contract: jsonDocument, schema: schemaOf[trashRestoreJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			id := seedTrashEntry(t, config.DriveStatePath(cid), t.TempDir(), "notes.txt")
 			return runDetachedLeaf(t, leaf, cc, id)
 		}},
-		"onedrive-go trash empty": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go trash empty": {contract: jsonDocument, schema: schemaOf[trashEmptyJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			return runDetachedLeaf(t, leaf, cc, "--confirm")
 		}},
-		"onedrive-go drive rebind-root": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go drive rebind-root": {contract: jsonDocument, schema: schemaOf[driveRebindRootJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 			return runDetachedLeaf(t, leaf, cc, "--yes")
 		}},
-		"onedrive-go drive reset-sync-state": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go drive reset-sync-state": {contract: jsonDocument, schema: schemaOf[driveResetSyncStateJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			cc.Flags.Drive = []string{cid.String()}
 			require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 			return runDetachedLeaf(t, leaf, cc, "--yes")
 		}},
-		"onedrive-go drive search": {contract: jsonDocument, invoke: invokeDriveSearchJSON},
-		"onedrive-go pause": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go drive search": {contract: jsonDocument, schema: schemaOf[driveSearchJSONOutput](), invoke: invokeDriveSearchJSON},
+		"onedrive-go pause": {contract: jsonDocument, schema: schemaOf[pauseJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, _ := jsonContractConfigContext(t)
 			return runDetachedLeaf(t, leaf, cc, "2h")
 		}},
-		"onedrive-go resume": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go resume": {contract: jsonDocument, schema: schemaOf[resumeJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
 			require.NoError(t, config.SetDriveKey(cc.CfgPath, cid, "paused", "true"))
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go sync": {contract: jsonLines, invoke: invokeSyncJSON},
+		"onedrive-go sync": {contract: jsonLines, schema: schemaOf[syncJSONEvent](), invoke: invokeSyncJSON},
 	}
 }
 
 func fileJSONContractCases() map[string]jsonContractCase {
 	return map[string]jsonContractCase{
-		"onedrive-go ls": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go ls": {contract: jsonDocument, schema: schemaOf[lsJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addFile("notes.txt", "hello")
 			return runDetachedLeaf(t, leaf, cc, "/")
 		}},
-		"onedrive-go stat": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go stat": {contract: jsonDocument, schema: schemaOf[statJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addFile("notes.txt", "hello")
 			return runDetachedLeaf(t, leaf, cc, "/notes.txt")
 		}},
-		"onedrive-go get": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
-			t.Helper()
-			cc, fake := jsonContractFileContext(t)
-			fake.addFile("notes.txt", "hello")
-			return runDetachedLeaf(t, leaf, cc, "/notes.txt", filepath.Join(t.TempDir(), "notes.txt"))
-		}},
-		"onedrive-go put": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
-			t.Helper()
-			cc, _ := jsonContractFileContext(t)
-			local := filepath.Join(t.TempDir(), "upload.txt")
-			// Zero bytes: every non-empty upload goes through an upload
-			// session, whose pre-authenticated URL must be an https Microsoft
-			// host the local fake cannot serve. The JSON contract is the same.
-			require.NoError(t, os.WriteFile(local, nil, 0o600))
-			return runDetachedLeaf(t, leaf, cc, local, "/upload.txt")
-		}},
-		"onedrive-go rm": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go get": {
+			contract: jsonDocument, schema: schemaOf[getJSONOutput](), otherSchemas: []jsonSchema{schemaOf[folderTransferJSONOutput[getJSONOutput]]()},
+			invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+				t.Helper()
+				cc, fake := jsonContractFileContext(t)
+				fake.addFile("notes.txt", "hello")
+				return runDetachedLeaf(t, leaf, cc, "/notes.txt", filepath.Join(t.TempDir(), "notes.txt"))
+			},
+		},
+		"onedrive-go put": {
+			contract: jsonDocument, schema: schemaOf[putJSONOutput](), otherSchemas: []jsonSchema{schemaOf[folderTransferJSONOutput[putJSONOutput]]()},
+			invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+				t.Helper()
+				cc, _ := jsonContractFileContext(t)
+				local := filepath.Join(t.TempDir(), "upload.txt")
+				// Zero bytes: every non-empty upload goes through an upload
+				// session, whose pre-authenticated URL must be an https Microsoft
+				// host the local fake cannot serve. The JSON contract is the same.
+				require.NoError(t, os.WriteFile(local, nil, 0o600))
+				return runDetachedLeaf(t, leaf, cc, local, "/upload.txt")
+			},
+		},
+		"onedrive-go rm": {contract: jsonDocument, schema: schemaOf[rmJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addFile("old.txt", "bye")
 			return runDetachedLeaf(t, leaf, cc, "/old.txt")
 		}},
-		"onedrive-go mkdir": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go mkdir": {contract: jsonDocument, schema: schemaOf[mkdirJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, _ := jsonContractFileContext(t)
 			return runDetachedLeaf(t, leaf, cc, "/Reports")
 		}},
-		"onedrive-go mv": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go mv": {contract: jsonDocument, schema: schemaOf[mvJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addFile("a.txt", "a")
 			return runDetachedLeaf(t, leaf, cc, "/a.txt", "/b.txt")
 		}},
-		"onedrive-go cp": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go cp": {contract: jsonDocument, schema: schemaOf[cpJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addFile("a.txt", "a")
@@ -429,19 +474,19 @@ func fileJSONContractCases() map[string]jsonContractCase {
 
 func recycleBinJSONContractCases() map[string]jsonContractCase {
 	return map[string]jsonContractCase{
-		"onedrive-go recycle-bin list": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go recycle-bin list": {contract: jsonDocument, schema: schemaOf[recycleBinListJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addRecycled("gone.txt")
 			return runDetachedLeaf(t, leaf, cc)
 		}},
-		"onedrive-go recycle-bin restore": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go recycle-bin restore": {contract: jsonDocument, schema: schemaOf[recycleBinJSONItem](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			item := fake.addRecycled("gone.txt")
 			return runDetachedLeaf(t, leaf, cc, item.ID)
 		}},
-		"onedrive-go recycle-bin empty": {contract: jsonDocument, invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
+		"onedrive-go recycle-bin empty": {contract: jsonDocument, schema: schemaOf[recycleBinEmptyJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, fake := jsonContractFileContext(t)
 			fake.addRecycled("gone.txt")
@@ -556,7 +601,7 @@ func TestDriveAdd_JSONWithoutSelectorIsAUsageError(t *testing.T) {
 	cc := newCommandContext(&bytes.Buffer{}, filepath.Join(t.TempDir(), "config.toml"))
 
 	stdout, err := runDetachedLeaf(t, leaf, cc)
-	assertJSONContract(t, jsonRejected, stdout, err)
+	assertJSONContract(t, jsonRejected, jsonSchema{}, stdout, err)
 
 	// And end to end through main: exit status 2, nothing on stdout.
 	var mainStdout, mainStderr bytes.Buffer

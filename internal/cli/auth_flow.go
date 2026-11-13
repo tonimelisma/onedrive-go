@@ -276,7 +276,7 @@ func logoutAndReport(
 	}
 
 	if cc.Flags.JSON {
-		return writeJSONDocument(cc.Output(), result)
+		return writeJSONDocument(cc.Output(), result.withEmptyLists())
 	}
 
 	return nil

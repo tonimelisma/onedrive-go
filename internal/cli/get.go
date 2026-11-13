@@ -2,10 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,14 +37,6 @@ type getJSONOutput struct {
 	Path         string `json:"path"`
 	Size         int64  `json:"size"`
 	HashVerified bool   `json:"hash_verified"`
-}
-
-// getFolderJSONOutput is the JSON output schema for downloading a folder.
-type getFolderJSONOutput struct {
-	Files          []getJSONOutput `json:"files"`
-	FoldersCreated int             `json:"folders_created"`
-	TotalSize      int64           `json:"total_size"`
-	Errors         []string        `json:"errors"`
 }
 
 func runGet(cmd *cobra.Command, args []string) error {
@@ -130,7 +120,7 @@ func downloadOneFile(
 	cc.Logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
 
 	if cc.Flags.JSON {
-		return printGetJSON(cc.Output(), getJSONOutput{
+		return writeJSONDocument(cc.Output(), getJSONOutput{
 			Path:         localPath,
 			Size:         result.Size,
 			HashVerified: result.HashVerified,
@@ -160,8 +150,8 @@ func configuredMinFreeSpace(cc *CLIContext) (int64, error) {
 }
 
 // localFileTarget treats a destination that ends in a path separator or
-// names an existing directory as "into that directory", like cp. Downloading
-// onto "./" used to fail at the final rename and leave a nameless
+// names an existing directory as "into that directory", like cp. Otherwise a
+// download onto "./" would fail at the final rename and leave a nameless
 // ".onedrive-go...partial" file behind.
 func localFileTarget(target, remoteName string) string {
 	if strings.HasSuffix(target, string(filepath.Separator)) {
@@ -172,30 +162,6 @@ func localFileTarget(target, remoteName string) string {
 	}
 
 	return target
-}
-
-// printGetJSON writes the get command's single-file JSON output to w.
-func printGetJSON(w io.Writer, out getJSONOutput) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode download output: %w", err)
-	}
-
-	return nil
-}
-
-// printGetFolderJSON writes the get command's folder JSON output to w.
-func printGetFolderJSON(w io.Writer, out getFolderJSONOutput) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode folder download output: %w", err)
-	}
-
-	return nil
 }
 
 // downloadState holds mutable state shared across the recursive download.
@@ -209,7 +175,7 @@ type downloadState struct {
 	mu          sync.Mutex
 	wg          sync.WaitGroup
 	sem         chan struct{} // shared semaphore bounding total concurrency
-	result      getFolderJSONOutput
+	result      folderTransferJSONOutput[getJSONOutput]
 	done        int
 	total       int
 	childCache  map[string][]graph.Item // keyed by folder item ID
@@ -284,7 +250,7 @@ func finishFolderDownload(
 	state.wg.Wait()
 
 	if cc.Flags.JSON {
-		if err := printGetFolderJSON(cc.Output(), state.result); err != nil {
+		if err := writeJSONDocument(cc.Output(), state.result.withEmptyLists()); err != nil {
 			return err
 		}
 

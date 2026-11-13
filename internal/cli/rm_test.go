@@ -48,11 +48,11 @@ func (f *fakeRmParentWaiter) WaitPathVisible(_ context.Context, remotePath strin
 }
 
 // Validates: R-1.4.3
-func TestPrintRmJSON(t *testing.T) {
+func TestRmJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printRmJSON(&buf, rmJSONOutput{Deleted: "/docs/old-report.pdf"})
+	err := writeJSONDocument(&buf, rmJSONOutput{Deleted: "/docs/old-report.pdf"})
 	require.NoError(t, err)
 
 	var decoded rmJSONOutput

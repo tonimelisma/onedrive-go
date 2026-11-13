@@ -28,6 +28,22 @@ command-line mistake (exit 2); none ignores it.
   `trash empty` (`trash list` prints the entries).
 - `sync` is the exception to "one document": it **streams JSON lines**, one
   object per event (below).
+- Every document and every `sync --json` line prints `&`, `<` and `>` as
+  themselves: a file named `Q&A <draft>.txt` prints as `"Q&A <draft>.txt"`,
+  never as `\u0026`, `\u003c` or `\u003e`.
+- A list with nothing in it prints `[]`, never `null`. A few lists are left
+  out when empty instead (`accounts_degraded`, and the per-drive lists of
+  `status` such as `shared_folders` and `sync_state.issues`); none prints
+  `null`.
+- `accounts_requiring_auth` is always present, as a list, in `shared`,
+  `drive list` and `drive search`.
+
+Earlier builds differed in three ways a script may have relied on: `&`, `<`
+and `>` printed as `\u0026`, `\u003c` and `\u003e` everywhere; `shared`
+(`accounts_requiring_auth`), the folder forms of `get` and `put` (`files`,
+`errors`) and `status` (`accounts`, each account's `drives`) printed `null`
+for an empty list; and `drive list` and `drive search` left
+`accounts_requiring_auth` out when it was empty.
 
 Examples:
 
