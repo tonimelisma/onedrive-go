@@ -406,7 +406,7 @@ const taggedVetTargetCount = 2
 func taggedVetTargets() [taggedVetTargetCount][2]string {
 	return [taggedVetTargetCount][2]string{
 		{"-tags=e2e e2e_full", "./e2e"},
-		{"-tags=integration", "./internal/graph"},
+		{"-tags=" + integrationBuildTag, "./internal/graph"},
 	}
 }
 
@@ -538,7 +538,7 @@ func runFastE2ESuiteOnce(
 		return "", fmt.Errorf("write status: %w", err)
 	}
 
-	return runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e", fastE2EArgs()...)
+	return runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e", fastE2EArgs()...)
 }
 
 func runFastE2ESuiteWithClassification(
@@ -553,7 +553,7 @@ func runFastE2ESuiteWithClassification(
 		return "", fmt.Errorf("write status: %w", err)
 	}
 
-	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e", fastE2EJSONArgs()...)
+	output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e", fastE2EJSONArgs()...)
 	if err == nil {
 		return output, nil
 	}
@@ -888,7 +888,7 @@ func runFullE2EBucket(
 		return nil, fmt.Errorf("write status: %w", err)
 	}
 
-	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketCommandArgs(bucket)...)
+	output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketCommandArgs(bucket)...)
 
 	return parseGoTestLog(output).failedTopLevelTests(), err
 }
@@ -908,7 +908,7 @@ func runFullE2EBucketWithClassification(
 
 	// Streamed, not captured until exit: this is the nightly's watch bucket,
 	// and a job killed during it would otherwise leave no test output at all.
-	output, err := runGoTestTeed(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketJSONCommandArgs(bucket)...)
+	output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "full e2e", fullE2EBucketJSONCommandArgs(bucket)...)
 	if err == nil {
 		return nil, nil
 	}
@@ -929,25 +929,6 @@ func runFullE2EBucketWithClassification(
 	})
 
 	return failedTests, err
-}
-
-func writeCommandOutput(w io.Writer, output []byte) error {
-	if len(output) == 0 {
-		return nil
-	}
-
-	_, err := w.Write(output)
-	if err != nil {
-		return fmt.Errorf("write command output: %w", err)
-	}
-
-	if output[len(output)-1] != '\n' {
-		if _, err := w.Write([]byte("\n")); err != nil {
-			return fmt.Errorf("write command output newline: %w", err)
-		}
-	}
-
-	return nil
 }
 
 func runE2EPreflightFull(

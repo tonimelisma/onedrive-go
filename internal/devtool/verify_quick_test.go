@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -82,6 +83,37 @@ func TestRunVerifyQuickShardSelectsOneSliceOfTheShortTier(t *testing.T) {
 	unit := runner.runCommands[len(runner.runCommands)-1]
 	assert.Equal(t, []string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "-run=^(.{3})*.{1}$", "./..."}, unit.args)
 	assert.Contains(t, stdout.String(), "==> go test -short (shard 2/3)\n")
+}
+
+// Validates: R-6.10.22, R-6.10.26
+//
+// A shard whose pattern selects no test in any package passed: go test prints
+// `[no tests to run]` for every package and exits 0, so a shard count or a
+// pattern that came apart from the tree went unnoticed.
+func TestRunVerifyQuickFailsAShardThatRanNoTest(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	writeRequirementsBackedReadme(t, repoRoot)
+	runner := &fakeRunner{
+		runStdoutFunc: func(args []string) string {
+			if slices.Contains(args, "-short") {
+				return "ok  \t" + repoModulePath + "/internal/sync\t0.012s [no tests to run]\n" +
+					"?   \t" + repoModulePath + "/internal/synctest\t[no test files]\n"
+			}
+
+			return passingGoTestOutput(args)
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: repoRoot,
+		Profile:  VerifyQuick,
+		Shard:    "2/3",
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.ErrorContains(t, err, "short unit tests matched no tests")
 }
 
 // Validates: R-6.10.22

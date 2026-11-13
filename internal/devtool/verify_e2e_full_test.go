@@ -19,17 +19,19 @@ import (
 const e2eFullCommandsBeforeBuckets = 4
 
 // bucketFailureOutput returns a fake go test stdout that prints a `--- FAIL:`
-// line for each test named for the bucket whose command runs.
+// line for each test named for the bucket whose command runs; every other
+// command, and a bucket with no test named, passes.
 func bucketFailureOutput(failedByBucket map[string][]string) func(args []string) string {
 	return func(args []string) string {
 		for _, bucket := range fullE2EBuckets() {
-			if slices.Equal(args, fullE2EBucketCommandArgs(bucket)) ||
-				slices.Equal(args, fullE2EBucketJSONCommandArgs(bucket)) {
-				return rawFailLines(failedByBucket[bucket.Name]...)
+			failed := failedByBucket[bucket.Name]
+			if len(failed) > 0 && (slices.Equal(args, fullE2EBucketCommandArgs(bucket)) ||
+				slices.Equal(args, fullE2EBucketJSONCommandArgs(bucket))) {
+				return rawFailLines(failed...)
 			}
 		}
 
-		return ""
+		return passingGoTestOutput(args)
 	}
 }
 
@@ -84,6 +86,35 @@ func TestRunVerifyE2EFullRunsEveryBucketAfterOneFails(t *testing.T) {
 		[]string{verifySummaryStatusFail, verifySummaryStatusPass, verifySummaryStatusPass},
 		bucketStatuses(summary))
 	assert.Equal(t, []string{"TestE2E_RapidFileChurn"}, summary.E2EFullBuckets[0].FailedTests)
+}
+
+// Validates: R-6.10.26
+//
+// A bucket's -run pattern names its tests, and the fast suite runs the smoke
+// tests; one that ran none of them passed while verifying nothing, which go
+// test reports as success.
+func TestRunVerifyE2EFullFailsASuiteThatRanNoTests(t *testing.T) {
+	t.Parallel()
+
+	serial := fullE2ESerialSyncBucket()
+	emptyRun := "testing: warning: no tests to run\nPASS\nok  \t" + testE2EPackage + "\t0.101s [no tests to run]\n"
+	runner := &fakeRunner{
+		runStdoutFunc: func(args []string) string {
+			if slices.Equal(args, fullE2EBucketCommandArgs(serial)) || slices.Equal(args, fastE2EArgs()) {
+				return emptyRun
+			}
+
+			return passingGoTestOutput(args)
+		},
+	}
+
+	summary, _, err := runE2EFullForTest(t, runner, false)
+	require.ErrorContains(t, err, "fast e2e matched no tests")
+	require.ErrorContains(t, err, "bucket "+serial.Name+": full e2e matched no tests")
+	assert.Equal(t,
+		[]string{verifySummaryStatusPass, verifySummaryStatusFail, verifySummaryStatusPass},
+		bucketStatuses(summary))
+	assert.Equal(t, verifySummaryStatusFail, requireVerifySummaryStep(t, summary, "fast e2e").Status)
 }
 
 // Validates: R-6.10.26
@@ -193,7 +224,7 @@ func TestRunVerifyE2EFullDoesNotRerunAuthPreflightWithoutItsTestFailing(t *testi
 				runErrByKey: map[string]error{authKey: assert.AnError},
 				runStdoutFunc: func(args []string) string {
 					if goCommandKey(args) != authKey {
-						return ""
+						return passingGoTestOutput(args)
 					}
 
 					return tc.output
@@ -218,7 +249,7 @@ func TestRunVerifyE2EFullReportsTheAuthPreflightRerunFailure(t *testing.T) {
 		runErrSequenceByKey: map[string][]error{authKey: {assert.AnError, rerunErr}},
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != authKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return rawFailLines(authPreflightTestName)
@@ -245,7 +276,7 @@ func TestRunVerifyRecordsASkippedAuthPreflightAsSkipped(t *testing.T) {
 	runner := &fakeRunner{
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != authKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return "=== RUN   " + authPreflightTestName + "\n" +

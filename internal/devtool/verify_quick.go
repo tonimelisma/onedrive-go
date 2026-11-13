@@ -81,8 +81,8 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 //   - quick: format, the repository rules, the host and cross-platform builds,
 //     the tagged vets, then the short unit tier. No lint (its own CI job), no
 //     race detector, no coverage, no live E2E.
-//   - lint: golangci-lint alone, so CI runs it beside the test shards instead
-//     of in front of them.
+//   - lint: golangci-lint and the workflow lint alone, so CI runs them beside
+//     the test shards instead of in front of them.
 //   - platform: the host build and the short unit tier, nothing else: the
 //     secondary-OS leg exists to catch darwin-only build and behavior
 //     breakage, and the repository rules are platform-independent.
@@ -105,7 +105,7 @@ func runPRLaneVerification(
 ) error {
 	var steps []verifyStep
 	if plan.runLint {
-		steps = append(steps, verifyStep{"lint", runLint})
+		steps = append(steps, lintSteps()...)
 	}
 	switch {
 	case plan.runQuickChecks:
@@ -164,9 +164,10 @@ func runShortUnitTests(
 	if err := writeStatus(stdout, status+"\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "go", args...); err != nil {
-		return fmt.Errorf("short unit tests: %w", err)
-	}
 
-	return nil
+	// A shard's pattern matches nothing in many packages, which is expected;
+	// a shard or a tier in which no package ran a test fails the guard.
+	_, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "short unit tests", args...)
+
+	return err
 }

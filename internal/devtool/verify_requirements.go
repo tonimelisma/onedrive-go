@@ -38,8 +38,18 @@ type requirementRef struct {
 	ID       string
 }
 
-// runRequirementTraceability enforces the two halves of requirement
-// traceability that only tooling can hold up.
+// requirementDeclarations is what the requirement files declare.
+type requirementDeclarations struct {
+	// declared holds every declared ID, group headings included.
+	declared map[string]bool
+	// statuses holds the bracketed status of each acceptance criterion.
+	statuses map[string]string
+	// definedAt lists the lines that declare each ID, in file and line order.
+	definedAt map[string][]string
+}
+
+// runRequirementTraceability enforces the halves of requirement traceability
+// that only tooling can hold up.
 //
 // Forward: a Validates or Implements reference must resolve to a declared
 // requirement, so a renamed or deleted requirement cannot leave citations
@@ -49,6 +59,10 @@ type requirementRef struct {
 // citing it or a design doc implementing it. A verified status with neither is
 // a claim about behavior nobody demonstrated, which is the more dangerous
 // direction because it reads as proof.
+//
+// Unique: each ID is declared by one requirement line. Two lines with one ID
+// make every citation of it ambiguous, and the status of either can stand in
+// for the other's.
 func runRequirementTraceability(
 	_ context.Context,
 	_ commandRunner,
@@ -62,7 +76,7 @@ func runRequirementTraceability(
 }
 
 func findRequirementViolations(repoRoot string) ([]checkViolation, error) {
-	declared, statuses, err := readDeclaredRequirements(repoRoot)
+	declarations, err := readDeclaredRequirements(repoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -77,10 +91,10 @@ func findRequirementViolations(repoRoot string) ([]checkViolation, error) {
 		return nil, err
 	}
 
-	var violations []checkViolation
+	violations := duplicateRequirementDefinitions(declarations.definedAt)
 
 	for _, ref := range append(append([]requirementRef{}, validates...), implements...) {
-		if !requirementKnown(ref.ID, declared) {
+		if !requirementKnown(ref.ID, declarations.declared) {
 			violations = append(violations, checkViolation{
 				Location: ref.Location,
 				Detail:   fmt.Sprintf("%s is not declared in %s", ref.ID, specRequirementsDir),
@@ -88,9 +102,32 @@ func findRequirementViolations(repoRoot string) ([]checkViolation, error) {
 		}
 	}
 
-	violations = append(violations, unevidencedVerifiedRequirements(statuses, validates, implements)...)
+	violations = append(violations, unevidencedVerifiedRequirements(declarations.statuses, validates, implements)...)
 
 	return violations, nil
+}
+
+// duplicateRequirementDefinitions reports each ID that more than one
+// requirement line declares, naming every one of those lines, in ID order.
+func duplicateRequirementDefinitions(definedAt map[string][]string) []checkViolation {
+	var duplicated []string
+	for id, locations := range definedAt {
+		if len(locations) > 1 {
+			duplicated = append(duplicated, id)
+		}
+	}
+	sort.Strings(duplicated)
+
+	violations := make([]checkViolation, 0, len(duplicated))
+	for _, id := range duplicated {
+		violations = append(violations, checkViolation{
+			Location: specRequirementsDir,
+			Detail: fmt.Sprintf("%s is defined by more than one requirement line (%s); give each its own ID",
+				id, strings.Join(definedAt[id], ", ")),
+		})
+	}
+
+	return violations
 }
 
 // requirementKnown accepts a group id whenever any acceptance criterion hangs
@@ -164,7 +201,12 @@ func unevidencedVerifiedRequirements(
 	return violations
 }
 
-func readDeclaredRequirements(repoRoot string) (map[string]bool, map[string]string, error) {
+func readDeclaredRequirements(repoRoot string) (requirementDeclarations, error) {
+	declarations := requirementDeclarations{
+		declared:  make(map[string]bool),
+		statuses:  make(map[string]string),
+		definedAt: make(map[string][]string),
+	}
 	dir := filepath.Join(repoRoot, specRequirementsDir)
 
 	entries, err := os.ReadDir(dir)
@@ -173,46 +215,58 @@ func readDeclaredRequirements(repoRoot string) (map[string]bool, map[string]stri
 		// reported as unresolved, which is the correct answer and keeps the
 		// rule meaningful on trees that do not carry the spec.
 		if errors.Is(err, os.ErrNotExist) {
-			return map[string]bool{}, map[string]string{}, nil
+			return declarations, nil
 		}
 
-		return nil, nil, fmt.Errorf("read %s: %w", specRequirementsDir, err)
+		return requirementDeclarations{}, fmt.Errorf("read %s: %w", specRequirementsDir, err)
 	}
-
-	declared := make(map[string]bool)
-	statuses := make(map[string]string)
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 
-		data, readErr := os.ReadFile(filepath.Join(dir, entry.Name())) //nolint:gosec // repo-relative verifier input
+		path := filepath.Join(dir, entry.Name())
+		data, readErr := os.ReadFile(path) //nolint:gosec // repo-relative verifier input
 		if readErr != nil {
-			return nil, nil, fmt.Errorf("read %s: %w", entry.Name(), readErr)
+			return requirementDeclarations{}, fmt.Errorf("read %s: %w", entry.Name(), readErr)
 		}
 
-		for _, line := range strings.Split(string(data), "\n") {
-			if m := requirementHeadingPattern.FindStringSubmatch(line); m != nil {
-				declared[m[1]] = true
-
+		for lineNo, line := range strings.Split(string(data), "\n") {
+			id, status, ok := requirementDeclaration(line)
+			if !ok {
 				continue
 			}
 
-			m := requirementBulletPattern.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-
-			declared[m[1]] = true
-
-			if status := requirementStatusPattern.FindStringSubmatch(strings.TrimRight(line, " \t")); status != nil {
-				statuses[m[1]] = status[1]
+			declarations.declared[id] = true
+			declarations.definedAt[id] = append(declarations.definedAt[id],
+				fmt.Sprintf("%s:%d", repoRelative(repoRoot, path), lineNo+1))
+			if status != "" {
+				declarations.statuses[id] = status
 			}
 		}
 	}
 
-	return declared, statuses, nil
+	return declarations, nil
+}
+
+// requirementDeclaration reads the ID one line of a requirement file declares,
+// a group heading's or an acceptance criterion's, and the criterion's trailing
+// status. ok is false for a line that declares nothing.
+func requirementDeclaration(line string) (id, status string, ok bool) {
+	if m := requirementHeadingPattern.FindStringSubmatch(line); m != nil {
+		return m[1], "", true
+	}
+
+	m := requirementBulletPattern.FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	if s := requirementStatusPattern.FindStringSubmatch(strings.TrimRight(line, " \t")); s != nil {
+		status = s[1]
+	}
+
+	return m[1], status, true
 }
 
 func collectValidatesRefs(repoRoot string) ([]requirementRef, error) {

@@ -41,6 +41,7 @@ const (
 	rollupInProgress = "IN_PROGRESS"
 	rollupCancelled  = "CANCELLED" //nolint:misspell // GitHub's spelling of the conclusion
 	rollupQueued     = "QUEUED"
+	rollupPending    = "PENDING"
 	runInProgress    = "in_progress"
 
 	ciWaitTestStall = 30 * time.Minute
@@ -1129,19 +1130,28 @@ func queuedCheckWaitConfig(clock *fakeCIClock) ciWaitConfig {
 // A pull request's e2e job that waits in its concurrency group behind a
 // nightly run changes no state for as long as that run takes. It is not
 // stalled after the pull request's own window; the wait gives up only after
-// the group's longest run.
+// the group's longest run. On #883, a check held by its group read PENDING and
+// one waiting only for a runner read QUEUED; both have not started.
 func TestWaitForPRCI_CheckQueuedInItsGroupWaitsOneRunOfTheGroup(t *testing.T) {
 	t.Parallel()
 
-	runner, _ := scriptedRunner(map[string][]string{
-		ciWaitPRViewCommand: {prViewJSON(t, checkPassed("verify"), checkPassed("integration"), checkQueued("e2e"))},
-	})
-	clock := newFakeCIClock()
+	for _, status := range []string{rollupPending, rollupQueued} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
 
-	err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, queuedCheckWaitConfig(clock))
-	require.ErrorContains(t, err, "stalled")
-	assert.Contains(t, err.Error(), "e2e")
-	assert.Equal(t, ciWaitQueuedWindow, clock.elapsed(), "not stalled at 56 minutes: the check had not started")
+			e2e := checkQueued("e2e")
+			e2e.status = status
+			runner, _ := scriptedRunner(map[string][]string{
+				ciWaitPRViewCommand: {prViewJSON(t, checkPassed("verify"), checkPassed("integration"), e2e)},
+			})
+			clock := newFakeCIClock()
+
+			err := waitForPRCI(context.Background(), runner, testCleanupRepoRoot, ciWaitPR, queuedCheckWaitConfig(clock))
+			require.ErrorContains(t, err, "stalled")
+			assert.Contains(t, err.Error(), "e2e")
+			assert.Equal(t, ciWaitQueuedWindow, clock.elapsed(), "not stalled at 56 minutes: the check had not started")
+		})
+	}
 }
 
 // Validates: R-6.10.16

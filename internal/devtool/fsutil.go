@@ -1,6 +1,7 @@
 package devtool
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -136,7 +137,7 @@ func atomicWrite(path string, data []byte, perm os.FileMode, dirPerm os.FileMode
 		if retErr == nil {
 			return
 		}
-		if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
+		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			retErr = errorsJoin(retErr, fmt.Errorf("remove temp file %s: %w", tempPath, removeErr))
 		}
 	}()

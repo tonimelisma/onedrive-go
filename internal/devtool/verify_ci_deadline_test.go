@@ -98,7 +98,7 @@ func worstCaseE2EFullRunner() *fakeRunner {
 			case watchKey:
 				return jsonFailLines(websocketRestartTestName)
 			default:
-				return ""
+				return passingGoTestOutput(args)
 			}
 		},
 	}
@@ -144,7 +144,7 @@ func profileGoTestDeadlines(t *testing.T, runner *fakeRunner, profile VerifyProf
 	commands := append(append([]recordedCommand{}, runner.runCommands...), runner.combinedCommands...)
 	var total time.Duration
 	for _, command := range commands {
-		if command.name != "go" || len(command.args) == 0 || command.args[0] != "test" ||
+		if command.name != goCommandName || len(command.args) == 0 || command.args[0] != goTestSubcommand ||
 			slices.Contains(command.args, "-c") {
 			continue
 		}

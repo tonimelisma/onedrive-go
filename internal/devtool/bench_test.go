@@ -190,6 +190,35 @@ func TestRunBenchStartupEmptyConfigSucceeds(t *testing.T) {
 	assert.Zero(t, result.Scenario.Denominators.ExpectedDownloads)
 }
 
+// Validates: R-6.10.2, R-6.10.14
+//
+// The benchmark built its subject with the host's Go, so on a host whose Go is
+// newer than go.mod's pin it measured a binary that CI never builds. It builds
+// with the pinned toolchain, like every command a verify profile starts.
+func TestPrepareBenchSubject_BuildsWithThePinnedToolchain(t *testing.T) {
+	// The test's own environment may carry the pin already; an empty value
+	// counts as unset, so the pin has to come from the subject's go.mod.
+	t.Setenv(goToolchainEnvVar, "")
+
+	repoRoot := t.TempDir()
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, goModFileName),
+		[]byte("module example.com/bench\n\ngo 1.26.0\n\ntoolchain go1.26.7\n"),
+	))
+	runner := &fakeRunner{outputs: map[string][]byte{"git rev-parse HEAD": []byte("0123abcd\n")}}
+
+	subject, err := prepareOnedriveGoBenchSubject(t.Context(), runner, repoRoot)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, subject.cleanup())
+	})
+
+	require.Len(t, runner.combinedCommands, 1)
+	build := runner.combinedCommands[0]
+	assert.Equal(t, []string{"build", "-o", subject.metadata.ExecutablePath, "./"}, build.args)
+	assert.Equal(t, "go1.26.7", envValue(build.env, goToolchainEnvVar))
+}
+
 func repoRootFromBenchTest(t *testing.T) string {
 	t.Helper()
 

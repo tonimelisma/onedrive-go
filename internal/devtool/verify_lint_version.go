@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	ciWorkflowPath = ".github/workflows/ci.yml"
+	ciWorkflowPath = workflowDir + "/ci.yml"
 
 	lintBinaryName    = "golangci-lint"
 	lintInstallTarget = "github.com/golangci/golangci-lint/v2/cmd/golangci-lint"

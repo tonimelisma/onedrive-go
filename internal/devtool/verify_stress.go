@@ -113,17 +113,10 @@ func runStress(
 	// lane, so stopping would hide the other steps' state for a day.
 	var stepErrs []error
 	for _, command := range stressCommands {
-		var err error
-		if command.collectSlowTests {
-			err = collector.runStepWithOutcome(command.stepName, func() (stepOutcome, error) {
-				slowTests, runErr := runStressCommandWithSlowTests(ctx, runner, repoRoot, env, stdout, command)
-				return stepOutcome{slowTests: slowTests}, runErr
-			})
-		} else {
-			err = collector.runStep(command.stepName, func() error {
-				return runStressCommand(ctx, runner, repoRoot, env, stdout, stderr, command)
-			})
-		}
+		err := collector.runStepWithOutcome(command.stepName, func() (stepOutcome, error) {
+			slowTests, runErr := runStressCommand(ctx, runner, repoRoot, env, stdout, stderr, command)
+			return stepOutcome{slowTests: slowTests}, runErr
+		})
 		if err != nil {
 			stepErrs = append(stepErrs, err)
 		}
@@ -132,6 +125,13 @@ func runStress(
 	return errors.Join(stepErrs...)
 }
 
+// runStressCommand runs one stress step through the empty-run guard, whose
+// tee streams the output as go test prints it: a step that hangs shows every
+// line up to the hang, and a job killed meanwhile keeps them. Every step
+// fails when no package of its target ran a test, with or without a -run
+// pattern: a multisync or sync tree that lost its tests verifies nothing
+// either. A step that collects slow tests reads them from the captured -json
+// output once go test exits.
 func runStressCommand(
 	ctx context.Context,
 	runner commandRunner,
@@ -139,74 +139,42 @@ func runStressCommand(
 	env []string,
 	stdout, stderr io.Writer,
 	command stressCommandSpec,
-) error {
-	if err := writeStatus(stdout, command.statusLine); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-
-	// A step with a -run pattern is a targeted step, and a pattern that
-	// matches nothing anywhere in the tree must fail it: go test exits 0.
-	var err error
-	if hasRunPattern(command.args) {
-		err = runGoTestMatchingTree(ctx, runner, repoRoot, env, stdout, stderr, command.stepName, command.args...)
-	} else {
-		err = runner.Run(ctx, repoRoot, env, stdout, stderr, "go", command.args...)
-	}
-	if err != nil {
-		return fmt.Errorf("stress tests: %w", err)
-	}
-
-	return nil
-}
-
-// hasRunPattern reports whether go test arguments select tests with -run.
-func hasRunPattern(args []string) bool {
-	for _, arg := range args {
-		if arg == "-run" || strings.HasPrefix(arg, "-run=") {
-			return true
-		}
-	}
-
-	return false
-}
-
-func runStressCommandWithSlowTests(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	env []string,
-	stdout io.Writer,
-	command stressCommandSpec,
 ) ([]StressSlowTestSummary, error) {
 	if err := writeStatus(stdout, command.statusLine); err != nil {
 		return nil, fmt.Errorf("write status: %w", err)
 	}
 
-	output, err := runner.CombinedOutput(ctx, repoRoot, env, "go", command.args...)
-	if writeErr := writeCommandOutput(stdout, output); writeErr != nil {
-		return nil, fmt.Errorf("write stress output: %w", writeErr)
-	}
+	output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, command.stepName, command.args...)
 
-	slowTests := summarizeStressSlowTests(output, stressSlowTestLimit)
-	if len(slowTests) > 0 {
+	var slowTests []StressSlowTestSummary
+	if command.collectSlowTests {
+		slowTests = summarizeStressSlowTests(output, stressSlowTestLimit)
 		if writeErr := writeStressSlowTestSummary(stdout, slowTests); writeErr != nil {
-			return slowTests, fmt.Errorf("write stress timing summary: %w", writeErr)
+			return slowTests, errors.Join(
+				fmt.Errorf("write stress timing summary: %w", writeErr),
+				wrapStressError(err),
+			)
 		}
 	}
 
-	if err != nil {
-		return slowTests, fmt.Errorf("stress tests: %w", err)
+	return slowTests, wrapStressError(err)
+}
+
+// wrapStressError names a failed stress step's error as a stress failure.
+func wrapStressError(err error) error {
+	if err == nil {
+		return nil
 	}
 
-	return slowTests, nil
+	return fmt.Errorf("stress tests: %w", err)
 }
 
 // summarizeStressSlowTests totals the completed tests of `go test -json`
 // output by package and test, slowest first.
-func summarizeStressSlowTests(output []byte, limit int) []StressSlowTestSummary {
+func summarizeStressSlowTests(output string, limit int) []StressSlowTestSummary {
 	totals := make(map[stressTestKey]*stressTestTiming)
 
-	for line := range strings.Lines(string(output)) {
+	for line := range strings.Lines(output) {
 		_, event, isEvent := decodeGoTestLogLine(line)
 		if !isEvent || event.Test == "" {
 			continue
