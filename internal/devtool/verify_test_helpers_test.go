@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,7 +35,8 @@ type fakeRunner struct {
 	combinedErr         error
 	combinedErrByKey    map[string]error
 	// runStdoutFunc, when set, returns what a Run call writes to its stdout,
-	// so a test can show a step the output go test would have printed.
+	// so a test can show a step the output go test would have printed. When
+	// it is nil, a go command prints what passingGoTestOutput says.
 	runStdoutFunc func(args []string) string
 }
 
@@ -53,10 +55,15 @@ func (f *fakeRunner) Run(
 		args: append([]string{}, args...),
 	})
 
-	if f.runStdoutFunc != nil {
-		if _, err := io.WriteString(stdout, f.runStdoutFunc(args)); err != nil {
-			return fmt.Errorf("write fake stdout: %w", err)
-		}
+	printed := ""
+	switch {
+	case f.runStdoutFunc != nil:
+		printed = f.runStdoutFunc(args)
+	case name == goCommandName:
+		printed = passingGoTestOutput(args)
+	}
+	if _, err := io.WriteString(stdout, printed); err != nil {
+		return fmt.Errorf("write fake stdout: %w", err)
 	}
 
 	if err, ok := f.runErrByKey[name+" "+strings.Join(args, " ")]; ok {
@@ -179,6 +186,56 @@ func assertVerifyBucketSummary(t *testing.T, summary VerifySummary, name string,
 
 // testE2EPackage is the import path go test reports for the live suite.
 const testE2EPackage = "github.com/tonimelisma/onedrive-go/e2e"
+
+// fakePassingTestName is the test the fake runner reports as run and passed.
+const fakePassingTestName = "TestFakeRunnerPasses"
+
+// goCommandName is the go command, as a runner is asked to start it, and
+// goTestSubcommand its first argument for a test run.
+const (
+	goCommandName    = "go"
+	goTestSubcommand = "test"
+)
+
+// passingGoTestOutput is what go test prints for these arguments when one test
+// of its target runs and passes: -json events, -v lines, or the package result
+// line alone. Any other go command prints nothing, as a build or a vet that
+// succeeds does, and so does a compile-only `go test -c`.
+func passingGoTestOutput(args []string) string {
+	if len(args) == 0 || args[0] != goTestSubcommand || slices.Contains(args, "-c") {
+		return ""
+	}
+
+	pkg := fakeGoTestPackage(args)
+	switch {
+	case slices.Contains(args, "-json"):
+		return strings.Join([]string{
+			`{"Action":"start","Package":"` + pkg + `"}`,
+			`{"Action":"run","Package":"` + pkg + `","Test":"` + fakePassingTestName + `"}`,
+			`{"Action":"output","Package":"` + pkg + `","Test":"` + fakePassingTestName +
+				`","Output":"--- PASS: ` + fakePassingTestName + ` (0.00s)\n"}`,
+			`{"Action":"pass","Package":"` + pkg + `","Test":"` + fakePassingTestName + `","Elapsed":0}`,
+			`{"Action":"pass","Package":"` + pkg + `","Elapsed":0.01}`,
+		}, "\n") + "\n"
+	case slices.Contains(args, "-v"):
+		return "=== RUN   " + fakePassingTestName + "\n--- PASS: " + fakePassingTestName + " (0.00s)\nPASS\n" +
+			"ok  \t" + pkg + "\t0.01s\n"
+	default:
+		return "ok  \t" + pkg + "\t0.01s\n"
+	}
+}
+
+// fakeGoTestPackage is the import path go test reports for the target, the
+// last argument: ./internal/sync/... reports as its root package.
+func fakeGoTestPackage(args []string) string {
+	target := strings.TrimSuffix(args[len(args)-1], "/...")
+	target = strings.TrimPrefix(strings.TrimPrefix(target, "."), "/")
+	if target == "" {
+		return repoModulePath
+	}
+
+	return repoModulePath + "/" + target
+}
 
 // goCommandKey is the fakeRunner key of a `go` command with these arguments.
 func goCommandKey(args []string) string {

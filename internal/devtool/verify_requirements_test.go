@@ -1,6 +1,8 @@
 package devtool
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,6 +116,31 @@ func TestFindRequirementViolations_UnverifiedStatusesNeedNoEvidence(t *testing.T
 	violations, err := findRequirementViolations(root)
 	require.NoError(t, err)
 	assert.Empty(t, violations)
+}
+
+// Validates: R-6.10.12
+//
+// Two requirement lines declared one ID and the check passed: every citation
+// of the ID resolved, to whichever of the two a reader found first, and the
+// status of one could stand in for the other's.
+func TestRequirementTraceability_RefusesAnIDDefinedTwice(t *testing.T) {
+	t.Parallel()
+
+	root := writeRequirementFixture(t,
+		"## R-1 Group\n\n- R-1.1: does a thing. [verified]\n- R-1.2: does another. [planned]\n",
+		"Implements: R-1 [verified]\n",
+		"package demo\n\n// Validates: R-1.1\nfunc TestThing() {}\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, specRequirementsDir, "more.md"),
+		[]byte("## R-2 Other\n\n- R-1.1: does a different thing. [planned]\n"), 0o600))
+
+	var stdout bytes.Buffer
+	err := runRequirementTraceability(t.Context(), nil, root, nil, &stdout, io.Discard)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "R-1.1 is defined by more than one requirement line")
+	assert.Contains(t, err.Error(), "spec/requirements/more.md:3")
+	assert.Contains(t, err.Error(), "spec/requirements/reqs.md:3")
+	assert.NotContains(t, err.Error(), "R-1.2", "an ID defined once is not reported")
 }
 
 // Validates: R-6.10.12

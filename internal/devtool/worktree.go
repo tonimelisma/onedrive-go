@@ -221,7 +221,7 @@ func applyIncludeEntry(fs worktreeFS, repoRoot, targetPath string, entry include
 		return false, fmt.Errorf("mkdir include target %s: %w", filepath.Dir(targetEntryPath), mkdirErr)
 	}
 
-	if removeErr := fs.removeAll(targetEntryPath); removeErr != nil && !os.IsNotExist(removeErr) {
+	if removeErr := fs.removeAll(targetEntryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return false, fmt.Errorf("remove existing include target %s: %w", targetEntryPath, removeErr)
 	}
 

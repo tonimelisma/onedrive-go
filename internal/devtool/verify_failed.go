@@ -55,9 +55,6 @@ func runFailedTestVerification(
 		// A test renamed or deleted since the failing run matches nothing,
 		// and go test exits 0 on that: the rerun must fail instead of
 		// reporting the failure fixed.
-		if strings.HasSuffix(args[len(args)-1], "/...") {
-			return runGoTestMatchingTree(ctx, runner, repoRoot, env, stdout, stderr, "rerun failed test", args...)
-		}
 		_, err = runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "rerun failed test", args...)
 
 		return err

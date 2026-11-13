@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -129,20 +131,21 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 // Validates: R-6.10.22
 //
 // The 20-minute deadline of the full race tier was set on the 3-core macOS CI
-// runner. On fewer cores the same tests take proportionally longer, and a
-// deadline that fires on a healthy run makes the tier unusable there. On as
-// many cores or more it stays, so neither CI runner's deadline moves past its
-// job timeout.
-func TestUnitTestTimeoutForCoresScalesBelowTheReference(t *testing.T) {
+// runner. A host with fewer cores is a developer's machine: internal/sync took
+// 63 minutes there on 2 shared cores, and a deadline that fires on a healthy
+// run makes the tier unusable. Below the reference the deadline is 180
+// core-minutes divided by the cores. At the reference and above it stays, so
+// neither CI runner's deadline moves past its job timeout.
+func TestUnitTestTimeoutForCoresGivesSmallHostsACoreBudget(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		cores int
 		want  time.Duration
 	}{
-		{cores: 0, want: 60 * time.Minute},
-		{cores: 1, want: 60 * time.Minute},
-		{cores: 2, want: 40 * time.Minute},
+		{cores: 0, want: 180 * time.Minute},
+		{cores: 1, want: 180 * time.Minute},
+		{cores: 2, want: 90 * time.Minute},
 		{cores: 3, want: 20 * time.Minute},
 		{cores: 4, want: 20 * time.Minute},
 		{cores: 8, want: 20 * time.Minute},
@@ -156,8 +159,8 @@ func TestUnitTestTimeoutForCoresScalesBelowTheReference(t *testing.T) {
 func TestResolveUnitTestTimeoutPrefersTheExplicitValue(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 90*time.Minute, resolveUnitTestTimeout(90*time.Minute, 2))
-	assert.Equal(t, 40*time.Minute, resolveUnitTestTimeout(0, 2))
+	assert.Equal(t, 45*time.Minute, resolveUnitTestTimeout(45*time.Minute, 2))
+	assert.Equal(t, 90*time.Minute, resolveUnitTestTimeout(0, 2))
 	assert.Equal(t, 20*time.Minute, resolveUnitTestTimeout(0, 8))
 }
 
@@ -320,9 +323,9 @@ func TestRunVerifyE2EFullWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing
 	assertCommandHasEnvVar(t, runner.runCommands[6], e2eSkipSuiteScrubEnvVar+"=1")
 
 	_, eventsErr := os.Stat(filepath.Join(logDir, e2eTimingEventsFileName))
-	assert.True(t, os.IsNotExist(eventsErr))
+	require.ErrorIs(t, eventsErr, os.ErrNotExist)
 	_, summaryErr := os.Stat(filepath.Join(logDir, e2eTimingSummaryFileName))
-	assert.True(t, os.IsNotExist(summaryErr))
+	require.ErrorIs(t, summaryErr, os.ErrNotExist)
 }
 
 func TestRunVerifyE2EWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing.T) {
@@ -357,13 +360,13 @@ func TestRunVerifyE2EWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing.T) 
 	assertCommandHasEnvVar(t, runner.runCommands[2], e2eSkipSuiteScrubEnvVar+"=1")
 
 	_, eventsErr := os.Stat(filepath.Join(logDir, e2eTimingEventsFileName))
-	assert.True(t, os.IsNotExist(eventsErr))
+	require.ErrorIs(t, eventsErr, os.ErrNotExist)
 	_, summaryErr := os.Stat(filepath.Join(logDir, e2eTimingSummaryFileName))
-	assert.True(t, os.IsNotExist(summaryErr))
+	require.ErrorIs(t, summaryErr, os.ErrNotExist)
 	_, quirkEventsErr := os.Stat(filepath.Join(logDir, e2eQuirkEventsFileName))
-	assert.True(t, os.IsNotExist(quirkEventsErr))
+	require.ErrorIs(t, quirkEventsErr, os.ErrNotExist)
 	_, quirkSummaryErr := os.Stat(filepath.Join(logDir, e2eQuirkSummaryFileName))
-	assert.True(t, os.IsNotExist(quirkSummaryErr))
+	require.ErrorIs(t, quirkSummaryErr, os.ErrNotExist)
 }
 
 func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t *testing.T) {
@@ -374,7 +377,7 @@ func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t
 		runErrSequenceByKey: map[string][]error{authKey: {assert.AnError}},
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != authKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return rawFailLines(authPreflightTestName)
@@ -402,7 +405,7 @@ func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *te
 		runErrSequenceByKey: map[string][]error{fastKey: {assert.AnError}},
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != fastKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return jsonFailLines(fastDownloadTestName)
@@ -435,7 +438,7 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
 		runErrByKey: map[string]error{fastKey: assert.AnError},
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != fastKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return jsonFailLines("TestE2E_Sync_DeletePropagation")
@@ -463,7 +466,7 @@ func TestRunVerifyE2EFullClassifiesKnownWatchSharedQuirkAfterSuccessfulRerun(t *
 		runErrSequenceByKey: map[string][]error{watchKey: {assert.AnError}},
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != watchKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return jsonFailLines(websocketRestartTestName)
@@ -500,7 +503,7 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownWatchSharedFailure(t *testing.T) {
 		runErrByKey: map[string]error{watchKey: assert.AnError},
 		runStdoutFunc: func(args []string) string {
 			if goCommandKey(args) != watchKey {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return jsonFailLines("TestE2E_Orchestrator_WatchSimultaneous")
@@ -780,9 +783,10 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 
 	// The watch-ordering step is intentionally absent: it targeted
 	// TestWatchOrderingStress_, which no test in the repo has ever defined, so
-	// it reported success while running nothing.
-	require.Len(t, runner.runCommands, 2)
-	require.Len(t, runner.combinedCommands, 1)
+	// it reported success while running nothing. Every step streams through
+	// Run; none captures its output until it exits.
+	require.Len(t, runner.runCommands, 3)
+	assert.Empty(t, runner.combinedCommands)
 
 	assert.Equal(t, "go", runner.runCommands[0].name)
 	assert.Equal(t, []string{
@@ -807,7 +811,7 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"./internal/sync/...",
 	}, runner.runCommands[1].args)
 
-	assert.Equal(t, "go", runner.combinedCommands[0].name)
+	assert.Equal(t, "go", runner.runCommands[2].name)
 	assert.Equal(t, []string{
 		"test",
 		"-json",
@@ -816,7 +820,35 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"-shuffle=on",
 		"-timeout=40m",
 		"./internal/sync/...",
-	}, runner.combinedCommands[0].args)
+	}, runner.runCommands[2].args)
+}
+
+// Validates: R-6.10.8, R-6.10.26
+//
+// A stress step without a -run pattern verifies nothing too when its packages
+// lost their tests: go test passes a tree of `[no test files]`.
+func TestRunVerifyStressFailsAStepWhosePackagesHaveNoTests(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		runStdoutFunc: func(args []string) string {
+			if slices.Contains(args, "./internal/multisync") {
+				return "?   \tgithub.com/tonimelisma/onedrive-go/internal/multisync\t[no test files]\n"
+			}
+
+			return passingGoTestOutput(args)
+		},
+	}
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: t.TempDir(),
+		Profile:  VerifyStress,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.ErrorContains(t, err, "multisync race x50 matched no tests")
+	assert.NotContains(t, err.Error(), "sync race x3 matched", "the other steps ran a test")
+	require.Len(t, runner.runCommands, 3, "every step still runs")
 }
 
 // Validates: R-6.10.1, R-6.10.8
@@ -831,7 +863,7 @@ func TestRunVerifyStressFailsWhenConcurrencyPatternMatchesNothing(t *testing.T) 
 	runner := &fakeRunner{
 		runStdoutFunc: func(args []string) string {
 			if !slices.Contains(args, "-run") {
-				return ""
+				return passingGoTestOutput(args)
 			}
 
 			return strings.Join([]string{
@@ -849,8 +881,8 @@ func TestRunVerifyStressFailsWhenConcurrencyPatternMatchesNothing(t *testing.T) 
 		Stderr:   &bytes.Buffer{},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sync concurrency race x50 matched no tests in any package")
-	assert.Len(t, runner.combinedCommands, 1, "the step after the one that verified nothing still runs")
+	assert.Contains(t, err.Error(), "sync concurrency race x50 matched no tests")
+	assert.Len(t, runner.runCommands, 3, "the step after the one that verified nothing still runs")
 }
 
 // Validates: R-6.10.8
@@ -861,11 +893,11 @@ func TestRunVerifyStressFailsWhenConcurrencyPatternMatchesNothing(t *testing.T) 
 func TestSummarizeStressSlowTestsKeysByPackage(t *testing.T) {
 	t.Parallel()
 
-	output := []byte(strings.Join([]string{
+	output := strings.Join([]string{
 		`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestShutdown","Elapsed":2.0}`,
 		`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync/planner","Test":"TestShutdown","Elapsed":0.5}`,
 		`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestShutdown","Elapsed":1.0}`,
-	}, "\n"))
+	}, "\n")
 
 	slowTests := summarizeStressSlowTests(output, stressSlowTestLimit)
 
@@ -898,13 +930,17 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	repoRoot := t.TempDir()
 	summaryPath := filepath.Join(t.TempDir(), "stress-verify-summary.json")
 	runner := &fakeRunner{
-		combinedOutputs: map[string][]byte{
-			"go test -json -race -count=3 -shuffle=on -timeout=40m ./internal/sync/...": []byte(strings.Join([]string{
+		runStdoutFunc: func(args []string) string {
+			if goCommandKey(args) != "go test -json -race -count=3 -shuffle=on -timeout=40m ./internal/sync/..." {
+				return passingGoTestOutput(args)
+			}
+
+			return strings.Join([]string{
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestFast","Elapsed":0.125}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.5}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestSlow","Elapsed":1.0}`,
 				`{"Action":"pass","Package":"github.com/tonimelisma/onedrive-go/internal/sync","Test":"TestMedium","Elapsed":0.75}`,
-			}, "\n")),
+			}, "\n")
 		},
 	}
 
@@ -931,6 +967,113 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	assert.Equal(t, 2, step.SlowTests[0].Runs)
 	assert.EqualValues(t, 2500, step.SlowTests[0].TotalElapsedMS)
 	assert.EqualValues(t, 1500, step.SlowTests[0].MaxElapsedMS)
+}
+
+// streamCheckRunner is the fake runner of a stress run whose step with
+// stepArgs prints its output and then waits, before it returns, until the
+// test has seen that output on stdout: only a step that streams its output
+// gets past it.
+type streamCheckRunner struct {
+	*fakeRunner
+	stepArgs []string
+	// printed is closed once the step printed its output.
+	printed chan struct{}
+	// seen is closed by the test once the output reached stdout.
+	seen chan struct{}
+}
+
+func (r *streamCheckRunner) Run(
+	ctx context.Context,
+	cwd string,
+	env []string,
+	stdout, stderr io.Writer,
+	name string,
+	args ...string,
+) error {
+	if !slices.Equal(args, r.stepArgs) {
+		return r.fakeRunner.Run(ctx, cwd, env, stdout, stderr, name, args...)
+	}
+	if _, err := io.WriteString(stdout, passingGoTestOutput(args)); err != nil {
+		return fmt.Errorf("write fake stdout: %w", err)
+	}
+	close(r.printed)
+
+	select {
+	case <-r.seen:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for the test to read stdout: %w", ctx.Err())
+	}
+}
+
+// Validates: R-6.10.8, R-6.10.26
+//
+// The x3 step captured its output until go test exited, so on CI a hang in it
+// printed nothing for forty minutes, and a job killed meanwhile left no test
+// output at all. It streams like every other step.
+func TestRunVerifyStressStreamsTheRepeatStep(t *testing.T) {
+	t.Parallel()
+
+	runner := &streamCheckRunner{
+		fakeRunner: &fakeRunner{},
+		stepArgs: []string{
+			"test", "-json", "-race", "-count=3", "-shuffle=on", "-timeout=" + stressSyncTimeout, stressSyncTree,
+		},
+		printed: make(chan struct{}),
+		seen:    make(chan struct{}),
+	}
+	var stdout outputCapture
+	verified := make(chan error, 1)
+	go func() {
+		verified <- RunVerify(t.Context(), runner, &VerifyOptions{
+			RepoRoot: t.TempDir(),
+			Profile:  VerifyStress,
+			Stdout:   &stdout,
+			Stderr:   io.Discard,
+		})
+	}()
+
+	select {
+	case <-runner.printed:
+	case err := <-verified:
+		require.Failf(t, "the x3 step did not stream", "verify returned (%v) without running the step through Run", err)
+	}
+	assert.Contains(t, stdout.String(), fakePassingTestName, "the step's output is on stdout while the step still runs")
+	close(runner.seen)
+	require.NoError(t, <-verified)
+	assert.Contains(t, stdout.String(), "slowest completed sync race tests", "the step keeps its slow-test summary")
+}
+
+// Validates: R-6.10.26
+//
+// The integration tier ran every test of ./internal/graph/..., the untagged
+// unit tests included, so it passed although no integration test ran. It runs
+// the integration tests only, and fails when none of them ran.
+func TestRunVerifyIntegrationRunsOnlyTheIntegrationTests(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	require.NoError(t, RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: t.TempDir(),
+		Profile:  VerifyIntegration,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	}))
+	require.Len(t, runner.runCommands, 1)
+	assert.Equal(t, []string{
+		"test", "-tags=integration", "-race", "-v", "-run=^TestIntegration_", "-timeout=5m", "./internal/graph/...",
+	}, runner.runCommands[0].args)
+
+	empty := &fakeRunner{runStdoutFunc: func([]string) string {
+		return "testing: warning: no tests to run\nPASS\nok  \t" + repoModulePath + "/internal/graph\t0.021s [no tests to run]\n"
+	}}
+	err := RunVerify(context.Background(), empty, &VerifyOptions{
+		RepoRoot: t.TempDir(),
+		Profile:  VerifyIntegration,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.ErrorContains(t, err, "integration tests matched no tests")
 }
 
 func TestRunVerifyFailedTestRerunsLastJSONFailureOnly(t *testing.T) {

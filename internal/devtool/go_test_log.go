@@ -16,6 +16,7 @@ const (
 	goTestActionOutput = "output"
 
 	rawGoTestFailurePrefix = "--- FAIL:"
+	rawGoTestPassPrefix    = "--- PASS:"
 	// rawGoTestPackageFailPrefix and rawGoTestPackagePassPrefix start go
 	// test's result line of a package, exactly as cmd/go prints it: `FAIL`, a
 	// tab and the package (then a tab and the time, or ` [build failed]` or
