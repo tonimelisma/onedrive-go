@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/mutation_lock.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_change_journal.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/mutation_lock.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.1.5 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.6.31 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -29,8 +29,8 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 - Owns: Config-file schema, catalog schema, durable lifecycle mutation rules for config/catalog-managed inventory, child state DB path derivation, override resolution, path discovery, drive-section resolution, token-path resolution, and validation policy.
 - Does Not Own: OAuth exchange, Graph request behavior, sync runtime orchestration, or durable sync-store contents.
 - Source of Truth: The loaded `Config` snapshot plus derived `ResolvedDrive` values at the config/CLI selection boundary. `Holder` is the single in-process source of truth for reloadable config state; sync orchestration receives `multisync.StandaloneMountConfig` values compiled at the CLI edge, and runtime session/engine construction consume mount-owned identity compiled above their boundaries.
-- Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath`.
-- Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers; its only wait is the bounded lock poll of a config or catalog change (`mutation_lock.go`), which runs in the caller's goroutine.
+- Allowed Side Effects: Reading and writing config and managed inventory/state files through `fsroot`, plus statting arbitrary user-selected local paths through `localpath` and syncing the data directory through `localpath` once an account email change has renamed files in it.
+- Mutable Runtime Owner: `config.Holder` owns the current `*Config` pointer behind `Holder.mu`. The package starts no background goroutines, owns no long-lived channels, and uses no timers; its only wait is the bounded lock poll of a config, catalog or account email change (`mutation_lock.go`), which runs in the caller's goroutine.
 - Error Boundary: `config` translates parse/load/validation outcomes into either fatal errors or warnings before callers act, following [error-model.md](error-model.md).
 
 ## Verified By
@@ -254,7 +254,12 @@ already exists keeps its mode (`TestAtomicWriteFile_CreatesItsFoldersOwnerOnly`)
 
 Section-header rewrites are also config-owned. `RenameDriveSections()` edits
 only the quoted section name, leaving comments, key order, and section body
-text intact. Email reconciliation uses this instead of re-encoding TOML.
+text intact. Email reconciliation uses this instead of re-encoding TOML. A
+section whose old name is gone is renamed already, and with nothing to
+rename the file is not rewritten
+(`TestRenameDriveSections_NothingToRenameLeavesTheFileAlone`); a section at
+both names is a `driveSectionCollisionError` that names both, and the file is
+left as it was (`TestRenameDriveSections_Collision`).
 
 ## Drive Sections
 
@@ -317,7 +322,7 @@ or legacy metadata files.
 
 ## Email Reconciliation
 
-Implements: R-3.7.1 [verified], R-3.7.2 [verified]
+Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified]
 
 `config.ReconcileAccountEmail()` owns durable email-change mutation. Given the
 current authenticated account type, stable Graph user GUID, and current Graph
@@ -325,11 +330,21 @@ email, it:
 
 - finds stored personal/business catalog accounts with the same `UserID`
 - computes exact old → new canonical-ID rewrites
-- moves owned state DBs (`state_*`) first, through the `StateDBMover` its
-  caller passes in
-- renames owned token files (`token_*`)
-- rewrites catalog account IDs and owned drive ownership/canonical IDs
-- rewrites config section headers in place through `RenameDriveSections()`
+- refuses the change while any new name is taken (a token or state DB file,
+  a config section), naming what to remove, before anything is renamed or
+  recorded
+- records the whole change in a journal, then runs four steps in this order:
+  1. moves owned state DBs (`state_*`), through the `StateDBMover` its caller
+     passes in
+  2. renames owned token files (`token_*`)
+  3. rewrites config section headers in place through `RenameDriveSections()`
+  4. rewrites catalog account IDs and the drives those accounts own, in one
+     catalog write; a drive of any other account keeps its ID, even one under
+     the same old address with another account type
+     (`TestReconcileAccountEmail_LeavesAnotherAccountsCatalogDrivesAlone`).
+     A re-keyed drive's stored name follows the address only when it is the
+     default derived from the old ID; a name Graph or the user supplied stays
+     (`TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress`)
 
 A state DB is never renamed here. It moves with its whole file family under
 the store lock that excludes every engine using it, which `internal/sync`
@@ -363,21 +378,90 @@ where no command looks
 (`TestMoveStateDBs_RemovesTheLeftoversOfAStoreWithoutItsDatabase`,
 `TestMoveStateDBs_KeepsLeftoversWhileTheirStoreIsLocked`).
 
-An email change cut short between two renames of one store is finished by
-the next run, which still finds the database under the old name. That run
-does not keep a log that had already moved (it deletes the sidecars it finds
-at the target), so the store falls back to its last checkpoint.
+### The change is journaled and rolled forward
+
+No single write covers files in the data directory, sections of the config
+file and records of the catalog, so the change is journaled
+(`email_change_journal.go`). Before the first rename the whole list of
+renames is written to `<data dir>/email-change/journal.json` (atomic write,
+mode 0600): the account and drive ID renames, the absolute path of the config
+file the change started with, and every state DB and token move by its file
+name in the data directory. A name with a separator is refused when the
+journal is built and again when it is read, so a journal renames nothing
+outside the data directory (the token rename used to go by the target's base
+name inside the source's folder, so a target in another folder landed beside
+its source, `TestDataDirFileName_RefusesAFileOutsideTheDataDir`). The whole
+list is recorded because a plan rebuilt after an interruption would see
+half-renamed inputs. The journal is read strictly: an unknown field, data
+after it, another `schema_version`, an empty or self-renaming entry, or two
+renames that meet are an error that names the file, and the journal is kept
+(`TestDecodeEmailChangeJournal_RefusesWhatItCannotFinishExactly`,
+`TestEmailChangeJournal_AJournalThatCannotBeReadFailsClosed`).
+
+The journal's folder is also the lock: every writer and finisher of a
+journal holds an exclusive lock on `<data dir>/email-change/` with the
+bounded wait of every config change, so one email change runs per data
+directory. Lock order: that lock, then the store locks the mover takes, then
+the config and catalog locks the later steps take; never the reverse.
+
+The mover writes the journal itself, through the `begin` callback of
+`StateDBMover`: once it holds every source and target store lock, after its
+checks pass and before its first rename. So a store in use refuses with no
+journal and nothing renamed, and a change that cannot be recorded renames
+nothing (`TestReconcileAccountEmail_RecordsTheWholeChangeBeforeTheFirstRename`,
+`TestReconcileAccountEmail_RefusesAMoverThatDidNotRecordTheChange`). The
+steps then run in order, and every step is idempotent: a source that is gone
+is done, and a source and a target that both exist is the only refusal. The
+data directory is synced, and the journal deleted, after the last step.
+
+The invariant behind every refusal: with no journal, nothing of a change is
+at a new name, so a file or section at a new name was there first and the
+change is refused naming it
+(`TestReconcileAccountEmail_CollisionFailsWithoutMutation`,
+`TestReconcileAccountEmail_ConfigSectionsAtBothNamesRefuseTheChange`); with a
+journal, everything at a new name was put there by the change, so a file or
+section at both names was created under the old name afterwards, and the
+refusal names that one to remove and keeps both
+(`TestCompleteEmailChange_ATokenAtBothNamesSaysWhichToRemove`,
+`TestCompleteEmailChange_AConfigSectionAtBothNamesSaysWhichToRemove`,
+`TestMoveStateDBs_AResumedMoveWithADatabaseAtBothNamesSaysWhichToRemove`).
+
+| Interrupted after | On disk | The next command |
+| --- | --- | --- |
+| the checks, target sidecars cleared | every name old, no journal | plans afresh |
+| the journal was written | journal; every name old | runs every step |
+| some state DBs moved, or one store's sidecars but not its database | journal; each store whole at the old name, whole at the new, or split | finishes each store without deleting at its target, then the rest |
+| the state DBs | journal; stores new; tokens, sections, catalog old | tokens, sections, catalog |
+| the tokens | journal; stores, tokens new | sections, catalog |
+| the config sections | journal; only the catalog old | catalog |
+| the catalog | journal; every name new | deletes the journal |
+| the journal was deleted | every name new, no journal | nothing |
+
+`TestReconcileAccountEmail_AFailureAfterAnyStepIsFinishedByTheNextCommand`
+stops a change at every one of these boundaries, from the record to the
+catalog, and between two state DB moves, and shows the next command finishes
+it with every name new and each new name holding what the old one held; a
+change stopped before it was recorded leaves nothing to finish and is planned
+afresh (`TestReconcileAccountEmail_AChangeStoppedBeforeItWasRecordedStartsAfresh`).
+
+**Where a change is finished.** `CompleteEmailChange` finishes a journal
+it finds and reports its renames. The CLI calls it once at its entry, in
+`initializeCLIContext`, before any command resolves its config (cli.md),
+never inside `config.Load`: completing needs the state DB mover of
+`internal/sync`, and a config read that renames files is a side effect no
+reader expects. With no journal it is one stat: no lock is taken and nothing
+is created (`TestCompleteEmailChange_WithNoJournalTouchesNothing`).
+`ReconcileAccountEmail` also finishes a journal it finds, under the lock,
+before it plans (`TestReconcileAccountEmail_FinishesAnInterruptedChangeItFinds`).
+An engine neither waits for nor finishes a change: it refuses to start on a
+store a journal names, at either name (`UnfinishedEmailChangeStateDBs`,
+sync-engine.md).
 
 The reconciliation planner is conservative about authority:
 
 - personal/business ownership comes from the canonical-ID type
 - SharePoint ownership comes from token-owner resolution to the business account
 - shared-drive ownership comes from the managed catalog, not by guessing
-
-Before any file mutation, the planner validates that every target path is free.
-Existing target paths are treated as collisions rather than being overwritten,
-so a partial or conflicting rename fails loudly instead of silently merging two
-authorities.
 
 ### Catalog JSON Policy
 
@@ -493,7 +577,7 @@ manager stops restarting a run that would fail the same way (R-6.6.31).
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory `flock` on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. The lock is taken by polling a non-blocking `flock` every `configLockPollInterval` (50 ms) for at most `configLockTimeout` (10 s), never by a blocking `flock`: a stopped or stuck holder (SIGSTOP, a hung filesystem, a foreign program holding the lock) would otherwise hang every config-writing command, and the watch daemon's reload, for as long as it lived. When the wait runs out the change is not made, and the error wraps `ErrConfigLocked` and names the directory (R-4.4.4). No caller has a context to give, so the wait is bounded rather than cancelable. The catalog takes the same lock on its own directory, the data directory; on macOS that is also the config directory, so there the two are one lock. `flock` locks belong to an open file description and every acquisition opens the directory afresh, so a locked callback must never call another locking function: it would wait on its own caller and fail after the timeout. Every locked callback only reads and rewrites its own file, and the multi-step flows (login, `drive add`, email reconciliation) take the config and catalog locks one after the other, never nested. `EnsureDriveInConfigDetailed` reports whether the current call added a section or actually inserted `sync_dir` at the write boundary; for backfills it also returns the pre-backfill drive state from the same locked write snapshot so CLI rollback can undo only the mutation it performed when the current section is otherwise unchanged. Config owns the rollback-safe conditional deletes: `DeleteDriveKeyIfDriveEquals` and `DeleteDriveSectionIfDriveEquals` compare the decoded drive and render the delete from the same locked file snapshot so rollback does not act on a different parsed section than the one it checked. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`; CLI enrollment then materializes the configured sync directory.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory `flock` on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. The lock is taken by polling a non-blocking `flock` every `configLockPollInterval` (50 ms) for at most `configLockTimeout` (10 s), never by a blocking `flock`: a stopped or stuck holder (SIGSTOP, a hung filesystem, a foreign program holding the lock) would otherwise hang every config-writing command, and the watch daemon's reload, for as long as it lived. When the wait runs out the change is not made, and the error wraps `ErrConfigLocked` and names the directory (R-4.4.4). No caller has a context to give, so the wait is bounded rather than cancelable. The catalog takes the same lock on its own directory, the data directory; on macOS that is also the config directory, so there the two are one lock. `flock` locks belong to an open file description and every acquisition opens the directory afresh, so a locked callback must never call another locking function: it would wait on its own caller and fail after the timeout. Every locked callback only reads and rewrites its own file, and the multi-step flows (login, `drive add`, email reconciliation) take the config and catalog locks one after the other, never nested. An account email change holds one more lock around them, on its own folder `<data dir>/email-change/` (a directory no other lock names), and takes it first, so the nesting cannot wait on itself. `EnsureDriveInConfigDetailed` reports whether the current call added a section or actually inserted `sync_dir` at the write boundary; for backfills it also returns the pre-backfill drive state from the same locked write snapshot so CLI rollback can undo only the mutation it performed when the current section is otherwise unchanged. Config owns the rollback-safe conditional deletes: `DeleteDriveKeyIfDriveEquals` and `DeleteDriveSectionIfDriveEquals` compare the decoded drive and render the delete from the same locked file snapshot so rollback does not act on a different parsed section than the one it checked. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`; CLI enrollment then materializes the configured sync directory.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

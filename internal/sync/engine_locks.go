@@ -28,6 +28,16 @@ var ErrSyncRootInUse = errors.New("another onedrive-go sync is already syncing t
 // directory can give one drive two different sync folders, and so one store.
 var ErrSyncStoreInUse = errors.New("another onedrive-go sync is already using this sync state")
 
+// ErrEmailChangeUnfinished means the drive's state store is named by the
+// journal of an account email change that was cut short: the store may be at
+// its old name, at its new one, or split between them. An engine never
+// finishes the change and never waits for it; it refuses to start, and the
+// next onedrive-go command that uses an account finishes the change at its
+// entry (only help and the completion scripts skip that).
+var ErrEmailChangeUnfinished = errors.New(
+	"an account email change is not finished yet; run any onedrive-go command, such as " +
+		"'onedrive-go status', to finish it")
+
 // engineLocksDir is the data-directory subfolder that holds the lock files.
 const engineLocksDir = "locks"
 
@@ -90,6 +100,11 @@ func engineLockDataDir(cfg *engineInputs) string {
 // contends, whatever folder it syncs). It must run before the store opens:
 // a refused engine never touches the store. A store lock refused after the
 // folder lock was taken lets the folder go again.
+//
+// Holding both, it refuses a store an unfinished account email change moves
+// (ErrEmailChangeUnfinished): such a store may be at either name or split
+// between them, and the engine neither waits for the change nor finishes
+// it. The refusal lets both locks go.
 func acquireEngineLocks(cfg *engineInputs) (engineLocks, error) {
 	dataDir := engineLockDataDir(cfg)
 	root, err := acquireSyncRootLock(dataDir, cfg.SyncRoot, cfg.Logger, cfg.lockFlock)
@@ -100,8 +115,12 @@ func acquireEngineLocks(cfg *engineInputs) (engineLocks, error) {
 	if err != nil {
 		return engineLocks{}, errors.Join(err, root.release())
 	}
+	locks := engineLocks{root: root, store: store}
+	if refuseErr := refuseStoreOfUnfinishedEmailChange(dataDir, cfg.DBPath); refuseErr != nil {
+		return engineLocks{}, errors.Join(refuseErr, locks.release())
+	}
 
-	return engineLocks{root: root, store: store}, nil
+	return locks, nil
 }
 
 // release drops the store lock, then the folder lock.
@@ -304,18 +323,35 @@ func LockDriveForOfflineChange(
 }
 
 // MoveStateDBs renames state stores, each with its whole file family, for an
-// account email change. It takes the store lock of every source and every
-// target first and changes nothing unless it holds them all: a store an
-// engine has open (ErrSyncStoreInUse) refuses every move, as does a target
-// that already has a database. The locks are held until every rename is
-// done, so no engine starts on either name meanwhile.
+// account email change (config.StateDBMover). It takes the store lock of
+// every source and every target first and changes nothing unless it holds
+// them all: a store an engine has open (ErrSyncStoreInUse) refuses every
+// move, as does a target that already has a database. The locks are held
+// until every rename is done, so no engine starts on either name meanwhile.
+//
+// A non-nil begin starts a new change. No journal names these moves yet, so
+// whatever sidecars stand at a new name are a stranger's; they are deleted
+// (SQLite would replay a log into the database moved beside it), and then
+// begin records the change, before the first rename. A nil begin finishes a
+// change a journal records: everything at a new name was moved there by it
+// and is kept, and a database at both names is refused with the one to
+// remove named.
+//
+// Before a store moves, a log it has is folded into its database where it
+// can be (foldStateDBLog), so the store is one file and moves in one rename;
+// a store that cannot fold moves file by file, never deleting at its target.
 //
 // A source with no database is not a store: its sidecars are leftovers of a
 // deleted one. There is nothing to move, and left behind they would sit
 // under an email no account has any more, where no command looks, so they
 // are deleted instead, after the moves. dataDir must be the data directory
 // the engines use.
-func MoveStateDBs(ctx context.Context, dataDir string, moves []config.StateDBMove, logger *slog.Logger) (err error) {
+func MoveStateDBs(
+	ctx context.Context, dataDir string, moves []config.StateDBMove, begin func() error, logger *slog.Logger,
+) (err error) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	release, err := lockStateDBMoves(ctx, dataDir, moves, logger)
 	if err != nil {
 		return err
@@ -326,43 +362,148 @@ func MoveStateDBs(ctx context.Context, dataDir string, moves []config.StateDBMov
 		}
 	}()
 
-	pending := make([]config.StateDBMove, 0, len(moves))
-	var leftovers []string
-	for _, move := range moves {
-		_, statErr := localpath.Stat(move.From)
-		switch {
-		case statErr == nil:
-			pending = append(pending, move)
-		case errors.Is(statErr, os.ErrNotExist):
-			leftovers = append(leftovers, move.From)
-		default:
-			return fmt.Errorf("move sync state %s: %w", move.From, statErr)
+	pending, leftovers, err := splitStateDBMoves(moves)
+	if err != nil {
+		return err
+	}
+	if checkErr := checkStateDBMoveTargets(pending, begin == nil); checkErr != nil {
+		return checkErr
+	}
+	if begin != nil {
+		for _, move := range pending {
+			if removeErr := removeStateDBSidecars(move.To); removeErr != nil {
+				return removeErr
+			}
+		}
+		if beginErr := begin(); beginErr != nil {
+			return fmt.Errorf("record the account email change: %w", beginErr)
 		}
 	}
 
 	for _, move := range pending {
-		_, statErr := localpath.Stat(move.To)
-		switch {
-		case statErr == nil:
-			return fmt.Errorf("move sync state %s: %s already exists", move.From, move.To)
-		case !errors.Is(statErr, os.ErrNotExist):
-			return fmt.Errorf("check sync state target %s: %w", move.To, statErr)
-		}
-	}
-
-	for _, move := range pending {
+		foldStateDBLogBeforeMove(ctx, move, logger)
 		if moveErr := moveStateDBFamily(move.From, move.To); moveErr != nil {
 			return moveErr
 		}
-		if logger != nil {
-			logger.Info("moved sync state for an account email change",
-				slog.String("from", move.From), slog.String("to", move.To))
-		}
+		logger.Info("moved sync state for an account email change",
+			slog.String("from", move.From), slog.String("to", move.To))
 	}
 
 	for _, dbPath := range leftovers {
 		if removeErr := removeStateDBLeftovers(dbPath, logger); removeErr != nil {
 			return removeErr
+		}
+	}
+
+	return nil
+}
+
+// splitStateDBMoves separates the moves whose source has a database from the
+// sources that hold only leftovers of a deleted store, or nothing.
+func splitStateDBMoves(moves []config.StateDBMove) (pending []config.StateDBMove, leftovers []string, err error) {
+	pending = make([]config.StateDBMove, 0, len(moves))
+	for _, move := range moves {
+		exists, statErr := stateDBFileExists(move.From)
+		switch {
+		case statErr != nil:
+			return nil, nil, fmt.Errorf("move sync state %s: %w", move.From, statErr)
+		case exists:
+			pending = append(pending, move)
+		default:
+			leftovers = append(leftovers, move.From)
+		}
+	}
+
+	return pending, leftovers, nil
+}
+
+// checkStateDBMoveTargets refuses every move while one target already has a
+// database, and names the file to remove: before a change is recorded the
+// one at the new name was there first; while a recorded change is finished
+// the drive's state is already at the new name, so the one at the old name
+// was created afterwards.
+func checkStateDBMoveTargets(pending []config.StateDBMove, isResumed bool) error {
+	for _, move := range pending {
+		exists, err := stateDBFileExists(move.To)
+		switch {
+		case err != nil:
+			return fmt.Errorf("check sync state target %s: %w", move.To, err)
+		case !exists:
+			continue
+		case isResumed:
+			return fmt.Errorf("finish moving sync state %s: %s exists too; the account email change already moved "+
+				"the drive's sync state to %s, so %s was created after the account's email changed: "+
+				"remove %s (and its -wal, -shm and -journal files) and run the command again",
+				move.From, move.To, move.To, move.From, move.From)
+		default:
+			return fmt.Errorf("move sync state %s: %s already exists; it was there before the account's email "+
+				"changed: remove %s (and its -wal, -shm and -journal files) and run the command again",
+				move.From, move.To, move.To)
+		}
+	}
+
+	return nil
+}
+
+// foldStateDBLogBeforeMove folds a source's log into its database when the
+// source has a sidecar and nothing of its family is at the target yet: a
+// move resumed after its log went ahead must keep that log, not fold the
+// database without it. A failed fold is logged and the family moves as
+// files, which loses nothing.
+func foldStateDBLogBeforeMove(ctx context.Context, move config.StateDBMove, logger *slog.Logger) {
+	// A file that cannot be checked is left to the move, which checks every
+	// file again and reports it.
+	family := config.StateDBFamily(move.From)
+	hasSidecar := false
+	for _, sidecar := range family[:len(family)-1] {
+		if exists, err := stateDBFileExists(sidecar); err == nil && exists {
+			hasSidecar = true
+			break
+		}
+	}
+	if !hasSidecar {
+		return
+	}
+	if targetFound, err := stateDBFamilyExists(move.To); err != nil || targetFound {
+		return
+	}
+
+	if err := foldStateDBLog(ctx, move.From); err != nil {
+		logger.Warn("could not fold the sync state log into its database before an account email change "+
+			"moves it; moving its files as they are",
+			slog.String("db_path", move.From), slog.Any("error", err))
+	}
+}
+
+// refuseStoreOfUnfinishedEmailChange returns ErrEmailChangeUnfinished when
+// an unfinished account email change in dataDir moves the store at dbPath,
+// from or to that name, compared by store lock identity. The caller holds
+// the store's lock: the mover records a change while it holds the locks of
+// every store the change moves, so either the mover saw this engine's lock
+// and refused, or this check sees the journal. A journal that cannot be read
+// may name any store and refuses too.
+func refuseStoreOfUnfinishedEmailChange(dataDir, dbPath string) error {
+	moves, err := config.UnfinishedEmailChangeStateDBs(dataDir)
+	if err != nil {
+		return fmt.Errorf("check for an unfinished account email change: %w", err)
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+
+	own, err := syncStoreLockPath(dataDir, dbPath)
+	if err != nil {
+		return err
+	}
+	for _, move := range moves {
+		for _, path := range []string{move.From, move.To} {
+			named, lockErr := syncStoreLockPath(dataDir, path)
+			if lockErr != nil {
+				return lockErr
+			}
+			if named == own {
+				return fmt.Errorf("%w: it moves %s", ErrEmailChangeUnfinished, dbPath)
+			}
 		}
 	}
 
@@ -406,7 +547,8 @@ func lockStateDBMoves(
 		return releaseErr
 	}
 
-	locked := make(map[string]struct{}, len(moves)+len(moves))
+	// Each move names two stores.
+	locked := make(map[string]struct{}, 2*len(moves))
 	for _, move := range moves {
 		for _, path := range []string{move.From, move.To} {
 			if _, seen := locked[path]; seen {

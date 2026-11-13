@@ -1137,7 +1137,7 @@ deletes, resets or replaces a state DB family outside an engine:
 | reset, rebind | `drive reset-sync-state`, `drive rebind-root` (`changeDriveStateUnderLock`) | the drive's sync folder |
 | purge | `drive remove --purge`, `logout --purge` (`deleteStateDB`), after the config section is removed and the watch told | the drive's sync folder, none for orphaned state |
 | shortcut child cleanup | multisync `shortcutChildArtifactCleanupExecutor.purge` | none: a replacement child may sync the folder |
-| email rename | `MoveStateDBs` via `config.ReconcileAccountEmail` | none; every source and target store first, all or nothing |
+| email rename | `MoveStateDBs` via `config.ReconcileAccountEmail` and `config.CompleteEmailChange` | none; every source and target store first, all or nothing |
 
 Read-only inspectors (`status`, the rebind's file count) take no lock: they
 open the store `mode=ro` and `query_only`, which SQLite runs beside a live
@@ -1146,6 +1146,27 @@ writer (R-2.9.5, R-6.3.9,
 `TestLockDriveForOfflineChange_ContendsWithAnEngineWhoseFolderMoved`,
 `TestLockDriveForOfflineChange_WithoutAFolderTakesTheStoreLock`,
 `TestMoveStateDBs_RefusesEveryMoveWhileOneStoreIsInUse`).
+
+An account email change is journaled (config.md, Email Reconciliation).
+`MoveStateDBs` records a new change through its `begin` callback while it
+holds the store lock of every source and target, after its checks and
+before its first rename; a change it is asked to finish (no `begin`) keeps
+everything at a new name (`TestMoveStateDBs_RecordsTheChangeOnceBeforeTheFirstRename`,
+`TestMoveStateDBs_AChangeThatCannotBeRecordedRenamesNothing`,
+`TestMoveStateDBs_RefusesATargetThatExists`). While a journal is on disk,
+`newEngine` refuses with `ErrEmailChangeUnfinished` when the journal moves
+its store from or to its path, compared by store lock identity; a journal
+that cannot be read refuses every engine of the data dir. The check runs in
+`acquireEngineLocks`, holding both locks and before the store opens, and the
+refusal lets both locks go. The mover records the change under the store
+locks and the engine checks under its own, so one of them always sees the
+other. An engine neither waits for the change nor finishes it: the next CLI
+command does, at its entry, and `sync --watch` passes through that entry, so
+a watch started after an interruption finishes the change before it starts a
+drive; a running watch that starts a runner on such a drive while another
+process's change is unfinished gets this error, as any start failure (R-3.7.3,
+`TestEngine_RefusesToStartWhileAnEmailChangeIsUnfinished`,
+`TestEngine_RefusesToStartWhileTheEmailChangeJournalCannotBeRead`).
 
 ### Detached store writes
 

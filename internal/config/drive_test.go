@@ -38,7 +38,7 @@ func TestMatchDrive_MultipleDrives_NoSelector_Error(t *testing.T) {
 
 func TestMatchDrive_NoDrives_NoSelector_NoTokens(t *testing.T) {
 	// Override HOME so DiscoverTokens finds no real tokens on disk.
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	cfg := DefaultConfig()
 
@@ -50,7 +50,7 @@ func TestMatchDrive_NoDrives_NoSelector_NoTokens(t *testing.T) {
 func TestMatchDrive_NoDrives_CanonicalSelector_Error(t *testing.T) {
 	// A canonical ID selector with no drives configured should return an error.
 	// Config is mandatory — users must run "login" and "drive add" first.
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	cfg := DefaultConfig()
 
@@ -62,7 +62,7 @@ func TestMatchDrive_NoDrives_CanonicalSelector_Error(t *testing.T) {
 func TestMatchDrive_NoDrives_NonCanonicalSelector_Error(t *testing.T) {
 	// A non-canonical selector (no ":") with no drives can't match anything.
 	// Override HOME to ensure no tokens on disk.
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	cfg := DefaultConfig()
 
@@ -408,6 +408,8 @@ func TestDriveStatePath_ZeroID(t *testing.T) {
 }
 
 func TestDriveStatePath_PlatformSpecific(t *testing.T) {
+	setConfigTestHome(t)
+
 	path := DriveStatePath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 
 	switch runtime.GOOS {
@@ -817,14 +819,13 @@ func writeTokenFile(t *testing.T, dir, name string) {
 	require.NoError(t, err)
 }
 
-// setTestDataDir overrides HOME so DefaultDataDir() returns a temp directory,
-// creates that directory, and returns its path. This isolates token discovery
-// tests from real tokens on the developer's machine.
+// setTestDataDir gives the test its own home so DefaultDataDir() returns a temp
+// directory, creates that directory, and returns its path. This isolates token
+// discovery tests from real tokens on the developer's machine.
 func setTestDataDir(t *testing.T) string {
 	t.Helper()
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setConfigTestHome(t)
 
 	// DefaultDataDir() derives from HOME — create the expected directory structure.
 	dataDir := DefaultDataDir()

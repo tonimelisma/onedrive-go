@@ -18,15 +18,22 @@ const (
 	emailReconcileTestUser123       = "user-123"
 	emailReconcileTestBusinessUser  = "Business User"
 	emailReconcileTestDriveBusiness = "drive-business"
+	emailReconcileTestDrivePersonal = "drive-personal"
 )
 
 // stateDBMoverForTest stands in for the sync package's mover, which config
-// cannot import: it renames each database file, as that mover does once it
-// holds the stores' locks, and records what it was asked to move.
+// cannot import: it records the change through begin when the move is a new
+// one, renames each database file, as that mover does once it holds the
+// stores' locks, and records what it was asked to move.
 func stateDBMoverForTest(t *testing.T, moved *[]StateDBMove) StateDBMover {
 	t.Helper()
 
-	return func(moves []StateDBMove) error {
+	return func(moves []StateDBMove, begin func() error) error {
+		if begin != nil {
+			if err := begin(); err != nil {
+				return err
+			}
+		}
 		for _, move := range moves {
 			if err := os.Rename(move.From, move.To); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err //nolint:wrapcheck // test double reports the rename as it is
@@ -78,7 +85,7 @@ func seedEmailReconcileFixture(t *testing.T) emailReconcileFixture {
 	seedCatalogAccount(t, fixture.personal, func(account *CatalogAccount) {
 		account.UserID = "other-user"
 		account.DisplayName = "Personal User"
-		account.PrimaryDriveID = "drive-personal"
+		account.PrimaryDriveID = emailReconcileTestDrivePersonal
 		account.PrimaryDriveCanonical = fixture.personal.String()
 	})
 
@@ -200,12 +207,56 @@ func TestReconcileAccountEmail_RenamesOwnedArtifacts(t *testing.T) {
 	}, moved, "every state DB is moved by the mover, which locks it, never renamed here")
 }
 
+// The catalog stores a default drive name derived from the drive's ID, which
+// holds the account's address. That name follows the address; a name Graph or
+// the user supplied stays.
+//
+// Validates: R-3.7.2
+func TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress(t *testing.T) {
+	setTestDataDir(t)
+	logger := testLogger(t)
+	fixture := seedEmailReconcileFixture(t)
+	seedCatalogDrive(t, fixture.oldBusiness, func(drive *CatalogDrive) {
+		drive.DisplayName = DefaultDisplayName(fixture.oldBusiness)
+	})
+	seedCatalogDrive(t, fixture.oldShared, func(drive *CatalogDrive) {
+		drive.DisplayName = DefaultDisplayName(fixture.oldShared)
+	})
+	seedCatalogDrive(t, fixture.oldSharePoint, func(drive *CatalogDrive) {
+		drive.DisplayName = "Team documents"
+	})
+
+	var moved []StateDBMove
+	_, err := ReconcileAccountEmail(
+		fixture.configPath,
+		fixture.newBusiness,
+		emailReconcileTestUser123,
+		"renamed@example.com",
+		stateDBMoverForTest(t, &moved),
+		logger,
+	)
+	require.NoError(t, err)
+
+	business, found := loadCatalogDrive(t, fixture.newBusiness)
+	require.True(t, found)
+	assert.Equal(t, "renamed@example.com", business.DisplayName)
+
+	shared, found := loadCatalogDrive(t, fixture.newShared)
+	require.True(t, found)
+	assert.Equal(t, "Shared from renamed@example.com", shared.DisplayName)
+
+	sharePoint, found := loadCatalogDrive(t, fixture.newSharePoint)
+	require.True(t, found)
+	assert.Equal(t, "Team documents", sharePoint.DisplayName)
+}
+
 // A state DB an engine still has open refuses the mover, and the email
 // change then renames nothing at all: the state DBs move first, before any
-// token, config section or catalog record, so a refusal leaves the old
-// names consistent for the next try.
+// token, config section or catalog record, and the mover records the change
+// only once it holds every store, so a refusal leaves the old names
+// consistent and no journal for the next try.
 //
-// Validates: R-3.7.2, R-6.3.9
+// Validates: R-3.7.2, R-3.7.3, R-6.3.9
 func TestReconcileAccountEmail_AStateDBInUseChangesNothing(t *testing.T) {
 	setTestDataDir(t)
 	logger := testLogger(t)
@@ -213,9 +264,10 @@ func TestReconcileAccountEmail_AStateDBInUseChangesNothing(t *testing.T) {
 	inUse := errors.New("another onedrive-go sync is already using this sync state")
 
 	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
-		"renamed@example.com", func([]StateDBMove) error { return inUse }, logger)
+		"renamed@example.com", func([]StateDBMove, func() error) error { return inUse }, logger)
 	require.ErrorIs(t, err, inUse)
 
+	assert.NoFileExists(t, emailChangeJournalPath(DefaultDataDir()), "a change that renamed nothing leaves no journal")
 	assert.FileExists(t, DriveTokenPath(fixture.oldBusiness), "the token keeps its name")
 	assert.NoFileExists(t, DriveTokenPath(fixture.newBusiness))
 	assert.FileExists(t, DriveStatePath(fixture.oldBusiness), "the state DB keeps its name")
@@ -285,7 +337,11 @@ sync_dir = "~/Business"
 	assert.False(t, second.Changed())
 }
 
-// Validates: R-3.7.2
+// A token at the new name before the change starts was there first: the
+// change is refused before it is put on record or renames anything, and the
+// error names the file to remove.
+//
+// Validates: R-3.7.2, R-3.7.3
 func TestReconcileAccountEmail_CollisionFailsWithoutMutation(t *testing.T) {
 	setTestDataDir(t)
 	logger := testLogger(t)
@@ -309,8 +365,9 @@ sync_dir = "~/Business"
 	var moved []StateDBMove
 	_, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com",
 		stateDBMoverForTest(t, &moved), logger)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "target already exists")
+	require.ErrorContains(t, err, "target already exists: "+DriveTokenPath(newBusiness))
+	require.ErrorContains(t, err, "remove "+DriveTokenPath(newBusiness))
+	assert.NoFileExists(t, emailChangeJournalPath(DefaultDataDir()), "a refused change is never put on record")
 	assert.FileExists(t, DriveTokenPath(oldBusiness))
 
 	cfg, loadErr := Load(configPath, logger)

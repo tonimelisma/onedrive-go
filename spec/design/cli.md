@@ -302,6 +302,27 @@ while the config file is still being found go to a `bootstrapLogBuffer` and
 are replayed through the command logger once it exists, so they follow the
 same console rules and `log_format`, and reach the log file too.
 
+Right after the logger is attached, and before the shared-target bootstrap
+or any config resolution, `initializeCLIContext` finishes an account email
+change an earlier command was cut short in (`finishInterruptedEmailChange`,
+`config.CompleteEmailChange` with the `syncengine.MoveStateDBs` mover; R-3.7.3,
+config.md): with no journal that is one stat. A finished change, like one
+`reconcileGraphUser` makes, remaps this invocation's exact old IDs in
+`--account`, `--drive` and `ONEDRIVE_GO_DRIVE` (which used to keep the old ID)
+and prints the "Account email changed" line once, so a command run with a
+drive's old name resolves it under the new one
+(`TestInitializeCLIContext_FinishesAnInterruptedEmailChangeBeforeTheCommandResolvesItsDrive`,
+`TestApplyEmailReconcileResult_RemapsEveryExactSelectorOfTheInvocation`).
+A change that cannot be finished fails the command with the reason, because
+every name it would resolve may be half renamed. The commands cobra adds
+itself need no account and skip the whole CLI context
+(`commandNeedsNoAccount`): `help`, `completion <shell>` and the hidden
+completion requests a shell makes read and write nothing of onedrive-go's, so
+they work whatever state the data is in, an unfinishable change included;
+`--help` and `--version` never reach the hook. They used to go through the
+strict config load and failed without a configured account
+(`TestInitializeCLIContext_AChangeThatCannotBeFinishedFailsOnlyCommandsThatUseAnAccount`).
+
 `login` (R-6.6.24) shows the code, its expiry, the account to use, a passkey
 hint, and that it is waiting; success says where files will sync and what to
 run next. A refresh token rejected with `invalid_grant` is `ErrLoginExpired`

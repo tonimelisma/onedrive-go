@@ -32,7 +32,7 @@ func freshLeaf(t *testing.T, cmd *cobra.Command) *cobra.Command {
 
 // Validates: R-1.8.2
 func TestCpForce_FailedCopyRestoresTheOriginal(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("src.txt", "new")
@@ -59,7 +59,7 @@ func TestCpForce_FailedCopyRestoresTheOriginal(t *testing.T) {
 
 // Validates: R-1.8.2, R-1.8.3
 func TestCpForce_SuccessReplacesAndKeepsSourceMtime(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("src.txt", "new")
@@ -86,7 +86,7 @@ func TestCpForce_SuccessReplacesAndKeepsSourceMtime(t *testing.T) {
 
 // Validates: R-1.7.4
 func TestMv_RenameKeepsTheModificationTime(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("a.txt", "content")
@@ -106,7 +106,7 @@ func TestMv_RenameKeepsTheModificationTime(t *testing.T) {
 
 // Validates: R-1.7.4, R-1.8.2
 func TestMvForce_RestoredDestinationKeepsItsModificationTime(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("dst.txt", "precious")
@@ -134,7 +134,7 @@ func TestMvForce_RestoredDestinationKeepsItsModificationTime(t *testing.T) {
 
 // Validates: R-1.8.2
 func TestMvForce_ReplacesWithoutDeletingFirst(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("a.txt", "new")
@@ -154,7 +154,7 @@ func TestMvForce_ReplacesWithoutDeletingFirst(t *testing.T) {
 
 // Validates: R-1.8.2
 func TestReplaceDestination_CanceledOperationStillRestores(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("dst.txt", "precious")
@@ -210,7 +210,7 @@ func TestCopyStatusOutcome(t *testing.T) {
 
 // Validates: R-1.8.2
 func TestCpForce_CleanupFailureWarnsAndSucceeds(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	var logs bytes.Buffer
@@ -231,7 +231,7 @@ func TestCpForce_CleanupFailureWarnsAndSucceeds(t *testing.T) {
 
 // Validates: R-1.8.2
 func TestCpForce_HintsAboutAnInterruptedReplacement(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("src.txt", "new")
@@ -266,7 +266,7 @@ func TestIsAsideNameFor(t *testing.T) {
 
 // Validates: R-1.8.2
 func TestReplaceDestination_RestoreIsBounded(t *testing.T) {
-	t.Parallel()
+	setTestDriveHome(t)
 
 	cc, fake := jsonContractFileContext(t)
 	fake.addFile("dst.txt", "precious")

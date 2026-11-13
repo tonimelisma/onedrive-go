@@ -17,10 +17,20 @@ const (
 	validatedStateTestDriveUser = "drive-user"
 )
 
-func setConfigTestHome(t *testing.T) {
+// setConfigTestHome points HOME at a temp dir and clears the three XDG
+// overrides, so every default path derives from that home whatever the shell
+// running the tests exports (scripts/dev-env.sh sets all three). HOME alone
+// leaves a test reading and writing the directories those variables name.
+func setConfigTestHome(t *testing.T) string {
 	t.Helper()
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	return home
 }
 
 func testConfigLogger() *slog.Logger {

@@ -1409,7 +1409,7 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 // Validates: R-4.2.1
 func TestEnsureDriveInConfig_NewDrive_NoConfigFile(t *testing.T) {
 	// Isolate HOME so token paths resolve to temp dir.
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1428,7 +1428,7 @@ func TestEnsureDriveInConfig_NewDrive_NoConfigFile(t *testing.T) {
 }
 
 func TestEnsureDriveInConfig_NewDrive_ExistingConfig(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1450,7 +1450,7 @@ func TestEnsureDriveInConfig_NewDrive_ExistingConfig(t *testing.T) {
 }
 
 func TestEnsureDriveInConfig_ExistingDrive(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1465,7 +1465,7 @@ func TestEnsureDriveInConfig_ExistingDrive(t *testing.T) {
 }
 
 func TestEnsureDriveInConfig_ExistingDriveMissingSyncDirSetsDefault(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
@@ -1483,7 +1483,7 @@ func TestEnsureDriveInConfig_ExistingDriveMissingSyncDirSetsDefault(t *testing.T
 }
 
 func TestEnsureDriveInConfigDetailed_ExistingDriveMissingSyncDirReportsBackfill(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	path := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
@@ -1500,7 +1500,7 @@ func TestEnsureDriveInConfigDetailed_ExistingDriveMissingSyncDirReportsBackfill(
 }
 
 func TestEnsureDriveInConfig_CollisionDetection(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1520,7 +1520,7 @@ func TestEnsureDriveInConfig_CollisionDetection(t *testing.T) {
 }
 
 func TestEnsureDriveInConfig_NoFallback(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setConfigTestHome(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
@@ -1562,20 +1562,55 @@ display_name = "Work"
 `, string(data))
 }
 
+// A section under the new name beside the one under the old name is a
+// collision that names both, and the file is left as it was.
+//
+// Validates: R-3.7.2
 func TestRenameDriveSections_Collision(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	writeConfigFixture(t, path, []byte(`["business:user@example.com"]
+	original := []byte(`["business:user@example.com"]
 sync_dir = "~/Business"
 
 ["business:renamed@example.com"]
 sync_dir = "~/Renamed"
-`))
+`)
+	writeConfigFixture(t, path, original)
 
 	err := RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
 		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already exists")
+	var collision *driveSectionCollisionError
+	require.ErrorAs(t, err, &collision)
+	assert.Equal(t, "business:user@example.com", collision.from)
+	assert.Equal(t, "business:renamed@example.com", collision.to)
+	require.ErrorContains(t, err, "already exists")
+
+	data, readErr := localpath.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, string(original), string(data))
+}
+
+// A rename whose source section is gone is done already, so the file is not
+// rewritten: a resumed email change finds its sections renamed and leaves
+// the file as it is.
+//
+// Validates: R-3.7.3
+func TestRenameDriveSections_NothingToRenameLeavesTheFileAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	writeConfigFixture(t, path, []byte(`["business:renamed@example.com"]
+sync_dir = "~/Business"
+`))
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+
+	require.NoError(t, RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
+		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
+	}))
+
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(before, after), "the config file was not replaced")
 }

@@ -76,20 +76,16 @@ func TestRemoveStateDBFiles_RemovesALeftoverJournal(t *testing.T) {
 	assert.NoFileExists(t, dbPath)
 }
 
-// SQLite pairs a write-ahead log with a database by file name alone, and the
-// rules for a store's file family rest on what it then does
-// (config.StateDBFamily, moveStateDBFamily). A log left without its database
-// is deleted when a database is created at that name, so a store created
-// where an older delete left sidecars starts empty. A log beside a database
-// that did not write it is replayed into that database, which is why a move
-// clears the sidecars at its target. The control shows that the copied log is
-// one SQLite replays when it can.
-//
-// Validates: R-2.1.3
-func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
-	t.Parallel()
+// staleMarkerTable is the table a walDonor keeps only in its log.
+const staleMarkerTable = "stale_marker"
 
-	dir := t.TempDir()
+// walDonor creates a WAL-mode database in dir whose one table lives only in
+// its write-ahead log (no checkpoint has run), and returns the database's
+// path. The donor stays open until the test ends, so its files can be copied
+// as an interrupted writer would leave them.
+func walDonor(t *testing.T, dir string) string {
+	t.Helper()
+
 	donorPath := filepath.Join(dir, "donor.db")
 	donor, err := sql.Open(sqliteDriverName,
 		"file:"+donorPath+"?_pragma=journal_mode(WAL)&_pragma=wal_autocheckpoint(0)")
@@ -98,42 +94,68 @@ func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
 	t.Cleanup(func() {
 		assert.NoError(t, donor.Close())
 	})
-	// With no checkpoint the table lives only in the donor's log.
-	_, err = donor.ExecContext(t.Context(), "CREATE TABLE stale_marker (x INTEGER)")
+	_, err = donor.ExecContext(t.Context(), "CREATE TABLE "+staleMarkerTable+" (x INTEGER)")
 	require.NoError(t, err)
 
-	copyFile := func(t *testing.T, from, to string) {
-		t.Helper()
+	return donorPath
+}
 
-		data, readErr := os.ReadFile(from) //nolint:gosec // test reads its own temp tree
-		require.NoError(t, readErr)
-		require.NotEmpty(t, data)
-		require.NoError(t, os.WriteFile(to, data, 0o600)) //nolint:gosec // test writes its own temp tree
-	}
-	hasTable := func(t *testing.T, db *sql.DB, name string) bool {
-		t.Helper()
+// copyStateFile copies one non-empty file of a test's own temp tree.
+func copyStateFile(t *testing.T, from, to string) {
+	t.Helper()
 
-		var count int
-		require.NoError(t, db.QueryRowContext(t.Context(),
-			"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count))
+	info, err := os.Stat(from)
+	require.NoError(t, err)
+	require.Positive(t, info.Size())
+	require.NoError(t, copyFileContent(from, to))
+}
 
-		return count == 1
-	}
-	openPlain := func(t *testing.T, dbPath string) *sql.DB {
-		t.Helper()
+// sqliteHasTable reports whether db has a table called name.
+func sqliteHasTable(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
 
-		db, openErr := sql.Open(sqliteDriverName, "file:"+dbPath)
-		require.NoError(t, openErr)
-		t.Cleanup(func() {
-			assert.NoError(t, db.Close())
-		})
+	var count int
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count))
 
-		return db
-	}
+	return count == 1
+}
+
+// openPlainSQLite opens the database at dbPath as SQLite does by default,
+// without the store's schema or pragmas.
+func openPlainSQLite(t *testing.T, dbPath string) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open(sqliteDriverName, "file:"+dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Close())
+	})
+
+	return db
+}
+
+// SQLite pairs a write-ahead log with a database by file name alone, and the
+// rules for a store's file family rest on what it then does
+// (config.StateDBFamily, moveStateDBFamily). A log left without its database
+// is deleted when a database is created at that name, so a store created
+// where an older delete left sidecars starts empty. A log beside a database
+// that did not write it is replayed into that database, which is why a new
+// account email change clears the sidecars at each target before it is
+// recorded (MoveStateDBs), and why a resumed one keeps the log it already
+// moved. The control shows that the copied log is one SQLite replays when it
+// can.
+//
+// Validates: R-2.1.3
+func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	donorPath := walDonor(t, dir)
 
 	t.Run("a log without its database is deleted, not replayed", func(t *testing.T) {
 		dbPath := filepath.Join(dir, "created.db")
-		copyFile(t, donorPath+"-wal", dbPath+"-wal")
+		copyStateFile(t, donorPath+"-wal", dbPath+"-wal")
 
 		store, openErr := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
 		require.NoError(t, openErr)
@@ -141,16 +163,16 @@ func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
 			assert.NoError(t, store.Close(context.Background()))
 		})
 
-		assert.False(t, hasTable(t, store.rawDB(), "stale_marker"))
-		assert.True(t, hasTable(t, store.rawDB(), "baseline"))
+		assert.False(t, sqliteHasTable(t, store.rawDB(), staleMarkerTable))
+		assert.True(t, sqliteHasTable(t, store.rawDB(), "baseline"))
 	})
 
 	t.Run("control: a log beside its own database is replayed", func(t *testing.T) {
 		dbPath := filepath.Join(dir, "own.db")
-		copyFile(t, donorPath, dbPath)
-		copyFile(t, donorPath+"-wal", dbPath+"-wal")
+		copyStateFile(t, donorPath, dbPath)
+		copyStateFile(t, donorPath+"-wal", dbPath+"-wal")
 
-		assert.True(t, hasTable(t, openPlain(t, dbPath), "stale_marker"))
+		assert.True(t, sqliteHasTable(t, openPlainSQLite(t, dbPath), staleMarkerTable))
 	})
 
 	t.Run("a log beside another database is replayed into it", func(t *testing.T) {
@@ -158,10 +180,35 @@ func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
 		store, openErr := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
 		require.NoError(t, openErr)
 		require.NoError(t, store.Close(context.Background()))
-		copyFile(t, donorPath+"-wal", dbPath+"-wal")
+		copyStateFile(t, donorPath+"-wal", dbPath+"-wal")
 
-		db := openPlain(t, dbPath)
-		assert.True(t, hasTable(t, db, "stale_marker"))
-		assert.False(t, hasTable(t, db, "baseline"))
+		db := openPlainSQLite(t, dbPath)
+		assert.True(t, sqliteHasTable(t, db, staleMarkerTable))
+		assert.False(t, sqliteHasTable(t, db, "baseline"))
 	})
+}
+
+// A family move cut short after the log moved and before the database did
+// leaves the log at the new name and the database at the old one. The rerun
+// finds no log at the source; it must finish the move with the log it already
+// moved, not delete it as a stranger's: the log holds committed sync state the
+// database does not have yet.
+//
+// Validates: R-3.7.3, R-2.1.3
+func TestMoveStateDBFamily_ResumeAfterSidecarsMovedKeepsTheLog(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	donorPath := walDonor(t, dir)
+	from := filepath.Join(dir, "old.db")
+	to := filepath.Join(dir, "new.db")
+	// What the interrupted move left: the log renamed, the database not yet.
+	copyStateFile(t, donorPath, from)
+	copyStateFile(t, donorPath+"-wal", to+"-wal")
+
+	require.NoError(t, moveStateDBFamily(from, to))
+
+	assert.NoFileExists(t, from)
+	assert.True(t, sqliteHasTable(t, openPlainSQLite(t, to), staleMarkerTable),
+		"the state committed to the log must survive the resumed move")
 }

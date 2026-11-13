@@ -78,6 +78,8 @@ func TestDriveTokenPath_ZeroID(t *testing.T) {
 }
 
 func TestDriveTokenPath_PlatformSpecific(t *testing.T) {
+	setConfigTestHome(t)
+
 	path := DriveTokenPath(driveid.MustCanonicalID("personal:toni@outlook.com"))
 
 	switch runtime.GOOS {
