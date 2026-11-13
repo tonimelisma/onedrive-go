@@ -617,10 +617,18 @@ func plainErrorReason(err error) string {
 
 // innermostErrorText returns the deepest message in a wrap chain, which is
 // where the concrete cause ("permission denied", "no space left on device")
-// lives; the outer layers only name the code path.
+// lives; the outer layers only name the code path. An error that wraps
+// several (fmt.Errorf with more than one %w) is followed through the last
+// one: the ones before it are marks, such as a request not sent.
 func innermostErrorText(err error) string {
 	for {
 		next := errors.Unwrap(err)
+		var several interface{ Unwrap() []error }
+		if next == nil && errors.As(err, &several) {
+			if wrapped := several.Unwrap(); len(wrapped) > 0 {
+				next = wrapped[len(wrapped)-1]
+			}
+		}
 		if next == nil {
 			break
 		}

@@ -303,7 +303,7 @@ func resolveSharedDisplayName(
 	cfg *config.Config,
 	runtime *driveops.SessionRuntime,
 ) (string, error) {
-	client, err := runtime.BootstrapClient(ctx, tokenPath)
+	client, err := runtime.BootstrapClient(tokenPath)
 	if err != nil {
 		return "", fmt.Errorf("load sign-in for shared drive name: %w", err)
 	}

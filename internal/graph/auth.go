@@ -21,18 +21,55 @@ func defaultScopes() []string {
 	}
 }
 
-// withAuthClient returns ctx carrying authHTTP as the client oauth2 uses for
-// every request to the sign-in service: the device-code request and its
-// polls, the code exchange, and each silent refresh of a token source built
-// from the returned context. Without it oauth2 falls back to
-// http.DefaultClient, which has no timeout (R-6.8.27). A nil authHTTP is a
-// caller bug, so it is an error rather than that fallback.
-func withAuthClient(ctx context.Context, authHTTP *http.Client) (context.Context, error) {
+// checkAuthClient refuses a sign-in HTTP client that could wait forever. A nil
+// one is a caller bug: oauth2 would fall back to http.DefaultClient, which
+// has no timeout (R-6.8.27). One without a Timeout is refused for the same
+// reason: a token refresh outlives the callers that stop waiting for it, and
+// only the client's Timeout ends it then.
+func checkAuthClient(authHTTP *http.Client) error {
 	if authHTTP == nil {
-		return nil, errors.New("graph: sign-in HTTP client must not be nil")
+		return errors.New("graph: sign-in HTTP client must not be nil")
+	}
+	if authHTTP.Timeout <= 0 {
+		return errors.New("graph: sign-in HTTP client must have a timeout")
 	}
 
-	return context.WithValue(ctx, oauth2.HTTPClient, authHTTP), nil
+	return nil
+}
+
+// signInContext returns ctx carrying authHTTP as the client oauth2 uses for
+// its requests to the sign-in service: the device-code request and its
+// polls, the code exchange, or one token refresh.
+func signInContext(ctx context.Context, authHTTP *http.Client) context.Context {
+	return context.WithValue(ctx, oauth2.HTTPClient, authHTTP)
+}
+
+// SignInRequestError is the failure of a request to the Microsoft identity
+// platform, the sign-in service, rather than to Graph: a token refresh, the
+// device-code request and its polls, or the browser sign-in's code exchange.
+// It wraps the request's own error, so the chain still answers errors.As for
+// *url.Error and *oauth2.RetrieveError and errors.Is for a context's error,
+// and it stays in the chain through a refresh's wrapping and a request not
+// sent. A caller asks for it with errors.As to name the sign-in service
+// instead of OneDrive.
+type SignInRequestError struct {
+	Err error
+}
+
+func (e *SignInRequestError) Error() string { return e.Err.Error() }
+
+func (e *SignInRequestError) Unwrap() error { return e.Err }
+
+// signInFailure marks err, the failure of a request to the sign-in service,
+// as a *SignInRequestError. Every sign-in request's failure passes through
+// it: tokenBridge.redeem, requestDeviceAuth, exchangeDeviceAccessToken and
+// exchangeAndSave.
+func signInFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return &SignInRequestError{Err: err}
 }
 
 // DeviceAuth holds the device code response fields that the CLI displays to the user.
@@ -50,10 +87,9 @@ type DeviceAuth struct {
 //  4. Saves the token to disk at tokenPath
 //  5. Returns a TokenSource for use with Client
 //
-// The returned TokenSource binds ctx to the underlying oauth2 token source.
-// ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
-// will fail. Callers pass the command's or the daemon's context, never a
-// per-request one: the source keeps it for every later refresh.
+// ctx bounds the sign-in flow only. The returned TokenSource keeps no
+// context: each later refresh runs under the context of the request that
+// needs a token.
 //
 // authHTTP sends every request to the sign-in service, the polls and the
 // returned source's refreshes included; callers pass graphtransport.AuthClient.
@@ -67,14 +103,7 @@ func Login(
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	authCtx, err := withAuthClient(ctx, authHTTP)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := oauthConfig(tokenPath, logger)
-
-	return doLogin(authCtx, tokenPath, cfg, display, logger)
+	return doLogin(ctx, tokenPath, authHTTP, oauthConfig(tokenPath, logger), display, logger)
 }
 
 // stateTokenBytes is the number of random bytes for the OAuth2 state parameter.
@@ -111,7 +140,8 @@ type callbackResult struct {
 // default browser and owns any user-facing fallback output if opening fails.
 //
 // authHTTP sends the code exchange and the returned source's refreshes; the
-// browser, not authHTTP, follows the authorization URL.
+// browser, not authHTTP, follows the authorization URL. As for Login, ctx
+// bounds the sign-in flow only.
 //
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
@@ -122,12 +152,5 @@ func LoginWithBrowser(
 	openURL func(context.Context, string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	authCtx, err := withAuthClient(ctx, authHTTP)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := oauthConfig(tokenPath, logger)
-
-	return doAuthCodeLogin(authCtx, tokenPath, cfg, openURL, logger)
+	return doAuthCodeLogin(ctx, tokenPath, authHTTP, oauthConfig(tokenPath, logger), openURL, logger)
 }

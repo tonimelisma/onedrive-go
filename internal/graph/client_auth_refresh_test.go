@@ -29,13 +29,13 @@ type forcingToken struct {
 	forced   int
 }
 
-func (f *forcingToken) Token() (string, error) {
+func (f *forcingToken) Token(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.current, nil
 }
 
-func (f *forcingToken) ForceRefresh() (string, error) {
+func (f *forcingToken) ForceRefresh(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.forced++
@@ -186,27 +186,28 @@ func TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst(t *testing.T) {
 	defer tokenSrv.Close()
 
 	cfg := &oauth2.Config{ClientID: "test", Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL + "/token"}}
-	// The cached token is still valid: ReuseTokenSource alone would never refresh it.
+	// The cached token is still valid: an expiry-driven refresh alone would never redeem it.
 	cached := &oauth2.Token{AccessToken: "cached", RefreshToken: "rt", Expiry: time.Now().Add(time.Hour)}
-	clock := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	bridge := newTokenBridge(context.Background(), cfg, cached, slog.Default())
-	bridge.now = func() time.Time { return clock }
+	var clock atomic.Int64
+	clock.Store(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC).UnixNano())
+	bridge := newTokenBridge(cfg, testAuthClient(), cached, slog.Default())
+	bridge.now = func() time.Time { return time.Unix(0, clock.Load()) }
 
-	got, err := bridge.Token()
+	got, err := bridge.Token(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "cached", got)
 
-	first, err := bridge.ForceRefresh()
+	first, err := bridge.ForceRefresh(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "fresh-x", first)
 
-	second, err := bridge.ForceRefresh()
+	second, err := bridge.ForceRefresh(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, first, second, "a second 401 in the same burst shares the refresh")
 	assert.Equal(t, int32(1), redeemed.Load())
 
-	clock = clock.Add(forcedRefreshMinInterval)
-	third, err := bridge.ForceRefresh()
+	clock.Add(int64(forcedRefreshMinInterval))
+	third, err := bridge.ForceRefresh(t.Context())
 	require.NoError(t, err)
 	assert.NotEqual(t, first, third)
 	assert.Equal(t, int32(2), redeemed.Load())
@@ -252,9 +253,9 @@ func TestTokenBridge_InteractionRequiredIsPlainSignInRequired(t *testing.T) {
 
 	cfg := &oauth2.Config{ClientID: "test", Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL + "/token"}}
 	tok := &oauth2.Token{AccessToken: "old", RefreshToken: "rt", Expiry: time.Now().Add(-time.Hour)}
-	bridge := newTokenBridge(context.Background(), cfg, tok, slog.Default())
+	bridge := newTokenBridge(cfg, testAuthClient(), tok, slog.Default())
 
-	_, err := bridge.Token()
+	_, err := bridge.Token(t.Context())
 	require.ErrorIs(t, err, ErrLoginInteractionRequired)
 	require.ErrorIs(t, err, ErrUnauthorized, "it still needs a sign-in, so it takes the sign-in-required path")
 	require.ErrorIs(t, err, ErrLoginExpired, "the saved login is no longer usable, not 'rejected while valid'")
@@ -320,7 +321,7 @@ func (u unauthorizedTransport) RoundTrip(*http.Request) (*http.Response, error) 
 // failsAfterFirst hands out one token, then fails: the refresh after the 401.
 type failsAfterFirst struct{ calls atomic.Int32 }
 
-func (f *failsAfterFirst) Token() (string, error) {
+func (f *failsAfterFirst) Token(context.Context) (string, error) {
 	if f.calls.Add(1) > 1 {
 		return "", errors.New("token endpoint unreachable")
 	}

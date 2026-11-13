@@ -109,11 +109,13 @@ type SessionRuntime struct {
 
 	// TokenSourceFn creates a TokenSource from a token file path. Exported
 	// for test injection; defaults to graph.TokenSourceFromPath with authHTTP.
-	TokenSourceFn func(ctx context.Context, tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
+	// It takes no context: a source refreshes under the context of the
+	// request that needs a token, never one it keeps.
+	TokenSourceFn func(tokenPath string, logger *slog.Logger) (graph.TokenSource, error)
 
 	// authHTTP sends every sign-in request of the default token sources
 	// (graphtransport.AuthClient). Built at construction and never replaced,
-	// so TokenSourceFn can read it while mu is held.
+	// so TokenSourceFn reads it without mu.
 	authHTTP *http.Client
 
 	// retryNotices is shared by every retrying client this runtime builds,
@@ -122,16 +124,34 @@ type SessionRuntime struct {
 	// and never replaced; Notices guards its own state.
 	retryNotices *retry.Notices
 
-	// mu guards the lazily built caches below: tokenCache, bootstrapMeta,
+	// mu guards the lazily built caches below: tokenSources, bootstrapMeta,
 	// interactiveMeta, interactiveTransfer, and syncClients. Sessions for
-	// different mounts build them concurrently.
-	mu                  gosync.Mutex
-	tokenCache          map[string]graph.TokenSource
-	bootstrapMeta       *http.Client
+	// different mounts build them concurrently. It is never held while a
+	// sign-in file is read.
+	mu gosync.Mutex
+	// tokenSources holds one load per sign-in file, finished or under way.
+	tokenSources map[string]*tokenSourceLoad
+	// bootstrapMeta holds one bootstrap metadata client per sign-in file, so
+	// a throttle deadline OneDrive sets for one sign-in is that sign-in's.
+	bootstrapMeta       map[string]*http.Client
 	interactiveMeta     map[string]*http.Client
 	interactiveTransfer *http.Client
 	syncClients         *graphtransport.ClientSet
 }
+
+// tokenSourceLoad is the one load of a sign-in file's token source. The
+// caller that starts it reads the file outside SessionRuntime.mu; callers for
+// the same file wait for done. ts and err are set before done closes and
+// never change after.
+type tokenSourceLoad struct {
+	done chan struct{}
+	ts   graph.TokenSource
+	err  error
+}
+
+// errTokenSourceLoadAbandoned is what the callers waiting for a load get when
+// it ended without an answer: its loader panicked.
+var errTokenSourceLoadAbandoned = errors.New("loading the sign-in did not finish")
 
 // NewSessionRuntime creates a SessionRuntime with default TokenSourceFn.
 func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Logger) *SessionRuntime {
@@ -145,7 +165,8 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 		logger:          logger,
 		authHTTP:        graphtransport.AuthClient(),
 		retryNotices:    &retry.Notices{},
-		tokenCache:      make(map[string]graph.TokenSource),
+		tokenSources:    make(map[string]*tokenSourceLoad),
+		bootstrapMeta:   make(map[string]*http.Client),
 		interactiveMeta: make(map[string]*http.Client),
 	}
 	runtime.TokenSourceFn = runtime.tokenSourceFromPath
@@ -155,22 +176,22 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 
 // tokenSourceFromPath is the default TokenSourceFn: the saved sign-in at
 // tokenPath, refreshed through the runtime's auth client.
-func (r *SessionRuntime) tokenSourceFromPath(
-	ctx context.Context,
-	tokenPath string,
-	logger *slog.Logger,
-) (graph.TokenSource, error) {
+func (r *SessionRuntime) tokenSourceFromPath(tokenPath string, logger *slog.Logger) (graph.TokenSource, error) {
 	// The graph error already says what failed, and every caller of the
 	// runtime adds its own context ("not logged in — run ..."), so the
 	// runtime passes it through as it always has for TokenSourceFn errors.
-	return graph.TokenSourceFromPath(ctx, tokenPath, r.authHTTP, logger) //nolint:wrapcheck // callers add the context, see above
+	return graph.TokenSourceFromPath(tokenPath, r.authHTTP, logger) //nolint:wrapcheck // callers add the context, see above
 }
 
 // InteractiveSession creates or retrieves an authenticated interactive Session
 // for one mounted remote root. Mount-root sessions use a root-scoped throttle
 // key so interactive metadata retries stay scoped to the concrete remote root.
-func (r *SessionRuntime) InteractiveSession(ctx context.Context, mount *MountSessionConfig) (*MountSession, error) {
-	session, err := r.session(ctx, mount, r.interactiveClientsForMount(mount))
+func (r *SessionRuntime) InteractiveSession(mount *MountSessionConfig) (*MountSession, error) {
+	if mount == nil {
+		return nil, errMountConfigRequired
+	}
+
+	session, err := r.session(mount, r.interactiveClientsForMount(mount))
 	if err != nil {
 		return nil, err
 	}
@@ -178,19 +199,22 @@ func (r *SessionRuntime) InteractiveSession(ctx context.Context, mount *MountSes
 	return NewMountSession(session, mount.RemoteRootItemID), nil
 }
 
+// errMountConfigRequired is a session constructor called without the mount it
+// is for.
+var errMountConfigRequired = errors.New("mount session config is required")
+
 // SyncSession creates or retrieves the authenticated Session used by sync
 // workers. Sync paths intentionally bypass retry-wrapped HTTP clients.
-func (r *SessionRuntime) SyncSession(ctx context.Context, mount *MountSessionConfig) (*Session, error) {
-	return r.session(ctx, mount, r.syncClientSet())
+func (r *SessionRuntime) SyncSession(mount *MountSessionConfig) (*Session, error) {
+	return r.session(mount, r.syncClientSet())
 }
 
 func (r *SessionRuntime) session(
-	ctx context.Context,
 	mount *MountSessionConfig,
 	httpClients graphtransport.ClientSet,
 ) (*Session, error) {
 	if mount == nil {
-		return nil, fmt.Errorf("mount session config is required")
+		return nil, errMountConfigRequired
 	}
 
 	tokenPath := config.DriveTokenPath(mount.TokenOwnerCanonical)
@@ -198,7 +222,7 @@ func (r *SessionRuntime) session(
 		return nil, fmt.Errorf("cannot determine token path for mount %q", mount.TokenOwnerCanonical)
 	}
 
-	meta, transfer, err := r.clientsForTokenPath(ctx, tokenPath, httpClients)
+	meta, transfer, err := r.clientsForTokenPath(tokenPath, httpClients)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotLoggedIn) {
 			return nil, fmt.Errorf("not logged in — run 'onedrive-go login' first: %w", err)
@@ -242,7 +266,6 @@ func (r *SessionRuntime) session(
 // commands use this path because they target account-scoped shared items
 // rather than configured drives.
 func (r *SessionRuntime) SharedTargetClients(
-	ctx context.Context,
 	cid driveid.CanonicalID,
 	remoteDriveID string,
 	remoteItemID string,
@@ -253,7 +276,6 @@ func (r *SessionRuntime) SharedTargetClients(
 	}
 
 	meta, transfer, err := r.clientsForTokenPath(
-		ctx,
 		tokenPath,
 		r.interactiveClientsForSharedTarget(cid.Email(), remoteDriveID, remoteItemID),
 	)
@@ -275,26 +297,26 @@ func (r *SessionRuntime) SharedTargetClients(
 // BootstrapClient returns a Graph client for account-level calls made before
 // a drive session exists, or without one: identity probes, drive and
 // shared-item discovery, SharePoint search, shared-item naming. It uses the
-// bootstrap metadata profile, the runtime's Graph base URL and the runtime's
-// one token source for tokenPath, the same source the drive sessions for that
-// sign-in file use (R-6.8.27). Token-source errors keep their chain, so
-// callers can still tell graph.ErrNotLoggedIn from a damaged sign-in.
+// runtime's Graph base URL, the bootstrap metadata client of tokenPath
+// (BootstrapMeta) and the runtime's one token source for tokenPath, the same
+// source the drive sessions for that sign-in file use (R-6.8.27).
+// Token-source errors keep their chain, so callers can still tell
+// graph.ErrNotLoggedIn from a damaged sign-in.
 //
-// A cached token source keeps the context of the call that created it and
-// refreshes with it. Pass the command's (or daemon's) context, never one
-// derived for a single request: once that context ends, every later silent
-// refresh for the sign-in file fails until FlushTokenCache.
-func (r *SessionRuntime) BootstrapClient(ctx context.Context, tokenPath string) (*graph.Client, error) {
+// It takes no context: the source refreshes under the context of each request
+// that needs a token, so a client built here serves requests with any
+// deadline, a status budget's included.
+func (r *SessionRuntime) BootstrapClient(tokenPath string) (*graph.Client, error) {
 	if tokenPath == "" {
 		return nil, fmt.Errorf("bootstrap graph client: token path is required")
 	}
 
-	ts, err := r.getOrCreateTokenSource(ctx, tokenPath)
+	ts, err := r.getOrCreateTokenSource(tokenPath)
 	if err != nil {
 		return nil, err
 	}
 
-	client, err := graph.NewClient(r.graphBaseURL(), r.BootstrapMeta(), ts, r.logger, r.userAgent)
+	client, err := graph.NewClient(r.graphBaseURL(), r.BootstrapMeta(tokenPath), ts, r.logger, r.userAgent)
 	if err != nil {
 		return nil, fmt.Errorf("create bootstrap graph client: %w", err)
 	}
@@ -302,32 +324,51 @@ func (r *SessionRuntime) BootstrapClient(ctx context.Context, tokenPath string) 
 	return client, nil
 }
 
-// getOrCreateTokenSource returns a cached TokenSource for the given token
-// path, creating one on cache miss. Thread-safe via mutex.
-func (r *SessionRuntime) getOrCreateTokenSource(ctx context.Context, tokenPath string) (graph.TokenSource, error) {
+// getOrCreateTokenSource returns the token source of tokenPath, loading it on
+// first use. The file is read outside r.mu, so a slow or large read holds up
+// no other sign-in and none of the runtime's other caches; callers that want
+// the same file meanwhile wait for that one load. A failed load is not kept:
+// the next caller reads the file again (a later login in the same process is
+// picked up). A load whose loader panics is a failed load too.
+func (r *SessionRuntime) getOrCreateTokenSource(tokenPath string) (graph.TokenSource, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	load, loading := r.tokenSources[tokenPath]
+	if !loading {
+		load = &tokenSourceLoad{done: make(chan struct{})}
+		r.tokenSources[tokenPath] = load
+	}
+	r.mu.Unlock()
 
-	if ts, ok := r.tokenCache[tokenPath]; ok {
-		return ts, nil
+	if loading {
+		<-load.done
+		return load.ts, load.err
 	}
 
-	ts, err := r.TokenSourceFn(ctx, tokenPath, r.logger)
-	if err != nil {
-		return nil, err
-	}
+	// The load counts as failed until the loader answers, so a loader that
+	// panics still releases its waiters, with an error, and leaves no entry
+	// for a later caller to wait on. The panic itself goes on to this caller.
+	var ts graph.TokenSource
+	err := errTokenSourceLoadAbandoned
+	defer func() {
+		r.mu.Lock()
+		load.ts, load.err = ts, err
+		if err != nil && r.tokenSources[tokenPath] == load {
+			delete(r.tokenSources, tokenPath)
+		}
+		r.mu.Unlock()
+		close(load.done)
+	}()
 
-	r.tokenCache[tokenPath] = ts
+	ts, err = r.TokenSourceFn(tokenPath, r.logger)
 
-	return ts, nil
+	return ts, err
 }
 
 func (r *SessionRuntime) clientsForTokenPath(
-	ctx context.Context,
 	tokenPath string,
 	httpClients graphtransport.ClientSet,
 ) (*graph.Client, *graph.Client, error) {
-	ts, err := r.getOrCreateTokenSource(ctx, tokenPath)
+	ts, err := r.getOrCreateTokenSource(tokenPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -357,14 +398,17 @@ func (r *SessionRuntime) graphBaseURL() string {
 	return graph.DefaultBaseURL
 }
 
-// FlushTokenCache clears the cached TokenSources, forcing the next Session()
-// call to re-read token files from disk. Called during daemon control-socket
-// reload to pick up logout/re-login credential changes.
+// FlushTokenCache clears the cached TokenSources and the per-sign-in
+// bootstrap clients beside them, forcing the next Session() call to re-read
+// token files from disk. Called during daemon control-socket reload to pick
+// up logout/re-login credential changes. A load under way finishes for its
+// waiters and is not kept.
 func (r *SessionRuntime) FlushTokenCache() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.tokenSources = make(map[string]*tokenSourceLoad)
+	r.bootstrapMeta = make(map[string]*http.Client)
+	r.mu.Unlock()
 
-	r.tokenCache = make(map[string]graph.TokenSource)
 	r.logger.Info("token cache flushed")
 }
 
@@ -380,27 +424,25 @@ func (r *SessionRuntime) UpdateConfig(cfg *config.Config) {
 	r.holder.Update(cfg)
 }
 
-// BootstrapMeta returns the retrying metadata client used before account
-// identity is known.
-func (r *SessionRuntime) BootstrapMeta() *http.Client {
+// BootstrapMeta returns the retrying metadata client for account-level calls
+// of the sign-in saved at tokenPath, building it on first use: BootstrapClient
+// uses it, and so does login's account discovery for the sign-in file it just
+// wrote. Each sign-in has its own, so the throttle deadline a 429 sets holds
+// for that sign-in's next requests and delays no other account's.
+func (r *SessionRuntime) BootstrapMeta(tokenPath string) *http.Client {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.bootstrapMeta == nil {
-		r.bootstrapMeta = graphtransport.BootstrapMetadataClient(r.logger, r.retryNotices)
+	client := r.bootstrapMeta[tokenPath]
+	if client == nil {
+		client = graphtransport.BootstrapMetadataClient(r.logger, r.retryNotices)
+		r.bootstrapMeta[tokenPath] = client
 	}
 
-	return r.bootstrapMeta
+	return client
 }
 
 func (r *SessionRuntime) interactiveClientsForMount(mount *MountSessionConfig) graphtransport.ClientSet {
-	if mount == nil {
-		return graphtransport.ClientSet{
-			Meta:     r.BootstrapMeta(),
-			Transfer: r.syncClientSet().Transfer,
-		}
-	}
-
 	account := mount.AccountEmail
 	if account == "" {
 		account = mount.TokenOwnerCanonical.Email()

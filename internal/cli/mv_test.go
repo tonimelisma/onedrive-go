@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -19,7 +20,7 @@ import (
 // stubTS implements graph.TokenSource for tests.
 type stubTS struct{}
 
-func (s stubTS) Token() (string, error) { return "test", nil }
+func (s stubTS) Token(context.Context) (string, error) { return "test", nil }
 
 func makeTestSession(t *testing.T, handler http.Handler) *driveops.MountSession {
 	t.Helper()

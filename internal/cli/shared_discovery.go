@@ -134,7 +134,7 @@ func discoverSharedTargetsForAccount(
 			continue
 		}
 
-		client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
+		client, err := cc.runtime().BootstrapClient(tokenPath)
 		if err != nil {
 			logger.Debug("shared discovery token load failed",
 				"account", tokenCID.String(),

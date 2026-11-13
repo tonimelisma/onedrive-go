@@ -64,8 +64,12 @@ const (
 // TokenSource provides OAuth2 bearer tokens.
 // Defined at the consumer (graph/) per "accept interfaces, return structs" —
 // do not move this interface to the auth provider package.
+//
+// ctx is the context of the request the token is for: a call that has to
+// wait for a token refresh waits no longer than ctx allows, and a failure
+// caused by ctx carries context.Cause(ctx).
 type TokenSource interface {
-	Token() (string, error)
+	Token(ctx context.Context) (string, error)
 }
 
 // retryPolicies is the per-call-site retry configuration. It is one value

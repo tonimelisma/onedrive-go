@@ -9,20 +9,24 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 const (
@@ -35,9 +39,22 @@ const (
 	// behavior before the budget existed. A passing run takes milliseconds.
 	statusLiveTestGuard = 30 * time.Second
 
-	statusLiveTestNotePrefix   = "Note: showing what is known locally for "
-	statusLiveTestUnanswered   = "OneDrive did not answer within 10 s"
-	statusLiveTestStorageLabel = "Storage: "
+	// statusLiveTestRetryDeadline is the deadline of a budget that carries
+	// one: far beyond any passing run, and shorter than the Retry-After the
+	// fake OneDrive sends with its 429s and 503s, so the retrying transport's
+	// rule against waiting past a deadline decides by the header alone.
+	statusLiveTestRetryDeadline = 10 * time.Minute
+	statusLiveTestRetryAfter    = "3600"
+
+	statusLiveTestNotePrefix    = "Note: showing what is known locally for "
+	statusLiveTestUnanswered    = "OneDrive did not answer within 10 s"
+	statusLiveTestServerProblem = "OneDrive had a temporary server problem"
+	statusLiveTestStorageLabel  = "Storage: "
+
+	// statusLiveTestSignInTimeout is the stalled sign-in client's own
+	// deadline: longer than statusLiveTestGuard, so a refresh the budget did
+	// not cut would fail the test.
+	statusLiveTestSignInTimeout = 2 * statusLiveTestGuard
 )
 
 // statusLiveTestBudget stands in for the 10 s budget of the live details. A
@@ -47,10 +64,23 @@ const (
 type statusLiveTestBudget struct {
 	once  sync.Once
 	spent chan struct{}
+	// deadline, when set, also gives the budget's context a deadline, as the
+	// command's own budget has, for tests of the retrying transport's rule
+	// against waits that would end after it (R-6.8.8).
+	deadline time.Duration
 }
 
 func newStatusLiveTestBudget() *statusLiveTestBudget {
 	return &statusLiveTestBudget{spent: make(chan struct{})}
+}
+
+// newStatusLiveTestDeadlineBudget is a budget whose context also carries
+// statusLiveTestRetryDeadline.
+func newStatusLiveTestDeadlineBudget() *statusLiveTestBudget {
+	budget := newStatusLiveTestBudget()
+	budget.deadline = statusLiveTestRetryDeadline
+
+	return budget
 }
 
 // spend ends the budget, as the clock does for the command.
@@ -59,9 +89,14 @@ func (b *statusLiveTestBudget) spend() {
 }
 
 // context is the command's statusLiveBudgetContext seam: ctx, which ends with
-// the cause the command's own budget ends with once the test spends the budget.
+// the cause the command's own budget ends with once the test spends the budget
+// (or its deadline, when it has one, passes).
 func (b *statusLiveTestBudget) context(ctx context.Context) (context.Context, context.CancelFunc) {
 	askCtx, cancel := context.WithCancelCause(ctx)
+	stopDeadline := context.CancelFunc(func() {})
+	if b.deadline > 0 {
+		askCtx, stopDeadline = context.WithTimeoutCause(askCtx, b.deadline, errStatusLiveBudgetSpent)
+	}
 	go func() {
 		select {
 		case <-b.spent:
@@ -70,7 +105,10 @@ func (b *statusLiveTestBudget) context(ctx context.Context) (context.Context, co
 		}
 	}()
 
-	return askCtx, func() { cancel(context.Canceled) }
+	return askCtx, func() {
+		stopDeadline()
+		cancel(context.Canceled)
+	}
 }
 
 // accountTokenSource hands each sign-in file a token of its own, so the fake
@@ -80,7 +118,7 @@ type accountTokenSource struct {
 	token string
 }
 
-func (s accountTokenSource) Token() (string, error) { return s.token, nil }
+func (s accountTokenSource) Token(context.Context) (string, error) { return s.token, nil }
 
 // statusLiveRun is one status command against a fake Graph server, with
 // stdout and stderr kept apart.
@@ -112,7 +150,7 @@ func newStatusLiveRun(t *testing.T, graphURL string, budget *statusLiveTestBudge
 	logger := slog.New(slog.DiscardHandler)
 	runtime := driveops.NewSessionRuntime(nil, "test-agent", logger)
 	runtime.GraphBaseURL = graphURL
-	runtime.TokenSourceFn = func(_ context.Context, tokenPath string, _ *slog.Logger) (graph.TokenSource, error) {
+	runtime.TokenSourceFn = func(tokenPath string, _ *slog.Logger) (graph.TokenSource, error) {
 		return accountTokenSource{token: filepath.Base(tokenPath)}, nil
 	}
 
@@ -195,10 +233,11 @@ func blockUntilRequestEnds(r *http.Request, release <-chan struct{}) {
 	}
 }
 
-func writeStatusTestUser(t *testing.T, w http.ResponseWriter, displayName string) {
+// writeStatusTestUser answers /me with the live display name.
+func writeStatusTestUser(t *testing.T, w http.ResponseWriter) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	writeTestResponsef(t, w, `{"id":"user-1","displayName":%q}`, displayName)
+	writeTestResponsef(t, w, `{"id":"user-1","displayName":%q}`, statusLiveTestLiveName)
 }
 
 func writeStatusTestPrimaryDrive(t *testing.T, w http.ResponseWriter) {
@@ -316,7 +355,7 @@ func TestStatus_AsksAccountsAtTheSameTime(t *testing.T) {
 
 			select {
 			case <-bothIn:
-				writeStatusTestUser(t, w, statusLiveTestLiveName)
+				writeStatusTestUser(t, w)
 			case <-r.Context().Done():
 			case <-release:
 			}
@@ -348,7 +387,7 @@ func TestStatus_StorageCutShortByTheBudgetIsNoted(t *testing.T) {
 	srv := newStatusGraphServer(t, func(w http.ResponseWriter, r *http.Request, release <-chan struct{}) {
 		switch r.URL.Path {
 		case testGraphMePath:
-			writeStatusTestUser(t, w, statusLiveTestLiveName)
+			writeStatusTestUser(t, w)
 		default:
 			budget.spend()
 			blockUntilRequestEnds(r, release)
@@ -366,20 +405,172 @@ func TestStatus_StorageCutShortByTheBudgetIsNoted(t *testing.T) {
 	assert.Contains(t, notes[0], statusLiveTestUnanswered)
 }
 
+// A storage request OneDrive failed with a server error, whose retry would
+// outlast the budget, leaves that drive's storage out and says so; before the
+// transport returned the answer at once, it waited into the budget's end.
+//
+// Validates: R-6.8.28, R-6.8.8
+func TestStatus_AStorageServerErrorIsNoted(t *testing.T) {
+	srv := newStatusGraphServer(t, func(w http.ResponseWriter, r *http.Request, _ <-chan struct{}) {
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeStatusTestUser(t, w)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", statusLiveTestRetryAfter)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			writeTestResponse(t, w, `{"error":{"code":"serviceNotAvailable","message":"Try again later."}}`)
+		}
+	})
+
+	run := newStatusLiveRun(t, srv.URL, newStatusLiveTestDeadlineBudget(), statusLiveTestEmailA)
+
+	require.NoError(t, run.status(t, t.Context()))
+	out := run.stdout.String()
+	assert.Contains(t, out, statusAccountLine(statusLiveTestLiveName, statusLiveTestEmailA))
+	assert.NotContains(t, out, statusLiveTestStorageLabel)
+	assert.Equal(t, []string{statusLiveTestNotePrefix + statusLiveTestEmailA + ": " + statusLiveTestServerProblem + "."},
+		run.notes())
+}
+
+// A throttle is the throttled account's: with OneDrive throttling the first
+// account, the second account's details arrive and its note says nothing,
+// on the run that got the 429 and on the next one, which meets the throttle
+// deadline that 429 left.
+//
+// Validates: R-6.8.28, R-6.8.27
+func TestStatus_OneAccountsThrottleLeavesTheOtherAlone(t *testing.T) {
+	srv := newStatusGraphServer(t, func(w http.ResponseWriter, r *http.Request, _ <-chan struct{}) {
+		if strings.Contains(r.Header.Get("Authorization"), statusLiveTestEmailA) {
+			w.Header().Set("Retry-After", statusLiveTestRetryAfter)
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeStatusTestUser(t, w)
+		case primaryDrivePath:
+			writeStatusTestPrimaryDrive(t, w)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	run := newStatusLiveRun(t, srv.URL, newStatusLiveTestDeadlineBudget(), statusLiveTestEmailA, statusLiveTestEmailB)
+
+	for pass := range 2 {
+		run.stdout.Reset()
+		run.stderr.Reset()
+
+		require.NoError(t, run.status(t, t.Context()))
+		assert.Contains(t, run.stdout.String(), statusAccountLine(statusLiveTestLiveName, statusLiveTestEmailB), "pass %d", pass)
+		assert.Equal(t, []string{statusLiveTestNotePrefix + statusLiveTestEmailA + ": OneDrive is limiting requests."},
+			run.notes(), "pass %d: only the throttled account has a note", pass)
+	}
+}
+
+// statusSignInRedirect is the transport of a test's sign-in client: it sends
+// every request to a local server in place of the identity platform.
+type statusSignInRedirect struct {
+	target *url.URL
+}
+
+func (s statusSignInRedirect) RoundTrip(req *http.Request) (*http.Response, error) {
+	local := req.Clone(req.Context())
+	local.URL.Scheme = s.target.Scheme
+	local.URL.Host = s.target.Host
+	local.Host = s.target.Host
+
+	resp, err := http.DefaultTransport.RoundTrip(local)
+	if err != nil {
+		return nil, fmt.Errorf("deliver sign-in request to the local stand-in: %w", err)
+	}
+
+	return resp, nil
+}
+
+// A token refresh is part of the request it is for, so the budget covers it:
+// a saved sign-in whose access token has expired, against a token endpoint
+// that does not answer, costs status its budget, not the sign-in client's
+// own deadline, and OneDrive is never asked. The budget ends while the
+// refresh waits for the token endpoint.
+//
+// Validates: R-6.8.28, R-6.8.27
+func TestStatus_ASlowTokenRefreshIsCutByTheBudget(t *testing.T) {
+	budget := newStatusLiveTestBudget()
+	var graphRequests atomic.Int32
+	graphSrv := newStatusGraphServer(t, func(w http.ResponseWriter, _ *http.Request, _ <-chan struct{}) {
+		graphRequests.Add(1)
+		writeStatusTestUser(t, w)
+	})
+	signInSrv := newStatusGraphServer(t, func(_ http.ResponseWriter, r *http.Request, release <-chan struct{}) {
+		budget.spend()
+		blockUntilRequestEnds(r, release)
+	})
+	signInTarget, err := url.Parse(signInSrv.URL)
+	require.NoError(t, err)
+	authHTTP := &http.Client{Timeout: statusLiveTestSignInTimeout, Transport: statusSignInRedirect{target: signInTarget}}
+
+	run := newStatusLiveRun(t, graphSrv.URL, budget, statusLiveTestEmailA)
+	require.NoError(t, tokenfile.Save(config.DriveTokenPath(driveid.MustCanonicalID("personal:"+statusLiveTestEmailA)), &oauth2.Token{
+		AccessToken:  "expired-" + statusLiveTestEmailA,
+		RefreshToken: "refresh-" + statusLiveTestEmailA,
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(-time.Hour),
+	}))
+	run.cc.Runtime.TokenSourceFn = func(tokenPath string, logger *slog.Logger) (graph.TokenSource, error) {
+		return graph.TokenSourceFromPath(tokenPath, authHTTP, logger)
+	}
+
+	require.NoError(t, run.status(t, t.Context()))
+	assert.Contains(t, run.stdout.String(), statusAccountLine(statusLiveTestLocalName, statusLiveTestEmailA))
+	assert.Equal(t, []string{statusLiveTestNotePrefix + statusLiveTestEmailA + ": " + statusLiveTestUnanswered + "."},
+		run.notes())
+	assert.Zero(t, graphRequests.Load(), "a request whose token never came is never sent")
+}
+
+// A token refresh whose connection to the sign-in service dropped is named
+// as that in the note, in the words a file command uses for it.
+//
+// Validates: R-6.8.28, R-6.6.22
+func TestStatus_ASignInConnectionFailureIsNamedInTheNote(t *testing.T) {
+	var graphRequests atomic.Int32
+	graphSrv := newStatusGraphServer(t, func(w http.ResponseWriter, _ *http.Request, _ <-chan struct{}) {
+		graphRequests.Add(1)
+		writeStatusTestUser(t, w)
+	})
+	run := newStatusLiveRun(t, graphSrv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA)
+	saveExpiredSignIn(t, driveid.MustCanonicalID("personal:"+statusLiveTestEmailA))
+	authHTTP := &http.Client{Timeout: failingSignInDeadline, Transport: failingSignIn{err: io.ErrUnexpectedEOF}}
+	run.cc.Runtime.TokenSourceFn = func(tokenPath string, logger *slog.Logger) (graph.TokenSource, error) {
+		return graph.TokenSourceFromPath(tokenPath, authHTTP, logger)
+	}
+
+	require.NoError(t, run.status(t, t.Context()))
+	assert.Equal(t, []string{statusLiveTestNotePrefix + statusLiveTestEmailA + ": the connection to Microsoft sign-in was interrupted."},
+		run.notes())
+	assert.Zero(t, graphRequests.Load())
+}
+
 // A request that fails says why in the note, in the user's words: OneDrive's
 // own message for a refusal, the budget for a server error the retries had
-// not got past when it ran out.
+// not got past when it ran out, and the server error for one whose next retry
+// would end after the budget: the transport returns it at once instead of
+// waiting into the budget's end.
 //
-// Validates: R-6.8.28
+// Validates: R-6.8.28, R-6.8.8
 func TestStatus_SaysWhyOneDriveGaveNoDetails(t *testing.T) {
 	tests := []struct {
 		name   string
 		status int
 		body   string
+		// retryAfter is the answer's Retry-After, "" for none.
+		retryAfter string
 		// budgetEnds ends the budget once OneDrive has answered a request,
 		// while the command still retries.
 		budgetEnds bool
-		reason     string
+		// deadline gives the budget a deadline the answer's retry ends after.
+		deadline bool
+		reason   string
 	}{
 		{
 			name:   "a refusal passes on OneDrive's message",
@@ -395,13 +586,27 @@ func TestStatus_SaysWhyOneDriveGaveNoDetails(t *testing.T) {
 			budgetEnds: true,
 			reason:     statusLiveTestUnanswered,
 		},
+		{
+			name:       "a server error whose retry would outlast the budget",
+			status:     http.StatusServiceUnavailable,
+			body:       `{"error":{"code":"serviceNotAvailable","message":"Try again later."}}`,
+			retryAfter: statusLiveTestRetryAfter,
+			deadline:   true,
+			reason:     statusLiveTestServerProblem,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			budget := newStatusLiveTestBudget()
+			if tc.deadline {
+				budget = newStatusLiveTestDeadlineBudget()
+			}
 			srv := newStatusGraphServer(t, func(w http.ResponseWriter, _ *http.Request, _ <-chan struct{}) {
 				w.Header().Set("Content-Type", "application/json")
+				if tc.retryAfter != "" {
+					w.Header().Set("Retry-After", tc.retryAfter)
+				}
 				w.WriteHeader(tc.status)
 				writeTestResponse(t, w, tc.body)
 				if tc.budgetEnds {
@@ -439,7 +644,7 @@ func TestStatus_AStoppedCommandAddsNoNote(t *testing.T) {
 // panickingTokenSource stands for a bug on one account's request path.
 type panickingTokenSource struct{}
 
-func (panickingTokenSource) Token() (string, error) { panic("token source bug") }
+func (panickingTokenSource) Token(context.Context) (string, error) { panic("token source bug") }
 
 // A panic while one account's live details are asked for costs that account
 // its details, not the command: status prints the account's local state with
@@ -457,7 +662,7 @@ func TestStatus_APanicAskingOneAccountLeavesItsLocalStateAndTheOthersDetails(t *
 	srv := newStatusGraphServer(t, func(w http.ResponseWriter, r *http.Request, _ <-chan struct{}) {
 		switch r.URL.Path {
 		case testGraphMePath:
-			writeStatusTestUser(t, w, statusLiveTestLiveName)
+			writeStatusTestUser(t, w)
 		case primaryDrivePath:
 			writeStatusTestPrimaryDrive(t, w)
 		default:
@@ -466,7 +671,7 @@ func TestStatus_APanicAskingOneAccountLeavesItsLocalStateAndTheOthersDetails(t *
 	})
 
 	run := newStatusLiveRun(t, srv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA, statusLiveTestEmailB)
-	run.cc.Runtime.TokenSourceFn = func(_ context.Context, tokenPath string, _ *slog.Logger) (graph.TokenSource, error) {
+	run.cc.Runtime.TokenSourceFn = func(tokenPath string, _ *slog.Logger) (graph.TokenSource, error) {
 		if strings.Contains(filepath.Base(tokenPath), statusLiveTestEmailB) {
 			return panickingTokenSource{}, nil
 		}

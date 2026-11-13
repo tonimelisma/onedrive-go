@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -123,7 +124,7 @@ type chaosPinTokenSource struct {
 	err error
 }
 
-func (s chaosPinTokenSource) Token() (string, error) {
+func (s chaosPinTokenSource) Token(context.Context) (string, error) {
 	if s.err != nil {
 		return "", s.err
 	}

@@ -205,14 +205,17 @@ func isLoopbackBrowserHost(host string) bool {
 // or school accounts also read /me/organization for display naming; personal
 // Microsoft accounts skip that endpoint because Graph does not support it.
 // Returns the canonical ID, user profile, org display name, and the primary
-// drive's Graph API ID.
+// drive's Graph API ID. tokenPath is the sign-in file ts was saved to (the
+// pending one, before the account is known); the requests use that sign-in's
+// bootstrap metadata client, so a throttle OneDrive sets for it is its own.
 func discoverAccount(
 	ctx context.Context,
 	ts graph.TokenSource,
+	tokenPath string,
 	logger *slog.Logger,
 	runtime *driveops.SessionRuntime,
 ) (driveid.CanonicalID, *graph.User, string, driveid.ID, error) {
-	client, err := newGraphClientWithHTTP(runtime.GraphBaseURL, runtime.BootstrapMeta(), ts, logger)
+	client, err := newGraphClientWithHTTP(runtime.GraphBaseURL, runtime.BootstrapMeta(tokenPath), ts, logger)
 	if err != nil {
 		return driveid.CanonicalID{}, nil, "", driveid.ID{}, err
 	}

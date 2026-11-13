@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"golang.org/x/oauth2"
 
@@ -27,7 +28,7 @@ type (
 func requestDeviceAuth(ctx context.Context, cfg *oauth2.Config) (*oauth2.DeviceAuthResponse, error) {
 	auth, err := cfg.DeviceAuth(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("device auth request: %w", err)
+		return nil, fmt.Errorf("device auth request: %w", signInFailure(err))
 	}
 
 	return auth, nil
@@ -40,7 +41,7 @@ func exchangeDeviceAccessToken(
 ) (*oauth2.Token, error) {
 	tok, err := cfg.DeviceAccessToken(ctx, auth)
 	if err != nil {
-		return nil, fmt.Errorf("device access token: %w", err)
+		return nil, fmt.Errorf("device access token: %w", signInFailure(err))
 	}
 
 	return tok, nil
@@ -51,22 +52,29 @@ func exchangeDeviceAccessToken(
 func doLogin(
 	ctx context.Context,
 	tokenPath string,
+	authHTTP *http.Client,
 	cfg *oauth2.Config,
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	return doLoginWithFlow(ctx, tokenPath, cfg, display, logger, requestDeviceAuth, exchangeDeviceAccessToken)
+	return doLoginWithFlow(ctx, tokenPath, authHTTP, cfg, display, logger, requestDeviceAuth, exchangeDeviceAccessToken)
 }
 
 func doLoginWithFlow(
 	ctx context.Context,
 	tokenPath string,
+	authHTTP *http.Client,
 	cfg *oauth2.Config,
 	display func(DeviceAuth),
 	logger *slog.Logger,
 	requestAuth deviceAuthRequester,
 	exchangeToken deviceTokenExchanger,
 ) (TokenSource, error) {
+	if err := checkAuthClient(authHTTP); err != nil {
+		return nil, err
+	}
+	ctx = signInContext(ctx, authHTTP)
+
 	logger.Info("starting device code auth flow",
 		slog.String("path", tokenPath),
 	)
@@ -102,7 +110,7 @@ func doLoginWithFlow(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	return newTokenBridge(ctx, cfg, tok, logger), nil
+	return newTokenBridge(cfg, authHTTP, tok, logger), nil
 }
 
 // deviceLoginError turns the token endpoint's answer for the common user-side

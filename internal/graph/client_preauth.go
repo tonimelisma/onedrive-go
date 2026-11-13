@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -121,7 +122,10 @@ func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
 }
 
 // dispatchRequestWith sends req through client (c.httpClient, or a copy
-// with a different redirect policy).
+// with a different redirect policy). A request the retrying transport
+// returned unsent because the throttle wait outlasts its deadline
+// (*retry.ThrottledError) carries errRequestNotSent and ErrThrottled: it is
+// the earlier 429's answer, and nothing was asked of OneDrive.
 func (c *Client) dispatchRequestWith(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Callers validate the request URL before dispatch: Graph base URLs are
 	// checked in NewClient and pre-auth URLs are validated at their boundary.
@@ -130,7 +134,14 @@ func (c *Client) dispatchRequestWith(client *http.Client, req *http.Request) (*h
 		// net/http wraps transport failures in *url.Error, whose text carries
 		// the full request URL. Pre-authenticated URLs embed their credential,
 		// so scrub it before the error can reach logs or the console.
-		return nil, fmt.Errorf("dispatching request: %w", redactURLError(err))
+		redacted := redactURLError(err)
+
+		var throttled *retry.ThrottledError
+		if errors.As(redacted, &throttled) {
+			return nil, fmt.Errorf("dispatching request: %w: %w: %w", errRequestNotSent, ErrThrottled, redacted)
+		}
+
+		return nil, fmt.Errorf("dispatching request: %w", redacted)
 	}
 
 	if resp.Body != nil {

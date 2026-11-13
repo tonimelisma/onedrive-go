@@ -32,6 +32,10 @@ const (
 	// the stalled-endpoint test, short so the test stays fast.
 	stalledSignInTimeout = 50 * time.Millisecond
 
+	// testSignInTimeout is the whole-request deadline of the tests' sign-in
+	// clients, which must have one; no passing test comes near it.
+	testSignInTimeout = time.Minute
+
 	// signInFormLimit bounds the refresh request form the stand-in reads.
 	signInFormLimit = 4 << 10
 
@@ -98,7 +102,13 @@ func (o offlineSignIn) RoundTrip(req *http.Request) (*http.Response, error) {
 func offlineAuthClient(t *testing.T) *http.Client {
 	t.Helper()
 
-	return &http.Client{Transport: offlineSignIn{t: t}}
+	return &http.Client{Timeout: testSignInTimeout, Transport: offlineSignIn{t: t}}
+}
+
+// testAuthClient is the sign-in client of tests whose sign-in endpoints are
+// local httptest servers the flow addresses directly.
+func testAuthClient() *http.Client {
+	return &http.Client{Timeout: testSignInTimeout}
 }
 
 // writeExpiredSignIn saves a sign-in whose access token has expired, so the
@@ -144,10 +154,10 @@ func TestTokenSourceFromPath_RefreshUsesTheInjectedClient(t *testing.T) {
 	standIn := newSignInStandIn(t, srv)
 	path := writeExpiredSignIn(t)
 
-	ts, err := TokenSourceFromPath(t.Context(), path, &http.Client{Transport: standIn}, slog.New(slog.DiscardHandler))
+	ts, err := TokenSourceFromPath(path, &http.Client{Timeout: testSignInTimeout, Transport: standIn}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
-	got, err := ts.Token()
+	got, err := ts.Token(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "refreshed-access-token", got)
 	assert.Equal(t, []string{signInHost + signInGrantPath}, standIn.requests(),
@@ -178,7 +188,7 @@ func TestTokenSourceFromPath_StalledTokenEndpointTimesOut(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 
 	authHTTP := &http.Client{Timeout: stalledSignInTimeout, Transport: newSignInStandIn(t, srv)}
-	ts, err := TokenSourceFromPath(t.Context(), writeExpiredSignIn(t), authHTTP, slog.New(slog.DiscardHandler))
+	ts, err := TokenSourceFromPath(writeExpiredSignIn(t), authHTTP, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	const callers = 2
@@ -187,7 +197,7 @@ func TestTokenSourceFromPath_StalledTokenEndpointTimesOut(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range callers {
 		wg.Go(func() {
-			_, errs[i] = ts.Token()
+			_, errs[i] = ts.Token(t.Context())
 		})
 	}
 	wg.Wait()
@@ -205,10 +215,37 @@ func TestTokenSourceFromPath_StalledTokenEndpointTimesOut(t *testing.T) {
 
 // Validates: R-6.8.27
 func TestTokenSourceFromPath_NilAuthClientIsAnError(t *testing.T) {
-	ts, err := TokenSourceFromPath(t.Context(), writeExpiredSignIn(t), nil, slog.New(slog.DiscardHandler))
+	ts, err := TokenSourceFromPath(writeExpiredSignIn(t), nil, slog.New(slog.DiscardHandler))
 	require.Error(t, err)
 	assert.Nil(t, ts)
 	assert.Contains(t, err.Error(), "sign-in HTTP client")
+}
+
+// Validates: R-6.8.27
+//
+// A refresh goes on after the callers that started it stop waiting, and only
+// the sign-in client's own timeout ends it then, so a client without one is
+// refused by every entry point.
+func TestSignInFlows_AuthClientWithoutATimeoutIsAnError(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "tokens", "never-written.json")
+	logger := slog.New(slog.DiscardHandler)
+	untimed := &http.Client{Transport: offlineSignIn{t: t}}
+
+	ts, err := TokenSourceFromPath(writeExpiredSignIn(t), untimed, logger)
+	require.ErrorContains(t, err, "must have a timeout")
+	assert.Nil(t, ts)
+
+	ts, err = Login(t.Context(), tokenPath, untimed, noopDisplay, logger)
+	require.ErrorContains(t, err, "must have a timeout")
+	assert.Nil(t, ts)
+
+	ts, err = LoginWithBrowser(t.Context(), tokenPath, untimed, func(context.Context, string) error {
+		assert.Fail(t, "a browser login without a timed sign-in client must not open the browser")
+		return nil
+	}, logger)
+	require.ErrorContains(t, err, "must have a timeout")
+	assert.Nil(t, ts)
+	assert.NoFileExists(t, tokenPath)
 }
 
 // Validates: R-6.8.27
@@ -246,10 +283,11 @@ func TestLogin_UsesTheInjectedAuthClient(t *testing.T) {
 	standIn := newSignInStandIn(t, srv)
 	tokenPath := filepath.Join(t.TempDir(), "tokens", "device.json")
 
-	ts, err := Login(t.Context(), tokenPath, &http.Client{Transport: standIn}, noopDisplay, slog.New(slog.DiscardHandler))
+	ts, err := Login(t.Context(), tokenPath, &http.Client{Timeout: testSignInTimeout, Transport: standIn}, noopDisplay,
+		slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
-	got, err := ts.Token()
+	got, err := ts.Token(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "test-access-token", got)
 	assert.Equal(t, []string{signInHost + signInDeviceCodePath, signInHost + signInGrantPath}, standIn.requests(),
@@ -288,10 +326,11 @@ func TestLoginWithBrowser_UsesTheInjectedAuthClient(t *testing.T) {
 		return nil
 	}
 
-	ts, err := LoginWithBrowser(t.Context(), tokenPath, &http.Client{Transport: standIn}, openURL, slog.New(slog.DiscardHandler))
+	ts, err := LoginWithBrowser(t.Context(), tokenPath, &http.Client{Timeout: testSignInTimeout, Transport: standIn}, openURL,
+		slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
-	got, err := ts.Token()
+	got, err := ts.Token(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "test-access-token", got)
 	assert.Equal(t, []string{signInHost + signInGrantPath}, standIn.requests(),

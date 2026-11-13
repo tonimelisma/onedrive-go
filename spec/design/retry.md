@@ -41,6 +41,7 @@ rely on transport-level retry loops for action execution.
 | Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/transport_test.go` (`TestRetryTransport_ThrottleCoordination`, `TestRetryTransport_SharedThrottleGateAcrossTransports`, `TestRetryTransport_429SetsThrottleDeadline`) |
 | An outage is announced once per process across concurrent requests and transports, and re-arms after OneDrive answers. | `TestRetryTransport_OutageIsAnnouncedOncePerProcessAcrossConcurrentRequests`, `TestRetryTransport_OutageNoticeRearmsAfterAResponse`, `TestSessionRuntime_RetryingClientsShareOneRetryNotices` |
 | Long rate-limit waits are announced once; short ones stay quiet; exhaustion is not logged above Debug. | `TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce`, `TestRetryTransport_NetworkError_ExhaustionAnnouncesOnceAndDoesNotRepeatTheError`, `TestRetryTransport_HTTPError_ExhaustionDoesNotWarn` |
+| No wait starts that would end after the request's deadline: the transport returns the answer it has at once and announces nothing, a throttle wait answers unsent as `*ThrottledError`, and a context without a deadline waits as before. | `TestRetryTransport_AWaitPastTheDeadlineReturnsTheAnswerAtOnce`, `TestRetryTransport_AWaitPastTheDeadlineIsNotAnnounced`, `TestRetryTransport_NoDeadlineWaitsAsBefore`, `TestDo_AThrottleWaitPastTheDeadlineIsNotSent` |
 | CLI/control-plane callers use retry without reinterpreting retryable versus fatal conditions themselves. | `internal/cli/control_client_additional_test.go`, `internal/multisync/orchestrator_test.go`, `internal/graph/client_test.go` |
 
 ## Named Policies
@@ -92,6 +93,22 @@ Features:
 - `X-Retry-Count` header annotation on retried requests
 - request-scoped log target override via `WithRequestLogTarget(req, target)`
 - retryable status codes: 408, 429, 500, 502, 503, 504, 509
+- no wait past the request's deadline (R-6.8.8): every wait the transport
+  would start, a `Retry-After`, the backoff ladder or the throttle deadline,
+  goes through one rule, `waitFits`, which compares the wait's end with the
+  request context's deadline. A wait that would end after it is not started:
+  the transport returns what it has, as when the attempts are used up (the
+  429 or 5xx response with its body unread, or the network error), at once
+  and with no long-wait or outage notice. A 429 still sets the throttle
+  deadline for later requests. A throttle wait that does not fit has no
+  answer of its own, so the request is returned unsent as a
+  `*ThrottledError` carrying the throttle deadline; the graph client marks it
+  not sent and `ErrThrottled`. Waiting would only have turned each of these
+  into the deadline's error, later; callers now classify the real answer. A
+  context without a deadline waits as before
+  (`TestRetryTransport_AWaitPastTheDeadlineReturnsTheAnswerAtOnce`,
+  `TestRetryTransport_AWaitPastTheDeadlineIsNotAnnounced`,
+  `TestRetryTransport_NoDeadlineWaitsAsBefore`)
 
 Sync action execution does not use `RetryTransport`. Workers issue one request,
 return the result immediately, and let the engine classify it.
@@ -137,6 +154,9 @@ fallback it uses when the field is absent.
   busy" (5xx) once per throttling episode; a 2xx response ends the episode
 - exhaustion is returned (the error, or the last retryable response) and is
   not logged above Debug: the command reports it once
+- a wait not started because it would end after the request's deadline is
+  logged at Debug ("not waiting past the request's deadline") and announced
+  nowhere else
 
 `Notices` is caller-owned like `ThrottleGate`. A transport built without one
 uses private notices, which keeps the announcements correct per transport.

@@ -205,7 +205,7 @@ func (o *Orchestrator) prepareRunOnceWork(
 
 		o.attachParentChildWorkSink(mount, 0, childWork, nil, notify)
 
-		session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
+		session, err := o.cfg.Runtime.SyncSession(mount.syncSessionConfig())
 		if err != nil {
 			startResults = append(startResults, mountStartupResultForMount(
 				mount,

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -109,7 +110,7 @@ func TestDoLogin_Success(t *testing.T) {
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
 	var displayed DeviceAuth
-	ts, err := doLogin(t.Context(), tokenPath, cfg, func(da DeviceAuth) {
+	ts, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, func(da DeviceAuth) {
 		displayed = da
 	}, slog.Default())
 	require.NoError(t, err)
@@ -127,7 +128,7 @@ func TestDoLogin_Success(t *testing.T) {
 	assert.Equal(t, "test-refresh-token", loaded.RefreshToken)
 
 	// Verify the returned TokenSource works.
-	tok, tokenErr := ts.Token()
+	tok, tokenErr := ts.Token(t.Context())
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
 }
@@ -159,6 +160,7 @@ func TestDoLogin_TokenEndpointErrors(t *testing.T) {
 			_, err := doLoginWithFlow(
 				t.Context(),
 				tokenPath,
+				testAuthClient(),
 				cfg,
 				noopDisplay,
 				slog.Default(),
@@ -200,6 +202,7 @@ func TestDoLogin_UserSideOAuthOutcomesArePlain(t *testing.T) {
 			_, err := doLoginWithFlow(
 				t.Context(),
 				tokenPath,
+				testAuthClient(),
 				cfg,
 				noopDisplay,
 				slog.Default(),
@@ -245,6 +248,7 @@ func TestDoLogin_ContextCancel(t *testing.T) {
 	_, err := doLoginWithFlow(
 		ctx,
 		tokenPath,
+		testAuthClient(),
 		cfg,
 		noopDisplay,
 		slog.Default(),
@@ -269,6 +273,7 @@ func TestDoLogin_ExchangeSuccess(t *testing.T) {
 	ts, err := doLoginWithFlow(
 		t.Context(),
 		tokenPath,
+		testAuthClient(),
 		cfg,
 		func(da DeviceAuth) {
 			displayed = da
@@ -289,7 +294,7 @@ func TestDoLogin_ExchangeSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
-	tok, tokenErr := ts.Token()
+	tok, tokenErr := ts.Token(t.Context())
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
 	assert.Equal(t, "ABCD-1234", displayed.UserCode)
@@ -417,7 +422,7 @@ func TestLoadToken_InvalidJSON(t *testing.T) {
 func TestTokenSourceFromPath_NoFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	_, err := TokenSourceFromPath(t.Context(), path, offlineAuthClient(t), slog.Default())
+	_, err := TokenSourceFromPath(path, offlineAuthClient(t), slog.Default())
 	assert.ErrorIs(t, err, ErrNotLoggedIn)
 }
 
@@ -434,12 +439,12 @@ func TestTokenSourceFromPath_ValidToken(t *testing.T) {
 
 	require.NoError(t, tokenfile.Save(path, tok))
 
-	ts, err := TokenSourceFromPath(t.Context(), path, offlineAuthClient(t), slog.Default())
+	ts, err := TokenSourceFromPath(path, offlineAuthClient(t), slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
 	// The token source should return the saved access token.
-	got, err := ts.Token()
+	got, err := ts.Token(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "saved-access-token", got)
 }
@@ -450,7 +455,7 @@ func TestTokenSourceFromPath_InvalidJSON(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte("not valid json"), tokenfile.FilePerms))
 
-	_, err := TokenSourceFromPath(t.Context(), path, offlineAuthClient(t), slog.Default())
+	_, err := TokenSourceFromPath(path, offlineAuthClient(t), slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tokenfile: decoding")
 }
@@ -490,22 +495,20 @@ func TestTokenBridge(t *testing.T) {
 		Expiry:      time.Now().Add(time.Hour),
 	}
 
-	bridge := &tokenBridge{src: oauth2.StaticTokenSource(tok), logger: slog.Default()}
+	bridge := newTokenBridge(&oauth2.Config{}, offlineAuthClient(t), tok, slog.Default())
 
-	got, err := bridge.Token()
+	got, err := bridge.Token(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "bridge-token-123", got)
 }
 
 func TestTokenBridge_Error(t *testing.T) {
-	// An expired token with no refresh mechanism should return an error.
+	// An expired token with no refresh token cannot be refreshed.
 	tok := &oauth2.Token{
 		AccessToken: "expired",
 		Expiry:      time.Now().Add(-time.Hour),
 	}
 
-	// StaticTokenSource ignores expiry, so use a Config.TokenSource
-	// with a bad endpoint to force a refresh failure.
 	tokenSrv := httptest.NewServer(http.NotFoundHandler())
 	tokenURL := tokenSrv.URL + "/token"
 	tokenSrv.Close()
@@ -515,9 +518,9 @@ func TestTokenBridge_Error(t *testing.T) {
 		Endpoint: oauth2.Endpoint{TokenURL: tokenURL},
 	}
 
-	bridge := &tokenBridge{src: cfg.TokenSource(t.Context(), tok), logger: slog.Default()}
+	bridge := newTokenBridge(cfg, testAuthClient(), tok, slog.Default())
 
-	_, err := bridge.Token()
+	_, err := bridge.Token(t.Context())
 	require.Error(t, err)
 }
 
@@ -540,9 +543,9 @@ func TestTokenBridge_InvalidGrantIsLoginExpired(t *testing.T) {
 		Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL + "/token"},
 	}
 	tok := &oauth2.Token{AccessToken: "expired", RefreshToken: "stale", Expiry: time.Now().Add(-time.Hour)}
-	bridge := &tokenBridge{src: cfg.TokenSource(t.Context(), tok), logger: slog.Default()}
+	bridge := newTokenBridge(cfg, testAuthClient(), tok, slog.Default())
 
-	_, err := bridge.Token()
+	_, err := bridge.Token(t.Context())
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrLoginExpired)
 	require.ErrorIs(t, err, ErrUnauthorized, "an expired login must also take every existing unauthorized path")
@@ -614,7 +617,7 @@ func TestDoLogin_SaveError(t *testing.T) {
 	tokenPath := filepath.Join(blocker, "tokens", "test.json")
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "saving token")
 }
@@ -636,7 +639,7 @@ func TestDoLogin_DeviceAuthError(t *testing.T) {
 		},
 	}
 
-	_, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
+	_, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "device auth request failed")
 }
@@ -746,11 +749,11 @@ func TestLogin_Success(t *testing.T) {
 	// oauthConfig internally, we test via doLogin (which is what Login delegates to).
 	cfg := testOAuthConfig(t, tokenPath, endpoint)
 
-	ts, err := doLogin(t.Context(), tokenPath, cfg, noopDisplay, slog.Default())
+	ts, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, noopDisplay, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
-	tok, tokenErr := ts.Token()
+	tok, tokenErr := ts.Token(t.Context())
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
 }
@@ -849,7 +852,7 @@ func TestDoAuthCodeLogin_Success(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	ts, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
+	ts, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
@@ -861,7 +864,7 @@ func TestDoAuthCodeLogin_Success(t *testing.T) {
 	assert.Equal(t, "test-refresh-token", loaded.RefreshToken)
 
 	// Verify the returned TokenSource works.
-	tok, tokenErr := ts.Token()
+	tok, tokenErr := ts.Token(t.Context())
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
 }
@@ -894,7 +897,7 @@ func TestDoAuthCodeLogin_InvalidState(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state mismatch")
 }
@@ -942,7 +945,7 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 		return nil
 	}
 
-	_, err := doAuthCodeLogin(ctx, tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(ctx, tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "browser auth canceled")
 }
@@ -976,7 +979,7 @@ func TestDoAuthCodeLogin_MissingCode(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing authorization code")
 }
@@ -995,7 +998,7 @@ func TestDoAuthCodeLogin_ExchangeError(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token exchange failed")
 }
@@ -1013,7 +1016,7 @@ func TestDoAuthCodeLogin_SaveError(t *testing.T) {
 	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
 	openURL := simulateBrowserCallback(t)
 
-	_, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
+	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "saving token")
 }
@@ -1039,11 +1042,11 @@ func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
 		return errors.New("browser open failed")
 	}
 
-	ts, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())
+	ts, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
 	require.NoError(t, err)
 	require.NotNil(t, ts)
 
-	tok, tokenErr := ts.Token()
+	tok, tokenErr := ts.Token(t.Context())
 	require.NoError(t, tokenErr)
 	assert.Equal(t, "test-access-token", tok)
 	require.NoError(t, <-browserErrCh)
@@ -1059,12 +1062,11 @@ func TestGenerateState(t *testing.T) {
 	assert.NotEqual(t, state1, state2, "consecutive states should differ")
 }
 
-// failingOAuthSource is an oauth2.TokenSource whose refresh always fails the
-// way an offline machine does.
-type failingOAuthSource struct{}
+// offlineHost is the lookup failure of a machine with no network.
+type offlineHost struct{}
 
-func (failingOAuthSource) Token() (*oauth2.Token, error) {
-	return nil, errors.New(`oauth2: cannot fetch token: Post "https://login.microsoftonline.com/common/oauth2/v2.0/token": dial tcp: lookup login.microsoftonline.com: no such host`)
+func (offlineHost) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, &net.DNSError{Err: "no such host", Name: req.URL.Hostname(), IsNotFound: true}
 }
 
 // Validates: R-6.6.22
@@ -1076,13 +1078,13 @@ func TestTokenBridge_RefreshFailureIsReturnedNotWarned(t *testing.T) {
 	t.Parallel()
 
 	var logBuf bytes.Buffer
-	bridge := &tokenBridge{
-		src:    failingOAuthSource{},
-		logger: slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})),
-	}
+	cfg := &oauth2.Config{ClientID: "test", Endpoint: oauth2.Endpoint{TokenURL: "https://" + signInHost + signInGrantPath}}
+	tok := &oauth2.Token{AccessToken: "expired", RefreshToken: savedRefreshToken, Expiry: time.Now().Add(-time.Hour)}
+	bridge := newTokenBridge(cfg, &http.Client{Timeout: testSignInTimeout, Transport: offlineHost{}}, tok,
+		slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	for range 3 {
-		_, err := bridge.Token()
+		_, err := bridge.Token(t.Context())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no such host")
 		assert.Equal(t, 1, strings.Count(err.Error(), "refreshing access token"))
