@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
@@ -31,12 +31,21 @@ const defaultTransferStallTimeout = 2 * time.Minute
 // Retry-After longer than the stall timeout is not a stall.
 type stallWatchdog struct {
 	timeout time.Duration
-	timer   *time.Timer
 	cancel  context.CancelCauseFunc
-	// attempt counts retry waits. A body reader belongs to one attempt: the
-	// transport can still be draining an abandoned attempt's body during a
-	// retry wait, and those reads must not re-arm the watchdog.
-	attempt atomic.Int64
+
+	// mu makes "is this reader's attempt still the current one" and the timer
+	// change that follows from it one step. The transport reads a body on its
+	// own goroutine, and the retry wait starts on the caller's. With the two
+	// apart, a read that found its attempt current armed the timer just after
+	// the wait had stopped it, and the timer ran through the wait: a
+	// Retry-After longer than the stall timeout failed the fragment as stalled.
+	mu    sync.Mutex
+	timer *time.Timer
+	// attempt counts retry waits, and the end of the transfer. A body reader
+	// belongs to one attempt: the transport can still be reading an abandoned
+	// attempt's body during a retry wait, during the next attempt and after
+	// the transfer has ended, and those reads must not touch the timer.
+	attempt int64
 }
 
 // watchTransfer returns a context that is canceled with ErrTransferStalled
@@ -60,25 +69,56 @@ func (c *Client) watchTransfer(ctx context.Context) (context.Context, *stallWatc
 // waitStarts runs before every retry or throttle wait: it disarms the
 // watchdog and retires the current attempt's body reader.
 func (w *stallWatchdog) waitStarts() {
-	w.attempt.Add(1)
-	w.disarm()
+	w.retireAttempt()
 }
 
-// arm (re)starts the stall timer: body bytes are expected now.
-func (w *stallWatchdog) arm() { w.timer.Reset(w.timeout) }
-
-// disarm stops the stall timer: nothing is expected to move.
-func (w *stallWatchdog) disarm() { w.timer.Stop() }
-
+// stop ends the transfer: it disarms the watchdog for good and releases the
+// request context.
 func (w *stallWatchdog) stop() {
-	w.timer.Stop()
+	w.retireAttempt()
 	w.cancel(nil)
 }
 
+// retireAttempt stops the stall timer and makes every reader handed out so
+// far a stale one, so none of them can start it again.
+func (w *stallWatchdog) retireAttempt() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.attempt++
+	w.timer.Stop()
+}
+
+// arm (re)starts the stall timer when attempt is still the current one: body
+// bytes are expected now.
+func (w *stallWatchdog) arm(attempt int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if attempt == w.attempt {
+		w.timer.Reset(w.timeout)
+	}
+}
+
+// disarm stops the stall timer when attempt is still the current one: its
+// body is drained or failed, so nothing is expected to move.
+func (w *stallWatchdog) disarm(attempt int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if attempt == w.attempt {
+		w.timer.Stop()
+	}
+}
+
 // reader wraps a body so that reading it arms the watchdog, every read that
-// moves bytes re-arms it, and the end of the body disarms it.
+// moves bytes re-arms it, and the end of the body disarms it. The reader
+// belongs to the attempt that is current when it is made.
 func (w *stallWatchdog) reader(r io.Reader) io.Reader {
-	return &progressReader{inner: r, watchdog: w, attempt: w.attempt.Load()}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return &progressReader{inner: r, watchdog: w, attempt: w.attempt}
 }
 
 // explain turns a failure caused by the watchdog into ErrTransferStalled
@@ -101,15 +141,12 @@ type progressReader struct {
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
-	current := p.watchdog.attempt.Load() == p.attempt
-	if current {
-		p.watchdog.arm()
-	}
+	p.watchdog.arm(p.attempt)
 
 	n, err := p.inner.Read(b)
-	if err != nil && current {
+	if err != nil {
 		// Drained or failed: no more body bytes are expected from here.
-		p.watchdog.disarm()
+		p.watchdog.disarm(p.attempt)
 	}
 
 	return n, err //nolint:wrapcheck // io.EOF must reach io.Copy unwrapped; callers wrap real failures
