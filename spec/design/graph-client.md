@@ -299,7 +299,19 @@ body is being written and while a response body is read; the wait for
 headers belongs to the transports' `ResponseHeaderTimeout`, and
 `RetryTransport` disarms it before every retry or throttle wait
 (`retry.WithBackoffObserver`), so a long `Retry-After` is not a stall
-(`TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall`). A stall is
+(`TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall`). A body
+reader belongs to one attempt. The transport reads a request body on its own
+goroutine, and can still be inside an abandoned attempt's body when the
+retry wait starts, while the next attempt runs and after the call has
+returned, so the watchdog decides "is this reader's attempt still the
+current one" and changes the timer as one step under its lock; a wait and
+the end of the transfer both retire every reader handed out so far. With the
+check and the timer change apart, a read armed the timer just after the wait
+had stopped it, and a `Retry-After` longer than the stall timeout failed the
+fragment as stalled
+(`TestStallWatchdog_AWaitThatStartsDuringAReadLeavesTheTimerStopped`,
+`TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt`,
+`TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded`). A stall is
 reported as `ErrTransferStalled` alone, never with `context.Canceled` in the
 chain (`doPreAuth` and `RetryTransport` return `context.Cause`), because sync
 reads a cancellation as a shutdown and would drop the action; sync
