@@ -76,6 +76,19 @@ retention; the fact that it happens quietly, on a best-effort path that ignores
 its own errors, makes it worse. Nothing else in the product deletes outside
 what it owns, and a log directory is not owned merely by being written to.
 
+Retention no longer ignores its own errors. `logfile.RemoveExpired` runs
+before `logfile.Open` (an expired current log is removed and the open starts
+it afresh), goes on past every failure, and returns each listing, age check
+and removal it could not do, joined; a folder that does not exist yet has
+nothing to remove. It returns them rather than logging them because it runs
+before the logger exists, and they are not the open's failures, because the
+log works without retention. The CLI logs them once at Warn ("could not
+remove expired log files") through the logger it has just built, so a log
+that cannot be removed no longer grows unseen
+(`TestRemoveExpired_ReportsWhatItCannotListOrRemove`,
+`TestRemoveExpiredEntries_ReportsAnEntryItCannotStat`,
+`TestBuildLoggerDual_ReportsAnExpiredLogItCannotRemoveOnce`).
+
 ## Account Names Are Untrusted Input
 
 Account names reach the CLI from the config file and the catalog, both of which
@@ -750,8 +763,9 @@ does not mutate state and does not become a DB health control surface.
 
 Every "is this managed file there" question in the CLI goes through
 `managedPathExists` (`cleanup.go`), which answers `(exists, error)`. Only a
-missing file or a missing parent (including a parent that is not a directory)
-is absent. Permission denied, an I/O error or a symlink loop is an error that
+missing file or a missing parent (including a parent, or any folder above it,
+that is a file, which `fsroot` itself reports as absent) is absent.
+Permission denied, an I/O error or a symlink loop is an error that
 each caller handles as "cannot check", never as absent, because reading those
 as absent made an unreadable data directory look like one with no login
 ("Run 'onedrive-go login'"), no state database ("Not synced yet") and nothing

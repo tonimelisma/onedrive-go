@@ -13,17 +13,14 @@ import (
 	"time"
 )
 
+// cleanPath refuses an empty path, which filepath.Clean would turn into ".",
+// the working directory, and cleans every other one.
 func cleanPath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is empty")
 	}
 
-	clean := filepath.Clean(path)
-	if clean == "" {
-		return "", fmt.Errorf("path is empty")
-	}
-
-	return clean, nil
+	return filepath.Clean(path), nil
 }
 
 func absolutePath(path string) (string, error) {
@@ -77,12 +74,10 @@ func OpenRegular(path string) (*os.File, error) {
 
 	info, err := file.Stat()
 	if err != nil {
-		closeErr := file.Close()
-		return nil, errors.Join(fmt.Errorf("stat %s: %w", path, err), closeErr)
+		return nil, closeAfterFailure(file, path, fmt.Errorf("stat %s: %w", path, err))
 	}
 	if !info.Mode().IsRegular() {
-		closeErr := file.Close()
-		return nil, errors.Join(fmt.Errorf("opening %s: %w", path, ErrNotRegularFile), closeErr)
+		return nil, closeAfterFailure(file, path, fmt.Errorf("opening %s: %w", path, ErrNotRegularFile))
 	}
 
 	return file, nil
@@ -109,21 +104,32 @@ func ReadFile(path string) ([]byte, error) {
 		return nil, err
 	}
 
-	data, readErr := io.ReadAll(file)
-	closeErr := file.Close()
-	if readErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(readErr, closeErr)
-		}
+	return readAndClose(file, path)
+}
 
-		return nil, fmt.Errorf("reading %s: %w", path, readErr)
+// readAndClose reads all of file, opened from path, and closes it.
+func readAndClose(file *os.File, path string) ([]byte, error) {
+	data, readErr := io.ReadAll(file)
+	if readErr != nil {
+		return nil, closeAfterFailure(file, path, fmt.Errorf("reading %s: %w", path, readErr))
 	}
 
-	if closeErr != nil {
+	if closeErr := file.Close(); closeErr != nil {
 		return nil, fmt.Errorf("closing %s: %w", path, closeErr)
 	}
 
 	return data, nil
+}
+
+// closeAfterFailure closes file, opened from path, once cause has ended its
+// use, and returns cause joined with the close failure, if any, which names
+// path like every other step does.
+func closeAfterFailure(file *os.File, path string, cause error) error {
+	if closeErr := file.Close(); closeErr != nil {
+		return errors.Join(cause, fmt.Errorf("closing %s: %w", path, closeErr))
+	}
+
+	return cause
 }
 
 func Stat(path string) (os.FileInfo, error) {

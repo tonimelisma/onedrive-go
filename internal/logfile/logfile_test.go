@@ -1,6 +1,8 @@
 package logfile
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -17,7 +20,7 @@ func TestOpen_CreatesFile(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "test.log")
-	f, err := Open(path, 0)
+	f, err := Open(path)
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -30,7 +33,7 @@ func TestOpen_CreatesParentDirs(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "deep", "nested", "dir", "test.log")
-	f, err := Open(path, 0)
+	f, err := Open(path)
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -49,7 +52,7 @@ func TestOpen_AppendsToExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "append.log")
 	require.NoError(t, os.WriteFile(path, []byte("existing content\n"), 0o600))
 
-	f, err := Open(path, 0)
+	f, err := Open(path)
 	require.NoError(t, err)
 
 	_, writeErr := f.WriteString("new content\n")
@@ -69,7 +72,7 @@ func TestOpen_Permissions(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "perms.log")
-	f, err := Open(path, 0)
+	f, err := Open(path)
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -104,7 +107,9 @@ func TestOpen_CleansOwnOldLogsOnly(t *testing.T) {
 	foreign := write("backup.log")
 	foreignPrefixed := write("current-other-app.txt")
 
-	f, err := Open(filepath.Join(dir, "current.log"), 7)
+	logPath := filepath.Join(dir, "current.log")
+	require.NoError(t, RemoveExpired(logPath, 7))
+	f, err := Open(logPath)
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -162,12 +167,118 @@ func TestOpen_RetentionLeavesNonExpiredFiles(t *testing.T) {
 			require.NoError(t, os.Chtimes(fixturePath, oldTime, oldTime))
 
 			logPath := filepath.Join(dir, "current.log")
-			f, err := Open(logPath, tt.retention)
-			require.NoError(t, err)
-			defer f.Close()
+			require.NoError(t, RemoveExpired(logPath, tt.retention))
 
 			_, statErr := os.Stat(fixturePath)
 			assert.NoError(t, statErr, tt.wantMessage)
 		})
 	}
+}
+
+// Validates: R-4.7.3
+//
+// Retention that cannot remove an expired log says so: the log keeps growing
+// otherwise, unseen. It goes on past the failure, and an absent folder has
+// nothing to remove.
+func TestRemoveExpired_ReportsWhatItCannotListOrRemove(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removal refused", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		expired := writeExpiredLog(t, dir, "current.log.1")
+		chmodForTest(t, dir, 0o500)
+
+		err := RemoveExpired(filepath.Join(dir, "current.log"), 7)
+		require.ErrorIs(t, err, os.ErrPermission)
+		assert.Contains(t, err.Error(), "current.log.1")
+		assert.FileExists(t, expired)
+	})
+
+	t.Run("listing refused", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		writeExpiredLog(t, dir, "current.log.1")
+		chmodForTest(t, dir, 0o300)
+
+		err := RemoveExpired(filepath.Join(dir, "current.log"), 7)
+		require.ErrorIs(t, err, os.ErrPermission)
+		assert.Contains(t, err.Error(), "list log directory")
+	})
+
+	t.Run("no folder yet", func(t *testing.T) {
+		t.Parallel()
+
+		require.NoError(t, RemoveExpired(filepath.Join(t.TempDir(), "missing", "current.log"), 7))
+	})
+}
+
+// Validates: R-4.7.3
+//
+// An entry whose age cannot be read is reported and the rest are still
+// handled; an entry that vanished since the listing is simply gone.
+func TestRemoveExpiredEntries_ReportsAnEntryItCannotStat(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	expired := writeExpiredLog(t, dir, "current.log.1")
+	root, err := fsroot.Open(dir)
+	require.NoError(t, err)
+	listed, err := root.ReadDir("")
+	require.NoError(t, err)
+
+	errUnreadable := errors.New("injected stat failure")
+	entries := append([]os.DirEntry{
+		infoFailingEntry{name: "current.log.2", err: errUnreadable},
+		infoFailingEntry{name: "current.log.3", err: os.ErrNotExist},
+	}, listed...)
+
+	err = removeExpiredEntries(root, "current.log", entries, time.Now())
+	require.ErrorIs(t, err, errUnreadable)
+	assert.Contains(t, err.Error(), "current.log.2")
+	assert.NotContains(t, err.Error(), "current.log.3", "a vanished entry is not a failure")
+	assert.NoFileExists(t, expired, "retention goes on past an entry it cannot read")
+}
+
+// infoFailingEntry is a listed log whose Info fails with err.
+type infoFailingEntry struct {
+	name string
+	err  error
+}
+
+func (e infoFailingEntry) Name() string               { return e.name }
+func (e infoFailingEntry) IsDir() bool                { return false }
+func (e infoFailingEntry) Type() fs.FileMode          { return 0 }
+func (e infoFailingEntry) Info() (fs.FileInfo, error) { return nil, e.err }
+
+// writeExpiredLog writes name in dir last modified long before any retention
+// window and returns its path.
+func writeExpiredLog(t *testing.T, dir, name string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	stale := time.Now().Add(-100 * retentionDay)
+	require.NoError(t, os.Chtimes(path, stale, stale))
+
+	return path
+}
+
+// chmodForTest gives dir mode for the rest of the test and its write access
+// back before t.TempDir removes it. The superuser ignores modes, so a test
+// that needs one skips as root.
+func chmodForTest(t *testing.T, dir string, mode os.FileMode) {
+	t.Helper()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+
+	require.NoError(t, os.Chmod(dir, mode))
+	t.Cleanup(func() {
+		//nolint:gosec // a test folder gets its owner's access back so t.TempDir can remove it.
+		assert.NoError(t, os.Chmod(dir, 0o700))
+	})
 }

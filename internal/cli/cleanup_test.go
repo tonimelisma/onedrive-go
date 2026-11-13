@@ -37,6 +37,10 @@ func TestManagedPathExists_DistinguishesAbsentFromUnreadable(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exists, "a parent that is a file (ENOTDIR) is absent")
 
+	exists, err = managedPathExists(filepath.Join(present, "sub", "child.db"))
+	require.NoError(t, err)
+	assert.False(t, exists, "a folder above the parent that is a file makes the path absent too")
+
 	loop := filepath.Join(dir, "loop.db")
 	require.NoError(t, os.Symlink("loop.db", loop))
 	exists, err = managedPathExists(loop)

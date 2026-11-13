@@ -333,7 +333,7 @@ able to scan this table and place every top-level code area.
 | `internal/graph` | Graph API semantics, normalization, auth, delta, item CRUD, transfer session behavior | You are changing Graph behavior or provider quirks |
 | `internal/graphtransport` | Stateless Graph-facing HTTP transport profiles and transport defaults | You are changing HTTP runtime policy or profile construction |
 | `internal/localpath` | Explicit arbitrary local-path filesystem operations | You are doing local file I/O outside a rooted capability |
-| `internal/logfile` | Log file creation, rotation, retention | You are changing logging file lifecycle |
+| `internal/logfile` | Log file creation and retention | You are changing logging file lifecycle |
 | `internal/multisync` | Multi-mount sync control plane and watch reload | You are changing `sync` orchestration across mounts |
 | `internal/perf` | Production-visible perf sessions, counters, live snapshots, and capture bundles | You are changing performance instrumentation or capture behavior |
 | `internal/retry` | Retry policies and stateful backoff | You are changing retry semantics |

@@ -1,6 +1,7 @@
 package localpath
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -60,6 +61,34 @@ func TestLinkOrCopyNoReplace_FilesystemWithoutHardLinksCopies(t *testing.T) {
 	data, err = os.ReadFile(dst) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "from trash", string(data))
+}
+
+// Validates: R-6.4.9
+//
+// A copy that failed leaves no partial file behind, or says it could not
+// remove it: a leftover makes the next attempt find the destination taken.
+// A partial copy already closed, or already gone, is no further failure.
+func TestDiscardPartialCopy_ReportsAPartialCopyItCannotRemove(t *testing.T) {
+	t.Parallel()
+
+	errCopy := errors.New("injected copy failure")
+
+	stuck := filepath.Join(t.TempDir(), "stuck")
+	out, err := os.Create(stuck) //nolint:gosec // test creates a file in its own temp dir
+	require.NoError(t, err)
+	err = discardPartialCopy(out, stuck, errCopy, func(string) error { return syscall.EBUSY })
+	require.ErrorIs(t, err, errCopy)
+	require.ErrorIs(t, err, syscall.EBUSY)
+	assert.Contains(t, err.Error(), "removing partial copy "+stuck)
+
+	removed := filepath.Join(t.TempDir(), "removed")
+	out, err = os.Create(removed) //nolint:gosec // test creates a file in its own temp dir
+	require.NoError(t, err)
+	require.NoError(t, out.Close())
+	err = discardPartialCopy(out, removed, errCopy, os.Remove)
+	require.ErrorIs(t, err, errCopy)
+	assert.Equal(t, errCopy.Error(), err.Error(), "a closed, removable partial copy adds nothing")
+	assert.NoFileExists(t, removed)
 }
 
 // Validates: R-6.4.9

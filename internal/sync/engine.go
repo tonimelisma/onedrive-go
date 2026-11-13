@@ -130,12 +130,14 @@ type Engine struct {
 	// because one-shot and watch observation can run on different goroutines.
 	mountRootDeltaFallbackReported atomic.Bool
 
-	// protectedRootRefreshFailing and trashPurgeFailing keep two housekeeping
-	// failures to one Warn per failure streak (R-6.6.30): a protected-root
-	// refresh that keeps failing, and a trash purge that keeps failing. Each
-	// clears when its operation succeeds again, so the next streak is
+	// These keep each housekeeping failure to one Warn per failure streak
+	// (R-6.6.30): a protected-root refresh, a leftover download file cleanup,
+	// an expired upload session cleanup and a trash purge that keeps failing.
+	// Each clears when its operation succeeds again, so the next streak is
 	// reported once more. Atomic for the same reason as the flag above.
 	protectedRootRefreshFailing atomic.Bool
+	partialCleanupFailing       atomic.Bool
+	sessionCleanupFailing       atomic.Bool
 	trashPurgeFailing           atomic.Bool
 }
 
@@ -429,10 +431,13 @@ func (e *Engine) nextRuntimeRunID() string {
 // database connection, and only then releases the store and folder locks.
 // Safe to call more than once.
 func (e *Engine) Close(ctx context.Context) error {
-	// Clean stale upload session files (best-effort).
+	// Clean stale upload session files. A failure does not stop the close, but
+	// it is reported at Warn with the count removed, as after a sync pass: a
+	// session file that cannot be removed would otherwise go unseen.
 	if e.sessionStore != nil {
 		if n, err := e.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {
-			e.logger.Debug("failed to clean stale sessions on close",
+			e.logger.Warn("failed to clean stale sessions on close",
+				slog.Int("deleted", n),
 				slog.Any("error", err),
 			)
 		} else if n > 0 {

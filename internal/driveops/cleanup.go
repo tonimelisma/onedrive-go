@@ -9,42 +9,42 @@ import (
 // TransferArtifactCleanupOptions controls local transfer artifact cleanup.
 // SkipDirs entries are rooted slash paths relative to the sync root and are
 // left untouched during partial-file cleanup. IncludedDirs narrows cleanup to
-// configured sync-visible containers and their descendants.
+// configured sync-visible containers and their descendants, with the same
+// root-relative ancestor/container semantics as sync include filters.
+// IncludeJunkPartials also removes arbitrary user-named *.partial files.
 type TransferArtifactCleanupOptions struct {
 	SkipDirs            []string
 	IncludedDirs        []string
 	IncludeJunkPartials bool
 }
 
-// CleanTransferArtifacts runs non-critical post-sync housekeeping:
-//   - Deletes orphaned owned partial files after sync completes
-//   - Cleans expired upload session files from the session store
-//
-// Errors are logged but not propagated — housekeeping should never
-// fail a sync run.
-func CleanTransferArtifacts(tree *synctree.Root, sessionStore *SessionStore, logger *slog.Logger) {
-	CleanTransferArtifactsWithOptions(tree, sessionStore, logger, TransferArtifactCleanupOptions{})
+// TransferArtifactCleanup is what one post-sync cleanup did. Each half goes
+// on past what it cannot remove, so its count and its error can both be set.
+type TransferArtifactCleanup struct {
+	PartialsRemoved int
+	PartialsErr     error
+	SessionsRemoved int
+	SessionsErr     error
 }
 
-// CleanTransferArtifactsWithOptions runs post-sync housekeeping with local
-// subtree exclusions.
-func CleanTransferArtifactsWithOptions(
+// CleanTransferArtifacts runs the non-critical post-sync housekeeping:
+//   - deletes orphaned owned partial files under the sync tree
+//   - deletes expired upload session files from the session store, if any
+//
+// It never fails a sync run, and it reports no failure itself: the engine that
+// called it does, in one line per cleanup and once per failure streak.
+func CleanTransferArtifacts(
 	tree *synctree.Root,
 	sessionStore *SessionStore,
 	logger *slog.Logger,
 	opts TransferArtifactCleanupOptions,
-) {
-	if n, err := CleanStalePartialsWithOptions(tree, logger, StalePartialCleanupOptions(opts)); err != nil {
-		logger.Warn("partial file cleanup failed", slog.Any("error", err))
-	} else if n > 0 {
-		logger.Info("cleaned stale partial files", slog.Int("count", n))
+) TransferArtifactCleanup {
+	var result TransferArtifactCleanup
+
+	result.PartialsRemoved, result.PartialsErr = CleanStalePartials(tree, logger, opts)
+	if sessionStore != nil {
+		result.SessionsRemoved, result.SessionsErr = sessionStore.CleanStale(StaleSessionAge)
 	}
 
-	if sessionStore != nil {
-		if n, err := sessionStore.CleanStale(StaleSessionAge); err != nil {
-			logger.Warn("stale session cleanup failed", slog.Any("error", err))
-		} else if n > 0 {
-			logger.Info("cleaned stale upload sessions", slog.Int("count", n))
-		}
-	}
+	return result
 }

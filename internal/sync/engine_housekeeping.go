@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -18,18 +19,43 @@ import (
 // could let the parent delete a child mount's in-flight partials.
 func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 	if flow.engine.refreshProtectedRootsForHousekeeping(ctx) {
-		driveops.CleanTransferArtifactsWithOptions(
-			flow.engine.syncTree,
-			flow.engine.sessionStore,
-			flow.deps.logger,
-			driveops.TransferArtifactCleanupOptions{
-				SkipDirs:            transferArtifactCleanupSkipDirs(flow.engine.contentFilter, flow.engine.protectedRoots),
-				IncludedDirs:        flow.engine.contentFilter.IncludedDirs,
-				IncludeJunkPartials: flow.engine.contentFilter.IgnoreJunkFiles,
-			},
-		)
+		flow.engine.cleanTransferArtifacts()
 	}
 	flow.engine.purgeExpiredTrash(true)
+}
+
+// housekeepingReport names one housekeeping step's failure streak and the
+// three lines it can log.
+type housekeepingReport struct {
+	failing   *atomic.Bool
+	warn      string // the first failure of a streak
+	repeat    string // every later failure of the streak, at Debug
+	recovered string // the first success after a streak, at Info
+}
+
+// reportHousekeepingOutcome keeps a housekeeping failure to one Warn per
+// streak (R-6.6.30). A step can run many times in one engine's life (the
+// watch purges its trash every hour), and a condition that stays would
+// otherwise warn each time: the first failure warns, repeats are Debug, and
+// the first success after a streak says so at Info and ends it, so the next
+// streak warns once more. attrs go on every line.
+func (e *Engine) reportHousekeepingOutcome(report housekeepingReport, err error, attrs ...any) {
+	if err == nil {
+		if report.failing.Swap(false) {
+			e.logger.Info(report.recovered, attrs...)
+		}
+
+		return
+	}
+
+	failed := make([]any, 0, len(attrs)+1)
+	failed = append(failed, attrs...)
+	failed = append(failed, slog.Any("error", err))
+	if report.failing.Swap(true) {
+		e.logger.Debug(report.repeat, failed...)
+		return
+	}
+	e.logger.Warn(report.warn, failed...)
 }
 
 // refreshProtectedRootsForHousekeeping refreshes the protected-root list and
@@ -43,28 +69,54 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 // and leaves the streak as it was, so a real failure later still warns once.
 func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool {
 	err := e.refreshProtectedRootsFromStore(ctx)
-	if err == nil {
-		if e.protectedRootRefreshFailing.Swap(false) {
-			e.logger.Info("shared-folder list refreshed again; transfer cleanup resumes")
-		}
-
-		return true
-	}
-
-	if ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		e.logger.Debug("skipping transfer cleanup: shutting down", slog.Any("error", err))
 		return false
 	}
 
-	if e.protectedRootRefreshFailing.Swap(true) {
-		e.logger.Debug("refresh protected roots before housekeeping failed again; skipping transfer cleanup",
-			slog.Any("error", err))
-	} else {
-		e.logger.Warn("Could not refresh the shared-folder list; skipping transfer-leftover cleanup until it can be read",
-			slog.Any("error", err))
+	e.reportHousekeepingOutcome(housekeepingReport{
+		failing:   &e.protectedRootRefreshFailing,
+		warn:      "Could not refresh the shared-folder list; skipping transfer-leftover cleanup until it can be read",
+		repeat:    "refresh protected roots before housekeeping failed again; skipping transfer cleanup",
+		recovered: "shared-folder list refreshed again; transfer cleanup resumes",
+	}, err)
+
+	return err == nil
+}
+
+// cleanTransferArtifacts removes leftover download files from the sync tree
+// and expired upload session files from the session store. Neither can fail
+// a pass. Each of the two reports everything it could not remove in one line,
+// once per streak (R-6.6.30): what cannot be removed now is still there the
+// next time. What it did remove is said whenever there was something.
+func (e *Engine) cleanTransferArtifacts() {
+	result := driveops.CleanTransferArtifacts(e.syncTree, e.sessionStore, e.logger,
+		driveops.TransferArtifactCleanupOptions{
+			SkipDirs:            transferArtifactCleanupSkipDirs(e.contentFilter, e.protectedRoots),
+			IncludedDirs:        e.contentFilter.IncludedDirs,
+			IncludeJunkPartials: e.contentFilter.IgnoreJunkFiles,
+		},
+	)
+
+	e.reportHousekeepingOutcome(housekeepingReport{
+		failing:   &e.partialCleanupFailing,
+		warn:      "Could not remove every leftover download file; the rest stay until this is fixed",
+		repeat:    "could not remove every leftover download file (still failing)",
+		recovered: "leftover download files can be removed again",
+	}, result.PartialsErr)
+	if result.PartialsRemoved > 0 {
+		e.logger.Info("cleaned stale partial files", slog.Int("count", result.PartialsRemoved))
 	}
 
-	return false
+	e.reportHousekeepingOutcome(housekeepingReport{
+		failing:   &e.sessionCleanupFailing,
+		warn:      "Could not remove every expired upload session file; the rest stay until this is fixed",
+		repeat:    "could not remove every expired upload session file (still failing)",
+		recovered: "expired upload session files can be removed again",
+	}, result.SessionsErr)
+	if result.SessionsRemoved > 0 {
+		e.logger.Info("cleaned stale upload sessions", slog.Int("count", result.SessionsRemoved))
+	}
 }
 
 // trashPurgeInterval bounds how often a long-running watch session scans the
@@ -87,19 +139,12 @@ func (e *Engine) purgeExpiredTrash(force bool) {
 	e.trashPurgedAt.Store(now.UnixNano())
 
 	removed, err := e.trash.Purge()
-	switch {
-	case err == nil:
-		if e.trashPurgeFailing.Swap(false) {
-			e.logger.Info("expired files can be removed from the sync trash again",
-				slog.String("trash", e.trash.Dir()))
-		}
-	case e.trashPurgeFailing.Swap(true):
-		e.logger.Debug("could not purge expired trash entries (still failing)",
-			slog.String("trash", e.trash.Dir()), slog.Any("error", err))
-	default:
-		e.logger.Warn("Could not remove expired files from the sync trash; it will keep growing until this is fixed",
-			slog.String("trash", e.trash.Dir()), slog.Any("error", err))
-	}
+	e.reportHousekeepingOutcome(housekeepingReport{
+		failing:   &e.trashPurgeFailing,
+		warn:      "Could not remove expired files from the sync trash; it will keep growing until this is fixed",
+		repeat:    "could not purge expired trash entries (still failing)",
+		recovered: "expired files can be removed from the sync trash again",
+	}, err, slog.String("trash", e.trash.Dir()))
 	if removed > 0 {
 		e.logger.Info("removed expired files from the sync trash",
 			slog.Int("removed", removed), slog.String("trash", e.trash.Dir()))

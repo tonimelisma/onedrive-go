@@ -135,6 +135,12 @@ func TestSave_CreatesDirectory(t *testing.T) {
 	info, err := os.Stat(nested)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(FilePerms), info.Mode().Perm())
+
+	for _, created := range []string{filepath.Join(dir, "sub"), filepath.Dir(nested)} {
+		dirInfo, dirErr := os.Stat(created)
+		require.NoError(t, dirErr)
+		assert.Equal(t, os.FileMode(DirPerms), dirInfo.Mode().Perm(), "a token folder the save creates is owner-only: %s", created)
+	}
 }
 
 func TestSave_FilePermissions(t *testing.T) {
@@ -158,7 +164,7 @@ func TestSave_InvalidParentDirectory(t *testing.T) {
 
 	err := Save(filepath.Join(blocker, "token.json"), testToken())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tokenfile: creating directory")
+	assert.Contains(t, err.Error(), "creating root directory")
 }
 
 // Validates: R-3.1

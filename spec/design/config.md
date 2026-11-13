@@ -245,7 +245,12 @@ All authoritative config/account/drive-metadata writes go through
 rename choreography to callers. The file is written `0600`
 (`configFilePermissions`): its `[personal:<email>]` section keys name the
 signed-in accounts, and the threat model counts other local users reading
-managed files as an actor.
+managed files as an actor. A folder these writes create (the config folder,
+the data folder the catalog lives in, any missing one above them) is `0700`
+(`configDirPermissions`), as the XDG base directory rule asks of a directory
+created where none existed; it used to be `0755`, which let every account on
+the machine list the folder that names the signed-in accounts. A folder that
+already exists keeps its mode (`TestAtomicWriteFile_CreatesItsFoldersOwnerOnly`).
 
 Section-header rewrites are also config-owned. `RenameDriveSections()` edits
 only the quoted section name, leaving comments, key order, and section body

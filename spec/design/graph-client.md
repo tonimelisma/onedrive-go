@@ -645,7 +645,7 @@ The graph package intentionally keeps runtime ownership narrow:
 
 - `graph/` exposes concrete types, not interfaces (`graph.Client`, `graph.Item`)
 - `graph/` does NOT import `config/` — callers pass token paths directly
-- `tokenfile/` is a leaf package (stdlib + oauth2 only)
+- `tokenfile/` imports no internal package but `fsroot` (stdlib, oauth2 and the rooted managed-state capability), and the `tokenfile-only-fsroot` depguard rule holds it to that
 - Token refresh uses a forked `golang.org/x/oauth2` (`github.com/tonimelisma/oauth2`, branch `on-token-change`) with `Config.OnTokenChange` callback for persistence. Tracks upstream proposal `golang/go#77502`.
   - Two consequences are accepted deliberately and must be revisited when the upstream proposal resolves. A `replace` directive does not apply transitively, so this module cannot be consumed as a library by another module without that consumer adding the same `replace`; the product ships as a binary, so this costs nothing today. And the build depends on a personal repository remaining available, which is a single point of failure no amount of pinning removes.
   - The fork is credential-handling code that will not receive upstream security advisories automatically, so `govulncheck` running on every CI verify is the compensating control, not an optional extra. Re-evaluate the fork whenever the upstream proposal moves.

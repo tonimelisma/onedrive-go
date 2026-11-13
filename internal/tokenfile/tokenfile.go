@@ -1,7 +1,9 @@
 // Package tokenfile handles reading and writing OAuth2 token files. Token
-// files store a pure OAuth2 token — no metadata. This is a leaf package
-// imported by both config/ and graph/ to avoid duplication and break the
-// config→graph import cycle.
+// files store a pure OAuth2 token — no metadata. Both config/ and graph/
+// import it, which avoids duplication and breaks the config→graph import
+// cycle. It imports no internal package but fsroot, through which every token
+// file is read and written, and the tokenfile-only-fsroot depguard rule holds
+// it to that.
 package tokenfile
 
 import (
@@ -84,10 +86,8 @@ func Save(path string, tok *oauth2.Token) (err error) {
 		return fmt.Errorf("tokenfile: opening managed root: %w", err)
 	}
 
-	if err := root.MkdirAll(DirPerms); err != nil {
-		return fmt.Errorf("tokenfile: creating directory: %w", err)
-	}
-
+	// AtomicWrite creates the token folder, and any missing one above it,
+	// with DirPerms.
 	if err := root.AtomicWrite(name, data, FilePerms, DirPerms, ".token-*.tmp"); err != nil {
 		return fmt.Errorf("tokenfile: writing token file: %w", err)
 	}

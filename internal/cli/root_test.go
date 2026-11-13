@@ -1229,6 +1229,50 @@ func TestBuildLoggerDualWithStatusWriter_LogFileOpenFailureWritesWarning(t *test
 	assert.Contains(t, statusBuf.String(), "cannot open log file")
 }
 
+// Validates: R-4.7.3, R-6.6.1
+//
+// An expired log that retention cannot remove is reported once, in the log
+// itself, and the log still opens.
+func TestBuildLoggerDual_ReportsAnExpiredLogItCannotRemoveOnce(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "test.log")
+	require.NoError(t, os.WriteFile(logPath, nil, 0o600))
+	expired := filepath.Join(dir, "test.log.1")
+	require.NoError(t, os.WriteFile(expired, []byte("old"), 0o600))
+	stale := time.Now().Add(-100 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(expired, stale, stale))
+	// The folder keeps its search bit, so the log opens; without the write bit
+	// the expired rotation cannot be removed.
+	//nolint:gosec // a test folder is made read-only on purpose.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() {
+		//nolint:gosec // a test folder gets its owner's write access back so t.TempDir can remove it.
+		assert.NoError(t, os.Chmod(dir, 0o700))
+	})
+
+	cfg := &config.ResolvedDrive{
+		LoggingConfig: config.LoggingConfig{LogFile: logPath, LogLevel: "debug", LogRetentionDays: 7},
+	}
+
+	var console bytes.Buffer
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &console)
+	require.NotNil(t, logger)
+	require.NotNil(t, closer, "the log opens although retention failed")
+	require.NoError(t, closer.Close())
+
+	data, err := localpath.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), "could not remove expired log files"), string(data))
+	assert.Contains(t, string(data), "test.log.1")
+	assert.FileExists(t, expired)
+}
+
 // Validates: R-4.7.1, R-6.6.1
 func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	t.Parallel()

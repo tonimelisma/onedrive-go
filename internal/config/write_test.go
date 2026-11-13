@@ -1014,6 +1014,54 @@ func TestAtomicWriteFile_SetsPermissions(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
+// Validates: R-6.8.23
+//
+// A folder the client creates for its own state is owner-only, as the XDG
+// base directory rule asks of a directory created where none existed: the
+// config folder holds the account list, and the catalog and the data folder
+// go through the same writer. A folder that already exists keeps its mode.
+func TestAtomicWriteFile_CreatesItsFoldersOwnerOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("new folders", func(t *testing.T) {
+		t.Parallel()
+
+		base := t.TempDir()
+		path := filepath.Join(base, "onedrive-go", "nested", "config.toml")
+		require.NoError(t, atomicWriteFile(path, []byte("hello")))
+
+		for _, dir := range []string{filepath.Join(base, "onedrive-go"), filepath.Dir(path)} {
+			info, err := os.Stat(dir)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+		}
+	})
+
+	t.Run("folder created by the mutation lock", func(t *testing.T) {
+		t.Parallel()
+
+		dir := filepath.Join(t.TempDir(), "onedrive-go")
+		path := filepath.Join(dir, "config.toml")
+		require.NoError(t, AppendDriveSection(path, driveid.MustCanonicalID("personal:user@example.com"), "~/OneDrive"))
+
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	})
+
+	t.Run("existing folder keeps its mode", func(t *testing.T) {
+		t.Parallel()
+
+		dir := filepath.Join(t.TempDir(), "onedrive-go")
+		require.NoError(t, os.Mkdir(dir, 0o750))
+		require.NoError(t, atomicWriteFile(filepath.Join(dir, "config.toml"), []byte("hello")))
+
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o750), info.Mode().Perm(), "an existing folder is never chmodded")
+	})
+}
+
 func TestAtomicWriteFile_InvalidDirectory(t *testing.T) {
 	// Use a path under a file (not a directory) to trigger MkdirAll failure.
 	dir := t.TempDir()
@@ -1024,7 +1072,7 @@ func TestAtomicWriteFile_InvalidDirectory(t *testing.T) {
 	path := filepath.Join(blocker, "sub", "test.txt")
 	err = atomicWriteFile(path, []byte("hello"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "creating config directory")
+	assert.Contains(t, err.Error(), "creating root directory")
 }
 
 // --- formatTOMLValue tests ---

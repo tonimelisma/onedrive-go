@@ -1,7 +1,9 @@
 package driveops
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -464,6 +467,78 @@ func TestSessionStore_CleanStale(t *testing.T) {
 	assert.True(t, found)
 	assert.NotNil(t, rec, "fresh session was incorrectly deleted")
 }
+
+// Validates: R-5.2
+//
+// A stale session that cannot be removed is reported to the caller with the
+// rest of the pass's failures, not only logged inside the store.
+func TestSessionStore_CleanStale_ReportsASessionItCannotRemove(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+	require.NoError(t, store.Save(testSessionDriveID, "/stale.txt", &SessionRecord{SessionURL: "https://example.com/stale"}))
+	sessionDir := filepath.Join(dir, sessionSubdir)
+	stalePath := filepath.Join(sessionDir, sessionKey(testSessionDriveID, "/stale.txt"))
+	staleTime := time.Now().Add(-8 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(stalePath, staleTime, staleTime))
+
+	makeReadOnlyForTest(t, sessionDir)
+
+	deleted, err := store.CleanStale(7 * 24 * time.Hour)
+	require.ErrorIs(t, err, os.ErrPermission)
+	assert.Contains(t, err.Error(), filepath.Base(stalePath))
+	assert.Zero(t, deleted)
+	assert.FileExists(t, stalePath)
+}
+
+// Validates: R-5.2
+//
+// A session file whose age cannot be read is reported and the rest are still
+// cleaned; one that vanished since the listing is simply gone.
+func TestSessionStore_RemoveStaleEntries_ReportsAnEntryItCannotStat(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewSessionStore(dir, testLogger(t))
+	require.NoError(t, store.Save(testSessionDriveID, "/stale.txt", &SessionRecord{SessionURL: "https://example.com/stale"}))
+	stalePath := filepath.Join(dir, sessionSubdir, sessionKey(testSessionDriveID, "/stale.txt"))
+	staleTime := time.Now().Add(-8 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(stalePath, staleTime, staleTime))
+
+	root, err := fsroot.Open(filepath.Join(dir, sessionSubdir))
+	require.NoError(t, err)
+	listed, err := root.ReadDir("")
+	require.NoError(t, err)
+
+	errUnreadable := errors.New("injected stat failure")
+	entries := append([]os.DirEntry{
+		infoFailingEntry{name: "unreadable.json", err: errUnreadable},
+		infoFailingEntry{name: "vanished.json", err: os.ErrNotExist},
+	}, listed...)
+
+	deleted, err := store.removeStaleEntries(root, entries, time.Now().Add(-7*24*time.Hour))
+	require.ErrorIs(t, err, errUnreadable)
+	assert.Contains(t, err.Error(), "unreadable.json")
+	assert.NotContains(t, err.Error(), "vanished.json", "a vanished session file is not a failure")
+	assert.Equal(t, 1, deleted, "cleaning goes on past an entry it cannot read")
+	assert.NoFileExists(t, stalePath)
+}
+
+// infoFailingEntry is a listed session file whose Info fails with err.
+type infoFailingEntry struct {
+	name string
+	err  error
+}
+
+func (e infoFailingEntry) Name() string               { return e.name }
+func (e infoFailingEntry) IsDir() bool                { return false }
+func (e infoFailingEntry) Type() fs.FileMode          { return 0 }
+func (e infoFailingEntry) Info() (fs.FileInfo, error) { return nil, e.err }
 
 func TestSessionStore_CleanStale_EmptyDir(t *testing.T) {
 	t.Parallel()

@@ -23,9 +23,10 @@ Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.
 | Dependency vulnerabilities are caught by tooling rather than by review, including in the forked oauth2 credential path. | `.github/workflows/ci.yml` (govulncheck step), `.github/dependabot.yml` |
 | Every platform claimed in README.md compiles on every verify run, and the darwin runtime is exercised by its own CI leg. | `TestRunVerifyDefaultRunsExpectedSteps`, `TestRunVerifyPublicRunsExpectedSteps`, `.github/workflows/ci.yml` |
 | Test assertion style and sleep discipline are enforced by repo verification, not only by contributor convention. | `internal/devtool/verify_test_conventions_test.go` |
-| `localpath.AtomicWrite` fsyncs the directory the rename landed in, reports a sync failure, and tolerates only a filesystem that cannot sync a directory (R-6.5.4). | `TestAtomicWrite_SyncsTargetDirectory`, `TestAtomicWrite_ReportsDirectorySyncFailure`, `TestAtomicWrite_ToleratesUnsupportedDirectorySync` |
+| `localpath.AtomicWrite` and `fsroot.Root.AtomicWrite` fsync the directory the rename landed in, report a sync failure, and tolerate only a filesystem that cannot sync a directory (R-6.5.4). | `TestAtomicWrite_SyncsTargetDirectory`, `TestAtomicWrite_ReportsDirectorySyncFailure`, `TestAtomicWrite_ToleratesUnsupportedDirectorySync`, `TestRoot_AtomicWrite_SyncsTargetDirectory`, `TestRoot_AtomicWrite_ReportsDirectorySyncFailure`, `TestRoot_AtomicWrite_ToleratesUnsupportedDirectorySync` |
 | `synctree.Root.Spelling` finds an entry by its spelling on disk when a stored NFC path differs from it in Unicode form only: the exact path first, then one listing per missing component; an ambiguous match, a missing parent and an unusable path resolve nothing, and `SpellingOfParent` never looks up the new entry's own name (R-2.13.2). | `TestRoot_SpellingFindsTheNameOnDisk`, `TestRoot_SpellingReturnsUnusablePathsAsGiven`, `TestRoot_SpellingOfParentResolvesOnlyTheParents`, `TestRoot_SpellingAddressesTheEntryForRootedOperations` |
 | Sync-tree mutation cannot escape the configured sync root through a symlinked ancestor, and a containment failure is never reported as absence. | `TestRoot_Rename_ThroughSymlinkedAncestorFailsAndPreservesTarget`, `TestRoot_MkdirAll_ThroughSymlinkedAncestorFails`, `TestRoot_RemoveAll_ThroughSymlinkedAncestorFails`, `TestRoot_Remove_ThroughSymlinkedAncestorFails`, `TestRoot_Chtimes_ThroughSymlinkedAncestorFails`, `TestRoot_Lstat_ThroughSymlinkedAncestorIsNotReportedAsNotExist`, `TestRoot_Stat_ThroughSymlinkedAncestorIsNotReportedAsNotExist`, `TestRoot_OpenFile_ThroughSymlinkedAncestorFails`, `TestRoot_NormalizeNotExist_DepthOnePathTerminates`, `TestRoot_MutationsWithinRootStillSucceed`, `TestRoot_MutationsThroughInRootSymlinkSucceed`, `TestRoot_ValidateNoSymlinkAncestors_NamesLinkAndNonFolderSeparately` |
+| Managed-state I/O cannot leave its folder through a symlinked parent, and a failure reads as absence only when the name is absent: never for an escape, and never for a create refused for permission, space or a read-only mount (R-6.4.10). | `TestRoot_Remove_RefusesSymlinkedParent`, `TestRoot_Rename_RefusesSymlinkedParent`, `TestRoot_AtomicWrite_RefusesSymlinkedParent`, `TestRoot_Stat_RefusesSymlinkedParent`, `TestRoot_OpenFile_CreateFailureKeepsItsErrno`, `TestRoot_OpenFile_PermissionDeniedIsNotNotExist`, `TestRoot_NameBelowAFileIsNotExist`, `TestRoot_RootThatIsAFileHasNothingBeneathIt` |
 
 ## Package Structure
 
@@ -48,7 +49,7 @@ internal/
   graph/                      Graph API client: auth, Graph normalization, items CRUD, delta, transfers
   graphtransport/             Graph-facing HTTP transport profile construction
   localpath/                  Explicit arbitrary-local-path boundary helpers
-  logfile/                    Log file creation, rotation, retention
+  logfile/                    Log file creation and retention
   multisync/                  Multi-mount sync control plane and watch reload
   namekey/                    OneDrive's name-equivalence key (leaf, x/text only)
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
@@ -83,7 +84,7 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
 - `multisync` owns multi-mount lifecycle; `sync` owns the single mounted
   content-root runtime.
-- `driveid`, `errclass`, `tokenfile`, `retry` and `namekey` are leaf packages (no internal imports).
+- `authstate`, `driveid`, `errclass`, `localpath`, `loglevel`, `namekey`, `sdnotify` and `sharedref` are leaf packages (no internal imports), every package that is one today, held to it by the `leaf-internal` depguard rule. Three packages have exactly one internal dependency and are held to that one by a rule of their own: `tokenfile` imports only `fsroot`, `retry` only `perf`, and `fsroot` only `localpath` (for `IsDirSyncUnsupported`).
 - `namekey` is the single authority for "are these two names in one folder the
   same OneDrive name". It is shared because both sides of the boundary ask:
   `graph` (path verification, created-item lookups), `driveops` (upload
@@ -251,7 +252,7 @@ performance data.
 Static verification is a first-class architectural constraint, not a best-effort hygiene step.
 
 - `golangci-lint` runs with `default: none`; every enabled linter is an explicit policy choice.
-- `depguard` enforces architectural import boundaries, and `forbidigo` bans raw filesystem `os.*` calls in production/runtime packages outside the explicit boundary packages (`fsroot`, `synctree`, `localpath`). Repo tooling under `internal/devtool` is allowed to use stdlib filesystem calls directly because it does not participate in product runtime authority.
+- `depguard` enforces architectural import boundaries, and `forbidigo` bans raw filesystem `os.*` calls in production/runtime packages outside the explicit boundary packages (`fsroot`, `synctree`, `localpath`). Repo tooling under `internal/devtool` is allowed to use stdlib filesystem calls directly because it does not participate in product runtime authority. depguard matches a rule's `files` patterns against each file's absolute path, anchored, and golangci-lint rewrites nothing in them but `${base-path}` and `${config-path}`, so every path-scoped rule names its files from `**/`. Written relative to the repository, the leaf-package, `graph`-no-`config`, `driveops`-no-`sync` and `multisync`-no-`graph` rules matched nothing and were off without a word, which is how `tokenfile` and `retry` stopped being the leaves the list said they were; a temporary internal import in a listed leaf now fails lint, and a test fails on any pattern that cannot match (`TestGolangciConfig_DepguardFilePatternsMatchAbsolutePaths`). The leaf list holds every package that imports no internal package. `tokenfile`, `retry` and `fsroot`, each with one internal dependency, have one rule apiece in depguard's lax mode: it denies the module's `internal/` prefix and allows the one dependency by its exact path, and in lax mode an allow entry that matches with a longer prefix than the deny wins, so that import alone passes. A temporary import of another internal package fails lint in each, naming its rule. A rule names its packages by folder, so a renamed or removed package would leave its pattern matching nothing; a test fails on any `**/<folder>/*.go` pattern whose folder holds no non-test Go file (`TestGolangciConfig_DepguardPackagePatternsNameExistingPackages`).
 - The devtool output-boundary check prevents production packages from bypassing the CLI-owned output contract with package-level `slog.Debug`/`Info`/`Warn`/`Error`, `log.Print*`, or direct `os.Stdout`/`os.Stderr` writes. The explicit product exceptions are `internal/cli/root.go` and `internal/cli/format.go`, which own the command output/status writers.
 - Test-time synchronization and assertion style are verified by `cmd/devtool`.
   Direct `t.Fatal`, `t.Fatalf`, `t.Error`, and `t.Errorf` are banned in tests
@@ -402,20 +403,27 @@ Static verification is a first-class architectural constraint, not a best-effort
   contents are already visible, but success would claim a guarantee the
   filesystem refused, and rewriting the same bytes is safe to retry. This
   holds for both atomic writers: `fsroot.Root.AtomicWrite` for managed state
-  and `localpath.AtomicWrite` for arbitrary paths (trash records, config,
-  tokens). `localpath` tolerates the one case where the sync cannot happen,
-  a filesystem that answers `EINVAL`/`ENOTSUP`/`EOPNOTSUPP` to an fsync on a
-  directory (FUSE, SMB), through `localpath.IsDirSyncUnsupported`, which is
-  the single definition of that errno set for every caller that syncs a
-  directory after a rename (`driveops.publishPartial`, the trash's
-  cross-filesystem copy and restore, `localpath.AtomicWrite`).
-  `fsroot.Root.AtomicWrite` has no such tolerance and reports that errno
-  too; it syncs the directory through its rooted handle. The seam is
-  the unexported `atomicWrite` with an injected directory sync, because an
-  fsync has no observable effect to test
-  (`TestAtomicWrite_SyncsTargetDirectory`,
+  (config, tokens, upload sessions) and `localpath.AtomicWrite` for arbitrary
+  paths (trash records). Both tolerate the one case where the sync cannot
+  happen, a filesystem that answers `EINVAL`/`ENOTSUP`/`EOPNOTSUPP` to an
+  fsync on a directory (FUSE and SMB mounts, home folders among them),
+  through `localpath.IsDirSyncUnsupported`, which is the single definition
+  of that errno set for every caller that syncs a directory after a rename
+  (`driveops.publishPartial`, the trash's cross-filesystem copy and restore,
+  both atomic writers). Without it every config and token write on such a
+  folder failed. `fsroot` imports `localpath` for that one predicate rather
+  than keeping a copy or moving it into a package of its own: `localpath`
+  imports no internal package, `synctree` already imports it for the same
+  test, and a second copy of the errno set is the drift a single definition
+  exists to prevent. `fsroot` syncs the directory through its rooted handle.
+  The seams are `localpath`'s unexported `atomicWrite` with an injected
+  directory sync and `fsroot`'s `syncDir` op, because an fsync has no
+  observable effect to test (`TestAtomicWrite_SyncsTargetDirectory`,
   `TestAtomicWrite_ReportsDirectorySyncFailure`,
-  `TestAtomicWrite_ToleratesUnsupportedDirectorySync`).
+  `TestAtomicWrite_ToleratesUnsupportedDirectorySync`,
+  `TestRoot_AtomicWrite_SyncsTargetDirectory`,
+  `TestRoot_AtomicWrite_ReportsDirectorySyncFailure`,
+  `TestRoot_AtomicWrite_ToleratesUnsupportedDirectorySync`).
 - The lint version is checked, not just pinned. CI installs a pinned
   golangci-lint, but nothing compared that pin against the version a developer
   runs locally, and a different version is a different lint policy rather than
@@ -479,9 +487,9 @@ Static verification is a first-class architectural constraint, not a best-effort
 - CI keeps the expensive runtime stress lane out of the required per-PR path, and runs it nightly and on manual dispatch so race-heavy watch/runtime regressions surface within a day. Stress runs upload the verifier `--summary-json` artifact so timeout growth and slowest-test evidence remain visible even when the package step stays green; the `verify-full` legs upload theirs too, one per platform. The live jobs print only variable names and file counts while they fetch credentials, never a drive identifier, a secret name or a token file name, because the repository's logs are public (R-6.10.27). The drive identifiers and the account allowlist are not in job-level `env`, whose values GitHub prints in every step's header: each live job receives them in the step right after its checkout, each as `${{ secrets.NAME || vars.NAME }}` so that a secret of the variable's name, if one is created, wins and is masked by GitHub everywhere. That step runs `scripts/ci-mask-test-drives.sh`, the one copy of the logic for both jobs: it masks every spelling of them the job, the tests or Graph URLs in debug output can print (each identifier and allowlist entry, the account address inside it, the vault-secret and token-file spellings, and the lower-cased and percent-encoded form of each, `@` as `%40` and `:` as `%3A`); lists those spellings in `$RUNNER_TEMP/onedrive-test-masks`; and exports the values, and each drive's Key Vault secret name (`<NAME>_VAULT_SECRET`) and token file name (`<NAME>_TOKEN_FILE`), through `$GITHUB_ENV`, printing nothing itself, so the credential steps derive no spelling. It keeps to bash 3.2, because the devtool tests run it on both CI platforms (`TestCIMaskScript_MasksEverySpellingAndExportsTheNames`). With repository variables that one step's header still shows the values once per job; a repository secret of the same name removes that last occurrence. Masking covers the log only. The e2e recorders write every configured drive by role (`drive-1`, `drive-2`, and `drive-1-account` for its address) through one helper, `testutil.DriveRoles`, that the timing and quirk summaries and every debug-log chunk go through; a debug log's file name is the test name redacted before it is sanitized, the auth preflight's subtests are named by role, the suite's own failure messages and log lines write drives through the same helper, and TestMain names the second drive's variable, not the drive (`TestDriveRoles_RecordedLinesHoldNoConfiguredDrive`, `TestE2ERecordersRecordRolesNotDrives`). No tracked file spells a test account: `TestE2E_TrackedFilesNameNoTestAccount`, in the quick live tier because only the live jobs know the addresses, lists the tracked files with `git ls-files` and fails on any line that holds a configured drive's or an allowlist entry's address in any case or percent-encoded, naming the file, the line and the account's role (`testutil.FindTestAccounts`, `TestFindTestAccounts_NamesFileLineAndRoleNeverTheAddress`); as a second layer the `e2e` job replaces every listed spelling with `***` in `/tmp/e2e-debug-logs` before uploading its artifacts, and uploads nothing from outside that directory: the verifier's `--summary-json` file is written there too. A failure message that quotes the CLI's own output is not rewritten by the suite; it reaches only the job log, which the masks cover. The test-account allowlist is read by one function, `testutil.CheckDriveAllowed`, which the live suites and the live benchmark share and whose error names the variables, never a value (`TestCheckDriveAllowed_NamesTheVariablesAndNoValue`); the `.env` files are read by one reader too, `testutil.LoadDotEnvFile`, which returns its errors to the live benchmark and to `LoadLiveTestConfig` and exits only in the thin harness wrappers `LoadDotEnv` and `LoadTestEnv` (`TestLoadDotEnvFile_ReturnsErrors`). `TestCIWorkflowSetsNoTestDriveInJobEnv` holds the workflow to all of this. Each `verify-unit` and `verify-full` leg prints its runner's core count, which the test tiers' durations and the full tier's deadline formula depend on.
 - Managed repo-state files use `internal/fsroot` root capabilities (R-6.4.10).
   Every `fsroot` call beneath the root -- open, stat, directory listing,
-  removal, rename, temp-file creation, subdirectory creation, the directory
-  sync after an atomic write, and the absence check that maps a failure onto
-  `os.ErrNotExist` -- resolves its name through an open `os.Root` descriptor.
+  removal, rename, an atomic write's temp file, subdirectories and directory
+  sync, and the absence check that maps a failure onto `os.ErrNotExist` --
+  resolves its name through an open `os.Root` descriptor.
   The name check in `cleanRelative` is lexical, so it cannot see a symlinked
   directory below the root; until the mutations were rooted too, such a link
   redirected a remove, rename, temp file or mkdir outside the root while reads
@@ -496,11 +504,54 @@ Static verification is a first-class architectural constraint, not a best-effort
   left alone (`TestRoot_Remove_RefusesSymlinkedParent`,
   `TestRoot_Rename_RefusesSymlinkedParent`,
   `TestRoot_AtomicWrite_RefusesSymlinkedParent`,
+  `TestRoot_Stat_RefusesSymlinkedParent`,
   `TestRoot_AtomicWrite_RefusesDirectoryCreationBelowSymlinkedParent`,
   `TestRoot_CreateTemp_RefusesSymlinkedDir`,
   `TestRoot_AtomicWrite_FollowsSymlinksThatStayInside`,
   `TestRoot_AtomicWrite_TempNameCollisionRetries`,
-  `TestRoot_CreateTemp_StopsAfterBoundedNameCollisions`).
+  `TestRoot_CreateTemp_StopsAfterBoundedNameCollisions`). Temp files are
+  created only inside an atomic write; the package exports no temp-file
+  creation of its own.
+  A failure reads as `os.ErrNotExist` only when the name is absent: the
+  failure must itself say not-exist or not-a-directory, and a rooted lstat of
+  the name must agree. Before, any failure on a name that turned out absent
+  read as "does not exist", and a create always targets an absent name, so a
+  log file in a folder the user cannot write failed with "file does not
+  exist" instead of "permission denied", and a full disk or a read-only mount
+  read the same way. The lstat is still needed because ENOTDIR also answers
+  an operation that wanted a directory and found a file, and that name is
+  there; a name below a file is absent. `synctree` applies the same errno
+  guard to the sync tree (below) (`TestRoot_OpenFile_CreateFailureKeepsItsErrno`,
+  `TestRoot_OpenFile_PermissionDeniedIsNotNotExist`,
+  `TestRoot_AtomicWrite_PermissionDeniedIsNotNotExist`,
+  `TestRoot_NameBelowAFileIsNotExist`).
+  The root follows the same rule. A root that is missing, or whose path runs
+  through a file, is not there, and nor is anything beneath it. A root that is
+  something other than a directory (a file, a FIFO, a device) is there, so
+  listing it fails with ENOTDIR as listing any file does, but every name
+  beneath it is absent. A stat of the root's path decides this before
+  anything opens the root (`checkRootIsDirectory`), never after: `os.OpenRoot`
+  opens the path for reading, which blocks forever on a FIFO, and it reports a
+  root that is a regular file with a bare "not a directory" error carrying no
+  errno. An open that fails after the stat found a directory keeps its own
+  error. Before, that bare error reached callers as neither absent nor
+  ENOTDIR, and the CLI re-derived it by stat'ing each managed file's parent,
+  which still missed a file two folders up
+  (`TestRoot_RootThatIsAFileHasNothingBeneathIt`,
+  `TestRoot_RootThatIsAFIFOAnswersWithoutOpeningIt`,
+  `TestManagedPathExists_DistinguishesAbsentFromUnreadable`).
+  An atomic write creates the root and every missing folder above and below
+  it with its `dirPerm`, so its callers do not create the root first
+  (`TestRoot_AtomicWrite_CreatesMissingFoldersWithDirPerm`).
+  The sync state database is the one managed file that does not go through
+  `fsroot`. SQLite opens it, and creates its `-wal` and `-shm` files next to
+  it, by path inside its own file layer, and the `database/sql` driver takes a
+  file name, never a descriptor opened through an `os.Root`; only the
+  creation of its folder is rooted (`openSyncStoreWithDriver` in
+  `internal/sync/store.go`). That is why R-6.4.10 names config, tokens,
+  upload sessions and logs and leaves the database out. Redirecting the
+  database would take a symlink planted in the user's own data folder, and
+  write access there already reaches the token beside it.
 - Sync-runtime filesystem operations under one configured sync root use `internal/synctree`. Managed shortcut projection roots use opt-in `synctree` helpers for no-symlink ancestor validation, safe component creation, root-contained path-state checks, rooted renames, empty-target replacement, byte-identical tree comparison, no-follow tree removal, and platform device/inode identity capture for same-parent shortcut alias rename detection; ordinary content sync symlink policy remains owned by the existing sync observation/execution rules.
 - Every `synctree` filesystem call — read, write, and destroy alike — resolves its name through an open `os.Root` descriptor. Mutating operations are part of the rooted `rootHandle` surface specifically because they are the ones that destroy data when containment is skipped: a lexically validated absolute path handed to package-level `os.Rename` follows a symlinked ancestor out of the sync root and silently replaces whatever sits at the destination. `synctree` therefore performs no mutation from an absolute path: the one absolute-path entry point, `RemoveAbs`, converts through `Rel` (which rejects anything outside the root) before delegating to the rooted `Remove`. Its injectable ops take a rooted handle plus a rooted-relative name, so a future call site cannot reintroduce the escape.
 - `synctree` offers three escalating strictness tiers, and callers must pick deliberately: rooted operations (`MkdirAll`, `Remove`, `RemoveAll`, `Rename`, `Chtimes`) contain the path but follow symlinks that stay inside the root; `*NoFollow` variants (`MkdirAllNoFollow`, `RemoveTreeNoFollow`, `RemoveEmptyDirNoFollow`, `ValidateTreeNoFollow`, `DirEmptyNoFollow`) additionally reject symlinks even when they resolve inside the root; and `ValidateNoSymlinkAncestors` is the standalone ancestor assertion used where the mutation itself happens outside `synctree`. Its refusal names which problem it found ("parent folder a is a symbolic link" or "parent folder a is not a folder"), since a symlinked ancestor is the everyday case under `follow_symlinks`.
@@ -512,7 +563,7 @@ Static verification is a first-class architectural constraint, not a best-effort
 - `synctree.FileIdentity` is (device, inode, birth time), and `synctree.SameIdentity` is the one Go definition of "the same entry": equal device and inode, and equal birth times whenever both are known (R-2.17.1). The birth time comes from `statx(2)` `STATX_BTIME` on Linux, read by path after each rooted stat and for each walked or listed entry and kept only when the mask bit is set and statx names the same device and inode (`withBirthTime`), and from `st_birthtimespec` on macOS, FreeBSD and NetBSD; elsewhere it is unknown. A FileInfo may state its own birth time (`BirthTimeReporter`), which the shims use. Because Linux FileInfo values are wrapped to carry it, `synctree.SameFile` replaces `os.SameFile` for anything the sync tree returned (`TestSameIdentity_BirthTimeDecidesWhenBothSidesKnowIt`, `TestIdentityFromFileInfo_EveryReadReportsTheSameBirthTime`, `TestIdentityFromFileInfo_LinuxBirthTimeIsStatxBtime`). Reads outside the seam see the real filesystem: upload sources, content hashing and followed symlinks go through `localpath` by absolute path (R-2.4.6), and the read-only probe reads `statfs` directly, so a shim cannot make a folder read-only.
 - Arbitrary local file paths outside those rooted domains use `internal/localpath` as the explicit trust boundary. `localpath.AtomicWrite` is the default arbitrary-path writer when replace-in-place semantics matter. `localpath.WriteDisposableFile` is reserved for disposable operational artifacts such as perf capture manifests; durable config, token, state, or sync-tree content writers must not use it.
 - Append-only log file creation in `internal/logfile` is the single documented exception to atomic replace-style writes. It is allowed because the log is an append-only operational artifact, not an authoritative config/state file.
-- `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks. `fsroot`'s ops are only `openRoot` and `tempSuffix`: no hook takes an absolute path, so failure injection substitutes a fake rooted handle (`TestRoot_AtomicWrite_FailureInjection`, `TestAtomicWriteReportsDirectorySyncFailure`), and the steps of writing the temp file are tested on a fake file (`TestWriteTempFile_ReportsEachStepFailure`). `synctree`'s `rootOps.syncDir` is the directory sync a detached file's cross-filesystem copy performs on the trash entry it lands in (`spec/design/sync-execution.md` → local trash); `localtrash.Trash` carries the same kind of seam (`syncDir`, `renameNoReplace`) for its restore path.
+- `fsroot.Root` and `synctree.Root` carry unexported injectable ops so managed-state and sync-runtime I/O failure paths can be tested deterministically without package-level test hooks. `fsroot`'s ops are `openRoot`, `tempSuffix` and `syncDir`: no hook takes an absolute path (`syncDir` is handed the directory already opened through the rooted handle), so failure injection substitutes a fake rooted handle (`TestRoot_AtomicWrite_FailureInjection`, `TestRoot_AtomicWrite_ReportsDirectorySyncFailure`, `TestRoot_ReadFile_ReportsReadAndCloseFailures`, `TestRoot_Open_ReportsRootAndFileCloseFailures`), the directory sync's answer is injected through `syncDir` (`TestRoot_AtomicWrite_ToleratesUnsupportedDirectorySync`), and the steps of writing the temp file are tested on a fake file (`TestWriteTempFile_ReportsEachStepFailure`). `synctree`'s `rootOps.syncDir` is the directory sync a detached file's cross-filesystem copy performs on the trash entry it lands in (`spec/design/sync-execution.md` → local trash); `localtrash.Trash` carries the same kind of seam (`syncDir`, `renameNoReplace`) for its restore path.
 
 - Family layering inside `internal/sync` is machine-checked. Each sync design doc declares a `LAYER:` rank beside its `GOVERNS:` line, and `devtool verify` fails when a file owned by a ranked doc reads a package-scope symbol owned by a higher-ranked doc. The compiler cannot help here -- every sync family compiles into one package, so a reference from the store up into the engine is as legal to it as any other -- but the families are real, each doc already declares which files it owns, and the direction between them is a design decision worth keeping true.
 

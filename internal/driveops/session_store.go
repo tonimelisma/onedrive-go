@@ -160,12 +160,7 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 			slog.Any("error", err),
 		)
 
-		if root, openErr := fsroot.Open(s.dir); openErr != nil {
-			s.logger.Warn("failed to open session root for corrupt-file cleanup",
-				slog.String("path", path),
-				slog.Any("error", openErr),
-			)
-		} else if rmErr := root.Remove(filepath.Base(path)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		if rmErr := root.Remove(name); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to remove corrupt session file",
 				slog.String("path", path),
 				slog.Any("error", rmErr),
@@ -304,8 +299,9 @@ func localRootContains(root, candidate string) bool {
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// CleanStale removes session files older than maxAge. Returns the number
-// of files deleted. Safe to call concurrently.
+// CleanStale removes session files older than maxAge. It returns the number
+// of files deleted and every file it could not check or delete, joined. Safe
+// to call concurrently.
 func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 	root, err := fsroot.Open(s.dir)
 	if err != nil {
@@ -321,7 +317,15 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 		return 0, fmt.Errorf("reading session dir: %w", err)
 	}
 
-	cutoff := time.Now().Add(-maxAge)
+	return s.removeStaleEntries(root, entries, time.Now().Add(-maxAge))
+}
+
+// removeStaleEntries removes each session file among entries last written
+// before cutoff and returns how many it removed. It goes on past a failure and
+// returns every one joined, as DeleteForScope does, for the caller to report
+// once; a file gone since the listing is not a failure.
+func (s *SessionStore) removeStaleEntries(root *fsroot.Root, entries []os.DirEntry, cutoff time.Time) (int, error) {
+	var errs []error
 	deleted := 0
 
 	for _, e := range entries {
@@ -330,30 +334,32 @@ func (s *SessionStore) CleanStale(maxAge time.Duration) (int, error) {
 		}
 
 		info, err := e.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
+			errs = append(errs, fmt.Errorf("stating session file %s: %w", e.Name(), err))
 			continue
 		}
 
-		if info.ModTime().Before(cutoff) {
-			if err := root.Remove(e.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
-				s.logger.Warn("failed to clean stale session",
-					slog.String("file", e.Name()),
-					slog.Any("error", err),
-				)
-
-				continue
-			}
-
-			s.logger.Debug("deleted stale upload session",
-				slog.String("file", e.Name()),
-				slog.Duration("age", time.Since(info.ModTime()).Truncate(time.Hour)),
-			)
-
-			deleted++
+		if !info.ModTime().Before(cutoff) {
+			continue
 		}
+
+		if err := root.Remove(e.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("deleting stale session file %s: %w", e.Name(), err))
+			continue
+		}
+
+		s.logger.Debug("deleted stale upload session",
+			slog.String("file", e.Name()),
+			slog.Duration("age", time.Since(info.ModTime()).Truncate(time.Hour)),
+		)
+
+		deleted++
 	}
 
-	return deleted, nil
+	return deleted, errors.Join(errs...)
 }
 
 // sessionKey produces a deterministic filename for a (driveID, localPath) pair.

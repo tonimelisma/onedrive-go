@@ -1077,7 +1077,26 @@ func buildLoggerDualWithStatusWriter(
 		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
 	}
 
-	f, err := logfile.Open(cfg.LogFile, cfg.LogRetentionDays)
+	// Retention runs before the open, so an expired current log is removed and
+	// the open starts it afresh. What it could not do is reported once, through
+	// the logger built here; it never keeps the log from opening.
+	retentionErr := logfile.RemoveExpired(cfg.LogFile, cfg.LogRetentionDays)
+	logger, closer := buildFileLogger(cfg, flags, statusWriter)
+	if retentionErr != nil {
+		logger.Warn("could not remove expired log files",
+			slog.String("log_file", cfg.LogFile),
+			slog.Any("error", retentionErr),
+		)
+	}
+
+	return logger, closer
+}
+
+// buildFileLogger opens cfg.LogFile and builds the dual console and file
+// logger on it, falling back to the console alone when the file cannot be
+// opened.
+func buildFileLogger(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) (*slog.Logger, io.Closer) {
+	f, err := logfile.Open(cfg.LogFile)
 	if err != nil {
 		writeWarningf(statusWriter, "Warning: cannot open log file %q: %v\n", cfg.LogFile, err)
 

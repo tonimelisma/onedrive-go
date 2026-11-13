@@ -685,7 +685,7 @@ func TestSaveToken_MkdirAllError(t *testing.T) {
 
 	err := tokenfile.Save(path, tok)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tokenfile: creating directory")
+	assert.Contains(t, err.Error(), "creating root directory")
 }
 
 func TestOAuthConfig_OnTokenChangeError(t *testing.T) {
