@@ -435,7 +435,15 @@ next pass (R-5.6.14, `TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefus
 `TestUpload_FailedContentStepStopsAfterThreeRefusedDeletes`,
 `TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone`,
 `TestRemoveEmptyItem`; live, in the integration tier,
-`TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession`).
+`TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession`). The failure's
+`CreatedItemError.Removed` says whether the removal worked, so sync ends its
+record of an item that can no longer receive the content (R-5.6.15,
+`TestUpload_FailedContentStepReportsWhetherItRemovedItsEmptyItem`). An upload
+that completed without returning its item (a fragment before the last
+answered 200 or 201 without a body, `ErrUploadCompletedWithoutItem`) is never
+handed to the removal: the item holds the content, and a read-back while
+OneDrive still processes it can show it empty
+(`TestUpload_CompletedUploadIsNotRemovedAsAPlaceholder`).
 
 Only a last fragment that was sent can have committed the file, so only its
 failure is a `FinalFragmentError` (the caller looks the item up before

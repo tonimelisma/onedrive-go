@@ -39,6 +39,10 @@ type watchLoopState struct {
 	// re-key, a move made on OneDrive), so the loop replans by itself once
 	// the plan's actions settle (R-2.1.7).
 	followUp watchFollowUpState
+
+	// createAttempts is when the creates this loop ran ended, by path, for
+	// the drop of create intents after a remote poll (R-5.6.15).
+	createAttempts watchCreateAttempts
 }
 
 // watchFollowUpState is the loop's record of a plan's follow-up work.

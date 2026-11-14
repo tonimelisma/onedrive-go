@@ -106,7 +106,19 @@ Important properties:
 - delta windows that carried no items (apart from the root) do **not**
   advance the saved cursor; the old token replays the empty window at no cost
   while a recent delete may still be propagating
-  ([graph-api-quirks.md](../reference/graph-api-quirks.md))
+  ([graph-api-quirks.md](../reference/graph-api-quirks.md)). Such a poll
+  still hands the loop a batch that carries only the time the poll began
+  (`pollOnly`): no items and no token, so it commits nothing and replans
+  nothing
+- every batch of a watch poll carries the time the poll began
+  (`remoteObservationBatch.pollStartedAt`, read from the observer's clock
+  before the first page is asked for, or, for a mount-root engine's poll,
+  from the run's clock), so the watch loop can drop the create
+  intent of a file that is gone once a poll that began after the last create
+  attempt at its path has been applied ([sync-engine.md](sync-engine.md);
+  `TestWatch_EveryPollHandsOverTheTimeItBegan`,
+  `TestWatch_ZeroEvents_NoTokenAdvance`,
+  `TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile`)
 - a window that carried items does advance the cursor even when every item
   converted to no event (for example deletes of items never synced here).
   Treating that as an empty window kept the old token, so watch mode replayed

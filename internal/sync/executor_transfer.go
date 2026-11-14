@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	slashpath "path"
 	"path/filepath"
 	"time"
 
@@ -495,24 +496,29 @@ type pendingCreateStore interface {
 	RecordPendingCreateIntent(ctx context.Context, pending *PendingCreate) error
 	RecordPendingCreate(ctx context.Context, pending *PendingCreate) error
 	ClearPendingCreateIntent(ctx context.Context, path string) error
+	ForgetRemovedPlaceholder(ctx context.Context, path, itemID string) error
 	PendingCreateAt(ctx context.Context, path string) (PendingCreate, bool, error)
 }
 
 // uploadNewFile creates action's file on OneDrive, with the pending-create
 // records around the request (R-5.6.15): the intent before it, the item
 // once the create hook has seen it (whether the attempt then succeeded or
-// failed), and the intent cleared again when the attempt is known to have
-// created nothing. A 409 is resolved rather than retried as is.
+// failed), the intent cleared again when the attempt is known to have
+// created nothing or succeeded without the hook (a zero-byte file), and the
+// record dropped when the cleanup after a failure removed the item the
+// create made (graph.CreatedItemError.Removed). A 409 is resolved rather
+// than retried as is.
 //
 // An attempt whose create ended without an answer (a dropped connection, a
 // 5xx, a timeout: graph.ErrCreateOutcomeUnknown) is not known to have created
 // nothing, and its intent stays. The empty file such a create left is then
 // this client's own: observation adopts it, and a retry that gets 409 on it
 // finishes the upload into it (resolveCreateConflict). When the user renames
-// or deletes the file instead, no retry comes, and the step after planning
-// drops the intent once a pass has observed OneDrive and then found the file
-// gone, or once it expires (pruneAbandonedCreateIntents). The intent was
-// cleared here once, and the file read as someone else's: a create conflict,
+// or deletes the file instead, no retry comes, and the intent is dropped once
+// OneDrive has been observed after the attempt and the file found gone (the
+// step after planning, prunePendingCreates, or in watch mode the next remote
+// poll, dropGoneCreateIntentsAt), or once it expires. An intent cleared here
+// on such an answer made the file read as someone else's: a create conflict,
 // the user's file renamed to a conflict copy and the empty one downloaded in
 // its place (live, 2026-11-11, during a network outage).
 func (e *executor) uploadNewFile(
@@ -542,8 +548,12 @@ func (e *executor) uploadNewFile(
 	case errors.Is(err, graph.ErrConflict):
 		result, keepIntent, err = e.resolveCreateConflict(ctx, action, driveID, parentID, source, localPath, err, priorIntent)
 	}
-	if !created && !keepIntent {
-		e.clearPendingCreateIntent(ctx, action)
+	var createdErr *graph.CreatedItemError
+	switch {
+	case errors.As(err, &createdErr) && createdErr.Removed && createdErr.Item != nil:
+		e.forgetRemovedPlaceholder(ctx, action, createdErr.Item.ID)
+	case !created && !keepIntent:
+		e.clearPendingCreateIntent(ctx, action, err == nil)
 	}
 
 	return result, err
@@ -631,28 +641,56 @@ func (e *executor) recordPendingCreate(
 }
 
 // clearPendingCreateIntent forgets the intent of an attempt that is known to
-// have created nothing (uploadNewFile keeps the intent of one whose create
-// ended without an answer). Best effort: a failure here leaves an intent that
-// observation drops when it sees the file synced or with content, and that
-// the step after planning prunes once the file is gone (after a pass that
-// observed OneDrive first) or the intent is past its TTL.
+// have created nothing, or that succeeded without the create hook (a
+// zero-byte file is complete as created); uploadNewFile keeps the intent of
+// one whose create ended without an answer. Best effort: a failure here
+// leaves an intent that observation drops when it sees the file synced or
+// with content, and that the step after planning prunes once the file is
+// gone (after a pass that observed OneDrive first) or the intent is past its
+// TTL.
 //
-// A canceled attempt keeps its intent, quietly. The create may have been in
-// flight when the context was canceled, and OneDrive can still make the item
-// after the client stopped waiting: that is the window the intent covers. The
-// write would also fail on the canceled context and warn at a clean shutdown
-// (R-6.6.21).
-func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action) {
+// A canceled attempt that did not succeed keeps its intent, quietly. The
+// create may have been in flight when the context was canceled, and OneDrive
+// can still make the item after the client stopped waiting: that is the
+// window the intent covers. The write would also fail on the canceled context
+// and warn at a clean shutdown (R-6.6.21). An attempt that succeeded has
+// nothing left in flight, so its intent is cleared on a context detached from
+// the action's and bounded like an outcome's commit: kept, it outlived a file
+// that was already synced.
+func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action, succeeded bool) {
 	if e.pendingCreates == nil {
 		return
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && !succeeded {
 		e.logger.Debug("kept the pending create intent of a canceled attempt",
 			slog.String("path", action.Path), slog.Any("error", ctx.Err()))
 		return
 	}
-	if err := e.pendingCreates.ClearPendingCreateIntent(ctx, action.Path); err != nil {
+
+	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	defer cancel()
+	if err := e.pendingCreates.ClearPendingCreateIntent(clearCtx, action.Path); err != nil {
 		e.logger.Warn("Could not clear a pending create intent", slog.String("path", action.Path), slog.Any("error", err))
+	}
+}
+
+// forgetRemovedPlaceholder drops the record of the item action's create made
+// once the cleanup after the failure reported it removed: the item is gone,
+// so it can never receive this client's upload, and nothing of this attempt
+// is left on OneDrive to recognize. On a context detached from the action's
+// and bounded like an outcome's commit, since the removal already happened
+// whatever became of the action. Best effort: a record left behind ends when
+// observation sees the item's delete.
+func (e *executor) forgetRemovedPlaceholder(ctx context.Context, action *Action, itemID string) {
+	if e.pendingCreates == nil {
+		return
+	}
+
+	forgetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	defer cancel()
+	if err := e.pendingCreates.ForgetRemovedPlaceholder(forgetCtx, action.Path, itemID); err != nil {
+		e.logger.Warn("Could not forget the record of a removed placeholder",
+			slog.String("path", action.Path), slog.String("item_id", itemID), slog.Any("error", err))
 	}
 }
 
@@ -696,7 +734,7 @@ func (e *executor) resolveCreateConflict(
 				action.Path, readErr)
 		}
 		if found && pending.ItemID != "" {
-			uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, pending.ItemID, source, localPath)
+			uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, parentID, pending.ItemID, source, localPath)
 			if finished {
 				return uploaded, false, uploadErr
 			}
@@ -730,19 +768,34 @@ func (e *executor) resolveCreateConflict(
 // finishIntoPlaceholder uploads action's content into the empty item itemID,
 // conditional on the eTag it reads now (not the creation eTag, which a
 // canceled upload session moves). finished is false, and nothing was sent,
-// when the item cannot be read or is no longer empty.
+// when the item is gone, is no longer an empty live file (isEmptyLiveFile: a
+// folder, a deleted item or a package of size 0 is no placeholder of this
+// client's), or is no longer where this create puts the file
+// (placeholderIsAtCreate): renamed or moved online before observation took
+// its record along, it would receive the user's file under another name or
+// in another folder. A read that fails otherwise is that read's failure,
+// classified by its own answer like every read made while resolving the 409,
+// and it settles the attempt (finished, with the error): taken for "no
+// placeholder", it came back as a stale plan under the 409's status.
 func (e *executor) finishIntoPlaceholder(
-	ctx context.Context, action *Action, driveID driveid.ID, itemID, source, localPath string,
+	ctx context.Context, action *Action, driveID driveid.ID, parentID, itemID, source, localPath string,
 ) (result *driveops.UploadResult, finished bool, err error) {
-	if item, getErr := e.items.GetItem(ctx, driveID, itemID); getErr == nil && item.Size == 0 {
-		opts := e.uploadOpts(action, source)
-		opts.IfMatch = item.ETag
-		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, itemID, localPath, opts)
-
-		return result, true, err //nolint:wrapcheck // driveops names the file
+	item, getErr := e.items.GetItem(ctx, driveID, itemID)
+	switch {
+	case errors.Is(getErr, graph.ErrNotFound):
+		return nil, false, nil
+	case getErr != nil:
+		return nil, true, fmt.Errorf("resolving the refused create of %s: reading its placeholder %s: %w",
+			action.Path, itemID, getErr)
+	case !isEmptyLiveFile(item), !e.placeholderIsAtCreate(item, action.Path, parentID):
+		return nil, false, nil
 	}
 
-	return nil, false, nil
+	opts := e.uploadOpts(action, source)
+	opts.IfMatch = item.ETag
+	result, err = e.transferMgr.UploadFileToItem(ctx, driveID, itemID, localPath, opts)
+
+	return result, true, err //nolint:wrapcheck // driveops names the file
 }
 
 // claimLostCreate finishes the create that an earlier attempt asked for and
@@ -770,12 +823,29 @@ func (e *executor) claimLostCreate(
 	e.logger.Debug("claimed the empty file of a create whose answer was lost",
 		slog.String("path", action.Path), slog.String("item_id", child.ID))
 
-	uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, child.ID, source, localPath)
+	uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, parentID, child.ID, source, localPath)
 	if finished {
 		return uploaded, false, uploadErr
 	}
 
 	return nil, false, conflictErr
+}
+
+// placeholderIsAtCreate reports whether item sits where the create of relPath
+// under parentID puts the file: relPath's name in NFC, under parentID. The
+// drive root's alias graphRootID names no item, so an item read back for a
+// create in the drive root is placed by remoteItemIsAt, and only a location
+// it knows to be elsewhere refuses it.
+func (e *executor) placeholderIsAtCreate(item *graph.Item, relPath, parentID string) bool {
+	if nfcNormalize(item.Name) != nfcNormalize(slashpath.Base(relPath)) {
+		return false
+	}
+	if parentID != "" && parentID != graphRootID {
+		return item.ParentID == parentID
+	}
+	at, known := e.remoteItemIsAt(item, relPath)
+
+	return at || !known
 }
 
 // isEmptyLiveFile reports whether item, as listed, is a plain file holding no

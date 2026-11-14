@@ -113,7 +113,15 @@ side as converged, forever (D-035). An upload completion without an item
 (`graph.ErrUploadCompletedWithoutItem`) is looked up by ID, or by an exact
 name in the parent listing for a create, through the optional `ItemReader`
 capability, and a persisted session whose upload completed that way is
-deleted. Evidence: `TestTransferManager_Upload_PersonalHashMismatchFails`,
+deleted. A lookup that fails leaves the outcome unknown
+(`uploadOutcomeUnknownError`, the lookup's failure in its chain), and after a
+create the failure still names the created item (`graph.CreatedItemError`):
+returned plain, a 404 from looking up the created item reached sync as the
+create's own 404, read as the parent folder gone, and the folder and its
+subtree were forgotten from remote truth
+(`TestSettleUploadedItem_LookupFailureKeepsTheCreateMark`; in sync,
+`TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth`).
+Evidence: `TestTransferManager_Upload_PersonalHashMismatchFails`,
 `TestTransferManager_Upload_MismatchThatReadsBackVerifiedSucceeds`,
 `TestTransferManager_Upload_WarnsOnHashMismatch` (enrichment accepted),
 `TestTransferManager_Upload_CompletionWithoutItemIsLookedUp`,
@@ -375,6 +383,11 @@ When recording the item a persisted session created fails (`OnCreated`
 returns an error), the session is canceled and the item removed the same way,
 before any content is sent
 (`TestSessionUpload_FailedCreatedHookRemovesTheEmptyItem`).
+In both places the failure is the one `graph.CreatedItemError` naming the
+item, never one wrapped inside another, and its `Removed` says whether the
+removal worked, as Graph's own removal does, so sync ends its record of an
+item that can no longer receive the content (R-5.6.15,
+`TestUploadFile_RemovedPlaceholderIsReportedRemoved`).
 A large create makes its item and opens its session in one Graph call
 (`CreateUploadSession`). When the session request fails after the item
 exists, Graph names the item in a `graph.CreatedItemError` and has already
@@ -383,9 +396,11 @@ that item, once, because the removal is best effort and an empty file nobody
 recorded reads on the next pass as someone else's (R-5.6.15). Before, the
 hook ran only once a session was open, so the caller cleared its intent and a
 failed removal left a stranger's empty file (live, e2e
-`TestE2E_SyncWatch_PauseResume`). The item is not adopted for a retry by ID,
-since it may be gone; a hook failure there is Debug, and the session's error
-is what the caller sees
+`TestE2E_SyncWatch_PauseResume`). An item the error reports removed is not
+recorded: it is gone, and a record would name an item no upload can use
+(`TestRecordItemOfFailedSession_SkipsARemovedItem`). The item is not adopted
+for a retry by ID, since it may be gone; a hook failure there is Debug, and
+the session's error is what the caller sees
 (`TestSessionUpload_FailedSessionRecordsTheItemTheCreateMade`).
 The hook cannot run for a create whose answer never arrived: there is no item
 to name. The Graph client marks that failure `graph.ErrCreateOutcomeUnknown`

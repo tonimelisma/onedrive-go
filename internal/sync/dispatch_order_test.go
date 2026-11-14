@@ -331,6 +331,11 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ALocalFileDated2300UploadsAndConverges,
 		TestRunOnce_AFileRedatedToTheEpochConverges,
 		TestRunOnce_ARemoteFileDatedTheEpochKeepsItsTimeLocally,
+		TestRunOnce_ClaimedZeroByteFileThenRemoteMtimeChangeIsARemoteChange,
+		TestRunOnce_AdoptedPlaceholderWithAnEmptyLocalFileLosesItsRecord,
+		TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth,
+		TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord,
+		TestRunOnce_AdoptedHashlessPlaceholderRenamedOnlineIsFinishedWithoutAConflict,
 	}
 }
 

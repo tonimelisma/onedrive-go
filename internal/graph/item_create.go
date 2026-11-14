@@ -175,6 +175,9 @@ type CreatedFunc func(created *Item) error
 type CreatedItemError struct {
 	Item *Item
 	Err  error
+	// Removed reports that the cleanup after the failure removed Item: it was
+	// still empty and is gone now, so it can never receive the content.
+	Removed bool
 }
 
 func (e *CreatedItemError) Error() string { return e.Err.Error() }
@@ -195,11 +198,13 @@ func (c *Client) Upload(
 // sent through an upload session on the new item, conditional on the eTag it
 // was created with, so a writer that replaced it in between gets a 412
 // instead of being overwritten. onCreated (may be nil) runs between the two
-// steps. When the content step fails before its final fragment the empty
-// item is removed again (RemoveEmptyItem), so a retry does not meet its own
+// steps. When the content step fails before its final fragment, and not
+// because the upload completed without returning the item, the empty item is
+// removed again (RemoveEmptyItem), so a retry does not meet its own
 // placeholder as a conflicting file; failures after the create are
-// *CreatedItemError. content must be an io.ReaderAt so that retries can
-// re-read from arbitrary offsets. progress may be nil.
+// *CreatedItemError, whose Removed says whether that removal happened.
+// content must be an io.ReaderAt so that retries can re-read from arbitrary
+// offsets. progress may be nil.
 //
 // A zero-byte upload whose content landed but whose mtime PATCH failed
 // returns the uploaded item together with a *MtimeNotAppliedError.
@@ -218,15 +223,15 @@ func (c *Client) UploadCreating(
 
 	if onCreated != nil {
 		if hookErr := onCreated(created); hookErr != nil {
-			c.removeCreatedPlaceholder(ctx, driveID, created, hookErr)
-			return nil, &CreatedItemError{Item: created, Err: hookErr}
+			removed := c.removeCreatedPlaceholder(ctx, driveID, created, hookErr)
+			return nil, &CreatedItemError{Item: created, Err: hookErr, Removed: removed}
 		}
 	}
 
 	item, err := c.chunkedUploadToExistingItem(ctx, driveID, created.ID, created.ETag, content, size, mtime, progress)
 	if err != nil {
-		c.removeCreatedPlaceholder(ctx, driveID, created, err)
-		return nil, &CreatedItemError{Item: created, Err: err}
+		removed := c.removeCreatedPlaceholder(ctx, driveID, created, err)
+		return nil, &CreatedItemError{Item: created, Err: err, Removed: removed}
 	}
 
 	return item, nil
@@ -247,8 +252,8 @@ func (c *Client) CreateUploadSession(
 
 	session, err := c.CreateUploadSessionForItem(ctx, driveID, created.ID, created.ETag, size, mtime)
 	if err != nil {
-		c.removeCreatedPlaceholder(ctx, driveID, created, err)
-		return nil, &CreatedItemError{Item: created, Err: err}
+		removed := c.removeCreatedPlaceholder(ctx, driveID, created, err)
+		return nil, &CreatedItemError{Item: created, Err: err, Removed: removed}
 	}
 	session.CreatedETag = created.ETag
 
@@ -264,16 +269,20 @@ const placeholderCleanupTimeout = 10 * time.Second
 // and tries its conditional delete before it leaves the item in place.
 const placeholderCleanupAttempts = 3
 
-// removeCreatedPlaceholder deletes the empty item a failed upload created,
-// unless the failure was on the final fragment (the content may have
-// landed; the caller looks before deciding). The removal itself is
-// RemoveEmptyItem, on a context detached from the upload's (the upload may be
-// failing because that was canceled) and bounded by
-// placeholderCleanupTimeout. Best-effort: a leftover placeholder is an
-// ordinary remote file the next pass sees.
-func (c *Client) removeCreatedPlaceholder(ctx context.Context, driveID driveid.ID, created *Item, cause error) {
-	if IsFinalFragmentUncertain(cause) || created == nil || created.ID == "" {
-		return
+// removeCreatedPlaceholder deletes the empty item a failed upload created
+// and reports whether the item is gone. It leaves the item alone when the
+// content may have landed: a failure on the final fragment (the caller looks
+// before deciding) or an upload that completed without returning the item
+// (that item holds the content; a read-back can still show it empty while
+// OneDrive processes it). The removal itself is RemoveEmptyItem, on a context
+// detached from the upload's (the upload may be failing because that was
+// canceled) and bounded by placeholderCleanupTimeout. Best-effort: a leftover
+// placeholder is an ordinary remote file the next pass sees, and a removal
+// that failed reports the item as not removed.
+func (c *Client) removeCreatedPlaceholder(ctx context.Context, driveID driveid.ID, created *Item, cause error) bool {
+	if IsFinalFragmentUncertain(cause) || errors.Is(cause, ErrUploadCompletedWithoutItem) ||
+		created == nil || created.ID == "" {
+		return false
 	}
 
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placeholderCleanupTimeout)
@@ -285,13 +294,15 @@ func (c *Client) removeCreatedPlaceholder(ctx context.Context, driveID driveid.I
 			slog.String("item_id", created.ID),
 			slog.Any("error", err),
 		)
-		return
+		return false
 	}
 	if !removed {
 		c.logger.Debug("left the file a failed upload created in place: it holds content, or has no eTag to delete it by",
 			slog.String("item_id", created.ID),
 		)
 	}
+
+	return removed
 }
 
 // RemoveEmptyItem deletes itemID while it is still an empty file. Each attempt

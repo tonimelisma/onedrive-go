@@ -94,9 +94,11 @@ const placeholderRemovalTimeout = 10 * time.Second
 //     ErrUploadSessionInvalidated, never a blind restart.
 func (tm *TransferManager) persistedSessionUpload(ctx context.Context, up *persistedUpload) (*graph.Item, error) {
 	item, err := tm.persistedSessionUploadOnce(ctx, up)
-	if err != nil && up.createdItem != nil {
+	var created *graph.CreatedItemError
+	if err != nil && up.createdItem != nil && !errors.As(err, &created) {
 		// Failures after this upload created its item name that item, so the
-		// caller looks the outcome up by ID (M2).
+		// caller looks the outcome up by ID (M2). One that already names it
+		// (a removed placeholder) is not wrapped in a second one.
 		return nil, &graph.CreatedItemError{Item: up.createdItem, Err: err}
 	}
 
@@ -224,8 +226,12 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 	if up.onCreated != nil {
 		if hookErr := up.onCreated(session.ItemID, session.CreatedETag); hookErr != nil {
 			tm.dropSession(ctx, driveStr, up.key, session.UploadURL)
-			tm.removePlaceholder(ctx, up.target.driveID, session.ItemID)
-			return nil, fmt.Errorf("recording the new file %s: %w", up.localPath, hookErr)
+			removed := tm.removePlaceholder(ctx, up.target.driveID, session.ItemID)
+			return nil, &graph.CreatedItemError{
+				Item:    up.createdItem,
+				Err:     fmt.Errorf("recording the new file %s: %w", up.localPath, hookErr),
+				Removed: removed,
+			}
 		}
 	}
 
@@ -239,14 +245,16 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 // and conditional delete can fail or give up), and an empty file nobody
 // recorded reads on the next pass as someone else's (R-5.6.15). Before this,
 // the hook ran only once a session was open, and sync cleared the intent of
-// an attempt whose hook never ran. The item is not adopted as up.createdItem:
+// an attempt whose hook never ran. An item the error reports removed is not
+// recorded: it can never receive the content, and a record of it would name
+// an item that no longer exists. The item is not adopted as up.createdItem:
 // it may be gone, and a retry by its ID would then meet 404 instead of
 // creating the file again. A hook failure is Debug; the session's error is
 // what the caller sees.
 func (tm *TransferManager) recordItemOfFailedSession(up *persistedUpload, err error) {
 	var createdErr *graph.CreatedItemError
 	if up.onCreated == nil || up.createdItem != nil || !errors.As(err, &createdErr) ||
-		createdErr.Item == nil || createdErr.Item.ID == "" {
+		createdErr.Item == nil || createdErr.Item.ID == "" || createdErr.Removed {
 		return
 	}
 
@@ -461,12 +469,15 @@ func committedByThisUpload(sent uploadedContent, item *graph.Item) bool {
 // empty item moves its eTag although no content landed (live, e2e
 // TestE2E_SyncWatch_FileModification). The context is detached from the
 // caller's, because the upload may be failing because that was canceled.
-// Best effort: a leftover is an ordinary remote file, which sync's
-// pending-create record identifies when one was written (R-5.6.15).
-func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID driveid.ID, itemID string) {
+// It reports whether the item is gone, which the caller hands on in its
+// *graph.CreatedItemError so sync ends its record of the item. Best effort: a
+// leftover is an ordinary remote file, which sync's pending-create record
+// identifies when one was written (R-5.6.15), and a removal that failed
+// reports the item as not removed.
+func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID driveid.ID, itemID string) bool {
 	remover, ok := tm.uploads.(PlaceholderRemover)
 	if !ok || itemID == "" {
-		return
+		return false
 	}
 
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placeholderRemovalTimeout)
@@ -478,13 +489,15 @@ func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID drivei
 			slog.String("item_id", itemID),
 			slog.Any("error", err),
 		)
-		return
+		return false
 	}
 	if !removed {
 		tm.logger.Debug("left the file a failed upload created in place: it holds content, or has no eTag to delete it by",
 			slog.String("item_id", itemID),
 		)
 	}
+
+	return removed
 }
 
 // dropSession cancels a server session best-effort, on a context detached

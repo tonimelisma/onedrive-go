@@ -515,8 +515,13 @@ to a conflict copy and the empty file downloaded. `pending_creates`
 (generation 18, keyed by path since generation 27, `store_pending_creates.go`)
 is that memory: the executor records the intent at the path before the
 request that creates the item, and item ID, path and creation eTag before the
-first content byte is sent. The intent is what survives a process dying with
-the creating request in flight (live, 2026-11-01: OneDrive created the empty
+first content byte is sent. One rule holds for a row's whole life: it ends
+at the first moment its file can no longer receive this client's upload, and
+no remote change is ever swallowed, and no item adopted, because a row
+exists. The comment block at the top of `store_pending_creates.go` lists
+every way a row is written and every way it ends. The intent is what
+survives a process dying with the creating request in flight (live,
+2026-11-01: OneDrive created the empty
 item two seconds after the kill, so no hook recorded it): an empty file
 observed at the intended path within `pendingCreateIntentTTL` (72 h) is
 claimed as the placeholder, `claimIntendedPlaceholderTx`, and adopted like a
@@ -529,10 +534,15 @@ file that stays empty and was never dropped
 attempt known to have created nothing clears the intent. An attempt that was
 canceled, or whose create ended without an answer
 (`graph.ErrCreateOutcomeUnknown`), is not known to: its create may have
-landed or may still land, so the intent is kept. The runtime-state step
-that follows planning prunes the intents no create will claim
-(`pruneAbandonedCreateIntents`, one transaction), told by its caller what
-the pass observed before it planned (`passObservation`):
+landed or may still land, so the intent is kept. An attempt that succeeded
+clears its intent even when a shutdown canceled it as it finished, on a
+context detached from the action's and bounded by `OutcomeCommitTimeout`:
+kept, the intent of a zero-byte file (which runs no create hook) outlived a
+file that was already synced
+(`TestUploadNewFile_ZeroByteCreateLeavesNoPendingRow`). The runtime-state
+step that follows planning prunes what no create, upload or observation
+needs any more (`prunePendingCreates`, one transaction), told by its caller
+what the pass observed before it planned (`passObservation`):
 
 - after any plan, every intent past the TTL;
 - after a pass that observed OneDrive and then the local tree (a one-shot
@@ -544,24 +554,53 @@ the pass observed before it planned (`passObservation`):
   and the user renamed or deleted the file. Nothing retries it, and the
   intent stayed for good, able to claim an empty file a stranger made at
   that path, which the next pass then deleted (model test, chaos seeds 9
-  and 11).
+  and 11);
+- after any plan, the row naming an item whose baseline row records empty
+  content on both sides and whose path the local tree holds as an empty file:
+  an adopted placeholder whose local file is empty too plans nothing and
+  commits nothing, so its row stayed for good and absorbed every later move
+  of the item's eTag as the placeholder following it. Nothing is left to
+  upload, and an echo of an empty file is no change
+  (`TestPrunePendingCreates_DropsTheRecordOfASettledEmptyPlaceholder`,
+  `TestRunOnce_AdoptedPlaceholderWithAnEmptyLocalFileLosesItsRecord`);
+- after any plan, the row naming an item at a path the full local scan does
+  not visit (the content filter hides it, a shortcut root reserves it): this
+  engine plans nothing there, so no upload goes into the item. Every such
+  row ends in this step, whether or not observation adopted its item
+  (`TestPrunePendingCreates_DropsTheRecordOfAnItemAtAPathTheScanDoesNotVisit`;
+  end to end, `TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord`).
+  The commit that removes an adopted item's hidden baseline row would end
+  that row too, but this step runs before the plan executes. An intent there
+  is kept: it names no item, and its TTL ends it.
+
+The prune never runs while an upload of the engine is in flight: a one-shot
+pass prunes before it executes its plan, and a watch replan waits until no
+action is running
+(`TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates`).
 
 A watch replan refreshes the local tree only and plans on the OneDrive
-changes the observers committed before it, so a long-running watch keeps a
-fresh intent whose file is gone: a create whose answer was lost may have
-landed without a change batch showing it yet, and dropped at that point its
-empty file would have been downloaded as a stranger's. The batch that shows
-it claims it, and the next replan deletes the placeholder; an intent whose
-create never landed goes at the next start or once it expires. A path the
-content filter hides or a shortcut root reserves, a read boundary on either
-side or another issue that blocks truth, and suspect local truth also keep
-the intent: absence there proves nothing. A row that names an item is never
-pruned. A create that lands after its intent was dropped reads as an empty
-remote file and is downloaded, the lesser harm
+changes the observers committed before it, so its prune keeps a fresh intent
+whose file is gone: a create whose answer was lost may have landed without a
+change batch showing it yet, and dropped at that point its empty file would
+have been downloaded as a stranger's. The batch that shows it claims it, and
+the next replan deletes the placeholder. An intent whose create never landed
+goes once a remote poll that began after the last create attempt at its path
+ended has been applied without claiming it, a poll that returned no items
+included ([sync-engine.md](sync-engine.md), `watchCreateAttempts`;
+`dropGoneCreateIntentsAt` judges such a path as after a pass that observed
+OneDrive first), at the next start, or once it expires. That record of
+attempts is held in memory by the watch loop, so the row has no column for
+it; after a restart the start pass judges older intents. A path the content
+filter hides or a shortcut root reserves, a read boundary on either side or
+another issue that blocks truth, and suspect local truth also keep the
+intent: absence there proves nothing. A create that lands after its intent
+was dropped (its change shows only in a later poll) reads as an empty remote
+file and is downloaded, the lesser harm
 (`TestPruneAbandonedCreateIntents_DropsWhatNoCreateWillClaim`,
 `TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped`,
 `TestRunOnce_EmptyItemOfAKilledCreateWhoseFileWasDeletedIsRemoved`,
-`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`;
+`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`,
+`TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll`;
 `TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded`,
 `TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL`,
 `TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem`,
@@ -600,12 +639,62 @@ comparison has, and a moved eTag with the local file changed read as an
 edit on both sides, a conflict copy of the user's file plus a download of
 the empty one
 (`TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict`).
-An observation whose size Graph did not report (R-2.4.16) is not followed:
-the item may hold content, and the upload into it is conditional on the
-row's eTag
-(`TestCommitObservation_AdoptedPlaceholderOfUnknownSizeIsNotFollowed`).
+Stale, adopt and follow read the item as still empty, which takes a known
+size of zero. An observation whose size Graph did not report (R-2.4.16)
+arrives as size 0 and says nothing about emptiness: it is observed like any
+item, nothing is adopted, followed or swallowed as a stale echo, and the
+record stays for an observation that knows (`placeholderSizeUnknown`;
+`TestCommitObservation_AdoptedPlaceholderOfUnknownSizeIsNotFollowed`,
+`TestCommitObservation_UnknownSizeOfAPendingItemIsNotAStaleEcho`,
+`TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted`). An adopted
+placeholder renamed or moved online while still empty takes its record to
+its new path: left at the old path, the record was found by a later create
+there that met 409, which uploaded into the item at its new path; dropped,
+the stale-echo rule above would be lost for an upload by ID into the item
+already on its way, whose If-Match is checked when its session opens and not
+by every fragment. A path that already holds another record keeps that one,
+and the moved record ends rather than stay at the path its item left: two
+records never name one item (`movePendingCreateOfItemTx`;
+`TestCommitObservation_AdoptedPlaceholderRenamedWhileEmptyTakesItsRecordAlong`,
+`TestCommitObservation_AdoptedPlaceholderRenamedOntoARecordedPathLeavesNoRecordBehind`).
+An adopted placeholder renamed online whose eTag and modification time moved
+with the rename, on a drive that gives empty files no hash, is planned as the
+rename it is, and the user's file goes into it by ID without a conflict copy
+(`TestRunOnce_AdoptedHashlessPlaceholderRenamedOnlineIsFinishedWithoutAConflict`).
 Adopted and followed rows are put into the in-memory baseline after the
-commit. A baseline row at the
+commit.
+
+Outside observation and the prune, a row ends or moves in the transaction
+that commits an outcome (`CommitMutation`, `settlePendingCreatesTx`, before
+the commit's crash point, so recovery from a kill mid-create is untouched).
+A file outcome whose committed remote content is empty (a zero-byte create,
+an empty file uploaded into a placeholder, an empty file downloaded or found
+equal) drops the row at its path and the row naming its item: a zero-byte
+create that watch observation claimed before the attempt cleared its intent
+otherwise kept a row naming the item for good, and a later change of the
+file on OneDrive was absorbed as the placeholder following its eTag
+(`TestUploadNewFile_ZeroByteCreateClaimedByTheObserverLeavesNoPendingRow`,
+`TestRunOnce_ClaimedZeroByteFileThenRemoteMtimeChangeIsARemoteChange`). An
+outcome that removes an item from the baseline (a delete on either side,
+another item's row taking the path) drops the row naming that item
+(`TestCommitMutation_DeleteOutcomeDropsTheRecordOfItsItem`). An outcome that
+commits content keeps its row for the stale echo until observation sees the
+content (`TestCommitMutation_UploadWithContentKeepsTheRecordForItsEcho`). A
+move takes the row naming its item to the item's new path, and a folder move
+every row below the folder's previous baseline path, as it re-paths the
+baseline (`movePendingCreatesTx`): the placeholder can still receive the
+upload, and only there. Left at the old path, the row was found by a create
+there that met 409, which uploaded into the item at its new path. A new path
+that already holds a row keeps it, and the moved row ends, with one
+exception: a row naming an item the move displaces from the baseline is
+dropped first, so the moved row takes the path
+(`TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong`, which has a
+case for each). The attempt
+itself drops the record of an item the cleanup after its failure reported
+removed (`graph.CreatedItemError.Removed`, `ForgetRemovedPlaceholder`, on a
+detached bounded context; `TestUploadNewFile_RemovedPlaceholderLeavesNoRecord`).
+
+A baseline row at the
 placeholder's path whose item OneDrive no longer holds there (deleted, or
 moved away, often in the same window: a folder replaced by a file, a file
 renamed online while edited here) does not block adoption: the create could
@@ -613,7 +702,12 @@ only succeed because OneDrive had freed the name, so that row is dropped and
 the item, if it lives on elsewhere, reads as a new remote item
 (`TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemOneDriveDeleted`,
 `TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemMovedAway`,
-`TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem`).
+`TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem`). The
+record naming that item goes with its row: kept, it named an item without a
+baseline row, which the next observation would adopt at its new path as an
+untouched placeholder, and with no local file there the plan would delete it
+online
+(`TestCommitObservation_APlaceholderTakingAFreedPathEndsTheRecordOfTheItemThatLeftIt`).
 
 ### Remote twins
 

@@ -1243,8 +1243,9 @@ func TestTransferManager_Upload_NilItem(t *testing.T) {
 	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o600))
 
 	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "nil-item.txt", localPath, UploadOpts{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "looking it up failed")
+	var unknown *uploadOutcomeUnknownError
+	require.ErrorAs(t, err, &unknown, "an item that cannot be looked up leaves the outcome unknown")
+	assert.Contains(t, err.Error(), "looking the item up failed")
 }
 
 func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {

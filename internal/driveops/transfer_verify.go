@@ -166,39 +166,51 @@ func (e *uploadOutcomeUnknownError) Unwrap() error { return e.lookupErr }
 // have committed: the encapsulated small-file session canceled itself, but
 // the item is adopted if it is provably ours (D-036). When it is not, the
 // create made it and the lookup shows it still empty, the content provably
-// did not land: the empty item is removed now, by its ID (removePlaceholder).
-// The removal reads the eTag it is conditional on itself. The creation eTag
-// no longer matches by then: opening and canceling the session moved it, so
-// that delete always failed with 412 and left the placeholder behind. A
-// failed lookup leaves the outcome unknown; the failure still names the item
-// the create made.
+// did not land: the empty item is removed now, by its ID (removePlaceholder),
+// and the failure, still the one *graph.CreatedItemError naming the item,
+// says whether the removal worked. The removal reads the eTag it is
+// conditional on itself. The creation eTag no longer matches by then: opening
+// and canceling the session moved it, so that delete always failed with 412
+// and left the placeholder behind. A failed lookup leaves the outcome
+// unknown; the failure still names the item the create made.
 func (tm *TransferManager) settleUncertainFinalFragment(
 	ctx context.Context, target uploadTarget, sent uploadedContent, created *graph.CreatedItemError, uploadErr error,
 ) (*graph.Item, error) {
 	landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, target, sent)
 	if lookupErr != nil {
-		unknown := outcomeUnknownAfter(uploadErr.Error(), lookupErr)
-		if created != nil && created.Item != nil {
-			return nil, &graph.CreatedItemError{Item: created.Item, Err: unknown}
-		}
-
-		return nil, unknown
+		return nil, keepCreateMark(created, outcomeUnknownAfter(uploadErr.Error(), lookupErr))
 	}
 	if adopted {
 		return landed, nil
 	}
 	if created != nil && created.Item != nil && landed != nil && landed.ID == created.Item.ID && landed.Size == 0 {
-		tm.removePlaceholder(ctx, target.driveID, landed.ID)
+		removed := tm.removePlaceholder(ctx, target.driveID, landed.ID)
+		return nil, &graph.CreatedItemError{Item: created.Item, Err: created.Err, Removed: removed}
 	}
 
 	return nil, uploadErr
+}
+
+// keepCreateMark returns err as the failure of the create created names, or
+// err itself when there was no create. The item stays named, so the caller
+// still looks the outcome up by its ID and never reads a failed lookup as
+// something else's absence.
+func keepCreateMark(created *graph.CreatedItemError, err error) error {
+	if created == nil || created.Item == nil || created.Item.ID == "" {
+		return err
+	}
+
+	return &graph.CreatedItemError{Item: created.Item, Err: err}
 }
 
 // settleUploadedItem turns an upload call's answer into a verified item.
 // A completion that carried no item is looked up at the target, because the
 // content has landed; an item that does not match what was sent is read back
 // once (server processing can briefly show pre-commit facts) and the upload
-// fails if it still does not match.
+// fails if it still does not match. A lookup that fails leaves the outcome
+// unknown (uploadOutcomeUnknownError), and after a create the failure still
+// names the created item: without the mark, a 404 from that lookup read in
+// sync as the create's parent being gone.
 func (tm *TransferManager) settleUploadedItem(
 	ctx context.Context, target uploadTarget, sent uploadedContent, localPath string, item *graph.Item, uploadErr error,
 ) (*graph.Item, error) {
@@ -224,8 +236,8 @@ func (tm *TransferManager) settleUploadedItem(
 	if item == nil || item.ID == "" {
 		looked, err := tm.lookupUploadTarget(ctx, target)
 		if err != nil {
-			return nil, fmt.Errorf("uploading %s: the upload completed without the item, and looking it up failed: %w",
-				localPath, err)
+			answer := fmt.Sprintf("uploading %s: the upload completed without the item", localPath)
+			return nil, keepCreateMark(created, outcomeUnknownAfter(answer, err))
 		}
 
 		item = looked
