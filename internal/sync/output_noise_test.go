@@ -337,11 +337,13 @@ func TestWatchRuntime_ObserverExit_ReturnedOnceWithCause(t *testing.T) {
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 2
 
-	rt.logObserverError(observerExitError(observerNameRemote, fmt.Errorf("poll: %w", context.Canceled)))
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	rt.logObserverError(stopped, observerExitError(observerNameRemote, fmt.Errorf("poll: %w", context.Canceled)))
 	assert.Zero(t, countLevel(logs.String(), "WARN"), "cancellation is shutdown, not news")
 
 	cause := errors.New("inotify: too many open files")
-	rt.logObserverError(observerExitError(observerNameLocal, cause))
+	rt.logObserverError(t.Context(), observerExitError(observerNameLocal, cause))
 	require.NoError(t, rt.handleObserverExit(&watchPipeline{}, false))
 	output := logs.String()
 	assert.Equal(t, 1, countLevel(output, "WARN"))

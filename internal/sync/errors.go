@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"errors"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
@@ -154,3 +155,42 @@ var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
 // cycle, making topological ordering impossible. This is a planner bug —
 // well-formed sync actions should always form a DAG (B-313).
 var errDependencyCycle = errors.New("sync: dependency cycle detected in action plan")
+
+// ---------------------------------------------------------------------------
+// The end of a run
+// ---------------------------------------------------------------------------
+
+// runEnded reports whether work that failed with err failed because its run
+// is ending: exactly when ctx has ended. The caller passes the context the
+// work was started under (for a worker's completion, the context the workers
+// were started under), which ends only with the run or once nothing is left
+// to classify, never a request's own: a request's deadline ends while the run
+// goes on. The answer never depends on what err says. A request the transport
+// timed out carries context.DeadlineExceeded while the run goes on, and that
+// is a failure to retry, not a stop; err is there only so that a nil error,
+// which is no failure, never reads as a stop.
+func runEnded(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() != nil
+}
+
+// isCancellationEcho reports whether err is what a canceled or expired
+// context hands back to the work it interrupted. A caller that already knows
+// the run has ended (runEnded) uses it to tell that echo of the stop from a
+// separate failure that landed during it, which is still reported.
+func isCancellationEcho(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// cancelCauseError is the cause each cancel the worker pool and the one-shot
+// pass make carries, and it answers to context.Canceled as the cause of
+// signal.NotifyContext does. A
+// request interrupted by a cancel carries the cancel's cause in place of
+// context.Canceled, so a cause that did not answer to context.Canceled would
+// make the interrupted work read as a failure; the cause's text says which
+// cancel it was.
+type cancelCauseError string
+
+func (e cancelCauseError) Error() string { return string(e) }
+
+// Is answers true for context.Canceled and for nothing else.
+func (cancelCauseError) Is(target error) bool { return target == context.Canceled }

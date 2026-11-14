@@ -1550,11 +1550,10 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 	stopWatch(t, cancel, done)
 }
 
-// Validates: R-6.8.2
-func TestWatch_BackoffOnError(t *testing.T) {
-	t.Parallel()
-
-	fetcher := &sequentialFetcher{
+// fetcherFailingTwiceThenRecovering answers two polls with a transient failure
+// and the third with one file.
+func fetcherFailingTwiceThenRecovering() *sequentialFetcher {
+	return &sequentialFetcher{
 		pages: []mockDeltaPage{
 			{err: errors.New("transient network error")},
 			{err: errors.New("transient network error")},
@@ -1567,6 +1566,50 @@ func TestWatch_BackoffOnError(t *testing.T) {
 			}},
 		},
 	}
+}
+
+// Validates: R-6.8.2, R-6.8.29
+func TestWatch_BackoffWithAWakeChannelWaitsOnTheRunClock(t *testing.T) {
+	t.Parallel()
+
+	fetcher := fetcherFailingTwiceThenRecovering()
+
+	// The clock fires the two backoff waits at once and never fires a later
+	// one, so the test does not wait the backoffs out. The delays it records
+	// are the proof: a backoff armed on wall time records nothing here.
+	var waits []time.Duration
+
+	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.clock = &observerTestClock{syncClock: realClock{}, afterFunc: func(d time.Duration, fn func()) syncTimer {
+		waits = append(waits, d)
+		if len(waits) <= 2 {
+			fn()
+		}
+
+		return noopSyncTimer{}
+	}}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	batches := make(chan remoteObservationBatch, 10)
+	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
+	wakeCh := make(chan struct{}, 1)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Minute, wakeCh, nil)
+	})
+
+	receiveWithin(t, events, "the event of the poll that succeeded")
+	stopWatch(t, cancel, done)
+
+	require.GreaterOrEqual(t, len(waits), 2, "each backoff is armed on the run's clock")
+	assert.Equal(t, retry.WatchRemotePolicy().Base, waits[0])
+	assert.Equal(t, time.Duration(float64(retry.WatchRemotePolicy().Base)*retry.WatchRemotePolicy().Multiplier), waits[1])
+}
+
+// Validates: R-6.8.2
+func TestWatch_BackoffOnError(t *testing.T) {
+	t.Parallel()
+
+	fetcher := fetcherFailingTwiceThenRecovering()
 
 	var sleepDurations []time.Duration
 
