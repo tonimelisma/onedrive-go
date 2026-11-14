@@ -18,23 +18,66 @@ import (
 // made it, it was a create_conflict: the user's file was renamed to a
 // conflict copy and the empty file downloaded in its place.
 //
-// pending_creates is that memory. The executor records the intent to create
-// at the path before the request that creates the item, and the item itself
-// (ID and creation eTag) as soon as it exists, before the first content byte
-// is sent; observation then recognizes the empty item as this client's own
-// placeholder:
+// pending_creates is that memory, one row per path. One rule holds for the
+// whole life of a row: it ends at the first moment its file can no longer
+// receive this client's upload, and no remote change is ever swallowed, and
+// no item adopted, because a row exists.
 //
-//   - still empty and not yet synced: it is adopted as a baseline row whose
-//     local side is the empty content, so the planner sees "the local file
-//     changed" and uploads by ID with If-Match, or, when the local file is
-//     gone, deletes the placeholder with If-Match;
-//   - still empty and already adopted: the row follows the item's eTag and
-//     modification time, which move without content, so a drive that gives
-//     empty files no hash never reads them as a remote edit;
-//   - still empty after the upload committed (a delta page captured
-//     mid-upload): stale, and not recorded as a remote change;
-//   - anything else (content, a delete): no longer a placeholder, and the
-//     record is dropped.
+// A row is written in five places: the intent, before the request that
+// creates the item (uploadNewFile); the item itself, ID and creation eTag,
+// once the create made it and before the first content byte is sent (the
+// create hook, also for a session request that failed after the create, and
+// a retry's claim of the empty file of a create whose answer was lost,
+// claimLostCreate); observation's claim of the empty file at an intent's path
+// (claimIntendedPlaceholderTx); observation moving the row of an adopted
+// placeholder renamed online while still empty (followAdoptedPlaceholderTx);
+// and the commit of a move outcome, which moves the row of the item it moves
+// and of everything below a folder it moves (movePendingCreatesTx). A row
+// moved onto a path that already holds one ends instead: two rows never name
+// one item, and none stays at a path its item left.
+// Observation recognizes the empty item as this client's own placeholder
+// while it is known to be empty:
+//
+//   - not yet synced: it is adopted as a baseline row whose local side is the
+//     empty content, so the planner sees "the local file changed" and uploads
+//     by ID with If-Match, or, when the local file is gone, deletes the
+//     placeholder with If-Match;
+//   - already adopted: the row follows the item's eTag and modification time,
+//     which move without content, so a drive that gives empty files no hash
+//     never reads them as a remote edit;
+//   - after an upload with content committed (a delta page captured
+//     mid-upload): stale, and not recorded as a remote change.
+//
+// An observation whose size Graph did not report (R-2.4.16) says nothing
+// about emptiness: the item is observed like any item and keeps its row.
+//
+// A row ends, at the moment its file can no longer receive this client's
+// upload, in one of these ways:
+//
+//   - observation sees the item hold content or be deleted, or meets it moved
+//     before it was adopted (adoptPlaceholderTx), or refuses an intent's
+//     claim (claimIntendedPlaceholderTx), or drops the baseline row of an item
+//     OneDrive no longer holds at the path a new placeholder takes, and that
+//     item's row with it (freeBaselinePathForPlaceholderTx);
+//   - the commit of an outcome, in its own transaction
+//     (settlePendingCreatesTx): a file outcome whose committed remote content
+//     is empty drops the row at its path and the row naming its item (nothing
+//     is left to upload, and an echo of an empty file is no change), and an
+//     outcome that removes an item from the baseline drops the row naming
+//     that item. An upload with content keeps its row for the stale echo above
+//     until observation sees the content;
+//   - the attempt: it clears its intent when it is known to have created
+//     nothing or succeeded without the hook (a zero-byte file), and drops the
+//     row of an item the cleanup removed (ForgetRemovedPlaceholder);
+//   - the step after planning (prunePendingCreates): an intent past
+//     pendingCreateIntentTTL, an intent whose file is gone after a pass that
+//     observed OneDrive first, the row of an adopted placeholder whose local
+//     file is empty too, and the row naming an item at a path the local scan
+//     does not visit (the content filter hides it, a shortcut root reserves
+//     it), where this engine plans nothing;
+//   - in watch mode, an intent whose file is gone once a remote poll that
+//     began after the last create attempt at its path ended has been applied
+//     (dropGoneCreateIntentsAt, watchCreateAttempts).
 //
 // The item ID and its emptiness identify the placeholder, not its creation
 // eTag: opening and then canceling an upload session on the empty item moves
@@ -59,28 +102,30 @@ import (
 // The intent is cleared when the attempt ends with nothing left to recognize:
 // OneDrive refused the create, the attempt failed before it asked, or the
 // file was complete as created (a zero-byte file, whose create hook never
-// runs). It is kept when the attempt was canceled, and when its create ended
-// without an answer (graph.ErrCreateOutcomeUnknown: no response, a 5xx, a
-// 408): the create may have landed, or may still land.
+// runs; that clear is not skipped when a shutdown lands as the create
+// succeeds). It is kept when an attempt that did not succeed was canceled,
+// and when its create ended without an answer (graph.ErrCreateOutcomeUnknown:
+// no response, a 5xx, a 408): the create may have landed, or may still land.
 //
-// A kept intent ends in one of three ways. Observation claims the empty file
+// A kept intent ends in one of these ways. Observation claims the empty file
 // at its path, or meets something else there and drops it. A retry of the
 // create claims it on a 409. Or no create at that path is ever retried and
 // no item appears there: the create never reached OneDrive and the user then
 // renamed or deleted the file. Such an intent stayed for good, and while
 // fresh it could claim an empty file a stranger made at that path, which the
 // next pass then deleted since the local file was gone (model test, chaos
-// seeds 9 and 11). The step after planning therefore prunes intents
-// (pruneAbandonedCreateIntents). One past pendingCreateIntentTTL claims
-// nothing and goes after any plan. One whose path a complete local scan
-// finds empty goes only after a pass that observed OneDrive before the local
-// tree (a one-shot sync, a watch bootstrap): that observation ran first, so
-// an intent whose create landed has been claimed by then and names its item.
-// A watch replan observes the local tree only, so a long-running watch keeps
-// such an intent: the change batch that shows a landed create claims it, and
-// one that never landed goes at the next start or once it expires. A create
-// that lands after its intent was dropped shows up as an empty remote file
-// and is downloaded, the lesser harm.
+// seeds 9 and 11). The step after planning therefore prunes intents. One
+// past pendingCreateIntentTTL claims nothing and goes after any plan. One
+// whose path a complete local scan finds empty goes after a pass that
+// observed OneDrive before the local tree (a one-shot sync, a watch
+// bootstrap): that observation ran first, so an intent whose create landed
+// has been claimed by then and names its item. A watch replan observes the
+// local tree only and keeps such an intent; the watch loop drops it once a
+// remote poll that began after the last create attempt at the path ended has
+// been applied without claiming it, a poll that returned no items included.
+// A create that lands after its intent was dropped (its change shows only in
+// a later poll) shows up as an empty remote file and is downloaded, the
+// lesser harm.
 //
 // Observation is one of two places that claim the file of a kept intent. The
 // executor is the other: a retry of the create gets 409 from the file the
@@ -89,8 +134,9 @@ import (
 // with If-Match (resolveCreateConflict in executor_transfer.go). Both ask the
 // same of the file: at the intent's path, live, a file, empty, within the
 // TTL (PendingCreate.intentIsFresh). Observation also passes over a file the
-// baseline already holds (claimIntendedPlaceholderTx). A 409 without such an
-// intent never claims anything.
+// baseline already holds, and waits on a file whose size is unknown
+// (claimIntendedPlaceholderTx). A 409 without such an intent never claims
+// anything.
 
 // pendingCreateIntentTTL is how long an intent without an item ID can claim
 // an empty file observed at its path. Past it the intent is pruned.
@@ -167,12 +213,29 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *PendingCre
 // ClearPendingCreateIntent drops an intent at path that never became an
 // item: the attempt ended, by success or by a failure that says nothing was
 // created, without the create hook firing (it fires for a failure that names
-// a created item too), without being canceled and without leaving the outcome
-// of its create unknown, so nothing on OneDrive is ours to recognize there. A
-// row that already names an item is kept.
+// a created item too), and without leaving the outcome of its create unknown,
+// so nothing on OneDrive is ours to recognize there. A row that already names
+// an item is kept.
 func (s *SyncStore) ClearPendingCreateIntent(ctx context.Context, path string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, path); err != nil {
 		return fmt.Errorf("sync: clearing pending create intent at %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// ForgetRemovedPlaceholder drops the record of the create at path whose item
+// itemID the cleanup after a failed upload removed: the row naming that item,
+// and the intent at path if the item was removed before it was recorded. The
+// item is gone, so it can never receive the content, and the create that
+// made it answered, so no other item of that attempt can appear. A row naming
+// another item is kept.
+func (s *SyncStore) ForgetRemovedPlaceholder(ctx context.Context, path, itemID string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM pending_creates WHERE (item_id = ? AND item_id <> '') OR (path = ? AND item_id = '')`,
+		itemID, path,
+	); err != nil {
+		return fmt.Errorf("sync: forgetting the removed placeholder %s at %s: %w", itemID, path, err)
 	}
 
 	return nil
@@ -208,50 +271,126 @@ func (o passObservation) claimedLandedCreates() bool {
 	}
 }
 
-// pruneAbandonedCreateIntents deletes the intents without an item ID that no
-// create will claim any more. It runs once a plan has been built, after the
-// observations that plan was built from were committed, so a row that names
-// an item is never touched here (observation drops it once the item holds
-// content or is gone).
+// prunePendingCreates deletes, in one transaction once a plan has been
+// built, the records no create, no upload and no observation needs any more.
+// It runs after the observations that plan was built from were committed.
 //
 //   - Past pendingCreateIntentTTL an intent claims nothing, so it is deleted
 //     whatever the pass observed.
 //   - After a pass that observed OneDrive before the local tree, an intent
-//     whose file is gone is deleted: local truth is complete, the scan visits
-//     the path, local and remote truth are both available there, and
-//     local_state holds no entry at it. That pass's remote observation
-//     claimed the file of a create that landed, so no create at that path
-//     will be retried or claimed, and the intent could only claim a
-//     stranger's empty file.
+//     whose file is gone is deleted (createIntentFileGoneTx): that pass's
+//     remote observation claimed the file of a create that landed, so no
+//     create at that path will be retried or claimed, and the intent could
+//     only claim a stranger's empty file.
+//   - The row naming an adopted placeholder whose local file is empty too is
+//     deleted (dropRecordsOfSettledEmptyPlaceholdersTx).
+//   - A row naming an item at a path the scan does not visit is deleted
+//     (dropRecordsAtUnscannedPathsTx).
 //
-// A watch replan observes the local tree only, so a long-running watch keeps
-// a fresh intent whose file is gone: the change batch that shows a landed
-// create claims it and the next replan deletes the placeholder, and an intent
-// whose create never landed goes at the next start or once it expires.
+// A watch replan observes the local tree only, so it keeps a fresh intent
+// whose file is gone; the watch loop drops that one after a remote poll that
+// began once the last create attempt at the path had ended
+// (dropGoneCreateIntentsAt). Any other row naming an item ends through
+// observation or an outcome's commit.
+//
+// It never runs while an upload of this engine is in flight: a one-shot pass
+// prunes before it executes its plan, and a watch replan waits until no
+// action is running (watchRuntime.canPrepareNow).
 //
 // scanned reports whether a full local scan visits path at all: a path the
 // content filter hides or a shortcut root reserves is never in local_state,
 // so its absence there proves nothing. Read boundaries on either side, case
 // collisions and other observation issues that block truth keep an intent the
 // same way, as suspect local truth keeps every one.
-func (s *SyncStore) pruneAbandonedCreateIntents(
+func (s *SyncStore) prunePendingCreates(
 	ctx context.Context, observed passObservation, scanned func(path string) bool,
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning the prune of abandoned create intents: %w", err)
+		return fmt.Errorf("sync: beginning the prune of pending creates: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback the prune of abandoned create intents")
+		err = finalizeTxRollback(err, tx, "sync: rollback the prune of pending creates")
 	}()
 
-	intents, err := listCreateIntentsTx(ctx, tx)
-	if err != nil || len(intents) == 0 {
-		return err
-	}
-	fileGone, err := createIntentFileGoneTx(ctx, tx, observed, scanned)
+	intents, err := listCreateIntentsTx(ctx, tx, "")
 	if err != nil {
 		return err
+	}
+	if _, dropErr := s.dropAbandonedCreateIntentsTx(ctx, tx, intents, observed.claimedLandedCreates(), scanned); dropErr != nil {
+		return dropErr
+	}
+	if dropErr := s.dropRecordsOfSettledEmptyPlaceholdersTx(ctx, tx); dropErr != nil {
+		return dropErr
+	}
+	if dropErr := s.dropRecordsAtUnscannedPathsTx(ctx, tx, scanned); dropErr != nil {
+		return dropErr
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing the prune of pending creates: %w", err)
+	}
+
+	return nil
+}
+
+// dropGoneCreateIntentsAt is the watch loop's prune after a remote poll that
+// began once the last create attempt at each of paths had ended, and that
+// has been applied: every create of those attempts that landed before the
+// poll has been claimed by then, so an intent still without an item there is
+// judged as after a pass that observed OneDrive first. It returns the paths
+// whose intent stays (its file is still there, or absence proves nothing
+// there yet); a path with no intent any more, or whose row names an item, is
+// not returned.
+func (s *SyncStore) dropGoneCreateIntentsAt(
+	ctx context.Context, paths []string, scanned func(path string) bool,
+) (kept []string, err error) {
+	tx, err := beginPerfTx(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("sync: beginning the prune of create intents after a poll: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback the prune of create intents after a poll")
+	}()
+
+	var intents []PendingCreate
+	for _, path := range paths {
+		atPath, listErr := listCreateIntentsTx(ctx, tx, path)
+		if listErr != nil {
+			return nil, listErr
+		}
+		intents = append(intents, atPath...)
+	}
+	dropped, err := s.dropAbandonedCreateIntentsTx(ctx, tx, intents, true, scanned)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sync: committing the prune of create intents after a poll: %w", err)
+	}
+	for i := range intents {
+		if !dropped[intents[i].Path] {
+			kept = append(kept, intents[i].Path)
+		}
+	}
+
+	return kept, nil
+}
+
+// dropAbandonedCreateIntentsTx deletes each of intents that is past its TTL
+// or, when claimedLandedCreates, whose file the committed truth proves gone
+// (createIntentFileGoneTx), and reports the paths it dropped.
+func (s *SyncStore) dropAbandonedCreateIntentsTx(
+	ctx context.Context, tx sqlTxRunner, intents []PendingCreate, claimedLandedCreates bool, scanned func(path string) bool,
+) (map[string]bool, error) {
+	dropped := make(map[string]bool, len(intents))
+	if len(intents) == 0 {
+		return dropped, nil
+	}
+	fileGone, err := createIntentFileGoneTx(ctx, tx, claimedLandedCreates, scanned)
+	if err != nil {
+		return nil, err
 	}
 
 	now := s.nowFunc()
@@ -261,36 +400,34 @@ func (s *SyncStore) pruneAbandonedCreateIntents(
 		abandoned := expired
 		if !expired {
 			if abandoned, err = fileGone(intent.Path); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if !abandoned {
 			continue
 		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, intent.Path); err != nil {
-			return fmt.Errorf("sync: dropping the abandoned create intent at %s: %w", intent.Path, err)
+			return nil, fmt.Errorf("sync: dropping the abandoned create intent at %s: %w", intent.Path, err)
 		}
+		dropped[intent.Path] = true
 		s.logger.Debug("dropped a create intent no create will claim",
 			slog.String("path", intent.Path), slog.Bool("expired", expired))
 	}
 
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing the prune of abandoned create intents: %w", err)
-	}
-
-	return nil
+	return dropped, nil
 }
 
-// createIntentFileGoneTx returns the test of whether the committed truth of
-// a pass proves that the file of an intent at a path is gone. It proves
-// nothing anywhere when the pass did not observe OneDrive before it planned
-// or local truth is not complete, and nothing at a path the scan does not
-// visit or whose local or remote truth is unavailable.
+// createIntentFileGoneTx returns the test of whether committed truth proves
+// that the file of an intent at a path is gone: local truth is complete, the
+// scan visits the path, local and remote truth are both available there, and
+// local_state holds no entry at it. It proves nothing anywhere unless the
+// remote observation committed before it claimed the empty file of every
+// create that landed (claimedLandedCreates) and local truth is complete.
 func createIntentFileGoneTx(
-	ctx context.Context, tx sqlTxRunner, observed passObservation, scanned func(path string) bool,
+	ctx context.Context, tx sqlTxRunner, claimedLandedCreates bool, scanned func(path string) bool,
 ) (func(path string) (bool, error), error) {
 	provesNothing := func(string) (bool, error) { return false, nil }
-	if !observed.claimedLandedCreates() {
+	if !claimedLandedCreates {
 		return provesNothing, nil
 	}
 	state, err := readObservationStateFromTx(ctx, tx)
@@ -316,9 +453,233 @@ func createIntentFileGoneTx(
 	}, nil
 }
 
-// listCreateIntentsTx returns the rows that record only an intent.
-func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner) ([]PendingCreate, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT path, intended_at FROM pending_creates WHERE item_id = '' ORDER BY path`)
+// dropRecordsOfSettledEmptyPlaceholdersTx deletes the rows naming an item
+// whose baseline row records empty content on both sides and whose path the
+// local tree holds as an empty file. The placeholder was adopted and the
+// local file is empty too, so no plan uploads into the item and no outcome
+// commits anything for it: the row stayed for good, and every later move of
+// the item's eTag or modification time was absorbed as the placeholder
+// following it. Nothing is left to upload, and an echo of an empty file is no
+// change. A row whose baseline holds content (an upload committed) keeps its
+// row for the stale echo of the empty state.
+func (s *SyncStore) dropRecordsOfSettledEmptyPlaceholdersTx(ctx context.Context, tx sqlTxRunner) error {
+	result, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id <> '' AND item_id IN (
+		SELECT b.item_id FROM baseline b JOIN local_state l ON l.path = b.path
+		WHERE b.item_type = 'file' AND b.local_size = 0 AND b.remote_size = 0
+			AND l.item_type = 'file' AND l.size = 0)`)
+	if err != nil {
+		return fmt.Errorf("sync: dropping the records of settled empty placeholders: %w", err)
+	}
+	if dropped, countErr := result.RowsAffected(); countErr == nil && dropped > 0 {
+		s.logger.Debug("dropped the records of adopted placeholders whose local file is empty too",
+			slog.Int64("records", dropped))
+	}
+
+	return nil
+}
+
+// dropRecordsAtUnscannedPathsTx deletes the rows naming an item at a path the
+// full local scan does not visit (scanned is false: the content filter hides
+// it, or a shortcut root reserves it). This engine plans nothing there, so no
+// upload goes into the item and no outcome commits anything for it. Every
+// such row ends here, whether or not observation adopted its item. The commit
+// that removes an adopted item's hidden baseline row would end that row too,
+// but this step runs before the plan executes. An intent at such a path is
+// kept: it names no item, and its own TTL ends it.
+func (s *SyncStore) dropRecordsAtUnscannedPathsTx(ctx context.Context, tx sqlTxRunner, scanned func(path string) bool) error {
+	paths, err := listRecordedItemPathsTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		if scanned(path) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id <> ''`, path); err != nil {
+			return fmt.Errorf("sync: dropping the record at %s, which the scan does not visit: %w", path, err)
+		}
+		s.logger.Debug("dropped the record of a created item at a path the scan does not visit", slog.String("path", path))
+	}
+
+	return nil
+}
+
+// listRecordedItemPathsTx returns the paths of the rows that name an item.
+func listRecordedItemPathsTx(ctx context.Context, tx sqlTxRunner) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path FROM pending_creates WHERE item_id <> '' ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing the records of created items: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("sync: reading the record of a created item: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: listing the records of created items: %w", err)
+	}
+
+	return paths, nil
+}
+
+// baselineBeforeOutcome is what the baseline held before an outcome was
+// applied: the item at the outcome's path, and, for a move, the path the
+// moved item's row had. Either is "" when there was none.
+type baselineBeforeOutcome struct {
+	occupant     string
+	previousPath string
+}
+
+// readBaselineBeforeOutcomeTx reads baselineBeforeOutcome for outcome, in the
+// transaction that applies it.
+func readBaselineBeforeOutcomeTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation) (baselineBeforeOutcome, error) {
+	kind, err := classifyMutation(outcome)
+	if err != nil {
+		return baselineBeforeOutcome{}, err
+	}
+	var before baselineBeforeOutcome
+	if before.occupant, err = baselineOccupantAtTx(ctx, tx, outcome.Path); err != nil {
+		return baselineBeforeOutcome{}, err
+	}
+	if kind != baselineMutationMove || outcome.ItemID == "" {
+		return before, nil
+	}
+	switch scanErr := tx.QueryRowContext(ctx, `SELECT path FROM baseline WHERE item_id = ?`, outcome.ItemID).
+		Scan(&before.previousPath); {
+	case errors.Is(scanErr, sql.ErrNoRows):
+		return before, nil
+	case scanErr != nil:
+		return baselineBeforeOutcome{}, fmt.Errorf("sync: reading the baseline path of moved item %s: %w", outcome.ItemID, scanErr)
+	default:
+		return before, nil
+	}
+}
+
+// settlePendingCreatesTx ends or moves, in the transaction that commits
+// outcome, the records the outcome settles. before is what the baseline held
+// before the outcome was applied.
+//
+//   - A file outcome that commits empty remote content (a zero-byte create,
+//     an upload of an empty file into a placeholder, an empty file downloaded
+//     or found equal) drops the row at its path and the row naming its item:
+//     nothing is left to upload, and an echo of an empty file is no change.
+//     Without it, the row of a zero-byte create that observation claimed
+//     before the attempt's clear stayed for good, and a later change of the
+//     file on OneDrive was absorbed as the placeholder following its eTag.
+//   - A move takes the row naming its item, and for a folder every row below
+//     it, to the new path (movePendingCreatesTx): the placeholder it moves
+//     can still receive the upload, and only there.
+//   - An outcome that removed the item it found at its path from the
+//     baseline (a delete on either side, another item's row taking the path)
+//     drops the row naming that item: the item can no longer receive this
+//     client's upload. This runs first, so a move onto that item's path finds
+//     the path free and keeps the row of the item it moves.
+//
+// An outcome that commits content keeps its row for the stale echo of the
+// empty state (placeholderStale).
+func settlePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation, before baselineBeforeOutcome) error {
+	kind, err := classifyMutation(outcome)
+	if err != nil {
+		return err
+	}
+	if before.occupant != "" {
+		if _, goneErr := tx.ExecContext(ctx,
+			`DELETE FROM pending_creates WHERE item_id = ? AND NOT EXISTS (SELECT 1 FROM baseline WHERE item_id = ?)`,
+			before.occupant, before.occupant,
+		); goneErr != nil {
+			return fmt.Errorf("sync: dropping the pending create of %s, which left the baseline: %w", before.occupant, goneErr)
+		}
+	}
+	switch {
+	case kind == baselineMutationUpsert && outcome.ItemType == ItemTypeFile && outcome.ItemID != "" &&
+		outcome.RemoteSizeKnown && outcome.RemoteSize == 0:
+		if _, emptyErr := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? OR item_id = ?`,
+			outcome.Path, outcome.ItemID); emptyErr != nil {
+			return fmt.Errorf("sync: dropping the pending create settled by the empty outcome at %s: %w", outcome.Path, emptyErr)
+		}
+	case kind == baselineMutationMove:
+		if moveErr := movePendingCreatesTx(ctx, tx, outcome, before.previousPath); moveErr != nil {
+			return moveErr
+		}
+	}
+
+	return nil
+}
+
+// movePendingCreatesTx moves, with the move outcome commits, the row naming
+// the moved item to its new path, and, for a folder move, every row below the
+// folder's previous baseline path to the same place below the new one, as
+// commitMove does for the baseline. Left at the old path, a row was found by
+// a create there that met 409, which uploaded into the item at its new path.
+// A new path that already holds a row keeps it, and the moved row ends there
+// instead of staying where its item left.
+func movePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation, previousPath string) error {
+	if outcome.ItemID != "" {
+		if err := movePendingCreateOfItemTx(ctx, tx, outcome.ItemID, outcome.Path); err != nil {
+			return err
+		}
+	}
+	if !isFolderPathMove(outcome) || previousPath == "" || previousPath == outcome.Path {
+		return nil
+	}
+
+	oldPrefix, newPrefix := previousPath+"/", outcome.Path+"/"
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates
+		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY
+			AND EXISTS (SELECT 1 FROM pending_creates taken
+				WHERE taken.path = ? || substr(pending_creates.path, length(?) + 1))`,
+		oldPrefix, oldPrefix, newPrefix, oldPrefix); err != nil {
+		return fmt.Errorf("sync: dropping the pending creates below %s whose new path holds one: %w", previousPath, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE pending_creates
+		SET path = ? || substr(path, length(?) + 1)
+		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`,
+		newPrefix, oldPrefix, oldPrefix, oldPrefix); err != nil {
+		return fmt.Errorf("sync: moving the pending creates below %s to %s: %w", previousPath, outcome.Path, err)
+	}
+
+	return nil
+}
+
+// movePendingCreateOfItemTx moves the row naming itemID to path. A path that
+// already holds another row keeps that one, and this row ends: two rows never
+// name one item, and none stays at a path its item left.
+func movePendingCreateOfItemTx(ctx context.Context, tx sqlTxRunner, itemID, path string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE pending_creates SET path = ? WHERE item_id = ?`,
+		path, itemID); err != nil {
+		return fmt.Errorf("sync: moving the record of placeholder %s to %s: %w", itemID, path, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id = ? AND path <> ?`,
+		itemID, path); err != nil {
+		return fmt.Errorf("sync: dropping the record of placeholder %s left behind on its way to %s: %w", itemID, path, err)
+	}
+
+	return nil
+}
+
+// baselineOccupantAtTx returns the item the baseline holds at path, or "".
+func baselineOccupantAtTx(ctx context.Context, tx sqlTxRunner, path string) (string, error) {
+	var itemID string
+	switch err := tx.QueryRowContext(ctx, `SELECT item_id FROM baseline WHERE path = ?`, path).Scan(&itemID); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("sync: reading the baseline at %s: %w", path, err)
+	default:
+		return itemID, nil
+	}
+}
+
+// listCreateIntentsTx returns the rows that record only an intent: every one,
+// or the one at path when path is not empty.
+func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner, path string) ([]PendingCreate, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT path, intended_at FROM pending_creates
+		WHERE item_id = '' AND (? = '' OR path = ?) ORDER BY path`, path, path)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing create intents: %w", err)
 	}
@@ -395,6 +756,12 @@ func scanPendingCreate(row *sql.Row) (PendingCreate, bool, error) {
 // nothing is lost. Kept, the row turned our own empty item into a create
 // conflict: the user's file renamed to a conflict copy and the empty item
 // downloaded in its place (found by the chaos Graph layer, D-092).
+//
+// The dropped row's item loses its record too, if it has one (an adopted
+// placeholder renamed online, whose record followed it): kept, the record
+// named an item without a baseline row, which the next observation would
+// adopt at its new path as an untouched placeholder, and with no local file
+// there the plan would delete it online.
 func freeBaselinePathForPlaceholderTx(ctx context.Context, tx sqlTxRunner, path string) (bool, error) {
 	var (
 		occupantID string
@@ -414,6 +781,9 @@ func freeBaselinePathForPlaceholderTx(ctx context.Context, tx sqlTxRunner, path 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM baseline WHERE item_id = ?`, occupantID); err != nil {
 		return false, fmt.Errorf("sync: dropping the baseline of %s, which OneDrive no longer has at %s: %w", occupantID, path, err)
 	}
+	if err := deletePendingCreateTx(ctx, tx, occupantID); err != nil {
+		return false, err
+	}
 
 	return true, nil
 }
@@ -423,16 +793,25 @@ func freeBaselinePathForPlaceholderTx(ctx context.Context, tx sqlTxRunner, path 
 type placeholderDecision int
 
 const (
-	placeholderNotPending placeholderDecision = iota // no record: observe normally
-	placeholderAdopt                                 // our untouched placeholder, not yet synced
-	placeholderAdopted                               // our placeholder, adopted and still empty
-	placeholderStale                                 // our placeholder state, after the upload committed
-	placeholderResolved                              // no longer a placeholder: drop the record
+	placeholderNotPending  placeholderDecision = iota // no record: observe normally
+	placeholderAdopt                                  // our untouched placeholder, not yet synced
+	placeholderAdopted                                // our placeholder, adopted and still empty
+	placeholderStale                                  // our placeholder state, after the upload committed
+	placeholderResolved                               // no longer a placeholder: drop the record
+	placeholderSizeUnknown                            // not known to be empty: observe normally, keep the record
 )
 
 // classifyObservedPlaceholderTx decides how observation treats item when it
 // has a pending-create record. now decides whether an intent without an item
 // ID is still fresh enough to claim an empty file observed at its path.
+//
+// Stale and adopt read the item as still empty, which takes a known size of
+// zero. An item whose size Graph did not report arrives as size 0
+// (normalizeRemoteFacts); read as empty, it was dropped as a stale echo once
+// the upload had committed (a remote change swallowed because a record
+// existed) or adopted as known empty on both sides (an item adopted because a
+// record existed, which the next upload by ID could overwrite). It is
+// observed like any item, and the record stays for an observation that knows.
 func classifyObservedPlaceholderTx(
 	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
 ) (*PendingCreate, placeholderDecision, error) {
@@ -446,8 +825,11 @@ func classifyObservedPlaceholderTx(
 			return nil, placeholderNotPending, err
 		}
 	}
-	if item.IsDeleted || item.Size != 0 {
+	switch {
+	case item.IsDeleted, !item.SizeUnknown && item.Size != 0:
 		return &pending, placeholderResolved, nil
+	case item.SizeUnknown:
+		return &pending, placeholderSizeUnknown, nil
 	}
 
 	var remoteSize sql.NullInt64
@@ -475,18 +857,27 @@ func classifyObservedPlaceholderTx(
 // file renamed to a conflict copy and the empty file downloaded in its place.
 // Only the row's eTag and remote modification time follow; its content facts
 // stay "synced empty content", so the planner still uploads into the item by
-// ID. The updated row is appended to adopted for the in-memory baseline.
+// ID. The updated row is appended to adopted for the in-memory baseline. An
+// observation whose size Graph did not report never gets here
+// (placeholderSizeUnknown): the item may hold content by now, and a row that
+// took its eTag would let the next upload by ID overwrite it.
 //
-// An observation whose size Graph did not report (R-2.4.16) is not followed:
-// the item may hold content by now, and a row that took its eTag would let
-// the next upload by ID overwrite it.
+// Renamed or moved online while still empty, the item is observed like any
+// item and its record moves to the item's new path. Left at the old path, the
+// record was found by a later create there that met 409, which uploaded into
+// the item at its new path. Dropped, it would lose the stale-echo rule: an
+// upload by ID into the item may already be on its way (the eTag it is
+// conditional on is checked when its session opens, not by every fragment),
+// and once its content commits, a window captured before that shows the
+// empty item again, which only the record tells from a remote change. A path
+// that already holds another record keeps that one, and this record ends
+// (movePendingCreateOfItemTx): left where it was, it named an item that is no
+// longer there, for a create there to upload into.
 func followAdoptedPlaceholderTx(
 	ctx context.Context, tx sqlTxRunner, item *observedItem, pending *PendingCreate, adopted *[]*BaselineEntry,
 ) error {
-	if item.Path != pending.Path || item.SizeUnknown {
-		// Moved or renamed meanwhile, or not known to be empty: observed like
-		// any item.
-		return nil
+	if item.Path != pending.Path {
+		return movePendingCreateOfItemTx(ctx, tx, item.ItemID, item.Path)
 	}
 
 	entry, found, err := baselineEntryByItemIDTx(ctx, tx, item.ItemID, item.DriveID)
@@ -572,6 +963,10 @@ func adoptPlaceholderTx(
 // completed (such a create never runs the hook) while its intent outlived it,
 // because the attempt was canceled as it succeeded or the clear failed.
 // Claimed, the record named a file that stays empty, and nothing dropped it.
+//
+// A live file whose size Graph did not report (R-2.4.16) may be that empty
+// file or not: a fresh intent neither claims it nor is dropped, and an
+// observation that knows the size decides.
 func claimIntendedPlaceholderTx(
 	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
 ) (PendingCreate, bool, error) {
@@ -580,8 +975,11 @@ func claimIntendedPlaceholderTx(
 	if err != nil || !found {
 		return PendingCreate{}, false, err
 	}
-	isEmptyFile := !item.IsDeleted && item.ItemType == ItemTypeFile && !item.SizeUnknown && item.Size == 0
-	claimable := pending.intentIsFresh(now) && isEmptyFile
+	isLiveFile := !item.IsDeleted && item.ItemType == ItemTypeFile
+	if isLiveFile && item.SizeUnknown && pending.intentIsFresh(now) {
+		return PendingCreate{}, false, nil
+	}
+	claimable := pending.intentIsFresh(now) && isLiveFile && !item.SizeUnknown && item.Size == 0
 	if claimable {
 		synced, syncedErr := baselineHoldsItemTx(ctx, tx, item.ItemID)
 		if syncedErr != nil {

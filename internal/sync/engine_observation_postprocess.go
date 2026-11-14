@@ -149,6 +149,13 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	if batch == nil {
 		return nil
 	}
+	if batch.pollOnly {
+		// A poll that returned no items: nothing to commit and nothing to
+		// replan, only the time it began, which may settle create intents.
+		rt.dropGoneCreateIntentsAfterPoll(ctx, batch.pollStartedAt)
+		batch.finishApplied(nil)
+		return nil
+	}
 
 	if batch.source == remoteObservationBatchFullRefresh {
 		defer func() {
@@ -159,6 +166,8 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	if err := rt.applyRemoteObservationBatch(ctx, batch); err != nil {
 		return rt.handleRemoteObservationBatchApplyFailure(ctx, batch, err)
 	}
+	// Committed: every create the poll saw has been claimed by now.
+	rt.dropGoneCreateIntentsAfterPoll(ctx, batch.pollStartedAt)
 
 	if batch.source == remoteObservationBatchFullRefresh {
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshCommitted})

@@ -434,11 +434,8 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 		outcome.DriveID = state.ContentDriveID
 	}
 
-	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
+	if applyErr := s.applyOutcomeTx(ctx, tx, outcome); applyErr != nil {
 		return applyErr
-	}
-	if ledgerErr := s.recordDeleteLedgerTx(ctx, tx, outcome); ledgerErr != nil {
-		return ledgerErr
 	}
 	if crashErr := s.reachCrashPoint(crashPointCommitOutcome); crashErr != nil {
 		err = crashErr
@@ -455,6 +452,25 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	}
 
 	return nil
+}
+
+// applyOutcomeTx writes everything outcome changes, in tx: its baseline and
+// remote_state rows, its delete-ledger entry, and the end of the
+// pending-create records it settles (store_pending_creates.go), which goes
+// with the outcome, before the commit's crash point.
+func (s *SyncStore) applyOutcomeTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation) error {
+	before, err := readBaselineBeforeOutcomeTx(ctx, tx, outcome)
+	if err != nil {
+		return err
+	}
+	if applyErr := applySingleMutation(ctx, tx, outcome); applyErr != nil {
+		return applyErr
+	}
+	if ledgerErr := s.recordDeleteLedgerTx(ctx, tx, outcome); ledgerErr != nil {
+		return ledgerErr
+	}
+
+	return settlePendingCreatesTx(ctx, tx, outcome, before)
 }
 
 // RefreshLocalBaseline updates the local-side comparison tuple for one path

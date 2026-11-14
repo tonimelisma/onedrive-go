@@ -752,14 +752,39 @@ dirty/full-refresh scheduler signal, and that signal feeds only this
 steady-state replan path; it does not define a second planning model.
 
 A steady-state replan observed the local tree only (`passRefreshedLocalOnly`),
-so its runtime-state step drops expired create intents and nothing else. A
-create whose answer was lost may have landed without a change batch showing
-it yet; the fresh intent stays for the batch that does, which claims the
-empty file, and the next replan deletes the placeholder. An intent whose
-create never landed and whose file is gone stays until the next start, whose
-bootstrap observes OneDrive first and drops it, or until it expires
+so its runtime-state step drops expired create intents but no fresh intent
+whose file is gone. A create whose answer was lost may have landed without a
+change batch showing it yet; the fresh intent stays for the batch that does,
+which claims the empty file, and the next replan deletes the placeholder.
+The loop goroutine, which owns dispatch and completions, keeps in memory
+when each create it ran that did not succeed ended, by path
+(`watchCreateAttempts`). Every batch of the primary watch carries the time
+its poll began (`pollStartedAt`, read from the observer's clock before the
+first page is asked for), and a poll that returned no items sends a batch
+that carries only that time (`pollOnly`: no items and no token, so it
+commits nothing and replans nothing; [sync-observation.md](sync-observation.md)).
+A mount-root engine's poll goroutine stamps its batches the same way, from
+the run's clock (`watchMountRootRemote`); a mount-root poll that saw no
+events already hands over a whole batch, since its findings manage the
+read-denied issue type it clears, so it needs no poll-only batch.
+Once such a batch is applied, an intent at a path whose last attempt ended
+before the poll began, with no create in flight there, is judged as after a
+pass that observed OneDrive first and is dropped when its file is gone
+(`dropGoneCreateIntentsAt`); a path whose intent stays (its file is still
+there) is judged again after the next poll. The store is touched only when
+such a path exists. An intent of an earlier process waits for the next
+start, whose bootstrap observes OneDrive first, or until it expires
 ([sync-store.md](sync-store.md), Pending creates;
-`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`).
+`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`,
+`TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll`,
+`TestWatch_PollThatMayHaveMissedTheCreateKeepsTheIntent`,
+`TestWatch_PollKeepsTheIntentOfAFileThatIsStillThere`,
+`TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile`).
+
+A steady-state replan, and with it the prune of pending creates, runs only
+when no action is running (`canPrepareNow`), so the prune never sees an
+upload by ID into a placeholder still on its way
+(`TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates`).
 
 Bootstrap uses that same outer owner after the initial
 observe/build/reconcile/start-runtime handoff. The only bootstrap-specific semantics
@@ -1405,6 +1430,8 @@ the same expression that detaches it:
 | --- | --- | --- |
 | commit of a completed action's outcome | `worker.go` `commitOutcome` | `OutcomeCommitTimeout` (30 s) |
 | record of an item a create made | `executor_transfer.go` `recordPendingCreate` | `OutcomeCommitTimeout` |
+| clearing the intent of a create that succeeded | `executor_transfer.go` `clearPendingCreateIntent` | `OutcomeCommitTimeout` |
+| dropping the record of a placeholder the cleanup removed | `executor_transfer.go` `forgetRemovedPlaceholder` | `OutcomeCommitTimeout` |
 | clearing a succeeded action's retry work | `engine_retry_trial.go` `clearRetryWorkOnActionSuccess` | `OutcomeCommitTimeout` |
 | findings observed before a shutdown | `engine_watch_loop.go` `handleWatchSkippedSignal` | `OutcomeCommitTimeout` |
 | persisted-invariant checks (tests and debug only) | `engine_runtime_invariants.go` | `OutcomeCommitTimeout` |
@@ -1695,8 +1722,10 @@ reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
   dirty-buffer drain, the post-sync housekeeping of a pass whose context was
   canceled (it skips the transfer-leftover cleanup without starting a failure
   streak, `TestPostSyncHousekeeping_CanceledContextIsQuiet`), and a canceled
-  create attempt, which keeps its pending-create intent instead of failing to
-  clear it (`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`), are Debug.
+  create attempt that did not succeed, which keeps its pending-create intent
+  instead of failing to clear it
+  (`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`), are Debug. One
+  that succeeded clears its intent on a detached, bounded context.
 
 ## Activity Hook
 

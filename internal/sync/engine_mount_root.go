@@ -320,6 +320,14 @@ func (rt *watchRuntime) watchMountRootRemote(
 	var outage pollOutageLog
 
 	for {
+		// When the poll began, before its first page was asked for: once the
+		// batch is applied, the watch loop judges create intents by it, as it
+		// does the primary watch's (remoteObservationBatch.pollStartedAt). A
+		// poll that saw no events still hands over a batch: its findings
+		// manage the read-denied issue type, to clear it, so
+		// shouldSkipMountRootWatchBatch does not skip it, and a create
+		// attempt ends here the same way as after the primary watch's polls.
+		pollStartedAt := rt.deps.now()
 		observationBatch, err := rt.executeMountRootObservation(ctx, bl, false)
 		if err != nil {
 			stop, handleErr := rt.handleMountRootPollError(ctx, bo, &outage, err)
@@ -329,6 +337,7 @@ func (rt *watchRuntime) watchMountRootRemote(
 			continue
 		}
 		outage.recovered(ctx, rt.deps.logger, "Checking the shared folder for changes works again")
+		observationBatch.pollStartedAt = pollStartedAt
 		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
 			if mountRootWatchStopped(ctx, err) {
 				return nil

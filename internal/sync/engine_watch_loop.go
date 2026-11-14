@@ -272,6 +272,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 func (rt *watchRuntime) handleWatchDispatch(next int) {
 	postReplanDispatch := rt.loop.postReplanOutbox
 	rt.loop.postReplanOutbox = false
+	rt.loop.createAttempts.dispatched(rt.outboxEntry(next))
 	rt.loop.outbox = rt.markDispatched(rt.loop.outbox, next)
 	if postReplanDispatch {
 		rt.emitRuntimeDebugEvent(engineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
@@ -587,6 +588,7 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 	p *watchPipeline,
 	completion *actionCompletion,
 ) error {
+	rt.loop.createAttempts.completed(completion, rt.deps.now())
 	hadPendingReplan := rt.hasPendingReplan()
 	ready, err := rt.applyRuntimeCompletionStage(ctx, completion, p.bl)
 	if hadPendingReplan {

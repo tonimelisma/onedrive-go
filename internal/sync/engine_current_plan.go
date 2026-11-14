@@ -752,9 +752,11 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionP
 	// After a pass that observed OneDrive before the local tree, an intent
 	// still without an item is judged by its age and the local scan; after a
 	// watch replan, which observed the local tree only, by its age alone, and
-	// the change batch that shows a landed create still claims it.
-	if err := flow.deps.store.pruneAbandonedCreateIntents(ctx, observed, flow.engine.localScanCoverage()); err != nil {
-		return fmt.Errorf("sync: pruning abandoned create intents: %w", err)
+	// the change batch that shows a landed create still claims it. The record
+	// of an adopted placeholder whose local file is empty too, and the record
+	// of an item at a path the scan does not visit, go after any plan.
+	if err := flow.deps.store.prunePendingCreates(ctx, observed, flow.engine.localScanCoverage()); err != nil {
+		return fmt.Errorf("sync: pruning pending creates: %w", err)
 	}
 
 	return nil

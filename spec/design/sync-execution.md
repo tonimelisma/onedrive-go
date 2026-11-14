@@ -173,9 +173,17 @@ content is sent (R-5.6.15). The hook also runs for an item a failure names
 on a context detached from the action's, bounded by `OutcomeCommitTimeout`,
 so a shutdown right after the create cannot drop the record
 (`TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled`). An
-attempt known to have created nothing clears the intent. Two kinds of attempt
-are not known to: one that was canceled, whose create may still land after
-the client stopped waiting
+attempt known to have created nothing clears the intent, and so does one
+that succeeded without the hook (a zero-byte file is the created item), on a
+context detached from the action's and bounded by `OutcomeCommitTimeout`, so
+a shutdown landing as it succeeded does not leave the intent of a synced file
+(`TestUploadNewFile_ZeroByteCreateLeavesNoPendingRow`). When the cleanup
+after a failure reports the created item removed
+(`graph.CreatedItemError.Removed`), the attempt drops the item's record the
+same way: the item can never receive the content
+(`TestUploadNewFile_RemovedPlaceholderLeavesNoRecord`). Two kinds of attempt
+are not known to have created nothing: one that was canceled before it
+succeeded, whose create may still land after the client stopped waiting
 (`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`), and one whose
 create ended without an answer that says whether it landed
 (`graph.ErrCreateOutcomeUnknown`: no response, a 5xx, a 408, a success whose
@@ -185,10 +193,16 @@ once it is past `pendingCreateIntentTTL`, and, after a pass that observed
 OneDrive before the local tree (a one-shot sync, a watch bootstrap), once a
 complete local scan finds no file at its path, since no create there will
 be retried. A watch replan observes the local tree only and keeps a fresh
-intent, so the change batch that shows a landed create still claims it
+intent, so the change batch that shows a landed create still claims it; the
+watch loop drops it once a remote poll that began after the attempt ended has
+been applied and the file is gone
 ([sync-store.md](sync-store.md), Pending creates;
 `TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped`,
-`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`).
+`TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile`,
+`TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll`). A
+failed lookup of an upload's created item keeps the create mark, so its 404
+is never read as the create's parent being gone
+(`TestExecuteUpload_LookupFailureAfterACreateIsNotAGoneParent`).
 Kept for good, an intent whose file was renamed away could claim an empty
 file a stranger made at that path, and the next pass then deleted it.
 Before, the unanswered create cleared its intent, and when it had in fact
@@ -204,8 +218,16 @@ earlier attempt left one (`priorCreateIntent`: no item ID, within
 A 409 on the create is resolved, not retried as is (`resolveCreateConflict`):
 
 - into our own placeholder from an interrupted attempt: upload by ID with
-  If-Match on the eTag just read while it is still empty. The creation eTag
-  does not work, since a canceled upload session moves it
+  If-Match on the eTag just read while it is still an empty live file (a
+  folder, a deleted item or a package of size 0 is none) at the create's own
+  path: the name in NFC, under the create's parent (`placeholderIsAtCreate`;
+  the drive root's alias `root` names no item, so an item read back for a
+  create there is placed by its parent path, and only a location known to be
+  elsewhere refuses it). An item renamed or moved online before observation
+  took its record along would otherwise receive the user's file under
+  another name or in another folder
+  (`TestFinishIntoPlaceholder_RefusesAnItemThatIsNotAnEmptyLiveFile`). The
+  creation eTag does not work, since a canceled upload session moves it
   (`TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved`);
 - into the file of a create whose answer was lost: only with a prior intent,
   and only when the folder lists a file of exactly this spelling, live and
@@ -229,11 +251,14 @@ A 409 on the create is resolved, not retried as is (`resolveCreateConflict`):
   the listing did not show yet
   (`TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt`).
 
-A read that fails while resolving the 409 (the pending-create row, the folder
-listing, the record of a claim) is that read's failure, classified by its own
-answer: a throttled or failing listing proves nothing about the plan. Joined
-to the 409, it read as a stale precondition under the 409's status
-(`TestExecutor_Upload_ListingFailureAfterACreateConflictIsClassifiedByItsOwnAnswer`).
+A read that fails while resolving the 409 (the pending-create row, the read
+of the placeholder, the folder listing, the record of a claim) is that read's
+failure, classified by its own answer: a throttled or failing listing proves
+nothing about the plan. Joined to the 409, it read as a stale precondition
+under the 409's status
+(`TestExecutor_Upload_ListingFailureAfterACreateConflictIsClassifiedByItsOwnAnswer`,
+`TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure`; a placeholder
+that is gone is no placeholder, and the listing decides).
 The same holds for the lookup of an upload whose final fragment may have
 committed: driveops reports its failure as an unknown outcome carrying the
 lookup's error only, so a final fragment's 409 or 412 before it does not make

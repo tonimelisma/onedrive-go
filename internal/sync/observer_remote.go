@@ -348,6 +348,10 @@ func (o *remoteObserver) Watch(
 
 		token := o.CurrentDeltaToken()
 
+		// Taken before the first page is asked for: a create that ended before
+		// this time can be in what the poll sees, and the watch loop judges
+		// create intents by it (remoteObservationBatch.pollStartedAt).
+		pollStartedAt := o.clock.Now()
 		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
 		if stuck.observe(o.clock.Now(), token, err) {
 			o.logger.Warn("OneDrive has failed every check of the saved change-list position for hours; rescanning the whole drive",
@@ -380,7 +384,7 @@ func (o *remoteObserver) Watch(
 		outage.recovered(ctx, o.logger, "Checking OneDrive for changes works again")
 
 		result := o.handleWatchBatch(
-			ctx, batches, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
+			ctx, batches, pollStartedAt, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
 		)
 		if result.err != nil {
 			return result.err
@@ -394,6 +398,7 @@ func (o *remoteObserver) Watch(
 func (o *remoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
+	pollStartedAt time.Time,
 	polledEvents []changeEvent,
 	windowItems int,
 	newToken string,
@@ -407,7 +412,7 @@ func (o *remoteObserver) handleWatchBatch(
 	// converted to nothing (deletes of never-synced items) must still advance
 	// the token, or every poll replays it forever.
 	if windowItems == 0 && len(polledEvents) == 0 && !topology.shouldApply() {
-		return o.handleZeroEventPoll(ctx, interval, bo, wakeCh)
+		return o.handleZeroEventPoll(ctx, batches, pollStartedAt, interval, bo, wakeCh)
 	}
 
 	batch := remoteObservationBatch{
@@ -423,6 +428,7 @@ func (o *remoteObserver) handleWatchBatch(
 			return watchStepResult{err: handleErr}
 		}
 	}
+	batch.pollStartedAt = pollStartedAt
 
 	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
 		if watchShouldStop(ctx, emitErr) {
@@ -496,6 +502,9 @@ func (o *remoteObserver) recoverExpiredDeltaInWatch(
 	if err != nil {
 		return o.backOffAfterFailedRecovery(ctx, bo, outage, err, wakeCh)
 	}
+	// The full refresh stands in for this poll: it observed OneDrive from the
+	// time it began.
+	batch.pollStartedAt = *lastRecovery
 	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
 		if watchShouldStop(ctx, emitErr) {
 			return watchStepResult{stop: true}
@@ -574,17 +583,31 @@ func (o *remoteObserver) handleWatchPollError(
 	return watchStepResult{}
 }
 
+// handleZeroEventPoll skips token advancement and observation commit when
+// the window carried no items. The old token replays the same empty window at
+// zero cost, but avoids advancing past deletions still propagating through
+// the Graph change log (ci_issues.md §20). The poll still hands over when it
+// began, in a batch that carries nothing else: no items and no token, so it
+// commits nothing and replans nothing, while a create intent whose file is
+// gone can be dropped once a poll that began after its attempt ended has
+// been seen (watchCreateAttempts).
 func (o *remoteObserver) handleZeroEventPoll(
 	ctx context.Context,
+	batches chan<- remoteObservationBatch,
+	pollStartedAt time.Time,
 	interval time.Duration,
 	bo *retry.Backoff,
 	wakeCh <-chan struct{},
 ) watchStepResult {
-	// Skip token advancement and observation commit when the window carried no
-	// items. The old token replays the same empty window at zero cost,
-	// but avoids advancing past deletions still propagating through the
-	// Graph change log (ci_issues.md §20).
 	o.logger.Debug("watch: delta returned 0 events, skipping token advancement")
+	if emitErr := o.emitWatchBatch(ctx, batches, &remoteObservationBatch{
+		source: remoteObservationBatchPrimaryWatch, pollStartedAt: pollStartedAt, pollOnly: true,
+	}); emitErr != nil {
+		if watchShouldStop(ctx, emitErr) {
+			return watchStepResult{stop: true}
+		}
+		return watchStepResult{err: emitErr}
+	}
 	bo.Reset()
 
 	return o.sleepWatch(ctx, interval, "zero-event", wakeCh)
