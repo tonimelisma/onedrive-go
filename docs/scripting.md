@@ -72,9 +72,11 @@ drive's `sync_state.issues` lists problem groups:
 ```
 
 Match on `type`; `title`, `reason` and `action` are for people and may be
-reworded. `paths` is sampled like the text output (`examples_limit` gives the
-sample size); add `--verbose` for every path. The shape is the same with or
-without `--drive`.
+reworded. A folder OneDrive refused to read at the top of what a drive or a
+shared folder syncs is `remote_root_not_found` when OneDrive answered "not
+found" and `remote_read_denied` when it answered "forbidden". `paths` is
+sampled like the text output (`examples_limit` gives the sample size); add
+`--verbose` for every path. The shape is the same with or without `--drive`.
 
 ### `sync --json` event lines
 
@@ -128,13 +130,19 @@ The code is chosen from the kind of error, never from its message text, so it
 is safe to branch on. `sync` run as root without `--allow-root` is a
 command-line mistake (2). One-shot `sync` exits non-zero when a selected drive
 could not sync at all, and exits 1 when a drive it ran left a file unsynced:
-a file action failed, work is waiting to be retried, or a condition `status`
-lists keeps a file from syncing. It exits 0 only when `status` would list
-nothing left for the drives it ran, so a condition that needs you (a name
-OneDrive does not allow, a read-only shared folder) makes every run exit 1
-until it is dealt with. Work `--upload-only` or `--download-only` holds back,
-deletes held for `--confirm-deletes`, conflict copies, a paused drive beside
-one that ran, and `--dry-run` do not fail the run. A drive that needs a new
+a file action failed, work is waiting to be retried, a condition `status`
+lists keeps a file from syncing, or a change in the local copy of a shared
+folder removed from your account could not be uploaded before the folder
+went. A condition that needs you (a name OneDrive does not allow, a read-only
+shared folder, a shared folder that is gone or can no longer be read, such a
+kept change) makes every run exit 1 until it is dealt with.
+A run over several drives, or over a drive and the shared folders below it,
+ends with one line that counts them apart, such as `1 of 2 shared folders in
+1 selected drive left files unsynced (see above)`. Work `--upload-only` or
+`--download-only` holds back, deletes held for `--confirm-deletes`, conflict
+copies, files a removed shared folder's local copy keeps because sync does
+not manage them, a paused drive beside one that ran, and `--dry-run` do not
+fail the run. A drive that needs a new
 sign-in or has an invalid configuration still exits 77 or 78. `sync --watch`
 exits 77 or 78 only when every drive that could not start failed for that
 same reason.

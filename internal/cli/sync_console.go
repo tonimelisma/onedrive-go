@@ -216,7 +216,7 @@ func (c *syncConsole) Summary(result multisync.RunOnceResult) map[string]synceng
 			reportsBySelection[report.SelectionIndex] = append(reportsBySelection[report.SelectionIndex], report)
 		}
 	}
-	multi := result.Startup.SelectedCount() > 1
+	multi := result.Startup.StartupResultCount() > 1
 
 	for i := range result.Startup.Results {
 		startup := &result.Startup.Results[i]
@@ -351,8 +351,8 @@ func (c *syncConsole) reportSummary(tally *activityTally, r *syncengine.Report, 
 	if left.WillRetry > 0 {
 		line += fmt.Sprintf("; %d will be retried on the next sync", left.WillRetry)
 	}
-	if left.StillOpen > 0 {
-		line += fmt.Sprintf("; %d still not synced (see 'onedrive-go status')", left.StillOpen)
+	if notSynced := left.NotSynced(); notSynced > 0 {
+		line += fmt.Sprintf("; %d still not synced (see 'onedrive-go status')", notSynced)
 	}
 
 	return line + "."

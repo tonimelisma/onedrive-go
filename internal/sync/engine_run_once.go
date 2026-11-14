@@ -169,7 +169,9 @@ func (e *Engine) reportWhatTheRunLeft(ctx context.Context, total *Report, last o
 // (DriveStatusSnapshot.unsyncedIssueCount), so the one-shot exit status
 // cannot say done while `status` lists such a file (R-6.6.28), and the files
 // an interrupted removal set aside (interruptedRemovalCount). A store that
-// cannot be read fails the run: nothing would then prove it left nothing.
+// cannot be read fails the run: nothing would then prove it left nothing. The
+// release of a removed shared folder that cannot be read reads them again
+// once the folder's own read failure is gone (forgetSharedFolderReadFailure).
 func (e *Engine) readIssuesTheRunLeft(ctx context.Context, report *Report) error {
 	snapshot, err := e.baseline.ReadDriveStatusSnapshot(ctx)
 	if err != nil {

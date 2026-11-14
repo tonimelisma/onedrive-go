@@ -674,10 +674,10 @@ func releaseDeniedClient(t *testing.T, remote *moveScenarioRemote, denied *atomi
 
 // Validates: R-2.4.8
 //
-// When the shared folder can no longer be read, its drain can never finish,
-// and the same rule still holds: what matches the baseline leaves, a change
-// that cannot be uploaded stays, named as such, and the folder that holds it
-// is not reported as an entry the delete could not remove. When the folder is shared
+// When the shared folder can no longer be read, the same rule still holds:
+// what matches the baseline leaves, a change that cannot be uploaded stays,
+// named as such, and holds the drain, and the folder that holds it is not
+// reported as an entry the delete could not remove. When the folder is shared
 // again at the same path, the next sync plans no delete in it: the released
 // files' rows left with them, so they are downloaded again, and the kept
 // changes are uploaded.
@@ -696,7 +696,7 @@ func TestRunOnce_UnreadableSharedFolderReleasesWhatMatchesAndTheReAddPlansNoDele
 	for pass := range 2 {
 		report := runReleaseDrain(t, eng)
 		holds := report.LocalTreeHolds()
-		assert.True(t, holds.Any(), "pass %d: the drain cannot finish", pass)
+		assert.True(t, holds.Any(), "pass %d: the kept changes hold the drain", pass)
 		assert.Equal(t, KeptEntries{Count: 2, Examples: []string{releaseFileA, "Docs/new.txt"}}, holds.KeptNotUploaded)
 		require.NotEmpty(t, holds.keptReasons())
 		assert.Contains(t, holds.keptReasons()[0], "2 changes could not be uploaded")
@@ -722,6 +722,152 @@ func TestRunOnce_UnreadableSharedFolderReleasesWhatMatchesAndTheReAddPlansNoDele
 	assert.FileExists(t, filepath.Join(syncRoot, filepath.FromSlash(releaseFileB)), "released files come back down")
 	assert.FileExists(t, filepath.Join(syncRoot, releaseFileTop))
 	assert.Empty(t, releaseKeptIssuePaths(t, eng), "a sync of the shared folder clears what the release kept")
+}
+
+// sharedFolderReleaseRootID is the shared folder, below a drive's root, that
+// the engine of an unreadable shared folder's final drain syncs.
+const sharedFolderReleaseRootID = "item-shared"
+
+// unreadableRootAnswers are OneDrive's two answers to the read of a shared
+// folder's root that make the folder unreadable.
+func unreadableRootAnswers() []struct {
+	name   string
+	answer error
+} {
+	return []struct {
+		name   string
+		answer error
+	}{
+		{name: "not found", answer: graph.ErrNotFound},
+		{name: "forbidden", answer: graph.ErrForbidden},
+	}
+}
+
+// newSharedFolderReleaseEngine syncs a shared folder holding Docs/a.txt and
+// top.txt through an engine whose root is that folder, and whose listing of
+// it gets answer from then on.
+func newSharedFolderReleaseEngine(t *testing.T, answer *rootReadAnswer) (*testEngine, string) {
+	t.Helper()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder(sharedFolderReleaseRootID, strRoot, "Shared")
+	remote.addFolder("item-docs", sharedFolderReleaseRootID, releaseSyncedFolder)
+	remote.addFile(t, "item-a", "item-docs", "a.txt", releaseContentA)
+	remote.addFile(t, "item-top", sharedFolderReleaseRootID, releaseFileTop, "top\n")
+
+	client := remote.client(t)
+	client.listChildrenRecursiveFn = func(_ context.Context, _ driveid.ID, folderID string) ([]graph.Item, error) {
+		if answer.err != nil {
+			return nil, answer.err
+		}
+		return sharedFolderListing(remote, folderID), nil
+	}
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), client, t.TempDir(), func(inputs *engineInputs) {
+		inputs.RemoteRootItemID = sharedFolderReleaseRootID
+	})
+	runScenarioPass(t, eng)
+	require.FileExists(t, filepath.Join(syncRoot, filepath.FromSlash(releaseFileA)))
+	require.FileExists(t, filepath.Join(syncRoot, releaseFileTop))
+
+	return eng, syncRoot
+}
+
+// sharedFolderListing is the recursive listing of folderID: every item below
+// it, each folder before its children.
+func sharedFolderListing(remote *moveScenarioRemote, folderID string) []graph.Item {
+	var items []graph.Item
+	children := remote.listChildren(folderID)
+	for i := range children {
+		items = append(items, children[i])
+		if children[i].IsFolder {
+			items = append(items, sharedFolderListing(remote, children[i].ID)...)
+		}
+	}
+
+	return items
+}
+
+// storedIssueNames lists the store's observation issues, each as its type
+// and path.
+func storedIssueNames(t *testing.T, eng *testEngine) []string {
+	t.Helper()
+
+	issues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	names := make([]string, 0, len(issues))
+	for i := range issues {
+		names = append(names, string(issues[i].IssueType)+" "+issues[i].Path)
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+// Validates: R-2.4.8, R-6.6.28
+//
+// A removed shared folder whose root OneDrive answers with "not found" or
+// "forbidden" gives up what matches the baseline, and its root's read issue
+// is neither work the run left nor kept as an issue of the folder: a final
+// drain that keeps nothing finishes, so the shared folder's report ends with
+// the removal of its shortcut.
+func TestRunOnce_FinalDrainOfAnUnreadableSharedFolderThatKeepsNothingFinishes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range unreadableRootAnswers() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var rootAnswer rootReadAnswer
+			eng, syncRoot := newSharedFolderReleaseEngine(t, &rootAnswer)
+
+			rootAnswer.err = tc.answer
+			report := runReleaseDrain(t, eng)
+
+			holds := report.LocalTreeHolds()
+			assert.False(t, holds.Any(), "nothing holds the tree: %+v", holds)
+			assert.Empty(t, holds.Reasons())
+			assert.Empty(t, releaseRootEntries(t, syncRoot), "everything matched the baseline and left")
+			assert.Empty(t, storedIssueNames(t, eng), "the store holds no issue of the folder")
+		})
+	}
+}
+
+// Validates: R-2.4.8, R-6.6.28
+//
+// A final drain of a shared folder that cannot be read is held by what its
+// release kept and by nothing else: a change that can no longer be uploaded
+// stays, is named, is stored as kept and is the one piece of work the run
+// left, so the run fails until the change is dealt with. The root's read
+// issue is neither counted as work the run left nor stored, so status names
+// the kept change and not the shared folder whose shortcut is gone. Every
+// later drain ends the same way.
+func TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range unreadableRootAnswers() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var rootAnswer rootReadAnswer
+			eng, syncRoot := newSharedFolderReleaseEngine(t, &rootAnswer)
+			writeLocalFile(t, syncRoot, releaseFileA, "edited, never uploaded\n")
+
+			rootAnswer.err = tc.answer
+			for pass := range 2 {
+				report := runReleaseDrain(t, eng)
+
+				holds := report.LocalTreeHolds()
+				assert.Equal(t, KeptEntries{Count: 1, Examples: []string{releaseFileA}}, holds.KeptNotUploaded, "pass %d", pass)
+				assert.Equal(t, LeftWork{NotUploaded: 1}, holds.Left,
+					"pass %d: the run left the change it kept and nothing else", pass)
+				assert.Equal(t, []string{notUploadedReason(1, []string{releaseFileA})}, holds.Reasons(), "pass %d", pass)
+				assert.Equal(t, []string{string(issueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
+					"pass %d: the store holds the kept change and no issue of the folder", pass)
+			}
+			assert.FileExists(t, filepath.Join(syncRoot, filepath.FromSlash(releaseFileA)), "the change stays")
+			assert.NoFileExists(t, filepath.Join(syncRoot, releaseFileTop), "a matching file leaves")
+		})
+	}
 }
 
 // Validates: R-2.4.8, R-6.5.2

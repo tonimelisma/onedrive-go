@@ -41,7 +41,7 @@ func TestBuildSyncStateInfo_CarriesLocalDriftAndRendersIt(t *testing.T) {
 	info := buildSyncStateInfo(&syncengine.DriveStatusSnapshot{
 		BaselineFileCount: 7,
 		LocalDriftItems:   3,
-	}, false, 0)
+	}, statusStoreRootDrive, false, 0)
 	assert.Equal(t, 3, info.LocalDrift)
 
 	var buf bytes.Buffer

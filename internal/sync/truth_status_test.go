@@ -93,7 +93,7 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 			// OneDrive's side of the path is the unknown one; a folder's subtree
 			// is covered by the issue's read scope key, not by its type.
 			verdict: observationIssueTruthVerdict{blocksRemote: true},
-			members: []IssueType{issueRemoteReadDenied},
+			members: []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound},
 		},
 		issueTypeVerdictGroup[observationIssueTruthVerdict]{
 			// OneDrive keeps two items under the path, so its side of the path

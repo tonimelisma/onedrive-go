@@ -88,7 +88,30 @@ func summarizeStartupResults(results []MountStartupResult) StartupSelectionSumma
 	}
 }
 
-func (s StartupSelectionSummary) SelectedCount() int {
+// SelectedDriveCount is how many configured drives the results name, each
+// once however many results name it: a drive whose shared folders could not
+// be set up has a second result beside its own. A shared folder below a
+// drive is not a drive, and a result that names no drive (a failure that
+// stopped the run before any drive started) counts none.
+func (s StartupSelectionSummary) SelectedDriveCount() int {
+	drives := make(map[string]struct{}, len(s.Results))
+	for i := range s.Results {
+		identity := &s.Results[i].Identity
+		if identity.ProjectionKind != MountProjectionStandalone || identity.MountID == "" {
+			continue
+		}
+		drives[identity.MountID] = struct{}{}
+	}
+
+	return len(drives)
+}
+
+// StartupResultCount is how many results there are: one for each drive and
+// each shared folder of the run, a second one for a drive whose shared
+// folders could not be set up, or the single result of a failure that
+// stopped the run before any drive started. More than one means the run's
+// output names what each of its lines is about.
+func (s StartupSelectionSummary) StartupResultCount() int {
 	return len(s.Results)
 }
 
@@ -161,7 +184,7 @@ type WatchStartupError struct {
 }
 
 func (e *WatchStartupError) Error() string {
-	if e == nil || e.Summary.SelectedCount() == 0 {
+	if e == nil || e.Summary.StartupResultCount() == 0 {
 		return "no drives could start syncing; run 'onedrive-go status' for details"
 	}
 	failures := e.Summary.SkippedResults()
@@ -174,7 +197,54 @@ func (e *WatchStartupError) Error() string {
 		return fmt.Sprintf("%s could not start syncing: %v", name, failure.Err)
 	}
 
-	return fmt.Sprintf("%d drives could not start syncing; run 'onedrive-go status' for details", len(failures))
+	return countDrivesAndSharedFolders(failures) + " could not start syncing; run 'onedrive-go status' for details"
+}
+
+// countDrivesAndSharedFolders counts the drives and the shared folders below
+// them that results name, apart and each once: "2 drives", "1 shared
+// folder", or both joined by "and". A drive whose shared folders could not be
+// set up has a second result that carries the drive's own identity, so it
+// counts once; a result that names no mount counts once by its selection
+// index.
+func countDrivesAndSharedFolders(results []MountStartupResult) string {
+	type mountKey struct {
+		mountID        string
+		selectionIndex int
+	}
+	drives := make(map[mountKey]struct{}, len(results))
+	sharedFolders := make(map[mountKey]struct{}, len(results))
+	for i := range results {
+		key := mountKey{mountID: results[i].Identity.MountID}
+		if key.mountID == "" {
+			key.selectionIndex = results[i].SelectionIndex
+		}
+		if results[i].Identity.ProjectionKind == MountProjectionChild {
+			sharedFolders[key] = struct{}{}
+			continue
+		}
+		drives[key] = struct{}{}
+	}
+
+	drivePart := formatMountCount(len(drives), "drive", "drives")
+	folderPart := formatMountCount(len(sharedFolders), "shared folder", "shared folders")
+	switch {
+	case len(sharedFolders) == 0:
+		return drivePart
+	case len(drives) == 0:
+		return folderPart
+	default:
+		return drivePart + " and " + folderPart
+	}
+}
+
+// formatMountCount is count followed by the singular noun for one and the
+// plural otherwise.
+func formatMountCount(count int, singular, plural string) string {
+	if count == 1 {
+		return "1 " + singular
+	}
+
+	return fmt.Sprintf("%d %s", count, plural)
 }
 
 // MountActivity is one finished file action together with the mount it ran

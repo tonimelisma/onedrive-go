@@ -420,6 +420,7 @@ func blockScopeActivationWording(key ScopeKey, conditionType IssueType, retryIn 
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		issueRemoteReadDenied,
+		issueRemoteRootNotFound,
 		issueLocalReadDenied,
 		issueLocalWriteDenied,
 		issueCaseCollision,

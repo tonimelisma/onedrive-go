@@ -22,8 +22,9 @@ type IssueType string
 // type is a switch that names every member, its default answering only a
 // value outside the enum: membership (isMember), truth
 // (truthVerdictForIssueType), condition family (conditionKeyForIssueType),
-// retry curve, permission boundary scope, block-scope wording and the
-// one-shot exit status (issueTypeLeavesFileUnsynced). A new
+// retry curve, permission boundary scope, block-scope wording, the
+// one-shot exit status (issueTypeLeavesFileUnsynced) and the read failure of
+// a whole tree (issueTypeIsRootReadFailure). A new
 // member does not pass the exhaustive linter until each of them decides it,
 // and each has a test that reads the members from this file.
 const (
@@ -46,11 +47,19 @@ const (
 	IssueUnauthorized      IssueType = "unauthorized"
 	IssueRemoteWriteDenied IssueType = "remote_write_denied"
 	issueRemoteReadDenied  IssueType = "remote_read_denied"
-	IssueQuotaExceeded     IssueType = "quota_exceeded"
-	issueRateLimited       IssueType = "rate_limited"
-	issueLocalReadDenied   IssueType = "local_read_denied"
-	issueLocalWriteDenied  IssueType = "local_permission_denied"
-	issueCaseCollision     IssueType = "case_collision"
+	// issueRemoteRootNotFound marks the root an engine syncs (a drive's own
+	// root or a shared folder's) when OneDrive answered its read with "not
+	// found"; a "forbidden" answer is issueRemoteReadDenied
+	// (rootReadFailureIssueType). Both sit at "/" under the root read scope,
+	// so they block the same truth and every per-type switch except the
+	// condition family decides them alike; each has its own condition
+	// family, because what the user is told, and can do, differs.
+	issueRemoteRootNotFound IssueType = "remote_root_not_found"
+	IssueQuotaExceeded      IssueType = "quota_exceeded"
+	issueRateLimited        IssueType = "rate_limited"
+	issueLocalReadDenied    IssueType = "local_read_denied"
+	issueLocalWriteDenied   IssueType = "local_permission_denied"
+	issueCaseCollision      IssueType = "case_collision"
 	// issueRemoteNameTwin marks a path where OneDrive keeps two or more
 	// items that this computer stores under one name (store_remote_twins.go).
 	issueRemoteNameTwin       IssueType = "remote_name_twin"
@@ -117,6 +126,7 @@ func (t IssueType) isMember() bool {
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		issueRemoteReadDenied,
+		issueRemoteRootNotFound,
 		IssueQuotaExceeded,
 		issueRateLimited,
 		issueLocalReadDenied,
@@ -163,7 +173,11 @@ func (t IssueType) isMember() bool {
 // content sync does not sync by design, a synced folder that cannot be
 // written to or a synced entry the local delete could not remove, both
 // already synced, or a change that can no longer be sent to the shared
-// folder, whose own remote_read_denied issue already counts.
+// folder. Each of them keeps the folder's local copy through the release's
+// own report (Report.LocalTreeHolds), not through this count. The change that
+// could not be sent is still work the run left, and fails it: the release's
+// report counts it (LeftWork.NotUploaded), so counting its row here would
+// count it twice.
 // A value outside the enum, which the stores refuse, is not known to be done,
 // so it counts.
 func issueTypeLeavesFileUnsynced(issueType IssueType) bool {
@@ -179,6 +193,7 @@ func issueTypeLeavesFileUnsynced(issueType IssueType) bool {
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		issueRemoteReadDenied,
+		issueRemoteRootNotFound,
 		IssueQuotaExceeded,
 		issueRateLimited,
 		issueLocalReadDenied,
@@ -209,6 +224,57 @@ func issueTypeLeavesFileUnsynced(issueType IssueType) bool {
 		return true
 	default:
 		return true
+	}
+}
+
+// issueTypeIsRootReadFailure reports whether an issue of this type, held at
+// the root read scope, is OneDrive's refusal to read the root an engine
+// syncs (rootReadFailureIssueType): "forbidden" or "not found", which makes
+// the whole tree unreadable. A value outside the enum is not.
+func issueTypeIsRootReadFailure(issueType IssueType) bool {
+	switch issueType {
+	case issueRemoteReadDenied,
+		issueRemoteRootNotFound:
+		return true
+	case IssueInvalidFilename,
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueHashPanic,
+		IssueUnauthorized,
+		IssueRemoteWriteDenied,
+		IssueQuotaExceeded,
+		issueRateLimited,
+		issueLocalReadDenied,
+		issueLocalWriteDenied,
+		issueCaseCollision,
+		issueRemoteNameTwin,
+		issueDiskFull,
+		issueServiceOutage,
+		issueFileTooLargeForSpace,
+		issueLocalNameTooLong,
+		issueLocalReadOnly,
+		issueDeletesHeld,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
+		issueRemoteFolderUnverifiable,
+		issueLocalInterruptedRemoval,
+		issueRemovedFolderKept,
+		issueLocalFileTooLarge,
+		issueLocalBusy,
+		issueLocalCrossDevice,
+		issueUnsupportedOperation,
+		issueMalwareDetected,
+		issueLocalDatabaseOpen,
+		issueUploadVerification,
+		issueDownloadIntegrity,
+		issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected:
+		return false
+	default:
+		return false
 	}
 }
 

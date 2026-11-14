@@ -12,7 +12,8 @@ const (
 		"Shared reports: Done in 2.0 s; 2 still not synced (see 'onedrive-go status').\n" +
 		"Shared plans: Done in 0.4 s: downloaded 1 file (46 B); 1 still not synced (see 'onedrive-go status').\n"
 
-	standingErrorTwoOfThree = "Error: 2 of 3 selected drives left files unsynced (see above)\n"
+	// The baseline above is one drive and two shared folders below it.
+	standingErrorTwoFolders = "Error: 2 of 2 shared folders in 1 selected drive left files unsynced (see above)\n"
 )
 
 func recordedStandingConditions(t *testing.T) *StandingSyncConditions {
@@ -59,7 +60,7 @@ func TestStandingSyncConditions_SettleRewritesAPassThatLeftOnlyRecordedCondition
 		"Main drive: Done in 2.7 s: downloaded 2 files (46 B), created 3 folders.\n"+
 			"Shared reports: Done in 1 min 3 s; 1 still not synced (see 'onedrive-go status').\n"+
 			"Shared plans: Done in 0.4 s: uploaded 1 file (1.2 KB); 1 still not synced (see 'onedrive-go status').\n",
-		"time=2026-01-01T00:00:00Z level=DEBUG msg=\"pass finished\"\n"+standingErrorTwoOfThree,
+		"time=2026-01-01T00:00:00Z level=DEBUG msg=\"pass finished\"\n"+standingErrorTwoFolders,
 	)
 	require.True(t, settled)
 	assert.Equal(t,
@@ -76,7 +77,7 @@ func TestStandingSyncConditions_SettleLeavesEveryOtherPassAlone(t *testing.T) {
 
 	const (
 		standingLine = "Shared reports: Done in 2.0 s; 2 still not synced (see 'onedrive-go status').\n"
-		oneOfThree   = "Error: 1 of 3 selected drives left files unsynced (see above)\n"
+		oneFolder    = "Error: 1 of 2 shared folders in 1 selected drive left files unsynced (see above)\n"
 	)
 
 	cases := []struct {
@@ -92,12 +93,12 @@ func TestStandingSyncConditions_SettleLeavesEveryOtherPassAlone(t *testing.T) {
 		{
 			name:   "more items than recorded",
 			stdout: "Shared reports: Done in 2.0 s; 3 still not synced (see 'onedrive-go status').\n",
-			stderr: oneOfThree,
+			stderr: oneFolder,
 		},
 		{
 			name:   "a mount that was not recorded",
 			stdout: "Main drive: Done in 2.0 s; 1 still not synced (see 'onedrive-go status').\n",
-			stderr: oneOfThree,
+			stderr: oneFolder,
 		},
 		{
 			name:   "no mount named",
@@ -107,17 +108,17 @@ func TestStandingSyncConditions_SettleLeavesEveryOtherPassAlone(t *testing.T) {
 		{
 			name:   "a failure beside the standing condition",
 			stdout: "Shared reports: Done in 2.0 s; 1 failed; 2 still not synced (see 'onedrive-go status').\n",
-			stderr: oneOfThree,
+			stderr: oneFolder,
 		},
 		{
 			name:   "another mount left work of its own",
 			stdout: standingLine + "Main drive: Done in 2.0 s: uploaded 1 file; 1 will be retried on the next sync.\n",
-			stderr: standingErrorTwoOfThree,
+			stderr: standingErrorTwoFolders,
 		},
 		{
 			name:   "the error counts more mounts than the standing lines",
 			stdout: standingLine,
-			stderr: standingErrorTwoOfThree,
+			stderr: standingErrorTwoFolders,
 		},
 		{
 			name:   "a different error",
@@ -127,12 +128,12 @@ func TestStandingSyncConditions_SettleLeavesEveryOtherPassAlone(t *testing.T) {
 		{
 			name:   "a second error line",
 			stdout: standingLine,
-			stderr: "Error: something else\n" + oneOfThree,
+			stderr: "Error: something else\n" + oneFolder,
 		},
 		{
 			name:   "text after the error line",
 			stdout: standingLine,
-			stderr: oneOfThree + "Details: more\n",
+			stderr: oneFolder + "Details: more\n",
 		},
 		{
 			name:   "no error line",
@@ -161,9 +162,48 @@ func TestStandingSyncConditions_ZeroValueSettlesNothing(t *testing.T) {
 	var standing StandingSyncConditions
 	stdout, stderr, settled := standing.Settle(
 		"Shared reports: Done in 2.0 s; 2 still not synced (see 'onedrive-go status').\n",
-		"Error: 1 of 3 selected drives left files unsynced (see above)\n",
+		"Error: 1 of 2 shared folders in 1 selected drive left files unsynced (see above)\n",
 	)
 	assert.False(t, settled)
 	assert.Contains(t, stdout, "still not synced")
 	assert.Contains(t, stderr, "Error: ")
+}
+
+// Validates: R-6.6.28
+//
+// The closing error counts drives and the shared folders below them apart.
+// Settle reads every form of it and adds the two counts: the mounts that left
+// work, which must be exactly the recorded standing lines.
+func TestStandingSyncConditions_SettleReadsEveryFormOfTheClosingCount(t *testing.T) {
+	t.Parallel()
+
+	const twoStandingLines = "Shared reports: Done in 2.0 s; 2 still not synced (see 'onedrive-go status').\n" +
+		"Shared plans: Done in 0.4 s; 1 still not synced (see 'onedrive-go status').\n"
+
+	cases := []struct {
+		stderr      string
+		wantSettled bool
+	}{
+		{stderr: standingErrorTwoFolders, wantSettled: true},
+		{stderr: "Error: 2 of 3 selected drives left files unsynced (see above)\n", wantSettled: true},
+		{
+			stderr:      "Error: 1 of 2 selected drives and 1 of 1 shared folder left files unsynced (see above)\n",
+			wantSettled: true,
+		},
+		{stderr: "Error: 1 of 3 shared folders in 2 selected drives left files unsynced (see above)\n"},
+		{stderr: "Error: 1 of 1 selected drive and 2 of 2 shared folders left files unsynced (see above)\n"},
+	}
+
+	standing := recordedStandingConditions(t)
+	for _, tc := range cases {
+		t.Run(tc.stderr, func(t *testing.T) {
+			t.Parallel()
+
+			_, stderr, settled := standing.Settle(twoStandingLines, tc.stderr)
+			assert.Equal(t, tc.wantSettled, settled)
+			if tc.wantSettled {
+				assert.Empty(t, stderr)
+			}
+		})
+	}
 }

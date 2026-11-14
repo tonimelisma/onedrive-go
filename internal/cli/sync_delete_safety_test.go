@@ -46,7 +46,7 @@ func TestStatusConditions_HeldDeletesAreDescribed(t *testing.T) {
 		},
 	}
 
-	conditions := buildStatusConditionJSON(snapshot, true, 5)
+	conditions := buildStatusConditionJSON(snapshot, statusStoreRootDrive, true, 5)
 	require.Len(t, conditions, 1)
 	assert.Equal(t, string(syncengine.ConditionDeletesHeld), conditions[0].ConditionKey)
 	assert.Equal(t, "Deletes held for confirmation", conditions[0].Title)

@@ -275,7 +275,7 @@ func TestHandleRemoteObservationBatch_MountRootReconcilesRemoteReadDeniedFinding
 		remoteObservationModeEnumerate,
 		nil,
 		"",
-		rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
+		rootReadFailureObservationFindingsBatch(eng.driveID, issueRemoteReadDenied),
 	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -301,7 +301,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	findings := rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
+	findings := rootReadFailureObservationFindingsBatch(eng.driveID, issueRemoteReadDenied)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings))
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
@@ -350,7 +350,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
-	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
+	batch.findings = rootReadFailureObservationFindingsBatch(eng.driveID, issueRemoteReadDenied)
 
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.Error(t, err)
@@ -394,7 +394,7 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 		nil,
 		"",
 		true,
-		rootRemoteReadDeniedObservationFindingsBatch(eng.driveID),
+		rootReadFailureObservationFindingsBatch(eng.driveID, issueRemoteReadDenied),
 	)
 	batch.source = remoteObservationBatchFullRefresh
 	batch.armFullRefreshTimer = true
@@ -434,7 +434,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 	rt.scopes.upsertActiveScope(serviceScope)
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
-	batch.findings = rootRemoteReadDeniedObservationFindingsBatch(eng.driveID)
+	batch.findings = rootReadFailureObservationFindingsBatch(eng.driveID, issueRemoteReadDenied)
 	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
 	activeScopes := rt.scopes.snapshotActiveScopes()

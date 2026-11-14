@@ -201,7 +201,7 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 			members: []IssueType{
 				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
 				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
-				issueRemoteNameTwin, issueRemoteReadDenied,
+				issueRemoteNameTwin, issueRemoteReadDenied, issueRemoteRootNotFound,
 			},
 		},
 		issueTypeVerdictGroup[bool]{
@@ -228,6 +228,51 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 
 	assert.True(t, issueTypeLeavesFileUnsynced(issueTypeOutsideTheEnum),
 		"a value outside the enum is not known to be done, so it counts")
+}
+
+// Validates: R-2.4.8, R-2.10.4
+//
+// Only OneDrive's two refusals to read the root, "forbidden" and "not found",
+// make a whole tree unreadable. The groups must name every declared member,
+// so a new member is decided here as well as in the exhaustive switch.
+func TestIssueTypeIsRootReadFailure_EveryMemberIsDecided(t *testing.T) {
+	t.Parallel()
+
+	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
+		issueTypeVerdictGroup[bool]{
+			// The two answers rootReadFailureIssueType records at the root.
+			verdict: true,
+			members: []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound},
+		},
+		issueTypeVerdictGroup[bool]{
+			// What a scan finds, or a refusal of one path's work.
+			verdict: false,
+			members: []IssueType{
+				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
+				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary, issueRemoteNameTwin,
+				IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, issueRateLimited,
+				issueLocalWriteDenied, issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace,
+				issueLocalNameTooLong, issueLocalReadOnly, issueRemoteFolderUnverifiable, issueLocalFileTooLarge,
+				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
+				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity,
+			},
+		},
+		issueTypeVerdictGroup[bool]{
+			// A deliberate hold, or what a removal kept or set aside.
+			verdict: false,
+			members: []IssueType{issueDeletesHeld, issueLocalInterruptedRemoval, issueRemovedFolderKept},
+		},
+		issueTypeVerdictGroup[bool]{
+			// A transient failure no store keeps as an observation issue.
+			verdict: false,
+			members: []IssueType{
+				issueRequestTimeout, issueTransientConflict, issueTransientNotFound, issueResourceLocked,
+				issueTransferURLRejected,
+			},
+		},
+	), issueTypeIsRootReadFailure)
+
+	assert.False(t, issueTypeIsRootReadFailure(issueTypeOutsideTheEnum), "a value outside the enum is not")
 }
 
 // Validates: R-2.5.6

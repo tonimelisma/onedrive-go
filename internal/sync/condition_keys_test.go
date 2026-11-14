@@ -79,6 +79,7 @@ func TestConditionClearsAutomatically_EveryKeyIsDecided(t *testing.T) {
 			verdict: false,
 			members: []ConditionKey{
 				ConditionAuthenticationRequired, ConditionQuotaExceeded, ConditionRemoteWriteDenied, ConditionRemoteReadDenied,
+				ConditionRemoteRootNotFound,
 				ConditionLocalReadDenied, ConditionLocalWriteDenied, ConditionInvalidFilename, ConditionPathTooLong,
 				ConditionFileTooLarge, ConditionCaseCollision, ConditionRemoteNameTwin, ConditionDiskFull,
 				ConditionHashError, ConditionFileTooLargeForSpace, ConditionLocalNameTooLong, ConditionLocalReadOnly,
@@ -140,6 +141,7 @@ func TestConditionKeyForIssueType_EveryMemberIsDecided(t *testing.T) {
 		IssueUnauthorized:               ConditionAuthenticationRequired,
 		IssueRemoteWriteDenied:          ConditionRemoteWriteDenied,
 		issueRemoteReadDenied:           ConditionRemoteReadDenied,
+		issueRemoteRootNotFound:         ConditionRemoteRootNotFound,
 		IssueQuotaExceeded:              ConditionQuotaExceeded,
 		issueRateLimited:                ConditionRateLimited,
 		issueLocalReadDenied:            ConditionLocalReadDenied,

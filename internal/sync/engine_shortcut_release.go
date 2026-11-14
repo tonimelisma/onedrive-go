@@ -103,12 +103,29 @@ func (e *Engine) releaseLocalTree(ctx context.Context, report *Report) error {
 	return e.recordReleaseKept(ctx, report, survey, issues, unreachable)
 }
 
+// forgetSharedFolderReadFailure ends the report of a removed shared folder
+// that can no longer be read, once its release ran: the shortcut that report
+// would have the user remove is gone, and what could not leave is named by
+// the entries the release kept, each with its own issue. The read failure
+// leaves the store as a root read that succeeds clears it
+// (newRemoteObservationFindingsBatch), and the issues the run left are read
+// again without it, so it is not work the run left. The next run observes the
+// root again before it plans anything.
+func (e *Engine) forgetSharedFolderReadFailure(ctx context.Context, report *Report) error {
+	batch := newRemoteObservationFindingsBatch()
+	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {
+		return fmt.Errorf("sync: clearing the read failure of a released shared folder: %w", err)
+	}
+
+	return e.readIssuesTheRunLeft(ctx, report)
+}
+
 // releaseMayRun reports whether the release runs after a final drain whose
 // report holds the tree as holds says. It runs when nothing holds the tree.
-// When the shared folder can no longer be read, the drain cannot finish, so
-// the release also runs over the work that leaves, but still not over a dry
-// run, a held delete of a local file or a file an interrupted removal set
-// aside.
+// When the shared folder can no longer be read, no drain can sync what is
+// left, so the release also runs over that work (the folder's own read
+// failure among it), but still not over a dry run, a held delete of a local
+// file or a file an interrupted removal set aside.
 func releaseMayRun(holds *LocalTreeHolds, sharedFolderUnreachable bool) bool {
 	if !holds.Any() {
 		return true
@@ -118,13 +135,14 @@ func releaseMayRun(holds *LocalTreeHolds, sharedFolderUnreachable bool) bool {
 		holds.HeldLocalDeletes == 0 && holds.SetAsideFiles == 0
 }
 
-// sharedFolderUnreadable reports whether the store holds the remote read
-// denial of the whole tree: OneDrive answered "not found" or "forbidden" for
-// the folder this engine syncs, so nothing in it can be uploaded or read.
+// sharedFolderUnreadable reports whether the store holds the read failure of
+// the whole tree: OneDrive answered "not found" or "forbidden" for the folder
+// this engine syncs (issueTypeIsRootReadFailure), recorded at the root read
+// scope, so nothing in it can be uploaded or read.
 func sharedFolderUnreadable(issues []ObservationIssueRow) bool {
 	root := sKPermRemoteRead("")
 	for i := range issues {
-		if issues[i].IssueType == issueRemoteReadDenied && issues[i].ScopeKey == root {
+		if issueTypeIsRootReadFailure(issues[i].IssueType) && issues[i].ScopeKey == root {
 			return true
 		}
 	}
@@ -709,7 +727,9 @@ func (e *Engine) emptyReleasedRoot(bl *Baseline) (releaseSurvey, error) {
 // file is work for the next drain while the shared folder can be read, and
 // kept, as not uploaded, when it cannot. A path that already holds an issue
 // of another type keeps that issue, which already names it, and the sync
-// folder itself holds none: the report names it.
+// folder itself holds none: the report names it. When the shared folder
+// cannot be read, its own read failure then leaves the store
+// (forgetSharedFolderReadFailure).
 func (e *Engine) recordReleaseKept(
 	ctx context.Context,
 	report *Report,
@@ -748,6 +768,9 @@ func (e *Engine) recordReleaseKept(
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {
 		return fmt.Errorf("sync: recording what the release of the local tree kept: %w", err)
 	}
+	if !sharedFolderUnreachable {
+		return nil
+	}
 
-	return nil
+	return e.forgetSharedFolderReadFailure(ctx, report)
 }
