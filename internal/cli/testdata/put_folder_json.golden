@@ -1,0 +1,17 @@
+{
+  "files": [
+    {
+      "path": "/Backup/R&D <old>/a.txt",
+      "id": "item-a",
+      "size": 10
+    },
+    {
+      "path": "/Backup/R&D <old>/b>c.txt",
+      "id": "item-b",
+      "size": 20
+    }
+  ],
+  "folders_created": 3,
+  "total_size": 30,
+  "errors": []
+}

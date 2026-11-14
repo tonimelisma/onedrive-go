@@ -43,10 +43,10 @@ func runRecycleBinListWithFactory(
 	}
 
 	if cc.Flags.JSON {
-		return formatRecycleBinJSON(cc.Output(), items)
+		return printRecycleBinJSON(cc.Output(), items)
 	}
 
-	return formatRecycleBinTable(cc.Output(), items)
+	return printRecycleBinTable(cc.Output(), items)
 }
 
 func runRecycleBinRestoreWithFactory(
@@ -70,7 +70,7 @@ func runRecycleBinRestoreWithFactory(
 	}
 
 	if cc.Flags.JSON {
-		return printRecycleBinRestoreJSON(cc.Output(), recycleBinJSONItem{
+		return writeJSONDocument(cc.Output(), recycleBinJSONItem{
 			ID:      item.ID,
 			Name:    item.Name,
 			Size:    item.Size,
@@ -108,11 +108,11 @@ func runRecycleBinEmptyWithFactory(
 		return fmt.Errorf("listing recycle bin: %w", err)
 	}
 
-	report := recycleBinEmptyJSONOutput{Deleted: []recycleBinEmptyJSONItem{}, Failed: []recycleBinEmptyJSONItem{}}
+	var report recycleBinEmptyJSONOutput
 
 	if len(items) == 0 {
 		if cc.Flags.JSON {
-			return writeJSONDocument(cc.Output(), report)
+			return writeJSONDocument(cc.Output(), report.withEmptyLists())
 		}
 
 		cc.Statusf("Recycle bin is already empty\n")
@@ -126,7 +126,7 @@ func runRecycleBinEmptyWithFactory(
 	deleteRecycleBinItems(ctx, cc, session, items, &report)
 
 	if cc.Flags.JSON {
-		if err := writeJSONDocument(cc.Output(), report); err != nil {
+		if err := writeJSONDocument(cc.Output(), report.withEmptyLists()); err != nil {
 			return err
 		}
 	}
@@ -179,6 +179,13 @@ func deleteRecycleBinItems(
 type recycleBinEmptyJSONOutput struct {
 	Deleted []recycleBinEmptyJSONItem `json:"deleted"`
 	Failed  []recycleBinEmptyJSONItem `json:"failed"`
+}
+
+func (out recycleBinEmptyJSONOutput) withEmptyLists() recycleBinEmptyJSONOutput {
+	out.Deleted = emptyIfNil(out.Deleted)
+	out.Failed = emptyIfNil(out.Failed)
+
+	return out
 }
 
 type recycleBinEmptyJSONItem struct {

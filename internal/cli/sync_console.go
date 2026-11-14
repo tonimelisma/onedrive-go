@@ -38,12 +38,15 @@ type syncConsole struct {
 	now    func() time.Time
 	home   string
 
-	// mu guards multi and tallies, which engine completion goroutines update
-	// concurrently, and serializes writes so lines from several mounts never
-	// interleave.
+	// mu guards multi, tallies and jsonFailureReported, which engine
+	// completion goroutines update concurrently, and serializes writes so
+	// lines from several mounts never interleave.
 	mu      sync.Mutex
 	multi   bool
 	tallies map[string]*activityTally
+	// jsonFailureReported is set once a sync --json line could not be
+	// written and the warning saying so went to stderr.
+	jsonFailureReported bool
 }
 
 // activityTally is what the activity feed reported done for one mount, by

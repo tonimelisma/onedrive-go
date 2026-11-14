@@ -157,7 +157,7 @@ func TestGetJSONOutput_Serialization(t *testing.T) {
 
 // Validates: R-1.2.4
 func TestGetFolderJSONOutput_Serialization(t *testing.T) {
-	out := getFolderJSONOutput{
+	out := folderTransferJSONOutput[getJSONOutput]{
 		Files: []getJSONOutput{
 			{Path: "dir/a.txt", Size: 100, HashVerified: true},
 			{Path: "dir/b.txt", Size: 200, HashVerified: false},
@@ -170,7 +170,7 @@ func TestGetFolderJSONOutput_Serialization(t *testing.T) {
 	data, err := json.Marshal(out)
 	require.NoError(t, err)
 
-	var decoded getFolderJSONOutput
+	var decoded folderTransferJSONOutput[getJSONOutput]
 	require.NoError(t, json.Unmarshal(data, &decoded))
 
 	assert.Len(t, decoded.Files, 2)
@@ -180,35 +180,31 @@ func TestGetFolderJSONOutput_Serialization(t *testing.T) {
 	assert.Contains(t, decoded.Errors[0], "permission denied")
 }
 
-// Validates: R-1.2.4
+// A folder download with no failures prints "errors": [], and one that
+// downloaded nothing prints "files": []: a list is never null.
+//
+// Validates: R-1.2.4, R-6.6.33
 func TestGetFolderJSONOutput_EmptyErrors(t *testing.T) {
-	out := getFolderJSONOutput{
-		Files:          []getJSONOutput{},
-		FoldersCreated: 1,
-		TotalSize:      0,
-		Errors:         nil,
-	}
+	t.Parallel()
 
-	data, err := json.Marshal(out)
-	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, writeJSONDocument(&buf, folderTransferJSONOutput[getJSONOutput]{FoldersCreated: 1}.withEmptyLists()))
 
-	// nil slice should serialize as null, not [].
-	var decoded map[string]interface{}
-	require.NoError(t, json.Unmarshal(data, &decoded))
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
 
-	errs, present := decoded["errors"]
-	assert.True(t, present, "errors is always in the output")
-	assert.Nil(t, errs, "no errors is null")
+	assert.Equal(t, []any{}, decoded["errors"], "no errors is [], not null")
+	assert.Equal(t, []any{}, decoded["files"], "no files is [], not null")
 	assert.InDelta(t, 1, decoded["folders_created"], 0)
 	assert.InDelta(t, 0, decoded["total_size"], 0)
 }
 
 // Validates: R-1.2.4
-func TestPrintGetJSON(t *testing.T) {
+func TestGetJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printGetJSON(&buf, getJSONOutput{
+	err := writeJSONDocument(&buf, getJSONOutput{
 		Path:         "report.pdf",
 		Size:         4096,
 		HashVerified: true,
@@ -223,11 +219,11 @@ func TestPrintGetJSON(t *testing.T) {
 }
 
 // Validates: R-1.2.4
-func TestPrintGetFolderJSON(t *testing.T) {
+func TestGetFolderJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printGetFolderJSON(&buf, getFolderJSONOutput{
+	err := writeJSONDocument(&buf, folderTransferJSONOutput[getJSONOutput]{
 		Files: []getJSONOutput{
 			{Path: "dir/a.txt", Size: 100, HashVerified: true},
 			{Path: "dir/b.txt", Size: 200, HashVerified: false},
@@ -235,15 +231,36 @@ func TestPrintGetFolderJSON(t *testing.T) {
 		FoldersCreated: 2,
 		TotalSize:      300,
 		Errors:         []string{"dir/c.txt: access denied"},
-	})
+	}.withEmptyLists())
 	require.NoError(t, err)
 
-	var decoded getFolderJSONOutput
+	var decoded folderTransferJSONOutput[getJSONOutput]
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
 	assert.Len(t, decoded.Files, 2)
 	assert.Equal(t, 2, decoded.FoldersCreated)
 	assert.Equal(t, int64(300), decoded.TotalSize)
 	assert.Len(t, decoded.Errors, 1)
+}
+
+// The folder form of get prints this document byte for byte: its field names
+// and their order, a path holding &, < and > as itself, and a list with
+// nothing in it as [].
+//
+// Validates: R-1.2.4, R-6.6.33
+func TestGetFolderJSONOutput_Golden(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, writeJSONDocument(&buf, folderTransferJSONOutput[getJSONOutput]{
+		Files: []getJSONOutput{
+			{Path: "Q&A <draft>/notes.txt", Size: 100, HashVerified: true},
+			{Path: "Q&A <draft>/v2>v1.txt", Size: 200},
+		},
+		FoldersCreated: 2,
+		TotalSize:      300,
+	}.withEmptyLists()))
+
+	assertGoldenFile(t, "get_folder_json.golden", buf.Bytes())
 }
 
 // buildFolderOnlyTree fills the child cache with a wide, shallow folder tree

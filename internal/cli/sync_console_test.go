@@ -489,12 +489,51 @@ func TestSyncConsole_JSONSummaryOfADriveThatLeftNothingIsDone(t *testing.T) {
 	assert.False(t, left["m1"].Any())
 }
 
-// Validates: R-6.6.19, R-6.6.28
+// flakyWriter refuses the first writes, as many as failures says, with err,
+// and keeps everything written after them.
+type flakyWriter struct {
+	failures int
+	err      error
+	written  bytes.Buffer
+}
+
+func (w *flakyWriter) Write(p []byte) (int, error) {
+	if w.failures > 0 {
+		w.failures--
+		return 0, w.err
+	}
+
+	return w.written.Write(p) //nolint:wrapcheck // a writer hands back its buffer's own result, as io.Writer expects
+}
+
+// A sync --json line that cannot be written is reported on stderr, once
+// however many lines fail, and the sync goes on writing the lines after it.
 //
-// A pass that waits out a throttle and then uploads the file (R-2.1.7) used
-// to end "uploaded 1 file; 1 will be retried on the next sync": the retry
-// was counted when it was recorded and never taken back (fault round of
-// 2026-11-03).
+// Validates: R-6.6.28, R-6.6.33
+func TestSyncConsole_EmitJSONFailureIsReported(t *testing.T) {
+	t.Parallel()
+
+	c, _, errOut := testSyncConsole()
+	out := &flakyWriter{failures: 2, err: errors.New("broken pipe")}
+	c.out = out
+	c.json = true
+
+	c.emitJSON(&syncJSONEvent{Event: "start", Drive: "Personal"})
+	c.emitJSON(&syncJSONEvent{Event: "activity", Drive: "Personal"})
+	c.emitJSON(&syncJSONEvent{Event: "stopped"})
+
+	assert.Equal(t, "Warning: sync --json output is incomplete: write JSON output: broken pipe\n", errOut.String(),
+		"two failed lines are reported once")
+	//nolint:testifylint // byte-exact on purpose: the one line written after the failures, newline included
+	assert.Equal(t, "{\"event\":\"stopped\"}\n", out.written.String(), "the lines after a failure are still written")
+}
+
+// A pass that waits out a throttle and then uploads the file (R-2.1.7) ends
+// "uploaded 1 file (22 B).", with no retry promised and nothing failed: the
+// retry its first attempt recorded no longer counts once the same file
+// uploads.
+//
+// Validates: R-6.6.19, R-6.6.28
 func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.T) {
 	t.Parallel()
 
@@ -516,11 +555,11 @@ func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.
 	assert.False(t, left["m1"].Any(), "a retry the run finished does not fail the run (R-6.6.28)")
 }
 
-// Validates: R-6.6.19
+// With the activity feed wired, a pass whose only planned action was held as
+// retry work did nothing, and its summary says so instead of falling back to
+// the planner's counts ("uploaded 1 file").
 //
-// With the feed wired, a pass whose only planned action was held as retry
-// work did nothing; it used to fall through to the planner's counts and say
-// "uploaded 1 file" (fault round of 2026-11-03).
+// Validates: R-6.6.19
 func TestSyncConsole_SummaryWithAWiredFeedAndNoActivityDoesNotUsePlannerCounts(t *testing.T) {
 	t.Parallel()
 

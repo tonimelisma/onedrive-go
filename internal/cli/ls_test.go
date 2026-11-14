@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ func TestPrintItemsTable(t *testing.T) {
 	// Folders sort first and get a trailing slash.
 	assert.Contains(t, output, "docs/")
 	assert.Contains(t, output, "readme.txt")
+	assert.Less(t, strings.Index(output, "docs/"), strings.Index(output, "readme.txt"), "folders sort first")
+	assert.Equal(t, "readme.txt", items[0].Name, "the table sorts a copy: the caller's listing keeps its order")
 }
 
 // --- printItemsJSON ---

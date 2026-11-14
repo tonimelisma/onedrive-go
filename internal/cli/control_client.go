@@ -201,8 +201,13 @@ func (c *controlSocketClient) capturePerf(
 		timeout = controlClientTimeout
 	}
 
+	payload, encodeErr := encodeControlRequest(request)
+	if encodeErr != nil {
+		return synccontrol.PerfCaptureResponse{}, encodeErr
+	}
+
 	var response synccontrol.PerfCaptureResponse
-	if err := c.postJSONInto(ctx, synccontrol.PathPerfCapture, request, timeout, &response); err != nil {
+	if err := c.postJSONInto(ctx, synccontrol.PathPerfCapture, payload, timeout, &response); err != nil {
 		return synccontrol.PerfCaptureResponse{}, err
 	}
 
@@ -240,22 +245,15 @@ func (c *controlSocketClient) getJSON(ctx context.Context, path string, timeout 
 	return decodeControlJSONResponse(resp, target)
 }
 
+// postJSONInto posts payload, a body encodeControlRequest built or nil for
+// none, and decodes the owner's answer into target.
 func (c *controlSocketClient) postJSONInto(
 	ctx context.Context,
 	path string,
-	body any,
+	payload []byte,
 	timeout time.Duration,
 	target any,
 ) error {
-	var payload []byte
-	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("encode control request: %w", err)
-		}
-		payload = encoded
-	}
-
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -278,27 +276,12 @@ func (c *controlSocketClient) postJSONInto(
 // that is not that shape is an internal_error carrying what went wrong.
 func readControlErrorResponse(resp *http.Response) error {
 	var decoded synccontrol.MutationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		closeErr := resp.Body.Close()
-		message := fmt.Sprintf("decode control response: %v", err)
-		if closeErr != nil {
-			message = fmt.Sprintf("%s (close: %v)", message, closeErr)
-		}
-		return &controlDaemonError{
-			statusCode: resp.StatusCode,
-			code:       synccontrol.ErrorInternal,
-			message:    message,
-		}
+	decodeErr := json.NewDecoder(resp.Body).Decode(&decoded)
+	if err := controlResponseReadError(resp, decodeErr, resp.Body.Close()); err != nil {
+		return err
 	}
 	if decoded.Message == "" {
 		decoded.Message = resp.Status
-	}
-	if closeErr := resp.Body.Close(); closeErr != nil {
-		return &controlDaemonError{
-			statusCode: resp.StatusCode,
-			code:       synccontrol.ErrorInternal,
-			message:    fmt.Sprintf("close control response: %v", closeErr),
-		}
 	}
 
 	return &controlDaemonError{
@@ -313,25 +296,31 @@ func decodeControlJSONResponse(resp *http.Response, target any) error {
 		return readControlErrorResponse(resp)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
-		closeErr := resp.Body.Close()
-		message := fmt.Sprintf("decode control response: %v", err)
-		if closeErr != nil {
-			message = fmt.Sprintf("%s (close: %v)", message, closeErr)
-		}
-		return &controlDaemonError{
-			statusCode: resp.StatusCode,
-			code:       synccontrol.ErrorInternal,
-			message:    message,
-		}
-	}
-	if closeErr := resp.Body.Close(); closeErr != nil {
-		return &controlDaemonError{
-			statusCode: resp.StatusCode,
-			code:       synccontrol.ErrorInternal,
-			message:    fmt.Sprintf("close control response: %v", closeErr),
-		}
+	decodeErr := json.NewDecoder(resp.Body).Decode(target)
+
+	return controlResponseReadError(resp, decodeErr, resp.Body.Close())
+}
+
+// controlResponseReadError is the internal_error for an owner's answer that
+// did not decode or whose body did not close, or nil when both went well. A
+// decode failure names the close failure too when there is one. The callers
+// close the body themselves, where the bodyclose linter can see it.
+func controlResponseReadError(resp *http.Response, decodeErr, closeErr error) error {
+	var message string
+	switch {
+	case decodeErr != nil && closeErr != nil:
+		message = fmt.Sprintf("decode control response: %v (close: %v)", decodeErr, closeErr)
+	case decodeErr != nil:
+		message = fmt.Sprintf("decode control response: %v", decodeErr)
+	case closeErr != nil:
+		message = fmt.Sprintf("close control response: %v", closeErr)
+	default:
+		return nil
 	}
 
-	return nil
+	return &controlDaemonError{
+		statusCode: resp.StatusCode,
+		code:       synccontrol.ErrorInternal,
+		message:    message,
+	}
 }

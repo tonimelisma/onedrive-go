@@ -1,14 +1,14 @@
 package cli
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
-	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
-
 	"github.com/spf13/cobra"
+
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 const (
@@ -16,6 +16,11 @@ const (
 	perfCaptureMinDuration     = 5 * time.Second
 	perfCaptureMaxDuration     = 60 * time.Second
 )
+
+// perfCaptureUnavailableMessage is the error for a sync owner the capture
+// cannot reach: one that did not answer the probe, or a state the probe does
+// not know.
+const perfCaptureUnavailableMessage = "live perf capture unavailable; check logs"
 
 func newPerfCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -79,12 +84,12 @@ func runPerfCapture(cmd *cobra.Command, _ []string) error {
 	}
 	switch probe.state {
 	case controlOwnerStateNoSocket:
-		return fmt.Errorf("no active sync owner; check logs for historical performance summaries")
+		return errors.New("no active sync owner; check logs for historical performance summaries")
 	case controlOwnerStatePathUnavailable, controlOwnerStateProbeFailed, controlOwnerStateUnresponsive:
-		return fmt.Errorf("live perf capture unavailable; check logs")
+		return errors.New(perfCaptureUnavailableMessage)
 	case controlOwnerStateWatchOwner, controlOwnerStateOneShotOwner:
 	default:
-		return fmt.Errorf("live perf capture unavailable; check logs")
+		return errors.New(perfCaptureUnavailableMessage)
 	}
 
 	response, err := probe.client.capturePerf(cmd.Context(), synccontrol.PerfCaptureRequest{
@@ -98,27 +103,13 @@ func runPerfCapture(cmd *cobra.Command, _ []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printPerfCaptureJSON(cc.Output(), &response)
+		return writeJSONDocument(cc.Output(), &response)
 	}
 
 	return printPerfCaptureText(cc.Output(), &response)
 }
 
-func printPerfCaptureJSON(w io.Writer, response *synccontrol.PerfCaptureResponse) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(response); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
-}
-
 func printPerfCaptureText(w io.Writer, response *synccontrol.PerfCaptureResponse) error {
-	if response == nil {
-		return nil
-	}
-
 	result := response.Result
 	if err := writef(w, "Capture bundle: %s\n", result.OutputDir); err != nil {
 		return err

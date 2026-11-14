@@ -3,7 +3,6 @@ package cli
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -86,7 +85,14 @@ type driveSearchResult struct {
 
 type driveSearchJSONOutput struct {
 	Results               []driveSearchResult      `json:"results"`
-	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth,omitempty"`
+	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth"`
+}
+
+func (out driveSearchJSONOutput) withEmptyLists() driveSearchJSONOutput {
+	out.Results = emptyIfNil(out.Results)
+	out.AccountsRequiringAuth = emptyIfNil(out.AccountsRequiringAuth)
+
+	return out
 }
 
 // sharePointSearchLimit caps the number of SharePoint sites returned per search query.
@@ -158,37 +164,19 @@ func searchAccountSharePoint(
 	return results, nil, nil
 }
 
-func printDriveSearchJSON(
-	w io.Writer,
-	results []driveSearchResult,
-	authRequiredOpt ...[]accountAuthRequirement,
-) error {
-	authRequired := optionalAuthRequirements(authRequiredOpt)
-	if results == nil {
-		results = []driveSearchResult{}
-	}
-
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(driveSearchJSONOutput{
+func printDriveSearchJSON(w io.Writer, results []driveSearchResult, authRequired []accountAuthRequirement) error {
+	return writeJSONDocument(w, driveSearchJSONOutput{
 		Results:               results,
 		AccountsRequiringAuth: authRequired,
-	}); err != nil {
-		return fmt.Errorf("encoding JSON output: %w", err)
-	}
-
-	return nil
+	}.withEmptyLists())
 }
 
 func printDriveSearchText(
 	w io.Writer,
 	results []driveSearchResult,
 	query string,
-	authRequiredOpt ...[]accountAuthRequirement,
+	authRequired []accountAuthRequirement,
 ) error {
-	authRequired := optionalAuthRequirements(authRequiredOpt)
-
 	if len(results) == 0 {
 		if len(authRequired) == 0 {
 			return writef(w, "No SharePoint sites found matching %q.\n", query)
@@ -200,19 +188,11 @@ func printDriveSearchText(
 		return writef(w, "No SharePoint sites found matching %q in searchable business accounts.\n", query)
 	}
 
-	if err := printDriveSearchAuthSection(w, authRequired, len(results) > 0); err != nil {
+	if err := printDriveSearchAuthSection(w, authRequired, true); err != nil {
 		return err
 	}
 
 	return printDriveSearchResults(w, sortedDriveSearchResults(results), query)
-}
-
-func optionalAuthRequirements(authRequiredOpt [][]accountAuthRequirement) []accountAuthRequirement {
-	if len(authRequiredOpt) == 0 {
-		return nil
-	}
-
-	return authRequiredOpt[0]
 }
 
 func printDriveSearchAuthSection(
@@ -273,10 +253,6 @@ func printDriveSearchSiteEntry(
 	result *driveSearchResult,
 	currentSite *string,
 ) error {
-	if result == nil || currentSite == nil {
-		return nil
-	}
-
 	if result.SiteName != *currentSite {
 		if *currentSite != "" {
 			if err := writeln(w); err != nil {

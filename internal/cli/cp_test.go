@@ -97,11 +97,11 @@ func TestCpJSONOutput_Fields(t *testing.T) {
 }
 
 // Validates: R-1.8.1
-func TestPrintCpJSON(t *testing.T) {
+func TestCpJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printCpJSON(&buf, cpJSONOutput{
+	err := writeJSONDocument(&buf, cpJSONOutput{
 		Source:      "/docs/report.pdf",
 		Destination: "/backup/report.pdf",
 		ID:          "item-789",

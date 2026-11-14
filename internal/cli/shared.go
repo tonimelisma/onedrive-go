@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 
@@ -27,6 +26,13 @@ type sharedListJSONOutput struct {
 	Items                 []sharedListItem         `json:"items"`
 	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth"`
 	AccountsDegraded      []accountDegradedNotice  `json:"accounts_degraded,omitempty"`
+}
+
+func (out sharedListJSONOutput) withEmptyLists() sharedListJSONOutput {
+	out.Items = emptyIfNil(out.Items)
+	out.AccountsRequiringAuth = emptyIfNil(out.AccountsRequiringAuth)
+
+	return out
 }
 
 func newSharedCmd() *cobra.Command {
@@ -64,7 +70,7 @@ func sharedListItemsFromTargets(targets []sharedDiscoveryTarget) []sharedListIte
 	for i := range targets {
 		items = append(items, sharedListItem{
 			Selector:            targets[i].Selector,
-			Type:                sharedItemType(targets[i].IsFolder),
+			Type:                folderOrFile(targets[i].IsFolder),
 			Name:                targets[i].Name,
 			AccountEmail:        targets[i].AccountEmail,
 			SharedByName:        targets[i].SharedByName,
@@ -80,37 +86,19 @@ func sharedListItemsFromTargets(targets []sharedDiscoveryTarget) []sharedListIte
 	return items
 }
 
-func sharedItemType(isFolder bool) string {
-	if isFolder {
-		return typeFolder
-	}
-
-	return typeFile
-}
-
 func printSharedJSON(
 	w io.Writer,
 	items []sharedListItem,
 	authRequired []accountAuthRequirement,
 	degraded []accountDegradedNotice,
 ) error {
-	if items == nil {
-		items = []sharedListItem{}
-	}
-
 	out := sharedListJSONOutput{
 		Items:                 items,
 		AccountsRequiringAuth: authRequired,
 		AccountsDegraded:      degraded,
 	}
 
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode shared output: %w", err)
-	}
-
-	return nil
+	return writeJSONDocument(w, out.withEmptyLists())
 }
 
 func printSharedText(

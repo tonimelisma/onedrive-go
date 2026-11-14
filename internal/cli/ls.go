@@ -2,11 +2,10 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -93,8 +92,15 @@ type lsJSONItem struct {
 	ID         string `json:"id"`
 }
 
+// lsJSONOutput is `ls --json`: one entry per item listed.
+type lsJSONOutput []lsJSONItem
+
+func (out lsJSONOutput) withEmptyLists() lsJSONOutput {
+	return emptyIfNil(out)
+}
+
 func printItemsJSON(w io.Writer, items []graph.Item) error {
-	out := make([]lsJSONItem, 0, len(items))
+	var out lsJSONOutput
 	for i := range items {
 		out = append(out, lsJSONItem{
 			Name:       items[i].Name,
@@ -105,18 +111,13 @@ func printItemsJSON(w io.Writer, items []graph.Item) error {
 		})
 	}
 
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode ls output: %w", err)
-	}
-
-	return nil
+	return writeJSONDocument(w, out.withEmptyLists())
 }
 
 func printItemsTable(w io.Writer, items []graph.Item) error {
-	// Sort: folders first, then alphabetical.
+	// Sort a copy, folders first, then alphabetical: the caller's listing
+	// keeps its order.
+	items = slices.Clone(items)
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].IsFolder != items[j].IsFolder {
 			return items[i].IsFolder

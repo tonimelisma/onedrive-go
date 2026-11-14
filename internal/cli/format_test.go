@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 func TestFormatSize(t *testing.T) {
@@ -29,6 +31,20 @@ func TestFormatSize(t *testing.T) {
 			assert.Equal(t, tt.want, formatSize(tt.bytes))
 		})
 	}
+}
+
+func TestItemType_File(t *testing.T) {
+	t.Parallel()
+
+	item := &graph.Item{IsFolder: false}
+	assert.Equal(t, "file", itemType(item))
+}
+
+func TestItemType_Folder(t *testing.T) {
+	t.Parallel()
+
+	item := &graph.Item{IsFolder: true}
+	assert.Equal(t, "folder", itemType(item))
 }
 
 func TestFormatTime(t *testing.T) {

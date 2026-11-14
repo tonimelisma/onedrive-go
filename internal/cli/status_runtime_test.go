@@ -142,7 +142,7 @@ func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 	assert.Equal(t, statusRuntimeStateActive, parent.ChildMounts[0].RuntimeState)
 	assert.Equal(t, statusRuntimeStateInactive, parent.ChildMounts[1].RuntimeState)
 
-	summary := computeSummary(accounts)
+	summary := newStatusOutput(accounts).Summary
 	assert.Equal(t, "watch", summary.RuntimeOwner)
 	assert.Equal(t, 2, summary.RuntimeActiveMounts)
 }

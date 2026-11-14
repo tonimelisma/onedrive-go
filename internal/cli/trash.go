@@ -123,6 +123,12 @@ type trashListJSONOutput struct {
 	Entries []trashEntryJSON `json:"entries"`
 }
 
+func (out trashListJSONOutput) withEmptyLists() trashListJSONOutput {
+	out.Entries = emptyIfNil(out.Entries)
+
+	return out
+}
+
 func runTrashList(_ context.Context, cc *CLIContext) error {
 	trash, drive, err := openDriveTrash(cc, "list")
 	if err != nil {
@@ -134,7 +140,7 @@ func runTrashList(_ context.Context, cc *CLIContext) error {
 	}
 
 	if cc.Flags.JSON {
-		out := trashListJSONOutput{Drive: drive, Entries: make([]trashEntryJSON, 0, len(entries))}
+		out := trashListJSONOutput{Drive: drive}
 		for i := range entries {
 			out.Entries = append(out.Entries, trashEntryJSON{
 				ID:        entries[i].ID,
@@ -146,7 +152,7 @@ func runTrashList(_ context.Context, cc *CLIContext) error {
 				State:     string(entries[i].State),
 			})
 		}
-		return writeJSONDocument(cc.Output(), out)
+		return writeJSONDocument(cc.Output(), out.withEmptyLists())
 	}
 
 	if len(entries) == 0 {

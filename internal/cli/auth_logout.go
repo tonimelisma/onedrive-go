@@ -85,6 +85,12 @@ type logoutJSONOutput struct {
 	Drives       []string `json:"drives"`
 }
 
+func (out logoutJSONOutput) withEmptyLists() logoutJSONOutput {
+	out.Drives = emptyIfNil(out.Drives)
+
+	return out
+}
+
 // executeLogout performs the actual logout: finds affected drives, deletes
 // the token, removes their config sections, tells a running watch, and with
 // purge then deletes their state databases. The human confirmation goes to
@@ -100,7 +106,7 @@ func executeLogout(
 	w := cc.resultWriter()
 	logger := cc.Logger
 	affected := drivesForAccount(cfg, account)
-	result := logoutJSONOutput{Account: account, Purged: purge, Drives: make([]string, 0, len(affected))}
+	result := logoutJSONOutput{Account: account, Purged: purge}
 	for _, cid := range affected {
 		result.Drives = append(result.Drives, cid.String())
 	}
