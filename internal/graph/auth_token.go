@@ -22,7 +22,8 @@ import (
 //
 // The returned TokenSource binds ctx to the underlying oauth2 token source.
 // ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
-// will fail. Callers should pass context.Background() for long-lived sessions.
+// will fail. Callers pass the command's or the daemon's context, never a
+// per-request one: the source keeps it for every later refresh.
 // authHTTP sends every refresh (graphtransport.AuthClient in production), so a
 // stalled token endpoint fails the refresh at that client's deadline.
 //

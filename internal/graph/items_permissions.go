@@ -322,7 +322,10 @@ func (c *Client) RestoreItem(
 
 	apiPath := fmt.Sprintf("/drives/%s/items/%s/restore", driveID, itemID)
 
-	resp, err := c.do(ctx, http.MethodPost, apiPath, http.NoBody)
+	// Restore takes optional JSON options; it is sent with none, and declares
+	// JSON as it always has: the request has never been sent without the
+	// header, and restore is exercised live only on Business.
+	resp, err := c.doRequest(ctx, http.MethodPost, apiPath, nil, http.Header{headerContentType: {contentTypeJSON}})
 	if err != nil {
 		return nil, err
 	}

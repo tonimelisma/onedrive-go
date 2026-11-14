@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,11 +20,11 @@ type socketIOEndpointResponse struct {
 
 // SocketIOEndpoint fetches the outbound Socket.IO notification endpoint for a
 // drive root. The returned notification URL is sensitive and validated before
-// leaving the Graph boundary.
+// leaving the Graph boundary. The GET carries no body and so declares no
+// Content-Type: nothing recorded shows the endpoint needs one, and on
+// Personal it answered 200 without one (2026-11-12, LI-20261112-01).
 func (c *Client) SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*SocketIOEndpoint, error) {
-	resp, err := c.doGetWithHeaders(ctx, fmt.Sprintf("/drives/%s/root/subscriptions/socketIo", driveID), http.Header{
-		"Content-Type": {"application/json"},
-	})
+	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/drives/%s/root/subscriptions/socketIo", driveID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +36,7 @@ func (c *Client) SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*Soc
 	}
 
 	if decoded.NotificationURL == "" {
-		return nil, fmt.Errorf("graph: socket.io endpoint response missing notificationUrl")
+		return nil, errors.New("graph: socket.io endpoint response missing notificationUrl")
 	}
 
 	notificationURL, err := c.validatedSocketIONotificationURL(SocketIONotificationURL(decoded.NotificationURL))
@@ -61,7 +62,7 @@ func (c *Client) SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*Soc
 func (c *Client) validatedSocketIONotificationURL(raw SocketIONotificationURL) (string, error) {
 	parsed, err := url.Parse(string(raw))
 	if err != nil {
-		return "", fmt.Errorf("graph: parsing socket.io notification URL: invalid URL")
+		return "", errors.New("graph: parsing socket.io notification URL: invalid URL")
 	}
 
 	if err := c.validators.socketIO(parsed); err != nil {

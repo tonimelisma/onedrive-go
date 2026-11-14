@@ -2,7 +2,7 @@ package graph
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -29,7 +29,7 @@ func defaultScopes() []string {
 // caller bug, so it is an error rather than that fallback.
 func withAuthClient(ctx context.Context, authHTTP *http.Client) (context.Context, error) {
 	if authHTTP == nil {
-		return nil, fmt.Errorf("graph: sign-in HTTP client must not be nil")
+		return nil, errors.New("graph: sign-in HTTP client must not be nil")
 	}
 
 	return context.WithValue(ctx, oauth2.HTTPClient, authHTTP), nil
@@ -52,7 +52,8 @@ type DeviceAuth struct {
 //
 // The returned TokenSource binds ctx to the underlying oauth2 token source.
 // ctx must outlive the TokenSource — if ctx is canceled, silent token refresh
-// will fail. Callers should pass context.Background() for long-lived sessions.
+// will fail. Callers pass the command's or the daemon's context, never a
+// per-request one: the source keeps it for every later refresh.
 //
 // authHTTP sends every request to the sign-in service, the polls and the
 // returned source's refreshes included; callers pass graphtransport.AuthClient.
@@ -84,8 +85,13 @@ const stateTokenBytes = 16
 // URI — Microsoft's v2.0 endpoint allows any port but requires path match.
 const callbackPath = "/"
 
-// shutdownTimeout is how long to wait for the callback server to drain.
-const shutdownTimeout = 5 * time.Second
+// callbackShutdownTimeout is how long to wait for the callback server to drain.
+const callbackShutdownTimeout = 5 * time.Second
+
+// callbackHeaderReadTimeout bounds how long the callback server waits for the
+// headers of a request on an accepted connection, so a client that connects
+// and sends nothing cannot hold a server goroutine.
+const callbackHeaderReadTimeout = 5 * time.Second
 
 // callbackResult carries the authorization code or error from the callback handler.
 type callbackResult struct {

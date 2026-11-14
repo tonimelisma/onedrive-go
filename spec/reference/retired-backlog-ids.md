@@ -50,7 +50,6 @@ and nothing in `spec/` resolves them.
 | `B-154` | `internal/sync/planner.go` |
 | `B-156` | `internal/cli/rm.go` |
 | `B-158` | `internal/graph/types.go`, `internal/graph/types_test.go` |
-| `B-159` | `internal/graph/client_auth.go` |
 | `B-189` | `internal/sync/observer_local_handlers_test.go` |
 | `B-190` | `internal/sync/observer_local_trysend_test.go` |
 | `B-198` | `internal/sync/baseline_test.go`, `internal/sync/store_write_baseline.go` |

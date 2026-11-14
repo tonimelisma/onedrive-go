@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -44,7 +43,7 @@ func (c *Client) CreateUploadSessionForItem(
 		return nil, fmt.Errorf("graph: marshaling upload session request: %w", err)
 	}
 
-	resp, err := c.doRequest(ctx, http.MethodPost, path, bytes.NewReader(bodyBytes), ifMatchHeaders(ifMatch))
+	resp, err := c.doRequest(ctx, http.MethodPost, path, bodyBytes, ifMatchHeaders(ifMatch))
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +57,16 @@ func (c *Client) CreateUploadSessionForItem(
 
 	return session, nil
 }
+
+// SessionCancelTimeout bounds the request that cancels an upload session after
+// a failed or abandoned upload, on a context detached from the upload's (which
+// may be why it failed). It is the one bound for that request, here and in
+// the transfer manager. The cancel is best effort: a session nobody cancels
+// expires on its own (about 15 minutes) and only holds quota until then. The
+// bound is therefore not sized for a provider that refuses slowly: on
+// 2026-11-12 Personal answered every session request 401 after about 12 s, and
+// such a cancel simply runs out its time.
+const SessionCancelTimeout = 10 * time.Second
 
 // CancelUploadSession cancels an in-progress upload session.
 // The session URL is pre-authenticated, so no Authorization header is sent.
@@ -169,8 +178,10 @@ func (c *Client) QueryUploadSession(
 	return status, nil
 }
 
-// ErrUploadSessionExpired indicates that an upload session is no longer valid
-// (Graph API returned 404). The caller should fall back to a fresh upload.
+// ErrUploadSessionExpired indicates that an upload session is no longer valid:
+// its status request was answered 404 (expired, or invalidated by a
+// concurrent change, L-02). It travels with that answer. The caller looks the
+// item up, then falls back to a fresh upload.
 var ErrUploadSessionExpired = errors.New("graph: upload session expired")
 
 // ErrUploadSessionComplete reports a session whose status lists no range
@@ -182,8 +193,10 @@ var ErrUploadSessionComplete = errors.New("graph: upload session has no ranges l
 
 // ResumeUpload resumes an interrupted chunked upload from where it left off.
 // It queries the session to find the next expected byte offset, then uploads
-// the remaining chunks. Returns ErrUploadSessionExpired if the session is no
-// longer valid (caller should fall back to fresh upload).
+// the remaining chunks. Returns ErrUploadSessionExpired, wrapped together with
+// the status answer, only when that answer is a 404: the session is gone.
+// Any other failure of the status request (the URL's own credential refused,
+// a server error, a dropped connection) says nothing about the session.
 // The caller manages session lifecycle including cancellation on permanent failure.
 func (c *Client) ResumeUpload(
 	ctx context.Context, session *UploadSession,
@@ -193,8 +206,8 @@ func (c *Client) ResumeUpload(
 
 	status, err := c.QueryUploadSession(ctx, session)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, ErrUploadSessionExpired
+		if isSessionGone(err) {
+			return nil, fmt.Errorf("graph: querying session for resume: %w: %w", ErrUploadSessionExpired, err)
 		}
 
 		return nil, fmt.Errorf("graph: querying session for resume: %w", err)
@@ -220,6 +233,14 @@ func (c *Client) ResumeUpload(
 	}
 
 	return c.uploadChunksFrom(ctx, resumeSession, content, totalSize, resumeOffset, progress)
+}
+
+// isSessionGone reports whether err is the session status request answered
+// 404 by the session URL itself, the one answer that says the session is gone.
+func isSessionGone(err error) bool {
+	var graphErr *GraphError
+
+	return errors.As(err, &graphErr) && graphErr.StatusCode == http.StatusNotFound
 }
 
 func parseNextExpectedRangeStart(ranges []string) (int64, error) {

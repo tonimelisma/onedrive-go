@@ -475,7 +475,7 @@ func classifyFixturePutCommandFailure(stderr string) liveProviderRecurrenceDecis
 			Reason: liveProviderRecurrenceTransientGraphGatewayFailure,
 			Retry:  true,
 		}
-	case graphQuirkExhausted(stderr, graph.QuirkUploadSessionCreateTransient404):
+	case graphQuirkExhausted(stderr, graph.QuirkFileCreateTransient404):
 		return liveProviderRecurrenceDecision{
 			Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 			Retry:  true,
@@ -532,7 +532,7 @@ func TestClassifyFixturePutCommandFailure_KnownConvergenceFamilies(t *testing.T)
 		Reason: liveProviderRecurrenceFreshParentChildCreateLag,
 		Retry:  true,
 	}, classifyFixturePutCommandFailure(
-		`{"level":"DEBUG","msg":"graph quirk retry exhausted","graph_quirk":"upload-session-create-transient-404","graph_quirk_attempt_count":6}`,
+		`{"level":"DEBUG","msg":"graph quirk retry exhausted","graph_quirk":"file-create-transient-404","graph_quirk_attempt_count":6}`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceFreshParentParentPathLag,

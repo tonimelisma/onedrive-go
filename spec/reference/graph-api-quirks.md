@@ -711,6 +711,23 @@ Personal-account pre-auth URLs can use `*.microsoftpersonalcontent.com` rather t
 
 One multi-hour Microsoft-side backend incident was observed returning HTTP 400 with message text such as `"ObjectHandle is Invalid"` across Graph API calls. The repository no longer has recoverable CI payload evidence for the exact body shape, so the runtime does **not** implement a special classifier for this incident. If the behavior reappears and CI captures the payload, targeted handling can be reconsidered. Observed: one 3.5-hour incident.
 
+### A Folder Create Can Be Refused With A Bare 400
+
+Nightly run 43070648626 (Personal, 2026-11-11, LI-20261111-01): an ordinary
+folder create, `POST /drives/{d}/items/{parent}/children` with the name in a
+JSON body, `"folder": {}` and `conflictBehavior=fail`, was answered HTTP 400
+with the message `Invalid request` and no logged code. The parent had been
+created three seconds earlier and was taking three file creates by the same
+route, each answered 201 within the same second. The answer named nothing
+about the request: neither the 400 messages that report a real length limit
+(`name is too long`, `400 characters or less`) nor a code. It is classed as a
+transient answer of the service, and the client has no rule for it: sync
+keeps a bare 400 as per-item retry work with backoff (its catch-all server
+answer, which implies no wider scope), so a later pass sends the create
+again. One occurrence without a code is not the payload evidence a runtime
+quirk rule needs; if it recurs with a code or a pattern, it can be
+reconsidered.
+
 ### HTTP 507 Wraps ErrServerError
 
 HTTP 507 (Insufficient Storage) wraps `ErrServerError` at the sentinel level. If error classification checks sentinels before status codes, 507 is incorrectly classified as retryable (like other 5xx errors). Status code classification must take priority.
@@ -875,11 +892,10 @@ folder itself is readable and listable. The equivalent upload-session creation
 request (`POST ...:/createUploadSession`) against the same folder returns the
 correct HTTP 403 `accessDenied`.
 
-Runtime policy: non-empty creates no longer use the simple-upload route at
-all (they go through `createUploadSession` for atomic `fileSystemInfo`), so a
-read-only shared folder answers `403` directly and enters the normal
-`perm:remote` flow. A zero-byte create still uses the simple route; its `404`
-is not retried.
+Runtime policy: no create uses the simple-upload route. Every new file is
+created by body (`POST /items/{parent}/children`) and its content sent by item
+ID; a read-only shared folder answers that create with `403` directly, which
+is not retried and enters the normal `perm:remote` flow.
 
 <a id="fresh-parent-child-create-lag"></a>
 ### Recently Created Parent Folders Can Lag Child Routes
@@ -900,11 +916,13 @@ still returned `404 itemNotFound` on the root item's `/children` route until
 Graph caught up.
 
 Runtime policy:
-- `CreateUploadSession()` retries that exact fresh-parent `404 itemNotFound`
-  case with a bounded policy (`9` total attempts, `250ms` base, `8s` max,
-  no jitter, about 32 s scheduled). It covers the window the old two-stage
-  budget did (a shorter session budget, then a simple-upload replay of `7`
-  attempts at up to `8s`) now that every non-empty create uses this route
+- new files are created by body (`CreateFile`, `POST /items/{parent}/children`),
+  and that create retries the exact fresh-parent `404 itemNotFound` case as
+  quirk `file-create-transient-404` with `retry.FileCreatePolicy()` (`9` total
+  attempts, `250ms` base, `8s` max, no jitter, about 32 s scheduled). It covers
+  the window the old two-stage budget did (a shorter session budget, then a
+  simple-upload replay of `7` attempts at up to `8s`) now that every create
+  uses this route
 - the retry stays at the graph quirk boundary instead of teaching callers or
   generic transport retry about parent-creation ordering
 - flows that already know the authoritative remote `itemID` avoid this parent
@@ -1077,7 +1095,7 @@ Path routes (`items/{parent}:/{name}:/...`) hand the name to Graph's router. Liv
 
 ### Upload Session Leak
 
-`CreateUploadSession` succeeds but subsequent operations fail. The session persists server-side until expiry (~15 minutes) and counts against quotas. Always cancel sessions on failure using `context.Background()` (the original context may be canceled).
+`CreateUploadSession` succeeds but subsequent operations fail. The session persists server-side until expiry (~15 minutes) and counts against quotas. The client cancels the session of a failed upload on a context detached from the upload's (`context.WithoutCancel`, since the upload's may be canceled), bounded by `graph.SessionCancelTimeout` (10 s), the one bound for that request in the Graph client and the transfer manager. The cancel is best effort, and the bound is not sized for a provider that refuses slowly: on 2026-11-12 Personal answered it 401 after about 12 s (see "An Upload Session Moves An Empty Item's eTag"), so such a cancel runs out its time, the session expires on its own, and the removal of a failed create's empty item does not depend on it.
 
 ## Timestamp and Metadata
 
@@ -1140,6 +1158,8 @@ OneDrive refuses a second sibling whose name it considers equal (409 `nameAlread
 Observed live on Personal on 2026-10-30 (e2e `TestE2E_SyncWatch_FileModification`): after a create by body made an empty item, opening an upload session on it by ID (with `If-Match` on the creation eTag, accepted) and then canceling that session before any fragment committed left the item empty but with a new eTag. A `DELETE` with `If-Match` on the creation eTag answered 412. So the creation eTag only identifies a placeholder until a session touches it; sync identifies its placeholder by item ID and emptiness, and every conditional write or delete that finishes it uses the eTag just read (R-5.6.14, R-5.6.15).
 
 The eTag just read can be stale too. On 2026-11-10 (e2e `TestE2E_SyncWatch_PauseResume`, LI-20261110-01) the client canceled its `createUploadSession` request while it was in flight, read the still-empty item back, and its `DELETE` with `If-Match` on the eTag from that read answered 412. The cause is that the canceled request still reaches the server and opens a session after the read, moving the eTag once more. A live probe on Personal on 2026-11-11 confirmed it: it created an empty item, canceled `createUploadSession` at a set delay after the request was written, and read the item every 0.1 s. Canceled at once (two rounds), the eTag never moved. Canceled 40, 80 and 160 ms after the write (four rounds), the request failed with `context canceled` each time and the eTag still moved from `,1` to `,2`, 0.24 s to 0.65 s after the client had given up, with the item still 0 bytes. The client cannot cancel such a session, because it never received its upload URL. Runtime policy: the cleanup reads the item again after a 412 and repeats the conditional delete, at most three attempts, and never deletes an item that reads back with content (R-5.6.14). The integration test `TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession` repeats the sequence live with the cleanup in place of the probe's reads: in nine rounds on 2026-11-11 Graph refused the first delete with 412 four times, and the second attempt removed the item every time.
+
+The eTag moves once, then holds. A live probe on Personal on 2026-11-12 (test account, drive endpoints only) created an empty item, opened a session on it by ID with `If-Match` on the creation eTag, and read the item right after, then at 0, 0.25, 0.5, 1, 2, 3, 5, 10, 15, 20, 30, 40, 50 and 60 s after the session step, and finally deleted it with `If-Match`. In two rounds the session opened: the read right after it showed `,2`, and every read for the minute after showed `,2`, 0 bytes, the creation's modification time and the empty-content QuickXor. In two more rounds the `createUploadSession` request was abandoned 80 and 160 ms after it was written: once the read right after still showed `,1` and the next one `,2`, once it already showed `,2`; again every later read showed `,2`, with the same modification time and hash. In all four rounds the delete conditional on the eTag read last answered 204, and the item then read 404. So an orphaned session does not keep moving the eTag, and the cleanup's attempts follow one another without a pause; a 412 is an eTag that moved once between the read and the delete. That day the client could not cancel any session: every request to the session's upload URL on `my.microsoftpersonalcontent.com` (a fragment `PUT`, the status `GET`, the cancelling `DELETE`) was answered 401 after about 12 s, while Graph also refused `GET /me` for the account and the drive's item endpoints answered normally; the cause is unknown (provider incident LI-20261112-01 in [live-incidents.md](live-incidents.md)). The client reads such a 401 as `ErrPreAuthURLRejected` (only that transfer fails), and the cleanup does not depend on the cancel. OneDrive for Business was not probed, because no Business test drive exists: whether a session moves an empty item's eTag, modification time or hash there is unknown.
 
 ### Path-Routed Upload Sessions Create A Visible Placeholder (L-34, L-35)
 

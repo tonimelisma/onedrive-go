@@ -3,7 +3,6 @@ package graph
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -78,7 +77,7 @@ func TestMarkedResponseBody_PassesEOFThrough(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "x", string(data))
 
-	failing := markedResponseBody{ReadCloser: io.NopCloser(iotestErrReader{err: fmt.Errorf("boom")})}
+	failing := markedResponseBody{ReadCloser: io.NopCloser(iotestErrReader{err: errors.New("boom")})}
 	_, err = failing.Read(make([]byte, 1))
 	var readErr *ResponseReadError
 	require.ErrorAs(t, err, &readErr)

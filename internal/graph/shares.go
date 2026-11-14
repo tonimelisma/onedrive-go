@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -57,10 +58,10 @@ func encodeSharingURL(raw string) (string, error) {
 	}
 
 	if parsed.Scheme != "https" {
-		return "", fmt.Errorf("it must start with https://")
+		return "", errors.New("it must start with https://")
 	}
 	if parsed.Host == "" {
-		return "", fmt.Errorf("it has no host name")
+		return "", errors.New("it has no host name")
 	}
 
 	return graphSharingURLPrefix + base64.RawURLEncoding.EncodeToString([]byte(parsed.String())), nil

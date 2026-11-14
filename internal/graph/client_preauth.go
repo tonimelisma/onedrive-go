@@ -13,7 +13,8 @@ import (
 
 // buildError reads the error response body, builds a *GraphError with the
 // appropriate sentinel, and logs the failure. Used by both authenticated and
-// pre-auth dispatch paths.
+// pre-auth dispatch paths; path is what the log names the request by, never
+// a pre-authenticated URL.
 func (c *Client) buildError(method, path string, resp *http.Response) *GraphError {
 	errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
 	if closeErr := resp.Body.Close(); closeErr != nil {
@@ -49,13 +50,20 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 // doPreAuth executes an HTTP request against a pre-authenticated URL. No
 // Authorization header is added — the URL itself is pre-authenticated.
 // If the httpClient has a RetryTransport, retry happens automatically at
-// the transport layer. On non-2xx response, returns *GraphError.
+// the transport layer. On non-2xx response, returns *GraphError. A failure
+// before the request leaves (ctx already ended, makeReq failed) carries
+// errRequestNotSent.
 func (c *Client) doPreAuth(
 	ctx context.Context, desc string, makeReq func() (*http.Request, error),
 ) (*http.Response, error) {
+	if ctx.Err() != nil {
+		// The cause, as below: a stall is retryable, a cancellation is not.
+		return nil, fmt.Errorf("graph: %s canceled before it was sent: %w: %w", desc, errRequestNotSent, context.Cause(ctx))
+	}
+
 	req, err := makeReq()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errRequestNotSent, err)
 	}
 
 	// Set GetBody so RetryTransport can rewind the body between attempts.
@@ -74,7 +82,8 @@ func (c *Client) doPreAuth(
 		}
 	}
 
-	req = retry.WithRequestLogTarget(req, "preauth:"+desc)
+	logTarget := "preauth:" + desc
+	req = retry.WithRequestLogTarget(req, logTarget)
 
 	resp, err := c.dispatchRequest(req)
 	if err != nil {
@@ -92,30 +101,9 @@ func (c *Client) doPreAuth(
 		return resp, nil
 	}
 
-	// Non-2xx -> build GraphError.
-	errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
-	if closeErr := resp.Body.Close(); closeErr != nil {
-		c.logger.Debug("failed to close pre-auth error response body",
-			slog.String("desc", desc),
-			slog.Any("error", closeErr),
-		)
-	}
-
-	if readErr != nil {
-		errBody = []byte("(failed to read response body)")
-	}
-
-	reqID := resp.Header.Get("request-id")
-	retryAfter := retry.ResponseRetryAfter(resp, time.Now())
-
-	c.logger.Debug("pre-auth request failed",
-		slog.String("desc", desc),
-		slog.Int("status", resp.StatusCode),
-		slog.String("request_id", reqID),
-	)
-
-	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
-	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
+	// Non-2xx -> build GraphError. The log names the request by its target,
+	// never by the URL, which carries a credential.
+	graphErr := c.buildError(req.Method, logTarget, resp)
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		// The URL's own credential was refused; the account sign-in was never

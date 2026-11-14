@@ -313,7 +313,8 @@ The transfer manager never deletes a placeholder itself. It hands the item's
 ID to `PlaceholderRemover.RemoveEmptyItem`, the Graph client's bounded
 read-back and conditional delete ([graph-client.md](graph-client.md),
 R-5.6.14), on a context detached from the upload's and bounded by
-`cancelSessionTimeout`; a failure, or an item left in place, is logged at
+`placeholderRemovalTimeout` (10 s); a dropped session is canceled under
+`graph.SessionCancelTimeout`, the one bound for that request. A failure, or an item left in place, is logged at
 Debug and the upload's own error is what the caller sees.
 There are two such places. When a final fragment's lookup shows the content
 did not land and the created item still empty, the item is removed at once;

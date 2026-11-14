@@ -68,16 +68,8 @@ type TokenSource interface {
 	Token() (string, error)
 }
 
-// Client is a pure HTTP client for the Microsoft Graph API. It handles request
-// construction, authentication (including 401 token refresh), and error
-// classification. Generic retry logic lives in retry.RetryTransport, while the
-// client itself keeps only narrow Graph-quirk retries for documented
-// misreported errors. This separation keeps generic resilience in the transport
-// layer and preserves caller control (CLI: RetryTransport, sync: raw
-// transport, single attempt, engine records failure for the engine retry
-// sweep).
 // retryPolicies is the per-call-site retry configuration. It is one value
-// rather than eight fields because the eight are configured together and read
+// rather than seven fields because the seven are configured together and read
 // together: as separate fields, a caller could set three and silently inherit
 // defaults for the rest, and nothing in the type said they were a set.
 type retryPolicies struct {
@@ -86,13 +78,13 @@ type retryPolicies struct {
 	downloadMetadata     retry.Policy
 	createFolderReadback retry.Policy
 	simpleUploadMtime    retry.Policy
-	uploadSessionCreate  retry.Policy
+	fileCreate           retry.Policy
 	copyDestination      retry.Policy
 }
 
 // urlValidators guard the server-supplied URLs the client will follow. They are
 // grouped for the same reason as the policies: they are one safety decision,
-// not three independent knobs.
+// not five independent knobs.
 type urlValidators struct {
 	uploadURL   func(*url.URL) error
 	copyMonitor func(*url.URL) error
@@ -106,6 +98,14 @@ type urlValidators struct {
 	contentRedirect func(*url.URL) error
 }
 
+// Client is a pure HTTP client for the Microsoft Graph API. It handles request
+// construction, authentication (including 401 token refresh), and error
+// classification. Generic retry logic lives in retry.RetryTransport, while the
+// client itself keeps only narrow Graph-quirk retries for documented
+// misreported errors. This separation keeps generic resilience in the transport
+// layer and preserves caller control (CLI: RetryTransport, sync: raw
+// transport, single attempt, engine records failure for the engine retry
+// sweep).
 type Client struct {
 	baseURL              string
 	httpClient           *http.Client

@@ -40,6 +40,8 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261112-01 | Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts | closed | provider incident | 2026-11-13 | no |
+| LI-20261111-01 | Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight | mitigated | graph quirk | 2026-11-11 | no |
 | LI-20261110-01 | A failed upload's cleanup was refused with 412 and left an empty file on OneDrive | fixed | product bug | 2026-11-10 | yes |
 | LI-20261029-01 | NFD-named local file was never uploaded on Linux while sync reported success | fixed | product bug | 2026-10-29 | no |
 | LI-20261024-01 | Overlapping live E2E runs against one test account failed each other | fixed | CI configuration | 2026-10-24 | no |
@@ -85,6 +87,123 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261112-01: Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts
+
+First seen: 2026-11-12 (about 17:57 UTC)
+Last seen: 2026-11-13 11:48 UTC
+Area: Microsoft Graph identity and upload-session hosts; every CLI command
+that asks `/me` first; live CI tiers
+Suite / test: nightly run `43274485305`, job `e2e` (its sign-in preflight)
+and job `integration` (`TestIntegration_Me`,
+`TestIntegration_SearchDriveItems`); the `e2e` and `integration` jobs of
+every pull request opened that day
+Classification: provider incident
+Status: closed
+Recurring: no
+Summary: From about 17:57 UTC on 2026-11-12 to 11:48 UTC on 2026-11-13,
+`GET /v1.0/me` for the Personal test accounts was answered 502 or 504 after
+about 21 s, from the development host and from the CI runners alike. Item and folder requests on the drives
+answered normally: a running watch kept syncing. Requests to upload-session
+URLs failed too, with 401. In its last hours the fault came and went. The
+cause is unknown.
+
+Evidence (no account, drive or item ID recorded):
+- `GET /v1.0/me`: 502 or 504 after about 21 s, on the host and in CI, from
+  about 17:57 UTC and still at 22:17 UTC on 2026-11-12.
+- The end, seen from the host by running `status` with a 40 s limit every
+  one to two minutes: between 06:06 and 11:48 UTC on 2026-11-13, 60 runs
+  answered (some only after 19 to 31 s) and 119 hit the limit; the last one
+  to hit it started at 11:48 UTC. The 44 runs after that (to 12:53 UTC, and
+  again from 22:02 UTC) all answered. Between 22:17 UTC and 06:06 UTC the
+  host was not probed at regular intervals. The scheduled nightly run
+  `43473280688` (17:29 UTC on 2026-11-13) passed every job.
+- A live probe on the host (21:35 to 21:49 UTC, drive endpoints only) sent
+  six requests to the upload URL of sessions it had just opened on
+  `my.microsoftpersonalcontent.com`: a fragment `PUT`, the status `GET` and
+  the cancelling `DELETE`. All six were answered 401 after about 12 s. The
+  session-opening `createUploadSession` itself answered 200, and item reads
+  and conditional deletes on the drive answered normally
+  ([graph-api-quirks.md](graph-api-quirks.md), "An Upload Session Moves An
+  Empty Item's eTag").
+- The drive's Socket.IO subscription endpoint
+  (`GET /drives/{d}/root/subscriptions/socketIo`) was degraded in a probe
+  between 22:24 and 22:52 UTC: of 14 calls through a retrying transport,
+  which waits out a 503's `Retry-After`, three answered 200 (after 6 to 32 s,
+  with and without a `Content-Type` alike); the others ended in 503
+  `serviceNotAvailable` or at the probe's own deadline (40 s, once 2 min)
+  while the transport waited to retry.
+- What it broke: in nightly run `43274485305` the `e2e` job at its sign-in
+  preflight and the `integration` job in `TestIntegration_Me` and
+  `TestIntegration_SearchDriveItems` (the unit, race and stress jobs passed);
+  the `e2e` and `integration` jobs of every pull request opened that day. On
+  the host, `status` took minutes and every file command failed, because
+  each asks `/me` first. Uploads to the test account failed at their first
+  fragment while the upload URLs answered 401; the client reads such a 401 as
+  `ErrPreAuthURLRejected`, so only that transfer fails and sync retries it.
+
+Resolution / mitigation: none in the client for the outage itself, which is
+Microsoft-side and ended without a change here. A transfer whose upload URL answers 401 fails alone and sync
+retries it.
+Follow-up: the incident showed two product faults that are not Microsoft's:
+`status` waited minutes on a slow `/me`, and `ls`, `get` and `put` failed on
+a failing `/me` though the drive itself answered.
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("An Upload Session Moves An Empty Item's eTag")
+
+## LI-20261111-01: Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight
+
+First seen: 2026-11-11
+Last seen: 2026-11-11
+Area: Graph folder create (`POST /drives/{d}/items/{parent}/children`),
+sync per-item retry work
+Suite / test: nightly run `43070648626` on `472e50ba`, job `e2e`,
+`TestE2E_Sync_IdempotentReSync` (`e2e_full`)
+Classification: graph quirk
+Status: mitigated
+Recurring: no
+Summary: A bidirectional sync of a configured shared-folder root on Personal
+created a new folder, three files in it and a subfolder `sub`. The three file
+creates were answered 201; the create of `sub`, sent while they were in
+flight, was answered HTTP 400 with the message `Invalid request`. The sync
+recorded the folder as retry work and exited zero, and the test's listing,
+taken before the retry was due, had no `sub`. The test half of this is
+LI-20260422-05 (one sync pass read as the end state).
+
+Evidence (the run's `--debug` log; account, drive and item IDs omitted):
+- The parent folder was created at 17:57:23.300 UTC. In it, `a.txt` was
+  created at 25.431 (201 at 25.608), `b.txt` answered 201 at 26.158, and
+  `c.txt` was sent at 26.522 (201 at 27.075).
+- The folder create of `sub` went out at 26.521, with the token that served
+  every other request of the pass, to the same parent route as the three file
+  creates. It was answered at 26.934: status 400, message `Invalid request`.
+  The log records no error code; the request ID and the
+  `X-Ms-Ags-Diagnostic` routing record are in the log.
+- The client sent the create once: sync's transport retries nothing, and a
+  folder create is replayed only by the CLI's retrying transport (R-6.8.21).
+- The sync logged `retry_work recorded` with `failure_class=actionable`,
+  `condition_key=unexpected_condition` and `http_status=400`, and the status
+  projection `sync retry work condition_type=transient_failure`; it printed
+  `1 failed; 1 will be retried on the next sync.` The test's second sync, two
+  seconds later, found the retry not yet due. No retry of the create ran in
+  the test, so its outcome on a later pass was not observed.
+
+Why it is classed as a transient provider answer: the request is the folder
+create every sync of every run sends (the name in a JSON body with
+`"folder": {}` and `conflictBehavior=fail`), the name `sub` is short and
+plain, and the parent was live and took three creates within the same
+second. The answer named no property of the request: no code, and neither of
+the 400 messages that name a real limit (`name is too long`, `400 characters
+or less`), which sync classifies as a durable path-too-long condition. What
+the 400 reflects is the service at that moment.
+
+Resolution / mitigation: no runtime special case. One occurrence with no code
+is not the payload evidence a quirk rule needs (`spec/design/graph-client.md`,
+Design Constraints). A bare 400 lands in sync's catch-all server answer
+(`serverAnswerOther`): per-item retry work with backoff that says nothing
+about a wider scope, so the next pass that is due sends the create again.
+The test now converges instead of trusting one pass (LI-20260422-05,
+recurrence 2026-11-11).
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("A Folder Create Can Be Refused With A Bare 400")
 
 ## LI-20261110-01: A failed upload's cleanup was refused with 412 and left an empty file on OneDrive
 
@@ -133,6 +252,13 @@ Evidence:
   and the item's eTag still moved from `,1` to `,2`, 0.24 s to 0.65 s after
   the client had given up, with the item still 0 bytes. Canceled at once (two
   rounds), the eTag never moved.
+- A second probe on 2026-11-12 read the item for a minute after the session
+  step, in two rounds whose session opened and two whose request was
+  abandoned after 80 and 160 ms: the eTag moved once, to `,2`, and held; the
+  modification time and the empty-content hash never changed; a delete
+  conditional on the eTag read last answered 204 every time. An orphaned
+  session does not keep moving the eTag, so the cleanup's attempts need no
+  pause between them ([graph-api-quirks.md](graph-api-quirks.md)).
 - Canceling the upload on the first signal is the specified behavior
   (R-6.3.6). The cleanup runs on a context detached from the canceled one:
   both of its requests were answered after the cancel.
@@ -1089,8 +1215,8 @@ Recurrence 2026-11-11 (nightly run 43070648626 on `472e50ba`): a test the first
 conversion had not reached. `TestE2E_Sync_IdempotentReSync` ran one
 bidirectional `sync` and then listed the folder. Graph answered the create of
 the `sub` folder with HTTP 400 `Invalid request` while three sibling file
-creates in the same new parent were in flight; the request was the usual one,
-and the same create succeeds on a later pass. The client recorded `retry_work`
+creates in the same new parent were in flight; the request was the usual one
+(the provider answer is LI-20261111-01). The client recorded `retry_work`
 for the folder, printed `1 failed; 1 will be retried on the next sync.` and
 exited zero. The listing had the three files and no `sub`.
 Follow-up 2026-11-11: the rest of the suite was swept, this test included. Both converge helpers
@@ -1849,6 +1975,12 @@ same `ls /` boundary before and after known exact-path `stat`, `get`, or
 equivalent CLI read-poller `404` failures, so later sync assertions do not
 treat this documented route-lag family as a product regression once the
 shared-root drive has already been selected successfully.
+Current policy (historical note): new files are no longer created through
+`createUploadSession` or a simple upload. `graph.Client.CreateFile` creates
+each one by body (`POST /items/{parent}/children`), and it is that request
+whose fresh-parent `404 itemNotFound` is retried, as quirk
+`file-create-transient-404` (`graph.QuirkFileCreateTransient404`) with
+`retry.FileCreatePolicy()`.
 Promoted docs: [graph-api-quirks.md#recently-created-parent-folders-can-lag-child-routes](graph-api-quirks.md#recently-created-parent-folders-can-lag-child-routes), [system.md](../design/system.md), [graph-client.md](../design/graph-client.md), [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md)
 
 ## LI-20260405-08: Delete-by-ID returned `404 itemNotFound` after successful path lookup

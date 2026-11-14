@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -632,7 +635,9 @@ func TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile(t *testing.T) {
 		},
 		{name: "408", create: answerWithStatus(http.StatusRequestTimeout, "requestTimeout"), unknown: true},
 		{name: "canceled context", create: answerAfterTheCallerGaveUp, unknown: true, also: context.Canceled},
-		{name: "expired context", create: answerWithNothing, expired: true, unknown: true, also: context.DeadlineExceeded},
+		// The deadline passed before the request: it was never sent, so
+		// nothing was created.
+		{name: "expired context", create: answerWithNothing, expired: true, also: context.DeadlineExceeded},
 		{
 			name:    "created, and the read-back fails",
 			create:  answerCreatedWithoutItem,
@@ -660,6 +665,7 @@ func TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile(t *testing.T) {
 			}
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.False(t, tc.expired, "a request whose deadline had passed is never sent")
 				if r.Method == http.MethodPost {
 					tc.create(t, w, r, cancel)
 
@@ -686,6 +692,139 @@ func TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile(t *testing.T) {
 			// upload by checking the file against the content, which would
 			// fail the empty file and drop the mark.
 			require.NotErrorIs(t, err, ErrUploadCompletedWithoutItem)
+		})
+	}
+}
+
+// countingCreateServer answers every request with status and counts them.
+func countingCreateServer(t *testing.T, status int, code string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		answerWithStatus(status, code)(t, w, r, nil)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, &requests
+}
+
+// Validates: R-5.6.15
+//
+// A create whose token source fails never leaves the client: nothing can have
+// been created, so the failure must not keep a create intent alive.
+func TestCreateFile_TokenFailureIsNotOutcomeUnknown(t *testing.T) {
+	srv, requests := countingCreateServer(t, http.StatusCreated, "")
+	client := MustNewClient(srv.URL, http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
+
+	item, err := client.CreateFile(t.Context(), driveid.New("d"), "parent", "a.txt")
+	require.ErrorContains(t, err, "token error")
+	assert.Nil(t, item)
+	require.NotErrorIs(t, err, ErrCreateOutcomeUnknown, "a create that was never sent created nothing")
+	assert.Zero(t, requests.Load())
+}
+
+// Validates: R-5.6.15
+//
+// A parent ID that cannot form a URL (here a control character) fails while
+// the request is built, before anything is sent.
+func TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown(t *testing.T) {
+	srv, requests := countingCreateServer(t, http.StatusCreated, "")
+
+	item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d"), "parent\x7f", "a.txt")
+	require.ErrorContains(t, err, "invalid control character")
+	assert.Nil(t, item)
+	require.NotErrorIs(t, err, ErrCreateOutcomeUnknown, "a create that was never sent created nothing")
+	assert.Zero(t, requests.Load())
+}
+
+// refreshFailingToken hands out one token and then fails, like a sign-in
+// whose refresh the token endpoint does not answer.
+type refreshFailingToken struct {
+	calls atomic.Int32
+}
+
+func (s *refreshFailingToken) Token() (string, error) {
+	if s.calls.Add(1) == 1 {
+		return "stale-token", nil
+	}
+
+	return "", errors.New("token endpoint unreachable")
+}
+
+// cancelAfterAnswer hands each answer back whole and then cancels the
+// caller's context, as a shutdown that lands between two attempts does.
+type cancelAfterAnswer struct {
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterAnswer) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, fmt.Errorf("round trip: %w", err)
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if answerErr := errors.Join(readErr, resp.Body.Close()); answerErr != nil {
+		return nil, fmt.Errorf("reading answer: %w", answerErr)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	c.cancel()
+
+	return resp, nil
+}
+
+// Validates: R-5.6.15
+//
+// A create OneDrive refused, and whose retry was then never sent, created
+// nothing: the token refresh after a 401 failed, or the context ended during
+// the backoff after a fresh parent's 404. Neither may read as a create that
+// may have landed.
+func TestCreateFile_UnsentRetryIsNotOutcomeUnknown(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		code   string
+		client func(t *testing.T, url string, cancel context.CancelFunc) *Client
+		also   error
+	}{
+		{
+			name:   "token refresh after a 401 fails",
+			status: http.StatusUnauthorized, code: "InvalidAuthenticationToken",
+			client: func(t *testing.T, url string, _ context.CancelFunc) *Client {
+				t.Helper()
+
+				return MustNewClient(url, http.DefaultClient, &refreshFailingToken{}, slog.Default(), "test-agent")
+			},
+		},
+		{
+			name:   "backoff after a fresh parent's 404 is canceled",
+			status: http.StatusNotFound, code: "itemNotFound",
+			client: func(t *testing.T, url string, cancel context.CancelFunc) *Client {
+				t.Helper()
+
+				return MustNewClient(url, &http.Client{Transport: cancelAfterAnswer{cancel: cancel}},
+					staticToken("test-token"), slog.Default(), "test-agent")
+			},
+			also: context.Canceled,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			srv, requests := countingCreateServer(t, tc.status, tc.code)
+
+			item, err := tc.client(t, srv.URL, cancel).CreateFile(ctx, driveid.New("d"), "parent", "a.txt")
+			require.Error(t, err)
+			assert.Nil(t, item)
+			require.NotErrorIs(t, err, ErrCreateOutcomeUnknown, "the one request sent was refused")
+			if tc.also != nil {
+				require.ErrorIs(t, err, tc.also)
+			}
+			assert.Equal(t, int32(1), requests.Load())
 		})
 	}
 }

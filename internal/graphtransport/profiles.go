@@ -26,7 +26,7 @@ const (
 
 	// The sign-in service (token refresh, device code, code exchange) answers
 	// with a small JSON body, so its client bounds the whole request too:
-	// nothing about a sign-in request legitimately takes a minute (D6).
+	// nothing about a sign-in request legitimately takes a minute (R-6.8.27).
 	authResponseHeaderTimeout = 30 * time.Second
 	authRequestTimeout        = 60 * time.Second
 )

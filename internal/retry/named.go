@@ -5,43 +5,40 @@ import "time"
 // Canonical retry constants. Kept local to this package so callers consume the
 // fully shaped Policy values rather than piecing them together themselves.
 const (
-	transportAttempts            = 6
-	deltaPageAttempts            = 4
-	deltaPageBaseDelay           = 2 * time.Second
-	deltaPageMaxDelay            = 8 * time.Second
-	driveDiscoveryAttempts       = 5
-	rootChildrenAttempts         = 3
-	downloadMetadataAttempts     = 6
-	simpleUploadMtimeAttempts    = 8
-	uploadSessionCreateAttempts  = 9
-	copyDestinationAttempts      = 6
-	pathVisibilityAttempts       = 10
-	infiniteAttempts             = 0
-	standardMultiplier           = 2.0
-	standardJitter               = 0.25
-	noJitter                     = 0.0
-	defaultBaseDelay             = 1 * time.Second
-	rootChildrenBaseDelay        = 250 * time.Millisecond
-	rootChildrenMaxDelay         = 1 * time.Second
-	downloadMetadataBaseDelay    = 250 * time.Millisecond
-	downloadMetadataMaxDelay     = 4 * time.Second
-	simpleUploadMtimeBaseDelay   = 250 * time.Millisecond
-	simpleUploadMtimeMaxDelay    = 16 * time.Second
-	uploadSessionCreateBaseDelay = 250 * time.Millisecond
-	uploadSessionCreateMaxDelay  = 8 * time.Second
-	copyDestinationBaseDelay     = 250 * time.Millisecond
-	copyDestinationMaxDelay      = 4 * time.Second
-	pathVisibilityBaseDelay      = 250 * time.Millisecond
-	pathVisibilityMaxDelay       = 32 * time.Second
-	transportMaxDelay            = 60 * time.Second
-	watchLocalMaxDelay           = 30 * time.Second
-	watchRemoteBaseDelay         = 5 * time.Second
-	watchRemoteMaxDelay          = 5 * time.Minute
+	transportAttempts          = 6
+	deltaPageAttempts          = 4
+	deltaPageBaseDelay         = 2 * time.Second
+	deltaPageMaxDelay          = 8 * time.Second
+	driveDiscoveryAttempts     = 5
+	rootChildrenAttempts       = 3
+	downloadMetadataAttempts   = 6
+	simpleUploadMtimeAttempts  = 8
+	fileCreateAttempts         = 9
+	copyDestinationAttempts    = 6
+	pathVisibilityAttempts     = 10
+	infiniteAttempts           = 0
+	standardMultiplier         = 2.0
+	standardJitter             = 0.25
+	noJitter                   = 0.0
+	defaultBaseDelay           = 1 * time.Second
+	rootChildrenBaseDelay      = 250 * time.Millisecond
+	rootChildrenMaxDelay       = 1 * time.Second
+	downloadMetadataBaseDelay  = 250 * time.Millisecond
+	downloadMetadataMaxDelay   = 4 * time.Second
+	simpleUploadMtimeBaseDelay = 250 * time.Millisecond
+	simpleUploadMtimeMaxDelay  = 16 * time.Second
+	fileCreateBaseDelay        = 250 * time.Millisecond
+	fileCreateMaxDelay         = 8 * time.Second
+	copyDestinationBaseDelay   = 250 * time.Millisecond
+	copyDestinationMaxDelay    = 4 * time.Second
+	pathVisibilityBaseDelay    = 250 * time.Millisecond
+	pathVisibilityMaxDelay     = 32 * time.Second
+	transportMaxDelay          = 60 * time.Second
+	watchLocalMaxDelay         = 30 * time.Second
+	watchRemoteBaseDelay       = 5 * time.Second
+	watchRemoteMaxDelay        = 5 * time.Minute
 )
 
-// TransportPolicy is the HTTP transport retry policy used by RetryTransport.
-// 6 total attempts (the first plus 5 retries), 1s base, 60s max, 2x
-// multiplier, ±25% jitter.
 // DeltaPagePolicy is the bounded retry for one page of the change list when
 // OneDrive answers it with a 5xx, a 429 or a dropped connection: four
 // attempts over about fourteen seconds, so a transient server fault does
@@ -56,6 +53,9 @@ func DeltaPagePolicy() Policy {
 	}
 }
 
+// TransportPolicy is the HTTP transport retry policy used by RetryTransport.
+// 6 total attempts (the first plus 5 retries), 1s base, 60s max, 2x
+// multiplier, ±25% jitter.
 func TransportPolicy() Policy {
 	return Policy{
 		MaxAttempts: transportAttempts,
@@ -125,18 +125,18 @@ func SimpleUploadMtimePatchPolicy() Policy {
 	}
 }
 
-// UploadSessionCreatePolicy is the retry policy for transient item-not-found
-// misfires when createUploadSession targets a freshly created parent folder.
-// Every non-empty create now goes through this route, so the budget covers
-// the whole convergence window live E2E has shown after a fresh folder
-// becomes path-visible (about 32 s scheduled; the old simple-upload replay
-// plus the shorter session budget gave about 24 s), while staying bounded for
-// a real missing parent. A permission denial is a 403 and is not retried.
-func UploadSessionCreatePolicy() Policy {
+// FileCreatePolicy is the retry policy for transient item-not-found misfires
+// when the create of a new file (POST .../children with the name in the body)
+// targets a freshly created parent folder. Every new file goes through that
+// create, so the budget covers the whole convergence window live E2E has
+// shown after a fresh folder becomes path-visible (about 32 s scheduled),
+// while staying bounded for a real missing parent. A permission denial is a
+// 403 and is not retried.
+func FileCreatePolicy() Policy {
 	return Policy{
-		MaxAttempts: uploadSessionCreateAttempts,
-		Base:        uploadSessionCreateBaseDelay,
-		Max:         uploadSessionCreateMaxDelay,
+		MaxAttempts: fileCreateAttempts,
+		Base:        fileCreateBaseDelay,
+		Max:         fileCreateMaxDelay,
 		Multiplier:  standardMultiplier,
 		Jitter:      noJitter,
 	}

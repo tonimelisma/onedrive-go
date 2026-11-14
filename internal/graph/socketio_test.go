@@ -24,7 +24,7 @@ func TestSocketIOEndpoint_Success(t *testing.T) {
 		assertRequest: func(r *http.Request) {
 			assert.Equal(t, http.MethodGet, r.Method)
 			assert.Equal(t, "/drives/0000000drive-123/root/subscriptions/socketIo", r.URL.Path)
-			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+			assert.Empty(t, r.Header.Get("Content-Type"), "a body-less GET declares no content type")
 		},
 	})
 	t.Cleanup(srv.Close)
