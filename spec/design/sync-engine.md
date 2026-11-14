@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
+GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
 
 LAYER: 4
 
@@ -469,6 +469,75 @@ That cadence is capability-driven, not websocket-driven:
 
 Websocket wakeups are additive only. They wake delta polling sooner, but they
 do not replace delta polling and they do not change the full-refresh cadence.
+
+### A One-Shot Sync Reports What It Left
+
+Every end of a one-shot pass records what its actions came to through one
+function (`recordPassCounts`, or `Report.setPassCounts` for a plan that never
+ran): `Succeeded`, `Failed`, the failures kept for retry (`failureKeptForRetry`
+over the result class, the predicate the activity feed's `WillRetry` reads
+too), and `LeftForNextSync` = actions - succeeded - failed, so a pass that
+ends at its first dispatch counts its work as every other pass does
+(`TestExecutePreparedPlan_APassThatEndsAtItsFirstDispatchLeavesItsWork`,
+`TestFailureKeptForRetry_TheFeedAndThePassCountAgree`). `withPass` adds the
+work done up over the passes and keeps the last pass's state:
+`LastPassFailed`, `LastPassKeptForRetry`, `LeftForNextSync`, the held deletes
+and `DeferredByMode` (the `Report` comment says which is which). What the run
+left is `Report.LeftWork`, read from that state alone: `Failed` is the last
+pass's failures not kept for retry, `WillRetry` its failures kept for retry
+plus `LeftForNextSync`, `StillOpen` the issues below. Each file is counted
+once, and a file an earlier pass failed and a later pass of the same run
+finished, or no longer needed, is in none of them: after a pause the run
+waited out, a pass that superseded actions, or a failed cleanup a later pass
+redid (`TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce`,
+`TestRunOnce_APauseWaitedOutLeavesNothing`,
+`TestRunOnce_AFailureTheNextPassNoLongerNeedsIsNotLeft`,
+`TestRunOnce_AFailureALaterPassFinishesIsNotLeft`,
+`TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt`). No other code
+adds those fields up (`TestReport_ProductCodeOutsideTheEngineReadsWhatARunLeftOnlyThroughItsMethods`).
+
+When the run ends, `RunOnce` adds two things to the report beside the
+last pass's own counts:
+
+- the follow-up work of the plan the last pass ran
+  (`planFollowUp.leftWhenTheRunEnds`) goes into `LeftForNextSync`. Deferred
+  and dropped work is in no action list, so nothing else counts it; only its
+  `Unfinished` part counts, the deferred and dropped work the run's sync mode
+  runs, because work a one-way mode holds back is not left (R-6.6.19).
+  Renames are actions, already succeeded, failed or left, and the work they
+  leave for the pass after them counts only when the pass bound ended the
+  run (`TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync`,
+  `TestRunOnce_UploadOnlyLeavesNoFollowUpForMovesTheModeHoldsBack`,
+  `TestPassWithoutActions_KeepsThePlansFollowUp`)
+- `Report.UnsyncedIssues` (`readIssuesTheRunLeft`), the observation issues
+  that keep a file unsynced, read after the housekeeping from the snapshot
+  `status` reads (`ReadDriveStatusSnapshot`) and counted by
+  `DriveStatusSnapshot.unsyncedIssueCount` with `status`'s own filter
+  (sync-store.md, Unresolved work), and beside it `Report.InterruptedRemovals`,
+  the files an interrupted removal set aside, which are not work left but
+  keep a local tree from being removed
+  (`TestRunOnce_ReportsTheFilesAnInterruptedRemovalSetAside`)
+
+Retry work is not read from the store: every live pass prunes the retry rows
+no action of its plan needs (`PruneRetryWorkToCurrentActions`) and the scopes
+no row is blocked under, so each row left is an action of the last pass,
+already counted as failed or left
+(`TestRunOnce_ReportCountsUnresolvedWork`,
+`TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`,
+`TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes`). An observation
+issue and a plan action never share a path in one pass: the issue blocks the
+path's truth, and the planner plans nothing for a path whose truth is
+blocked. The CLI's one-shot exit status is the sum of the three (cli.md, Exit
+Status), so a run cannot exit 0 while `status` lists a file it left unsynced,
+including the runs after a write into a read-only shared folder, which hold
+the upload under the write block (R-6.6.28). A store that cannot be read then fails the run,
+with the report of the passes beside the error: nothing would prove it left
+nothing (`TestRunOnce_ALastStoreReadThatFailsReturnsTheReportAndTheError`). A
+dry run attempts nothing and leaves both zero
+(`TestRunOnce_DryRunLeavesUnresolvedZero`). A final-drain child in watch mode
+runs `RunOnce` too; watch mode does not read the counts for its exit status,
+but a removed shared folder's final drain is clean only when
+`Report.LocalTreeHolds` holds nothing (sync-control-plane.md).
 
 ### Post-Sync Housekeeping
 

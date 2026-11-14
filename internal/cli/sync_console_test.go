@@ -127,21 +127,74 @@ func TestSyncConsole_SummaryInHumanUnits(t *testing.T) {
 	assert.Equal(t, "Done in 5.6 s: downloaded 3 files (3.0 MB), created 1 folder.\n", out.String())
 }
 
-// Validates: R-6.6.19
+// Validates: R-6.6.19, R-6.6.28
 func TestSyncConsole_SummaryUpToDateAndDryRun(t *testing.T) {
 	t.Parallel()
 
 	c, out, _ := testSyncConsole()
-	c.Summary(singleMountResult(&syncengine.Report{Duration: 1577 * time.Millisecond}))
+	left := c.Summary(singleMountResult(&syncengine.Report{Duration: 1577 * time.Millisecond}))
 	assert.Equal(t, "Up to date (1.6 s).\n", out.String())
+	assert.False(t, left["m1"].Any())
+
+	// A drive the store still holds conditions for is not up to date, even
+	// when this run had nothing to do (R-6.6.28).
+	out.Reset()
+	left = c.Summary(singleMountResult(&syncengine.Report{
+		Duration:       1577 * time.Millisecond,
+		UnsyncedIssues: 2,
+	}))
+	assert.Equal(t, "Done in 1.6 s; 2 still not synced (see 'onedrive-go status').\n", out.String())
+	assert.Equal(t, syncengine.LeftWork{StillOpen: 2}, left["m1"])
 
 	out.Reset()
 	c.Summary(singleMountResult(&syncengine.Report{DryRun: true, Downloads: 19, FolderCreates: 2}))
 	assert.Equal(t, "Dry run, nothing was changed. Would download 19 files, create 2 folders.\n", out.String())
 
 	out.Reset()
-	c.Summary(singleMountResult(&syncengine.Report{DryRun: true}))
+	left = c.Summary(singleMountResult(&syncengine.Report{DryRun: true, UnsyncedIssues: 1}))
 	assert.Equal(t, "Dry run: nothing to do.\n", out.String())
+	assert.False(t, left["m1"].Any(), "a dry run attempted nothing, so it left nothing")
+}
+
+// Validates: R-6.6.19, R-6.6.28
+//
+// The issues that keep a file unsynced add to the last pass's own failures
+// and left work: no plan action covers a path that holds one, so nothing is
+// counted twice. Three names OneDrive refuses beside two retryable failures
+// are five files left.
+func TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.ActivityHook()
+	for _, path := range []string{"a.txt", "b.txt"} {
+		c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: path, WillRetry: true}))
+	}
+	result := singleMountResult(&syncengine.Report{
+		Duration:             2 * time.Second,
+		Uploads:              2,
+		Failed:               2,
+		LastPassFailed:       2,
+		LastPassKeptForRetry: 2,
+		UnsyncedIssues:       3,
+	})
+	left := c.Summary(result)
+
+	assert.Equal(t, syncengine.LeftWork{WillRetry: 2, StillOpen: 3}, left["m1"])
+	assert.Equal(t, "Done in 2.0 s; 2 will be retried on the next sync; "+
+		"3 still not synced (see 'onedrive-go status').\n", out.String())
+	err := runOnceResultError(result, left)
+	require.ErrorIs(t, err, errSyncLeftWork)
+	assert.Equal(t, "sync left 5 files unsynced; run 'onedrive-go status' for details", err.Error())
+
+	// One upload a throttle took back and no issue: one file, no still-open part.
+	c, out, _ = testSyncConsole()
+	c.ActivityHook()
+	result = singleMountResult(&syncengine.Report{Duration: time.Second, Uploads: 1, LeftForNextSync: 1})
+	left = c.Summary(result)
+	assert.Equal(t, syncengine.LeftWork{WillRetry: 1}, left["m1"])
+	assert.NotContains(t, out.String(), "still not synced")
+	assert.Equal(t, "sync left 1 file unsynced; run 'onedrive-go status' for details", runOnceResultError(result, left).Error())
 }
 
 // Validates: R-6.6.19
@@ -157,7 +210,7 @@ func TestSyncConsole_SummaryExplainsHeldBackWork(t *testing.T) {
 	assert.Contains(t, out.String(), "Held back by --download-only: 3 uploads.")
 }
 
-// Validates: R-6.6.19
+// Validates: R-6.6.19, R-6.6.33
 //
 // Live, 2026-11-02: a one-shot confirm of 6,000 deletes met a 429 after
 // 5,557; the scope took the remaining 442 back and the pass ended with
@@ -173,12 +226,33 @@ func TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync(t *testing.T) 
 		RemoteDeletes:   5557,
 		Succeeded:       5557,
 		Failed:          1,
+		LastPassFailed:  1,
 		LeftForNextSync: 442,
 	}))
 
-	// Without an activity feed the one failure is reported as failed; the
-	// 442 the scope took back are counted as retried either way.
+	// The one failure the engine does not retry by itself is reported as
+	// failed; the 442 the scope took back are counted as retried.
 	assert.Contains(t, out.String(), "deleted 5557 files on OneDrive; 1 failed; 442 will be retried on the next sync.")
+
+	// The JSON summary counts the same work: will_retry includes what the
+	// throttle took back, and the drive's status is "incomplete" (R-6.6.33).
+	c, out, _ = testSyncConsole()
+	c.json = true
+	c.Summary(singleMountResult(&syncengine.Report{
+		Mode:            syncengine.SyncBidirectional,
+		RemoteDeletes:   5557,
+		Succeeded:       5557,
+		Failed:          1,
+		LastPassFailed:  1,
+		LeftForNextSync: 442,
+	}))
+	var summary syncJSONEvent
+	require.NoError(t, json.Unmarshal(out.Bytes(), &summary))
+	assert.Equal(t, "incomplete", summary.Status)
+	require.NotNil(t, summary.Failed)
+	assert.Equal(t, 1, *summary.Failed)
+	require.NotNil(t, summary.WillRetry)
+	assert.Equal(t, 442, *summary.WillRetry)
 }
 
 // Validates: R-6.6.22
@@ -195,11 +269,12 @@ func TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError(t *testing.T) {
 		}}},
 	}
 
-	c.Summary(result)
+	left := c.Summary(result)
 	assert.Empty(t, out.String())
 	assert.Empty(t, errOut.String(), "the command error prints it; printing here too doubled it")
+	assert.Empty(t, left, "a drive that could not start left no counted work; its error is the result")
 
-	err := runOnceResultError(result)
+	err := runOnceResultError(result, left)
 	require.Error(t, err)
 	require.ErrorIs(t, err, graph.ErrNotLoggedIn, "the returned error must keep its cause so it is presented as sign-in required")
 	assert.Contains(t, commandErrorText(err, false), "Authentication required")
@@ -209,7 +284,7 @@ func TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError(t *testing.T) {
 // not close afterwards: the engine may still hold its store, and only the
 // process exit releases it. A user's stop does not turn that into 130.
 //
-// Validates: R-6.3.9
+// Validates: R-6.3.9, R-6.6.28
 func TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced(t *testing.T) {
 	t.Parallel()
 
@@ -222,11 +297,39 @@ func TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced(t *testi
 		Stuck:   fmt.Errorf("Personal: %w (its sync state did not close within 15 s)", multisync.ErrSyncStuck),
 	}
 
-	err := runOnceResultError(result)
+	err := runOnceResultError(result, map[string]syncengine.LeftWork{"": {}})
 
 	require.ErrorIs(t, err, multisync.ErrSyncStuck)
 	assert.Equal(t, exitFailure, commandExitCode(err, false))
 	assert.Equal(t, exitFailure, commandExitCode(err, true))
+
+	// Work left and an engine that did not close are both reported.
+	err = runOnceResultError(result, map[string]syncengine.LeftWork{"": {Failed: 1}})
+	require.ErrorIs(t, err, multisync.ErrSyncStuck)
+	require.ErrorIs(t, err, errSyncLeftWork)
+	assert.Equal(t, exitFailure, commandExitCode(err, true))
+}
+
+// Validates: R-6.6.22, R-6.6.28
+//
+// A drive whose run returned a report and an error (a store it could not
+// read after the last pass) failed: its error is the command's, and its
+// report's counts are not printed or counted as work left.
+func TestRunOnceResultError_ADriveWithAnErrorAndAReportIsADriveError(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	readErr := errors.New("sync: reading the issues the run left: disk I/O error")
+	result := singleMountResult(&syncengine.Report{Uploads: 1, Failed: 1})
+	result.Reports[0].Err = readErr
+
+	left := c.Summary(result)
+	assert.Empty(t, left)
+	assert.NotContains(t, out.String(), "Done in")
+
+	err := runOnceResultError(result, left)
+	require.ErrorIs(t, err, readErr)
+	require.NotErrorIs(t, err, errSyncLeftWork)
 }
 
 // Validates: R-6.6.22
@@ -338,7 +441,10 @@ func TestSyncConsole_JSONWritesOnlyJSONLines(t *testing.T) {
 		syncengine.SyncBidirectional, false)
 	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.pdf", Size: 10, SizeKnown: true, Success: true}))
 	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Err: os.ErrPermission}))
-	c.Summary(singleMountResult(&syncengine.Report{Duration: 2 * time.Second, Downloads: 1, Uploads: 1, Succeeded: 1, Failed: 1}))
+	c.Summary(singleMountResult(&syncengine.Report{
+		Duration: 2 * time.Second, Downloads: 1, Uploads: 1, Succeeded: 1, Failed: 1, LastPassFailed: 1,
+		UnsyncedIssues: 1,
+	}))
 
 	var events []syncJSONEvent
 	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
@@ -356,13 +462,34 @@ func TestSyncConsole_JSONWritesOnlyJSONLines(t *testing.T) {
 	assert.Equal(t, "failed", events[2].Status)
 	assert.Equal(t, "permission denied", events[2].Error)
 	assert.Equal(t, "summary", events[3].Event)
+	assert.Equal(t, "incomplete", events[3].Status, "a drive that left work is not done")
 	require.NotNil(t, events[3].Failed)
 	assert.Equal(t, 1, *events[3].Failed)
+	require.NotNil(t, events[3].WillRetry)
+	assert.Zero(t, *events[3].WillRetry)
+	require.NotNil(t, events[3].StillOpen)
+	assert.Equal(t, 1, *events[3].StillOpen, "the issue that keeps a file unsynced")
 	assert.Equal(t, 1, events[3].Counts["download"])
 	assert.Empty(t, errOut.String(), "under --json, file failures are data on stdout")
 }
 
-// Validates: R-6.6.19
+// Validates: R-6.6.28, R-6.6.33
+func TestSyncConsole_JSONSummaryOfADriveThatLeftNothingIsDone(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.json = true
+	left := c.Summary(singleMountResult(&syncengine.Report{Duration: time.Second, Downloads: 1, Succeeded: 1}))
+
+	var summary syncJSONEvent
+	require.NoError(t, json.Unmarshal(out.Bytes(), &summary))
+	assert.Equal(t, "done", summary.Status)
+	require.NotNil(t, summary.StillOpen)
+	assert.Zero(t, *summary.StillOpen)
+	assert.False(t, left["m1"].Any())
+}
+
+// Validates: R-6.6.19, R-6.6.28
 //
 // A pass that waits out a throttle and then uploads the file (R-2.1.7) used
 // to end "uploaded 1 file; 1 will be retried on the next sync": the retry
@@ -375,7 +502,7 @@ func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.
 	c.ActivityHook()
 	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", WillRetry: true}))
 	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", Size: 22, SizeKnown: true, Success: true}))
-	c.Summary(singleMountResult(&syncengine.Report{
+	left := c.Summary(singleMountResult(&syncengine.Report{
 		Mode:      syncengine.SyncBidirectional,
 		Duration:  136 * time.Second,
 		Uploads:   1,
@@ -386,6 +513,7 @@ func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.
 	assert.Contains(t, out.String(), "Done in 2 min 16 s: uploaded 1 file (22 B).")
 	assert.NotContains(t, out.String(), "will be retried")
 	assert.NotContains(t, out.String(), "failed")
+	assert.False(t, left["m1"].Any(), "a retry the run finished does not fail the run (R-6.6.28)")
 }
 
 // Validates: R-6.6.19

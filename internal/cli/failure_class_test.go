@@ -66,6 +66,7 @@ func TestCommandExitCode(t *testing.T) {
 		{name: "throttled is transient", err: fmt.Errorf("get: %w", graph.ErrThrottled), want: exitFailure},
 		{name: "server error is transient", err: graph.ErrServerError, want: exitFailure},
 		{name: "not found", err: graph.ErrNotFound, want: exitFailure},
+		{name: "sync left work", err: newPresentedError("sync left 1 file unsynced", errSyncLeftWork), want: exitFailure},
 		{name: "plain", err: errors.New("boom"), want: exitFailure},
 		{
 			name: "text alone never classifies",

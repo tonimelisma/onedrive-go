@@ -518,8 +518,9 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	))
 
 	// Run one-shot sync.
-	// Single pass by design: this one pass after the daemon's shutdown must name the file it uploads.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	// Single pass by design: this one pass after the daemon's shutdown must
+	// name the file it uploads; it may leave work a transient failure causes.
+	out, _ := runSyncPass(t, cfgPath, env, "--upload-only")
 
 	// Verify the one-shot sync uploaded only the new file (incremental).
 	assert.Contains(t, out, "Uploaded ", "one-shot should name the uploaded file")

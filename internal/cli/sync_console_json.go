@@ -32,11 +32,15 @@ type syncJSONEvent struct {
 	Counts     map[string]int `json:"counts,omitempty"`
 	Failed     *int           `json:"failed,omitempty"`
 	WillRetry  *int           `json:"will_retry,omitempty"`
+	StillOpen  *int           `json:"still_open,omitempty"`
 }
 
 const (
 	syncJSONStatusDone   = "done"
 	syncJSONStatusFailed = "failed"
+	// syncJSONStatusIncomplete is a drive's summary when its run finished
+	// but left work (Report.LeftWork), and the run exits 1 (R-6.6.28).
+	syncJSONStatusIncomplete = "incomplete"
 )
 
 func activityJSONAction(kind syncengine.ActivityKind) string {
@@ -73,6 +77,10 @@ func syncModeJSON(mode syncengine.SyncMode) string {
 	return ""
 }
 
+// emitJSON writes one event line. A syncJSONEvent holds only strings, numbers
+// and a map of numbers, which always encode, so a Marshal error is dropped
+// like a line the console cannot write (write): the sync must not stop over
+// its output, and the exit status still records the outcome.
 func (c *syncConsole) emitJSON(event *syncJSONEvent) {
 	line, err := json.Marshal(event)
 	if err != nil {
@@ -128,7 +136,10 @@ func (c *syncConsole) jsonActivity(ma multisync.MountActivity) {
 	c.emitJSON(event)
 }
 
-func (c *syncConsole) jsonSummary(result multisync.RunOnceResult) {
+// jsonSummary writes one summary line per drive report. Its counts are the
+// text summary's (left, from Report.LeftWork): a drive that left work is
+// "incomplete", and will_retry includes the work left for the next sync.
+func (c *syncConsole) jsonSummary(result multisync.RunOnceResult, left map[string]syncengine.LeftWork) {
 	for _, report := range result.Reports {
 		if report == nil {
 			continue
@@ -146,15 +157,19 @@ func (c *syncConsole) jsonSummary(result multisync.RunOnceResult) {
 		}
 
 		r := report.Report
-		tally := c.tallyFor(report.Identity.MountID, r)
+		mountID := report.Identity.MountID
+		tally := c.tallyFor(mountID, r)
+		counts := left[mountID]
 		durationMS := r.Duration.Milliseconds()
-		failed := max(tally.failed, r.Failed-tally.retried)
-		willRetry := tally.willRetry()
 		event.Status = syncJSONStatusDone
+		if counts.Any() {
+			event.Status = syncJSONStatusIncomplete
+		}
 		event.DryRun = r.DryRun
 		event.DurationMS = &durationMS
-		event.Failed = &failed
-		event.WillRetry = &willRetry
+		event.Failed = &counts.Failed
+		event.WillRetry = &counts.WillRetry
+		event.StillOpen = &counts.StillOpen
 		event.Counts = make(map[string]int, len(tally.counts))
 		for kind, n := range tally.counts {
 			if n > 0 {

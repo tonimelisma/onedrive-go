@@ -152,8 +152,9 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	)
 
 	// Re-sync immediately — should show no changes (idempotent).
-	// Single pass by design: the one pass after convergence must find nothing to do.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
+	// Single pass by design: the one pass after convergence must find nothing
+	// to do, so it leaves nothing ("Up to date").
+	out, _ := runSyncPass(t, cfgPath, env)
 	assert.Contains(t, out, "Up to date",
 		"immediate re-sync after mixed changes should be idempotent")
 }
@@ -252,8 +253,9 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	require.ErrorIs(t, err, os.ErrNotExist)
 
 	snapshot := snapshotLocalTree(t, localDir)
-	// Single pass by design: the one pass after settlement must be idle and change nothing.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	// Single pass by design: the one pass after settlement must be idle and
+	// change nothing, so it leaves nothing ("Up to date").
+	out, _ := runSyncPass(t, cfgPath, env, "--download-only")
 	assert.Contains(t, out, "Up to date",
 		"immediate rerun after durable mirror settlement should be idle")
 	assert.Equal(t, snapshot, snapshotLocalTree(t, localDir))
@@ -297,8 +299,9 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	require.NoError(t, os.RemoveAll(localDir))
 
 	// Sync download-only — should do full re-enumeration and re-download.
-	// Single pass by design: the first pass on an empty state must enumerate and download in one go.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	// Single pass by design: the first pass on an empty state must enumerate
+	// and download in one go; it may leave work a transient failure causes.
+	out, _ := runSyncPass(t, cfgPath, env, "--download-only")
 	assert.Contains(t, out, "Done in",
 		"sync after purge should report applied work for at least one mount")
 	assert.Contains(t, out, "Downloaded "+testFolder+"/purge-a.txt",

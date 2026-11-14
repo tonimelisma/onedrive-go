@@ -98,6 +98,11 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 			if result.Err == nil {
 				return true
 			}
+			if syncLeftWorkPattern.MatchString(result.Stdout) {
+				// A pass that left work exits 1 (R-6.6.28); the next one
+				// finishes it.
+				return false
+			}
 			require.Truef(t, isRetryableGraphGatewayFailure(result.Stderr),
 				"unexpected sync setup failure\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 			return false

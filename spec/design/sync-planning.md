@@ -639,6 +639,16 @@ scan only after a pass that moved something. Every other "next pass" in the
 planner is one of these three; work held back by the sync mode or the
 delete-safety hold is not follow-up, because another pass would hold it again.
 
+`Deferred` and `Dropped` are counted before the mode partition, so they can
+include work a one-way mode holds back. `Unfinished` is the part of them the
+plan's mode runs (`moveComposition.deferredRelocationsInMode`,
+`countActionsAllowedInMode`). When a one-shot run ends on a plan,
+`planFollowUp.leftWhenTheRunEnds` is the work it leaves for the next sync:
+`Unfinished` always, since that work is in no action list, and `Renames` only
+when the pass bound ended the run, since a rename is an action already
+counted and the work behind it is planned by the pass the bound prevented
+(sync-engine.md, A One-Shot Sync Reports What It Left, R-6.6.28).
+
 ## Mount-Local Planning
 
 Some engines are rooted below the remote drive root. The planner therefore

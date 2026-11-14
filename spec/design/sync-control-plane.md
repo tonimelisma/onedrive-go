@@ -280,8 +280,16 @@ local content changes in the projection can reach the shared-folder target. If
 the child reports retry/block/content failures, root unavailability, target
 access loss, or no mount report, the typed final-drain result is not
 acknowledged and the parent protection remains. The child state DB remains the
-owner of dirty content retry/block state. Only a `clean` final-drain result
-produces an opaque acknowledgement to the live parent engine. The parent
+owner of dirty content retry/block state. A result is `clean` only when the
+child's report says its local tree may be removed (`Report.LocalTreeHolds`
+holds nothing: its last pass left no work, it was not a dry run, it holds no
+delete of a local file and no file an interrupted removal set aside), and the
+blocked detail says in counts what holds it
+(`TestClassifyShortcutChildDrainReport_CleanOnlyWhenTheLocalTreeMayGo`,
+`TestRunOnce_FinalDrainChildThatLeftWorkKeepsItsLocalCopy`,
+`TestFinalDrain_RunsBidirectionalFullReconcileInOneShotAndWatch`). Only a
+`clean` final-drain result produces an opaque acknowledgement to the live
+parent engine. The parent
 first persists `removed_release_pending`, then idempotently removes/releases
 the alias projection or promotes a waiting replacement. If release cleanup is
 blocked, the parent persists `removed_cleanup_blocked` and retries from that

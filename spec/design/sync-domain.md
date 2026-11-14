@@ -69,8 +69,13 @@ exhaustive linter fails until a new member is decided in each: membership
 (`isMember`), truth
 availability (`truthVerdictForIssueType`, sync-store.md), the condition family
 (`conditionKeyForIssueType`), the retry curve (`retryDelayForCondition`), the
-permission boundary scope (`scopeKeyForPermissionEvidence`) and the
-block-scope activation wording (`blockScopeActivationWording`). None of them
+permission boundary scope (`scopeKeyForPermissionEvidence`), the
+block-scope activation wording (`blockScopeActivationWording`) and whether an
+observation issue leaves a file unsynced, which fails a one-shot sync
+(`issueTypeLeavesFileUnsynced`, R-6.6.28: every member does except
+`deletes_held`, a deliberate hold, and `local_interrupted_removal`, a report
+about a leftover at an internal name sync never syncs;
+`TestIssueTypes_EveryTypeIsClassifiedForOneShotExit`). None of them
 carries a `//nolint:exhaustive`; until 2026-11-11 the last three did, remote
 truth was two equality tests and the condition family a lookup table, so a
 member they did not name fell through to "not blocking", "no family", the
@@ -79,7 +84,8 @@ from `issue_types.go` and states every member's verdict, and each states a
 verdict for a value outside the enum, which only a programming error can
 make: unavailable truth on both sides of its path,
 `ConditionUnexpectedCondition` (under any scope, rather than the scope's own
-condition), the durable curve, no boundary scope, the generic line.
+condition), the durable curve, no boundary scope, the generic line, a file
+left unsynced.
 
 `ConditionKey` is held the same way. Whether a condition clears without the
 user (`conditionClearsAutomatically`, here: throttling and an outage) is one

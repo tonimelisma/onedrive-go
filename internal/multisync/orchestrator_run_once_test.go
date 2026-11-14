@@ -42,7 +42,7 @@ func TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges(t *testing.T) {
 	blocked := []shortcutChildDrainResult{{
 		MountID: childMount.id().String(),
 		Status:  shortcutChildDrainBlocked,
-		Detail:  "child sync reported 2 failed action(s)",
+		Detail:  "child sync: 2 failed",
 	}}
 	for range 3 {
 		orch.reportKeptFinalDrains(blocked, decisions.Mounts)

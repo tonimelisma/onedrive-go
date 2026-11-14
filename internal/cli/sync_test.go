@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,13 +19,20 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
-// --- mountReportsError ---
+// --- runOnceResultError ---
 
-func TestMountReportsError(t *testing.T) {
+// Validates: R-6.6.22, R-6.6.28
+//
+// The drives that could not sync are the one-shot command's error: one
+// drive's own error, or a count of the failed drives that keeps the first
+// error as its cause.
+func TestRunOnceResultError_DriveFailures(t *testing.T) {
 	t.Parallel()
 
 	errDelta := fmt.Errorf("delta expired")
@@ -75,7 +83,7 @@ func TestMountReportsError(t *testing.T) {
 				{Report: &syncengine.Report{}},
 				{Err: errDelta},
 			},
-			wantMsg: "1 of 2 mounts failed",
+			wantMsg: "1 of 2 selected drives failed or were skipped (see above)",
 		},
 		{
 			name: "all failures",
@@ -83,7 +91,7 @@ func TestMountReportsError(t *testing.T) {
 				{Err: errDelta},
 				{Err: errAuth},
 			},
-			wantMsg: "2 of 2 mounts failed",
+			wantMsg: "2 of 2 selected drives failed or were skipped (see above)",
 		},
 	}
 
@@ -91,12 +99,20 @@ func TestMountReportsError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := mountReportsError(tt.reports)
+			result := multisync.RunOnceResult{Reports: tt.reports}
+			for i := range tt.reports {
+				tt.reports[i].SelectionIndex = i
+				result.Startup.Results = append(result.Startup.Results, multisync.MountStartupResult{
+					SelectionIndex: i,
+					Status:         multisync.MountStartupRunnable,
+				})
+			}
+
+			err := runOnceResultError(result, map[string]syncengine.LeftWork{})
 			if tt.wantNil {
 				assert.NoError(t, err)
 			} else {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantMsg)
+				require.ErrorContains(t, err, tt.wantMsg)
 			}
 		})
 	}
@@ -911,4 +927,279 @@ paused = true
 	require.NoError(t, err)
 	assert.True(t, called)
 	assert.Contains(t, output.String(), "Skipped (paused).")
+}
+
+// oneShotDrive is one configured drive of a one-shot sync test and what the
+// runner seam hands back for it: a report, a drive error, or a paused drive.
+type oneShotDrive struct {
+	email  string
+	paused bool
+	report *syncengine.Report
+	err    error
+}
+
+// runOneShotWithReports runs `sync` once over the drives through the runner
+// seam, which feeds no activity, as the orchestrator's hook would not for a
+// drive whose engine reported only counts. It returns stdout and the command
+// error.
+func runOneShotWithReports(t *testing.T, drives ...oneShotDrive) (string, error) {
+	t.Helper()
+	setTestDriveHome(t)
+
+	var configBody strings.Builder
+	byEmail := make(map[string]oneShotDrive, len(drives))
+	for _, drive := range drives {
+		fmt.Fprintf(&configBody, "[%q]\nsync_dir = %q\npaused = %t\n\n", "personal:"+drive.email, t.TempDir(), drive.paused)
+		byEmail[drive.email] = drive
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody.String()), 0o600))
+
+	var output bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: &output,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	}
+	cc.seams.syncRunOnce = func(
+		_ context.Context,
+		_ *config.Holder,
+		resolved []*config.ResolvedDrive,
+		_ syncengine.SyncMode,
+		_ syncengine.RunOptions,
+		_ *slog.Logger,
+		_ string,
+	) multisync.RunOnceResult {
+		require.Len(t, resolved, len(drives))
+		var result multisync.RunOnceResult
+		for i, rd := range resolved {
+			drive := byEmail[rd.CanonicalID.Email()]
+			startup := multisync.MountStartupResult{
+				SelectionIndex: i,
+				Identity:       testStandaloneMountIdentity(rd.CanonicalID),
+				DisplayName:    rd.DisplayName,
+				Status:         multisync.MountStartupRunnable,
+			}
+			if drive.paused {
+				startup.Status = multisync.MountStartupPaused
+				result.Startup.Results = append(result.Startup.Results, startup)
+				continue
+			}
+			result.Startup.Results = append(result.Startup.Results, startup)
+			result.Reports = append(result.Reports, &multisync.MountReport{
+				SelectionIndex: i,
+				Identity:       startup.Identity,
+				DisplayName:    rd.DisplayName,
+				Report:         drive.report,
+				Err:            drive.err,
+			})
+		}
+
+		return result
+	}
+
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+
+	return output.String(), err
+}
+
+// requireSyncLeftWork checks that a one-shot sync failed because it left
+// work, with exit status 1 and the message given.
+func requireSyncLeftWork(t *testing.T, err error, message string) {
+	t.Helper()
+
+	require.ErrorIs(t, err, errSyncLeftWork)
+	assert.Equal(t, exitFailure, commandExitCode(err, false))
+	assert.Equal(t, message, err.Error())
+}
+
+// Validates: R-6.6.28, R-6.6.31
+func TestRunSyncCommand_FailedActionsExitNonZero(t *testing.T) {
+	out, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		Uploads: 2, Succeeded: 1, Failed: 1, LastPassFailed: 1,
+	}})
+
+	requireSyncLeftWork(t, err, "sync left 1 file unsynced; run 'onedrive-go status' for details")
+	assert.Contains(t, out, "; 1 failed.")
+}
+
+// Validates: R-6.6.28, R-6.6.31
+func TestRunSyncCommand_WorkLeftForNextSyncExitsNonZero(t *testing.T) {
+	out, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		Uploads: 3, Succeeded: 1, LeftForNextSync: 2,
+	}})
+
+	requireSyncLeftWork(t, err, "sync left 2 files unsynced; run 'onedrive-go status' for details")
+	assert.Contains(t, out, "; 2 will be retried on the next sync.")
+}
+
+// Validates: R-6.6.28, R-6.6.31
+//
+// A run that itself did nothing still left work when the store holds issues
+// that keep a file unsynced (names OneDrive refuses): no plan acts on such a
+// path, and `status` lists it, so the exit status says so on every run.
+func TestRunSyncCommand_StillOpenConditionsExitNonZero(t *testing.T) {
+	out, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		UnsyncedIssues: 3,
+	}})
+
+	requireSyncLeftWork(t, err, "sync left 3 files unsynced; run 'onedrive-go status' for details")
+	assert.Contains(t, out, "; 3 still not synced (see 'onedrive-go status').")
+	assert.NotContains(t, out, "Up to date")
+}
+
+// Validates: R-6.6.28
+//
+// A plan whose actions and dependencies disagree runs none of it and
+// reports every action failed with no activity; the run exits 1.
+func TestRunSyncCommand_PlanInvariantViolationExitsNonZero(t *testing.T) {
+	_, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		Uploads:        2,
+		Failed:         2,
+		LastPassFailed: 2,
+		Errors:         []error{errors.New("plan invariant violation: 2 actions but 1 deps")},
+	}})
+
+	requireSyncLeftWork(t, err, "sync left 2 files unsynced; run 'onedrive-go status' for details")
+}
+
+// Validates: R-6.6.28
+func TestRunSyncCommand_DeferredByModeExitsZero(t *testing.T) {
+	out, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		Mode:           syncengine.SyncDownloadOnly,
+		DeferredByMode: syncengine.DeferredCounts{Uploads: 3},
+	}})
+
+	require.NoError(t, err)
+	assert.Contains(t, out, "Held back by --download-only: 3 uploads.")
+}
+
+// Validates: R-6.6.28
+func TestRunSyncCommand_HeldDeletesExitZero(t *testing.T) {
+	_, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		HeldRemoteDeletes: 60,
+	}})
+
+	require.NoError(t, err, "deletes held for --confirm-deletes are a deliberate hold")
+}
+
+// Validates: R-6.6.28
+func TestRunSyncCommand_ConflictCopiesExitZero(t *testing.T) {
+	_, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		ConflictCopies: 1, Succeeded: 1,
+	}})
+
+	require.NoError(t, err, "both versions are kept and synced")
+}
+
+// Validates: R-6.6.28
+func TestRunSyncCommand_DryRunExitsZero(t *testing.T) {
+	out, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
+		DryRun:         true,
+		Uploads:        2,
+		UnsyncedIssues: 1,
+	}})
+
+	require.NoError(t, err, "a dry run attempted nothing")
+	assert.Contains(t, out, "Dry run, nothing was changed. Would upload 2 files.")
+}
+
+// Validates: R-6.6.28
+func TestRunSyncCommand_PausedDriveBesideASyncedDriveExitsZero(t *testing.T) {
+	out, err := runOneShotWithReports(t,
+		oneShotDrive{email: "paused@example.com", paused: true},
+		oneShotDrive{email: "synced@example.com", report: &syncengine.Report{}},
+	)
+
+	require.NoError(t, err)
+	assert.Contains(t, out, "Skipped (paused).")
+}
+
+// Validates: R-6.6.28, R-6.6.22
+func TestRunSyncCommand_MultiDriveCountsTheDrivesThatLeftWork(t *testing.T) {
+	out, err := runOneShotWithReports(t,
+		oneShotDrive{email: "clean@example.com", report: &syncengine.Report{}},
+		oneShotDrive{email: "left@example.com", report: &syncengine.Report{Uploads: 1, Failed: 1, LastPassFailed: 1}},
+	)
+
+	requireSyncLeftWork(t, err, "1 of 2 selected drives left files unsynced (see above)")
+	assert.Contains(t, out, "Up to date")
+	assert.Contains(t, out, "; 1 failed.")
+}
+
+// Validates: R-6.6.28
+//
+// The live e2e suite tells a pass that left only what its test account held
+// before the suite started from a pass that left work of its own, and it does
+// so by reading this command's output (testutil.StandingSyncConditions). This
+// pins the wording it reads: for a run over several drives of which one left
+// only items still not synced, settling the output gives exactly what the
+// command prints for the same run without them.
+func TestRunSyncCommand_StandingConditionOutputSettlesToTheRunWithoutIt(t *testing.T) {
+	cases := []struct {
+		name string
+		work syncengine.Report
+	}{
+		{name: "nothing to do", work: syncengine.Report{}},
+		{name: "work done", work: syncengine.Report{Downloads: 2, Succeeded: 2}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			without := tc.work
+			wantOut, err := runOneShotWithReports(t,
+				oneShotDrive{email: "clean@example.com", report: &syncengine.Report{}},
+				oneShotDrive{email: "standing@example.com", report: &without},
+			)
+			require.NoError(t, err)
+
+			with := tc.work
+			with.UnsyncedIssues = 1
+			out, err := runOneShotWithReports(t,
+				oneShotDrive{email: "clean@example.com", report: &syncengine.Report{}},
+				oneShotDrive{email: "standing@example.com", report: &with},
+			)
+			requireSyncLeftWork(t, err, "1 of 2 selected drives left files unsynced (see above)")
+
+			var standing testutil.StandingSyncConditions
+			standing.RecordBaseline(out)
+			require.Equal(t, 1, standing.Mounts())
+			require.Equal(t, 1, standing.Items())
+			require.Zero(t, standing.Unattributed())
+
+			settledOut, settledErr, settled := standing.Settle(out, commandFailureText(err, false)+"\n")
+			require.True(t, settled)
+			assert.Equal(t, withoutSyncingLines(wantOut), withoutSyncingLines(settledOut))
+			assert.Contains(t, settledOut, "Syncing ", "the lines that are not summaries stay")
+			assert.Empty(t, settledErr)
+		})
+	}
+}
+
+// withoutSyncingLines drops the "Syncing <dir> with <drive>..." lines, which
+// name the temporary sync directory of each run.
+func withoutSyncingLines(out string) string {
+	var kept strings.Builder
+	for line := range strings.SplitAfterSeq(out, "\n") {
+		if !strings.HasPrefix(line, "Syncing ") {
+			kept.WriteString(line)
+		}
+	}
+
+	return kept.String()
+}
+
+// Validates: R-6.6.28, R-6.6.31
+//
+// A drive that could not sync because sign-in is required keeps exit 77 even
+// when another drive left work: running again unchanged cannot fix it.
+func TestRunSyncCommand_ADriveErrorWinsOverLeftWork(t *testing.T) {
+	_, err := runOneShotWithReports(t,
+		oneShotDrive{email: "left@example.com", report: &syncengine.Report{Uploads: 1, Failed: 1, LastPassFailed: 1}},
+		oneShotDrive{email: "signin@example.com", err: fmt.Errorf("session: %w", graph.ErrNotLoggedIn)},
+	)
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errSyncLeftWork)
+	assert.Equal(t, exitSignInRequired, commandExitCode(err, false))
 }

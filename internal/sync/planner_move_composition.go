@@ -157,6 +157,31 @@ type moveComposition struct {
 	// deferred holds the keys of relocated items whose moves wait for a
 	// later pass.
 	deferred map[string]bool
+	// deferredMoves holds, for each deferred item, the moves its relocation
+	// still needs: ActionLocalMove for this computer, ActionRemoteMove for
+	// OneDrive, none when only the baseline is behind (a re-key).
+	deferredMoves map[string][]actionType
+}
+
+// deferredRelocationsInMode counts the deferred relocations mode runs: one
+// with a move the mode admits, or a re-key, which every mode runs. A move a
+// one-way mode holds back waits for no later pass of that mode.
+func (c *moveComposition) deferredRelocationsInMode(mode SyncMode) int {
+	count := 0
+	for _, moves := range c.deferredMoves {
+		if len(moves) == 0 {
+			count++
+			continue
+		}
+		for _, moveType := range moves {
+			if actionAllowedInMode(&Action{Type: moveType}, mode) {
+				count++
+				break
+			}
+		}
+	}
+
+	return count
 }
 
 // moveOccupancy reports the paths each side's snapshot holds, so a move is
@@ -544,7 +569,7 @@ func (c *moveComposer) emit() moveComposition {
 	e := &moveEmitter{
 		moveComposer: c,
 		state:        make(map[string]moveEmitState, len(c.keys)),
-		result:       moveComposition{deferred: map[string]bool{}},
+		result:       moveComposition{deferred: map[string]bool{}, deferredMoves: map[string][]actionType{}},
 	}
 
 	// Shallow targets first: a parent's decision is known before its
@@ -786,6 +811,7 @@ func (e *moveEmitter) deferNode(key string) {
 	n := e.nodes[key]
 	if e.relocated(n) {
 		e.result.deferred[key] = true
+		e.result.deferredMoves[key] = e.relocationMoves(n)
 		note := e.notice(moveNoticeDeferred, n)
 		note.targetPath = e.targetPath(key)
 		e.result.notices = append(e.result.notices, note)
@@ -801,6 +827,22 @@ func (e *moveEmitter) relocated(n *moveNode) bool {
 	}
 
 	return false
+}
+
+// relocationMoves is the moves that bring n to its target: a local move
+// when it is elsewhere on this computer, a remote move when it is elsewhere
+// on OneDrive.
+func (e *moveEmitter) relocationMoves(n *moveNode) []actionType {
+	target := e.target[n.key]
+	var moves []actionType
+	if n.present(moveCoordLocal) && !sameLocation(e.location(n, moveCoordLocal), target) {
+		moves = append(moves, ActionLocalMove)
+	}
+	if n.present(moveCoordRemote) && !sameLocation(e.location(n, moveCoordRemote), target) {
+		moves = append(moves, ActionRemoteMove)
+	}
+
+	return moves
 }
 
 // resolve decides one item. It reports whether the item left the pending

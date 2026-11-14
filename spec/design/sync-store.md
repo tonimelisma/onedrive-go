@@ -696,6 +696,30 @@ plan or a transfer for it (R-2.10.50). Before this, 300 committed edits whose
 plan a livelocked watch loop never dispatched read as "Up to date" for an hour
 (`TestReadDriveStatusSnapshot_LocalDriftUsesPlannerContentTest`).
 
+`ReadDriveStatusSnapshotWithFilter` reads the whole snapshot in one read
+transaction, so a writer that commits between two of its queries is seen in
+full or not at all, never as an issue without the retry row committed with it
+(`TestReadDriveStatusSnapshot_AWriteBetweenItsReadsIsNotSeenHalf`).
+`sqlListRetryWorkRetrying` is the one definition of "Retrying": unblocked rows
+no user-clearable condition refused, with at least three attempts, and
+`RetryingItems` is the number of rows it lists
+(`TestReadDriveStatusSnapshot_RetryingIgnoresBlockedAndLowAttemptRows`).
+
+Unresolved work: `DriveStatusSnapshot.unsyncedIssueCount`
+(`condition_projection.go`) counts the observation issues in a snapshot that
+keep a file unsynced: an issue counts when `status` lists it
+(`storedConditionListed`, the filter `ProjectStoredConditionGroups` applies)
+and its type leaves a file unsynced (`issueTypeLeavesFileUnsynced`,
+sync-domain.md). Retry work is not read, because every retry row a live pass
+leaves belongs to an action of that pass's plan, which the run already counts
+as failed or left; held deletes are a deliberate hold and are not read either.
+`DriveStatusSnapshot.interruptedRemovalCount` counts the listed
+`local_interrupted_removal` issues the same way, for
+`Report.InterruptedRemovals`. The engine reads both at the end of a one-shot
+run, for the exit status and for a removed shared folder's final drain
+(sync-engine.md, A One-Shot Sync Reports What It Left, R-6.6.28,
+`TestDriveStatusSnapshot_UnsyncedIssueCountIsWhatStatusListsLessDeliberateHolds`).
+
 `ReconcileObservationFindingsReportingChange` reports whether a findings batch
 left a different persisted issue set (a finding appeared, cleared, or changed
 type or scope); the watch loop replans on that report and not on the

@@ -101,24 +101,28 @@ func (p *planner) planBuiltActions(
 	allActions := dropReconciliationOfComposedMoves(reconciled, composition)
 	allActions = append(allActions, composed...)
 
-	normalizedActions, trimmed := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(inputs.nodes), mode)
-	beforeDrop := len(normalizedActions)
+	normalizedActions, trimmed, trimmedInMode := normalizeCurrentPlanActions(
+		allActions, remoteToLocalFolderPrefixes(inputs.nodes), mode)
+	beforeDrop, beforeDropInMode := len(normalizedActions), countActionsAllowedInMode(normalizedActions, mode)
 	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, inputs, composition)
 	droppedCreates := beforeDrop - len(normalizedActions)
+	droppedCreatesInMode := max(0, beforeDropInMode-countActionsAllowedInMode(normalizedActions, mode))
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
 	beforeCycles := len(admitted)
 	admitted, deps := isolateDependencyCycles(admitted, p.logger)
+	inCycles := beforeCycles - len(admitted)
 
 	plan := &actionPlan{
 		Actions:        admitted,
 		Deps:           deps,
 		DeferredByMode: deferred,
 		FollowUp: planFollowUp{
-			Renames:  countRenames(admitted),
-			Deferred: len(composition.deferred),
-			Dropped:  trimmed + droppedCreates + beforeCycles - len(admitted),
+			Renames:    countRenames(admitted),
+			Deferred:   len(composition.deferred),
+			Dropped:    trimmed + droppedCreates + inCycles,
+			Unfinished: composition.deferredRelocationsInMode(mode) + trimmedInMode + droppedCreatesInMode + inCycles,
 		},
 	}
 
@@ -135,14 +139,32 @@ func (p *planner) planBuiltActions(
 // reconciled them at, which are consistent with each other; the rebases then
 // move whole subtrees, preserved parents included, to where they execute.
 //
-// It also reports how many actions the keep-both trim left for the next pass.
-func normalizeCurrentPlanActions(actions []Action, remoteToLocal []graphFolderMoveBoundary, mode SyncMode) ([]Action, int) {
-	before := len(actions)
+// It also reports how many actions the keep-both trim left for the next pass,
+// in all and among those the mode runs.
+func normalizeCurrentPlanActions(
+	actions []Action,
+	remoteToLocal []graphFolderMoveBoundary,
+	mode SyncMode,
+) (normalized []Action, trimmed, trimmedInMode int) {
+	before, beforeInMode := len(actions), countActionsAllowedInMode(actions, mode)
 	actions = trimKeepBothDescendants(actions)
-	trimmed := before - len(actions)
+	trimmed = before - len(actions)
+	trimmedInMode = max(0, beforeInMode-countActionsAllowedInMode(actions, mode))
 	actions = preserveParentFoldersForRunnableDescendants(actions, mode)
 	actions = rebaseLocalWritesToLocalFolderPositions(actions, remoteToLocal)
-	return rebaseRemoteCreatesThroughLocalFolderMoves(actions), trimmed
+	return rebaseRemoteCreatesThroughLocalFolderMoves(actions), trimmed, trimmedInMode
+}
+
+// countActionsAllowedInMode counts the actions mode runs (actionAllowedInMode).
+func countActionsAllowedInMode(actions []Action, mode SyncMode) int {
+	n := 0
+	for i := range actions {
+		if actionAllowedInMode(&actions[i], mode) {
+			n++
+		}
+	}
+
+	return n
 }
 
 // countRenames counts the actions that put an item at a new path (moves,

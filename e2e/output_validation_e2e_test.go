@@ -105,8 +105,9 @@ func TestE2E_Sync_QuietMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "quiet.txt"), []byte("quiet test"), 0o600))
 
 	// Sync with --quiet.
-	// Single pass by design: the test reads this one pass's log for lines quiet mode must drop.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--quiet", "--upload-only")
+	// Single pass by design: the test reads this one pass's log for lines
+	// quiet mode must drop; the pass may leave work a transient failure causes.
+	_, stderr := runSyncPass(t, cfgPath, env, "--quiet", "--upload-only")
 
 	// Quiet mode should suppress DEBUG and INFO level log lines.
 	for _, line := range strings.Split(stderr, "\n") {
@@ -153,8 +154,9 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 	})
 
 	// Sync all drives.
-	// Single pass by design: the test reads this one pass's per-drive summary lines.
-	out, _ := runCLIWithConfigAllDrives(t, cfgPath, env, "sync", "--upload-only")
+	// Single pass by design: the test reads this one pass's per-drive summary
+	// lines; the pass may leave work a transient failure causes.
+	out, _ := runSyncPassAllDrives(t, cfgPath, env, "--upload-only")
 
 	// Multi-drive output names the drive on each summary line.
 	assert.Regexp(t, `(?m)^.+: (Done in|Up to date)`, out, "multi-drive summaries should be prefixed with the drive name")

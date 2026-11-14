@@ -333,7 +333,9 @@ func assertConflictCopyContains(t *testing.T, localDir string, stem string, expe
 
 // assertSyncLeavesLocalTreeStable proves that a follow-up sync did not mutate
 // the caller-owned subtree, even if unrelated live-drive activity caused other
-// delta events elsewhere in the shared test account.
+// delta events elsewhere in the shared test account. The pass may leave work
+// a transient failure causes (it then exits 1 and says so); the tree is the
+// proof. args are the CLI arguments, "sync" included.
 func assertSyncLeavesLocalTreeStable(
 	t *testing.T,
 	cfgPath string,
@@ -343,8 +345,33 @@ func assertSyncLeavesLocalTreeStable(
 ) string {
 	t.Helper()
 
+	runner := syncRunnerForDrive(cfgPath, env, "")
 	before := snapshotLocalTree(t, root)
-	out, _ := runCLIWithConfig(t, cfgPath, env, args...)
+	out, stderr, err := runner.run(t, args...)
+	requireSyncExitMatchesSummary(t, runner, args, out, stderr, err)
+	after := snapshotLocalTree(t, root)
+	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
+
+	return out
+}
+
+// assertSyncLeavesLocalTreeStableLeavingConditions is
+// assertSyncLeavesLocalTreeStable for a drive that holds a condition the test
+// made on purpose (a name OneDrive refuses): the pass must not mutate the
+// subtree, and it exits 1, because the condition keeps a file unsynced
+// (R-6.6.28).
+func assertSyncLeavesLocalTreeStableLeavingConditions(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	root string,
+	args ...string,
+) string {
+	t.Helper()
+
+	before := snapshotLocalTree(t, root)
+	out, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, args...)
+	requireSyncLeftWork(t, out, stderr, err)
 	after := snapshotLocalTree(t, root)
 	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
 
@@ -639,8 +666,9 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
 
 	// Run sync --upload-only.
-	// Single pass by design: this one pass must name each file it uploads.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	// Single pass by design: this one pass must name each file it uploads; it
+	// may leave work a transient failure causes.
+	out, _ := runSyncPass(t, cfgPath, env, "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 	assert.Contains(t, out, "Uploaded "+testFolder+"/upload-test.txt", "each uploaded file is named")
 

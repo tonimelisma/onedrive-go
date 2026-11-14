@@ -46,21 +46,13 @@ type syncConsole struct {
 	tallies map[string]*activityTally
 }
 
+// activityTally is what the activity feed reported done for one mount, by
+// kind, for the summary line's "uploaded 3 files". It is display only: what
+// the mount left is the report's (Report.LeftWork), which the file events
+// printed during the run do not change.
 type activityTally struct {
 	counts map[syncengine.ActivityKind]int
 	bytes  map[syncengine.ActivityKind]int64
-	failed int
-	// retried counts every failure the engine kept as retry work; the
-	// report's Failed counts those too, so the summary's "failed" is the
-	// rest. retrying holds the paths among them not finished since: a pass
-	// that waits out a throttle and then uploads the file (R-2.1.7) removes
-	// it, so the summary does not promise a retry of work the run completed.
-	retried  int
-	retrying map[string]struct{}
-}
-
-func (t *activityTally) willRetry() int {
-	return len(t.retrying)
 }
 
 func newSyncConsole(cc *CLIContext, watch bool) *syncConsole {
@@ -174,9 +166,8 @@ func (c *syncConsole) ActivityHook() func(multisync.MountActivity) {
 
 func newActivityTally() *activityTally {
 	return &activityTally{
-		counts:   make(map[syncengine.ActivityKind]int),
-		bytes:    make(map[syncengine.ActivityKind]int64),
-		retrying: make(map[string]struct{}),
+		counts: make(map[syncengine.ActivityKind]int),
+		bytes:  make(map[syncengine.ActivityKind]int64),
 	}
 }
 
@@ -204,12 +195,16 @@ func (c *syncConsole) Activity(ma multisync.MountActivity) {
 	}
 }
 
-// Summary prints how each mount's one-shot run ended. Errors for a single
-// selected drive are left to the command's returned error so they print once.
-func (c *syncConsole) Summary(result multisync.RunOnceResult) {
+// Summary prints how each mount's one-shot run ended and returns what each
+// mount that ran left unsynced, keyed by mount ID: the numbers its summary
+// printed (Report.LeftWork), which the exit status is taken from
+// (runOnceResultError). Errors for a single selected drive are left to the
+// command's returned error so they print once.
+func (c *syncConsole) Summary(result multisync.RunOnceResult) map[string]syncengine.LeftWork {
+	left := leftWorkByMount(result)
 	if c.json {
-		c.jsonSummary(result)
-		return
+		c.jsonSummary(result, left)
+		return left
 	}
 
 	reportsBySelection := make(map[int][]*multisync.MountReport, len(result.Reports))
@@ -246,7 +241,8 @@ func (c *syncConsole) Summary(result multisync.RunOnceResult) {
 					c.printErr(prefix, "Error: "+formatMountReportErrorMessage(report))
 				}
 			case report.Report != nil:
-				c.printOut(prefix, c.reportSummary(report.Identity.MountID, report.Report))
+				mountID := report.Identity.MountID
+				c.printOut(prefix, c.reportSummary(c.tallyFor(mountID, report.Report), report.Report, left[mountID]))
 				if held := heldBackSummary(report.Report); held != "" {
 					c.printOut(prefix, held)
 				}
@@ -257,6 +253,8 @@ func (c *syncConsole) Summary(result multisync.RunOnceResult) {
 			}
 		}
 	}
+
+	return left
 }
 
 func (c *syncConsole) record(mountID string, a *syncengine.Activity) {
@@ -269,18 +267,12 @@ func (c *syncConsole) record(mountID string, a *syncengine.Activity) {
 		c.tallies[mountID] = tally
 	}
 
-	switch {
-	case a.Success || a.Planned:
-		tally.counts[a.Kind]++
-		if a.SizeKnown {
-			tally.bytes[a.Kind] += a.Size
-		}
-		delete(tally.retrying, a.Path)
-	case a.WillRetry:
-		tally.retried++
-		tally.retrying[a.Path] = struct{}{}
-	default:
-		tally.failed++
+	if !a.Success && !a.Planned {
+		return
+	}
+	tally.counts[a.Kind]++
+	if a.SizeKnown {
+		tally.bytes[a.Kind] += a.Size
 	}
 }
 
@@ -302,29 +294,38 @@ func (c *syncConsole) tallyFor(mountID string, r *syncengine.Report) *activityTa
 
 	// Dry runs, and callers without an activity feed, summarize from the
 	// planner's counts instead.
-	return &activityTally{
-		counts: map[syncengine.ActivityKind]int{
-			syncengine.ActivityDownload:     r.Downloads,
-			syncengine.ActivityUpload:       r.Uploads,
-			syncengine.ActivityLocalDelete:  r.LocalDeletes,
-			syncengine.ActivityRemoteDelete: r.RemoteDeletes,
-			syncengine.ActivityLocalMove:    r.Moves,
-			syncengine.ActivityFolderCreate: r.FolderCreates,
-			syncengine.ActivityConflictCopy: r.ConflictCopies,
-		},
-		bytes:  map[syncengine.ActivityKind]int64{},
-		failed: r.Failed,
-	}
+	tally = newActivityTally()
+	tally.counts[syncengine.ActivityDownload] = r.Downloads
+	tally.counts[syncengine.ActivityUpload] = r.Uploads
+	tally.counts[syncengine.ActivityLocalDelete] = r.LocalDeletes
+	tally.counts[syncengine.ActivityRemoteDelete] = r.RemoteDeletes
+	tally.counts[syncengine.ActivityLocalMove] = r.Moves
+	tally.counts[syncengine.ActivityFolderCreate] = r.FolderCreates
+	tally.counts[syncengine.ActivityConflictCopy] = r.ConflictCopies
+
+	return tally
 }
 
-func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string {
-	tally := c.tallyFor(mountID, r)
+// leftWorkByMount is what each mount whose run produced a report left
+// unsynced (Report.LeftWork), keyed by mount ID. A mount that failed or was
+// skipped has no entry: its error is the command's.
+func leftWorkByMount(result multisync.RunOnceResult) map[string]syncengine.LeftWork {
+	left := make(map[string]syncengine.LeftWork, len(result.Reports))
+	for _, report := range result.Reports {
+		if report == nil || report.Err != nil || report.Report == nil {
+			continue
+		}
+		left[report.Identity.MountID] = report.Report.LeftWork()
+	}
+
+	return left
+}
+
+// reportSummary is a mount's summary line: what the run did, from the tally,
+// and what it left, from left (Report.LeftWork). A mount that left work is
+// never "Up to date", even when this run itself had nothing to do.
+func (c *syncConsole) reportSummary(tally *activityTally, r *syncengine.Report, left syncengine.LeftWork) string {
 	parts := tally.parts()
-	failed := max(tally.failed, r.Failed-tally.retried)
-	// Work the pass left for the next run: retryable failures, plus the
-	// actions a throttle took back and still holds when the pass ended,
-	// which produced no activity of their own.
-	willRetry := tally.willRetry() + r.LeftForNextSync
 
 	if r.DryRun {
 		if len(parts) == 0 {
@@ -333,7 +334,7 @@ func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string
 		return "Dry run, nothing was changed. Would " + strings.Join(dryRunParts(tally), ", ") + "."
 	}
 
-	if len(parts) == 0 && failed == 0 && willRetry == 0 {
+	if len(parts) == 0 && !left.Any() {
 		return fmt.Sprintf("Up to date (%s).", humanDuration(r.Duration))
 	}
 
@@ -341,11 +342,14 @@ func (c *syncConsole) reportSummary(mountID string, r *syncengine.Report) string
 	if len(parts) > 0 {
 		line += ": " + strings.Join(parts, ", ")
 	}
-	if failed > 0 {
-		line += fmt.Sprintf("; %d failed", failed)
+	if left.Failed > 0 {
+		line += fmt.Sprintf("; %d failed", left.Failed)
 	}
-	if willRetry > 0 {
-		line += fmt.Sprintf("; %d will be retried on the next sync", willRetry)
+	if left.WillRetry > 0 {
+		line += fmt.Sprintf("; %d will be retried on the next sync", left.WillRetry)
+	}
+	if left.StillOpen > 0 {
+		line += fmt.Sprintf("; %d still not synced (see 'onedrive-go status')", left.StillOpen)
 	}
 
 	return line + "."

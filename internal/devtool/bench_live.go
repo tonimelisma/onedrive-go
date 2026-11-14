@@ -450,6 +450,11 @@ func (s *benchLiveScenarioState) measureCatchupSample(
 	return measuredSample
 }
 
+// classifyBenchProcessFailure classifies a timed one-shot sync that did not
+// exit 0. A sync that finished but left work exits 1 (R-6.6.28) and is no
+// measurement of a full sync either: its sample fails like any other, and
+// the excerpt carries the sync's summary line, which says what it left.
+//
 //nolint:gocritic // Samples are immutable result records; copy/return keeps process classification explicit.
 func classifyBenchProcessFailure(
 	ctx context.Context,
@@ -462,8 +467,59 @@ func classifyBenchProcessFailure(
 		return benchAbortedSample(measuredSample, runErr)
 	}
 
-	return benchSubjectFailureSample(measuredSample, runErr, process.Stdout, process.Stderr)
+	failed := benchSubjectFailureSample(measuredSample, runErr, process.Stdout, process.Stderr)
+	failed.FailureExcerpt = benchSyncFailureExcerpt(runErr, process)
+
+	return failed
 }
+
+// benchSyncFailureExcerpt is the excerpt of a one-shot sync that did not exit
+// 0: its summary line, then the tail of its error output, within
+// benchFailureExcerptLimit. A sync with no summary line keeps the excerpt
+// every failed command has.
+func benchSyncFailureExcerpt(runErr error, process benchMeasuredProcess) string {
+	summary := benchSyncSummaryLine(process.Stdout)
+	if summary == "" {
+		return failureExcerpt(runErr, process.Stdout, process.Stderr)
+	}
+
+	summary = truncateString(summary, benchFailureExcerptLimit/2)
+	rest := failureExcerpt(runErr, nil, process.Stderr)
+
+	return summary + "\n" + tailString(rest, benchFailureExcerptLimit-len(summary)-1)
+}
+
+// benchSyncSummaryLine is the last summary line a one-shot sync printed on
+// stdout ("Done in ...", which names what the run left), or "".
+func benchSyncSummaryLine(stdout []byte) string {
+	lines := strings.Split(strings.TrimSpace(string(stdout)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], benchSyncSummaryMarker) {
+			return strings.TrimSpace(lines[i])
+		}
+	}
+
+	return ""
+}
+
+// benchSyncSummaryMarker starts the summary line of a one-shot sync that did
+// any work or left any.
+const benchSyncSummaryMarker = "Done in "
+
+// tailString is the last limit bytes of value, marked "..." when cut.
+func tailString(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	if limit <= len(benchExcerptCutMark) {
+		return value[len(value)-max(0, limit):]
+	}
+
+	return benchExcerptCutMark + value[len(value)-(limit-len(benchExcerptCutMark)):]
+}
+
+// benchExcerptCutMark marks an excerpt cut at its start.
+const benchExcerptCutMark = "..."
 
 func (s *benchLiveScenarioState) ensurePrepared(ctx context.Context, subject preparedBenchSubject) error {
 	s.setupOnce.Do(func() {
@@ -520,7 +576,7 @@ func (s *benchLiveScenarioState) prepareRemoteFixture(ctx context.Context, subje
 		return fmt.Errorf(
 			"seed remote benchmark fixture: %w: %s",
 			err,
-			failureExcerpt(err, process.Stdout, process.Stderr),
+			benchSyncFailureExcerpt(err, process),
 		)
 	}
 

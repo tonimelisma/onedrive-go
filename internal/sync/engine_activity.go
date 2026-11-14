@@ -96,16 +96,32 @@ func (e *Engine) emitActivity(r *actionCompletion, class errclass.Class) {
 	switch class {
 	case errclass.ClassSuccess:
 		activity.Success = true
-	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient:
-		activity.WillRetry = true
-		activity.Err = r.Err
-	case errclass.ClassActionable, errclass.ClassFatal, errclass.ClassInvalid:
+	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient,
+		errclass.ClassActionable, errclass.ClassFatal, errclass.ClassInvalid:
+		activity.WillRetry = failureKeptForRetry(class)
 		activity.Err = r.Err
 	case errclass.ClassShutdown, errclass.ClassSuperseded:
 		return
 	}
 
 	e.activityHook(activity)
+}
+
+// failureKeptForRetry reports whether the engine keeps a failure of class as
+// retry work it runs again by itself: a transient failure, or one a scope
+// holds until its trial. The activity feed's WillRetry and a pass's count of
+// failures kept for retry (Report.LastPassKeptForRetry) both read it, so the
+// two cannot disagree.
+func failureKeptForRetry(class errclass.Class) bool {
+	switch class {
+	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient:
+		return true
+	case errclass.ClassInvalid, errclass.ClassSuccess, errclass.ClassShutdown, errclass.ClassSuperseded,
+		errclass.ClassActionable, errclass.ClassFatal:
+		return false
+	}
+
+	return false
 }
 
 // emitPlannedActivity lists what a dry run would do, one activity per

@@ -161,11 +161,30 @@ type planFollowUp struct {
 	// a composed item still holds, work below a keep-both path, and actions
 	// caught in a dependency cycle.
 	Dropped int
+	// Unfinished is the part of Deferred and Dropped the plan's sync mode
+	// runs. Both are counted before the mode partition, so they include work
+	// a one-way mode holds back on purpose (DeferredByMode's kind), which the
+	// next pass of the same mode does not do either.
+	Unfinished int
 }
 
 // pending reports whether the plan leaves work for the next pass.
 func (f planFollowUp) pending() bool {
 	return f.Renames+f.Deferred+f.Dropped > 0
+}
+
+// leftWhenTheRunEnds is the follow-up work a one-shot run leaves for the next
+// sync when it ends after this plan (R-6.6.28). Unfinished deferred and
+// dropped work is in no action list, so nothing else counts it. A rename is
+// an action: one that did not succeed is already failed or left, and the
+// work it leaves for the pass after it is counted only when the pass bound,
+// rather than a pass without progress or with a failure, ended the run.
+func (f planFollowUp) leftWhenTheRunEnds(stoppedAtPassBound bool) int {
+	if stoppedAtPassBound {
+		return f.Unfinished + f.Renames
+	}
+
+	return f.Unfinished
 }
 
 // actionOutcome is the result of executing a single action. Self-contained —

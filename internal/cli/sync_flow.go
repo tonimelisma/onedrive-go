@@ -107,14 +107,12 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		ConfirmDeletes: opts.ConfirmDeletes,
 	}, logger, controlSocketPath, console.ActivityHook())
 
-	console.Summary(result)
+	// The summary returns what each drive left unsynced, the numbers its
+	// lines just printed, so the exit status cannot say done while a summary
+	// line (or `status`) says otherwise (R-6.6.28).
+	left := console.Summary(result)
 
-	// Item-level failures are not a failed run: each one is printed as it
-	// happens and the engine keeps it as a durable condition that status
-	// reports (a read-only shared folder, a locked file, throttling).
-	// Failing every run on such a state would make the exit status useless
-	// to cron. A drive that could not sync at all still fails the command.
-	return runOnceResultError(result)
+	return runOnceResultError(result, left)
 }
 
 func runSyncWatch(

@@ -29,19 +29,58 @@ func TestProjectStoredConditionGroups_MergesDurableAuthorities(t *testing.T) {
 	})
 
 	require.Len(t, groups, 2)
-	assert.Equal(t, storedConditionGroup{
+	assert.Equal(t, StoredConditionGroup{
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      SKPermRemoteWrite("Shared/Docs"),
 		Count:         4,
 		Paths:         []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt", "Shared/Docs/c.txt"},
 	}, groups[0])
-	assert.Equal(t, storedConditionGroup{
+	assert.Equal(t, StoredConditionGroup{
 		ConditionKey:  ConditionInvalidFilename,
 		ConditionType: IssueInvalidFilename,
 		Count:         1,
 		Paths:         []string{"/bad:name.txt"},
 	}, groups[1])
+}
+
+// Validates: R-6.6.28
+//
+// The issues a one-shot run counts as left are the observation issues status
+// lists, through status's own filter, less those whose type keeps no file
+// unsynced. Retry work and held deletes in the same snapshot are not read:
+// the run's own counts hold the retry work, and held deletes are a
+// deliberate hold.
+func TestDriveStatusSnapshot_UnsyncedIssueCountIsWhatStatusListsLessDeliberateHolds(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &DriveStatusSnapshot{
+		RetryingItems: 1,
+		RetryingWork:  []RetryWorkRow{{Path: "a.txt", ActionType: ActionUpload, AttemptCount: 3}},
+		ActionableRetryWork: []RetryWorkRow{
+			{Path: "deep", ActionType: ActionFolderCreate, ConditionType: issuePathTooLong, AttemptCount: 1},
+		},
+		ObservationIssues: []ObservationIssueRow{
+			{Path: "CON", IssueType: IssueInvalidFilename},
+			{Path: "Shared/Gone", IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead("Shared/Gone")},
+			{Path: "Docs/.interrupted-removal", IssueType: issueLocalInterruptedRemoval},
+		},
+		BlockScopes:      []*BlockScope{{Key: SKPermRemoteWrite("Shared/Docs")}},
+		BlockedRetryWork: []RetryWorkRow{{Path: "Shared/Docs/a.txt", ScopeKey: SKPermRemoteWrite("Shared/Docs"), Blocked: true}},
+		HeldDeletes:      []HeldDeleteRow{{Path: "gone-1.txt", Side: string(deleteSafetySideRemote)}},
+	}
+
+	assert.Equal(t, 2, snapshot.unsyncedIssueCount())
+	assert.Zero(t, (&DriveStatusSnapshot{}).unsyncedIssueCount(), "an empty store holds no issue")
+
+	// Every counted issue is one status lists in a condition group.
+	listed := 0
+	for _, group := range ProjectStoredConditionGroups(&DriveStatusSnapshot{ObservationIssues: snapshot.ObservationIssues}) {
+		if issueTypeLeavesFileUnsynced(group.ConditionType) {
+			listed += group.Count
+		}
+	}
+	assert.Equal(t, listed, snapshot.unsyncedIssueCount())
 }
 
 // Validates: R-2.10.47
@@ -67,7 +106,7 @@ func TestProjectStoredConditionGroups_DoesNotDoubleCountObservationBackedScope(t
 	})
 
 	require.Len(t, groups, 1)
-	assert.Equal(t, storedConditionGroup{
+	assert.Equal(t, StoredConditionGroup{
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
 		ScopeKey:      SKPermRemoteWrite("Shared/Docs"),

@@ -85,8 +85,9 @@ func TestE2E_Sync_KillMidUploadResumesSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, sessions, "the killed upload left no persisted upload session")
 
-	// Single pass by design: the very next pass must resume the dead sync's upload session.
-	_, stderr := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	// Single pass by design: the very next pass must resume the dead sync's
+	// upload session; it may leave work a transient failure causes.
+	_, stderr := runSyncPass(t, cfgPath, env, "--upload-only")
 	assert.Contains(t, stderr, stderrUploadSessionResumed, "the second sync did not resume the dead sync's upload session")
 	assert.NotContains(t, stderr, stderrUploadSessionExpired)
 
@@ -94,8 +95,9 @@ func TestE2E_Sync_KillMidUploadResumesSession(t *testing.T) {
 	waitForRemoteStatSize(t, opsCfgPath, nil, remotePath, int64(killMidUploadSize), pollTimeout)
 	assertRemoteContentEquals(t, opsCfgPath, remotePath, data)
 
-	// Single pass by design: the one pass after the resumed upload must find nothing to do.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only")
+	// Single pass by design: the one pass after the resumed upload must find
+	// nothing to do, so it leaves nothing ("Up to date").
+	out, _ := runSyncPass(t, cfgPath, env, "--upload-only")
 	assert.Contains(t, out, "Up to date", "a resumed upload should leave nothing for the next sync")
 }
 
@@ -139,8 +141,9 @@ func TestE2E_Sync_KillMidDownloadResumesPartial(t *testing.T) {
 	require.NoError(t, err, "the killed download left no partial behind")
 	require.Positive(t, info.Size())
 
-	// Single pass by design: the very next pass must resume from the dead sync's partial.
-	_, stderr = runCLIWithConfig(t, cfgPath, env, "sync", "--download-only")
+	// Single pass by design: the very next pass must resume from the dead
+	// sync's partial; it may leave work a transient failure causes.
+	_, stderr = runSyncPass(t, cfgPath, env, "--download-only")
 	assert.Contains(t, stderr, stderrDownloadPartialResume, "the second sync did not resume from the dead sync's partial")
 
 	assert.Equal(t, data, mustReadFile(t, targetPath), "the resumed download does not match the uploaded content")

@@ -223,7 +223,7 @@ func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
 	assert.Contains(t, output, "unknown flag: --history", "status should expose the current issue view only")
 }
 
-// Validates: R-2.3.4, R-2.3.10
+// Validates: R-2.3.4, R-2.3.10, R-6.6.28
 // TestE2E_Status_JSON_IssueDetails validates that status JSON exposes the
 // current structured issue payload.
 func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
@@ -240,7 +240,8 @@ func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON.txt"), []byte("reserved"), 0o600))
 
-	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
+	// The reserved name stays unsynced, so the pass exits 1 (R-6.6.28).
+	runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, status.Issues, 1, "status should surface one invalid-filename issue for the Windows device name")
@@ -724,7 +725,7 @@ func buildDeepPath(t *testing.T, syncDir, testFolder string) (string, string) {
 	return filepath.Join(deepDir, longFileName), deepRelPath
 }
 
-// Validates: R-2.3.3, R-2.3.11
+// Validates: R-2.3.3, R-2.3.11, R-6.6.28
 // TestE2E_Status_IssueLifecycle triggers a real sync issue (path too long),
 // fixes the underlying local state, and validates that per-drive status follows
 // durable store truth without any manual clear/retry command.
@@ -741,8 +742,9 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	// Create a file whose total relative path exceeds 400 chars.
 	_, _ = buildDeepPath(t, syncDir, testFolder)
 
-	// Sync to trigger pre-upload validation failure.
-	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
+	// Sync to trigger pre-upload validation failure. The long path stays
+	// unsynced, so the pass exits 1 (R-6.6.28).
+	runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
 	require.Len(t, status.Issues, 1)

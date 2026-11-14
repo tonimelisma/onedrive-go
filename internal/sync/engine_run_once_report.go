@@ -57,11 +57,37 @@ func (e *Engine) logRunOnceCompletion(report *Report) {
 	)
 }
 
+// passCounts is what one pass's actions came to.
+type passCounts struct {
+	succeeded    int
+	failed       int
+	keptForRetry int
+	superseded   int
+	errors       []error
+}
+
+// setPassCounts records what one pass's actions came to on that pass's
+// report. Its failures, and those kept for retry, are also the last pass's
+// state while it is the run's last pass (LastPassFailed,
+// LastPassKeptForRetry), and the planned actions it neither completed nor
+// failed are left for the next sync.
+func (r *Report) setPassCounts(actions int, counts passCounts) {
+	r.Succeeded = counts.succeeded
+	r.Failed = counts.failed
+	r.LastPassFailed = counts.failed
+	r.LastPassKeptForRetry = counts.keptForRetry
+	r.Superseded = counts.superseded
+	r.Errors = counts.errors
+	r.LeftForNextSync = max(0, actions-counts.succeeded-counts.failed)
+}
+
 // withPass folds one more pass of a one-shot sync into the run's report and
 // returns it; a nil run report starts from the pass. Work done adds up across
-// passes. What is still held back (by the mode or the delete-safety hold) is
-// a state, not work: the last pass reports it, so a deferral every pass sees
-// is not counted once per pass. The caller sets Duration from the run's start.
+// passes. What is still held back (by the mode or the delete-safety hold) and
+// what is left is a state, not work: the last pass reports it, so a deferral
+// every pass sees is not counted once per pass, and a file an earlier pass
+// failed and a later pass finished is not left. The caller sets Duration from
+// the run's start.
 func (r *Report) withPass(pass *Report) *Report {
 	if pass == nil {
 		return r
@@ -89,6 +115,8 @@ func (r *Report) withPass(pass *Report) *Report {
 	r.HeldLocalDeletes = pass.HeldLocalDeletes
 	r.HeldRemoteDeletes = pass.HeldRemoteDeletes
 	r.LeftForNextSync = pass.LeftForNextSync
+	r.LastPassFailed = pass.LastPassFailed
+	r.LastPassKeptForRetry = pass.LastPassKeptForRetry
 
 	return r
 }

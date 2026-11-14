@@ -82,7 +82,7 @@ func TestRetryWorkReadyAndTrialCandidateQueries(t *testing.T) {
 }
 
 // Validates: R-2.10.33
-func TestCountRetryingWork_IgnoresBlockedAndLowAttemptRows(t *testing.T) {
+func TestReadDriveStatusSnapshot_RetryingIgnoresBlockedAndLowAttemptRows(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -93,9 +93,10 @@ func TestCountRetryingWork_IgnoresBlockedAndLowAttemptRows(t *testing.T) {
 	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked.txt", "", ActionRemoteDelete, SKService(), 7)))
 	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("fresh.txt", "", ActionUpload, 2, 30)))
 
-	count, err := store.CountRetryingWork(ctx)
+	snapshot, err := store.ReadDriveStatusSnapshot(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 2, count)
+	assert.Equal(t, 2, snapshot.RetryingItems)
+	assert.Len(t, snapshot.RetryingWork, snapshot.RetryingItems, "the count is the rows status lists")
 }
 
 // Validates: R-2.10.33
