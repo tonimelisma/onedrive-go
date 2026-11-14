@@ -157,3 +157,14 @@ run from cron or a systemd timer. Only one sync runs at a time per
 configuration: a scheduled run that starts while another is still running
 exits with an error instead of running twice. Branch on the
 [exit code](scripting.md#exit-codes) rather than on output text.
+
+A one-shot sync exits 0 only when it left nothing unsynced. It exits 1 when a
+file stays unsynced: a transfer failed, work is waiting to be retried, or a
+condition `onedrive-go status` lists keeps a file from syncing (a name
+OneDrive does not allow, a write into a read-only shared folder, a folder
+that cannot be read). The run after a transient failure usually finishes the
+work and exits 0 again; a condition that needs you makes every run exit 1
+until you deal with it, so a timer that alerts on failure keeps alerting
+while `status` lists it. Work `--upload-only` or `--download-only` holds
+back, deletes held for `--confirm-deletes`, and conflicts resolved by keeping
+both versions do not fail the run.

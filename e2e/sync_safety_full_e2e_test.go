@@ -62,10 +62,11 @@ func remoteFileNames(t *testing.T, cfgPath string, env map[string]string, remote
 	return names
 }
 
-// Validates: R-6.2.5
+// Validates: R-6.2.5, R-6.6.28
 //
 // Removing every synced file locally is held, OneDrive keeps the files, and
-// `sync --confirm-deletes` applies exactly that set.
+// `sync --confirm-deletes` applies exactly that set. A pass that holds the
+// deletes exits 0: the hold waits for the user on purpose.
 func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -77,9 +78,13 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 
 	require.NoError(t, os.RemoveAll(filepath.Join(syncDir, folder)))
 
+	// Single pass by design: this one pass must hold the deletes. Deletes held
+	// for confirmation are a deliberate hold, not work left, so it exits 0
+	// (R-6.6.28).
 	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
 	combined := stdout + stderr
-	t.Logf("sync with the files removed: err=%v", syncErr)
+	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", combined)
+	assert.NotRegexp(t, syncLeftWorkPattern, stdout)
 	assert.Contains(t, combined, "deletes for confirmation", "the deletes are held: %s", combined)
 	assert.Contains(t, combined, "sync --confirm-deletes", "the summary names the command: %s", combined)
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
@@ -100,9 +105,9 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	assert.True(t, heldIssue, "status lists the held deletes: %+v", driveStatus.SyncState.Issues)
 
 	// A second ordinary pass holds them again: the hold is derived from
-	// current truth, not from a one-shot flag.
+	// current truth, not from a one-shot flag. It exits 0 too.
 	stdout, stderr, syncErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-	t.Logf("second sync: err=%v", syncErr)
+	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", stdout+stderr)
 	assert.Contains(t, stdout+stderr, "deletes for confirmation")
 	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
 
@@ -111,8 +116,9 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 		return len(remoteFileNames(t, cfgPath, env, "/"+folder)) == 0
 	}, pollTimeout, 2*time.Second, "the confirmed deletes are applied on OneDrive")
 
-	// Single pass by design: the one pass after the confirmed deletes must hold nothing.
-	stdout, stderr = runCLIWithConfig(t, cfgPath, env, "sync")
+	// Single pass by design: the one pass after the confirmed deletes must
+	// hold nothing; it may leave work a transient failure causes.
+	stdout, stderr = runSyncPass(t, cfgPath, env)
 	assert.NotContains(t, stdout+stderr, "deletes for confirmation", "nothing is held once applied")
 }
 
@@ -170,7 +176,7 @@ func TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores(t *testing.T) {
 	assert.Empty(t, listing.Entries, "the restored entry has left the trash")
 }
 
-// Validates: R-6.2.12
+// Validates: R-6.2.12, R-6.6.28
 //
 // A different folder at the sync path is refused, with no delete anywhere,
 // until the user runs `drive rebind-root`; a rebound empty folder then
@@ -200,8 +206,10 @@ func TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound(t *testing.T) {
 	stdout, stderr := runCLIWithConfig(t, cfgPath, env, "drive", "rebind-root", "--yes")
 	t.Logf("rebind-root: %s%s", stdout, stderr)
 
+	// Single pass by design: this one pass must hold the deletes, and a pass
+	// that only holds deletes exits 0 (R-6.6.28).
 	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-	t.Logf("sync after rebind: err=%v", syncErr)
+	require.NoErrorf(t, syncErr, "the rebound folder's held deletes are not work left: %s", stdout+stderr)
 	assert.Contains(t, stdout+stderr, "deletes for confirmation",
 		"the rebound empty folder holds the deletes it implies: %s", stdout+stderr)
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),

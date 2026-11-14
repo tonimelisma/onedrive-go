@@ -176,6 +176,60 @@ func TestIssueType_EveryDeclaredConstantIsAMemberAndParses(t *testing.T) {
 	}
 }
 
+// Validates: R-6.6.28
+//
+// The one-shot exit verdict of every issue type: a drive whose store still
+// holds an observation issue of a type that leaves a file unsynced has work
+// left, and its one-shot sync exits 1. Only a deliberate hold, or a report
+// that keeps no file from syncing, is not counted. The groups must name every
+// declared member, so a new member is decided here as well as in the
+// exhaustive switch.
+func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
+	t.Parallel()
+
+	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
+		issueTypeVerdictGroup[bool]{
+			// Deletes held for `sync --confirm-deletes` are a deliberate hold.
+			// The leftover of an interrupted removal sits at an internal name
+			// sync never syncs; its report asks the user to look at it.
+			verdict: false,
+			members: []IssueType{issueDeletesHeld, issueLocalInterruptedRemoval},
+		},
+		issueTypeVerdictGroup[bool]{
+			// The scan found a path sync cannot represent, read or reach.
+			verdict: true,
+			members: []IssueType{
+				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
+				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
+				issueRemoteNameTwin, issueRemoteReadDenied,
+			},
+		},
+		issueTypeVerdictGroup[bool]{
+			// A refusal or a condition that holds the work back until it clears.
+			verdict: true,
+			members: []IssueType{
+				IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, issueRateLimited,
+				issueLocalWriteDenied, issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace,
+				issueLocalNameTooLong, issueLocalReadOnly, issueRemoteFolderUnverifiable, issueLocalFileTooLarge,
+				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
+				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity,
+			},
+		},
+		issueTypeVerdictGroup[bool]{
+			// A transient failure of work not done; no store keeps one as an
+			// observation issue, so this verdict only decides the case.
+			verdict: true,
+			members: []IssueType{
+				issueRequestTimeout, issueTransientConflict, issueTransientNotFound, issueResourceLocked,
+				issueTransferURLRejected,
+			},
+		},
+	), issueTypeLeavesFileUnsynced)
+
+	assert.True(t, issueTypeLeavesFileUnsynced(issueTypeOutsideTheEnum),
+		"a value outside the enum is not known to be done, so it counts")
+}
+
 // Validates: R-2.5.6
 func TestParseIssueType_RefusesAValueNoMemberHas(t *testing.T) {
 	t.Parallel()

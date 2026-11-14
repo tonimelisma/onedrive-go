@@ -73,6 +73,9 @@ type scopeLedger struct {
 type runResults struct {
 	succeeded int
 	failed    int
+	// keptForRetry counts the failures among failed that the engine keeps as
+	// retry work it runs again by itself (failureKeptForRetry).
+	keptForRetry int
 	// superseded counts the actions the run gave up on because the truth
 	// they were planned against changed; the next pass replans them.
 	superseded int

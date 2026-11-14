@@ -170,7 +170,7 @@ func TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter(t *testing.T) {
 	assert.True(t, found, "drive add <shared-folder-name> with --account should configure the fixture by canonical selector identity")
 }
 
-// Validates: R-3.6.6, R-3.3.5, R-2.14.2, R-2.14.3, R-2.14.4
+// Validates: R-3.6.6, R-3.3.5, R-2.14.2, R-2.14.3, R-2.14.4, R-6.6.28
 func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing.T) {
 	registerLogDump(t)
 
@@ -199,9 +199,11 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	require.NoError(t, os.MkdirAll(filepath.Dir(blockedLocalPath), 0o700))
 	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
 
-	// Single pass by design: this one pass must record the denied write that status shows next.
-	out, _ = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
+	// Single pass by design: this one pass must record the denied write that
+	// status shows next. The file stays unsynced, so the pass exits 1.
+	out, stderr, err := runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
 	assert.Contains(t, out, "(upload only)")
+	requireSyncLeftWork(t, out, stderr, err)
 
 	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "status")
 	// The rendered title is sentence case ("Shared folder writes blocked"); the
@@ -210,7 +212,15 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	assert.Contains(t, statusOut, "Downloads continue normally.")
 	assert.Contains(t, statusOut, "blocked-from-recipient.txt")
 
-	// Single pass by design: with the write block standing, one download-only pass must still succeed (R-2.14.2).
+	// Single pass by design: a later run does not finish the write either,
+	// and says so with its exit status every time, as status does (R-6.6.28).
+	out, stderr, err = runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
+	requireSyncLeftWork(t, out, stderr, err)
+
+	// Single pass by design: with the write block standing, one download-only
+	// pass must still succeed (R-2.14.2), and exits 0: the upload it does not
+	// attempt is work the mode holds back, and the pass prunes the held upload
+	// and its write block, which no action of its plan needs.
 	out, _ = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
 	assert.Contains(t, out, "(download only)")
 }

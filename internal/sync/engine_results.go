@@ -81,11 +81,15 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 	return rt.timers.retryTimerCh
 }
 
-// recordError increments the failed counter, preserves the raw error for the
-// final SyncReport, and records a failure kept as retry work for the
-// end-of-pass summary (logFailureSummary).
+// recordError increments the failed counter, and the kept-for-retry counter
+// for a failure the engine retries by itself (failureKeptForRetry), preserves
+// the raw error for the final SyncReport, and records a failure kept as retry
+// work for the end-of-pass summary (logFailureSummary).
 func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) {
 	f.results.failed++
+	if decision != nil && failureKeptForRetry(decision.Class) {
+		f.results.keptForRetry++
+	}
 	if r == nil {
 		return
 	}
@@ -208,6 +212,21 @@ func (f *engineFlow) resultStats() (succeeded, failed int, errs []error) {
 	return f.results.succeeded, f.results.failed, errs
 }
 
+// recordPassCounts fills a pass's report from the engine-owned counters.
+// Every end of a one-shot pass reports through it (or, for a plan that never
+// ran, through Report.setPassCounts directly), so each one holds the same
+// LeftForNextSync: the planned actions neither completed nor failed.
+func (f *engineFlow) recordPassCounts(report *Report, actions int) {
+	succeeded, failed, errs := f.resultStats()
+	report.setPassCounts(actions, passCounts{
+		succeeded:    succeeded,
+		failed:       failed,
+		keptForRetry: f.results.keptForRetry,
+		superseded:   f.supersededCount(),
+		errors:       errs,
+	})
+}
+
 // supersededCount is how many actions this pass gave up on as superseded.
 func (f *engineFlow) supersededCount() int {
 	return f.results.superseded
@@ -217,6 +236,7 @@ func (f *engineFlow) supersededCount() int {
 func (f *engineFlow) resetResultStats() {
 	f.results.succeeded = 0
 	f.results.failed = 0
+	f.results.keptForRetry = 0
 	f.results.superseded = 0
 	f.results.errors = nil
 	f.results.summaries = nil

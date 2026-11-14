@@ -50,6 +50,8 @@ sync_dir = %q
 	return cfgPath, env
 }
 
+// assertSyncLeavesLocalTreeStableForDrive is assertSyncLeavesLocalTreeStable
+// against one named drive.
 func assertSyncLeavesLocalTreeStableForDrive(
 	t *testing.T,
 	cfgPath string,
@@ -60,8 +62,10 @@ func assertSyncLeavesLocalTreeStableForDrive(
 ) string {
 	t.Helper()
 
+	runner := syncRunnerForDrive(cfgPath, env, driveID)
 	before := snapshotLocalTree(t, root)
-	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, driveID, args...)
+	out, stderr, err := runner.run(t, args...)
+	requireSyncExitMatchesSummary(t, runner, args, out, stderr, err)
 	after := snapshotLocalTree(t, root)
 	assert.Equal(t, before, after, "sync should not mutate the test-owned local tree")
 

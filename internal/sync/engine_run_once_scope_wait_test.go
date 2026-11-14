@@ -56,7 +56,7 @@ func TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass(t *testing.T) {
 	}
 }
 
-// Validates: R-2.1.7
+// Validates: R-2.1.7, R-6.6.28
 //
 // A pause longer than a sync waits (ten minutes) is the next sync's: the run
 // reports the work left and returns without sleeping.
@@ -86,4 +86,14 @@ func TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes(t *testing.T) {
 	assert.Positive(t, report.LeftForNextSync, "a twenty-minute pause is not waited out: %+v", report)
 	assert.Zero(t, waited)
 	assert.Less(t, remote.uploads, files)
+
+	// The work the pause holds is still in the store when the run ends, and
+	// each of its rows is an action the report already counts as failed or
+	// left for the next sync (R-6.6.28).
+	blocked, err := eng.baseline.ListBlockedRetryWork(t.Context())
+	require.NoError(t, err)
+	assert.NotEmpty(t, blocked, "the pause holds blocked work")
+	rows, err := eng.baseline.ListRetryWork(t.Context())
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(rows), report.LastPassFailed+report.LeftForNextSync)
 }

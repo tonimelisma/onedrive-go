@@ -87,6 +87,8 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 
 // TestE2E_InvalidFilenameRejection validates that OneDrive-invalid filenames
 // are not uploaded and produce warnings.
+//
+// Validates: R-6.6.28
 func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
@@ -106,8 +108,8 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	// Create an invalid file (CON is a Windows reserved name).
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "CON"), []byte("invalid"), 0o600))
 
-	// Upload.
-	_, stderr := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
+	// Upload. CON stays unsynced, so the pass exits 1 (R-6.6.28).
+	_, stderr := runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 
 	// The debug stderr should mention skipping the invalid entry.
 	assert.Contains(t, stderr, "skipping invalid entry",

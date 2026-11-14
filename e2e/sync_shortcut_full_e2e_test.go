@@ -68,8 +68,9 @@ func TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible(t *testing.T) {
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
 	firstRecord, _ := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
-	// Single pass by design: one restart pass must keep the same child mount without a re-projection.
-	runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--download-only")
+	// Single pass by design: one restart pass must keep the same child mount
+	// without a re-projection; it may leave work a transient failure causes.
+	runSyncPassForDrive(t, cfgPath, env, fixture.ParentDrive, "--download-only")
 	secondRecord := requireActiveShortcutChild(t, env, fixture)
 
 	assert.Equal(t, firstRecord.MountID, secondRecord.MountID)
@@ -185,7 +186,7 @@ func TestE2E_Shortcut_WritableUploadSyncsToSharedTarget(t *testing.T) {
 	waitForRemoteReadContains(t, opsCfgPath, opsEnv, fixture.SharedItem.Selector, remoteName, pollTimeout, "stat", remotePath)
 }
 
-// Validates: R-2.8.1
+// Validates: R-2.8.1, R-6.6.28
 func TestE2E_Shortcut_ReadOnlyBlockedUploadStatus(t *testing.T) {
 	registerLogDump(t)
 
@@ -199,14 +200,21 @@ func TestE2E_Shortcut_ReadOnlyBlockedUploadStatus(t *testing.T) {
 	blockedLocalPath := filepath.Join(syncDir, fixture.ShortcutName, blockedName)
 	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
 
-	// Single pass by design: this one pass must record the denied write that status shows next.
-	out, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
+	// Single pass by design: this one pass must record the denied write that
+	// status shows next. The file stays unsynced, so the pass exits 1.
+	out, stderr, err := runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
 	assert.Contains(t, out, "(upload only)")
+	requireSyncLeftWork(t, out, stderr, err)
 
 	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, fixture.ParentDrive, "status")
 	assert.Contains(t, statusOut, "Shared folder writes blocked")
 	assert.Contains(t, statusOut, "Downloads continue normally.")
 	assert.Contains(t, statusOut, blockedName)
+
+	// Single pass by design: a later run does not finish the write either,
+	// and says so with its exit status, as status does (R-6.6.28).
+	out, stderr, err = runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
+	requireSyncLeftWork(t, out, stderr, err)
 }
 
 // Validates: R-2.8.1

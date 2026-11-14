@@ -22,7 +22,8 @@ type IssueType string
 // type is a switch that names every member, its default answering only a
 // value outside the enum: membership (isMember), truth
 // (truthVerdictForIssueType), condition family (conditionKeyForIssueType),
-// retry curve, permission boundary scope and block-scope wording. A new
+// retry curve, permission boundary scope, block-scope wording and the
+// one-shot exit status (issueTypeLeavesFileUnsynced). A new
 // member does not pass the exhaustive linter until each of them decides it,
 // and each has a test that reads the members from this file.
 const (
@@ -141,6 +142,59 @@ func (t IssueType) isMember() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// issueTypeLeavesFileUnsynced reports whether an observation issue of this
+// type keeps a file from syncing, so that a one-shot sync ending with it in
+// the store has work left and exits 1 (R-6.6.28). A type answers no only when
+// it records a deliberate hold or a fact that keeps no file from syncing:
+// deletes held for `sync --confirm-deletes`, and the leftover of an
+// interrupted removal, which sits at an internal name sync never syncs and is
+// reported for the user to look at. A value outside the enum, which the
+// stores refuse, is not known to be done, so it counts.
+func issueTypeLeavesFileUnsynced(issueType IssueType) bool {
+	switch issueType {
+	case issueDeletesHeld,
+		issueLocalInterruptedRemoval:
+		return false
+	case IssueInvalidFilename,
+		issuePathTooLong,
+		issueFileTooLarge,
+		issueHashPanic,
+		IssueUnauthorized,
+		IssueRemoteWriteDenied,
+		issueRemoteReadDenied,
+		IssueQuotaExceeded,
+		issueRateLimited,
+		issueLocalReadDenied,
+		issueLocalWriteDenied,
+		issueCaseCollision,
+		issueRemoteNameTwin,
+		issueDiskFull,
+		issueServiceOutage,
+		issueFileTooLargeForSpace,
+		issueLocalNameTooLong,
+		issueLocalReadOnly,
+		issueLocalUnsyncableReplacement,
+		issueLocalMountBoundary,
+		issueRemoteFolderUnverifiable,
+		issueLocalFileTooLarge,
+		issueLocalBusy,
+		issueLocalCrossDevice,
+		issueUnsupportedOperation,
+		issueMalwareDetected,
+		issueLocalDatabaseOpen,
+		issueUploadVerification,
+		issueDownloadIntegrity,
+		issueRequestTimeout,
+		issueTransientConflict,
+		issueTransientNotFound,
+		issueResourceLocked,
+		issueTransferURLRejected:
+		return true
+	default:
+		return true
 	}
 }
 

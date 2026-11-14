@@ -831,6 +831,7 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 				report := &syncengine.Report{Mode: mode}
 				if req.Mount.id().String() == childID {
 					report.Failed = 1
+					report.LastPassFailed = 1
 					report.Errors = []error{errors.New("upload blocked")}
 				}
 				return report, nil

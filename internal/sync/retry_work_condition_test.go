@@ -54,9 +54,9 @@ func TestRecordRetryWorkFailure_KeepsTheConditionItWasRefusedFor(t *testing.T) {
 	require.Len(t, retrying, 1, "only the transient failure is retrying work")
 	assert.Equal(t, "docs/a.txt", retrying[0].Path)
 
-	count, err := store.CountRetryingWork(ctx)
+	snapshot, err := store.ReadDriveStatusSnapshot(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count, "the refused folder is an issue, not a retry")
+	assert.Equal(t, 1, snapshot.RetryingItems, "the refused folder is an issue, not a retry")
 }
 
 // Validates: R-2.10.71
@@ -80,7 +80,7 @@ func TestProjectStoredConditionGroups_ActionableRetryWorkJoinsItsCondition(t *te
 	}
 
 	groups := ProjectStoredConditionGroups(snapshot)
-	byKey := make(map[ConditionKey]storedConditionGroup, len(groups))
+	byKey := make(map[ConditionKey]StoredConditionGroup, len(groups))
 	for _, group := range groups {
 		byKey[group.ConditionKey] = group
 	}

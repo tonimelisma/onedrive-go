@@ -514,11 +514,13 @@ func directionalConflictModes() []directionalSyncMode {
 	}
 }
 
+// runSyncWithMode runs one one-shot pass in mode (runSyncPass). Work the mode
+// holds back and conflict copies are not work left, so the conflict tests'
+// passes exit 0 unless a transient failure leaves work.
 func runSyncWithMode(t *testing.T, cfgPath string, env map[string]string, mode directionalSyncMode) (string, string) {
 	t.Helper()
 
-	args := []string{"sync", mode.flag}
-	return runCLIWithConfig(t, cfgPath, env, args...)
+	return runSyncPass(t, cfgPath, env, mode.flag)
 }
 
 func requireSyncWithModeEventuallyConverges(
@@ -1063,8 +1065,9 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-create.txt", freshContent)
 
 	// Step 4: Bidirectional sync — convergent detection.
-	// Single pass by design: equal content on both sides must need no transfer in this one pass.
-	out, _ := runCLIWithConfig(t, cfgPath, env, "sync")
+	// Single pass by design: equal content on both sides must need no transfer
+	// in this one pass, so it leaves nothing ("Up to date").
+	out, _ := runSyncPass(t, cfgPath, env)
 
 	// Convergent updates need no transfer: nothing user-visible happened, so
 	// the run reports up to date and no conflict.

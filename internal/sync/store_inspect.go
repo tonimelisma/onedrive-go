@@ -15,6 +15,11 @@ import (
 type storeInspector struct {
 	db     *sql.DB
 	logger *slog.Logger
+	// betweenSnapshotReads, when set, runs between the two halves of a status
+	// snapshot read (readDriveStatusCounts, readDriveStatusConditions).
+	// Test-only; nil in production: a test writes the store there to prove
+	// the snapshot is one moment.
+	betweenSnapshotReads func()
 }
 
 // sqlCountRemoteDriftItems counts already-observed remote-side differences
@@ -143,8 +148,8 @@ func ReadDriveStatusSnapshotWithFilter(
 
 // countVisibleRemoteDrift counts the remote drift rows the filter lets the
 // planner see (store_planner_visible.go applies the same test to its rows).
-func (i *storeInspector) countVisibleRemoteDrift(ctx context.Context, filter ContentFilterConfig) (int, error) {
-	rows, err := i.db.QueryContext(ctx, sqlListRemoteDriftItems)
+func countVisibleRemoteDrift(ctx context.Context, runner sqlTxRunner, filter ContentFilterConfig) (int, error) {
+	rows, err := runner.QueryContext(ctx, sqlListRemoteDriftItems)
 	if err != nil {
 		return 0, fmt.Errorf("query remote drift rows: %w", err)
 	}
@@ -299,72 +304,96 @@ func (i *storeInspector) ReadDriveStatusSnapshot(ctx context.Context) (DriveStat
 
 // ReadDriveStatusSnapshotWithFilter reads the snapshot for a drive whose sync
 // scope is filter: remote drift counts only items the planner would see.
+// Every part is read in one transaction, so the snapshot is one moment of a
+// store a live engine writes: a write committed while it reads is seen whole
+// or not at all.
 func (i *storeInspector) ReadDriveStatusSnapshotWithFilter(
 	ctx context.Context, filter ContentFilterConfig,
-) (DriveStatusSnapshot, error) {
+) (snapshot DriveStatusSnapshot, err error) {
+	tx, err := i.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DriveStatusSnapshot{}, fmt.Errorf("read drive status: begin read transaction: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "read drive status: end read transaction")
+	}()
+
+	if snapshot, err = readDriveStatusCounts(ctx, tx, filter); err != nil {
+		return DriveStatusSnapshot{}, err
+	}
+	if i.betweenSnapshotReads != nil {
+		i.betweenSnapshotReads()
+	}
+	if conditionsErr := readDriveStatusConditions(ctx, tx, &snapshot); conditionsErr != nil {
+		return DriveStatusSnapshot{}, conditionsErr
+	}
+
+	return snapshot, nil
+}
+
+// readDriveStatusCounts reads the first half of a status snapshot: the
+// baseline and drift counts and the observation issues.
+func readDriveStatusCounts(ctx context.Context, runner sqlTxRunner, filter ContentFilterConfig) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
 
 	var err error
-	snapshot.BaselineFileCount, err = i.readCount(ctx, "SELECT COUNT(*) FROM baseline WHERE item_type = 'file'")
+	snapshot.BaselineFileCount, err = readCount(ctx, runner, "SELECT COUNT(*) FROM baseline WHERE item_type = 'file'")
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status baseline count: %w", err)
 	}
-	baselineItems, err := i.readCount(ctx, "SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'")
+	baselineItems, err := readCount(ctx, runner, "SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'")
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status baseline items: %w", err)
 	}
-	cursors, err := i.readCount(ctx, "SELECT COUNT(*) FROM observation_state WHERE cursor <> ''")
+	cursors, err := readCount(ctx, runner, "SELECT COUNT(*) FROM observation_state WHERE cursor <> ''")
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation cursor: %w", err)
 	}
 	snapshot.NeverSynced = baselineItems == 0 && cursors == 0
-	snapshot.RemoteDriftItems, err = i.countVisibleRemoteDrift(ctx, filter)
+	snapshot.RemoteDriftItems, err = countVisibleRemoteDrift(ctx, runner, filter)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status remote drift count: %w", err)
 	}
-	snapshot.LocalDriftItems, err = i.readCount(
-		ctx,
-		sqlCountLocalDriftItems,
-	)
+	snapshot.LocalDriftItems, err = readCount(ctx, runner, sqlCountLocalDriftItems)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status local drift count: %w", err)
 	}
-	snapshot.RetryingItems, err = i.readCount(
-		ctx,
-		"SELECT COUNT(*) FROM retry_work WHERE blocked = 0 AND attempt_count >= 3 AND condition_type = ''",
-	)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying count: %w", err)
-	}
-
-	snapshot.ObservationIssues, err = queryObservationIssueRowsWithRunner(ctx, i.db)
+	snapshot.ObservationIssues, err = queryObservationIssueRowsWithRunner(ctx, runner)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation issues: %w", err)
 	}
-	snapshot.BlockScopes, err = queryBlockScopeRowsWithRunner(ctx, i.db)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status block scopes: %w", err)
-	}
-	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsWithRunner(ctx, i.db)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status blocked retry_work: %w", err)
-	}
-
-	snapshot.HeldDeletes, err = queryHeldDeleteRowsWithRunner(ctx, i.db)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status held deletes: %w", err)
-	}
-
-	snapshot.RetryingWork, err = queryRetryingRetryWorkRowsWithRunner(ctx, i.db)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status retrying retry_work: %w", err)
-	}
-	snapshot.ActionableRetryWork, err = queryActionableRetryWorkRowsWithRunner(ctx, i.db)
-	if err != nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status actionable retry_work: %w", err)
-	}
 
 	return snapshot, nil
+}
+
+// readDriveStatusConditions reads the second half of a status snapshot: block
+// scopes, retry work and held deletes.
+func readDriveStatusConditions(ctx context.Context, runner sqlTxRunner, snapshot *DriveStatusSnapshot) error {
+	var err error
+	snapshot.BlockScopes, err = queryBlockScopeRowsWithRunner(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("read drive status block scopes: %w", err)
+	}
+	snapshot.BlockedRetryWork, err = queryBlockedRetryWorkRowsWithRunner(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("read drive status blocked retry_work: %w", err)
+	}
+	snapshot.HeldDeletes, err = queryHeldDeleteRowsWithRunner(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("read drive status held deletes: %w", err)
+	}
+	snapshot.RetryingWork, err = queryRetryingRetryWorkRowsWithRunner(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("read drive status retrying retry_work: %w", err)
+	}
+	// The count is the rows just listed, which status names.
+	snapshot.RetryingItems = len(snapshot.RetryingWork)
+	snapshot.ActionableRetryWork, err = queryActionableRetryWorkRowsWithRunner(ctx, runner)
+	if err != nil {
+		return fmt.Errorf("read drive status actionable retry_work: %w", err)
+	}
+
+	return nil
 }
 
 func (i *storeInspector) ReadShortcutRootStatusSnapshot(
@@ -396,9 +425,9 @@ func (i *storeInspector) ReadPathTruthStatus(
 	return newTruthAvailabilityIndex(observationIssues).StatusByPath(paths), nil
 }
 
-func (i *storeInspector) readCount(ctx context.Context, query string) (int, error) {
+func readCount(ctx context.Context, runner sqlTxRunner, query string) (int, error) {
 	var count int
-	if err := i.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+	if err := runner.QueryRowContext(ctx, query).Scan(&count); err != nil {
 		return 0, fmt.Errorf("scan count query: %w", err)
 	}
 
