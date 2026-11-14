@@ -17,7 +17,7 @@ func TestE2E_FixturePreflight_Full(t *testing.T) {
 	}
 
 	for _, fixture := range fixtures {
-		assert.Equal(t, fixture.RecipientEmail, fixture.FolderItem.AccountEmail)
+		assertSameIdentity(t, "fixture.FolderItem.AccountEmail", fixture.RecipientEmail, fixture.FolderItem.AccountEmail)
 		assert.Equal(t, "folder", fixture.FolderItem.Type)
 		assert.NotEmpty(t, fixture.RecipientDriveID)
 	}
@@ -46,7 +46,5 @@ func TestE2E_FixturePreflight_Full(t *testing.T) {
 	cfgPath, env := writeSyncConfigForDriveID(t, writableFixture.RecipientDriveID, t.TempDir())
 	rawStat := statSharedTargetJSON(t, cfgPath, env, "--account", writableFixture.RecipientEmail, rawLink)
 
-	assert.Equal(t, writableFixture.FolderItem.RemoteDriveID, rawStat.RemoteDriveID)
-	assert.Equal(t, writableFixture.FolderItem.RemoteItemID, rawStat.RemoteItemID)
-	assert.Equal(t, writableFixture.FolderItem.Selector, rawStat.SharedSelector)
+	assertStatNamesSharedItem(t, &writableFixture.FolderItem, &rawStat)
 }

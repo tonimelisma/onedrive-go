@@ -576,12 +576,12 @@ func TestE2E_Mv_ForceOverwrite(t *testing.T) {
 	cfgPath := writeMinimalConfig(t)
 	testFolder := runForceOverwrite(t, cfgPath, "mv", "e2e-mv-force", "new content", "Moved", "move")
 
-	// Verify destination has source content and source is gone.
-	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt")
-	assert.Equal(t, "new content", content, "destination should have source's content after force move")
+	// Verify destination has source content and source is gone. dst.txt
+	// existed before the overwrite, so its name proves nothing: wait for its
+	// new content, and for the listing to drop the moved source.
+	waitForRemoteFileContent(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "new content")
 
-	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
-	assert.NotContains(t, stdout, "src.txt", "source should no longer exist after move")
+	stdout, _ := waitForRemoteDeleteDisappearance(t, cfgPath, nil, "", "src.txt", "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "dst.txt", "destination should exist")
 }
 
@@ -595,9 +595,10 @@ func TestE2E_Cp_ForceOverwrite(t *testing.T) {
 	cfgPath := writeMinimalConfig(t)
 	testFolder := runForceOverwrite(t, cfgPath, "cp", "e2e-cp-force", "copied content", "Copied", "copy")
 
-	// Verify destination has source content and source still exists (it's a copy).
-	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/dst.txt")
-	assert.Equal(t, "copied content", content, "destination should have source's content after force copy")
+	// Verify destination has source content and source still exists (it's a
+	// copy). dst.txt existed before the overwrite, so the wait is for its new
+	// content.
+	waitForRemoteFileContent(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "copied content")
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
 	assert.Contains(t, stdout, "src.txt", "source should still exist after copy")

@@ -152,10 +152,10 @@ func TestE2E_SyncWatch_Bidirectional(t *testing.T) {
 
 // TestE2E_SyncWatch_ConflictDuringWatch starts a bidirectional daemon, creates
 // a file, waits for it to sync, then modifies both sides to create a conflict.
-// The remote is modified FIRST and confirmed via stat, then the local is
-// modified. This ensures the remote change is in the delta feed when the
-// local fsnotify event triggers a sync pass, so the planner sees both changes
-// and produces a conflict.
+// The remote is modified FIRST, by a put that has exited, then the local at
+// once, so the daemon meets the local edit while its synced copy is still the
+// baseline; the upload's live check finds the remote edit and the replan keeps
+// both versions.
 func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	registerLogDump(t)
 
@@ -185,21 +185,23 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 	remotePath := "/" + testFolder + "/conflict-watch.txt"
 	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(baselineContent)), daemonPollTimeout)
 
-	// Modify remote FIRST: put a new version and confirm it propagated via
-	// stat. This ensures the delta feed has the remote change before we
-	// trigger local fsnotify.
+	// Modify remote FIRST: the put has exited, so the remote edit is committed
+	// before the local one below.
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict-watch.txt", remoteConflictContent)
 
-	// Give delta time to pick up the remote change before triggering local.
-	sleepForLiveTestPropagation(5 * time.Second)
-
-	// Now modify local — fsnotify fires, daemon runs a sync pass that sees
-	// both the local change and the remote change from the delta feed.
+	// Now modify local at once. The daemon plans the pass for it from the
+	// remote truth its own poll committed, not from a delta read of its own,
+	// so a short wait here would not show it the remote edit; its upload
+	// checks the item's live state first, so the remote edit supersedes it and
+	// the replan meets both changes. The waits below poll for that outcome.
 	require.NoError(t, os.WriteFile(filePath, []byte("local conflict version"), 0o600))
 
+	// testify runs the condition on its own goroutine, where a failing t call
+	// cannot stop the test, so it only reads; the remote copy is waited for
+	// after it.
 	require.Eventually(t, func() bool {
-		matches := conflictCopiesForPath(t, filePath)
-		if len(matches) != 1 {
+		matches, globErr := globConflictCopies(filePath)
+		if globErr != nil || len(matches) != 1 {
 			return false
 		}
 
@@ -209,12 +211,9 @@ func TestE2E_SyncWatch_ConflictDuringWatch(t *testing.T) {
 		}
 
 		localData, err := os.ReadFile(filePath) //nolint:gosec // a file inside the test's own sync dir
-		if err != nil || string(localData) != remoteConflictContent {
-			return false
-		}
-
-		return getRemoteFile(t, cfgPath, env, remotePath) == remoteConflictContent
+		return err == nil && string(localData) == remoteConflictContent
 	}, daemonPollTimeout, time.Second, "watch mode should preserve both versions for edit-edit conflicts")
+	waitForRemoteFileContent(t, cfgPath, env, remotePath, remoteConflictContent)
 
 	// Graceful shutdown.
 	require.NoError(t, h.Cmd.Process.Signal(syscall.SIGTERM))
@@ -460,11 +459,8 @@ func TestE2E_SyncWatch_RapidChurn(t *testing.T) {
 	const finalVersion = "final version"
 	require.NoError(t, os.WriteFile(filePath, []byte(finalVersion), 0o600))
 
-	// Wait for file to appear remotely.
-	remotePath := "/" + testFolder + "/churn-watch.txt"
-	waitForRemoteReadContains(t, cfgPath, env, "", "churn-watch.txt", daemonPollTimeout, "stat", remotePath)
-
 	// Poll remote until content matches final version.
+	remotePath := "/" + testFolder + "/churn-watch.txt"
 	waitForRemoteFileContent(t, cfgPath, env, remotePath, finalVersion)
 
 	// Graceful shutdown.
@@ -511,9 +507,10 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	}
 
 	// Create a NEW file after daemon shutdown.
+	const oneShotContent = "one-shot upload"
 	require.NoError(t, os.WriteFile(
 		filepath.Join(localDir, "after-shutdown.txt"),
-		[]byte("one-shot upload"),
+		[]byte(oneShotContent),
 		0o600,
 	))
 
@@ -525,14 +522,74 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	// Verify the one-shot sync uploaded only the new file (incremental).
 	assert.Contains(t, out, "Uploaded ", "one-shot should name the uploaded file")
 
-	// Verify both files exist remotely.
-	waitForRemoteReadContains(t, cfgPath, env, "", "after-shutdown.txt", pollTimeout, "stat", "/"+testFolder+"/after-shutdown.txt")
-	waitForRemoteReadContains(t, cfgPath, env, "", "before-shutdown.txt", pollTimeout, "stat", remotePath)
+	// The one-shot pass uploaded the new file; the size wait before the
+	// shutdown already holds the daemon's.
+	waitForRemoteStatSize(t, cfgPath, env, "/"+testFolder+"/after-shutdown.txt", int64(len(oneShotContent)), pollTimeout)
 }
 
-// TestE2E_SyncWatch_TimedPauseExpiry starts a daemon, pauses the drive with
-// a short duration, verifies sync is paused, waits for expiry, asks the daemon
-// to reload through the control socket, and verifies sync resumes.
+const (
+	// watchLocalDebounce is the quiet time a watch daemon waits after the
+	// last local change before it plans a pass for it: the engine's default
+	// debounce (internal/sync/engine_watch.go), which no e2e config changes.
+	watchLocalDebounce = 5 * time.Second
+	// pausedFileUploadAllowance is what a daemon that ignored the pause needs
+	// after the debounce to put the test's small file on OneDrive where stat
+	// sees it: the plan, the folder create, the file's create request and the
+	// stat that then answers, with room for a slow Graph request.
+	pausedFileUploadAllowance = 10 * time.Second
+	// pausedUploadWindow is how long the test watches for an upload the pause
+	// must hold back: a daemon that went on syncing through the pause would
+	// have uploaded the file inside it.
+	pausedUploadWindow = watchLocalDebounce + pausedFileUploadAllowance
+	// pauseOutlastsWindowMargin covers what runs between the pause command
+	// and the window's start (the reload, the local write), the window's last
+	// stat with the second it sleeps afterwards, and the status command that
+	// follows, so the window ends while status still reports the drive paused.
+	pauseOutlastsWindowMargin = 15 * time.Second
+	// timedPauseDuration is the pause the test sets and then lets expire.
+	timedPauseDuration = pausedUploadWindow + pauseOutlastsWindowMargin
+)
+
+// requireNotUploadedDuringPause stats remotePath for pausedUploadWindow and
+// fails the test unless every stat says the item is missing. Only that answer
+// counts as "not uploaded", and only when it came before pauseEnds:
+//   - a daemon whose pause ended resumes by itself, so a stat that answered
+//     later cannot say what the pause held back;
+//   - a lagging listing of the mount root also answers "not found" and says
+//     nothing about the path, so the read recovers through the listing and a
+//     listing that never answers fails the test;
+//   - any other failure cannot tell either.
+func requireNotUploadedDuringPause(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	remotePath string,
+	pauseEnds time.Time,
+) {
+	t.Helper()
+
+	driveID := resolveDriveSelection(env, "")
+	windowEnds := time.Now().Add(pausedUploadWindow)
+	for time.Now().Before(windowEnds) {
+		_, statStderr, statErr := runRemoteReadAttemptWithRecovery(t, cfgPath, env, driveID, pauseEnds, "stat", remotePath)
+		require.NotErrorIsf(t, statErr, errSharedRootListingLagging,
+			"the mount root's listing did not answer, so stat cannot say whether the file uploaded\nstderr: %s",
+			suiteDriveRoles.Redact(statStderr))
+		require.Truef(t, time.Now().Before(pauseEnds),
+			"a stat in the window answered after the pause could have ended, so it cannot say what the pause held back: lengthen pauseOutlastsWindowMargin")
+		require.Error(t, statErr, "the file reached OneDrive while the drive was paused")
+		require.Truef(t, isRemoteNotFoundCleanup(statStderr),
+			"stat failed for a reason other than a missing item, so it cannot say whether the file uploaded\nstderr: %s",
+			suiteDriveRoles.Redact(statStderr))
+		sleepForLiveTestPropagation(1 * time.Second)
+	}
+}
+
+// TestE2E_SyncWatch_TimedPauseExpiry starts a daemon, pauses the drive for
+// timedPauseDuration, verifies nothing uploads during pausedUploadWindow
+// while status reports it paused, waits until status no longer does, asks
+// the daemon to reload through the control socket, and verifies the file
+// written during the pause uploads.
 func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	registerLogDump(t)
 
@@ -546,9 +603,11 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
 	cmd := h.Cmd
 
-	// Pause for 5 seconds; the synchronous reload answer proves the daemon
-	// applied it.
-	runCLIWithConfig(t, cfgPath, env, "pause", "5s")
+	// Pause for a while; the synchronous reload answer proves the daemon
+	// applied it. The pause ends no earlier than pauseEnds: the command adds
+	// the duration to its own, later clock reading and stores whole seconds.
+	pauseEnds := time.Now().Add(timedPauseDuration).Truncate(time.Second)
+	runCLIWithConfig(t, cfgPath, env, "pause", timedPauseDuration.String())
 	reloadDaemonConfig(t, env)
 
 	// Create local file while paused.
@@ -561,26 +620,56 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 		0o600,
 	))
 
-	// Bounded negative check: confirm file not remote while paused.
+	// Bounded negative check: the file does not reach OneDrive during the
+	// window, and status still reports the drive paused when the window ends,
+	// so the window covers only time the daemon was told to hold uploads.
 	remotePath := "/" + testFolder + "/paused-file.txt"
-	negDeadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(negDeadline) {
-		_, _, statErr := runCLIWithConfigAllowError(t, cfgPath, env, "stat", remotePath)
-		if statErr == nil {
-			t.Log("warning: file appeared remotely while paused (test environment may not support pause)")
-			break
-		}
-		sleepForLiveTestPropagation(1 * time.Second)
-	}
+	requireNotUploadedDuringPause(t, cfgPath, env, remotePath, pauseEnds)
+	require.Equal(t, statusDriveStatePaused, readStatusDriveState(t, cfgPath, env),
+		"the pause ended before the window did: lengthen pauseOutlastsWindowMargin")
 
-	// Wait for pause to expire (5s total from pause command), then use the
-	// control socket to trigger clearExpiredPauses.
-	sleepForLiveTestPropagation(4 * time.Second)
+	// Wait until the pause has expired, then use the control socket to
+	// trigger clearExpiredPauses.
+	waitForStatusDriveUnpaused(t, cfgPath, env)
 	reloadDaemonConfig(t, env)
 
 	// Poll until the file has its full size remotely, not only its name
 	// (daemon should now be unpaused).
 	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(pausedContent)), daemonPollTimeout)
+
+	// Graceful shutdown.
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	waitForDaemonExit(t, cmd)
+}
+
+// TestE2E_SyncWatch_StatusPerfCountsRequests starts an upload-only daemon,
+// lets it sync one small file, and reads `status --perf --json` while it
+// runs: the watched mount's live perf snapshot counts its Graph requests.
+//
+// Validates: R-6.6.15
+func TestE2E_SyncWatch_StatusPerfCountsRequests(t *testing.T) {
+	registerLogDump(t)
+
+	syncDir := t.TempDir()
+	cfgPath, env := writeIsolatedSharedRootSyncConfigWithOptions(t, syncDir, "poll_interval = \"30s\"\n")
+
+	testFolder := fmt.Sprintf("e2e-watch-perf-%d", time.Now().UnixNano())
+
+	// Start upload-only daemon.
+	cmd := startDaemon(t, cfgPath, env,
+		"--drive", resolveDriveSelection(env, ""), "sync", "--upload-only", "--watch")
+
+	const perfContent = "counted by status --perf"
+	localDir := filepath.Join(syncDir, testFolder)
+	require.NoError(t, os.MkdirAll(localDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "perf-counted.txt"), []byte(perfContent), 0o600))
+
+	// Wait for the upload to finish, not only for the name, so the daemon is
+	// not stopped between the create and the content (LI-20261110-01).
+	waitForRemoteStatSize(t, cfgPath, env, "/"+testFolder+"/perf-counted.txt", int64(len(perfContent)), daemonPollTimeout)
+
+	snapshot := waitForStatusPerfRequests(t, cfgPath, env)
+	assert.Positive(t, snapshot.HTTPRequestCount, "the watched mount's live perf snapshot counts its Graph requests")
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))

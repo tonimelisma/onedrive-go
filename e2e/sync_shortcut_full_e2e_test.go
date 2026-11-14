@@ -47,7 +47,8 @@ func TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive(t *te
 
 	stdout, _ := runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
 	var drives driveListE2EOutput
-	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &drives), "drive list --json output should be valid JSON, got: %s", stdout)
+	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &drives),
+		"drive list --json output should be valid JSON (%d bytes, in the test's debug log)", len(stdout))
 
 	found := false
 	for i := range drives.Configured {
@@ -365,12 +366,10 @@ func requireShortcutChildAtPath(
 
 	require.Failf(t,
 		"shortcut child mount missing at projection path",
-		"parent=%s shortcut=%q relative_path=%q remote=%s/%s",
+		"parent=%s shortcut=%q relative_path=%q remote=fixture.SharedItem",
 		suiteDriveRoles.Role(fixture.ParentDrive),
 		fixture.ShortcutName,
 		relativeLocalPath,
-		fixture.SharedItem.RemoteDriveID,
-		fixture.SharedItem.RemoteItemID,
 	)
 	return shortcutChildE2ERecord{}
 }
@@ -411,7 +410,7 @@ func restoreRemoteShortcutPath(
 	_, stdout, stderr, err := execCLI(cfgPath, env, driveID, "mv", *currentPath, originalPath)
 	if err != nil {
 		t.Logf("cleanup restoring shortcut %s to %s failed: %v\nstdout: %s\nstderr: %s",
-			*currentPath, originalPath, err, stdout, stderr)
+			*currentPath, originalPath, err, suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 		return
 	}
 	*currentPath = originalPath

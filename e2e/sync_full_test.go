@@ -229,7 +229,7 @@ func testConcurrentUploads(t *testing.T, opsCfgPath, testFolder string) {
 
 			if runErr := cmd.Run(); runErr != nil {
 				errCh <- fmt.Errorf("uploading %s: %w\nstderr: %s",
-					f.remoteName, runErr, stderr.String())
+					f.remoteName, runErr, suiteDriveRoles.Redact(stderr.String()))
 				return
 			}
 
@@ -363,6 +363,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 	// detect the edit-delete conflict.
 	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "fragile.txt", "ls", "/"+testFolder)
 
+	recreatedCopy := filepath.Join(t.TempDir(), "recreated")
 	requireSyncEventuallyConverges(
 		t,
 		cfgPath,
@@ -378,13 +379,9 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 			if err != nil || string(data) != preciousLocalContent {
 				return false
 			}
-			stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", "/"+testFolder+"/fragile.txt")
-			if err != nil {
-				t.Logf("waiting for recreated remote file\nstdout: %s\nstderr: %s", stdout, stderr)
-				return false
-			}
 
-			return getRemoteFile(t, cfgPath, env, "/"+testFolder+"/fragile.txt") == preciousLocalContent
+			remoteData, downloaded := readRemoteFileOnce(t, cfgPath, env, "/"+testFolder+"/fragile.txt", recreatedCopy)
+			return downloaded && remoteData == preciousLocalContent
 		},
 	)
 
@@ -536,15 +533,50 @@ func requireSyncWithModeEventuallyConverges(
 	return requireSyncEventuallyConverges(t, cfgPath, env, timeout, description, ready, mode.flag)
 }
 
+// dryRunConflictPrefix starts the dry-run line of a conflict whose two
+// versions the sync would keep.
+const dryRunConflictPrefix = "Would keep both versions of "
+
+// dryRunPlanHasLineStarting accepts a `sync --dry-run` pass whose plan has a
+// line that starts with prefix (dryRunStdoutHasLineStarting). A remote change
+// is in that plan only once delta carries it, and a dry run changes nothing,
+// so a test whose one real pass must see a remote change converges dry runs
+// on this first.
+func dryRunPlanHasLineStarting(prefix string) func(syncAttemptResult) bool {
+	return func(result syncAttemptResult) bool {
+		return result.Err == nil && dryRunStdoutHasLineStarting(result.Stdout, prefix)
+	}
+}
+
+// dryRunPlanHasNoTransferUnder accepts a `sync --dry-run` pass that printed
+// its summary and whose plan names no action under folder
+// (dryRunStdoutPlansNoTransferUnder). A test whose one real pass must find
+// both sides already equal waits for this: before delta carries the remote
+// side, the plan still uploads the local one.
+func dryRunPlanHasNoTransferUnder(folder string) func(syncAttemptResult) bool {
+	return func(result syncAttemptResult) bool {
+		return result.Err == nil && dryRunStdoutPlansNoTransferUnder(result.Stdout, folder)
+	}
+}
+
 func conflictCopiesForPath(t *testing.T, absPath string) []string {
 	t.Helper()
 
-	dir := filepath.Dir(absPath)
-	name := filepath.Base(absPath)
-	stem, ext := syncengine.ConflictStemExt(name)
-	matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("%s.conflict-*%s", stem, ext)))
+	matches, err := globConflictCopies(absPath)
 	require.NoError(t, err)
 	return matches
+}
+
+// globConflictCopies lists the conflict copies beside absPath. It asserts
+// nothing, so a poll predicate can call it.
+func globConflictCopies(absPath string) ([]string, error) {
+	stem, ext := syncengine.ConflictStemExt(filepath.Base(absPath))
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(absPath), fmt.Sprintf("%s.conflict-*%s", stem, ext)))
+	if err != nil {
+		return nil, fmt.Errorf("glob conflict copies of %s: %w", absPath, err)
+	}
+
+	return matches, nil
 }
 
 // Validates: R-2.1.3
@@ -593,8 +625,8 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 				return false
 			}
 
-			lsOut, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
-			return !strings.Contains(lsOut, "local-new.txt")
+			lsOut, _, lsErr := runCLIWithConfigAllowError(t, cfgPath, env, "ls", "/"+testFolder)
+			return lsErr == nil && !strings.Contains(lsOut, "local-new.txt")
 		},
 		"--download-only",
 	)
@@ -603,11 +635,13 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 	// Step 4: The deferred local edit still has its old remote content.
 	assert.Equal(t, "initial local-deferred", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt"))
 
-	// Step 5: A later upload-only pass should publish the deferred local-only changes.
+	// Step 5: A later upload-only pass should publish the deferred local-only
+	// changes. The edited file's name was there before the edit, so the wait
+	// is for its new content.
 	out, _ := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 	assert.Contains(t, out, "(upload only)")
 	waitForRemoteReadContains(t, cfgPath, env, "", "local-new.txt", pollTimeout, "ls", "/"+testFolder)
-	assert.Equal(t, "local deferred modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt"))
+	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt", "local deferred modification")
 
 	report, err := verifyBaselineReport(t, cfgPath, env)
 	require.NoError(t, err)
@@ -660,9 +694,10 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 		"--upload-only",
 	)
 	assert.Contains(t, attempt.Stdout, "(upload only)")
-	waitForRemoteReadContains(t, cfgPath, env, "", "local-owned.txt", pollTimeout, "ls", "/"+testFolder)
-	assert.Equal(t, "local modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-owned.txt"))
-	assert.Equal(t, "remote deferred modification", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/remote-deferred.txt"))
+	// Both files were modified, not created, so their names prove nothing:
+	// wait for the new content of each.
+	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/local-owned.txt", "local modification")
+	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/remote-deferred.txt", "remote deferred modification")
 
 	// Step 4: A later download-only pass should converge the deferred remote-only changes.
 	downloadAttempt := requireSyncEventuallyConverges(
@@ -718,6 +753,11 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 			require.NoError(t, os.WriteFile(conflictFile, []byte("local edit v2"), 0o600))
 			putRemoteFile(t, cfgPath, env, "/"+testFolder+"/shared.txt", "remote edit v2")
 
+			// The pass below must meet the remote edit; before delta carries
+			// it, the sync sees only the local edit and plans an upload.
+			requireSyncEventuallyConverges(t, cfgPath, env, remoteWritePropagationTimeout,
+				"delta carries the remote edit", dryRunPlanHasLineStarting(dryRunConflictPrefix+testFolder+"/"), "--dry-run")
+
 			// Single pass by design: this pass's own summary must report the conflict or the held-back download.
 			out, _ := runSyncWithMode(t, cfgPath, env, mode)
 			assert.Contains(t, out, mode.outputMode)
@@ -731,7 +771,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 
 				originalData := mustReadFile(t, conflictFile)
 				assert.Equal(t, "local edit v2", string(originalData))
-				assert.Equal(t, "remote edit v2", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/shared.txt"))
+				waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/shared.txt", "remote edit v2")
 
 				return
 			}
@@ -773,6 +813,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 			runCLIWithConfig(t, cfgPath, env, "rm", "/"+testFolder+"/fragile.txt")
 			waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "fragile.txt", "ls", "/"+testFolder)
 
+			recreatedCopy := filepath.Join(t.TempDir(), "recreated")
 			attempt := requireSyncWithModeEventuallyConverges(
 				t,
 				cfgPath,
@@ -797,7 +838,8 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 					stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", "/"+testFolder+"/fragile.txt")
 					if mode.flag == flagDownloadOnly {
 						if err == nil {
-							t.Logf("waiting for remote delete to stay visible via stat disappearance\nstdout: %s\nstderr: %s", stdout, stderr)
+							t.Logf("waiting for remote delete to stay visible via stat disappearance\nstdout: %s\nstderr: %s",
+								suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 							return false
 						}
 
@@ -805,11 +847,13 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 					}
 
 					if err != nil {
-						t.Logf("waiting for recreated remote file\nstdout: %s\nstderr: %s", stdout, stderr)
+						t.Logf("waiting for recreated remote file\nstdout: %s\nstderr: %s",
+							suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 						return false
 					}
 
-					return getRemoteFile(t, cfgPath, env, "/"+testFolder+"/fragile.txt") == preciousLocalContent
+					remoteData, downloaded := readRemoteFileOnce(t, cfgPath, env, "/"+testFolder+"/fragile.txt", recreatedCopy)
+					return downloaded && remoteData == preciousLocalContent
 				},
 			)
 			assert.Contains(t, attempt.Stdout, mode.outputMode)
@@ -849,6 +893,11 @@ func TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict(t *testing.T) {
 
 			mkdirRemoteFolder(t, cfgPath, env, "/"+testFolder)
 			putRemoteFile(t, cfgPath, env, "/"+testFolder+"/collision.txt", "remote version")
+
+			// The pass below must meet the remote create; before delta
+			// carries it, the sync sees only the local file and plans an upload.
+			requireSyncEventuallyConverges(t, cfgPath, env, remoteWritePropagationTimeout,
+				"delta carries the remote create", dryRunPlanHasLineStarting(dryRunConflictPrefix+testFolder+"/"), "--dry-run")
 
 			// Single pass by design: this pass's own summary must report the conflict or the held-back download.
 			out, _ := runSyncWithMode(t, cfgPath, env, mode)
@@ -948,9 +997,9 @@ func TestE2E_Sync_NestedFolderHierarchy(t *testing.T) {
 	leafOut, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder+"/x/y/z")
 	assert.Contains(t, leafOut, "new-leaf.txt")
 
-	// another.txt uploaded with modification.
-	remoteAnother := getRemoteFile(t, cfgPath, env, "/"+testFolder+"/x/y/another.txt")
-	assert.Equal(t, "modified another", remoteAnother)
+	// another.txt uploaded with modification: its name was there before the
+	// edit, so the wait is for the new content.
+	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/x/y/another.txt", "modified another")
 
 	// Step 6: Internal baseline verification stays clean.
 	report, err := verifyBaselineReport(t, cfgPath, env)
@@ -984,12 +1033,18 @@ func TestE2E_Sync_DryRunNonDestructive(t *testing.T) {
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/pending-download.txt", "to download")
 	require.NoError(t, os.Remove(filepath.Join(localDir, "existing.txt")))
 
-	// Step 3: Dry-run sync.
+	// Step 3: Dry-run sync, once delta carries the remote create: dry runs
+	// change nothing, so repeating them until one plans the download leaves
+	// the state the asserted pass starts from.
+	pendingDownloadLine := "Would download " + testFolder + "/pending-download.txt"
+	requireSyncEventuallyConverges(t, cfgPath, env, remoteWritePropagationTimeout,
+		"delta carries the remote create", dryRunPlanHasLineStarting(pendingDownloadLine), "--dry-run")
+
 	// Single pass by design: a dry run changes nothing, so its own plan is what the test reads.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--dry-run")
 	assert.Contains(t, out, "Dry run, nothing was changed.")
 	assert.Contains(t, out, "Would upload "+testFolder+"/pending-upload.txt")
-	assert.Contains(t, out, "Would download "+testFolder+"/pending-download.txt")
+	assert.Contains(t, out, pendingDownloadLine)
 
 	// Step 4: Verify NO side effects.
 	// pending-upload.txt NOT remotely uploaded.
@@ -1064,6 +1119,11 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "converge-create.txt"), []byte(freshContent), 0o600))
 	putRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-create.txt", freshContent)
 
+	// The pass below must meet both remote puts; before delta carries them,
+	// the sync sees only the local sides and plans their uploads.
+	requireSyncEventuallyConverges(t, cfgPath, env, remoteWritePropagationTimeout,
+		"delta carries both remote puts", dryRunPlanHasNoTransferUnder(testFolder), "--dry-run")
+
 	// Step 4: Bidirectional sync — convergent detection.
 	// Single pass by design: equal content on both sides must need no transfer
 	// in this one pass, so it leaves nothing ("Up to date").
@@ -1080,7 +1140,7 @@ func TestE2E_Sync_ConvergentEdit(t *testing.T) {
 	createData := mustReadFile(t, filepath.Join(localDir, "converge-create.txt"))
 	assert.Equal(t, freshContent, string(createData))
 
-	assert.Equal(t, newContent, getRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-edit.txt"))
+	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/converge-edit.txt", newContent)
 	assert.Equal(t, freshContent, getRemoteFile(t, cfgPath, env, "/"+testFolder+"/converge-create.txt"))
 
 	// Single pass by design: the next pass after convergence must change nothing.

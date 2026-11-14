@@ -643,11 +643,11 @@ func requireSyncEventuallyConvergesWith(
 				t,
 				"requireSyncEventuallyConverges: timed out",
 				"%s\ntimeout: %v\nlastErr: %v\nlastStdout: %s\nlastStderr: %s",
-				description,
+				suiteDriveRoles.Redact(description),
 				timeout,
 				last.Err,
-				last.Stdout,
-				last.Stderr,
+				suiteDriveRoles.Redact(last.Stdout),
+				suiteDriveRoles.Redact(last.Stderr),
 			)
 		}
 

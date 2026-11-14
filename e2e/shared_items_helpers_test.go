@@ -470,7 +470,8 @@ func shortcutSentinelReachable(
 	downloadRoot := filepath.Join(t.TempDir(), "shared-target")
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "get", fixture.SharedItem.Selector, downloadRoot)
 	if err != nil {
-		return fmt.Errorf("download shortcut shared target: %w\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		return fmt.Errorf("download shortcut shared target: %w\nstdout: %s\nstderr: %s",
+			err, suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 	}
 
 	sentinelPath := filepath.Join(downloadRoot, filepath.FromSlash(strings.TrimPrefix(path.Clean(fixture.SentinelPath), "/")))
@@ -488,41 +489,91 @@ func requireActiveShortcutChild(
 ) shortcutChildE2ERecord {
 	t.Helper()
 
-	record, ok := findActiveShortcutChild(t, env, fixture, fixture.ShortcutName)
-	if ok {
+	record, isActive, err := findActiveShortcutChild(t, env, fixture, fixture.ShortcutName)
+	requireNoErrorByRole(t, err)
+	if isActive {
 		return record
 	}
 
 	require.Failf(t,
 		"active shortcut child mount missing",
-		"parent=%s shortcut=%q remote=%s/%s",
+		"parent=%s shortcut=%q remote=fixture.SharedItem state=%q reason=%q",
 		suiteDriveRoles.Role(fixture.ParentDrive),
 		fixture.ShortcutName,
-		fixture.SharedItem.RemoteDriveID,
-		fixture.SharedItem.RemoteItemID,
+		record.State,
+		record.StateReason,
 	)
 	return shortcutChildE2ERecord{}
 }
 
+// requireNoErrorByRole stops the test when err is set, printing its text with
+// every configured drive and its account named by role: an error that names
+// a state database spells its drive in the file name.
+func requireNoErrorByRole(t *testing.T, err error) {
+	t.Helper()
+
+	if err != nil {
+		require.FailNow(t, suiteDriveRoles.Redact(err.Error()))
+	}
+}
+
+// assertSameIdentity checks that got is the identity want holds: an account
+// email, a shared selector, a remote drive or item ID. On a mismatch it names
+// what it compared, never the values: CI logs are public.
+func assertSameIdentity(t *testing.T, what, want, got string) {
+	t.Helper()
+
+	isSame := got == want
+	assert.Truef(t, isSame, "%s differs from the expected value (values not printed: CI logs are public)", what)
+}
+
+// assertSharedFileFixtureConsistent checks that the shared-file fixture's
+// listing entry and its raw-link stat name the same account and selector.
+func assertSharedFileFixtureConsistent(t *testing.T, fixture *resolvedSharedFileFixture) {
+	t.Helper()
+
+	assertSameIdentity(t, "the shared file's account email", fixture.RecipientEmail, fixture.FileItem.AccountEmail)
+	assertSameIdentity(t, "the raw link stat's shared selector", fixture.FileItem.Selector, fixture.RawStat.SharedSelector)
+}
+
+// assertStatNamesSharedItem checks that stat names the shared item item
+// describes: the same remote drive and item IDs and the same selector.
+func assertStatNamesSharedItem(t *testing.T, item *sharedItemE2E, stat *sharedStatE2EOutput) {
+	t.Helper()
+
+	assertSameIdentity(t, "the stat's remote drive ID", item.RemoteDriveID, stat.RemoteDriveID)
+	assertSameIdentity(t, "the stat's remote item ID", item.RemoteItemID, stat.RemoteItemID)
+	assertSameIdentity(t, "the stat's shared selector", item.Selector, stat.SharedSelector)
+}
+
+// findActiveShortcutChild returns the parent drive's child mount record at
+// relativeLocalPath, if there is one, and whether it is active with no state
+// reason. It asserts nothing, so a poll predicate can call it: a record in
+// another state is a state to wait through, and a failed read of the parent's
+// state database is its error.
 func findActiveShortcutChild(
 	t *testing.T,
 	env map[string]string,
 	fixture *resolvedShortcutFixture,
 	relativeLocalPath string,
-) (shortcutChildE2ERecord, bool) {
+) (shortcutChildE2ERecord, bool, error) {
 	t.Helper()
 
-	for _, record := range shortcutChildRecords(t, env, fixture) {
+	records, err := readShortcutChildRecords(t, env, fixture)
+	if err != nil {
+		return shortcutChildE2ERecord{}, false, err
+	}
+
+	for _, record := range records {
 		if record.NamespaceID != fixture.ParentDrive ||
 			record.RelativeLocalPath != relativeLocalPath {
 			continue
 		}
-		assert.Equal(t, syncengine.ShortcutRootStateActive, record.State)
-		assert.Empty(t, record.StateReason)
-		return record, true
+
+		return record, record.State == syncengine.ShortcutRootStateActive && record.StateReason == "", nil
 	}
 
-	return shortcutChildE2ERecord{}, false
+	return shortcutChildE2ERecord{}, false, nil
 }
 
 // syncShortcutDownloadUntilProjected runs `sync --download-only` on the
@@ -555,9 +606,14 @@ func syncShortcutDownloadUntilProjected(
 				return false
 			}
 
-			found, ok := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
-			if !ok {
-				t.Logf("waiting for an active shortcut child mount at %q", relativeLocalPath)
+			found, isActive, readErr := findActiveShortcutChild(t, env, fixture, relativeLocalPath)
+			switch {
+			case readErr != nil:
+				t.Logf("waiting for the shortcut child mounts to be readable: %s", suiteDriveRoles.Redact(readErr.Error()))
+				return false
+			case !isActive:
+				t.Logf("waiting for an active shortcut child mount at %q (state %q, reason %q)",
+					relativeLocalPath, found.State, found.StateReason)
 				return false
 			}
 
@@ -571,10 +627,14 @@ func syncShortcutDownloadUntilProjected(
 		},
 		"--download-only",
 	)
+	assert.Equal(t, syncengine.ShortcutRootStateActive, record.State)
+	assert.Empty(t, record.StateReason)
 
 	return record, attempt
 }
 
+// shortcutChildRecords is readShortcutChildRecords for a test that cannot go
+// on without them.
 func shortcutChildRecords(
 	t *testing.T,
 	env map[string]string,
@@ -582,10 +642,28 @@ func shortcutChildRecords(
 ) []shortcutChildE2ERecord {
 	t.Helper()
 
+	records, err := readShortcutChildRecords(t, env, fixture)
+	requireNoErrorByRole(t, err)
+
+	return records
+}
+
+// readShortcutChildRecords reads the parent drive's shortcut child mount
+// records from its state database. It asserts nothing, so a poll predicate
+// can call it.
+func readShortcutChildRecords(
+	t *testing.T,
+	env map[string]string,
+	fixture *resolvedShortcutFixture,
+) ([]shortcutChildE2ERecord, error) {
+	t.Helper()
+
 	parentID := driveid.MustCanonicalID(fixture.ParentDrive)
 	statePath := e2eDriveStatePath(env, parentID)
 	roots, err := syncengine.ReadShortcutRootStatusSnapshot(t.Context(), statePath, parentID.String(), "", nil)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, fmt.Errorf("read shortcut child mounts of %s: %w", suiteDriveRoles.Role(parentID.String()), err)
+	}
 	records := make([]shortcutChildE2ERecord, 0, len(roots))
 	for i := range roots {
 		root := roots[i]
@@ -602,7 +680,7 @@ func shortcutChildRecords(
 			StateReason:       stateReason,
 		})
 	}
-	return records
+	return records, nil
 }
 
 func e2eDriveStatePath(env map[string]string, canonicalID driveid.CanonicalID) string {
@@ -692,8 +770,8 @@ func waitForShortcutRootPlaceholder(
 					pollState.RootListingDecoded,
 					fixture.SharedItem.Selector != "",
 					pollState.RootNames,
-					pollState.LastErr,
-					pollState.LastStdout,
+					suiteDriveRoles.Redact(fmt.Sprint(pollState.LastErr)),
+					suiteDriveRoles.Redact(pollState.LastStdout),
 				)
 			}
 			lastSentinelErr = shortcutSentinelReachable(t, cfgPath, env, fixture)
@@ -754,8 +832,8 @@ func skipShortcutRootPlaceholderOmission(
 		suiteDriveRoles.Role(fixture.ParentDrive),
 		elapsed,
 		pollState.RootNames,
-		pollState.LastErr,
-		pollState.LastStdout,
+		suiteDriveRoles.Redact(fmt.Sprint(pollState.LastErr)),
+		suiteDriveRoles.Redact(pollState.LastStdout),
 	)
 }
 
@@ -890,7 +968,7 @@ func probeSharedFileCandidate(candidateDriveID, rawLink string) (sharedFileCandi
 	if decodeErr := json.Unmarshal([]byte(stdout), &rawStat); decodeErr != nil {
 		return sharedFileCandidate{}, false, fmt.Errorf(
 			"parse raw shared-link stat output for candidate %s: %w",
-			candidateDriveID,
+			suiteDriveRoles.Role(candidateDriveID),
 			decodeErr,
 		)
 	}
@@ -1166,7 +1244,7 @@ func sharedListForRecipientRaw(cfgPath string, env map[string]string, recipientE
 	_, stdout, stderr, err := execCLI(cfgPath, env, "", "--account", recipientEmail, "shared", "--json")
 	if err != nil {
 		return sharedListE2EOutput{}, fmt.Errorf("shared --json for %s: %w (%s)",
-			suiteDriveRoles.Redact(recipientEmail), err, strings.TrimSpace(stderr))
+			suiteDriveRoles.Redact(recipientEmail), err, suiteDriveRoles.Redact(strings.TrimSpace(stderr)))
 	}
 
 	var parsed sharedListE2EOutput
@@ -1202,34 +1280,37 @@ func waitForDriveListSharedSelectorVisible(
 	t.Helper()
 
 	deadline := time.Now().Add(pollTimeout)
-	var lastStdout string
+	// drive list names the owners of shared drives, whose accounts the suite
+	// does not configure and so cannot redact: messages say what the listing
+	// held, by count, never its text, which the test's debug log keeps.
+	lastListing := sharedListingNotDecoded
 	var lastStderr string
 
 	for attempt := 0; ; attempt++ {
 		stdout, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "drive", "list", "--json")
-		lastStdout = stdout
 		lastStderr = stderr
 
 		if err != nil {
 			if !isRetryableGraphGatewayFailure(stderr) {
-				require.NoErrorf(t, err, "drive list --json should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
+				require.NoErrorf(t, err, "drive list --json should succeed\nstderr: %s", suiteDriveRoles.Redact(stderr))
 			}
 		} else {
 			var parsed driveListE2EOutput
-			require.NoErrorf(t, json.Unmarshal([]byte(stdout), &parsed), "drive list --json output should be valid JSON, got: %s", stdout)
+			require.NoErrorf(t, json.Unmarshal([]byte(stdout), &parsed),
+				"drive list --json output should be valid JSON (%d bytes, in the test's debug log)", len(stdout))
 			if driveListAvailableContainsCanonicalID(parsed, selector) {
 				return parsed
 			}
+			lastListing = fmt.Sprintf("%d configured and %d available drives", len(parsed.Configured), len(parsed.Available))
 		}
 
 		if time.Now().After(deadline) {
 			t.Skipf(
-				"provider_skip=%s live drive list shared discovery did not expose selector %s within %v; Graph search omitted the known fixture on this run\nlast stdout: %s\nlast stderr: %s",
+				"provider_skip=%s live drive list shared discovery did not expose the shared fixture's selector within %v; Graph search omitted the known fixture on this run\nlast decoded listing: %s\nlast attempt's stderr: %s",
 				liveProviderSkipDriveListSharedOmitted,
-				suiteDriveRoles.Redact(selector),
 				pollTimeout,
-				lastStdout,
-				lastStderr,
+				lastListing,
+				suiteDriveRoles.Redact(lastStderr),
 			)
 		}
 
@@ -1246,15 +1327,14 @@ func waitForSharedFolderNameDriveAdd(
 	t.Helper()
 
 	deadline := time.Now().Add(pollTimeout)
-	var lastStdout string
 	var lastStderr string
-	var lastSharedStdout string
+	lastSharedListing := sharedListingNotDecoded
 	var lastSharedStderr string
 	var lastSharedErr error
 	lastSharedVisible := true
 
 	for attempt := 0; ; attempt++ {
-		stdout, stderr, err := runCLICore(
+		_, stderr, err := runCLICore(
 			t,
 			cfgPath,
 			env,
@@ -1265,14 +1345,13 @@ func waitForSharedFolderNameDriveAdd(
 			"add",
 			fixture.FolderItem.Name,
 		)
-		lastStdout = stdout
 		lastStderr = stderr
 
 		if err == nil {
 			return
 		}
 		if isSharedFolderNameDiscoveryOmission(stderr) {
-			lastSharedVisible, lastSharedStdout, lastSharedStderr, lastSharedErr = sharedFolderNameFixtureVisible(
+			lastSharedVisible, lastSharedListing, lastSharedStderr, lastSharedErr = sharedFolderNameFixtureVisible(
 				t,
 				cfgPath,
 				env,
@@ -1280,32 +1359,29 @@ func waitForSharedFolderNameDriveAdd(
 			)
 			if lastSharedErr != nil {
 				require.Truef(t, isRetryableGraphGatewayFailure(lastSharedStderr),
-					"shared --json preflight should succeed when classifying drive add <shared-folder-name> no-match\nstdout: %s\nstderr: %s",
-					lastSharedStdout,
-					lastSharedStderr,
+					"shared --json preflight should succeed when classifying drive add <shared-folder-name> no-match\nshared err: %s\nshared stderr: %s",
+					suiteDriveRoles.Redact(lastSharedErr.Error()),
+					suiteDriveRoles.Redact(lastSharedStderr),
 				)
 			} else if lastSharedVisible {
 				require.NoErrorf(t, err,
-					"drive add <shared-folder-name> missed fixture that shared --json exposed by exact name and remote identity\nstdout: %s\nstderr: %s\nshared stdout: %s",
-					stdout,
-					stderr,
-					lastSharedStdout,
+					"drive add <shared-folder-name> missed fixture that shared --json exposed by exact name and remote identity\nstderr: %s\nshared --json: %s",
+					suiteDriveRoles.Redact(stderr),
+					lastSharedListing,
 				)
 			}
 		} else if !isRetryableGraphGatewayFailure(stderr) {
 			require.NoErrorf(t, err,
-				"drive add <shared-folder-name> should succeed or expose known provider discovery failure\nstdout: %s\nstderr: %s",
-				stdout,
-				stderr,
+				"drive add <shared-folder-name> should succeed or expose known provider discovery failure\nstderr: %s",
+				suiteDriveRoles.Redact(stderr),
 			)
 		}
 
 		if time.Now().After(deadline) {
 			endSharedFolderNameDriveAddWait(t, fixture, err, sharedFolderNameDriveAddAttempt{
-				stdout:        lastStdout,
 				stderr:        lastStderr,
 				sharedVisible: lastSharedVisible,
-				sharedStdout:  lastSharedStdout,
+				sharedListing: lastSharedListing,
 				sharedStderr:  lastSharedStderr,
 				sharedErr:     lastSharedErr,
 			})
@@ -1316,12 +1392,15 @@ func waitForSharedFolderNameDriveAdd(
 }
 
 // sharedFolderNameDriveAddAttempt is the last observed state of the
-// drive add <shared-folder-name> poll, kept for the timeout verdict.
+// drive add <shared-folder-name> poll, kept for the timeout verdict. It holds
+// no stdout: drive add and shared --json can name the owners of shared items,
+// whose accounts the suite does not configure and so cannot redact, so the
+// verdict says what shared --json listed by count (sharedListing) and leaves
+// both outputs to the test's debug log.
 type sharedFolderNameDriveAddAttempt struct {
-	stdout        string
 	stderr        string
 	sharedVisible bool
-	sharedStdout  string
+	sharedListing string
 	sharedStderr  string
 	sharedErr     error
 }
@@ -1337,40 +1416,42 @@ func endSharedFolderNameDriveAddWait(
 ) {
 	t.Helper()
 
+	account := suiteDriveRoles.Redact(fixture.RecipientEmail)
 	if decision := classifySharedFolderNameProviderSkip(last.stderr, last.sharedVisible, last.sharedErr, last.sharedStderr); decision.Skippable {
 		t.Skipf(
-			"provider_skip=%s live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
+			"provider_skip=%s live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\n%s",
 			decision.Reason,
 			fixture.FolderItem.Name,
-			fixture.RecipientEmail,
+			account,
 			pollTimeout,
-			last.stdout,
-			last.stderr,
-			last.sharedErr,
-			last.sharedStdout,
-			last.sharedStderr,
+			last.redactedSummary(),
 		)
 	}
 	if isRetryableGraphGatewayFailure(last.stderr) {
 		t.Skipf(
-			"live shared discovery could not add folder name %q for account %s within %v because Graph kept returning retryable gateway failures\nlast stdout: %s\nlast stderr: %s",
+			"live shared discovery could not add folder name %q for account %s within %v because Graph kept returning retryable gateway failures\nlast stderr: %s",
 			fixture.FolderItem.Name,
-			fixture.RecipientEmail,
+			account,
 			pollTimeout,
-			last.stdout,
-			last.stderr,
+			suiteDriveRoles.Redact(last.stderr),
 		)
 	}
 
 	require.NoErrorf(t, err,
-		"drive add <shared-folder-name> should not time out without a provider-only omission signal\nlast stdout: %s\nlast stderr: %s\nlast shared err: %v\nlast shared stdout: %s\nlast shared stderr: %s",
-		last.stdout,
-		last.stderr,
-		last.sharedErr,
-		last.sharedStdout,
-		last.sharedStderr,
+		"drive add <shared-folder-name> should not time out without a provider-only omission signal\n%s",
+		last.redactedSummary(),
 	)
 	t.FailNow()
+}
+
+// redactedSummary is the attempt for a message: drive add's stderr, what
+// shared --json listed and how it failed, with every configured drive and
+// its account named by role.
+func (last *sharedFolderNameDriveAddAttempt) redactedSummary() string {
+	return suiteDriveRoles.Redact(fmt.Sprintf(
+		"last stderr: %s\nlast shared --json: %s\nlast shared err: %v\nlast shared stderr: %s",
+		last.stderr, last.sharedListing, last.sharedErr, last.sharedStderr,
+	))
 }
 
 func classifySharedFolderNameProviderSkip(
@@ -1395,6 +1476,14 @@ func classifySharedFolderNameProviderSkip(
 	return liveProviderSkipDecision{Skippable: true, Reason: liveProviderSkipSharedFolderNameOmitted}
 }
 
+// sharedListingNotDecoded is what a message says of a shared --json or
+// drive list --json run when no output of it has decoded.
+const sharedListingNotDecoded = "no listing decoded"
+
+// sharedFolderNameFixtureVisible runs shared --json for the fixture's
+// recipient and reports whether it lists the fixture, what it listed by count
+// (its output names sharers the suite cannot redact), its stderr and its
+// error.
 func sharedFolderNameFixtureVisible(
 	t *testing.T,
 	cfgPath string,
@@ -1414,15 +1503,16 @@ func sharedFolderNameFixtureVisible(
 		"--json",
 	)
 	if err != nil {
-		return false, stdout, stderr, err
+		return false, sharedListingNotDecoded, stderr, err
 	}
 
 	var listing sharedListE2EOutput
 	if err := json.Unmarshal([]byte(stdout), &listing); err != nil {
-		return false, stdout, stderr, fmt.Errorf("decode shared --json output: %w", err)
+		return false, sharedListingNotDecoded, stderr, fmt.Errorf("decode shared --json output: %w", err)
 	}
 
-	return sharedFolderFixtureVisibleInListing(listing, fixture), stdout, stderr, nil
+	return sharedFolderFixtureVisibleInListing(listing, fixture),
+		fmt.Sprintf("%d shared items listed", len(listing.Items)), stderr, nil
 }
 
 func statSharedTargetJSON(t *testing.T, cfgPath string, env map[string]string, args ...string) sharedStatE2EOutput {
@@ -1469,11 +1559,13 @@ func eventuallySharedContentEquals(
 ) {
 	t.Helper()
 
+	// testify runs the condition on its own goroutine, where a failing t call
+	// cannot stop the test, so the temp dir is made here, once: `get` renames
+	// each download over the same path.
+	localPath := filepath.Join(t.TempDir(), "downloaded")
+	fullArgs := append([]string{"get"}, args...)
+	fullArgs = append(fullArgs, localPath)
 	require.Eventually(t, func() bool {
-		localPath := filepath.Join(t.TempDir(), "downloaded")
-		fullArgs := append([]string{"get"}, args...)
-		fullArgs = append(fullArgs, localPath)
-
 		_, _, err := runCLICore(t, cfgPath, env, "", fullArgs...)
 		if err != nil {
 			return false

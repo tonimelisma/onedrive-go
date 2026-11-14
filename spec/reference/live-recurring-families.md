@@ -128,6 +128,11 @@ Current repo policy:
   `runSyncThroughTransientFailures*` or `requireSyncEventuallyConverges*`
   (default drive, `ForDrive`, `AllDrives`); a sync kept single-pass says why in
   a `Single pass by design:` comment
+- a single pass that must meet a remote change waits first until delta carries
+  it: `sync --dry-run`, which changes nothing, repeats until its plan names the
+  change (`dryRunPlanHasLineStarting`), or, for a pass that must find both
+  sides already equal, until it prints its summary line and plans no transfer
+  under the test's folder (`dryRunPlanHasNoTransferUnder`)
 
 Promoted docs:
 
@@ -157,7 +162,16 @@ Current repo policy:
 - name-only waits (`waitForRemoteReadContains`, parent listings, exact-path and
   fixture-seed visibility) remain for files written by a command that has
   already exited (`put`, `cp`, a one-shot `sync`), which has no upload in
-  flight
+  flight; a file that existed before (an edit, a `--force` overwrite) is read
+  through the content wait whatever wrote it, since its old name proves nothing
+- `TestE2EDaemonTestsUseNoNameOnlyWait` holds this in the quick lane, from the
+  sources: a test that starts a process reaches no name-only wait helper,
+  directly or through the suite's helpers; every wait helper is classified as
+  name-only or as a size, content or state wait, and a safe call (a read after
+  the daemon exited, a fixture no test writes) is a declared exception with its
+  reason
+- a poll predicate asserts nothing, so one transient state (a child mount not
+  yet active, a tree not yet synced down) is waited through, not failed on
 
 Promoted docs:
 
