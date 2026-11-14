@@ -42,11 +42,11 @@ func poolWorkerCount(requested int, serialize bool) int {
 // from it.
 const OutcomeCommitTimeout = 30 * time.Second
 
-// workerPool spawns goroutines that pull TrackedActions from the dispatch
+// workerPool spawns goroutines that pull trackedActions from the dispatch
 // channel, execute them, persist success outcomes, and send completions back
 // to the engine.
-// Workers are pure executors — they NEVER call depGraph.Complete(). The engine
-// owns all completion decisions (R-6.8.9).
+// Workers never call depGraph.Complete(); the engine owns all completion
+// decisions (R-6.8.9).
 type workerPool struct {
 	cfg           *executorConfig
 	dispatchCh    <-chan *trackedAction
@@ -184,13 +184,12 @@ func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) 
 }
 
 // executeAction runs a single tracked action: execute, persist success
-// outcomes, and send the result to the engine. Workers are pure executors —
-// they NEVER call depGraph.Complete().
+// outcomes, and send the result to the engine. Workers never call
+// depGraph.Complete(); the engine owns all completion decisions.
 func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
-	// Per-action cancellable context.
+	// actionCtx is canceled when executeAction returns, which stops what the
+	// action started under it.
 	actionCtx, cancel := context.WithCancel(ctx)
-	ta.Cancel = cancel
-
 	defer cancel()
 
 	if freshnessErr := wp.validateActionFreshness(actionCtx, ta); freshnessErr != nil {
@@ -327,7 +326,7 @@ func (wp *workerPool) Completions() <-chan actionCompletion {
 }
 
 // sendResult reports a per-action outcome to the completions channel. Populates
-// the ActionCompletion from the TrackedAction and any error. When outcome is
+// the actionCompletion from the trackedAction and any error. When outcome is
 // non-nil, uses its Success/Error fields; otherwise treats as failure with
 // the provided error.
 //

@@ -60,8 +60,9 @@ func newRetryLedger() retryLedger {
 
 // scopeLedger owns the active shared blockers for this run.
 type scopeLedger struct {
-	// mu guards active and nothing else. It is the one field here read outside
-	// the runtime goroutine, by admission checks and status snapshots.
+	// mu guards active and nothing else. Only the runtime goroutine that owns
+	// the run reads and writes active, admission checks and snapshots
+	// included.
 	mu     stdsync.RWMutex
 	active []activeScope
 

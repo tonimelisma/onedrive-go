@@ -52,9 +52,8 @@ const quiescenceLogInterval = 30 * time.Second
 //
 // Flow: runStartupStage → initWatchInfra → bootstrapSync →
 // startObservers → runWatchLoop.
-// Unlike the old approach (calling RunOnce with throwaway infrastructure),
-// bootstrapSync dispatches through the same DepGraph, active scope working
-// set, and WorkerPool that the steady-state watch loop uses.
+// bootstrapSync dispatches through the same dependency graph, active scope
+// working set and worker pool that the steady-state watch loop uses.
 // A timer callback that panics ends the watch with an error wrapping
 // panicguard.ErrPanic (beginRun).
 func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions) (err error) {
@@ -168,8 +167,8 @@ type socketIOWakeSourceRunner interface {
 	Run(ctx context.Context, wakes chan<- struct{}) error
 }
 
-// initWatchInfra sets up watch-mode infrastructure: watchRuntime, DepGraph,
-// worker pool, dirty scheduler, persisted scope state, and tickers. Does NOT load
+// initWatchInfra sets up watch-mode infrastructure: watchRuntime, the dependency
+// graph, worker pool, dirty scheduler, persisted scope state, and tickers. Does NOT load
 // baseline or start observers — those happen in bootstrapSync and RunWatch.
 //
 // Key differences from one-shot mode:
@@ -177,17 +176,17 @@ type socketIOWakeSourceRunner interface {
 //   - Workers exit only via ctx.Done(); the watch runtime owns settle/draintime
 //     instead of relying on dependency-graph completion
 //   - Retrier and trials are handled by the watch control flow itself
-//   - DirtyBuffer, not buffered planner input, decides when snapshots are refreshed
+//   - dirtyBuffer, not buffered planner input, decides when snapshots are refreshed
 //     and the current actionable set is rebuilt.
 func (rt *watchRuntime) initWatchInfra(
 	ctx context.Context,
 	mode SyncMode,
 	opts WatchOptions,
 ) (*watchPipeline, error) {
-	// DepGraph tracks action dependencies. Active scope state is loaded from
-	// the persisted block_scopes table into watch-owned runtime state.
-	depGraph := newDepGraph(rt.deps.logger)
-	rt.sched.graph = depGraph
+	// The graph starts empty, and startRuntimeStage replaces it with each
+	// plan's. Active scope state is loaded from the persisted block_scopes
+	// table into watch-owned runtime state.
+	rt.sched.graph = newDepGraph(rt.deps.logger)
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
@@ -205,7 +204,7 @@ func (rt *watchRuntime) initWatchInfra(
 	pool.serialize = rt.engine.serializeWorkers
 	pool.Start(ctx, rt.engine.transferWorkers)
 
-	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
+	// dirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
 	dirtyBuf := newDirtyBuffer(rt.deps.logger)
@@ -240,13 +239,6 @@ func (rt *watchRuntime) initWatchInfra(
 		stopTicker(maintenanceTicker)
 		rt.resetRefreshTimer(nil)
 
-		inFlight := depGraph.InFlightCount()
-		if inFlight > 0 {
-			rt.deps.logger.Info("graceful shutdown: canceling in-flight actions and waiting for them to stop",
-				slog.Int("in_flight", inFlight),
-			)
-		}
-
 		rt.stopRetryTimer()
 		rt.stopTrialTimer()
 		rt.stopAdmitTimer()
@@ -269,8 +261,8 @@ func (rt *watchRuntime) initWatchInfra(
 // observes current truth, builds the current plan, reconciles runtime state,
 // and starts the shared runtime through the
 // shared current-plan stage sequence, then dispatches through the same
-// DepGraph, active scope working set, and WorkerPool that the steady-state
-// watch loop uses. Blocks until all bootstrap actions due now complete.
+// dependency graph, active scope working set and worker pool that the
+// steady-state watch loop uses. Blocks until all bootstrap actions due now complete.
 //
 // Must be called after startup + initWatchInfra and before startObservers.
 func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPipeline) error {

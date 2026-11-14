@@ -93,7 +93,6 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 	assert.Equal(t, mountCfg.AccountEmail, eng.permHandler.accountEmail)
 	assert.Equal(t, mountCfg.TransferWorkers, eng.transferWorkers)
 	assert.Equal(t, mountCfg.CheckWorkers, eng.checkWorkers)
-	assert.Equal(t, mountCfg.MinFreeSpace, eng.minFreeSpace)
 	assert.Nil(t, eng.driveVerifier)
 }
 
@@ -201,7 +200,6 @@ func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
 	assert.True(t, eng.localRules.RejectSharePointRootForms)
 	assert.Equal(t, mountCfg.TransferWorkers, eng.transferWorkers)
 	assert.Equal(t, mountCfg.CheckWorkers, eng.checkWorkers)
-	assert.Equal(t, mountCfg.MinFreeSpace, eng.minFreeSpace)
 }
 
 func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {

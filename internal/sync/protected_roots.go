@@ -11,8 +11,11 @@ import (
 
 // refreshProtectedRootsFromStore rederives the protected roots from the
 // persisted shortcut-root state. It runs on the loop goroutine before every
-// observation and off it from the full-refresh goroutine and the remote
-// observer's expired-delta recovery, so the write goes through the lock.
+// observation and before housekeeping, and off it from the full-refresh
+// goroutine, the remote observer's expired-delta recovery and the multisync
+// orchestrator's goroutine, whose final-drain acknowledgement through the ack
+// handle reconciles the shortcut roots (reconcileShortcutRootLocalState), so
+// the write goes through the lock.
 func (e *Engine) refreshProtectedRootsFromStore(ctx context.Context) error {
 	if e == nil || e.baseline == nil {
 		return nil

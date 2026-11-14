@@ -9,9 +9,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
-// postSyncHousekeeping runs non-critical cleanup after a sync pass:
-// .partial deletion and session file cleanup. Synchronous — completes
-// before RunOnce returns to guarantee cleanup on process exit.
+// postSyncHousekeeping runs non-critical cleanup after a sync pass: leftover
+// download files, expired upload session files and expired trash entries. It
+// runs synchronously on the run's goroutine, so a one-shot sync that runs it
+// has cleaned up before RunOnce returns.
 //
 // The transfer-artifact cleanup walks everything but the protected roots, and
 // removes every owned partial it finds with no age check. It therefore runs
@@ -59,6 +60,11 @@ func (e *Engine) reportStreakOutcome(report streakReport, err error, attrs ...an
 	e.logger.Warn(report.warn, failed...)
 }
 
+// protectedRootRefreshRecoveredMessage is the line that ends a failure streak
+// of the housekeeping refresh. It is logged after the refresh and before the
+// cleanup reads the list.
+const protectedRootRefreshRecoveredMessage = "shared-folder list refreshed again; transfer cleanup resumes"
+
 // refreshProtectedRootsForHousekeeping refreshes the protected-root list and
 // reports whether housekeeping may walk the tree. A failure is one Warn per
 // streak (R-6.6.30), Debug on repeats, and the streak ends when a refresh
@@ -79,7 +85,7 @@ func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool 
 		failing:   &e.protectedRootRefreshFailing,
 		warn:      "Could not refresh the shared-folder list; skipping transfer-leftover cleanup until it can be read",
 		repeat:    "refresh protected roots before housekeeping failed again; skipping transfer cleanup",
-		recovered: "shared-folder list refreshed again; transfer cleanup resumes",
+		recovered: protectedRootRefreshRecoveredMessage,
 	}, err)
 
 	return err == nil
@@ -89,11 +95,14 @@ func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool 
 // and expired upload session files from the session store. Neither can fail
 // a pass. Each of the two reports everything it could not remove in one line,
 // once per streak (R-6.6.30): what cannot be removed now is still there the
-// next time. What it did remove is said whenever there was something.
+// next time. What it did remove is said whenever there was something. It
+// reads the protected roots through their lock: a parent's final-drain
+// acknowledgement can rederive them from the orchestrator's goroutine while
+// this runs.
 func (e *Engine) cleanTransferArtifacts() {
 	result := driveops.CleanTransferArtifacts(e.syncTree, e.sessionStore, e.logger,
 		driveops.TransferArtifactCleanupOptions{
-			SkipDirs:            transferArtifactCleanupSkipDirs(e.contentFilter, e.protectedRoots),
+			SkipDirs:            transferArtifactCleanupSkipDirs(e.contentFilter, e.currentProtectedRoots()),
 			IncludedDirs:        e.contentFilter.IncludedDirs,
 			IncludeJunkPartials: e.contentFilter.IgnoreJunkFiles,
 		},
