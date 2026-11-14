@@ -1,8 +1,10 @@
 version: "2"
 
 run:
-  # The e2e and integration code roughly doubles what is analyzed; a 2-core
-  # machine needs more than 5 minutes for a cold whole-repo run.
+  # The deadline of a linter started by hand. `devtool verify` passes its own
+  # --timeout over this one: this value on a host with at least 3 cores, and a
+  # longer one below, where a cold whole-repo run beside other work has taken
+  # more than 15 minutes. A devtool test keeps the two base values equal.
   timeout: 15m
   modules-download-mode: readonly
   # Live-test code is build-tagged; without these tags lint never sees it.

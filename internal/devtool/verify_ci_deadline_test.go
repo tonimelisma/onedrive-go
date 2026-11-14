@@ -76,6 +76,32 @@ func TestCILiveJobsPullRequestTimeoutsAreTheirNeed(t *testing.T) {
 	}
 }
 
+// ciLintJobSetupAllowance is the time the lint job spends before the linter
+// starts: checkout, the toolchain, the linter's download, the vulnerability
+// scan and compiling devtool. Its recorded runs take under a minute there.
+const ciLintJobSetupAllowance = 5 * time.Minute
+
+// Validates: R-6.10.26
+//
+// A linter that hangs on a CI runner is ended by its own deadline, and its
+// message says so, only when the lint job's timeout-minutes leaves room for
+// that deadline plus the steps before it. At an equal number the job ends
+// first and the log names no cause.
+func TestCILintJobTimeoutCoversTheLintersDeadline(t *testing.T) {
+	t.Parallel()
+
+	workflow, err := os.ReadFile(filepath.Join(repoRootFromDevtoolPackage(t), ciWorkflowPath))
+	require.NoError(t, err)
+
+	deadline := lintTimeoutForCores(unitTestReferenceCores)
+	for _, event := range []string{ciEventPullRequest, ciEventPush} {
+		timeout := ciJobTimeout(t, string(workflow), "verify-lint", event)
+		assert.LessOrEqualf(t, deadline+ciLintJobSetupAllowance, timeout,
+			"job verify-lint on %s: the linter's deadline %s plus %s of setup exceed its timeout-minutes %s",
+			event, deadline, ciLintJobSetupAllowance, timeout)
+	}
+}
+
 // worstCaseE2EFullRunner fails each step that has a classified rerun with the
 // failure that triggers it, so the e2e-full run starts every rerun it can.
 func worstCaseE2EFullRunner() *fakeRunner {

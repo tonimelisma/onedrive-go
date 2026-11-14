@@ -96,7 +96,7 @@ func TestRunVerifyPublicRunsUnitTestsAfterLintFails(t *testing.T) {
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
 	runner := &fakeRunner{
 		outputs:     map[string][]byte{"go tool cover -func=" + coverFile: []byte("total:\t(statements)\t90.0%\n")},
-		runErrByKey: map[string]error{"golangci-lint run --allow-parallel-runners": assert.AnError},
+		runErrByKey: map[string]error{lintCommandKey(): assert.AnError},
 	}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
