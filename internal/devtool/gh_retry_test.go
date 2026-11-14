@@ -159,7 +159,8 @@ func TestGHClient_ContextEndingDuringTheBackoffEndsTheCall(t *testing.T) {
 //
 // A request that never reached GitHub says as little about the request as a
 // dropped one: the runner's network or DNS failed. The texts are Go's
-// net/http errors as gh reports them.
+// net/http errors as gh reports them, and the last is gh's own message for a
+// host it could not connect to.
 func TestGHClient_RetriesARequestThatNeverReachedGitHub(t *testing.T) {
 	t.Parallel()
 
@@ -170,6 +171,7 @@ func TestGHClient_RetriesARequestThatNeverReachedGitHub(t *testing.T) {
 		`Get "https://api.github.com/repos/o/r": dial tcp: lookup api.github.com: no such host`,
 		`Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: Temporary failure in name resolution`,
 		`Get "https://api.github.com/repos/o/r": dial tcp 140.82.112.6:443: connect: network is unreachable`,
+		"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com",
 	}
 	for _, failure := range failures {
 		t.Run(failure, func(t *testing.T) {

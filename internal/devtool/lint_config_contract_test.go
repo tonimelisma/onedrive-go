@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,6 +108,45 @@ func TestGolangciConfig_DepguardPackagePatternsNameExistingPackages(t *testing.T
 	}
 
 	require.Positive(t, checked, "expected depguard rules that name package folders")
+}
+
+// Validates: R-6.10.22
+//
+// devtool gives golangci-lint its deadline on the command line, scaled to the
+// host's cores, and .golangci.yml keeps a deadline for a linter started by
+// hand. On a host the size of a CI runner the two are one number, and nothing
+// but this test stops one from being changed without the other.
+func TestGolangciConfig_RunTimeoutIsDevtoolsBaseLintDeadline(t *testing.T) {
+	t.Parallel()
+
+	value, ok := golangciRunTimeout(golangciConfigLines(t))
+	require.True(t, ok, "expected a timeout in the run block of .golangci.yml")
+
+	timeout, err := time.ParseDuration(value)
+	require.NoError(t, err)
+	assert.Equal(t, lintBaseTimeout, timeout)
+}
+
+// golangciRunTimeout returns the timeout the run block of the config's lines
+// holds.
+func golangciRunTimeout(lines []string) (string, bool) {
+	inRun := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") {
+			inRun = trimmed == "run:"
+
+			continue
+		}
+		if value, found := strings.CutPrefix(trimmed, "timeout:"); inRun && found {
+			return strings.TrimSpace(value), true
+		}
+	}
+
+	return "", false
 }
 
 // holdsNonTestGoFile reports whether dir exists and holds a Go file that is

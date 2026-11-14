@@ -647,11 +647,21 @@ func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []s
 	if err := assertLintVersionMatchesCI(ctx, runner, repoRoot, env); err != nil {
 		return err
 	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, "golangci-lint", "run", "--allow-parallel-runners"); err != nil {
+	args := lintCommandArgs(runtime.GOMAXPROCS(0))
+	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, lintBinaryName, args...); err != nil {
 		return fmt.Errorf("lint: %w", err)
 	}
 
 	return nil
+}
+
+// lintCommandArgs is golangci-lint's command line for the cores the run may
+// use. The deadline is passed here, over the `run.timeout` of .golangci.yml,
+// because a configuration file cannot follow the host: the fixed value that
+// fits a CI runner ends a healthy whole-repository run on a 2-core host that
+// other work shares.
+func lintCommandArgs(cores int) []string {
+	return []string{"run", "--allow-parallel-runners", "--timeout=" + lintTimeoutForCores(cores).String()}
 }
 
 // supportedPlatformCount is the number of GOOS values README.md claims support
@@ -772,15 +782,29 @@ const (
 	// when other work shared the cores. The budget gives that host three
 	// times the run that failed: 30 minutes on 2 cores, 60 on one.
 	shortUnitTestSmallHostCoreBudget = 60 * time.Minute
+
+	// lintBaseTimeout is golangci-lint's deadline on a host with at least
+	// unitTestReferenceCores cores. It is the `run.timeout` .golangci.yml
+	// holds for a linter started by hand, and a test keeps the two equal.
+	lintBaseTimeout = 15 * time.Minute
+
+	// lintSmallHostCoreBudget is the linter's deadline on a host with fewer
+	// cores than the reference, as core time. It is measured, like the unit
+	// tiers': on a shared 2-core host the whole-repository lint reported no
+	// issue and then ran into the 15-minute deadline in a pre-PR gate, at 16.6
+	// minutes, while other builds shared the cores. The budget gives that host
+	// three times the deadline that failed: 45 minutes on 2 cores, 90 on one.
+	lintSmallHostCoreBudget = 90 * time.Minute
 )
 
-// goTestTimeoutForCores is a unit tier's go test deadline for the cores the
-// run may use. The tiers are CPU-bound, and a deadline that fits a CI runner
-// fails a healthy run on a 2-core host, so a host below the reference gets the
-// tier's small-host budget divided by its cores. A host at the reference or
-// above keeps the base deadline: more cores do not shorten the deadline a real
-// hang is measured against, and the CI job timeouts are set above it.
-func goTestTimeoutForCores(cores int, base, smallHostCoreBudget time.Duration) time.Duration {
+// deadlineForCores is the deadline of a CPU-bound verify step (a unit tier's
+// go test, the linter) for the cores the run may use. A deadline that fits a
+// CI runner fails a healthy run on a 2-core host, so a host below the
+// reference gets the step's small-host budget divided by its cores. A host at
+// the reference or above keeps the base deadline: more cores do not shorten
+// the deadline a real hang is measured against, and the CI job timeouts are
+// set above it.
+func deadlineForCores(cores int, base, smallHostCoreBudget time.Duration) time.Duration {
 	if cores < 1 {
 		cores = 1
 	}
@@ -794,13 +818,19 @@ func goTestTimeoutForCores(cores int, base, smallHostCoreBudget time.Duration) t
 // unitTestTimeoutForCores is the full race tier's go test deadline for the
 // cores the run may use.
 func unitTestTimeoutForCores(cores int) time.Duration {
-	return goTestTimeoutForCores(cores, unitTestBaseTimeout, unitTestSmallHostCoreBudget)
+	return deadlineForCores(cores, unitTestBaseTimeout, unitTestSmallHostCoreBudget)
 }
 
 // shortUnitTestTimeoutForCores is the short unit tier's go test deadline for
 // the cores the run may use.
 func shortUnitTestTimeoutForCores(cores int) time.Duration {
-	return goTestTimeoutForCores(cores, shortUnitTestBaseTimeout, shortUnitTestSmallHostCoreBudget)
+	return deadlineForCores(cores, shortUnitTestBaseTimeout, shortUnitTestSmallHostCoreBudget)
+}
+
+// lintTimeoutForCores is golangci-lint's deadline for the cores the run may
+// use.
+func lintTimeoutForCores(cores int) time.Duration {
+	return deadlineForCores(cores, lintBaseTimeout, lintSmallHostCoreBudget)
 }
 
 // resolveUnitTestTimeout returns the explicit deadline (`--unit-timeout`) when

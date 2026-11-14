@@ -29,11 +29,14 @@ var (
 	githubDroppedConnectionPattern = regexp.MustCompile(
 		`(?m)connection reset by peer|broken pipe|unexpected EOF|server sent GOAWAY|: EOF$`)
 
-	// githubUnreachablePattern finds the ways Go's HTTP client reports a
-	// request that never reached GitHub: the runner's network or DNS failed.
+	// githubUnreachablePattern finds the ways a request that never reached
+	// GitHub is reported: the runner's network or DNS failed. The last is
+	// gh's own message, "error connecting to <host>", which carries none of
+	// the words of Go's HTTP client before it.
 	githubUnreachablePattern = regexp.MustCompile(
 		`(?i)i/o timeout|TLS handshake timeout|connection refused|no such host|` +
-			`temporary failure in name resolution|network is unreachable`)
+			`temporary failure in name resolution|network is unreachable|` +
+			`error connecting to `)
 )
 
 // ghClient runs the gh requests of the DoD stages and the nightly check. It

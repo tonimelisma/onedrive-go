@@ -144,6 +144,18 @@ func TestRunVerifyLintRunsOnlyLint(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"golangci-lint run --allow-parallel-runners"}, recordedCommandSequence(runner))
+	assert.Equal(t, hostLintCommandArgs(), runner.runCommands[0].args)
+}
+
+// hostLintCommandArgs is the linter's command line on the host the tests run
+// on: its deadline follows the cores this process may use.
+func hostLintCommandArgs() []string {
+	return lintCommandArgs(runtime.GOMAXPROCS(0))
+}
+
+// lintCommandKey is that command line as the fake runner keys a command.
+func lintCommandKey() string {
+	return lintBinaryName + " " + strings.Join(hostLintCommandArgs(), " ")
 }
 
 // quickCommandSequence is what the quick profile runs, as
@@ -186,6 +198,7 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 
 	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
 	assert.Equal(t, expected, recordedCommandSequence(runner))
+	assert.Equal(t, hostLintCommandArgs(), runner.runCommands[0].args)
 
 	unit := runner.runCommands[len(runner.runCommands)-1]
 	assert.Equal(t, []string{"test", "-short", testShortUnitTimeoutArg, "./..."}, unit.args)
@@ -273,6 +286,36 @@ func TestRunVerifyShortTierDeadlineComesFromTheCoresByDefault(t *testing.T) {
 		unit := runner.runCommands[len(runner.runCommands)-1]
 		assert.Equal(t, []string{"test", "-short", want, "./..."}, unit.args, "profile %s", profile)
 	}
+}
+
+// The linter's 15-minute deadline fits the CI runners, so at their core count
+// and above it stays. Below it the deadline is 90 core-minutes divided by the
+// cores: the whole-repository lint is CPU-bound and ran past 15 minutes on a
+// 2-core host that other builds shared, with no issue to report. A host that
+// reports no cores counts as one.
+//
+// Validates: R-6.10.22
+func TestLintTimeoutForCoresGivesSmallHostsACoreBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, cores := range []int{3, 4, 8} {
+		assert.Equal(t, 15*time.Minute, lintTimeoutForCores(cores), "cores %d", cores)
+	}
+
+	assert.Equal(t, 45*time.Minute, lintTimeoutForCores(2))
+	assert.Equal(t, 90*time.Minute, lintTimeoutForCores(1))
+	assert.Equal(t, 90*time.Minute, lintTimeoutForCores(0))
+}
+
+// The deadline reaches golangci-lint as its --timeout flag, which wins over
+// the configuration file's value.
+//
+// Validates: R-6.10.22
+func TestLintCommandArgsCarryTheDeadlineOfTheCores(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"run", "--allow-parallel-runners", "--timeout=15m0s"}, lintCommandArgs(4))
+	assert.Equal(t, []string{"run", "--allow-parallel-runners", "--timeout=45m0s"}, lintCommandArgs(2))
 }
 
 // Validates: R-6.10.22
