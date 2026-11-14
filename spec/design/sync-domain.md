@@ -74,7 +74,7 @@ exhaustive linter fails until a new member is decided in each: membership
 availability (`truthVerdictForIssueType`, sync-store.md), the condition family
 (`conditionKeyForIssueType`), the retry curve (`retryDelayForCondition`), the
 permission boundary scope (`scopeKeyForPermissionEvidence`), the
-block-scope activation wording (`blockScopeActivationWording`) and whether an
+block-scope activation wording (`blockScopeActivationWording`), whether an
 observation issue leaves a file unsynced, which fails a one-shot sync
 (`issueTypeLeavesFileUnsynced`, R-6.6.28: every member does except
 `deletes_held`, a deliberate hold, `local_interrupted_removal`, a report
@@ -82,10 +82,17 @@ about a leftover at an internal name sync never syncs, and
 `removed_folder_kept`, what a removed shared folder's release kept: content
 sync does not sync, a synced folder that cannot be written to or a synced
 entry the local delete could not move to the trash or delete, both already
-synced, or a change that can no longer be sent to the shared folder, whose
-own `remote_read_denied` issue already counts;
-`TestIssueTypes_EveryTypeIsClassifiedForOneShotExit`). None of them
-carries a `//nolint:exhaustive`; until 2026-11-11 the last three did, remote
+synced, or a change that can no longer be sent to the shared folder, each
+of which holds the folder's local copy through the release's own report.
+The change that could not be sent still fails the run, counted from that
+report and not from its row (`LeftWork.NotUploaded`, sync-engine.md);
+`TestIssueTypes_EveryTypeIsClassifiedForOneShotExit`), and whether an issue
+at the root read scope is the read failure of a whole tree
+(`issueTypeIsRootReadFailure`, only `remote_read_denied` and
+`remote_root_not_found`;
+`TestIssueTypeIsRootReadFailure_EveryMemberIsDecided`). None of them
+carries a `//nolint:exhaustive`; until 2026-11-11 the boundary scope, the
+activation wording and the one-shot exit verdict did, remote
 truth was two equality tests and the condition family a lookup table, so a
 member they did not name fell through to "not blocking", "no family", the
 one-second curve or a warning. Each switch has a test that reads the members

@@ -387,7 +387,13 @@ mount failed; partial failure is isolated per mount. Both startup results and
 completed reports carry a stable `SelectionIndex` matching the compiled runtime
 order plus a `MountIdentity` matching the current boundary, so standalone
 parents and their attached child mounts remain deterministic through
-orchestration, rendering, and bookkeeping.
+orchestration, rendering, and bookkeeping. The summary counts two things
+apart: `SelectedDriveCount` is the configured drives its results name, each
+once, because a drive whose shared folders could not be set up has a second
+result beside its own and a shared folder below a drive is not a drive
+(`TestRunOnce_DriveWhoseSharedFoldersCannotBeSetUpIsOneSelectedDrive`);
+`StartupResultCount` is every result, which tells the console whether its
+lines need names.
 
 ### RunWatch
 
@@ -443,7 +449,9 @@ mounts from running. Watch startup warns about those mounts immediately, keeps
 healthy mounts running, and exits non-zero only when no runnable mount starts.
 An all-failed selection is a structured startup refusal
 (`WatchStartupError`), not a special string-only path; a paused-only
-selection is not a refusal at all.
+selection is not a refusal at all. Its message names the one failure, or
+counts the drives and the shared folders below them apart, each once
+(`TestWatchStartupError_CountsDrivesAndSharedFoldersApart`).
 
 Every reconcile tick, reload, and runner event re-runs the start logic, and
 the carried-over CLI conversion failures ride along on each pass. The watch

@@ -469,7 +469,8 @@ with an error naming the type and the path: a batch deletes only rows of its
 managed types, so such a row would outlive every later batch that stops
 reporting it. Every production batch satisfies the rule (the local batch
 manages every type a local scan reports, the remote batch reports only
-`remote_read_denied`, which it manages), so the refusal marks a constructor
+`remote_read_denied` or `remote_root_not_found`, both of which it manages),
+so the refusal marks a constructor
 bug rather than an input the store tolerates.
 
 Derived truth inspection stays read-only and authority-based. Observation-owned

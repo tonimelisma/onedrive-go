@@ -37,16 +37,19 @@ func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreate
 }
 
 // Validates: R-2.1.2, R-2.10.4
-func TestRootRemoteReadDeniedObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
+func TestRootReadFailureObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
-	batch := rootRemoteReadDeniedObservationFindingsBatch(driveid.New(testDriveID))
+	for _, issueType := range []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound} {
+		batch := rootReadFailureObservationFindingsBatch(driveid.New(testDriveID), issueType)
 
-	require.Len(t, batch.Issues, 1)
-	assert.Equal(t, "/", batch.Issues[0].Path)
-	assert.Equal(t, issueRemoteReadDenied, batch.Issues[0].IssueType)
-	assert.Equal(t, sKPermRemoteRead(""), batch.Issues[0].ScopeKey)
-	assert.Equal(t, []IssueType{issueRemoteReadDenied}, batch.ManagedIssueTypes)
+		require.Len(t, batch.Issues, 1)
+		assert.Equal(t, "/", batch.Issues[0].Path)
+		assert.Equal(t, issueType, batch.Issues[0].IssueType)
+		assert.Equal(t, sKPermRemoteRead(""), batch.Issues[0].ScopeKey)
+		assert.Equal(t, []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound}, batch.ManagedIssueTypes,
+			"a root observation replaces whichever root read issue an earlier answer left")
+	}
 }
 
 // localScanIssueTypesInSource returns every IssueType constant named in a

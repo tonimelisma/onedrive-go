@@ -32,10 +32,16 @@ var (
 	// leftWorkSummary matches any summary line that reports left work.
 	leftWorkSummary = regexp.MustCompile(`\d+ failed|will be retried on the next sync|still not synced`)
 
-	// leftWorkDrivesError matches the command's closing error line for a run
-	// over several mounts of which some left work.
-	leftWorkDrivesError = regexp.MustCompile(
-		`^Error: (\d+) of \d+ selected drives left files unsynced \(see above\)$`)
+	// leftWorkMountsError matches the command's closing error line for a run
+	// over several mounts of which some left work. It counts the drives that
+	// left work, the shared folders below them that did, or both: "1 of 2
+	// selected drives", "2 of 2 shared folders in 1 selected drive", "1 of 2
+	// selected drives and 1 of 1 shared folder". Each submatch that took part
+	// is a number of mounts.
+	leftWorkMountsError = regexp.MustCompile(`^Error: (?:` +
+		`(\d+) of \d+ selected drives?(?: and (\d+) of \d+ shared folders?)?` +
+		`|(\d+) of \d+ shared folders? in \d+ selected drives?` +
+		`) left files unsynced \(see above\)$`)
 )
 
 const commandErrorPrefix = "Error: "
@@ -133,7 +139,7 @@ func (c *StandingSyncConditions) Settle(stdout, stderr string) (settledStdout, s
 		return stdout, stderr, false
 	}
 
-	withoutError, ok := removeLeftWorkDrivesError(stderr, standingLines)
+	withoutError, ok := removeLeftWorkMountsError(stderr, standingLines)
 	if !ok {
 		return stdout, stderr, false
 	}
@@ -151,10 +157,10 @@ func summaryWithoutLeftWork(prefix, duration, work string) string {
 	return prefix + "Done in " + duration + work + "."
 }
 
-// removeLeftWorkDrivesError removes stderr's closing error line when it is
+// removeLeftWorkMountsError removes stderr's closing error line when it is
 // the only error line, the last line with any text, and counts exactly
-// wantDrives mounts that left work.
-func removeLeftWorkDrivesError(stderr string, wantDrives int) (string, bool) {
+// wantMounts mounts that left work, drives and shared folders together.
+func removeLeftWorkMountsError(stderr string, wantMounts int) (string, bool) {
 	lines := strings.SplitAfter(stderr, "\n")
 	errorLine := -1
 	lastText := -1
@@ -176,11 +182,22 @@ func removeLeftWorkDrivesError(stderr string, wantDrives int) (string, bool) {
 	}
 
 	text, _ := splitLineEnding(lines[errorLine])
-	match := leftWorkDrivesError.FindStringSubmatch(text)
+	match := leftWorkMountsError.FindStringSubmatch(text)
 	if match == nil {
 		return "", false
 	}
-	if drives, err := strconv.Atoi(match[1]); err != nil || drives != wantDrives {
+	mounts := 0
+	for _, count := range match[1:] {
+		if count == "" {
+			continue
+		}
+		n, err := strconv.Atoi(count)
+		if err != nil {
+			return "", false
+		}
+		mounts += n
+	}
+	if mounts != wantMounts {
 		return "", false
 	}
 

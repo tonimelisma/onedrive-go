@@ -178,9 +178,10 @@ func (c *syncConsole) jsonSummary(result multisync.RunOnceResult, left map[strin
 		}
 		event.DryRun = r.DryRun
 		event.DurationMS = &durationMS
+		notSynced := counts.NotSynced()
 		event.Failed = &counts.Failed
 		event.WillRetry = &counts.WillRetry
-		event.StillOpen = &counts.StillOpen
+		event.StillOpen = &notSynced
 		event.Counts = make(map[string]int, len(tally.counts))
 		for kind, n := range tally.counts {
 			if n > 0 {

@@ -662,8 +662,9 @@ func requireSyncEventuallyConvergesWith(
 var syncLeftWorkPattern = regexp.MustCompile(`\d+ failed|will be retried on the next sync|still not synced`)
 
 // syncLeftWorkErrorPattern matches the command error of a one-shot sync that
-// left work, for one selected drive or for several.
-var syncLeftWorkErrorPattern = regexp.MustCompile(`left \d+ files? unsynced|drives left files unsynced`)
+// left work, for one mount ("sync left 2 files unsynced") or for several,
+// however the closing count names its drives and shared folders.
+var syncLeftWorkErrorPattern = regexp.MustCompile(`left \d+ files? unsynced|left files unsynced \(see above\)`)
 
 // syncPassFinishedWork reports whether a pass exited zero and left no work.
 // A requireSyncEventuallyConverges predicate that waits for remote state and

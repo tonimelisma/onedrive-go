@@ -3705,3 +3705,35 @@ func writeTestConfigMulti(t *testing.T, cfgPath string, cid1 driveid.CanonicalID
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid1, dir1))
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid2, dir2))
 }
+
+// Validates: R-6.6.28
+//
+// A drive whose shared folders cannot be set up has two startup results, its
+// own and the setup failure; it is still one selected drive, so a sentence
+// that counts what the user selected says one drive.
+func TestRunOnce_DriveWhoseSharedFoldersCannotBeSetUpIsOneSelectedDrive(t *testing.T) {
+	parent := testStandaloneMount(t, "personal:setup-failure@example.com", "SetupFailure")
+	setupXDGIsolation(t, parent.CanonicalID)
+
+	cfg := testOrchestratorConfig(t, parent)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	orch := NewOrchestrator(cfg)
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		require.Equal(t, MountProjectionStandalone, req.Mount.projectionKind(), "no shared folder can be set up")
+		return &mockEngine{
+			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+				child := testChildRecordWithContext(ctx, t, req.Mount.id(), "binding-incomplete", "Shortcuts/Incomplete")
+				// Without the shared folder's remote root it cannot be set up.
+				child.Engine.RemoteItemID = ""
+				require.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(req.Mount.id().String(), child)))
+				return &syncengine.Report{}, nil
+			},
+		}, nil
+	}
+
+	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+
+	require.Equal(t, 2, result.Startup.StartupResultCount(), "the drive's own result and its shared folders' setup failure")
+	require.ErrorContains(t, result.Startup.Results[1].Err, "set up shared-folder shortcuts")
+	assert.Equal(t, 1, result.Startup.SelectedDriveCount())
+}

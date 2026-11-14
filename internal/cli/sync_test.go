@@ -83,7 +83,7 @@ func TestRunOnceResultError_DriveFailures(t *testing.T) {
 				{Report: &syncengine.Report{}},
 				{Err: errDelta},
 			},
-			wantMsg: "1 of 2 selected drives failed or were skipped (see above)",
+			wantMsg: "1 of 2 selected drives failed or was skipped (see above)",
 		},
 		{
 			name: "all failures",
@@ -102,8 +102,13 @@ func TestRunOnceResultError_DriveFailures(t *testing.T) {
 			result := multisync.RunOnceResult{Reports: tt.reports}
 			for i := range tt.reports {
 				tt.reports[i].SelectionIndex = i
+				if tt.reports[i].Identity.MountID == "" {
+					tt.reports[i].Identity = testStandaloneMountIdentity(
+						driveid.MustCanonicalID(fmt.Sprintf("personal:drive-%d@example.com", i)))
+				}
 				result.Startup.Results = append(result.Startup.Results, multisync.MountStartupResult{
 					SelectionIndex: i,
+					Identity:       tt.reports[i].Identity,
 					Status:         multisync.MountStartupRunnable,
 				})
 			}

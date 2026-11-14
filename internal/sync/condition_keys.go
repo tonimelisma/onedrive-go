@@ -13,6 +13,7 @@ const (
 	ConditionRateLimited            ConditionKey = "rate_limited"
 	ConditionRemoteWriteDenied      ConditionKey = "remote_write_denied"
 	ConditionRemoteReadDenied       ConditionKey = "remote_read_denied"
+	ConditionRemoteRootNotFound     ConditionKey = "remote_root_not_found"
 	ConditionLocalReadDenied        ConditionKey = "local_read_denied"
 	ConditionLocalWriteDenied       ConditionKey = "local_permission_denied"
 	ConditionInvalidFilename        ConditionKey = "invalid_filename"
@@ -100,6 +101,7 @@ func conditionClearsAutomatically(key ConditionKey) bool {
 		ConditionQuotaExceeded,
 		ConditionRemoteWriteDenied,
 		ConditionRemoteReadDenied,
+		ConditionRemoteRootNotFound,
 		ConditionLocalReadDenied,
 		ConditionLocalWriteDenied,
 		ConditionInvalidFilename,
@@ -180,6 +182,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionRateLimited,
 		ConditionRemoteWriteDenied,
 		ConditionRemoteReadDenied,
+		ConditionRemoteRootNotFound,
 		ConditionLocalReadDenied,
 		ConditionLocalWriteDenied,
 		ConditionInvalidFilename,
@@ -248,6 +251,8 @@ func conditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
 		return ConditionRemoteWriteDenied, true
 	case issueRemoteReadDenied:
 		return ConditionRemoteReadDenied, true
+	case issueRemoteRootNotFound:
+		return ConditionRemoteRootNotFound, true
 	case IssueQuotaExceeded:
 		return ConditionQuotaExceeded, true
 	case issueRateLimited:

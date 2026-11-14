@@ -74,7 +74,7 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 		},
 	}
 
-	info := buildSyncStateInfo(snapshot, false, 1)
+	info := buildSyncStateInfo(snapshot, statusStoreRootDrive, false, 1)
 	require.Len(t, info.Conditions, 3)
 	assert.Equal(t, 11, info.FileCount)
 	assert.Equal(t, 2, info.RemoteDrift)
@@ -110,7 +110,7 @@ func TestBuildSyncStateInfo_NamesWhatARemovedSharedFolderKept(t *testing.T) {
 			{Path: "Docs/link", IssueType: kept},
 			{Path: "Docs/pipe", IssueType: kept},
 		},
-	}, false, defaultVisiblePaths)
+	}, statusStoreRootSharedFolder, false, defaultVisiblePaths)
 
 	require.Len(t, info.Conditions, 1)
 	condition := info.Conditions[0]
@@ -144,7 +144,7 @@ func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T)
 			{Path: "Shared/Docs/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
 			{Path: "Shared/Docs/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
 		},
-	}, false, 2)
+	}, statusStoreRootDrive, false, 2)
 
 	require.Len(t, groups, 2)
 	assert.Equal(t, "Shared folder writes blocked", groups[0].Title)
@@ -161,7 +161,7 @@ func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T)
 func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
 	t.Parallel()
 
-	info := buildSyncStateInfo(nil, true, 0)
+	info := buildSyncStateInfo(nil, statusStoreRootDrive, true, 0)
 	assert.Zero(t, info.FileCount)
 	assert.Zero(t, info.ConditionCount)
 	assert.Equal(t, defaultVisiblePaths, info.ExamplesLimit)
@@ -595,6 +595,16 @@ func descriptorAuthAndRemoteCases(authPresentation authstate.Presentation) []des
 			wantReason: "This remote content can no longer be downloaded with your current permissions.",
 			wantAction: "Restore access to the shared item, or remove the blocked content from this sync scope.",
 		},
+		{
+			// By key alone it is a drive's own root; a shared folder's root is
+			// told apart by TestBuildSyncStateInfo_RootReadFailureSaysWhatTheRootIs.
+			name:       "remote root not found",
+			key:        syncengine.ConditionRemoteRootNotFound,
+			wantTitle:  "Synced folder not found",
+			wantReason: "OneDrive answered that the folder this drive syncs was not found.",
+			wantAction: "Check on the OneDrive website that the folder still exists. If it is gone, " +
+				"remove the drive with 'onedrive-go drive remove --drive <drive>'.",
+		},
 	}
 }
 
@@ -708,7 +718,7 @@ func TestBuildSyncStateInfo_ListsRetryingWork(t *testing.T) {
 		},
 	}
 
-	info := buildSyncStateInfo(snapshot, false, 2)
+	info := buildSyncStateInfo(snapshot, statusStoreRootDrive, false, 2)
 	assert.Equal(t, []string{
 		"docs/a.txt (upload, 9 attempts)",
 		"docs/old.txt -> docs/new.txt (remote_move, 4 attempts)",
@@ -725,5 +735,5 @@ func TestBuildSyncStateInfo_ListsRetryingWork(t *testing.T) {
 		"      ... and 1 more (use --verbose to see all)\n",
 		buf.String())
 
-	assert.Len(t, buildSyncStateInfo(snapshot, true, 2).RetryingPaths, 3, "--verbose lists every item")
+	assert.Len(t, buildSyncStateInfo(snapshot, statusStoreRootDrive, true, 2).RetryingPaths, 3, "--verbose lists every item")
 }

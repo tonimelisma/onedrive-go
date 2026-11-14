@@ -6,7 +6,7 @@ import (
 )
 
 // LeftWork is what a one-shot run left for a later run or the user, as its
-// last pass ended (R-6.6.28): each file once, in one of three counts. A file
+// last pass ended (R-6.6.28): each file once, in one of four counts. A file
 // an earlier pass failed and a later pass of the same run finished, or no
 // longer needed, is in none of them.
 type LeftWork struct {
@@ -19,11 +19,24 @@ type LeftWork struct {
 	// StillOpen is the observation issues that keep a file unsynced
 	// (Report.UnsyncedIssues).
 	StillOpen int
+	// NotUploaded is the changes the release of a removed shared folder kept
+	// because the folder can no longer be read to upload them
+	// (Report.KeptNotUploaded). Each is a change the run did not sync, so it
+	// fails the run like the other counts, until the user moves it away or
+	// deletes it.
+	NotUploaded int
 }
 
 // Total is how many files the run left.
 func (w LeftWork) Total() int {
-	return w.Failed + w.WillRetry + w.StillOpen
+	return w.Failed + w.WillRetry + w.NotSynced()
+}
+
+// NotSynced is the files the run left that `status` lists: those an
+// observation issue keeps unsynced and those a release kept because they
+// could not be uploaded. The summaries print them as one count.
+func (w LeftWork) NotSynced() int {
+	return w.StillOpen + w.NotUploaded
 }
 
 // Any reports whether the run left anything, which fails a one-shot sync.
@@ -43,9 +56,10 @@ func (r *Report) LeftWork() LeftWork {
 	}
 
 	return LeftWork{
-		Failed:    max(0, r.LastPassFailed-r.LastPassKeptForRetry),
-		WillRetry: r.LastPassKeptForRetry + r.LeftForNextSync,
-		StillOpen: r.UnsyncedIssues,
+		Failed:      max(0, r.LastPassFailed-r.LastPassKeptForRetry),
+		WillRetry:   r.LastPassKeptForRetry + r.LeftForNextSync,
+		StillOpen:   r.UnsyncedIssues,
+		NotUploaded: r.KeptNotUploaded.Count,
 	}
 }
 
@@ -83,9 +97,10 @@ func (h *LocalTreeHolds) Any() bool {
 // Reasons says what holds the tree, one sentence per part that holds it, in
 // a fixed order: no report, a dry run, the work the run left by kind, held
 // deletes of local files, set-aside files, and what the release kept
-// (keptReasons). The zero value has none. It is the one place these
-// sentences are made: a removed shared folder's final drain names them in its
-// blocked detail and its notice.
+// (keptReasons), which is also where the changes that could not be uploaded
+// (Left.NotUploaded) get their one sentence. The zero value has none. It is
+// the one place these sentences are made: a removed shared folder's final
+// drain names them in its blocked detail and its notice.
 func (h *LocalTreeHolds) Reasons() []string {
 	var reasons []string
 	if h.NoReport {

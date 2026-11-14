@@ -72,3 +72,35 @@ func TestSyncConsole_LeftWorkComesFromTheReportAlone(t *testing.T) {
 	assert.Equal(t, 1, *summary.WillRetry)
 	assert.Equal(t, 1, *summary.StillOpen)
 }
+
+// Validates: R-6.6.28, R-2.4.8
+//
+// A change kept from a removed shared folder because it could not be uploaded
+// is a file the run left unsynced: the run exits 1, and the text and JSON
+// summaries count it with the files `status` lists as still not synced.
+func TestSyncConsole_AChangeThatCouldNotBeUploadedFailsTheRun(t *testing.T) {
+	t.Parallel()
+
+	report := &syncengine.Report{
+		Duration:        2 * time.Second,
+		UnsyncedIssues:  1,
+		KeptNotUploaded: syncengine.KeptEntries{Count: 2, Examples: []string{"a.txt", "b.txt"}},
+	}
+
+	c, out, _ := testSyncConsole()
+	result := singleMountResult(report)
+	left := c.Summary(result)
+	assert.Equal(t, "Done in 2.0 s; 3 still not synced (see 'onedrive-go status').\n", out.String())
+	err := runOnceResultError(result, left)
+	require.ErrorIs(t, err, errSyncLeftWork)
+	assert.Equal(t, "sync left 3 files unsynced; run 'onedrive-go status' for details", err.Error())
+
+	c, out, _ = testSyncConsole()
+	c.json = true
+	c.Summary(result)
+	var summary syncJSONEvent
+	require.NoError(t, json.Unmarshal(out.Bytes(), &summary))
+	assert.Equal(t, "incomplete", summary.Status)
+	require.NotNil(t, summary.StillOpen)
+	assert.Equal(t, 3, *summary.StillOpen)
+}

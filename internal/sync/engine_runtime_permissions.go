@@ -266,6 +266,7 @@ func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
 	case IssueRemoteWriteDenied:
 		return SKPermRemoteWrite(evidence.BoundaryPath)
 	case issueRemoteReadDenied,
+		issueRemoteRootNotFound,
 		IssueInvalidFilename,
 		issuePathTooLong,
 		issueFileTooLarge,

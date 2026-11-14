@@ -251,7 +251,7 @@ func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
 			verdict: ScopeKey{},
 			members: []IssueType{
 				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
-				IssueUnauthorized, issueRemoteReadDenied, IssueQuotaExceeded, issueRateLimited,
+				IssueUnauthorized, issueRemoteReadDenied, issueRemoteRootNotFound, IssueQuotaExceeded, issueRateLimited,
 				issueCaseCollision, issueRemoteNameTwin, issueDiskFull, issueServiceOutage,
 				issueFileTooLargeForSpace, issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement,
 				issueLocalMountBoundary, issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge,

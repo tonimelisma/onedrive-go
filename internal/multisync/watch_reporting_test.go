@@ -456,7 +456,8 @@ func TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives(t *testing.T) {
 
 	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
 
-	require.Equal(t, 1, result.Startup.SelectedCount())
+	require.Equal(t, 1, result.Startup.StartupResultCount())
+	assert.Zero(t, result.Startup.SelectedDriveCount(), "a failure that stops the whole run names no drive")
 	failure := result.Startup.Results[0]
 	var inUse *ControlSocketInUseError
 	require.ErrorAs(t, failure.Err, &inUse)

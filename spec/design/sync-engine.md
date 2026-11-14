@@ -46,8 +46,12 @@ assemble overlapping observation-managed batch shapes ad hoc. A batch's
 managed types are the conditions it replaces: the local batch manages every
 issue type a local scan reports (`localObservationManagedIssueTypes`, listed
 in `sync-observation.md` under "Unavailable Is Not Absent"), so the full scan
-that no longer reports a finding clears it, and the remote batch manages
-`remote_read_denied` only.
+that no longer reports a finding clears it, and the remote batch manages the
+two root read issue types, `remote_read_denied` and `remote_root_not_found`,
+so the next root observation replaces whichever one an earlier answer left
+and a read that succeeds clears either
+(`TestRootObservation_AnswerDecidesTheStoredRootIssue`); the release of a
+removed shared folder that cannot be read reconciles the same batch empty.
 
 ## Ownership Contract
 
@@ -1132,13 +1136,29 @@ folder deleted on OneDrive and nothing else:
   the hold kept from OneDrive) has nothing to remove, and its row leaves with
   the release (`TestReleaseLocalTree_ASyncedFileAlreadyGoneLeavesWithItsRow`);
 - when the shared folder can no longer be read (the root's
-  `remote_read_denied` issue), the drain can never finish, and the release
+  `remote_read_denied` or `remote_root_not_found` issue,
+  `TestSharedFolderUnreadable_EitherRootAnswerMakesTheFolderUnreadable`),
+  no drain can sync that work, and the release
   runs anyway over that work: what matches the baseline leaves, a change that
   cannot be uploaded stays, counted in `Report.KeptNotUploaded` and named "could
   not be uploaded". A folder shared again at the same path plans no delete in
   it: released files lost their rows with them, so the ordinary sync of the
   folder downloads them, and kept changes are uploaded
   (`TestRunOnce_UnreadableSharedFolderReleasesWhatMatchesAndTheReAddPlansNoDelete`).
+  The folder's own read issue leaves the store after the release
+  (`forgetSharedFolderReadFailure`) and is not work the run left: a drain
+  that keeps nothing finishes, and one that keeps changes is held by them
+  alone, so `status` names the kept changes and not the shared folder whose
+  shortcut is gone
+  (`TestRunOnce_FinalDrainOfAnUnreadableSharedFolderThatKeepsNothingFinishes`,
+  `TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept`).
+  A kept change that could not be uploaded is work the run left
+  (`LeftWork.NotUploaded`, read from `Report.KeptNotUploaded`): a one-shot
+  sync that keeps one exits 1 and counts it as still not synced, every run,
+  until the change is moved away or deleted. What a release keeps for the
+  other reasons holds the local copy and does not fail the run
+  (`TestReport_LeftWorkCountsAChangeTheReleaseCouldNotUpload`,
+  `TestSyncConsole_AChangeThatCouldNotBeUploadedFailsTheRun`).
 
 A released tree leaves the sync folder empty, for the parent to remove
 (`TestRunOnce_FinalDrainReleasesASyncedTreeToTheTrash`,
@@ -1506,8 +1526,9 @@ Remote `403` handling is intentionally narrow:
 - raw `403` never creates a permission block scope by itself
 - only remote-write actions may invoke remote write-denial probing
 - probe-confirmed write denial may activate `perm:remote:write`
-- observation-owned `remote_read_denied` findings come only from remote
-  observation/probe at the observation orchestration seam
+- observation-owned `remote_read_denied` and `remote_root_not_found`
+  findings come only from remote observation/probe at the observation
+  orchestration seam
 
 ### Retry and trial release
 

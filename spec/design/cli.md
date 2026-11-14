@@ -49,7 +49,7 @@ are inserted, updated, pruned, and validated.
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusDrive_RendersLifecycleState`, `TestBuildChildStatusDrive_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | The first SIGINT/SIGTERM cancels the command context cooperatively, the second forces exit, and the stop function releases the signal goroutine and its registration whether or not a first signal arrived (R-6.3.6). | `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`, `TestShutdownContext_ParentCancelStopsGoroutine`, `TestShutdownContext_CancelReleasesSignalGoroutine`, `TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine`, `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator` |
 | A recovered panic's `stack` attribute stays in the log file and the `--verbose` console; the default console prints the Error line without it. | `TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole` |
-| A one-shot `sync` exits 1 when a drive it ran left a file unsynced, and 0 only when `status` lists nothing left for those drives; the text summary, the JSON summary and the exit status take their numbers from one method (`Report.LeftWork`), which counts the run's last pass, each file once, and a drive error's 77 or 78 still wins (R-6.6.28). | `TestRunSyncCommand_FailedActionsExitNonZero`, `TestRunSyncCommand_StillOpenConditionsExitNonZero`, `TestRunSyncCommand_MultiDriveCountsTheDrivesThatLeftWork`, `TestRunSyncCommand_ADriveErrorWinsOverLeftWork`, `TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts`, `TestSyncConsole_LeftWorkComesFromTheReportAlone`, `TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce`, `TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync`, `TestRunOnceResultError_ADriveWithAnErrorAndAReportIsADriveError`, `TestRunOnce_ReportCountsUnresolvedWork`, `TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`, `TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync` |
+| A one-shot `sync` exits 1 when a drive it ran left a file unsynced, and 0 when none did: a failed action, work kept for retry, an issue that keeps a file from syncing, or a change kept from a removed shared folder because it could not be uploaded (counted with the files still not synced). What `status` lists without a file left unsynced (held deletes, a leftover of an interrupted removal, what a removed shared folder's local copy keeps for another reason) does not fail the run. The text summary, the JSON summary and the exit status take their numbers from one method (`Report.LeftWork`), which counts the run's last pass, each file once, and a drive error's 77 or 78 still wins (R-6.6.28). | `TestRunSyncCommand_FailedActionsExitNonZero`, `TestRunSyncCommand_StillOpenConditionsExitNonZero`, `TestRunSyncCommand_MultiDriveCountsTheDrivesThatLeftWork`, `TestRunSyncCommand_ADriveErrorWinsOverLeftWork`, `TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts`, `TestSyncConsole_LeftWorkComesFromTheReportAlone`, `TestSyncConsole_AChangeThatCouldNotBeUploadedFailsTheRun`, `TestReport_LeftWorkCountsAChangeTheReleaseCouldNotUpload`, `TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce`, `TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync`, `TestRunOnceResultError_ADriveWithAnErrorAndAReportIsADriveError`, `TestRunOnce_ReportCountsUnresolvedWork`, `TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`, `TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync` |
 | Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else, a recovered panic and a one-shot sync that left work included. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
 | A panic ends a command with exit 1 and never Go's 2 (R-6.3.10): on the command's goroutine through the last line of defense in `mainWithWriters` (the log file and stderr both get the stack), in the signal handler, the systemd keepalive or the performance logger through the command's context, and in a one-shot helper as its unit's failure; a watch a panic ended sets its failure `STATUS=`. The shared-target download walks its folders inline, as the plain one does. | `TestMainWithWriters_PanicExitsOne`, `TestWithCommandPanic_AHelpersPanicIsTheCommandsError`, `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`, `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`, `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`, `TestSession_UpdatePanicEndsTheCommandWithThePanic`, `TestSession_CompleteReleasesTheCommandContext`, `TestDownloadTree_DirectoryDescentDoesNotFanOutGoroutines` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
@@ -177,8 +177,19 @@ it exits 1. One-shot `sync` keeps its first drive failure as the cause
 (`TestRunSyncCommand_ADriveErrorWinsOverLeftWork`). With no drive failure,
 a drive that left work (Console Output, `Report.LeftWork`) fails the command with
 `errSyncLeftWork`, exit 1: "sync left N files unsynced; run 'onedrive-go
-status' for details" for one selected drive, "N of M selected drives left
-files unsynced (see above)" for several (R-6.6.28). `RunOnceResult.Stuck` is
+status' for details" when the run has one startup result, otherwise a count
+that names drives and the shared folders below them apart, because a shared
+folder is not one of the drives the user selected: "N of M selected drives",
+"N of M shared folders in K selected drives" when only shared folders left
+work, or both joined by "and", then "left files unsynced (see above)"
+(R-6.6.28, `TestRunOnceResultError_CountsSharedFoldersApartFromDrives`). A
+drive failure is counted the same way, "... failed or were skipped (see
+above)", with "was" for a count of one and a result that names no mount
+counted once by its selection index
+(`TestRunOnceDrivesError_CountsSharedFoldersApartFromDrives`). The
+selected drives are `StartupSelectionSummary.SelectedDriveCount`, each drive
+once although a drive whose shared folders could not be set up has a second
+result; whether lines need names is `StartupResultCount`. `RunOnceResult.Stuck` is
 joined to either: a drive whose engine did not close within its bound after
 the pass fails the command with `multisync.ErrSyncStuck` even when every
 drive synced, exit 1 also on a user's stop, so the process exits and the
@@ -713,6 +724,19 @@ condition keys remain private implementation details.
 - `status_sync_state.go` only assembles the high-level sync-state payload;
   `status_condition_descriptors.go` owns the public issue presentation while
   still keying descriptors from sync-owned `ConditionKey` values
+- the caller says what a store's root is (`statusStoreRoot`): a configured
+  drive's own root, or a shared folder below a drive (a shortcut child,
+  `buildChildStatusDrive`). OneDrive's refusal to read a shared folder's root
+  is told as the shared folder's: `remote_root_not_found` is "Shared folder
+  gone" (deleted by its owner or no longer shared with this account; removing
+  its shortcut ends the report), `remote_read_denied` at that root is "Shared
+  folder cannot be read" (no permission any more; ask the owner or remove the
+  shortcut). At a drive's own root `remote_root_not_found` is "Synced folder
+  not found", with no guess at why, and `remote_read_denied` anywhere but a
+  shared folder's root keeps "Remote read blocked"
+  (`TestBuildSyncStateInfo_RootReadFailureSaysWhatTheRootIs`,
+  `TestBuildChildStatusDrive_ReadsTheStoreAsASharedFolder`,
+  `TestConfiguredDriveState_ReadsTheStoreAsADrive`)
 - live account overlay fetches `/me` only for account display/sign-in proof, and
   fetches storage only for configured drives (`/me/drive` for the configured
   primary personal/business drive, or a narrow drive-by-ID lookup for a

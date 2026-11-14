@@ -117,6 +117,8 @@ func conditionLabelText(key ConditionKey) (label string, ok bool) {
 		return "in read-only shared folders", true
 	case ConditionRemoteReadDenied:
 		return "in OneDrive folders you cannot read", true
+	case ConditionRemoteRootNotFound:
+		return "in OneDrive folders that were not found", true
 	case ConditionQuotaExceeded:
 		return "waiting for OneDrive storage space", true
 	case ConditionDiskFull, ConditionFileTooLargeForSpace:

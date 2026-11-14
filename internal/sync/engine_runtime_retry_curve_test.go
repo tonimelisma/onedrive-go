@@ -57,7 +57,7 @@ func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 			verdict: false,
 			members: []IssueType{
 				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
-				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, IssueQuotaExceeded,
+				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueRemoteRootNotFound, IssueQuotaExceeded,
 				issueRateLimited, issueLocalReadDenied, issueLocalWriteDenied, issueRemoteNameTwin,
 				issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace, issueLocalNameTooLong,
 				issueLocalReadOnly, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,

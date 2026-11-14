@@ -71,17 +71,50 @@ func TestReport_ProductCodeOutsideTheEngineReadsWhatARunLeftOnlyThroughItsMethod
 	assert.Empty(t, selected, "read what a run left through Report.LeftWork or Report.LocalTreeHolds")
 }
 
+// Validates: R-6.6.28, R-2.4.8
+//
+// A change the release of a removed shared folder kept because it could not
+// be uploaded is work the run left: it has its own count, which the total and
+// the count the summaries print include, so a one-shot sync that keeps one
+// fails. What the release keeps because sync does not manage it, cannot write
+// to its folder or could not remove it is not work left.
+func TestReport_LeftWorkCountsAChangeTheReleaseCouldNotUpload(t *testing.T) {
+	t.Parallel()
+
+	keptOtherwise := Report{
+		KeptNotOnOneDrive: KeptEntries{Count: 5, Examples: []string{"Docs/link"}},
+		KeptNotWritable:   KeptEntries{Count: 3, Examples: []string{"Docs"}},
+		KeptNotRemoved:    KeptEntries{Count: 4, Examples: []string{"Docs/locked.txt"}},
+	}
+	assert.False(t, keptOtherwise.LeftWork().Any(), "only a change that could not be uploaded is work left")
+
+	report := keptOtherwise
+	report.UnsyncedIssues = 1
+	report.KeptNotUploaded = KeptEntries{Count: 2, Examples: []string{"a.txt", "b.txt"}}
+
+	left := report.LeftWork()
+	assert.Equal(t, LeftWork{StillOpen: 1, NotUploaded: 2}, left)
+	assert.Equal(t, 3, left.NotSynced())
+	assert.Equal(t, 3, left.Total())
+	assert.True(t, left.Any())
+
+	report.DryRun = true
+	assert.Equal(t, LeftWork{}, report.LeftWork(), "a dry run left nothing")
+}
+
 // Validates: R-2.4.8
 //
 // Every part of what holds a local tree has its sentence in one place, in a
-// fixed order, so the final drain's detail and its notice say the same.
+// fixed order, so the final drain's detail and its notice say the same. The
+// changes that could not be uploaded are named once, by what the release
+// kept, though the work the run left counts them too.
 func TestLocalTreeHolds_ReasonsNameEveryPartInOrder(t *testing.T) {
 	t.Parallel()
 
 	holds := LocalTreeHolds{
 		NoReport:          true,
 		DryRun:            true,
-		Left:              LeftWork{Failed: 1, WillRetry: 2, StillOpen: 3},
+		Left:              LeftWork{Failed: 1, WillRetry: 2, StillOpen: 3, NotUploaded: 4},
 		HeldLocalDeletes:  1,
 		SetAsideFiles:     2,
 		KeptNotOnOneDrive: KeptEntries{Count: 1, Examples: []string{"Docs/link"}},

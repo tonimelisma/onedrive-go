@@ -21,11 +21,24 @@ type statusConditionDescriptor struct {
 	Action string
 }
 
+// statusStoreRoot is what the root of a state store is: a configured drive's
+// own root, or a shared folder below a drive, brought in by its shortcut. It
+// decides how a failure to read that root is told, because the next step
+// differs: a shared folder ends with its shortcut.
+type statusStoreRoot int
+
+const (
+	statusStoreRootDrive statusStoreRoot = iota
+	statusStoreRootSharedFolder
+)
+
 // buildStatusConditionJSON is the CLI-owned presentation boundary for durable
 // sync conditions. Sync owns raw snapshot reads and grouping; CLI owns user
-// phrasing, scope-kind labels, ordering, truncation, and JSON shaping.
+// phrasing, scope-kind labels, ordering, truncation, and JSON shaping. root
+// says what the snapshot's store syncs.
 func buildStatusConditionJSON(
 	snapshot *syncengine.DriveStatusSnapshot,
+	root statusStoreRoot,
 	verbose bool,
 	examplesLimit int,
 ) []statusConditionJSON {
@@ -41,7 +54,7 @@ func buildStatusConditionJSON(
 	output := make([]statusConditionJSON, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		descriptor := describeStatusCondition(group.ConditionKey)
+		descriptor := describeStoredStatusCondition(&group, root)
 		output = append(output, statusConditionJSON{
 			ConditionKey:  string(group.ConditionKey),
 			ConditionType: string(group.ConditionType),
@@ -109,6 +122,35 @@ func sampleStrings(values []string, verbose bool, examplesLimit int) []string {
 	return out
 }
 
+// describeStoredStatusCondition is the descriptor of one stored condition
+// group. OneDrive's refusal to read a shared folder's root is told as the
+// shared folder's: gone ("not found") or no longer readable ("forbidden"),
+// each with the next step that ends it. Everywhere else, a drive's own root
+// included, the condition's own text stands.
+func describeStoredStatusCondition(
+	group *syncengine.StoredConditionGroup,
+	root statusStoreRoot,
+) statusConditionDescriptor {
+	atSharedFolderRoot := root == statusStoreRootSharedFolder &&
+		group.ScopeKey.Kind == syncengine.ScopePermRemoteRead && group.ScopeKey.Param == ""
+	if atSharedFolderRoot && group.ConditionKey == syncengine.ConditionRemoteRootNotFound {
+		return newStatusConditionDescriptor(
+			"Shared folder gone",
+			"This shared folder was deleted by its owner, or it is no longer shared with this account.",
+			"Remove its shortcut from your OneDrive; that ends this report.",
+		)
+	}
+	if atSharedFolderRoot && group.ConditionKey == syncengine.ConditionRemoteReadDenied {
+		return newStatusConditionDescriptor(
+			"Shared folder cannot be read",
+			"This account no longer has permission to read this shared folder.",
+			"Ask the owner for access, or remove its shortcut from your OneDrive.",
+		)
+	}
+
+	return describeStatusCondition(group.ConditionKey)
+}
+
 func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescriptor {
 	switch key {
 	case syncengine.ConditionLocalUnsyncable:
@@ -169,7 +211,8 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionServiceOutage,
 		syncengine.ConditionRateLimited,
 		syncengine.ConditionRemoteWriteDenied,
-		syncengine.ConditionRemoteReadDenied:
+		syncengine.ConditionRemoteReadDenied,
+		syncengine.ConditionRemoteRootNotFound:
 		return describeRemoteStatusCondition(key)
 	case syncengine.ConditionLocalReadDenied,
 		syncengine.ConditionLocalWriteDenied,
@@ -195,17 +238,9 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 		syncengine.ConditionDownloadIntegrity:
 		return describeTransferStatusCondition(key)
 	case syncengine.ConditionUnexpectedCondition:
-		return newStatusConditionDescriptor(
-			"Sync issue",
-			"An unexpected sync issue needs attention.",
-			"Check logs for details or rerun status after the next sync pass.",
-		)
+		return unexpectedStatusConditionDescriptor()
 	default:
-		return newStatusConditionDescriptor(
-			"Sync issue",
-			"An unexpected sync issue needs attention.",
-			"Check logs for details or rerun status after the next sync pass.",
-		)
+		return unexpectedStatusConditionDescriptor()
 	}
 }
 
@@ -256,6 +291,15 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 			"Remote read blocked",
 			"This remote content can no longer be downloaded with your current permissions.",
 			"Restore access to the shared item, or remove the blocked content from this sync scope.",
+		)
+	case syncengine.ConditionRemoteRootNotFound:
+		// Only a root observation records it, and a shared folder's root is
+		// told by describeStoredStatusCondition, so this is a drive's own root.
+		return newStatusConditionDescriptor(
+			"Synced folder not found",
+			"OneDrive answered that the folder this drive syncs was not found.",
+			"Check on the OneDrive website that the folder still exists. If it is gone, "+
+				"remove the drive with 'onedrive-go drive remove --drive <drive>'.",
 		)
 	case syncengine.ConditionAuthenticationRequired,
 		syncengine.ConditionLocalReadDenied,
@@ -342,6 +386,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionRateLimited,
 		syncengine.ConditionRemoteWriteDenied,
 		syncengine.ConditionRemoteReadDenied,
+		syncengine.ConditionRemoteRootNotFound,
 		syncengine.ConditionDiskFull,
 		syncengine.ConditionHashError,
 		syncengine.ConditionFileTooLargeForSpace,
@@ -443,6 +488,7 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionRateLimited,
 		syncengine.ConditionRemoteWriteDenied,
 		syncengine.ConditionRemoteReadDenied,
+		syncengine.ConditionRemoteRootNotFound,
 		syncengine.ConditionLocalReadDenied,
 		syncengine.ConditionLocalWriteDenied,
 		syncengine.ConditionInvalidFilename,
