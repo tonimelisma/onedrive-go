@@ -736,6 +736,7 @@ func retryDelayForCondition(condition IssueType) func(int) time.Duration {
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		issueRemoteReadDenied,
+		issueRemoteRootNotFound,
 		IssueQuotaExceeded,
 		issueRateLimited,
 		issueLocalReadDenied,

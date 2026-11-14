@@ -151,7 +151,7 @@ func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict 
 		issueLocalMountBoundary:
 		// The scan found the path but cannot represent it.
 		return observationIssueTruthVerdict{blocksLocal: true}
-	case issueRemoteReadDenied:
+	case issueRemoteReadDenied, issueRemoteRootNotFound:
 		// A folder's subtree is bounded by the issue's read scope key.
 		return observationIssueTruthVerdict{blocksRemote: true}
 	case issueRemoteNameTwin:

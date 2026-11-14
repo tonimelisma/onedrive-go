@@ -181,7 +181,8 @@ Important properties:
   known, because the child path cannot be identified safely. Such a skip is
   logged at DEBUG: there is nothing local to remove and no user action
 - explicit remote read denial discovered during observation is emitted as an
-  observation-owned finding (`remote_read_denied`) plus
+  observation-owned finding (`remote_read_denied`, or `remote_root_not_found`
+  when OneDrive answered the root's read with "not found") plus
   `perm:remote:read:<boundary>`
 - observation-owned read-denial boundary facts are subtree boundaries:
   descendants become unavailable for planning and status through the tagged
@@ -236,10 +237,21 @@ Remote read-denied boundaries are observation-owned facts. When drive-root or
 mount-root observation proves that remote truth is unreadable, the engine
 persists one managed observation batch containing:
 
-- `observation_issues` rows for `remote_read_denied`
+- an `observation_issues` row at `/` whose type is OneDrive's answer to the
+  read of the root (`rootReadFailureIssueType`): `remote_root_not_found` for
+  "not found", `remote_read_denied` for "forbidden". A folder delta answered
+  "not found" is read as change tracking the folder does not offer, so a
+  mount root then lists the folder, and that listing's answer is the root's
 - `ScopeKey` tags of `perm:remote:read:<boundary>` on those issue rows
 
-Healthy observation batches reconcile that managed set away again. Worker `403`
+The two types block the same truth, take the same arm in every per-type
+switch except the condition family, and both mark a shared folder unreadable for its release
+(`issueTypeIsRootReadFailure`, `sharedFolderUnreadable`); their condition families differ, so what `status` tells the user
+(cli.md) and the label in a watch's condition log differ too. The batch manages both, so the next observation replaces whichever
+one an earlier answer left, including a `remote_read_denied` row for a root
+whose next read answers "not
+found" (`TestRootObservation_AnswerDecidesTheStoredRootIssue`). Healthy
+observation batches reconcile that managed set away again, and so does the release of a removed shared folder that cannot be read (sync-engine.md). Worker `403`
 results do not create these read-denied findings.
 
 ## Item Conversion

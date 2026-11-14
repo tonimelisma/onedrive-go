@@ -176,6 +176,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_FinalDrainRemovesBundledJunkUnderTheConfiguredRule,
 		TestRunOnce_FinalDrainRemovesALeftoverDownloadPartialFirst,
 		TestRunOnce_UnreadableSharedFolderReleasesWhatMatchesAndTheReAddPlansNoDelete,
+		TestRunOnce_FinalDrainOfAnUnreadableSharedFolderThatKeepsNothingFinishes,
+		TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept,
 		TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete,
 		TestRunOnce_AReleaseRefusedForAnUnseenChangeUploadsItOnTheNextDrain,
 		TestRunOnce_ALocalDeleteRefusedForAnUnseenChangePlansTheLocalEditNext,

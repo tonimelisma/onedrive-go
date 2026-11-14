@@ -115,6 +115,20 @@ func (flow *engineFlow) executePrimaryRootObservation(
 	return flow.executeDriveRootObservation(ctx, bl, fullReconcile)
 }
 
+// rootReadFailureBatch is the observation batch of a root OneDrive refused
+// to read: no events and no new cursor, only the root's read issue, so the
+// whole tree is unavailable rather than absent.
+func (flow *engineFlow) rootReadFailureBatch(mode remoteObservationMode, issueType IssueType) remoteObservationBatch {
+	return buildRemoteObservationBatch(
+		flow.engine,
+		mode,
+		nil,
+		"",
+		false,
+		rootReadFailureObservationFindingsBatch(flow.engine.driveID, issueType),
+	)
+}
+
 func (flow *engineFlow) executeDriveRootObservation(
 	ctx context.Context,
 	bl *Baseline,
@@ -132,15 +146,8 @@ func (flow *engineFlow) executeDriveRootObservation(
 		flow.engine.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
 		return flow.executeDriveRootFullObservation(ctx, bl, resyncKindOf(err))
 	}
-	if err != nil && isObservationRemoteReadDenied(err) {
-		return buildRemoteObservationBatch(
-			flow.engine,
-			remoteObservationModeDelta,
-			nil,
-			"",
-			false,
-			rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
-		), nil
+	if issueType, ok := rootReadFailureIssueType(err); ok {
+		return flow.rootReadFailureBatch(remoteObservationModeDelta, issueType), nil
 	}
 
 	batch := buildRemoteObservationBatch(
@@ -193,15 +200,12 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 	kind resyncKind,
 ) (remoteObservationBatch, error) {
 	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
-	if err != nil && isObservationRemoteReadDenied(err) {
-		return buildRemoteObservationBatch(
-			flow.engine,
-			remoteObservationModeDelta,
-			nil,
-			"",
-			false,
-			rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
-		), nil
+	// A later page whose position OneDrive refused twice is an unusable
+	// position (errDeltaExpired) that unwraps to the refusal, which may be
+	// "not found": it says nothing about the root, so it is returned like any
+	// other failure.
+	if issueType, ok := rootReadFailureIssueType(err); ok && !errors.Is(err, errDeltaExpired) {
+		return flow.rootReadFailureBatch(remoteObservationModeDelta, issueType), nil
 	}
 
 	batch := buildRemoteObservationBatch(
@@ -223,15 +227,8 @@ func (flow *engineFlow) executeMountRootObservation(
 	fullReconcile bool,
 ) (remoteObservationBatch, error) {
 	observed, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)
-	if err != nil && isObservationRemoteReadDenied(err) {
-		return buildRemoteObservationBatch(
-			flow.engine,
-			observed.mode,
-			nil,
-			"",
-			false,
-			rootRemoteReadDeniedObservationFindingsBatch(flow.engine.driveID),
-		), nil
+	if issueType, ok := rootReadFailureIssueType(err); ok {
+		return flow.rootReadFailureBatch(observed.mode, issueType), nil
 	}
 
 	// A complete folder delta (requested, or after an expired token) is a

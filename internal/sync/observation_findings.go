@@ -51,9 +51,13 @@ func newLocalObservationFindingsBatch() ObservationFindingsBatch {
 	}
 }
 
+// newRemoteObservationFindingsBatch is the findings batch of one root
+// observation. It manages both root read issue types, so the next observation
+// replaces whichever one an earlier answer left (a "forbidden" after a "not
+// found", or the reverse) and a read that succeeds clears either.
 func newRemoteObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
-		ManagedIssueTypes: []IssueType{issueRemoteReadDenied},
+		ManagedIssueTypes: []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound},
 	}
 }
 
@@ -95,27 +99,37 @@ func appendSkippedObservationFinding(
 	batch.Issues = append(batch.Issues, issue)
 }
 
-func rootRemoteReadDeniedObservationFindingsBatch(
+// rootReadFailureObservationFindingsBatch records that OneDrive refused the
+// read of the root this engine syncs, as issueType (rootReadFailureIssueType):
+// one issue at "/" under the root read scope, which makes the whole tree
+// unavailable rather than absent.
+func rootReadFailureObservationFindingsBatch(
 	driveID driveid.ID,
-) ObservationFindingsBatch {
-	return remoteReadDeniedObservationBatch(driveID, "/", sKPermRemoteRead(""))
-}
-
-func remoteReadDeniedObservationBatch(
-	driveID driveid.ID,
-	path string,
-	scopeKey ScopeKey,
+	issueType IssueType,
 ) ObservationFindingsBatch {
 	batch := newRemoteObservationFindingsBatch()
 	batch.Issues = []ObservationIssue{{
-		Path:      path,
+		Path:      "/",
 		DriveID:   driveID,
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  scopeKey,
+		IssueType: issueType,
+		ScopeKey:  sKPermRemoteRead(""),
 	}}
 	return batch
 }
 
-func isObservationRemoteReadDenied(err error) bool {
-	return errors.Is(err, graph.ErrForbidden) || errors.Is(err, graph.ErrNotFound)
+// rootReadFailureIssueType names the issue a root observation records for
+// OneDrive's answer to the read of the root: remote_root_not_found for "not
+// found", remote_read_denied for "forbidden". ok is false for any other
+// answer, which the observation returns as its error. The two are told apart
+// only for the user: what the folder is, gone or not allowed, decides the
+// next step, while sync treats both as a tree it cannot read.
+func rootReadFailureIssueType(err error) (issueType IssueType, ok bool) {
+	switch {
+	case errors.Is(err, graph.ErrNotFound):
+		return issueRemoteRootNotFound, true
+	case errors.Is(err, graph.ErrForbidden):
+		return issueRemoteReadDenied, true
+	default:
+		return "", false
+	}
 }

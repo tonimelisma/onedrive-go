@@ -99,7 +99,8 @@ type (
 		// permissions, or a read-only filesystem), and KeptNotRemoved the
 		// synced entries its local delete could not move to the trash or
 		// delete (a trash that takes nothing, an immutable file). Each keeps
-		// the tree (LocalTreeHolds).
+		// the tree (LocalTreeHolds), and KeptNotUploaded is also work the run
+		// left (LeftWork).
 		KeptNotOnOneDrive KeptEntries
 		KeptNotUploaded   KeptEntries
 		KeptNotWritable   KeptEntries

@@ -84,6 +84,7 @@ func loadShortcutRootStatusSnapshots(
 
 func buildSyncStateInfo(
 	snapshot *syncengine.DriveStatusSnapshot,
+	root statusStoreRoot,
 	verbose bool,
 	examplesLimit int,
 ) syncStateInfo {
@@ -100,7 +101,7 @@ func buildSyncStateInfo(
 		RemoteDrift:   snapshot.RemoteDriftItems,
 		LocalDrift:    snapshot.LocalDriftItems,
 		Retrying:      snapshot.RetryingItems,
-		Conditions:    buildStatusConditionJSON(snapshot, verbose, examplesLimit),
+		Conditions:    buildStatusConditionJSON(snapshot, root, verbose, examplesLimit),
 		ExamplesLimit: examplesLimit,
 		Verbose:       verbose,
 		NeverSynced:   snapshot.NeverSynced,

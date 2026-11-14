@@ -379,9 +379,12 @@ func filterShortcutRootSnapshots(
 // syncStateQuerier abstracts querying per-mount sync state from state DBs.
 // Enables testing without real SQLite databases on disk.
 type syncStateQuerier interface {
-	// QuerySyncState reads the drive's sync state; filter is the drive's
-	// sync scope, so remote changes outside it are not counted (R-2.10.48).
-	QuerySyncState(ctx context.Context, statePath string, filter syncengine.ContentFilterConfig) *syncStateInfo
+	// QuerySyncState reads the sync state of the store at statePath, whose
+	// root is root; filter is the drive's sync scope, so remote changes
+	// outside it are not counted (R-2.10.48).
+	QuerySyncState(
+		ctx context.Context, statePath string, root statusStoreRoot, filter syncengine.ContentFilterConfig,
+	) *syncStateInfo
 }
 
 // liveSyncStateQuerier queries per-mount sync state from real state DBs.
@@ -392,9 +395,9 @@ type liveSyncStateQuerier struct {
 }
 
 func (q *liveSyncStateQuerier) QuerySyncState(
-	ctx context.Context, statePath string, filter syncengine.ContentFilterConfig,
+	ctx context.Context, statePath string, root statusStoreRoot, filter syncengine.ContentFilterConfig,
 ) *syncStateInfo {
-	return querySyncStateWithOptions(ctx, statePath, q.logger, filter, q.verbose, q.examplesLimit)
+	return querySyncStateWithOptions(ctx, statePath, q.logger, root, filter, q.verbose, q.examplesLimit)
 }
 
 type childMountStatusInput struct {
@@ -716,7 +719,9 @@ func configuredDriveState(
 	}
 	probe := statusDrive{State: state}
 	if syncQ != nil {
-		probe.SyncState = syncQ.QuerySyncState(ctx, config.DriveStatePath(cid), contentFilterConfigFor(&drive.DriveFilterConfig))
+		probe.SyncState = syncQ.QuerySyncState(
+			ctx, config.DriveStatePath(cid), statusStoreRootDrive, contentFilterConfigFor(&drive.DriveFilterConfig),
+		)
 	}
 	if checkErr != nil {
 		if probe.SyncState == nil {
@@ -778,8 +783,10 @@ func buildChildStatusDrive(
 	}
 	if syncQ != nil {
 		// A shortcut root's store holds only its own subtree, so its whole
-		// store is in scope.
-		status.SyncState = syncQ.QuerySyncState(ctx, config.MountStatePath(root.MountID), syncengine.ContentFilterConfig{})
+		// store is in scope, and its root is the shared folder's.
+		status.SyncState = syncQ.QuerySyncState(
+			ctx, config.MountStatePath(root.MountID), statusStoreRootSharedFolder, syncengine.ContentFilterConfig{},
+		)
 	}
 	finalizeStatusDriveState(&status)
 
@@ -790,12 +797,13 @@ func querySyncStateWithOptions(
 	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
+	root statusStoreRoot,
 	filter syncengine.ContentFilterConfig,
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {
 	snapshot, err := readDriveStatusSnapshot(ctx, statePath, logger, filter)
-	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
+	info := buildSyncStateInfo(&snapshot, root, verbose, examplesLimit)
 	if err != nil {
 		info.ReadError = err.Error()
 	}

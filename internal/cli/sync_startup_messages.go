@@ -100,7 +100,7 @@ func formatWatchStartupError(err error) error {
 	if !errors.As(err, &startupErr) {
 		return err
 	}
-	if startupErr.Summary.SelectedCount() == 0 {
+	if startupErr.Summary.StartupResultCount() == 0 {
 		return err
 	}
 

@@ -51,7 +51,7 @@ func TestBlockScopeActivationLine_EveryMemberIsDecided(t *testing.T) {
 			verdict: scopeLine{generic: true},
 			members: []IssueType{
 				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
-				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueLocalReadDenied,
+				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueRemoteRootNotFound, issueLocalReadDenied,
 				issueLocalWriteDenied, issueCaseCollision, issueRemoteNameTwin, issueFileTooLargeForSpace,
 				issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
 				issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge, issueLocalBusy,

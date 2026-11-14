@@ -68,10 +68,17 @@ func TestClassifyShortcutChildDrainReport_CleanOnlyWhenTheLocalTreeMayGo(t *test
 		},
 		{
 			name: "a release that kept changes it could not upload",
-			report: syncengine.Report{UnsyncedIssues: 1, KeptNotUploaded: syncengine.KeptEntries{
+			report: syncengine.Report{Released: 2, KeptNotUploaded: syncengine.KeptEntries{
 				Count: 1, Examples: []string{"Docs/edited.txt"},
 			}},
 			detail: "1 change could not be uploaded because the shared folder can no longer be reached (Docs/edited.txt)",
+		},
+		{
+			// The report of a drain whose release ran over a shared folder
+			// that cannot be read: the folder's own read failure is not work
+			// the run left.
+			name: "a release over a folder that cannot be read that kept nothing", clean: true,
+			report: syncengine.Report{Released: 3},
 		},
 		{
 			name: "a release that kept a folder that cannot be written to",

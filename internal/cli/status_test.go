@@ -75,7 +75,7 @@ func seedConfiguredStatusDrives(t *testing.T, cfg *config.Config) {
 func queryLiveSyncState(ctx context.Context, statePath string, logger *slog.Logger) *syncStateInfo {
 	querier := &liveSyncStateQuerier{logger: logger, examplesLimit: defaultVisiblePaths}
 
-	return querier.QuerySyncState(ctx, statePath, syncengine.ContentFilterConfig{})
+	return querier.QuerySyncState(ctx, statePath, statusStoreRootDrive, syncengine.ContentFilterConfig{})
 }
 
 // printMountStatus prints one drive the way status prints it inside an
@@ -101,7 +101,9 @@ type mockSyncStateQuerier struct {
 	state *syncStateInfo
 }
 
-func (m *mockSyncStateQuerier) QuerySyncState(_ context.Context, _ string, _ syncengine.ContentFilterConfig) *syncStateInfo {
+func (m *mockSyncStateQuerier) QuerySyncState(
+	_ context.Context, _ string, _ statusStoreRoot, _ syncengine.ContentFilterConfig,
+) *syncStateInfo {
 	return m.state
 }
 
