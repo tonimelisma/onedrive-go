@@ -116,12 +116,6 @@ func (f CLIFlags) SingleDrive() (string, error) {
 	return f.Drive[0], nil
 }
 
-// CLIContext bundles resolved config, flags, and logger. Created in
-// PersistentPreRunE with two-phase initialization:
-//   - Phase 1 (always): Flags + Logger + CfgPath + Env populated for every command.
-//   - Phase 2 (data commands): Cfg + Runtime populated after config resolution.
-//
-// Auth commands get CLIContext with Flags + Logger + CfgPath + Env but nil Cfg/Runtime.
 // cliSeams are the injection points command tests use to drive real command
 // flows without a live account or a running daemon.
 //
@@ -149,17 +143,24 @@ type cliSeams struct {
 	effectiveUID func() int
 }
 
+// CLIContext bundles resolved config, flags, and logger. PersistentPreRunE
+// builds it in two phases:
+//   - Phase 1 (every account command): Flags, Logger, CfgPath, Env, and a
+//     Runtime without config.
+//   - Phase 2 (data commands): Cfg, and a Runtime holding the resolved config.
+//
+// Auth and account commands stop after Phase 1, so their Cfg is nil.
 type CLIContext struct {
 	Flags            CLIFlags
 	Logger           *slog.Logger
 	OutputWriter     io.Writer                // destination for primary command output (default: os.Stdout)
 	StatusWriter     io.Writer                // destination for Statusf output (default: os.Stderr)
-	CfgPath          string                   // resolved config file path (always set)
-	Env              config.EnvOverrides      // env overrides (always set in Phase 1)
-	GraphBaseURL     string                   // Graph API base; overridden by live command coverage
+	CfgPath          string                   // resolved config file path (set for every account command)
+	Env              config.EnvOverrides      // environment overrides read at startup (zero when no account is needed)
+	GraphBaseURL     string                   // Graph root of the command's clients; empty means graph.DefaultBaseURL
 	SharedTarget     *sharedTarget            // nil for ordinary drive/path commands
-	Cfg              *config.ResolvedDrive    // nil for auth/account commands
-	Runtime          *driveops.SessionRuntime // nil for auth/account commands until Phase 2 swaps in a holder-backed runtime
+	Cfg              *config.ResolvedDrive    // the resolved drive; nil until a data command resolves one
+	Runtime          *driveops.SessionRuntime // every account command's runtime, with the config once a drive resolves
 	PerfSession      *perf.Session            // command-scoped performance collector/logging session
 	seams            cliSeams                 // test injection points; see cliSeams
 	logCloser        io.Closer                // log file closer; nil when no log file is configured
@@ -385,7 +386,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, erro
 		return nil, err
 	}
 
-	session, err := runtime.InteractiveSession(ctx, mountCfg)
+	session, err := runtime.InteractiveSession(mountCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create drive session: %w", err)
 	}

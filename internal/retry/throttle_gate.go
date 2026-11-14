@@ -1,35 +1,20 @@
 package retry
 
 import (
-	"context"
 	"sync"
 	"time"
 )
 
 // ThrottleGate coordinates shared Retry-After deadlines across multiple retry
-// transports that intentionally belong to the same caller scope.
+// transports that intentionally belong to the same caller scope. It only
+// holds the deadline: the transport that reads it decides whether to wait
+// (RetryTransport.waitForThrottle), so the rule against waiting past a
+// request's deadline lives in one place.
 type ThrottleGate struct {
 	// mu guards deadline, which several transports in one caller scope read
 	// and extend concurrently.
 	mu       sync.Mutex
 	deadline time.Time
-}
-
-// Wait blocks until the current throttle deadline passes.
-func (g *ThrottleGate) Wait(ctx context.Context, sleepFn SleepFunc) error {
-	if g == nil {
-		return nil
-	}
-
-	g.mu.Lock()
-	deadline := g.deadline
-	g.mu.Unlock()
-
-	if delay := time.Until(deadline); delay > 0 {
-		return sleepFn(ctx, delay)
-	}
-
-	return nil
 }
 
 // SetDeadline stores the latest throttle deadline.

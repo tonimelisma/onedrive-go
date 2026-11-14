@@ -170,6 +170,10 @@ func TestSimpleUploadToItem_Error(t *testing.T) {
 	assert.ErrorIs(t, err, ErrForbidden)
 }
 
+// Validates: R-6.8.27
+//
+// A raw upload whose token could not be had, or whose context had already
+// ended, never left the client.
 func TestSimpleUploadToItem_TokenError(t *testing.T) {
 	client := MustNewClient("http://localhost", http.DefaultClient, failingToken{}, slog.Default(), "test-agent")
 
@@ -177,8 +181,15 @@ func TestSimpleUploadToItem_TokenError(t *testing.T) {
 		t.Context(), driveid.New("d"), "item-1", "",
 		strings.NewReader("data"), 4,
 	)
-	require.Error(t, err)
+	require.ErrorIs(t, err, errRequestNotSent)
 	assert.Contains(t, err.Error(), "token")
+
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = MustNewClient("http://localhost", http.DefaultClient, staticToken("t"), slog.Default(), "test-agent").
+		SimpleUploadToItem(ended, driveid.New("d"), "item-1", "", strings.NewReader("data"), 4)
+	require.ErrorIs(t, err, errRequestNotSent)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestSimpleUploadToItem_NetworkError(t *testing.T) {

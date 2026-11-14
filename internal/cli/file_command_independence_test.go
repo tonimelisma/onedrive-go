@@ -40,7 +40,7 @@ func newFileCommandTestContext(
 	logger := buildLoggerWithStatusWriter(nil, CLIFlags{}, stderr)
 	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
 	provider.GraphBaseURL = srv.URL
-	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+	provider.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil
 	}
 

@@ -31,7 +31,7 @@ func (cc *CLIContext) probeAccountIdentity(
 		return zero, fmt.Errorf("cannot determine token path for account %q", accountCID)
 	}
 
-	client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
+	client, err := cc.runtime().BootstrapClient(tokenPath)
 	if err != nil {
 		return zero, fmt.Errorf("load sign-in for %s: %w", accountCID, err)
 	}

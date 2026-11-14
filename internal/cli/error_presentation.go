@@ -74,21 +74,35 @@ func (e *usageError) Unwrap() error { return e.err }
 // networkErrorReason recognizes "could not reach the server" failures and
 // names the concrete cause, or returns "" for anything else.
 func networkErrorReason(err error) string {
+	service := failedService(err)
+
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return "can't reach OneDrive (could not look up " + dnsErr.Name + ")"
+		return "can't reach " + service + " (could not look up " + dnsErr.Name + ")"
 	}
 
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
 		cause := innermostErrorText(opErr)
 		if opErr.Op == "proxyconnect" || strings.Contains(err.Error(), "proxyconnect") {
-			return "can't reach OneDrive through the configured proxy (" + cause + ")"
+			return "can't reach " + service + " through the configured proxy (" + cause + ")"
 		}
-		return "can't reach OneDrive (" + cause + ")"
+		return "can't reach " + service + " (" + cause + ")"
 	}
 
-	return transportErrorReason(err)
+	return transportErrorReason(err, service)
+}
+
+// failedService names the service whose request failed: Microsoft sign-in
+// when the graph client marked the failure as a request to the sign-in
+// service (a token refresh, or a login flow's request), OneDrive otherwise.
+func failedService(err error) string {
+	var signIn *graph.SignInRequestError
+	if errors.As(err, &signIn) {
+		return "Microsoft sign-in"
+	}
+
+	return "OneDrive"
 }
 
 // transportErrorReason covers network failures after the connection was
@@ -97,8 +111,9 @@ func networkErrorReason(err error) string {
 // only applies to errors that came from the HTTP transport: a *url.Error
 // (before the response) or a *graph.ResponseReadError (while reading it). So
 // a local file timeout, or a disk error io.Copy returned during a download,
-// is never described as a OneDrive problem.
-func transportErrorReason(err error) string {
+// is never described as a network problem. service names the one whose
+// request failed (failedService).
+func transportErrorReason(err error, service string) string {
 	var urlErr *url.Error
 	var readErr *graph.ResponseReadError
 	fromURL := errors.As(err, &urlErr)
@@ -107,15 +122,23 @@ func transportErrorReason(err error) string {
 	}
 
 	switch {
-	case fromURL && urlErr.Timeout(), !fromURL && isTimeout(readErr.Err):
-		return "OneDrive did not answer in time"
+	case fromURL && urlErrorTimedOut(urlErr), !fromURL && isTimeout(readErr.Err):
+		return service + " did not answer in time"
 	case isTLSFailure(err):
-		return "the secure connection to OneDrive failed (" + innermostErrorText(err) + ")"
+		return "the secure connection to " + service + " failed (" + innermostErrorText(err) + ")"
 	case isDroppedConnection(err):
-		return "the connection to OneDrive was interrupted"
+		return "the connection to " + service + " was interrupted"
 	default:
 		return ""
 	}
+}
+
+// urlErrorTimedOut reports whether a request failed on a timeout. A
+// *url.Error's own Timeout asks only the error it holds directly, so a round
+// tripper that wrapped the deadline it hit would hide it, and the failure
+// would be reported without naming the service. The chain below is read too.
+func urlErrorTimedOut(urlErr *url.Error) bool {
+	return urlErr.Timeout() || isTimeout(urlErr.Err)
 }
 
 func isTimeout(err error) bool {

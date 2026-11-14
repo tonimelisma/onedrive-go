@@ -26,7 +26,7 @@ import (
 // stubTokenSource implements graph.TokenSource for tests.
 type stubTokenSource struct{}
 
-func (s *stubTokenSource) Token() (string, error) { return "test-token", nil }
+func (s *stubTokenSource) Token(context.Context) (string, error) { return "test-token", nil }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
@@ -130,7 +130,7 @@ func TestSessionRuntime_EmptyTokenPath(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
-	_, err := p.InteractiveSession(t.Context(), &MountSessionConfig{})
+	_, err := p.InteractiveSession(&MountSessionConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token path")
 }
@@ -138,7 +138,7 @@ func TestSessionRuntime_EmptyTokenPath(t *testing.T) {
 func TestSessionRuntime_NotLoggedIn(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, graph.ErrNotLoggedIn
 	}
 
@@ -151,7 +151,7 @@ func TestSessionRuntime_NotLoggedIn(t *testing.T) {
 		AccountEmail:        cid.Email(),
 	}
 
-	_, err = p.InteractiveSession(t.Context(), mount)
+	_, err = p.InteractiveSession(mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "login")
 }
@@ -159,7 +159,7 @@ func TestSessionRuntime_NotLoggedIn(t *testing.T) {
 func TestSessionRuntime_ZeroDriveID(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
 
@@ -172,7 +172,7 @@ func TestSessionRuntime_ZeroDriveID(t *testing.T) {
 		// DriveID intentionally zero.
 	}
 
-	_, err = p.InteractiveSession(t.Context(), mount)
+	_, err = p.InteractiveSession(mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doesn't know which OneDrive to use for test@example.com")
 }
@@ -185,7 +185,7 @@ func TestSessionRuntime_TokenCaching(t *testing.T) {
 
 	var callCount int
 	ts := &stubTokenSource{}
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		callCount++
 		return ts, nil
 	}
@@ -199,11 +199,11 @@ func TestSessionRuntime_TokenCaching(t *testing.T) {
 		AccountEmail:        cid.Email(),
 	}
 
-	s1, err := p.InteractiveSession(t.Context(), mount)
+	s1, err := p.InteractiveSession(mount)
 	require.NoError(t, err)
 	require.NotNil(t, s1)
 
-	s2, err := p.InteractiveSession(t.Context(), mount)
+	s2, err := p.InteractiveSession(mount)
 	require.NoError(t, err)
 	require.NotNil(t, s2)
 
@@ -292,7 +292,8 @@ func TestSessionRuntime_RetryingClientsShareOneRetryNotices(t *testing.T) {
 	})
 
 	transports := make([]*retry.RetryTransport, 0, 4)
-	for _, client := range []*http.Client{driveA.Meta, driveB.Meta, driveA.Transfer, runtime.BootstrapMeta()} {
+	bootstrap := runtime.BootstrapMeta(config.DriveTokenPath(ownerCID))
+	for _, client := range []*http.Client{driveA.Meta, driveB.Meta, driveA.Transfer, bootstrap} {
 		rt, ok := client.Transport.(*retry.RetryTransport)
 		require.True(t, ok)
 		transports = append(transports, rt)
@@ -313,7 +314,7 @@ func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
 	var callCount int
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		callCount++
 		return &stubTokenSource{}, nil
 	}
@@ -328,12 +329,12 @@ func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	}
 
 	// First call creates the cached entry.
-	_, err = p.InteractiveSession(t.Context(), mount)
+	_, err = p.InteractiveSession(mount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 
 	// Second call reuses cache — no new TokenSourceFn invocation.
-	_, err = p.InteractiveSession(t.Context(), mount)
+	_, err = p.InteractiveSession(mount)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callCount)
 
@@ -341,7 +342,7 @@ func TestSessionRuntime_FlushTokenCache(t *testing.T) {
 	p.FlushTokenCache()
 
 	// Third call must re-invoke TokenSourceFn.
-	_, err = p.InteractiveSession(t.Context(), mount)
+	_, err = p.InteractiveSession(mount)
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount, "TokenSourceFn should be re-invoked after FlushTokenCache")
 }
@@ -351,14 +352,14 @@ func TestSessionRuntime_SyncSession_UsesMountSessionConfig(t *testing.T) {
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
 
 	var tokenPath string
-	p.TokenSourceFn = func(_ context.Context, path string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(path string, _ *slog.Logger) (graph.TokenSource, error) {
 		tokenPath = path
 		return &stubTokenSource{}, nil
 	}
 
 	ownerCID := driveid.MustCanonicalID("business:owner@example.com")
 
-	session, err := p.SyncSession(t.Context(), &MountSessionConfig{
+	session, err := p.SyncSession(&MountSessionConfig{
 		TokenOwnerCanonical: ownerCID,
 		DriveID:             driveid.New("remote-drive"),
 		RemoteRootItemID:    "root-item",
@@ -375,7 +376,7 @@ func TestSessionRuntime_SyncSession_UsesMountSessionConfig(t *testing.T) {
 func TestSessionRuntime_ThreadSafety(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
 
@@ -397,7 +398,7 @@ func TestSessionRuntime_ThreadSafety(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 
-			_, errs[idx] = p.InteractiveSession(t.Context(), mount)
+			_, errs[idx] = p.InteractiveSession(mount)
 		}(i)
 	}
 
@@ -423,7 +424,7 @@ func TestSession_Fields(t *testing.T) {
 func TestSessionRuntime_TokenSourceError(t *testing.T) {
 	holder := config.NewHolder(config.DefaultConfig(), "")
 	p := NewSessionRuntime(holder, "test/1.0", discardLogger())
-	p.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	p.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("disk read failed")
 	}
 
@@ -436,7 +437,7 @@ func TestSessionRuntime_TokenSourceError(t *testing.T) {
 		AccountEmail:        cid.Email(),
 	}
 
-	_, err = p.InteractiveSession(t.Context(), mount)
+	_, err = p.InteractiveSession(mount)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk read failed")
 }
@@ -453,7 +454,7 @@ func TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath(t *testing.T)
 	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
 
 	var sourcesBuilt atomic.Int32
-	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	runtime.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		sourcesBuilt.Add(1)
 		return &stubTokenSource{}, nil
 	}
@@ -468,7 +469,7 @@ func TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath(t *testing.T)
 	var wg sync.WaitGroup
 	for i := range concurrentCallers {
 		wg.Go(func() {
-			clients[i], errs[i] = runtime.BootstrapClient(t.Context(), tokenPath)
+			clients[i], errs[i] = runtime.BootstrapClient(tokenPath)
 		})
 	}
 	wg.Wait()
@@ -478,7 +479,7 @@ func TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath(t *testing.T)
 		assert.NotNil(t, clients[i], "caller %d", i)
 	}
 
-	_, err := runtime.InteractiveSession(t.Context(), &MountSessionConfig{
+	_, err := runtime.InteractiveSession(&MountSessionConfig{
 		TokenOwnerCanonical: cid,
 		DriveID:             driveid.New("d-bootstrap"),
 		AccountEmail:        cid.Email(),
@@ -493,18 +494,18 @@ func TestSessionRuntime_BootstrapClientKeepsNotLoggedIn(t *testing.T) {
 	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
 
 	var sourcesTried int
-	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	runtime.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		sourcesTried++
 		return nil, graph.ErrNotLoggedIn
 	}
 
 	tokenPath := config.DriveTokenPath(driveid.MustCanonicalID("personal:signed-out@example.com"))
 
-	client, err := runtime.BootstrapClient(t.Context(), tokenPath)
+	client, err := runtime.BootstrapClient(tokenPath)
 	require.ErrorIs(t, err, graph.ErrNotLoggedIn, "callers classify a missing sign-in from the error")
 	assert.Nil(t, client)
 
-	_, err = runtime.BootstrapClient(t.Context(), tokenPath)
+	_, err = runtime.BootstrapClient(tokenPath)
 	require.ErrorIs(t, err, graph.ErrNotLoggedIn)
 	assert.Equal(t, 2, sourcesTried, "a failed load is not cached: a later login in the same process is picked up")
 }
@@ -512,12 +513,12 @@ func TestSessionRuntime_BootstrapClientKeepsNotLoggedIn(t *testing.T) {
 // Validates: R-6.8.27
 func TestSessionRuntime_BootstrapClientNeedsATokenPath(t *testing.T) {
 	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
-	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	runtime.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		assert.Fail(t, "no token source may be built for an empty path")
 		return &stubTokenSource{}, nil
 	}
 
-	client, err := runtime.BootstrapClient(t.Context(), "")
+	client, err := runtime.BootstrapClient("")
 	require.Error(t, err)
 	assert.Nil(t, client)
 	assert.Contains(t, err.Error(), "token path")
@@ -536,11 +537,11 @@ func TestSessionRuntime_BootstrapClientUsesTheRuntimeBaseURL(t *testing.T) {
 
 	runtime := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
 	runtime.GraphBaseURL = srv.URL
-	runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	runtime.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return &stubTokenSource{}, nil
 	}
 
-	client, err := runtime.BootstrapClient(t.Context(), config.DriveTokenPath(driveid.MustCanonicalID("personal:bootstrap@example.com")))
+	client, err := runtime.BootstrapClient(config.DriveTokenPath(driveid.MustCanonicalID("personal:bootstrap@example.com")))
 	require.NoError(t, err)
 
 	user, err := client.Me(t.Context())
@@ -566,10 +567,10 @@ func TestSessionRuntime_DefaultTokenSourceHasTheAuthClient(t *testing.T) {
 		Expiry:       time.Now().Add(time.Hour),
 	}))
 
-	ts, err := runtime.TokenSourceFn(t.Context(), tokenPath, discardLogger())
+	ts, err := runtime.TokenSourceFn(tokenPath, discardLogger())
 	require.NoError(t, err)
 
-	token, err := ts.Token()
+	token, err := ts.Token(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "saved-access-token", token)
 }

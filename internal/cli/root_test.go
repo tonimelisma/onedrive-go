@@ -157,7 +157,7 @@ func TestCliContextFrom_WithCLIContext(t *testing.T) {
 func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
-	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+	provider.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) {
 		return nil, graph.ErrNotLoggedIn
 	}
 
@@ -180,7 +180,7 @@ func TestCLIContextSession_WrapsProviderError(t *testing.T) {
 func TestCLIContextSession_Success(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
-	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+	provider.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil
 	}
 
@@ -204,7 +204,7 @@ func TestCLIContextSession_ConfiguredRootItemReachesInteractiveSession(t *testin
 
 	logger := slog.New(slog.DiscardHandler)
 	provider := driveops.NewSessionRuntime(nil, "test-agent", logger)
-	provider.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+	provider.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil
 	}
 
@@ -266,7 +266,7 @@ func TestCLIContextSession_ProbeAndSessionShareOneTokenSource(t *testing.T) {
 	provider := driveops.NewSessionRuntime(nil, "test-agent", slog.New(slog.DiscardHandler))
 
 	var tokenPaths []string
-	provider.TokenSourceFn = func(_ context.Context, path string, _ *slog.Logger) (graph.TokenSource, error) {
+	provider.TokenSourceFn = func(path string, _ *slog.Logger) (graph.TokenSource, error) {
 		tokenPaths = append(tokenPaths, path)
 		return staticTokenSource{}, nil
 	}
@@ -332,7 +332,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	provider.GraphBaseURL = srv.URL
 
 	var tokenPaths []string
-	provider.TokenSourceFn = func(_ context.Context, path string, _ *slog.Logger) (graph.TokenSource, error) {
+	provider.TokenSourceFn = func(path string, _ *slog.Logger) (graph.TokenSource, error) {
 		tokenPaths = append(tokenPaths, path)
 		return staticTokenSource{}, nil
 	}
@@ -454,7 +454,8 @@ func TestCloseRootCommandLogger_ClosesActiveLoggerAfterCommandError(t *testing.T
 
 func TestNewGraphClientWithHTTP_ReturnsConstructionError(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	client, err := newGraphClientWithHTTP("", driveops.NewSessionRuntime(nil, "test-agent", logger).BootstrapMeta(), nil, logger)
+	httpClient := driveops.NewSessionRuntime(nil, "test-agent", logger).BootstrapMeta(filepath.Join(t.TempDir(), "pending.json"))
+	client, err := newGraphClientWithHTTP("", httpClient, nil, logger)
 	require.Error(t, err)
 	assert.Nil(t, client)
 	assert.Contains(t, err.Error(), "creating graph client")

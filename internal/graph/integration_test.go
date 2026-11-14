@@ -88,7 +88,6 @@ func newIntegrationClient(t *testing.T) *Client {
 	drive := os.Getenv(driveEnvVar)
 	require.NotEmpty(t, drive, "ONEDRIVE_TEST_DRIVE not set")
 
-	ctx := t.Context()
 	logger := testLogger(t)
 
 	cid := driveid.MustCanonicalID(drive)
@@ -101,7 +100,7 @@ func newIntegrationClient(t *testing.T) *Client {
 		slog.String("token_path", tokenPath),
 	)
 
-	ts, err := TokenSourceFromPath(ctx, tokenPath, graphtransport.AuthClient(), logger)
+	ts, err := TokenSourceFromPath(tokenPath, graphtransport.AuthClient(), logger)
 	if errors.Is(err, ErrNotLoggedIn) {
 		t.Skipf("no token for drive %q at %s -- run bootstrap first", drive, tokenPath)
 	}

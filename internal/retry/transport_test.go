@@ -365,20 +365,43 @@ func TestRetryTransport_BodyRewind(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 }
 
+// throttledOnce answers the first attempt with a 429 that asks to wait
+// retryAfter seconds, and every later one with 200.
+func throttledOnce(retryAfter string) roundTripFunc {
+	var calls atomic.Int32
+
+	return func(*http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return makeResponse(http.StatusTooManyRequests, map[string]string{"Retry-After": retryAfter}), nil
+		}
+
+		return makeResponse(http.StatusOK, nil), nil
+	}
+}
+
+// roundTripOK sends one GET through rt and expects a 200.
+func roundTripOK(t *testing.T, rt *retry.RetryTransport) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+}
+
 // Validates: R-6.8.8
+//
+// The first request's 429 sets the transport's throttle deadline; the next
+// request waits for it before it is sent.
 func TestRetryTransport_ThrottleCoordination(t *testing.T) {
 	t.Parallel()
 
-	// First request gets 429 with Retry-After=2.
-	// Second request (different goroutine) should wait for the throttle deadline.
 	var sleepCalls []time.Duration
-
-	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		return makeResponse(200, nil), nil
-	})
-
 	rt := &retry.RetryTransport{
-		Inner:  inner,
+		Inner:  throttledOnce("2"),
 		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep: func(_ context.Context, d time.Duration) error {
@@ -388,20 +411,15 @@ func TestRetryTransport_ThrottleCoordination(t *testing.T) {
 		},
 	}
 
-	// Simulate setting a throttle deadline.
-	rt.SetThrottleDeadline(time.Now().Add(2 * time.Second))
+	roundTripOK(t, rt)
+	roundTripOK(t, rt)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
-	require.NoError(t, err)
-
-	resp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	assert.Equal(t, 200, resp.StatusCode)
-	// Should have waited for throttle before making the request.
-	require.Len(t, sleepCalls, 1)
-	assert.True(t, sleepCalls[0] > 0 && sleepCalls[0] <= 2*time.Second,
-		"throttle wait should be between 0 and 2s, got %v", sleepCalls[0])
-	require.NoError(t, resp.Body.Close())
+	// The first request waited out its own Retry-After; the second waited
+	// for the deadline that 429 left before it was sent.
+	require.Len(t, sleepCalls, 2)
+	assert.Equal(t, 2*time.Second, sleepCalls[0])
+	assert.True(t, sleepCalls[1] > 0 && sleepCalls[1] <= 2*time.Second,
+		"throttle wait should be between 0 and 2s, got %v", sleepCalls[1])
 }
 
 // Validates: R-6.8.8
@@ -524,36 +542,36 @@ func TestRetryTransport_DeadlineExceededWithoutCanceledContextRetries(t *testing
 }
 
 // Validates: R-6.8.8
+//
+// A 429's Retry-After becomes the transport's throttle deadline: a later
+// request whose own deadline ends first is refused unsent, naming it.
 func TestRetryTransport_429SetsThrottleDeadline(t *testing.T) {
 	t.Parallel()
 
-	callNum := 0
-	inner := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		callNum++
-		if callNum == 1 {
-			return makeResponse(429, map[string]string{"Retry-After": "10"}), nil
-		}
-
-		return makeResponse(200, nil), nil
-	})
-
+	const (
+		retryAfter     = "10"
+		retryAfterWait = 10 * time.Second
+	)
 	rt := &retry.RetryTransport{
-		Inner:  inner,
+		Inner:  throttledOnce(retryAfter),
 		Policy: testPolicy(),
 		Logger: slog.Default(),
 		Sleep:  noopSleep,
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
+	throttledAt := time.Now()
+	roundTripOK(t, rt)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.com/test", http.NoBody)
 	require.NoError(t, err)
 
 	resp, err := rt.RoundTrip(req)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-
-	// The throttle deadline should be set after seeing 429 with Retry-After.
-	deadline := rt.ThrottleDeadline()
-	assert.False(t, deadline.IsZero(), "throttle deadline should be set after 429")
+	closeTestResponse(t, resp)
+	var throttled *retry.ThrottledError
+	require.ErrorAs(t, err, &throttled, "the throttle deadline should be set after a 429")
+	assert.WithinDuration(t, throttledAt.Add(retryAfterWait), throttled.Until, time.Second)
 }
 
 // Validates: R-6.8.8

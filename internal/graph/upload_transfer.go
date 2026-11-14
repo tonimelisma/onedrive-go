@@ -156,6 +156,8 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 // opens a fresh SectionReader over all size bytes. Without them the request
 // went out chunked and a retry after a 5xx sent the already-drained reader:
 // zero bytes, which replaced the online file with an empty one (D-033).
+// A failure before the request leaves (the context had ended, the request
+// could not be built, the token could not be had) carries errRequestNotSent.
 func (c *Client) doRawUpload(
 	ctx context.Context, method, path, contentType string, content io.ReaderAt, size int64, ifMatch string,
 ) (*http.Response, error) {
@@ -167,9 +169,13 @@ func (c *Client) doRawUpload(
 		slog.String("content_type", contentType),
 	)
 
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("graph: raw upload canceled before it was sent: %w: %w", errRequestNotSent, context.Cause(ctx))
+	}
+
 	req, err := http.NewRequestWithContext(ctx, method, url, replayableUploadBody(content, size))
 	if err != nil {
-		return nil, fmt.Errorf("graph: creating raw upload request: %w", err)
+		return nil, fmt.Errorf("graph: creating raw upload request: %w: %w", errRequestNotSent, err)
 	}
 
 	req.ContentLength = size
@@ -177,9 +183,9 @@ func (c *Client) doRawUpload(
 		return io.NopCloser(replayableUploadBody(content, size)), nil
 	}
 
-	tok, err := c.token.Token()
+	tok, err := c.token.Token(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("graph: obtaining token for upload: %w", err)
+		return nil, fmt.Errorf("graph: obtaining token for upload: %w: %w", errRequestNotSent, err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+tok)

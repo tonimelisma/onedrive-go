@@ -22,10 +22,16 @@ import (
 func doAuthCodeLogin(
 	ctx context.Context,
 	tokenPath string,
+	authHTTP *http.Client,
 	cfg *oauth2.Config,
 	openURL func(context.Context, string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
+	if err := checkAuthClient(authHTTP); err != nil {
+		return nil, err
+	}
+	ctx = signInContext(ctx, authHTTP)
+
 	logger.Info("starting browser auth flow (authorization code + PKCE)",
 		slog.String("path", tokenPath),
 	)
@@ -70,7 +76,7 @@ func doAuthCodeLogin(
 	}
 
 	// Exchange and save.
-	return exchangeAndSave(ctx, cfg, tokenPath, code, verifier, logger)
+	return exchangeAndSave(ctx, authHTTP, cfg, tokenPath, code, verifier, logger)
 }
 
 // callbackServer is the localhost server the browser redirects back to, and
@@ -241,9 +247,12 @@ func waitForCallback(ctx context.Context, resultCh <-chan callbackResult) (strin
 	}
 }
 
-// exchangeAndSave exchanges the auth code for a token and persists it.
+// exchangeAndSave exchanges the auth code for a token and persists it. ctx
+// carries authHTTP for the exchange; the returned source refreshes through
+// authHTTP under each request's own context.
 func exchangeAndSave(
 	ctx context.Context,
+	authHTTP *http.Client,
 	cfg *oauth2.Config,
 	tokenPath, code, verifier string,
 	logger *slog.Logger,
@@ -252,6 +261,7 @@ func exchangeAndSave(
 
 	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
+		err = signInFailure(err)
 		var retrieveErr *oauth2.RetrieveError
 		if errors.As(err, &retrieveErr) {
 			if plain := aadOutcomeError(retrieveErr.ErrorCode, retrieveErr.ErrorDescription); plain != nil {
@@ -273,7 +283,7 @@ func exchangeAndSave(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	return newTokenBridge(ctx, cfg, tok, logger), nil
+	return newTokenBridge(cfg, authHTTP, tok, logger), nil
 }
 
 // generateState produces a cryptographically random hex string for the OAuth2

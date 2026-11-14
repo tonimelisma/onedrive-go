@@ -44,7 +44,7 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 	t.Helper()
 
 	tokenPath := filepath.Join(testDataDir, testutil.TokenFileName(driveID))
-	ts, err := graph.TokenSourceFromPath(t.Context(), tokenPath, graphtransport.AuthClient(), slog.New(slog.DiscardHandler))
+	ts, err := graph.TokenSourceFromPath(tokenPath, graphtransport.AuthClient(), slog.New(slog.DiscardHandler))
 	require.NoError(t, err, "load token source for %s", suiteDriveRoles.Role(driveID))
 
 	httpClient := &http.Client{}
@@ -122,7 +122,7 @@ func runAuthPreflightAttempt(
 	ts graph.TokenSource,
 	path string,
 ) authPreflightAttempt {
-	token, err := ts.Token()
+	token, err := ts.Token(ctx)
 	if err != nil {
 		return authPreflightAttempt{Err: fmt.Sprintf("load token: %v", err)}
 	}
