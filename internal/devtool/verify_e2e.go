@@ -166,6 +166,7 @@ func fullE2ESerialWatchSharedTestNames() []string {
 		"TestE2E_SyncWatch_RapidChurn",
 		"TestE2E_SyncWatch_GracefulShutdown",
 		"TestE2E_SyncWatch_TimedPauseExpiry",
+		"TestE2E_SyncWatch_StatusPerfCountsRequests",
 		"TestE2E_SyncWatch_BasicRoundTrip",
 		"TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners",
 		"TestE2E_SyncWatch_PauseResume",

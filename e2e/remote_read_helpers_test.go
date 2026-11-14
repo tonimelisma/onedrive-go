@@ -14,17 +14,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-type remoteReadRecoveryAction uint8
-
-const (
-	remoteReadNoRecovery remoteReadRecoveryAction = iota
-	remoteReadRefreshSharedRootListing
-)
-
+// waitForSharedRootListingVisible lists the mount root of driveID until the
+// listing answers, and fails the test when remoteWritePropagationTimeout
+// passes first.
 func waitForSharedRootListingVisible(
 	t *testing.T,
 	cfgPath string,
@@ -33,64 +27,65 @@ func waitForSharedRootListingVisible(
 ) {
 	t.Helper()
 
-	waitForSharedRootListingVisibleWithin(
+	pollRemoteEventually(
 		t,
 		cfgPath,
 		env,
 		driveID,
 		remoteWritePropagationTimeout,
+		timingKindRemoteWriteVisibility,
+		sharedRootListingDescription(driveID),
+		remoteReadSucceeded,
+		"ls",
+		"/",
 	)
 }
 
-func waitForSharedRootListingVisibleWithin(
+// sharedRootListingAnswersWithin lists the mount root of driveID until the
+// listing answers or timeout passes, and reports whether it answered. It fails
+// nothing itself, so a read that recovers through it keeps its own deadline
+// and its own failure message.
+func sharedRootListingAnswersWithin(
 	t *testing.T,
 	cfgPath string,
 	env map[string]string,
 	driveID string,
 	timeout time.Duration,
-) {
+) bool {
 	t.Helper()
 
-	pollRemoteEventually(
+	_, _, isAnswered := pollRemoteUntil(
 		t,
 		cfgPath,
 		env,
 		driveID,
 		timeout,
 		timingKindRemoteWriteVisibility,
-		"shared-root listing visibility for "+suiteDriveRoles.Role(driveID),
-		func(_ string, _ string, err error) bool {
-			return err == nil
-		},
+		sharedRootListingDescription(driveID),
+		remoteReadSucceeded,
 		"ls",
 		"/",
 	)
+
+	return isAnswered
 }
 
-func isSharedCanonicalDriveID(driveID string) bool {
-	canonicalID, err := driveid.NewCanonicalID(driveID)
-	if err != nil {
-		return false
-	}
-
-	return canonicalID.IsShared()
+func sharedRootListingDescription(driveID string) string {
+	return "shared-root listing visibility for " + suiteDriveRoles.Role(driveID)
 }
 
-func classifyRemoteReadRecoveryAction(driveID string, stderr string) remoteReadRecoveryAction {
-	if isSharedCanonicalDriveID(driveID) &&
-		strings.Contains(stderr, "resolve item path") &&
-		strings.Contains(stderr, "list children for segment") &&
-		strings.Contains(stderr, "graph: HTTP 404") {
-		return remoteReadRefreshSharedRootListing
-	}
-
-	return remoteReadNoRecovery
+// remoteReadSucceeded accepts any read whose command succeeded.
+func remoteReadSucceeded(_, _ string, err error) bool {
+	return err == nil
 }
 
-func isSharedRootListingProbe(args []string) bool {
-	return len(args) == 2 && args[0] == "ls" && args[1] == "/"
-}
-
+// runRemoteReadAttemptWithRecovery runs one CLI read. A read on a shared drive
+// that fails because the mount root's listing lags is run again once the
+// listing answers (decideRemoteReadNextStep). It fails nothing itself: when
+// the listing does not answer before deadline, the deadline has already
+// passed, or the read run again meets a lagging listing once more, it returns
+// the failed read with errSharedRootListingLagging in its error, and the
+// caller goes on to its own deadline and message.
 func runRemoteReadAttemptWithRecovery(
 	t *testing.T,
 	cfgPath string,
@@ -102,24 +97,27 @@ func runRemoteReadAttemptWithRecovery(
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
-	if err == nil || isSharedRootListingProbe(args) {
-		return stdout, stderr, err
-	}
-
-	if classifyRemoteReadRecoveryAction(driveID, stderr) != remoteReadRefreshSharedRootListing {
-		return stdout, stderr, err
-	}
-
 	remaining := time.Until(deadline)
-	if remaining <= 0 {
+	step := decideRemoteReadNextStep(driveID, args, stderr, err, remaining)
+	if step == remoteReadOfferAttempt {
 		return stdout, stderr, err
 	}
 
-	waitForSharedRootListingVisibleWithin(t, cfgPath, env, driveID, remaining)
+	if step == remoteReadRetryAfterListing && sharedRootListingAnswersWithin(t, cfgPath, env, driveID, remaining) {
+		// One recovery per attempt: the read run again is decided as a read
+		// with no time left, so a listing that lags again marks it.
+		stdout, stderr, err = runCLICore(t, cfgPath, env, driveID, args...)
+		if decideRemoteReadNextStep(driveID, args, stderr, err, 0) == remoteReadOfferAttempt {
+			return stdout, stderr, err
+		}
+	}
 
-	return runCLICore(t, cfgPath, env, driveID, args...)
+	return stdout, stderr, markSharedRootListingLagging(err)
 }
 
+// pollRemoteEventually runs a CLI read until ready accepts an attempt, and
+// fails the test with the last attempt's output, every configured drive in it
+// named by role, when timeout passes first.
 func pollRemoteEventually(
 	t *testing.T,
 	cfgPath string,
@@ -131,6 +129,34 @@ func pollRemoteEventually(
 	ready func(stdout, stderr string, err error) bool,
 	args ...string,
 ) (string, string) {
+	t.Helper()
+
+	stdout, stderr, isReady := pollRemoteUntil(t, cfgPath, env, driveID, timeout, eventKind, description, ready, args...)
+	if !isReady {
+		require.Failf(t, "pollRemoteEventually: timed out", "%s",
+			remotePollTimeoutMessage(suiteDriveRoles, timeout, description, args, stdout, stderr))
+	}
+
+	return stdout, stderr
+}
+
+// pollRemoteUntil runs a CLI read until ready accepts an attempt or timeout
+// passes, and records the wait's timing either way. It reports whether ready
+// accepted one, with the last attempt's output, and fails nothing itself, so
+// a wait that knows more than the output can say what it last saw. An attempt
+// whose shared-root recovery found no listing before the deadline is never
+// offered to ready: its failure says nothing about the path read.
+func pollRemoteUntil(
+	t *testing.T,
+	cfgPath string,
+	env map[string]string,
+	driveID string,
+	timeout time.Duration,
+	eventKind string,
+	description string,
+	ready func(stdout, stderr string, err error) bool,
+	args ...string,
+) (string, string, bool) {
 	t.Helper()
 
 	startedAt := time.Now()
@@ -146,7 +172,7 @@ func pollRemoteEventually(
 			deadline,
 			args...,
 		)
-		if ready(stdout, stderr, err) {
+		if remotePollAccepts(ready, stdout, stderr, err) {
 			recordTimingEvent(
 				t,
 				eventKind,
@@ -158,7 +184,7 @@ func pollRemoteEventually(
 				attempt+1,
 				timingOutcomeSuccess,
 			)
-			return stdout, stderr
+			return stdout, stderr, true
 		}
 
 		if time.Now().After(deadline) {
@@ -173,9 +199,7 @@ func pollRemoteEventually(
 				attempt+1,
 				timingOutcomeTimeout,
 			)
-			require.Failf(t, "pollRemoteEventually: timed out",
-				"after %v waiting for %s via %v\nlast stdout: %s\nlast stderr: %s",
-				timeout, description, args, stdout, stderr)
+			return stdout, stderr, false
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
@@ -467,9 +491,13 @@ func waitForRemoteDeleteDisappearance(
 // on the name alone can stop it between the two requests and then read an
 // empty file (LI-20261110-01).
 //
-// Every attempt downloads to the same local path. `get` publishes a download
-// by renaming it over its destination and the content is read only after a
-// `get` that succeeded, so an attempt never reads an earlier attempt's bytes.
+// Every attempt downloads to the same local path, which the wait owns. `get`
+// publishes a download by renaming it over its destination and the content is
+// read only after a `get` that succeeded, so an attempt never reads an earlier
+// attempt's bytes. The wait compares only bytes it downloaded itself, never
+// `get`'s stdout. On timeout it prints what the last successful download held
+// (summarizeContent) and `get`'s last stderr, which says why the last
+// download failed, with every configured drive in it named by role.
 func waitForRemoteFileContent(
 	t *testing.T,
 	cfgPath string,
@@ -480,26 +508,59 @@ func waitForRemoteFileContent(
 	t.Helper()
 
 	localPath := filepath.Join(t.TempDir(), "downloaded")
-	pollRemoteEventually(
+	lastDownload := "no get succeeded"
+	_, stderr, isReady := pollRemoteUntil(
 		t,
 		cfgPath,
 		env,
 		"",
 		daemonPollTimeout,
 		timingKindRemoteWriteVisibility,
-		fmt.Sprintf("remote content of %q to equal %q", remotePath, want),
+		fmt.Sprintf("remote content of %q to equal %s", remotePath, summarizeContent([]byte(want))),
 		func(_ string, _ string, err error) bool {
 			if err != nil {
 				return false
 			}
 
 			data, readErr := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
-			return readErr == nil && string(data) == want
+			if readErr != nil {
+				lastDownload = fmt.Sprintf("reading the download failed: %v", readErr)
+				return false
+			}
+
+			lastDownload = summarizeContent(data)
+			return string(data) == want
 		},
 		"get",
 		remotePath,
 		localPath,
 	)
+	if !isReady {
+		require.Failf(t, "waitForRemoteFileContent: timed out",
+			"after %v waiting for %q to hold %s\nlast download: %s\nlast get stderr: %s",
+			daemonPollTimeout, remotePath, summarizeContent([]byte(want)), lastDownload, suiteDriveRoles.Redact(stderr))
+	}
+}
+
+// readRemoteFileOnce downloads remotePath once, on the drive that env selects
+// or else on the suite's primary drive, into localPath and returns its
+// content. It asserts nothing, so a poll predicate can call it: a failed get
+// or read is logged and reported as false.
+func readRemoteFileOnce(t *testing.T, cfgPath string, env map[string]string, remotePath, localPath string) (string, bool) {
+	t.Helper()
+
+	if _, _, err := runCLICore(t, cfgPath, env, resolveDriveSelection(env, ""), "get", remotePath, localPath); err != nil {
+		t.Logf("waiting for %s: get failed: %v (its output is in the test's debug log)", remotePath, err)
+		return "", false
+	}
+
+	data, err := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
+	if err != nil {
+		t.Logf("waiting for %s: reading the download failed: %v", remotePath, err)
+		return "", false
+	}
+
+	return string(data), true
 }
 
 // getRemoteFile downloads a remote file and returns its content as a string.
@@ -544,23 +605,6 @@ func getRemoteFileForDrive(
 	data, readErr := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
 	require.NoError(t, readErr)
 	return string(data)
-}
-
-func TestClassifyRemoteReadRecoveryAction(t *testing.T) {
-	t.Parallel()
-
-	sharedCID, err := driveid.ConstructShared("user@example.com", "drive-id", "item-id")
-	require.NoError(t, err)
-
-	personalCID, err := driveid.NewCanonicalID("personal:user@example.com")
-	require.NoError(t, err)
-
-	const sharedRootRoute404 = `Error: resolving "/folder/file.txt": resolve item path "folder/file.txt": list children for segment "folder": graph: HTTP 404 (request-id: req-123): The resource could not be found.`
-
-	require.Equal(t, remoteReadRefreshSharedRootListing, classifyRemoteReadRecoveryAction(sharedCID.String(), sharedRootRoute404))
-	require.Equal(t, remoteReadNoRecovery, classifyRemoteReadRecoveryAction(personalCID.String(), sharedRootRoute404))
-	require.Equal(t, remoteReadNoRecovery, classifyRemoteReadRecoveryAction(sharedCID.String(), `Error: creating folder "data": graph: HTTP 403: Access denied`))
-	require.Equal(t, remoteReadNoRecovery, classifyRemoteReadRecoveryAction("not-a-canonical-id", sharedRootRoute404))
 }
 
 func TestClassifyFixtureSeedVisibilityAttempt(t *testing.T) {

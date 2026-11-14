@@ -17,14 +17,11 @@ func TestE2E_Shared_FileDiscoveryAndSelectorReadCommands(t *testing.T) {
 	fixture := resolveSharedFileFixture(t, rawLink)
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.RecipientDriveID, t.TempDir())
 
-	assert.Equal(t, fixture.RecipientEmail, fixture.FileItem.AccountEmail)
-	assert.Equal(t, fixture.FileItem.Selector, fixture.RawStat.SharedSelector)
+	assertSharedFileFixtureConsistent(t, &fixture)
 
 	selectorStat := statSharedTargetJSON(t, cfgPath, env, fixture.FileItem.Selector)
-	assert.Equal(t, fixture.RawStat.RemoteDriveID, selectorStat.RemoteDriveID)
-	assert.Equal(t, fixture.RawStat.RemoteItemID, selectorStat.RemoteItemID)
+	assertStatNamesSharedItem(t, &fixture.FileItem, &selectorStat)
 	assert.Equal(t, fixture.RawStat.Name, selectorStat.Name)
-	assert.Equal(t, fixture.FileItem.Selector, selectorStat.SharedSelector)
 
 	rawContent := getSharedTargetContent(t, cfgPath, env, "--account", fixture.RecipientEmail, rawLink)
 	selectorContent := getSharedTargetContent(t, cfgPath, env, fixture.FileItem.Selector)
