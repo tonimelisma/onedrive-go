@@ -23,9 +23,9 @@ import (
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
 
-// executorConfig holds the immutable configuration for creating per-call
-// Executor instances. Separated from mutable state to prevent temporal
-// coupling and enable thread safety.
+// executorConfig holds the configuration every per-action executor shares.
+// The engine sets it up while it is built and no run changes it, except
+// parentChecks, which guards itself and is reset for each plan.
 type executorConfig struct {
 	items            itemClient
 	downloads        driveops.Downloader
@@ -38,7 +38,7 @@ type executorConfig struct {
 	// contentFilter tells a folder delete which leftover children sync
 	// deliberately does not own (D-012).
 	contentFilter contentFilter
-	// expectedSyncRoot is the sync folder identity the engine validated;
+	// syncRootIdentity is the sync folder identity the engine validated;
 	// a remote delete re-checks it before acting on local absence (D-011).
 	syncRootIdentity *syncRootIdentity
 
@@ -84,15 +84,16 @@ func (cfg *executorConfig) SetPendingCreates(store pendingCreateStore) {
 }
 
 // executor executes individual actions against the Graph API and local
-// filesystem, producing Outcomes. Created per-action via NewExecution.
-// Thread-safe: all mutable state is per-call, no shared mutation.
+// filesystem, producing Outcomes. Created per-action via newExecution.
+// Thread-safe: its own state is per-call, and the one mutable member of the
+// shared executorConfig, parentChecks, guards itself.
 type executor struct {
 	*executorConfig
 	baseline *Baseline
 }
 
-// newExecutorConfig creates an immutable executor configuration bound to a
-// specific drive and sync root. Use NewExecution to create per-call executors.
+// newExecutorConfig creates the executor configuration bound to a
+// specific drive and sync root. Use newExecution to create per-call executors.
 func newExecutorConfig(
 	items itemClient, downloads driveops.Downloader, uploads driveops.Uploader,
 	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,

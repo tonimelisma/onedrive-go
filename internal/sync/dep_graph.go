@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 )
 
-// trackedNode is an internal wrapper around *TrackedAction that adds
+// trackedNode is an internal wrapper around *trackedAction that adds
 // the dependency-tracking fields (depsLeft, dependents). These fields are
-// deliberately not exported on TrackedAction — they are graph internals that
+// deliberately not on trackedAction — they are graph internals that
 // workers and the engine never need to touch directly.
 type trackedNode struct {
 	*trackedAction
@@ -16,7 +16,7 @@ type trackedNode struct {
 	dependents []*trackedNode
 }
 
-// depGraph is a pure dependency graph with no channels, no callbacks, and no
+// depGraph is a dependency graph with no channels, no callbacks, and no
 // scope awareness. It tracks actions by sequential ID and resolves dependency
 // edges: when all of an action's dependencies are satisfied, it becomes ready.
 //
@@ -24,8 +24,9 @@ type trackedNode struct {
 // to channels, run active-scope admission, etc.). This separation keeps
 // dependency tracking independent from scope admission.
 type depGraph struct {
-	// mu guards actions. The engine adds and completes nodes while workers
-	// report outcomes.
+	// mu guards actions. Only the runtime goroutine that owns the run calls
+	// the graph's methods; workers report outcomes on the completion channel
+	// and never touch it.
 	mu      stdsync.Mutex
 	actions map[int64]*trackedNode
 	logger  *slog.Logger
@@ -39,18 +40,19 @@ func newDepGraph(logger *slog.Logger) *depGraph {
 	}
 }
 
-// Add inserts an action into the graph. If all dependencies are already
-// satisfied (depIDs is empty or all deps already completed/unknown), the
-// TrackedAction is returned as immediately ready. Otherwise nil is returned
-// and the action waits until Complete() decrements its depsLeft to zero.
-// Add registers an action and wires up dependencies in a single call.
+// Add registers an action and wires up its dependencies in a single call. If
+// all dependencies are already satisfied (depIDs is empty or all deps already
+// completed/unknown), the trackedAction is returned as immediately ready.
+// Otherwise nil is returned and the action waits until Complete() decrements
+// its depsLeft to zero.
 // WARNING: depIDs must reference actions that have ALREADY been added —
 // forward references (depID not yet in the graph) are silently dropped.
-// For one-shot mode with arbitrary dependency ordering, use the two-phase
-// Register + WireDeps approach instead.
+// Every plan registers through Register and WireDeps (registerPlanActions),
+// which take dependencies in any order; tests use Add to build a graph in one
+// call.
 func (g *depGraph) Add(action *Action, id int64, depIDs []int64) *trackedAction {
-	// Wrap the public TrackedAction in an internal trackedNode that carries
-	// the dependency-tracking fields (depsLeft, dependents).
+	// Wrap the trackedAction in an internal trackedNode that carries the
+	// dependency-tracking fields (depsLeft, dependents).
 	node := &trackedNode{
 		trackedAction: &trackedAction{
 			Action: *action,
@@ -111,7 +113,7 @@ func (g *depGraph) Register(action *Action, id int64) {
 
 // WireDeps resolves dependency edges for a previously-registered action.
 // All depIDs must reference already-registered actions (guaranteed by
-// the Register-all-first pattern). Returns the TrackedAction if the
+// the Register-all-first pattern). Returns the trackedAction if the
 // action is immediately ready (no unresolved deps), nil otherwise.
 func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
 	g.mu.Lock()
@@ -153,23 +155,6 @@ func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
 	return nil
 }
 
-// MarkTrial marks an already-registered action as a scope trial. This lets the
-// engine tag an action before it becomes ready, so the metadata survives normal
-// dependency resolution instead of relying on a separate pending-trial map.
-func (g *depGraph) MarkTrial(id int64, scopeKey ScopeKey) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	node, ok := g.actions[id]
-	if !ok {
-		return false
-	}
-
-	node.IsTrial = true
-	node.TrialScopeKey = scopeKey
-	return true
-}
-
 // Get returns the tracked action for the given ID if it is still registered in
 // the graph. Callers must treat the returned action as graph-owned runtime
 // state and must not mutate dependency bookkeeping fields directly.
@@ -187,7 +172,7 @@ func (g *depGraph) Get(id int64) (*trackedAction, bool) {
 
 // Complete marks an action as done, deletes it from the graph, and decrements
 // the depsLeft counter on all dependents. Returns (newly-ready
-// dependents as TrackedAction pointers, true) on success.
+// dependents as trackedAction pointers, true) on success.
 //
 // If id is unknown (not in the graph), a warning is logged and (nil, false)
 // is returned. The bool distinguishes "unknown ID" from "known ID with no
@@ -204,8 +189,8 @@ func (g *depGraph) Complete(id int64) ([]*trackedAction, bool) {
 		return nil, false
 	}
 
-	// Copy dependents under the lock so concurrent Add/Register callers cannot
-	// append to the same slice while completion walks it.
+	// Copy dependents under the lock; the walk below runs after it is
+	// released.
 	dependents := make([]*trackedNode, len(node.dependents))
 	copy(dependents, node.dependents)
 
@@ -216,7 +201,7 @@ func (g *depGraph) Complete(id int64) ([]*trackedAction, bool) {
 	g.mu.Unlock()
 
 	// Collect ready dependents, converting internal trackedNode to the
-	// public *TrackedAction that callers (engine, tests) expect.
+	// *trackedAction that callers (engine, tests) expect.
 	ready := make([]*trackedAction, 0, len(dependents))
 
 	for _, dep := range dependents {
