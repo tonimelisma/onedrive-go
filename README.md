@@ -1,6 +1,6 @@
 # onedrive-go
 
-[![CI](https://github.com/tonimelisma/onedrive-go/actions/workflows/ci.yml/badge.svg)](https://github.com/tonimelisma/onedrive-go/actions/workflows/ci.yml)
+[![Nightly CI](https://github.com/tonimelisma/onedrive-go/actions/workflows/ci.yml/badge.svg?branch=main&event=schedule)](https://github.com/tonimelisma/onedrive-go/actions/workflows/ci.yml?query=branch%3Amain+event%3Aschedule)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tonimelisma/onedrive-go)](https://goreportcard.com/report/github.com/tonimelisma/onedrive-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

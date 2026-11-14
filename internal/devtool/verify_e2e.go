@@ -519,7 +519,8 @@ type classifiedQuirkRerun struct {
 // rerunClassifiedQuirk reruns a known quirk once, records the rerun and
 // returns its output. A passing rerun downgrades the first failure to a
 // warning; a failing one returns its own error, which carries the first
-// attempt's too.
+// attempt's too. A rerun that skipped a top-level test verified nothing and
+// fails, although go test passed it.
 func rerunClassifiedQuirk(
 	ctx context.Context,
 	runner commandRunner,
@@ -529,14 +530,16 @@ func rerunClassifiedQuirk(
 	stdout, stderr io.Writer,
 	rerun classifiedQuirkRerun,
 ) (string, error) {
-	if err := writeStatus(stdout, fmt.Sprintf("==> rerun known live quirk %s\n", rerun.incidentID)); err != nil {
+	if err := writeStatus(stdout, classifiedRerunMarkerPrefix+rerun.incidentID+"\n"); err != nil {
 		return "", fmt.Errorf("write status: %w", err)
 	}
 
 	startedAt := time.Now()
-	output, rerunErr := runGoTestMatching(
-		ctx, runner, repoRoot, env, stdout, stderr, rerun.phase+" rerun of "+rerun.incidentID, rerun.args...,
-	)
+	step := rerun.phase + " rerun of " + rerun.incidentID
+	output, rerunErr := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, step, rerun.args...)
+	if skipped := skippedTopLevelTests(output); rerunErr == nil && len(skipped) > 0 {
+		rerunErr = fmt.Errorf("%s skipped %s, so it verified nothing", step, strings.Join(skipped, ", "))
+	}
 	status := verifySummaryStatusPass
 	if rerunErr != nil {
 		status = verifySummaryStatusFail
@@ -575,9 +578,13 @@ func runE2EPreflightAuth(
 
 		args := authE2EPreflightArgs()
 		output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, "fast e2e auth preflight", args...)
-		if err != nil && classifyLiveQuirks && isAuthPreflightQuirk(parseGoTestLog(output)) {
+		log := parseGoTestLog(output)
+		failedTests := log.failedTopLevelTests()
+		if err != nil && classifyLiveQuirks && isAuthPreflightQuirk(log) {
 			// The rerun's output decides from here on: it is the attempt whose
-			// result counts, skips included.
+			// result counts, a per-drive subtest's skip included. A rerun that
+			// skipped the preflight test itself fails, and its output names no
+			// failed test: the step then names the one the first attempt failed.
 			output, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
 				incidentID: authPreflightIncidentID,
 				phase:      "auth preflight",
@@ -585,9 +592,12 @@ func runE2EPreflightAuth(
 				args:       args,
 				firstErr:   err,
 			})
+			if rerunFailed := parseGoTestLog(output).failedTopLevelTests(); len(rerunFailed) > 0 {
+				failedTests = rerunFailed
+			}
 		}
 		if err != nil {
-			return stepOutcome{failedTests: parseGoTestLog(output).failedTopLevelTests()}, fmt.Errorf("%w: %w", errE2EPreflight, err)
+			return stepOutcome{failedTests: failedTests}, fmt.Errorf("%w: %w", errE2EPreflight, err)
 		}
 		if !authPreflightSkipped(output) {
 			return stepOutcome{}, nil
@@ -599,6 +609,27 @@ func runE2EPreflightAuth(
 
 		return stepOutcome{skipped: true}, nil
 	})
+}
+
+// skippedTopLevelTests names the top-level tests go test output shows
+// skipped, raw or -json, in output order. A subtest that skipped says
+// nothing about its parent.
+func skippedTopLevelTests(output string) []string {
+	skipped := []string{}
+	for line := range strings.Lines(output) {
+		text, event, isEvent := decodeGoTestLogLine(line)
+		name, isSkip := event.Test, isEvent && event.Action == goTestActionSkip
+		if !isEvent {
+			var rest string
+			rest, isSkip = strings.CutPrefix(strings.TrimSpace(text), goTestSkipPrefix)
+			name, _, _ = strings.Cut(rest, " ")
+		}
+		if top, isTest := topLevelTestName(name); isSkip && isTest && top == name {
+			skipped = append(skipped, name)
+		}
+	}
+
+	return skipped
 }
 
 // isAuthPreflightQuirk reports whether a failed auth preflight has the shape

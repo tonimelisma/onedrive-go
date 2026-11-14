@@ -22,13 +22,13 @@ const (
 	ciWaitMergeSHA = "merge-sha"
 	ciWaitShard    = "verify-unit (macos-latest, 2/3)"
 
-	ciWaitPRViewCommand      = "gh pr view 7 --json state,mergedAt,mergeCommit,statusCheckRollup,url"
+	ciWaitPRViewCommand      = "gh pr view 7 --json " + pullRequestStateFields
 	ciWaitPRHeadCommand      = "gh pr view 7 --json headRefOid"
 	ciWaitRunViewCommand     = "gh run view 111 --json conclusion,headSha,jobs,status,updatedAt,url"
 	ciWaitRerunCommand       = "gh run rerun 111 --failed"
 	ciWaitPushRunViewCommand = "gh run view 222 --json conclusion,headSha,jobs,status,updatedAt,url"
 	ciWaitPushRerunCommand   = "gh run rerun 222 --failed"
-	ciWaitRunListCommand     = "gh run list --branch main --commit merge-sha " +
+	ciWaitRunListCommand     = "gh run list --branch main --commit merge-sha --event push " +
 		"--json databaseId,name,event,status,conclusion,headSha,createdAt,updatedAt,url --limit 10"
 
 	ciWaitFirstStart  = "2026-11-11T10:00:00Z"

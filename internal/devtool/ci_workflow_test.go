@@ -18,9 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ciEventSchedule is the event of the nightly run, which no DoD wait follows.
-const ciEventSchedule = "schedule"
-
 // eventScopedWorkflowFixture has the job conditions, the timeout shape and the
 // concurrency forms of ci.yml, with timeouts chosen so that every wrong
 // reading gives its own window: counting the nightly-only job, reading the
@@ -177,6 +174,41 @@ func TestCIWorkflow_RejectsAnExpressionItDoesNotKnow(t *testing.T) {
 			assert.Contains(t, err.Error(), "odd-job")
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
+	}
+}
+
+// Validates: R-6.10.23, R-6.10.24
+//
+// A job's needs are read in the three forms YAML allows: one name, a flow
+// list and a block list; anything else fails naming the job.
+func TestCIWorkflowJobNeedsReadsEveryForm(t *testing.T) {
+	t.Parallel()
+
+	workflow := `jobs:
+  one:
+    needs: build
+  flow:
+    needs: [build, test]
+  block:
+    needs:
+      - build
+      - test # the slow one
+  none:
+    timeout-minutes: 5
+  odd:
+    needs: ${{ fromJSON(inputs.jobs) }}
+`
+	want := map[string][]string{
+		"one": {"build"}, "flow": {"build", "test"}, "block": {"build", "test"}, "none": nil,
+	}
+	for _, job := range ciWorkflowJobs(workflow) {
+		needs, err := job.needs()
+		if job.name == "odd" {
+			require.ErrorContains(t, err, "odd")
+			continue
+		}
+		require.NoError(t, err)
+		assert.Equal(t, want[job.name], needs, "job %s", job.name)
 	}
 }
 
