@@ -51,7 +51,9 @@ permissions:
 jobs:
   verify-lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Above the linter's own 15-minute deadline, so a lint that hangs ends
+    # with the linter's message instead of a job timeout that names no cause.
+    timeout-minutes: 20
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v7.0.1

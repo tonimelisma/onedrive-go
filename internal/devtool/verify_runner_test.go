@@ -78,6 +78,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assert.Equal(t, []string{"-w", "."}, runner.runCommands[cmdFormatGofumpt].args)
 	assert.Equal(t, "goimports", runner.runCommands[cmdFormatGoimports].name)
 	assert.Equal(t, "golangci-lint", runner.runCommands[cmdLint].name)
+	assert.Equal(t, hostLintCommandArgs(), runner.runCommands[cmdLint].args)
 	assert.Equal(t, "go", runner.runCommands[cmdBuild].name)
 	assert.Equal(t, []string{"build", "./..."}, runner.runCommands[cmdBuild].args)
 
