@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	stdsync "sync"
@@ -36,22 +37,34 @@ var errInjectedFault = errors.New("injected fault: disk I/O error (SQLITE_FULL)"
 type sqlFault struct {
 	mu    stdsync.Mutex
 	match string
-	err   error
-	hits  int
+	// skip is how many matching statements still run before the fault fires.
+	skip int
+	err  error
+	hits int
 }
 
 // arm makes the next statement whose SQL contains match (or the next commit,
 // for faultCommit) fail with err. One shot: the fault disarms when it fires.
 func (f *sqlFault) arm(match string, err error) {
+	f.armAfter(match, 0, err)
+}
+
+// armAfter is arm for the statement after the next skip matching ones, so a
+// test can fail a statement in the middle of a run of identical ones.
+func (f *sqlFault) armAfter(match string, skip int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.match, f.err = match, err
+	f.match, f.skip, f.err = match, skip, err
 }
 
 func (f *sqlFault) take(query string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.match == "" || !strings.Contains(query, f.match) {
+		return nil
+	}
+	if f.skip > 0 {
+		f.skip--
 		return nil
 	}
 	err := f.err
@@ -84,24 +97,29 @@ func faultForPath(dbPath string) *sqlFault {
 	return f
 }
 
-// faultPathFromDSN recovers the database path from the store's DSN
-// (`file:<path>?_pragma=...`), which keys the fault a connection consults.
-func faultPathFromDSN(dsn string) string {
-	path := strings.TrimPrefix(dsn, "file:")
-	if i := strings.IndexByte(path, '?'); i >= 0 {
-		path = path[:i]
+// faultPathFromDSN recovers the database path from the store's DSN, the
+// percent-encoded `file:` URI sqliteFileURI builds, which keys the fault a
+// connection consults.
+func faultPathFromDSN(dsn string) (string, error) {
+	uri, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("fault driver: parse DSN: %w", err)
 	}
-	return path
+	return uri.Path, nil
 }
 
 type faultDriver struct{ inner driver.Driver }
 
 func (d *faultDriver) Open(name string) (driver.Conn, error) {
+	path, err := faultPathFromDSN(name)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := d.inner.Open(name)
 	if err != nil {
 		return nil, fmt.Errorf("fault driver: open: %w", err)
 	}
-	return &faultConn{Conn: conn, fault: faultForPath(faultPathFromDSN(name))}, nil
+	return &faultConn{Conn: conn, fault: faultForPath(path)}, nil
 }
 
 // faultConn forwards to the real connection, consulting the fault first.
@@ -333,4 +351,32 @@ func TestFault_ReadFailureIsReturnedNotEmpty(t *testing.T) {
 	held, err = store.listHeldDeletes(ctx)
 	require.NoError(t, err)
 	assert.Len(t, held, 1, "the read works again once the fault is gone")
+}
+
+// Validates: R-2.5.2
+//
+// A retry-work prune whose delete fails in the middle of its run deletes
+// nothing: the rows it had already deleted come back with the rollback.
+func TestFault_RetryWorkPruneThatFailsMidwayDeletesNothing(t *testing.T) {
+	t.Parallel()
+
+	store, fault := newFaultStore(t)
+	ctx := t.Context()
+	for _, path := range []string{"a.txt", "b.txt", "c.txt"} {
+		require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow(path, "", ActionUpload, 1, 1)))
+	}
+
+	fault.armAfter(sqlDeleteRetryWorkByPathType, 1, errInjectedFault)
+	err := store.PruneRetryWorkToCurrentActions(ctx, nil)
+	require.ErrorIs(t, err, errInjectedFault)
+	require.Equal(t, 1, fault.fired(), "the second delete failed")
+
+	rows, err := store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	assert.Len(t, rows, 3, "no row is gone")
+
+	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, nil))
+	rows, err = store.ListRetryWork(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "the prune completes once the fault is gone")
 }

@@ -104,7 +104,9 @@ type RetryWorkRow struct {
 	ScopeKey     ScopeKey
 	Blocked      bool
 	AttemptCount int
-	NextRetryAt  int64
+	// NextRetryAt is when a delayed row is next due, as storedTimeNano
+	// encodes it; zero, and only zero, means no time (a blocked row).
+	NextRetryAt int64
 	// ConditionType names the condition only the user can clear that refused
 	// this work (an invalid name on OneDrive, a path too long, a local write
 	// denied); empty for a transient failure. Status lists the row under it.

@@ -85,7 +85,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 
 	if action.View != nil && action.View.Remote != nil {
 		opts.RemoteHash = action.View.Remote.Hash
-		opts.RemoteMtime = action.View.Remote.Mtime
+		opts.RemoteMtime = remoteModTime(action.View.Remote.Mtime)
 		opts.RemoteSize = action.View.Remote.Size
 		opts.RemoteSizeKnown = action.View.Remote.SizeKnown
 		opts.RemoteETag = action.View.Remote.ETag
@@ -146,6 +146,8 @@ func (e *executor) downloadOutcome(
 
 	if action.View != nil && action.View.Remote != nil {
 		o.ETag = action.View.Remote.ETag
+		// The time the download set is remoteModTime of the stored value,
+		// whose Unix nanoseconds are that value again.
 		o.LocalMtime = action.View.Remote.Mtime
 		o.RemoteMtime = action.View.Remote.Mtime
 		o.RemoteSize = action.View.Remote.Size
@@ -408,10 +410,6 @@ func (e *executor) uploadOutcome(
 	result *driveops.UploadResult,
 ) actionOutcome {
 	remoteHash := driveops.SelectHash(result.Item)
-	remoteMtime := int64(0)
-	if !result.Item.ModifiedAt.IsZero() {
-		remoteMtime = result.Item.ModifiedAt.UnixNano()
-	}
 
 	outcome := actionOutcome{
 		Action:          ActionUpload,
@@ -428,8 +426,10 @@ func (e *executor) uploadOutcome(
 		RemoteSize:      result.Item.Size,
 		RemoteSizeKnown: true,
 		LocalMtime:      result.Mtime.UnixNano(),
-		RemoteMtime:     remoteMtime,
-		ETag:            result.Item.ETag,
+		// The encoding the item converter stores for the next observation
+		// of this item, so the two compare equal.
+		RemoteMtime: storedTimeNano(result.Item.ModifiedAt),
+		ETag:        result.Item.ETag,
 	}
 	if action.View != nil && action.View.Local != nil {
 		outcome.LocalCtime = action.View.Local.LocalCtime

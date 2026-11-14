@@ -950,16 +950,6 @@ func classifyItemType(item *graph.Item) ItemType {
 	}
 }
 
-// toUnixNano converts a time.Time to Unix nanoseconds. Returns 0 for
-// the zero time value.
-func toUnixNano(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-
-	return t.UnixNano()
-}
-
 // nfcNormalize applies Unicode NFC normalization to a string. Applied to
 // each name segment individually, not to joined paths.
 func nfcNormalize(s string) string {

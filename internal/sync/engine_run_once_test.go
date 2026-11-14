@@ -338,7 +338,7 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 	}})
 	require.NoError(t, err)
 
-	inputs, err := flow.loadCurrentInputsTx(ctx, eng.baseline, tx, eng.driveID)
+	inputs, err := flow.loadCurrentInputsTx(ctx, tx, eng.driveID)
 	require.NoError(t, err)
 	require.Len(t, inputs.localRows, 1)
 	assert.Equal(t, "tx-only.txt", inputs.localRows[0].Path)
@@ -1032,7 +1032,7 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE baseline (
@@ -1107,7 +1107,7 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(t.Context(), canonicalSchemaSQL)

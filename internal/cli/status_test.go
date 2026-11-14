@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -1065,7 +1066,7 @@ func TestQuerySyncState_WithBaselineEntries(t *testing.T) {
 
 	createTestStateDB(t, dbPath)
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -1093,7 +1094,7 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 
 	createTestStateDB(t, dbPath)
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
 	ctx := t.Context()
@@ -1191,7 +1192,7 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 
 	createTestStateDB(t, dbPath)
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -1282,7 +1283,7 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 
 	createTestStateDB(t, dbPath)
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	defer db.Close()
 

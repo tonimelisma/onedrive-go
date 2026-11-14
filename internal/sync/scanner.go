@@ -58,7 +58,6 @@ type scanResult struct {
 
 // Constants for the local scanner.
 const (
-	nanosPerSecond         = 1_000_000_000
 	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
 

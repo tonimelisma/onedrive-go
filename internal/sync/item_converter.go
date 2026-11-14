@@ -725,7 +725,7 @@ func (c *itemConverter) classifyAndConvert(
 		Name:      name,
 		Size:      item.Size,
 		Hash:      hash,
-		Mtime:     toUnixNano(item.ModifiedAt),
+		Mtime:     storedTimeNano(item.ModifiedAt),
 		ETag:      item.ETag,
 		CTag:      item.CTag,
 		IsDeleted: item.IsDeleted,

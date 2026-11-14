@@ -2,8 +2,9 @@
 // retry work, block-scope and observation cadence state, and its lifecycle.
 //
 // Contents:
-//   - SyncStore:    struct definition (db, baseline, logger, nowFunc)
+//   - SyncStore:    struct definition (db handle, baseline cache, logger, clock)
 //   - NewSyncStore: open database, apply canonical schema, return ready store
+//   - sqliteFileURI: the database's SQLite URI, path percent-encoded
 //   - Close:        WAL checkpoint + close database
 //   - Checkpoint:   WAL checkpoint
 //   - nullString:   empty string → SQL NULL
@@ -19,6 +20,7 @@
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
 //   - store_reset.go:              explicit delete-and-recreate helper
+//   - store_sql_encoding.go:       column encodings, stored times among them
 
 package sync
 
@@ -28,6 +30,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"path/filepath"
 	stdsync "sync"
 	"time"
 
@@ -61,8 +65,8 @@ func IsLocalDiskFull(err error) bool {
 
 const syncStoreDirPerm = 0o700
 
-// SyncStore is the sole writer to the sync database. It loads the
-// baseline at pass start and commits outcomes at pass end.
+// SyncStore is the sole writer to the sync database: every table the schema
+// defines is written through its methods.
 type SyncStore struct {
 	db         *sql.DB
 	baseline   *Baseline
@@ -80,7 +84,7 @@ type SyncStore struct {
 }
 
 // NewSyncStore opens the SQLite database at dbPath, applies the canonical
-// schema, and returns a ready-to-use manager. The database uses WAL mode with
+// schema, and returns a ready-to-use store. The database uses WAL mode with
 // synchronous=FULL for crash-safe durability.
 func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	return openSyncStore(ctx, dbPath, logger, true)
@@ -90,6 +94,36 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 // with. Tests open through a fault-injecting wrapper of the same driver
 // (openSyncStoreWithDriver) to reach the store's failure branches.
 const sqliteDriverName = "sqlite"
+
+const (
+	// sqlitePragmaParam is the URI parameter whose values the SQLite driver
+	// runs as PRAGMA statements on every connection it opens.
+	sqlitePragmaParam = "_pragma"
+	// storeBusyTimeout is how long a statement waits for a lock another
+	// connection holds before it fails with SQLITE_BUSY.
+	storeBusyTimeout = 5 * time.Second
+	// storeJournalSizeLimitBytes is the size SQLite truncates the write-ahead
+	// log back to after a checkpoint, so one large transaction does not leave
+	// a log that size behind for good.
+	storeJournalSizeLimitBytes = 64 << 20
+)
+
+// sqliteFileURI is the SQLite URI of the database file at path, carrying
+// query. The path is percent-encoded: SQLite reads a '?' in a "file:" URI
+// as the start of the query and a '#' as the start of a fragment, so a data
+// folder named with either would open a different file. An absolute path
+// gets an empty authority ("file:///abs"); a relative one has none
+// ("file:rel"), which SQLite resolves against the working directory.
+func sqliteFileURI(path string, query url.Values) string {
+	uri := url.URL{
+		Scheme:   "file",
+		Path:     path,
+		OmitHost: !filepath.IsAbs(path),
+		RawQuery: query.Encode(),
+	}
+
+	return uri.String()
+}
 
 func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
 	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, sqliteDriverName)
@@ -107,14 +141,13 @@ func openSyncStoreWithDriver(
 	}
 
 	// DSN parameters ensure pragmas apply to every connection from the pool.
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"+
-			"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"+
-			"&_pragma=journal_size_limit(67108864)",
-		dbPath,
-	)
-
-	db, err := sql.Open(driverName, dsn)
+	db, err := sql.Open(driverName, sqliteFileURI(dbPath, url.Values{sqlitePragmaParam: {
+		"journal_mode(WAL)",
+		"synchronous(FULL)",
+		"foreign_keys(ON)",
+		fmt.Sprintf("busy_timeout(%d)", storeBusyTimeout.Milliseconds()),
+		fmt.Sprintf("journal_size_limit(%d)", storeJournalSizeLimitBytes),
+	}}))
 	if err != nil {
 		return nil, fmt.Errorf("sync: opening database %s: %w", dbPath, err)
 	}
@@ -195,16 +228,17 @@ func (s *SyncStore) rawDB() *sql.DB {
 	return s.db
 }
 
-// setNowFunc overrides the time source used for syncedAt timestamps in Commit.
-// Used in tests to produce deterministic timestamps without mocking the real
-// clock. Must be called before Commit.
+// setNowFunc overrides the store's clock, which dates delete-ledger rows,
+// retry timing and pending-create intents. Used in tests to produce
+// deterministic times without mocking the real clock; call it before the
+// writes it should date.
 func (s *SyncStore) setNowFunc(fn func() time.Time) {
 	s.nowFunc = fn
 }
 
-// cachedBaseline returns the in-memory baseline cache populated by the most recent
-// Load or Commit call. Returns nil before the first Load/Commit. Used by
-// tests to inspect baseline state without a round-trip through Load().
+// cachedBaseline returns the in-memory baseline cache populated by the most
+// recent Load or commit. Returns nil before the first one. Used by tests to
+// inspect baseline state without a round-trip through Load().
 func (s *SyncStore) cachedBaseline() *Baseline {
 	s.baselineMu.Lock()
 	defer s.baselineMu.Unlock()

@@ -520,12 +520,11 @@ func (flow *engineFlow) loadCurrentInputs(
 		}
 	}()
 
-	return flow.loadCurrentInputsTx(ctx, store, tx, defaultDriveID)
+	return flow.loadCurrentInputsTx(ctx, tx, defaultDriveID)
 }
 
 func (flow *engineFlow) loadCurrentInputsTx(
 	ctx context.Context,
-	store *SyncStore,
 	tx sqlTxRunner,
 	defaultDriveID driveid.ID,
 ) (currentInputs, error) {
@@ -533,7 +532,7 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
-	observationState, err := store.readObservationStateTx(ctx, tx)
+	observationState, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
 	}

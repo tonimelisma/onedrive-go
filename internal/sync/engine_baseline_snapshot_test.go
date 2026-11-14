@@ -33,7 +33,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	defer func() {
 		require.NoError(t, tx.Rollback())
 	}()
-	inputs, err := flow.loadCurrentInputsTx(ctx, eng.baseline, tx, eng.driveID)
+	inputs, err := flow.loadCurrentInputsTx(ctx, tx, eng.driveID)
 	require.NoError(t, err)
 
 	// Before: "sync: missing baseline entry for comparison path" tore down

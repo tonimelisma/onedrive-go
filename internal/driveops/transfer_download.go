@@ -109,10 +109,10 @@ var ErrDownloadIntegrity = errors.New("the downloaded file doesn't match OneDriv
 
 // DownloadOpts configures a single download operation.
 type DownloadOpts struct {
-	RemoteHash      string // expected QuickXorHash; empty = no hash verification
-	RemoteMtime     int64  // nanoseconds; 0 = don't set (not Unix epoch)
-	RemoteSize      int64  // expected size; a positive value is always known
-	RemoteSizeKnown bool   // set for a known size of zero
+	RemoteHash      string    // expected QuickXorHash; empty = no hash verification
+	RemoteMtime     time.Time // the modification time to give the file; the zero time sets none
+	RemoteSize      int64     // expected size; a positive value is always known
+	RemoteSizeKnown bool      // set for a known size of zero
 	// RemoteETag identifies the remote version for a hashless item, so an
 	// interrupted download resumes only against the same version.
 	RemoteETag                 string
@@ -323,9 +323,8 @@ func (tm *TransferManager) downloadToFile(
 func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPath, parentDir string, opts DownloadOpts) error {
 	// Set mtime on the partial file before its fsync, so the flush makes the
 	// time durable together with the bytes.
-	if opts.RemoteMtime != 0 {
-		mtime := time.Unix(0, opts.RemoteMtime)
-		if err := target.Chtimes(partialPath, mtime, mtime); err != nil {
+	if !opts.RemoteMtime.IsZero() {
+		if err := target.Chtimes(partialPath, opts.RemoteMtime, opts.RemoteMtime); err != nil {
 			tm.logger.Warn("couldn't set the modification time of the downloaded file",
 				slog.String("path", targetPath),
 				slog.Any("error", err),

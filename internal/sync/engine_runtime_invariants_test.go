@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -97,6 +98,27 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts(t 
 	err := flow.assertPersistedInvariants(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid attempt count")
+}
+
+// A delayed row's retry time at either end of the stored range is timing;
+// only zero is none.
+// Validates: R-2.10.33
+func TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOfTheStoredRange(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+
+	for path, stored := range map[string]int64{"before.txt": math.MinInt64, "past.txt": math.MaxInt64} {
+		require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+			Path:         path,
+			ActionType:   ActionUpload,
+			AttemptCount: 1,
+			NextRetryAt:  stored,
+		}))
+	}
+
+	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
 
 // Validates: R-2.10.33

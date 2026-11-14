@@ -42,7 +42,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	}
 
 	nextTrialAt := time.Time{}
-	if nextTrialNano != 0 {
+	if storedTimeIsSet(nextTrialNano) {
 		nextTrialAt = time.Unix(0, nextTrialNano).UTC()
 	}
 

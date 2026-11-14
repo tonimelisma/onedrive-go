@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 
 	_ "modernc.org/sqlite"
 )
@@ -55,7 +56,7 @@ func testShortcutChildAckRefWithContext(
 		require.NoError(t, store.Close(ctx))
 	})
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, db.Close())

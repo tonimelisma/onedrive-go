@@ -235,7 +235,7 @@ func assertPersistedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKe
 }
 
 func assertDelayedRetryWorkInvariant(row *RetryWorkRow) error {
-	if row.NextRetryAt <= 0 {
+	if !storedTimeIsSet(row.NextRetryAt) {
 		return fmt.Errorf("retry_work %s is missing retry timing", row.Path)
 	}
 
@@ -249,7 +249,7 @@ func assertBlockedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]
 	if _, ok := seenBlocks[row.ScopeKey]; !ok {
 		return fmt.Errorf("blocked retry_work %s references missing block scope %s", row.Path, row.ScopeKey.String())
 	}
-	if row.NextRetryAt != 0 {
+	if storedTimeIsSet(row.NextRetryAt) {
 		return fmt.Errorf("blocked retry_work %s must not have retry timing", row.Path)
 	}
 

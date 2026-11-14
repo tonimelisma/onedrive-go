@@ -137,7 +137,7 @@ func (s *SyncStore) upsertObservationIssuesTx(
 	tx sqlTxRunner,
 	issues []ObservationIssue,
 ) error {
-	state, err := s.readObservationStateTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}

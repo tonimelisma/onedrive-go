@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/internal/syncverify"
 
@@ -923,7 +924,7 @@ func openDriveStateDBForSyncTest(t *testing.T, env map[string]string) *sql.DB {
 	dbPath := filepath.Join(dataHome, "onedrive-go", "state_"+sanitizedDrive+".db")
 	require.FileExists(t, dbPath)
 
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 

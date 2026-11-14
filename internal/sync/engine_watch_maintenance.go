@@ -62,7 +62,7 @@ func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, err
 	if err != nil {
 		return 0, fmt.Errorf("sync: reading observation state for remote refresh cadence: %w", err)
 	}
-	if state.NextFullRemoteRefreshAt == 0 {
+	if !storedTimeIsSet(state.NextFullRemoteRefreshAt) {
 		return 0, nil
 	}
 
@@ -84,7 +84,7 @@ func (e *Engine) shouldRunFullRemoteRefresh(ctx context.Context, requested bool)
 	if err != nil {
 		return false, fmt.Errorf("sync: reading observation state for full remote refresh: %w", err)
 	}
-	if state.Cursor == "" || state.NextFullRemoteRefreshAt == 0 {
+	if state.Cursor == "" || !storedTimeIsSet(state.NextFullRemoteRefreshAt) {
 		return true, nil
 	}
 

@@ -307,9 +307,9 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 		)
 	}
 
-	// Set mtime from remote if available.
-	if action.View != nil && action.View.Remote != nil && action.View.Remote.Mtime != 0 {
-		mtime := time.Unix(0, action.View.Remote.Mtime)
+	// The remote folder's time, when one is known, as a download sets a file's.
+	if action.View != nil && action.View.Remote != nil && storedTimeIsSet(action.View.Remote.Mtime) {
+		mtime := remoteModTime(action.View.Remote.Mtime)
 		if err := e.syncTree.Chtimes(folder, mtime, mtime); err != nil {
 			// Debug: the folder exists; some filesystems (SMB, FUSE) refuse
 			// directory times, which would otherwise warn once per folder.
@@ -985,9 +985,9 @@ func (e *executor) moveOutcome(action *Action) actionOutcome {
 		o.LocalBirthTime = local.LocalBirthTime
 		o.LocalHasIdentity = local.LocalHasIdentity
 		o.LocalIdentityObserved = true
-		fillRemoteOutcomeFromBaseline(&o, baseline)
+		fillRemoteOutcomeFromBaseline(&o, baseline, action.View.Remote != nil)
 	} else {
-		fillOutcomeFromBaseline(&o, baseline)
+		fillOutcomeFromBaseline(&o, baseline, action.View.Remote != nil)
 	}
 	if o.ItemType == ItemTypeFile && baseline != nil && baseline.ItemType != ItemTypeFile {
 		o.ItemType = baseline.ItemType
@@ -1005,7 +1005,7 @@ func plannedRemoteItemType(action *Action) ItemType {
 	return resolveItemType(action.View)
 }
 
-func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
+func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry, remoteObserved bool) {
 	if baseline == nil {
 		return
 	}
@@ -1027,13 +1027,17 @@ func fillOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 		o.LocalBirthTime = baseline.LocalBirthTime
 		o.LocalHasIdentity = baseline.LocalHasIdentity
 	}
-	fillRemoteOutcomeFromBaseline(o, baseline)
+	fillRemoteOutcomeFromBaseline(o, baseline, remoteObserved)
 }
 
 // fillRemoteOutcomeFromBaseline fills only unknown remote-side facts. It is
 // used on its own when the local half was observed, because an observed but
 // unknown local hash must stay unknown rather than inherit the baseline's.
-func fillRemoteOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
+// The remote modification time is filled only when the view did not observe
+// the remote side, as in a publication (fillMutationFromBaselineDefaults): an
+// observed item with no time is recorded with none, which is what the
+// planner's comparison reads from the remote row.
+func fillRemoteOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry, remoteObserved bool) {
 	if baseline == nil {
 		return
 	}
@@ -1045,7 +1049,7 @@ func fillRemoteOutcomeFromBaseline(o *actionOutcome, baseline *BaselineEntry) {
 		o.RemoteSize = baseline.RemoteSize
 		o.RemoteSizeKnown = baseline.RemoteSizeKnown
 	}
-	if o.RemoteMtime == 0 {
+	if !storedTimeIsSet(o.RemoteMtime) && !remoteObserved {
 		o.RemoteMtime = baseline.RemoteMtime
 	}
 	if o.ETag == "" {

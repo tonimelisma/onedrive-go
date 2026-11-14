@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	stdsync "sync"
@@ -87,7 +88,7 @@ func (c *crashCapture) captureDatabase() error {
 		return copyFileContent(src, dst)
 	}
 
-	db, err := sql.Open("sqlite", "file:"+src+"?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqliteFileURI(src, url.Values{sqlitePragmaParam: {"busy_timeout(5000)"}}))
 	if err != nil {
 		return fmt.Errorf("open state for snapshot: %w", err)
 	}
@@ -247,7 +248,7 @@ func (c *crashCapture) reopen(t *testing.T) *syncHarness {
 	require.True(t, c.captured, "crash point %s was never reached", c.point)
 
 	dbPath := filepath.Join(c.dstDir, crashTestDBName)
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	for _, update := range []string{
 		`UPDATE baseline SET local_device = ?, local_inode = ?

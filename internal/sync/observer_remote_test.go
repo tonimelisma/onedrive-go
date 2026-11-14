@@ -892,15 +892,6 @@ func TestSelectHash(t *testing.T) {
 	}
 }
 
-// Validates: R-6.7.16
-func TestToUnixNano(t *testing.T) {
-	t.Parallel()
-
-	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	assert.Equal(t, ts.UnixNano(), toUnixNano(ts))
-	assert.Equal(t, int64(0), toUnixNano(time.Time{}))
-}
-
 // Validates: R-6.7.28
 func TestFullDelta_OrphanedItem(t *testing.T) {
 	t.Parallel()

@@ -813,7 +813,7 @@ func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncM
 	rawLocalRows, err := listLocalStateRows(ctx, tx)
 	require.NoError(t, err)
 
-	observationState, err := store.readObservationStateTx(ctx, tx)
+	observationState, err := readObservationStateFromTx(ctx, tx)
 	require.NoError(t, err)
 	contentDriveID := observationState.ContentDriveID
 	if contentDriveID.IsZero() {

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -574,4 +575,99 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 	assert.Empty(t, dispatched)
 	assert.Empty(t, rt.retries.heldByKey, "admission must not create in-memory held work when the blocked retry row was not durably recorded")
 	assert.Equal(t, 1, rt.sched.graph.InFlightCount())
+}
+
+// A stored retry time at either end of the stored range is a time: the one
+// before 1678 is due and arms the retry timer at once, the one past 2262
+// holds the work in the far future. Only zero means no time.
+// Validates: R-2.10.33
+func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		stored  int64
+		wantDue bool
+	}{
+		{name: "before the range", stored: math.MinInt64, wantDue: true},
+		{name: "past the range", stored: math.MaxInt64, wantDue: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng := newSingleOwnerEngine(t)
+			rt := testWatchRuntime(t, eng)
+			flow := testEngineFlow(t, eng)
+			held := rt.sched.graph.Add(&Action{Type: ActionUpload, Path: "retry.txt", DriveID: eng.driveID}, 1, nil)
+			require.NotNil(t, held)
+			work := retryWorkKeyForAction(&held.Action)
+			flow.retries.rowsByKey[work] = RetryWorkRow{
+				Path:         work.Path,
+				ActionType:   work.ActionType,
+				AttemptCount: 1,
+				NextRetryAt:  tc.stored,
+			}
+
+			require.NoError(t, flow.holdActionFromPersistedRetryState(held, work))
+
+			nextRetry, timed := flow.retries.earliestHeldRetryAt()
+			require.True(t, timed, "the held retry has a time the retry timer arms for")
+			assert.Equal(t, time.Unix(0, tc.stored), nextRetry)
+			assert.Equal(t, tc.wantDue, flow.hasDueHeldWork(eng.nowFunc()))
+		})
+	}
+}
+
+// A delayed row whose time is before 1970 (negative) is still delayed work:
+// with a clock that also reads before 1970, admission holds it until then.
+//
+// Validates: R-2.10.33
+func TestRetryLedger_ADelayedRowTimedBefore1970IsHeldUntilItsTime(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
+	due := now.Add(time.Hour)
+	ledger := newRetryLedger()
+	held := &trackedAction{Action: Action{Type: ActionUpload, Path: "moon.txt"}}
+	work := retryWorkKeyForAction(&held.Action)
+	ledger.rowsByKey[work] = RetryWorkRow{
+		Path:         work.Path,
+		ActionType:   work.ActionType,
+		AttemptCount: 1,
+		NextRetryAt:  storedTimeNano(due),
+	}
+	decision := admissionDecision{Action: held, RetryWorkKey: work}
+
+	ledger.applyPersistedRetryAdmission(now, held, &decision)
+
+	assert.Equal(t, admissionHoldRetry, decision.Kind, "held as delayed work, not dispatched at once")
+	assert.True(t, decision.NextRetryAt.Equal(due))
+}
+
+// Validates: R-2.10.33
+func TestEngineFlow_ScopeHasBlockedRetryWork_AnswersForOneScope(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	flow := testEngineFlow(t, eng)
+	ctx := t.Context()
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, testRetryWorkKey("held.txt", "", ActionUpload), SKService())
+	require.NoError(t, err)
+	_, err = eng.baseline.RecordRetryWorkFailure(ctx,
+		&RetryWorkFailure{Work: testRetryWorkKey("timed.txt", "", ActionUpload), ScopeKey: SKQuotaOwn()},
+		func(int) time.Duration { return time.Minute })
+	require.NoError(t, err)
+
+	blocked, err := flow.scopeHasBlockedRetryWork(ctx, SKService())
+	require.NoError(t, err)
+	assert.True(t, blocked, "a blocked row under the scope")
+
+	blocked, err = flow.scopeHasBlockedRetryWork(ctx, SKQuotaOwn())
+	require.NoError(t, err)
+	assert.False(t, blocked, "a delayed row carrying the scope as evidence is not blocked under it")
+
+	blocked, err = flow.scopeHasBlockedRetryWork(ctx, testThrottleScope())
+	require.NoError(t, err)
+	assert.False(t, blocked, "no row under the scope")
 }

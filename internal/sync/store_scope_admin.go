@@ -21,7 +21,7 @@ func (s *SyncStore) ReleaseScopeWork(
 	now time.Time,
 ) (scopeRemoved bool, err error) {
 	wire := scopeKey.String()
-	nowNano := now.UnixNano()
+	nowNano := storedTimeNano(now)
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
@@ -39,10 +39,8 @@ func (s *SyncStore) ReleaseScopeWork(
 		return false, countErr
 	}
 	if remaining == 0 {
-		if _, execErr := tx.ExecContext(ctx,
-			`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
-		); execErr != nil {
-			return false, fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
+		if deleteErr := deleteBlockScopeWithRunner(ctx, tx, scopeKey); deleteErr != nil {
+			return false, deleteErr
 		}
 	}
 
@@ -74,10 +72,8 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback discard-scope tx for %s", wire))
 	}()
 
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
+	if deleteErr := deleteBlockScopeWithRunner(ctx, tx, scopeKey); deleteErr != nil {
+		return deleteErr
 	}
 
 	if retryErr := deleteRetryWorkByScopeTx(ctx, tx, wire); retryErr != nil {
@@ -91,27 +87,25 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (err er
 	return nil
 }
 
+// PruneBlockScopesWithoutBlockedWork deletes every block scope row that no
+// blocked retry_work row references: such a scope has nothing to trial or
+// release. Ready work under the scope is left alone.
 func (s *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) error {
 	blocks, err := s.ListBlockScopes(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: listing block scopes for pruning: %w", err)
 	}
 
-	for i := range blocks {
-		block := blocks[i]
-		if block == nil {
-			continue
-		}
-
+	for _, block := range blocks {
 		hasBlockedRetryWork, keepErr := s.scopeHasBlockedRetryWork(ctx, block.Key)
 		if keepErr != nil {
-			return keepErr
+			return fmt.Errorf("sync: pruning block scope %s: %w", block.Key.String(), keepErr)
 		}
 		if shouldKeepTimedBlockScope(hasBlockedRetryWork) {
 			continue
 		}
 
-		if err := s.deleteBlockScopeOnly(ctx, block.Key); err != nil {
+		if err := deleteBlockScopeWithRunner(ctx, s.db, block.Key); err != nil {
 			return fmt.Errorf("sync: pruning block scope %s without blocked work: %w", block.Key.String(), err)
 		}
 	}
@@ -119,41 +113,13 @@ func (s *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 	return nil
 }
 
-func (s *SyncStore) deleteBlockScopeOnly(ctx context.Context, scopeKey ScopeKey) (err error) {
-	wire := scopeKey.String()
-
-	tx, err := beginPerfTx(ctx, s.db)
-	if err != nil {
-		return fmt.Errorf("sync: begin delete-scope tx for %s: %w", wire, err)
-	}
-	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback delete-scope tx for %s", wire))
-	}()
-
-	if _, execErr := tx.ExecContext(ctx,
-		`DELETE FROM block_scopes WHERE scope_key = ?`, wire,
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting block scope %s: %w", wire, execErr)
-	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing delete-scope for %s: %w", wire, err)
-	}
-
-	return nil
-}
-
+// scopeHasBlockedRetryWork reports whether any retry_work row is blocked
+// under scopeKey, from a count of that scope's blocked rows.
 func (s *SyncStore) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
-	rows, err := s.ListBlockedRetryWork(ctx)
+	blocked, err := countBlockedRetryWorkForScopeTx(ctx, s.db, scopeKey.String())
 	if err != nil {
-		return false, fmt.Errorf("sync: listing blocked retry work for scope pruning: %w", err)
+		return false, err
 	}
 
-	for i := range rows {
-		if rows[i].ScopeKey == scopeKey {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return blocked > 0, nil
 }

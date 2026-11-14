@@ -62,23 +62,16 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	assert.Zero(t, state.NextFullRemoteRefreshAt)
 }
 
-// Validates: R-2.5.6
-func TestNewSyncStore_RejectsNonCanonicalSchema(t *testing.T) {
-	t.Parallel()
+// requireNewSyncStoreRefusesSchema writes ddl into a fresh database file and
+// asserts that opening it as a sync store refuses it as an incompatible
+// schema rather than adopting or rewriting it.
+func requireNewSyncStoreRefusesSchema(t *testing.T, ddl string) {
+	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
-
-	_, err = db.ExecContext(t.Context(), `
-		CREATE TABLE baseline (
-			item_id TEXT NOT NULL,
-			path TEXT NOT NULL PRIMARY KEY
-		);
-		CREATE TABLE legacy_shadow (
-			path TEXT NOT NULL PRIMARY KEY,
-			value TEXT NOT NULL
-		)`)
+	_, err = db.ExecContext(t.Context(), ddl)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -90,11 +83,26 @@ func TestNewSyncStore_RejectsNonCanonicalSchema(t *testing.T) {
 }
 
 // Validates: R-2.5.6
+func TestNewSyncStore_RejectsNonCanonicalSchema(t *testing.T) {
+	t.Parallel()
+
+	requireNewSyncStoreRefusesSchema(t, `
+		CREATE TABLE baseline (
+			item_id TEXT NOT NULL,
+			path TEXT NOT NULL PRIMARY KEY
+		);
+		CREATE TABLE legacy_shadow (
+			path TEXT NOT NULL PRIMARY KEY,
+			value TEXT NOT NULL
+		)`)
+}
+
+// Validates: R-2.5.6
 func TestApplySchema_SeedsObservationStateRowForCurrentSchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Close())
@@ -118,7 +126,7 @@ func TestApplySchema_RejectsGeneration6RemoteStateDriveOwnership(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
 	legacySchema := strings.Replace(canonicalSchemaSQL, "    drive_id      TEXT    NOT NULL DEFAULT '',\n", "", 1)

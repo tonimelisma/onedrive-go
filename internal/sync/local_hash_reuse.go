@@ -2,9 +2,32 @@ package sync
 
 import (
 	"io/fs"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
+
+// racilyCleanWindow is how recent a file's last change may be before a scan
+// distrusts what is recorded for it: a write in the same clock tick as the
+// recorded hash moves neither size nor time (Git's "racily clean" problem).
+const racilyCleanWindow = time.Second
+
+// modifiedInRacilyCleanWindow reports whether a file was modified, or its
+// inode changed, within racilyCleanWindow before the scan that began at
+// scanStartNano (a clock reading), or after it began: either way a recorded
+// hash may predate the file's content. The modification time is taken as a
+// time, never as its stored integer, so a file dated outside 1678 to 2262 is
+// not misread: one from 1601 is long settled, one from 2300 is after the
+// scan began, like any file dated in the future. The change time is set by
+// the kernel from its own clock, so it lies inside that range and the
+// integer subtraction cannot overflow.
+func modifiedInRacilyCleanWindow(modTime time.Time, ctime, scanStartNano int64) bool {
+	if time.Unix(0, scanStartNano).Sub(modTime) < racilyCleanWindow {
+		return true
+	}
+
+	return scanStartNano-ctime < int64(racilyCleanWindow)
+}
 
 // canReuseBaselineHash reports whether a caller can safely trust the cached
 // baseline hash for a local file instead of re-reading the file contents.
@@ -50,7 +73,7 @@ func canReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNan
 		return false
 	}
 
-	return observeStartNano-currentMtime >= nanosPerSecond && observeStartNano-currentCtime >= nanosPerSecond
+	return !modifiedInRacilyCleanWindow(info.ModTime(), currentCtime, observeStartNano)
 }
 
 // sameBaselineIdentity reports whether info is the inode the baseline

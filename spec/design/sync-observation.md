@@ -455,6 +455,17 @@ stamps ctime from a coarse clock, so two writes in one tick share it).
 - Identity catches a different file renamed over the synced one with the same
   size and mtime.
 - A baseline with no ctime or identity proves nothing and is re-read.
+- The racily-clean window is one helper, `modifiedInRacilyCleanWindow`, which
+  the baseline fast path and the scan's hash cache (`cachedHashForNewFile`)
+  both ask. It takes the modification time as a time, never as its stored
+  integer: a file dated 1601 is long settled and its hash is reused, a file
+  dated 2300 is after the scan began and is re-read like any future-dated
+  file; the subtraction of wrapped integers had re-read the 1601 file on every
+  scan. The change time comes from the kernel's own clock, inside the range
+  Unix nanoseconds hold, and stays an integer comparison
+  (`TestModifiedInRacilyCleanWindow_IsDecidedOnTimes`,
+  `TestCanReuseBaselineHash_AFileDated1601IsNotRacyAndItsHashIsReused`,
+  `TestCanReuseBaselineHash_AFileDated2300IsRehashedLikeAnyFutureDatedFile`).
 - Rows record ctime for regular files only: a folder's ctime moves with every
   child. The ctime a row carries is always stated before the content is read
   (walk stat, watch stat, `computeStableHashWith` pre-stat, which also rejects a

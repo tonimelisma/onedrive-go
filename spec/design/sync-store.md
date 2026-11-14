@@ -149,6 +149,9 @@ and every other significant type in the tree already matched its own name
 | An issue type or condition type that no `IssueType` member names is refused at the store boundary on read and on write (R-2.5.6); every member has a stated verdict on local and remote truth and on the remote subtree, and a value outside the enum leaves both sides of its path unavailable; a remote twin's subtree is unavailable on OneDrive's side by its type alone. | `TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType`, `TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType`, `TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember`, `TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas`, `TestObservationIssueBlocksTruth_VerdictForEveryIssueType`, `TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable`, `TestObservationIssueBlocksRemoteTruth_ValueOutsideTheEnumIsUnavailable`, `TestTruthAvailabilityIndex_OnlyASubtreeBoundingTypeBlocksDescendants` |
 | An observation findings batch replaces the stored issues of exactly the types it manages, and a batch that reports an issue of a type it does not manage is refused before anything is written, naming the type and the path: such a row would outlive every later batch that stops reporting it, as an interrupted removal's report outlived the file (R-2.10.10, R-6.4.9). | `TestBuildObservationReconcilePlan_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover` |
 | Debug invariant checks reject malformed retry/block durable state before runtime handoff. | `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
+| Stored times compared by order saturate at the ends of the int64 range, so a trial a saturated `Retry-After` puts past 2262 is not due after a restart; readers take only zero as "no time". | `TestStoredTimeNano_SaturatesAtBothEndsOfTheRange`, `TestUpsertBlockScope_SaturatedTrialSurvivesAReload`, `TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOfTheStoredRange` |
+| The store and the inspector open the file they name when its folder's name holds `?` or `#`, with every pragma applied. | `TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`, `TestSQLiteFileURI_EscapesTheDatabasePath` |
+| Remote modification times saturate through the same encoder at every writer and come back through one decoder, so an item dated 2300 or 1601 is downloaded with the last or first storable time and the next pass plans nothing; a time re-dated to the epoch on either side converges. | `TestStoredTimeNano_RemoteModificationTimeWritersAgree`, `TestRunOnce_ARemoteFileDated2300DownloadsWithTheLastStorableTime`, `TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime`, `TestRunOnce_AFileRedatedToTheEpochConverges`, `TestStoredTimes_EveryDecodeIsDeclared` |
 
 ## Write Responsibilities
 
@@ -183,6 +186,90 @@ shows under "Path too long" next to the folders the scanner refused. Before
 generation 28 such a row was indistinguishable from a transient retry: the
 soak of 2026-11-02 showed a refused folder as "Retrying (21 attempts)" for
 nine hours with no issue and no log line.
+
+### Stored times
+
+A stored time that is compared by order (a deadline or a not-before time),
+and a remote modification time, is written through one encoder,
+`storedTimeNano` (`store_sql_encoding.go`): Unix nanoseconds, saturated at
+the ends of the int64 range. A time past 2262 stores `math.MaxInt64`, a time
+before 1678 stores `math.MinInt64`, the zero time stores 0, every such
+column's "no time", and the epoch itself stores 1 ns after it
+(`storedEpochNano`). `UnixNano` is undefined
+outside that range, and a server's `Retry-After` that saturates at the
+longest `time.Duration` (retry.md, "Reading `Retry-After`") puts a block
+scope's trial about 292 years out: written with `UnixNano` it wrapped to a
+time about 584 years earlier (1733 for a trial set in 2025), and after a
+restart the trial was due at once
+(`TestUpsertBlockScope_SaturatedTrialSurvivesAReload`,
+`TestStoredTimeNano_SaturatesAtBothEndsOfTheRange`).
+
+| Column | Time it holds | Bounded |
+| --- | --- | --- |
+| `block_scopes.next_trial_at` | the clock plus a server-given wait, or a local 60 s | no |
+| `retry_work.next_retry_at` | the clock plus a backoff of at most an hour (75 minutes with jitter), or the clock at a release | yes |
+| `observation_state.next_full_remote_refresh_at` | the clock plus the refresh cadence or the undecided-orphan backoff, or a clamp to the clock plus a fixed delay | yes |
+| `delete_ledger.committed_at`, and the window bounds compared to it | the clock, and the clock less the 24-hour `deleteSafetyWindow` | yes |
+| `pending_creates.intended_at` | the clock | yes |
+| `remote_state.mtime`, `baseline.remote_mtime` | the item's `lastModifiedDateTime` | no |
+
+The trial and the remote modification time can lie outside the range with a
+clock inside it; the others reach it only with a clock outside 1678 to 2262.
+Reads need no mapping back: `time.Unix(0, math.MaxInt64)` is 2262, still the
+far future, and `time.Unix(0, math.MinInt64)` is 1677, long past. Every
+reader converts with `time.Unix` and compares or subtracts as `time.Time`,
+which saturates, or compares the stored integers. Zero, and only zero, is
+"no time" (`storedTimeIsSet`, and `<> 0` in SQL): a time before 1970 is
+negative and a time like any other. Read as none, the runtime hold of
+persisted retry work armed no retry timer, the debug invariant refused the
+row, admission dispatched a pre-1970 retry at once, and a pending create's
+second record replaced its first intent's time
+(`TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange`,
+`TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOfTheStoredRange`,
+`TestRetryLedger_ADelayedRowTimedBefore1970IsHeldUntilItsTime`,
+`TestPendingCreate_AnIntentRecordedBefore1970KeepsItsTimeAndStaysFresh`).
+
+Remote modification times are written by the item converter, the upload
+outcome and the live row an executor precondition compares with the planned
+one, all through `storedTimeNano`, because they are compared with each other
+(`TestStoredTimeNano_RemoteModificationTimeWritersAgree`). One decoder,
+`remoteModTime`, turns a stored one back into a file time, for a download
+(`driveops.DownloadOpts.RemoteMtime`, a `time.Time` whose zero value sets
+none) and for a local folder create. An item dated 2300 is downloaded with
+the last storable time and one dated 1601 (the Windows file-time epoch) with
+the first, or the filesystem's earliest time when it holds none that early;
+written with `UnixNano` they were set about 584 years off, in 1715 and 2185.
+Go's own `os.Chtimes` converts through `UnixNano`, so a time inside the range
+is also the only kind a download can set exactly
+(`TestRunOnce_ARemoteFileDated2300DownloadsWithTheLastStorableTime`,
+`TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime`,
+`TestRunOnce_ALocalFolderForARemoteFolderDated2300GetsTheLastStorableTime`,
+`TestRunOnce_ALocalFileDated2300UploadsAndConverges`). The accepted loss:
+two remote times both past 2262 store the same value, so a change of only
+the time between them is not seen; a change of content still is.
+
+Local modification, change and birth times (`local_state.mtime`,
+`baseline.local_mtime`, the ctime and birth-time columns) keep `UnixNano`:
+they are compared only with themselves, never turned back into a time, the
+wrap maps a given time to the same value every time, and saturating would
+make two different far-future local times equal. The one place a stored
+remote time stands for a local one, the download outcome's intended mtime
+when the downloaded file cannot be stated, agrees with what the scanner
+reads, since `time.Unix(0, s).UnixNano()` is `s`. A local file dated exactly
+the epoch stores 0, which every reader takes for "unknown": the executor's
+preconditions then skip their mtime test and rely on ctime, size, identity
+and hash, and a baseline publication takes an observed side's time as
+observed rather than filling the baseline's back, which had planned the same
+`baseline_update` on every pass for a file re-dated to the epoch
+(`TestRunOnce_AFileRedatedToTheEpochConverges`,
+`TestRunOnce_ARemoteFileDatedTheEpochKeepsItsTimeLocally`). A move outcome
+follows the same rule for the remote time: it takes the baseline's only when
+its view did not observe the remote side
+(`TestExecutor_MoveOutcome_TakesTheBaselineRemoteTimeOnlyForAnUnobservedRemoteSide`).
+Source-reading tests hold every `time.Unix(0, …)` in `internal/sync` and `internal/driveops`
+and every plain `UnixNano()` in `internal/sync` to a declared list of what it
+decodes or encodes (`TestStoredTimes_EveryDecodeIsDeclared`,
+`TestStoredTimes_EveryPlainUnixNanoIsDeclared`).
 
 ### Observation writes
 
@@ -810,6 +897,26 @@ from SQLite instead of creating a second authority.
 2. opens SQLite in WAL mode
 3. creates or validates the current canonical schema
 4. returns a ready store
+
+The database is opened by its SQLite URI, `sqliteFileURI` (`store.go`),
+built with `net/url`: the path is percent-encoded, because SQLite reads a
+`?` in a `file:` URI as the start of the query and a `#` as the start of a
+fragment. Interpolated unescaped, a data folder named `data?v=1#part` opened
+a database file `data` beside the folder, and the pragma after the `?` was
+lost. The URI carries the pragmas every pooled connection applies: WAL,
+`synchronous(FULL)`, foreign keys, a busy timeout of `storeBusyTimeout`
+(5 s) and a journal size limit of `storeJournalSizeLimitBytes` (64 MiB). The
+inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
+1 s) is built the same way
+(`TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`,
+`TestSQLiteFileURI_EscapesTheDatabasePath`). Tests in other packages open a
+state database through `synctest.SQLiteFileURI`, which a test holds equal to
+the store's builder over paths with `?`, `#`, `%` and spaces; a
+source-reading test refuses any Go file in the repository that joins
+`"file:"` to a path or hands `sql.Open` anything but one of the two builders
+(or `":memory:"`)
+(`TestSQLiteFileURI_TheTestBuilderMatchesTheStoreBuilder`,
+`TestSQLiteDSNs_AreBuiltOnlyByTheTwoBuilders`).
 
 The target architecture prefers a new store generation plus explicit reset over
 compatibility bridges. New DBs bootstrap directly into the current schema.

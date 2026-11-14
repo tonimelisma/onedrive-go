@@ -1071,3 +1071,33 @@ func TestCommitObservation_AdoptedPlaceholderOfUnknownSizeIsNotFollowed(t *testi
 	require.True(t, ok)
 	assert.Equal(t, `"p,1"`, entry.ETag, "an item not known to be empty keeps the eTag it was adopted with")
 }
+
+// An intent recorded while the clock reads a time before 1970 is a time like
+// any other: only zero is "no time".
+//
+// Validates: R-5.6.15
+func TestPendingCreate_AnIntentRecordedBefore1970KeepsItsTimeAndStaysFresh(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(testDriveID)
+	intended := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
+	mgr.setNowFunc(func() time.Time { return intended })
+	require.NoError(t, mgr.RecordPendingCreateIntent(ctx, &PendingCreate{
+		DriveID: driveID, Path: "moon.txt", ParentID: "root", LocalSize: 3, LocalHash: "local-hash",
+	}))
+
+	mgr.setNowFunc(func() time.Time { return intended.Add(time.Hour) })
+	require.NoError(t, mgr.RecordPendingCreate(ctx, &PendingCreate{
+		ItemID: "placeholder", DriveID: driveID, Path: "moon.txt", ParentID: "root", CreatedETag: `"p,1"`,
+		LocalSize: 3, LocalHash: "local-hash",
+	}))
+
+	pending, found, err := mgr.PendingCreateAt(ctx, "moon.txt")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, storedTimeNano(intended), pending.IntendedAt, "the second record keeps the first intent's time")
+	assert.True(t, pending.intentIsFresh(intended.Add(2*time.Hour)), "inside its lifetime the intent is fresh")
+	assert.False(t, pending.intentIsFresh(intended.Add(pendingCreateIntentTTL+time.Second)))
+}

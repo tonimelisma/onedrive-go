@@ -38,7 +38,7 @@ func TestNewSyncStore_CreatesDB(t *testing.T) {
 	defer mgr.Close(t.Context())
 
 	// Verify DB file exists by opening a direct connection.
-	db, err := sql.Open("sqlite", "file:"+dbPath)
+	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -1103,11 +1103,7 @@ func TestCommitMutation_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
 func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 	t.Parallel()
 
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	db, err := sql.Open("sqlite", "file:"+dbPath)
-	require.NoError(t, err)
-
-	_, err = db.ExecContext(t.Context(), `
+	requireNewSyncStoreRefusesSchema(t, `
 		CREATE TABLE baseline (
 			drive_id TEXT NOT NULL,
 			item_id TEXT NOT NULL,
@@ -1130,14 +1126,6 @@ func TestNewSyncStore_RejectsUnversionedExistingStateDB(t *testing.T) {
 			'', '', 123, 456, 789, 'etag-legacy'
 		);
 	`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	mgr, err := NewSyncStore(t.Context(), dbPath, newTestLogger(t))
-	require.Error(t, err)
-	require.Nil(t, mgr)
-	require.ErrorIs(t, err, errIncompatibleSchema)
-	assert.Contains(t, err.Error(), "current schema")
 }
 
 // Validates: R-2.2
