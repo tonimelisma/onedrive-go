@@ -377,7 +377,7 @@ func (o *localObserver) handleCreate(
 	// Early rejection for case collisions in watch mode (R-2.12.2).
 	// Applies to both files and directories — OneDrive's case-insensitive
 	// namespace cannot host both Xyz/ and xyz in the same parent.
-	// The authoritative check is FullScan's post-walk DetectCaseCollisions;
+	// The authoritative check is FullScan's post-walk detectCaseCollisions;
 	// this rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
 		// Track peer for re-emission when the collider is deleted. The
@@ -390,6 +390,7 @@ func (o *localObserver) handleCreate(
 		o.logger.Debug("case collision detected in watch mode, skipping event",
 			slog.String("path", dbRelPath),
 			slog.String("collides_with", collidingName))
+		o.reportCaseCollisionSkip(dbRelPath, collidingName)
 
 		return
 	}
@@ -618,6 +619,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		o.logger.Debug("case collision detected in directory scan, skipping",
 			slog.String("path", entryRelPath),
 			slog.String("collides_with", collidingName))
+		o.reportCaseCollisionSkip(entryRelPath, collidingName)
 		return
 	}
 
@@ -997,7 +999,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	}
 
 	// Early rejection for case collisions in write coalesce (R-2.12.2).
-	// The authoritative check is FullScan's DetectCaseCollisions; this
+	// The authoritative check is FullScan's detectCaseCollisions; this
 	// rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(
 		tree, filepath.Dir(req.FsPath), filepath.Base(req.FsPath), filepath.Dir(req.DbRelPath),
@@ -1005,6 +1007,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		o.logger.Debug("case collision detected for modified file, skipping event",
 			slog.String("path", req.DbRelPath),
 			slog.String("collides_with", collidingName))
+		o.reportCaseCollisionSkip(req.DbRelPath, collidingName)
 
 		return
 	}

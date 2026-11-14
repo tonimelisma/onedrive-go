@@ -43,6 +43,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 
 		return batch, nil
 	})
+	remoteObs.debugEvents = rt.deps.emit
 	rt.resources.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 
@@ -69,8 +70,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			batches,
 			pollInterval,
 			wakeCh,
-			func(ctx context.Context, polledEvents []changeEvent, newToken string, topology shortcutTopologyBatch) (remoteObservationBatch, error) {
-				_ = ctx
+			func(_ context.Context, polledEvents []changeEvent, newToken string, topology shortcutTopologyBatch) (remoteObservationBatch, error) {
 				batch := buildPrimaryWatchBatch(rt.engine, bl, polledEvents, newToken)
 				batch.shortcutTopology = topology
 				if topology.shouldApply() && batch.cursorToken == "" {

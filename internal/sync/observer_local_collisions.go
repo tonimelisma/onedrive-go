@@ -1,10 +1,13 @@
 // The local observer's case-collision handling.
 //
 // Contents:
+//   - readDirForCollisionCheck: the directory listing a collision check reads
 //   - HasCaseCollisionCached: cached per-directory collision check
 //   - DirNameCache maintenance (updateDirNameCache, removeDirNameCache, populateDirNameCache)
 //   - buildPeerRelPath: collision peer path construction
 //   - onDiskSiblingName: a stored name's spelling on disk, for re-emission
+//   - reportCaseCollisionSkip: the debug event of a skipped colliding entry
+//   - collision peers (AddCollisionPeer, removeCollisionPeersFor)
 //
 // Related files:
 //   - observer_local_handlers.go: event handlers that call these methods
@@ -31,7 +34,7 @@ import (
 //
 // A listing that fails both ways makes the caller report no collision (fail
 // open), as it always has: the event's own handling meets the same failure,
-// and the full scan's DetectCaseCollisions, which is authoritative, judges
+// and the full scan's detectCaseCollisions, which is authoritative, judges
 // the directory again.
 func readDirForCollisionCheck(tree *synctree.Root, dirPath string) ([]os.DirEntry, error) {
 	if tree != nil {
@@ -155,6 +158,23 @@ func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, nam
 	}
 
 	return "", false
+}
+
+// reportCaseCollisionSkip tells the debug event sink, when one is installed,
+// that the entry at dbRelPath was skipped because its name collides with
+// collidingName's (R-2.12.2). It is how a test learns that the observer
+// handled the entry, instead of waiting out a window with no event.
+func (o *localObserver) reportCaseCollisionSkip(dbRelPath, collidingName string) {
+	if o.debugEvents == nil {
+		return
+	}
+
+	o.debugEvents(engineDebugEvent{
+		Type:     engineDebugEventLocalCaseCollisionSkipped,
+		Observer: engineDebugObserverLocal,
+		Path:     dbRelPath,
+		Note:     collidingName,
+	})
 }
 
 // updateDirNameCache adds a name to the cache for the given directory.

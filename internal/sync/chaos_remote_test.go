@@ -38,7 +38,9 @@ import (
 //   - a create whose own answer is lost: the empty item exists, the client
 //     never learned its ID, and the failure says only that the outcome is
 //     unknown (graph.ErrCreateOutcomeUnknown), as does a create that failed
-//     before it reached OneDrive without a definite refusal;
+//     before it reached OneDrive without a definite refusal; and a create
+//     that never left the client, which made nothing and carries no mark
+//     (chaosAnswer holds which answers carry it);
 //   - delta: a throttled or failing page (the first or a later one), 410 on a
 //     saved token, a window split over several pages with items repeated on
 //     an earlier page than their last occurrence, as Graph documents ("the
@@ -181,29 +183,100 @@ func (c *chaosGraph) maybeConcurrentWrite(cc *chaosCall) {
 	c.concurrentWrite(cc.rng)
 }
 
-// transientError is one of the transient answers Graph gives, seeded.
-func (c *chaosGraph) transientError(cc *chaosCall, op string) error {
-	retryAfter := time.Duration(1+cc.intN(int(chaosMaxRetryAfter/time.Second))) * time.Second
-	var err error
-	switch cc.intN(7) {
-	case 0:
-		err = &graph.GraphError{StatusCode: http.StatusTooManyRequests, Code: "activityLimitReached", Err: graph.ErrThrottled, RetryAfter: retryAfter}
-	case 1:
-		err = &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Code: "serviceNotAvailable", Err: graph.ErrServerError, RetryAfter: retryAfter}
-	case 2:
-		err = &graph.GraphError{StatusCode: http.StatusInternalServerError, Code: "generalException", Err: graph.ErrServerError}
-	case 3:
-		err = &graph.GraphError{StatusCode: http.StatusBadGateway, Err: graph.ErrServerError}
-	case 4:
-		err = &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
-	case 5:
-		err = &graph.GraphError{StatusCode: http.StatusRequestTimeout, Code: "timeout"}
-	default:
-		err = fmt.Errorf("chaos %s: read tcp: %w", op, syscall.ECONNRESET)
-	}
-	c.count(op + ":" + chaosErrorKind(err))
+// chaosAnswer is one way a call fails in the storm: an answer Graph gives, no
+// answer at all (a dropped connection), or a request that never left the
+// client. Which of them graph.CreateFile marks with
+// graph.ErrCreateOutcomeUnknown, because they do not say whether the file was
+// made, is written here once, in createMarked, and
+// TestChaosCreateFault_MarksWhatTheGraphClientMarks feeds every answer through
+// graph to hold the marks to its own classification.
+type chaosAnswer struct {
+	status     int    // the HTTP status; 0 for no answer
+	code       string // Graph's error code, when it sends one
+	sentinel   error  // the sentinel graph classifies the status as
+	retryAfter bool   // the answer carries Retry-After
+	// notSent is a request that never left the client: its token could not
+	// be read, its context had already ended, or its retry after a refusal
+	// was never sent.
+	notSent      bool
+	createMarked bool
+}
 
-	return err
+// chaosTransientAnswers are the transient answers to a call that did not take
+// effect, in the order the storm draws them.
+func chaosTransientAnswers() []chaosAnswer {
+	return []chaosAnswer{
+		{status: http.StatusTooManyRequests, code: "activityLimitReached", sentinel: graph.ErrThrottled, retryAfter: true},
+		{status: http.StatusServiceUnavailable, code: "serviceNotAvailable", sentinel: graph.ErrServerError, retryAfter: true, createMarked: true},
+		{status: http.StatusInternalServerError, code: "generalException", sentinel: graph.ErrServerError, createMarked: true},
+		{status: http.StatusBadGateway, sentinel: graph.ErrServerError, createMarked: true},
+		{status: http.StatusGatewayTimeout, sentinel: graph.ErrServerError, createMarked: true},
+		{status: http.StatusRequestTimeout, code: "timeout", createMarked: true},
+		{createMarked: true}, // the connection reset before any answer
+	}
+}
+
+// chaosCreateAnswers are a create's faults before it takes effect: the
+// transient answers and a create that never left the client, which made
+// nothing and says so.
+func chaosCreateAnswers() []chaosAnswer {
+	return append(chaosTransientAnswers(), chaosAnswer{notSent: true})
+}
+
+// chaosLostAnswers are what the client sees of a call that took effect and
+// lost its answer: a gateway timeout or a reset.
+func chaosLostAnswers() []chaosAnswer {
+	var lost []chaosAnswer
+	for _, answer := range chaosTransientAnswers() {
+		if answer.status == http.StatusGatewayTimeout || answer.status == 0 {
+			lost = append(lost, answer)
+		}
+	}
+
+	return lost
+}
+
+// kind names the answer in a fault kind: its status, "reset" or "not-sent".
+func (a chaosAnswer) kind() string {
+	switch {
+	case a.notSent:
+		return "not-sent"
+	case a.status == 0:
+		return "reset"
+	default:
+		return strconv.Itoa(a.status)
+	}
+}
+
+// failure is the error the client sees for the answer; how is "" for a
+// call that never reached OneDrive, or what happened before its answer was
+// lost.
+func (a chaosAnswer) failure(op, how string, retryAfter time.Duration) error {
+	switch {
+	case a.notSent:
+		return fmt.Errorf("chaos %s: the request never left the client: %w", op, errChaosNotSent)
+	case a.status == 0:
+		return fmt.Errorf("chaos %s%s: read tcp: %w", op, how, syscall.ECONNRESET)
+	}
+	graphErr := &graph.GraphError{StatusCode: a.status, Code: a.code, Err: a.sentinel}
+	if a.retryAfter {
+		graphErr.RetryAfter = retryAfter
+	}
+
+	return graphErr
+}
+
+// errChaosNotSent is the cause of a request the chaos layer never sent.
+var errChaosNotSent = errors.New("chaos: the token source failed")
+
+// transientError draws one of answers, seeded, as the failure of a call that
+// did not take effect.
+func (c *chaosGraph) transientError(cc *chaosCall, op string, answers []chaosAnswer) (chaosAnswer, error) {
+	retryAfter := time.Duration(1+cc.intN(int(chaosMaxRetryAfter/time.Second))) * time.Second
+	answer := answers[cc.intN(len(answers))]
+	c.count(op + ":" + answer.kind())
+
+	return answer, answer.failure(op, "", retryAfter)
 }
 
 // chaosResponseLostSuffix ends the fault kind of a request that took effect
@@ -218,22 +291,12 @@ const (
 
 // lostResponseError is what the client sees when the request took effect but
 // the answer never arrived.
-func (c *chaosGraph) lostResponseError(cc *chaosCall, op string) error {
+func (c *chaosGraph) lostResponseError(cc *chaosCall, op string) (chaosAnswer, error) {
 	c.count(op + chaosResponseLostSuffix)
-	if cc.intN(2) == 0 {
-		return &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
-	}
+	lost := chaosLostAnswers()
+	answer := lost[cc.intN(len(lost))]
 
-	return fmt.Errorf("chaos %s after it took effect: read tcp: %w", op, syscall.ECONNRESET)
-}
-
-func chaosErrorKind(err error) string {
-	var graphErr *graph.GraphError
-	if errors.As(err, &graphErr) {
-		return strconv.Itoa(graphErr.StatusCode)
-	}
-
-	return "reset"
+	return answer, answer.failure(op, " after it took effect", 0)
 }
 
 // wrap returns a client whose every call passes through the chaos layer.
@@ -306,12 +369,30 @@ func (c *chaosGraph) wrap(inner *engineMockClient) *engineMockClient {
 
 // before is the fault a call gets before it reaches OneDrive, if any.
 func (c *chaosGraph) before(cc *chaosCall, op string) error {
+	_, err := c.beforeFrom(cc, op, chaosTransientAnswers())
+
+	return err
+}
+
+// beforeFrom is before, drawing the fault from answers.
+func (c *chaosGraph) beforeFrom(cc *chaosCall, op string, answers []chaosAnswer) (chaosAnswer, error) {
 	c.maybeConcurrentWrite(cc)
 	if !cc.roll(chaosFaultOdds) {
-		return nil
+		return chaosAnswer{}, nil
 	}
 
-	return c.transientError(cc, op)
+	return c.transientError(cc, op, answers)
+}
+
+// beforeCreate is before for a create, whose faults include one that never
+// left the client; the failure reads as graph.CreateFile reports it.
+func (c *chaosGraph) beforeCreate(cc *chaosCall, op, name string) error {
+	answer, err := c.beforeFrom(cc, op, chaosCreateAnswers())
+	if err != nil {
+		return chaosCreateFailure(name, answer, err)
+	}
+
+	return nil
 }
 
 // chaosMutation runs a mutating call through the layer: it may fail before
@@ -324,7 +405,8 @@ func chaosMutation[T any](c *chaosGraph, op, key string, call func() (T, error))
 	}
 	result, err := call()
 	if err == nil && cc.roll(chaosFaultOdds) {
-		return none, c.lostResponseError(cc, op)
+		_, lostErr := c.lostResponseError(cc, op)
+		return none, lostErr
 	}
 
 	return result, err
@@ -338,18 +420,18 @@ type chaosCreateFunc func(context.Context, string, string, io.ReaderAt, int64, g
 // item, as a connection lost mid-session does: the item exists, the content
 // does not, and for some of them its eTag moved meanwhile
 // (chaosPlaceholderChurned). Or the creating request's own answer is lost
-// (createResponseLost). A create that fails before it reaches OneDrive reads
-// as graph.CreateFile reports it (chaosCreateFailure). A fault of the create
-// itself counts under chaosOpCreate, the session's under "upload-session";
-// the call's fault stream keeps its "upload-session" name, so every seed
-// draws the faults it drew before the two were told apart.
+// (createResponseLost). A create that fails before it reaches OneDrive, or
+// never leaves the client, reads as graph.CreateFile reports it
+// (chaosCreateFailure). A fault of the create itself counts under
+// chaosOpCreate, the session's under "upload-session"; the call's fault
+// stream keeps its "upload-session" name.
 func (c *chaosGraph) uploadCreating(
 	ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 	inner chaosCreateFunc,
 ) (*graph.Item, error) {
 	cc := c.call("upload-session", parentID+"/"+name)
-	if err := c.before(cc, chaosOpCreate); err != nil {
-		return nil, chaosCreateFailure(name, err)
+	if err := c.beforeCreate(cc, chaosOpCreate, name); err != nil {
+		return nil, err
 	}
 	if !cc.roll(chaosFaultOdds) {
 		return inner(ctx, parentID, name, content, size, onCreated)
@@ -401,21 +483,22 @@ func (c *chaosGraph) createResponseLost(
 		return item, err
 	}
 
-	return nil, chaosCreateFailure(name, c.lostResponseError(cc, chaosOpCreate))
+	answer, lostErr := c.lostResponseError(cc, chaosOpCreate)
+
+	return nil, chaosCreateFailure(name, answer, lostErr)
 }
 
-// chaosCreateFailure is a failed create as graph.CreateFile reports it: an
-// answer that does not say whether the file was made (none at all, a 5xx, a
-// 408) carries graph.ErrCreateOutcomeUnknown, whether or not the request
-// reached OneDrive, because the client cannot tell those apart.
-func chaosCreateFailure(name string, err error) error {
-	var graphErr *graph.GraphError
-	if errors.As(err, &graphErr) &&
-		graphErr.StatusCode < http.StatusInternalServerError && graphErr.StatusCode != http.StatusRequestTimeout {
-		return err
+// chaosCreateFailure is a failed create as graph.CreateFile reports it: the
+// answer's createMarked says whether it carries graph.ErrCreateOutcomeUnknown.
+// An answer that does not say whether the file was made is marked whether or
+// not the request reached OneDrive, because the client cannot tell those
+// apart; a refusal and a create that never left are not.
+func chaosCreateFailure(name string, answer chaosAnswer, err error) error {
+	if answer.createMarked {
+		return fmt.Errorf("graph: creating file %q: %w: %w", name, graph.ErrCreateOutcomeUnknown, err)
 	}
 
-	return fmt.Errorf("graph: creating file %q: %w: %w", name, graph.ErrCreateOutcomeUnknown, err)
+	return fmt.Errorf("graph: creating file %q: %w", name, err)
 }
 
 // download may deliver part of the bytes before the connection drops.
@@ -553,10 +636,8 @@ func (r *modelRun) takeConcurrentEdits() []modelEdit {
 // chaosRaceSeed is the one seed of the chaos run under -race. Its
 // modelRaceBatches batches draw both faults of a create that took effect: a
 // create whose own answer was lost and a session that timed out once the
-// empty item existed. Of seeds 1 to 16 it is the only one that draws a lost
-// create answer in two batches (seed 1 draws no create fault at all). The run
-// asserts that the seed still draws both, so a change that renumbers what a
-// seed does cannot quietly drop them.
+// empty item existed. The run asserts that the seed still draws both, so a
+// change that renumbers what a seed does cannot quietly drop them.
 const chaosRaceSeed = 2
 
 // chaosRaceSeedFaults are the fault kinds chaosRaceSeed must draw.

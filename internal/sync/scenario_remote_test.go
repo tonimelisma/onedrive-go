@@ -97,12 +97,17 @@ type moveScenarioRemote struct {
 	// Delta and reads by ID see it at once.
 	invisibleFor map[string]int
 	// sessions are the open upload sessions by URL
-	// (scenario_remote_session_test.go).
-	sessions      map[graph.UploadURL]scenarioSession
-	sessionSeq    int
-	folderCreates []string
-	deletes       []string
-	moves         []string
+	// (scenario_remote_session_test.go), and sessionFragments every fragment
+	// that reached each of them, for a test to read.
+	sessions         map[graph.UploadURL]scenarioSession
+	sessionFragments map[graph.UploadURL][]scenarioFragment
+	sessionSeq       int
+	// interruptFragmentAt, when nonzero, drops the connection of the next
+	// session fragment sent at that offset before it reaches OneDrive, once.
+	interruptFragmentAt int64
+	folderCreates       []string
+	deletes             []string
+	moves               []string
 }
 
 type deletedScenarioItem struct {

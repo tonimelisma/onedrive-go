@@ -111,7 +111,7 @@ type localWatchState struct {
 	// collisionPeers tracks N-way collision relationships detected in watch
 	// mode. When a collider is deleted, all surviving peers are re-emitted
 	// via handleCreate (which re-checks and re-records any remaining collisions).
-	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
+	// Cleared on safety scan (authoritative detectCaseCollisions replaces this).
 	// Single-goroutine access (watchLoop) — no mutex.
 	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
 
@@ -495,6 +495,10 @@ type localObserver struct {
 	watchIdentityBuiltAt time.Time
 	protectedRootEvents  protectedRootEventSink
 	watcherFactory       func() (fsWatcher, error)
+
+	// debugEvents is the engine's debug event sink, set by the watch runtime
+	// before Watch; nil reports nothing.
+	debugEvents func(engineDebugEvent)
 
 	// descriptorBudget caps the open descriptors watch setup may commit to
 	// watches (kqueue); 0 means the backend uses none per watch (inotify).

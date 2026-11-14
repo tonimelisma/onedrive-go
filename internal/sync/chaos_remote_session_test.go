@@ -22,7 +22,8 @@ import (
 // file's create is one Graph call for two requests (graph.CreateUploadSession:
 // the empty item, then a session on it), so it also fails between them: the
 // session request times out once the empty item exists, some of them after
-// that item's eTag moved.
+// that item's eTag moved. Content goes up in fragments, each of which may
+// fail on its own, so a fault can leave a part-uploaded session.
 
 const (
 	chaosOpCreateSession = "create-session"
@@ -40,6 +41,10 @@ const (
 	// chaosSessionUploadAnswerLost is a session upload whose content landed
 	// and whose answer was lost.
 	chaosSessionUploadAnswerLost = chaosOpSessionUpload + chaosResponseLostSuffix
+	// chaosPartSentSuffix ends the fault kind of a fragment that failed after
+	// the session had accepted earlier ones: the session holds part of the
+	// file.
+	chaosPartSentSuffix = ":part-sent"
 )
 
 // wrapSessions returns a session client whose every call passes through the
@@ -62,8 +67,8 @@ func (c *chaosGraph) createUploadSession(
 	remote *moveScenarioRemote, parentID, name string, create func() (*graph.UploadSession, error),
 ) (*graph.UploadSession, error) {
 	cc := c.call(chaosOpCreateSession, parentID+"/"+name)
-	if err := c.before(cc, chaosOpCreateSession); err != nil {
-		return nil, chaosCreateFailure(name, err)
+	if err := c.beforeCreate(cc, chaosOpCreateSession, name); err != nil {
+		return nil, err
 	}
 	session, err := create()
 	if err != nil || !cc.roll(chaosFaultOdds) {
@@ -71,7 +76,8 @@ func (c *chaosGraph) createUploadSession(
 	}
 	remote.dropSession(session.UploadURL)
 	if cc.intN(2) == 0 {
-		return nil, chaosCreateFailure(name, c.lostResponseError(cc, chaosOpCreateSession))
+		answer, lostErr := c.lostResponseError(cc, chaosOpCreateSession)
+		return nil, chaosCreateFailure(name, answer, lostErr)
 	}
 
 	c.count(chaosCreateSessionTimedOut)
@@ -99,23 +105,19 @@ func (c *chaosGraph) createUploadSessionForItem(
 	return chaosMutation(c, chaosOpItemSession, itemID, open)
 }
 
-// sessionUpload sends content through a session. It may fail before the
-// content lands, leaving the session open to resume, or land the content and
-// lose the answer to the last fragment, which graph reports as uncertain
-// (graph.FinalFragmentError).
-func (c *chaosGraph) sessionUpload(
-	op string, session *graph.UploadSession, upload func() (*graph.Item, error),
-) (*graph.Item, error) {
-	cc := c.call(op, chaosSessionKey(session))
-	if err := c.before(cc, op); err != nil {
-		return nil, err
-	}
-	item, err := upload()
-	if err == nil && cc.roll(chaosFaultOdds) {
-		return nil, &graph.FinalFragmentError{Err: c.lostResponseError(cc, op)}
+// fragmentFault is the fault one fragment of a session upload gets before it
+// lands, if any. The session keeps what it accepted before, so a fault at a
+// nonzero offset leaves a part-uploaded session that a resume finishes by
+// sending only the rest (chaosPartSentSuffix). The final fragment may also
+// land and lose its answer (scenarioSessionClient.sendFragment), which graph
+// reports as uncertain (graph.FinalFragmentError).
+func (c *chaosGraph) fragmentFault(cc *chaosCall, op string, offset int64) error {
+	err := c.before(cc, op)
+	if err != nil && offset > 0 {
+		c.count(op + chaosPartSentSuffix)
 	}
 
-	return item, err
+	return err
 }
 
 // cancelSession may fail before the cancel reaches OneDrive, leaving the
@@ -173,11 +175,11 @@ type chaosSessionOutcomes struct {
 // The session route a file above 4 MiB takes passes through the chaos layer,
 // and each fault it draws is the failure it models. A create whose answer was
 // lost leaves an empty item the client never learned of; one whose session
-// request timed out names its empty item, some of them under a moved eTag. A
-// session upload whose answer was lost has landed and reads as uncertain; one
-// that failed before landing leaves its session open, and resuming it once
-// the storm passes finishes the file. Item sessions and cancels draw faults
-// too.
+// request timed out names its empty item, some of them under a moved eTag; one
+// that never left the client made nothing. A session upload whose answer was
+// lost has landed and reads as uncertain; one that failed before landing
+// leaves its session open, and resuming it once the storm passes finishes the
+// file. Item sessions and cancels draw faults too.
 func TestChaosGraph_SessionRouteDrawsFaults(t *testing.T) {
 	t.Parallel()
 
@@ -261,11 +263,13 @@ func (s *chaosSessionOutcomes) upload(
 	case err == nil:
 		assert.Equal(t, chaosSessionContent, remote.tree()[name], "%s: the upload landed", name)
 		s.landed = append(s.landed, session.ItemID)
-	case graph.IsFinalFragmentUncertain(err):
+	case graph.IsFinalFragmentUncertain(err) && remote.tree()[name] == chaosSessionContent:
 		s.uploadAnswerLost++
-		assert.Equal(t, chaosSessionContent, remote.tree()[name], "%s: an upload whose answer was lost has landed", name)
 		s.landed = append(s.landed, session.ItemID)
 	default:
+		// The content is one fragment, so its failure before it landed reads
+		// as uncertain too: the client cannot tell the two apart.
+		require.True(t, graph.IsFinalFragmentUncertain(err), "%s: a failed final fragment is uncertain: %v", name, err)
 		assert.Empty(t, remote.tree()[name], "%s: an upload that failed before it landed sent nothing", name)
 		assert.True(t, remote.holdsSession(session.UploadURL), "%s: its session stays open", name)
 		s.unfinished = append(s.unfinished, session)
@@ -286,4 +290,57 @@ func requireItemSessionAndCancelHoldUp(t *testing.T, client *scenarioSessionClie
 		return
 	}
 	assert.False(t, remote.holdsSession(session.UploadURL), "a cancel that succeeded drops the session")
+}
+
+// Validates: R-5.2.4
+//
+// A storm's fault between two fragments of a session upload leaves the
+// session holding the fragments it accepted (chaosPartSentSuffix); once the
+// storm passes, a resume sends only the rest, and the file lands whole with
+// no byte sent twice.
+func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T) {
+	t.Parallel()
+
+	const (
+		attempts          = 24
+		fragmentsInAFile  = 3
+		lastFragmentBytes = 1
+	)
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	c := newChaosGraph(1)
+	client := c.wrapSessions(remote.sessionClient(t))
+	content := strings.Repeat("p", (fragmentsInAFile-1)*scenarioSessionFragmentSize+lastFragmentBytes)
+	size := int64(len(content))
+
+	resumed := 0
+	for i := range attempts {
+		name := fmt.Sprintf("part-%d.bin", i)
+		c.setStorm(true)
+		session, err := client.CreateUploadSession(t.Context(), remote.driveID, graphRootID, name, size, time.Time{})
+		if err != nil {
+			continue
+		}
+		_, err = client.UploadFromSession(t.Context(), session, strings.NewReader(content), size, nil)
+		next, open := remote.sessionNextExpected(session.UploadURL)
+		if err == nil || !open || next == 0 {
+			continue // landed, or failed before the session held a byte
+		}
+		resumed++
+		c.setStorm(false)
+		_, err = client.ResumeUpload(t.Context(), &graph.UploadSession{UploadURL: session.UploadURL}, strings.NewReader(content), size, nil)
+		require.NoError(t, err, "%s: the part-uploaded session resumes once the storm passes", name)
+		assert.Equal(t, content, remote.tree()[name], "%s: the resumed file is whole", name)
+
+		var sent int64
+		for _, fragment := range remote.fragmentsReceived(session.UploadURL) {
+			assert.True(t, fragment.accepted, "%s: the fragment at %d resent accepted bytes", name, fragment.offset)
+			sent += fragment.size
+		}
+		assert.Equal(t, size, sent, "%s: every byte reached the session once", name)
+	}
+
+	require.Positive(t, resumed, "no fragment fault left a part-uploaded session in %d attempts", attempts)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Equal(t, resumed, c.faults[chaosOpSessionUpload+chaosPartSentSuffix], "every part-uploaded session is a counted fault")
 }

@@ -22,6 +22,9 @@ func requireTrigger(t *testing.T, triggers <-chan string, want string) {
 	}
 }
 
+// requireNoTrigger is a window, kept until the poller gives a signal: it
+// needs the poller's report that it has looked at the file and decided not
+// to reload, and the poller runs on a real ticker and reports nothing.
 func requireNoTrigger(t *testing.T, triggers <-chan string, wait time.Duration) {
 	t.Helper()
 

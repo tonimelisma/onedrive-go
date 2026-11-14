@@ -215,7 +215,7 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	batches := make(chan remoteObservationBatch, 4)
-	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "expired-token", batches, time.Hour, nil, nil)
 	})

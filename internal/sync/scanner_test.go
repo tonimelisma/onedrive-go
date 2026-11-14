@@ -15,7 +15,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// DetectCaseCollisions — pure function tests (R-2.12.1)
+// detectCaseCollisions — pure function tests (R-2.12.1)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.12.1
@@ -316,7 +316,7 @@ func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DetectCaseCollisions — baseline cross-check tests (R-2.12.1)
+// detectCaseCollisions — baseline cross-check tests (R-2.12.1)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.12.1
@@ -488,7 +488,7 @@ func TestDetectCaseCollisions_NilBaseline_NoChange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DetectCaseCollisions — directory child suppression tests (R-2.12.1)
+// detectCaseCollisions — directory child suppression tests (R-2.12.1)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.12.1
@@ -553,7 +553,7 @@ func TestDetectCaseCollisions_DirectoryNoCollision_ChildrenPass(t *testing.T) {
 
 // Validates: R-2.12.1
 // On case-sensitive FS (Linux), both File.txt and
-// file.txt can coexist. DetectCaseCollisions removes both from the event
+// file.txt can coexist. detectCaseCollisions removes both from the event
 // set and places them in Skipped.
 func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 	t.Parallel()

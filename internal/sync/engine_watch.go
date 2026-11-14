@@ -401,6 +401,7 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetLocalObservationBatchChannel(localBatches)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
 	localObs.startupSafetyScan = true
+	localObs.debugEvents = rt.deps.emit
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)

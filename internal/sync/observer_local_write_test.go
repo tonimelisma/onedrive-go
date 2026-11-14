@@ -410,10 +410,12 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	clock := newManualClock(time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC))
+	recorder := newDebugEventRecorder()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		Baseline:              baseline,
 		AfterFunc:             clock.AfterFunc,
 		WriteCoalesceCooldown: 50 * time.Millisecond,
+		DebugEvents:           recorder.record,
 	})
 
 	events := make(chan changeEvent, 10)
@@ -430,13 +432,9 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	clock.Advance(50 * time.Millisecond)
 
-	// No event should be emitted — the case collision suppresses it.
-	select {
-	case ev := <-events:
-		require.FailNow(t, "expected no event due to case collision", "got %+v", ev)
-	case <-time.After(500 * time.Millisecond):
-		// Good — no event emitted.
-	}
+	// The case collision suppresses the hashed write: the observer reports
+	// the skip and emits nothing.
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("existing.txt"), "the collision skip of existing.txt's write")
 
 	stopWatch(t, cancel, done)
 }
@@ -453,11 +451,15 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 	writeTestFile(t, dir, "existing.txt", "content")
 
 	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
 	obs := &localObserver{
-		baseline: emptyBaseline(),
-		logger:   synctest.TestLogger(t),
+		baseline:    emptyBaseline(),
+		logger:      synctest.TestLogger(t),
+		debugEvents: recorder.record,
 		localWatchState: localWatchState{
 			CollisionPeers: make(map[string]map[string]struct{}),
+			// A differently cased sibling in the name cache simulates a
+			// collision without requiring a case-sensitive FS.
 			DirNameCache: map[string]map[string][]string{
 				dir: {
 					"existing.txt": {"existing.txt", "Existing.txt"},
@@ -466,8 +468,6 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
-		// Pre-populate dirNameCache with a different-cased entry.
-		// This simulates a collision without requiring a case-sensitive FS.
 		writeCoalesceCooldown: 50 * time.Millisecond,
 		clock: &observerTestClock{
 			syncClock: realClock{},
@@ -492,12 +492,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		Op:   fsnotify.Write,
 	}
 
-	select {
-	case ev := <-events:
-		require.FailNow(t, "expected no event (collision via cached lookup)", "got %+v", ev)
-	case <-time.After(500 * time.Millisecond):
-		// Good — no event emitted.
-	}
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("existing.txt"), "the collision skip found through the cache")
 
 	stopWatch(t, cancel, done)
 }

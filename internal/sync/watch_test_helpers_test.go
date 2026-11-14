@@ -22,6 +22,9 @@ type watchObserverTestOptions struct {
 	AfterFunc             func(time.Duration, func()) syncTimer
 	AfterSafetyScan       func()
 	TickCh                <-chan time.Time
+	// DebugEvents is the observer's debug event sink, the one the watch
+	// runtime installs (a debugEventRecorder's record in tests).
+	DebugEvents func(engineDebugEvent)
 }
 
 func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTestOptions) *localObserver {
@@ -70,8 +73,55 @@ func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTes
 	if opts.TickCh != nil {
 		clock.tickCh = opts.TickCh
 	}
+	obs.debugEvents = opts.DebugEvents
 
 	return obs
+}
+
+// requireDroppedWithoutEvent waits for the observer's debug report that it
+// dropped an input (match), failing at once on any change event meanwhile.
+// The observer reports the drop on its watch goroutine after anything the
+// input emitted, so once the report has arrived an empty events channel
+// shows that the input emitted nothing: no window decides the test. A report
+// already read by an earlier wait counts.
+func requireDroppedWithoutEvent(
+	t *testing.T, recorder *debugEventRecorder, events <-chan changeEvent,
+	match func(engineDebugEvent) bool, what string,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(eventWait)
+	defer timer.Stop()
+	for !recorder.findEvent(match) {
+		select {
+		case ev := <-events:
+			require.FailNow(t, "unexpected event", "got %+v while waiting for %s", ev, what)
+		case <-recorder.events:
+		case <-timer.C:
+			require.FailNow(t, "timed out waiting for "+what)
+		}
+	}
+	requireNoChangeEvent(t, events, what)
+}
+
+// requireNoChangeEvent fails when events holds an event. It never waits: the
+// caller has a signal that whatever could have been sent was sent before it.
+func requireNoChangeEvent(t *testing.T, events <-chan changeEvent, signal string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		require.FailNow(t, "unexpected event", "got %+v before %s", ev, signal)
+	default:
+	}
+}
+
+// collisionSkipOf matches the local observer's report that it skipped the
+// entry at path for a case collision.
+func collisionSkipOf(path string) func(engineDebugEvent) bool {
+	return func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventLocalCaseCollisionSkipped && event.Path == path
+	}
 }
 
 // startMockWatch runs obs.Watch on dir in the background (runInBackground)
@@ -97,6 +147,28 @@ func startMockWatch(
 	case <-time.After(eventWait):
 		require.FailNow(t, "timed out waiting for mock watch setup")
 	}
+
+	return cancel, done
+}
+
+// startMockWatchInLoop is startMockWatch that also waits until the watch has
+// finished its setup walk and reads events, so a directory the test creates
+// afterwards is new to it. One that existed during setup is registered by
+// the walk, and its Create event is then a duplicate whose contents are not
+// scanned.
+func startMockWatchInLoop(
+	t *testing.T,
+	obs *localObserver,
+	watcher *mockFsWatcher,
+	dir string,
+	events chan changeEvent,
+) (context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	looping := make(chan struct{})
+	obs.beforeWatchLoop = func() { close(looping) }
+	cancel, done := startMockWatch(t, obs, watcher, dir, events)
+	receiveWithin(t, looping, "the watch to finish its setup")
 
 	return cancel, done
 }

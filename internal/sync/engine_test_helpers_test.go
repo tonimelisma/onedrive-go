@@ -588,19 +588,36 @@ func attachDebugEventRecorderWithHook(
 	eng *testEngine,
 	hook func(engineDebugEvent),
 ) *debugEventRecorder {
-	recorder := &debugEventRecorder{
-		events: make(chan engineDebugEvent, 128),
-	}
+	recorder := newDebugEventRecorder()
 	eng.SetDebugEventHook(func(event DebugEvent) {
-		recorder.mu.Lock()
-		recorder.history = append(recorder.history, event)
-		recorder.mu.Unlock()
-		recorder.events <- event
+		recorder.record(event)
 		if hook != nil {
 			hook(event)
 		}
 	})
 	return recorder
+}
+
+// debugEventRecorderBuffer is how many events a recorder holds that no wait
+// has read yet; an emitter blocks beyond it.
+const debugEventRecorderBuffer = 128
+
+// newDebugEventRecorder is a recorder that no engine feeds: a test hands its
+// record method to an observer as the debug event sink the watch runtime
+// would install.
+func newDebugEventRecorder() *debugEventRecorder {
+	return &debugEventRecorder{events: make(chan engineDebugEvent, debugEventRecorderBuffer)}
+}
+
+// record is the recorder's sink: it keeps the event and queues it for the
+// waits.
+//
+//nolint:gocritic // the sink's signature is the hook's, which passes events by value
+func (r *debugEventRecorder) record(event engineDebugEvent) {
+	r.mu.Lock()
+	r.history = append(r.history, event)
+	r.mu.Unlock()
+	r.events <- event
 }
 
 func (r *debugEventRecorder) waitForEvent(
@@ -697,6 +714,21 @@ func (r *debugEventRecorder) waitUntilSeen(
 
 func (r *debugEventRecorder) findEvent(match func(engineDebugEvent) bool) bool {
 	return r.findEventIndex(match) >= 0
+}
+
+// countEvents is how many of the events recorded so far match.
+func (r *debugEventRecorder) countEvents(match func(engineDebugEvent) bool) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	count := 0
+	for i := range r.history {
+		if match(r.history[i]) {
+			count++
+		}
+	}
+
+	return count
 }
 
 func (r *debugEventRecorder) findEventIndex(match func(engineDebugEvent) bool) int {

@@ -200,7 +200,7 @@ func TestWatch_TransientErrorRetriesAndKeepsToken(t *testing.T) {
 		return remoteObservationBatch{}, errors.New("a transient failure must not reset the cursor")
 	})
 	batches := make(chan remoteObservationBatch, 4)
-	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	require.NoError(t, runWithin(t, ctx, "the third sleep to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "kept-token", batches, time.Hour, nil, nil)
@@ -232,7 +232,7 @@ func TestWatch_SustainedServerErrorsOnTheCursorResetIt(t *testing.T) {
 		return remoteObservationBatch{}, context.Canceled
 	})
 	batches := make(chan remoteObservationBatch, 4)
-	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	require.NoError(t, runWithin(t, ctx, "the cursor reset's re-enumeration to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "stuck-token", batches, time.Minute, nil, nil)
@@ -278,7 +278,7 @@ func TestWatch_RepeatedlyFailingRecoveryBacksOff(t *testing.T) {
 		return remoteObservationBatch{}, newCursorUnusableError("a page links back to an earlier page", nil)
 	})
 	batches := make(chan remoteObservationBatch, 4)
-	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	require.NoError(t, runWithin(t, ctx, "the last recovery attempt to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "expired", batches, time.Minute, nil, nil)

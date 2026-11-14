@@ -158,28 +158,48 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
-	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
-		return &stubSocketIOWakeSource{started: started}
-	}
+	wakeSourcesMade := countWakeSourcesMade(eng)
 
 	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
-	}, "remote observer started")
-
-	select {
-	case <-started:
-		require.FailNow(t, "wake source should not start when websocket is disabled")
-	case <-time.After(100 * time.Millisecond):
-	}
+	waitForWakeSourceDecision(t, recorder)
+	assert.Zero(t, wakeSourcesMade.Load(), "wake source should not start when websocket is disabled")
 
 	stopWatch(t, cancel, done)
+	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
 	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventWebsocketWakeSourceStarted ||
 			event.Type == engineDebugEventWebsocketConnected
 	}), "disabled websocket mode must not emit websocket lifecycle events")
+}
+
+// noWakeSourceAfterTheDecision is the failure of a wake source made after the
+// watch decided against one, read once the watch has returned.
+const noWakeSourceAfterTheDecision = "no wake source was made for the rest of the watch either"
+
+// countWakeSourcesMade replaces eng's wake-source factory with one that
+// counts its calls: the call is the engine's decision to start a wake source,
+// made before the source's goroutine runs.
+func countWakeSourcesMade(eng *testEngine) *atomic.Int32 {
+	made := &atomic.Int32{}
+	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
+		made.Add(1)
+		return &stubSocketIOWakeSource{started: make(chan struct{}, 1)}
+	}
+
+	return made
+}
+
+// waitForWakeSourceDecision waits until the watch has decided whether to
+// start a wake source. The remote observer is started with its wake source,
+// if any, before the local observer, so the local observer's start is that
+// signal: a wake source the watch decided on has been made by then.
+func waitForWakeSourceDecision(t *testing.T, recorder *debugEventRecorder) {
+	t.Helper()
+
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	}, "local observer started, after the remote observer and its wake source")
 }
 
 // Validates: R-2.8.5
@@ -199,27 +219,18 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 	eng.enableWebsocket = true
 	eng.remoteRootItemID = "mount-root-root"
 	recorder := attachDebugEventRecorder(eng)
-	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
-		return &stubSocketIOWakeSource{started: started}
-	}
+	wakeSourcesMade := countWakeSourcesMade(eng)
 
 	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
-	}, "remote observer started")
-
-	select {
-	case <-started:
-		require.FailNow(t, "wake source should not start for mount-root watch")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	stopWatch(t, cancel, done)
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
+	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventWebsocketFallback && event.Note == "mount_root"
 	}, "websocket mount-root fallback")
+	waitForWakeSourceDecision(t, recorder)
+	assert.Zero(t, wakeSourcesMade.Load(), "wake source should not start for mount-root watch")
+
+	stopWatch(t, cancel, done)
+	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
 }
 
 // Validates: R-2.8.3, R-6.8.9, R-6.10.10
