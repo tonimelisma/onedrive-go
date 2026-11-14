@@ -18,8 +18,9 @@ type statusRuntimeOverlay struct {
 	ownerMode    synccontrol.OwnerMode
 	activeMounts map[string]struct{}
 	// unavailableNote says why a sync that holds the control socket
-	// contributed no live state; empty when there is nothing to say. Without
-	// it a drive the watch is syncing reads as pending with no reason given.
+	// contributed no live state; empty when there is nothing to say, or when
+	// the user stopped status. Without it a drive the watch is syncing reads
+	// as pending with no reason given.
 	unavailableNote string
 }
 
@@ -35,9 +36,17 @@ func loadStatusRuntimeOverlay(ctx context.Context) statusRuntimeOverlay {
 			overlay.activeMounts[mountID] = struct{}{}
 		}
 		return overlay
-	case controlOwnerStateUnresponsive:
-		return statusRuntimeOverlay{unavailableNote: statusRuntimeUnansweredNote}
-	case controlOwnerStateProbeFailed:
+	case controlOwnerStateUnresponsive, controlOwnerStateProbeFailed:
+		if ctx.Err() != nil {
+			// The user stopped status, so the request ended with the
+			// command: that is no news about the running sync, and a stop
+			// prints no warnings.
+			return statusRuntimeOverlay{}
+		}
+		if probe.state == controlOwnerStateUnresponsive {
+			return statusRuntimeOverlay{unavailableNote: statusRuntimeUnansweredNote}
+		}
+
 		return statusRuntimeOverlay{
 			unavailableNote: fmt.Sprintf("Note: could not read the running sync's live state (%v), so it is not shown.\n", err),
 		}

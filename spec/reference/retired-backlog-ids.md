@@ -23,7 +23,6 @@ and nothing in `spec/` resolves them.
 | --- | --- |
 | `B-007` | `internal/sync/observer_remote_test.go` |
 | `B-021` | `internal/driveops/hash.go`, `internal/driveops/transfer_manager.go`, `internal/driveops/transfer_manager_test.go`, +3 more |
-| `B-036` | `internal/cli/status_test.go` |
 | `B-068` | `internal/sync/executor.go` |
 | `B-074` | `internal/sync/engine.go` |
 | `B-076` | `internal/sync/executor_test.go` |

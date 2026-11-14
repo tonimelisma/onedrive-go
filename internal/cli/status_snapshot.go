@@ -180,9 +180,8 @@ type statusOutput struct {
 	Summary  statusSummary   `json:"summary"`
 }
 
-func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPerf ...bool) error {
+func runStatusCommand(ctx context.Context, cc *CLIContext, showPerf bool) error {
 	logger := cc.Logger
-	perfEnabled := len(showPerf) > 0 && showPerf[0]
 	snapshot, err := loadAccountViewSnapshot(ctx, cc)
 	if err != nil {
 		return err
@@ -206,19 +205,21 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 		return writeStatusEmpty(cc, "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
-	accounts := statusAccounts(ctx, cc, filteredSnapshot, history)
+	accounts := statusAccounts(ctx, cc, filteredSnapshot)
 	liveOverlayLoader := cc.seams.statusLiveOverlay
 	if liveOverlayLoader == nil {
 		liveOverlayLoader = loadStatusLiveOverlay
 	}
-	applyStatusLiveOverlay(accounts, liveOverlayLoader(ctx, cc, filteredSnapshot))
+	liveOverlays := liveOverlayLoader(ctx, cc, filteredSnapshot)
+	applyStatusLiveOverlay(accounts, liveOverlays)
+	printStatusLiveNotes(cc, accounts, liveOverlays)
 	runtimeOverlay := loadStatusRuntimeOverlay(ctx)
 	applyStatusRuntimeOverlay(accounts, runtimeOverlay)
 	if runtimeOverlay.unavailableNote != "" {
 		// stderr, so --json output stays one document.
 		cc.Statusf("%s", runtimeOverlay.unavailableNote)
 	}
-	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, perfEnabled))
+	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, showPerf))
 	if !cc.Flags.Verbose && !cc.Flags.Debug {
 		dropStatusDebugDetail(accounts)
 	}
@@ -226,7 +227,7 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, history bool, showPer
 		return printStatusJSON(cc.Output(), accounts)
 	}
 
-	return printStatusText(cc.Output(), accounts, history)
+	return printStatusText(cc.Output(), accounts)
 }
 
 // dropStatusDebugDetail removes the raw diagnostics behind each state, which
@@ -377,12 +378,6 @@ func filterShortcutRootSnapshots(
 	return filtered
 }
 
-// accountNameReader abstracts reading display name and org name from account
-// profile files. Enables testing without real files on disk.
-type accountNameReader interface {
-	ReadAccountNames(account string, driveIDs []driveid.CanonicalID) (displayName, orgName string)
-}
-
 // syncStateQuerier abstracts querying per-mount sync state from state DBs.
 // Enables testing without real SQLite databases on disk.
 type syncStateQuerier interface {
@@ -394,7 +389,6 @@ type syncStateQuerier interface {
 // liveSyncStateQuerier queries per-mount sync state from real state DBs.
 type liveSyncStateQuerier struct {
 	logger        *slog.Logger
-	history       bool
 	verbose       bool
 	examplesLimit int
 }
@@ -402,31 +396,7 @@ type liveSyncStateQuerier struct {
 func (q *liveSyncStateQuerier) QuerySyncState(
 	ctx context.Context, statePath string, filter syncengine.ContentFilterConfig,
 ) *syncStateInfo {
-	return querySyncStateWithOptions(ctx, statePath, q.logger, filter, q.history, q.verbose, q.examplesLimit)
-}
-
-// buildStatusAccountsWith is the testable core of buildStatusAccounts.
-func buildStatusAccountsWith(
-	ctx context.Context,
-	cfg *config.Config,
-	names accountNameReader,
-	checker accountAuthChecker,
-	syncQ syncStateQuerier,
-) []statusAccount {
-	grouped, order := groupDrivesByAccount(cfg)
-	accounts := make([]statusAccount, 0, len(order))
-
-	for _, email := range order {
-		driveIDs := grouped[email]
-		sort.Slice(driveIDs, func(i, j int) bool {
-			return driveIDs[i].String() < driveIDs[j].String()
-		})
-
-		acct := buildSingleAccountStatusWith(ctx, cfg, email, driveIDs, nil, names, checker, syncQ)
-		accounts = append(accounts, acct)
-	}
-
-	return accounts
+	return querySyncStateWithOptions(ctx, statePath, q.logger, filter, q.verbose, q.examplesLimit)
 }
 
 type childMountStatusInput struct {
@@ -502,61 +472,6 @@ func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID,
 	sort.Strings(order)
 
 	return grouped, order
-}
-
-func buildSingleAccountStatusWith(
-	ctx context.Context,
-	cfg *config.Config,
-	email string,
-	driveIDs []driveid.CanonicalID,
-	childrenByParent map[driveid.CanonicalID][]childMountStatusInput,
-	names accountNameReader,
-	checker accountAuthChecker,
-	syncQ syncStateQuerier,
-) statusAccount {
-	acct := statusAccount{
-		Email:  email,
-		Drives: make([]statusDrive, 0, len(driveIDs)),
-	}
-
-	for _, cid := range driveIDs {
-		dt := cid.DriveType()
-		if dt != "sharepoint" {
-			acct.DriveType = dt
-			break
-		}
-	}
-	if acct.DriveType == "" && len(driveIDs) > 0 {
-		acct.DriveType = driveIDs[0].DriveType()
-	}
-
-	acct.DisplayName, acct.OrgName = names.ReadAccountNames(email, driveIDs)
-
-	authHealth := checker.CheckAccountAuth(ctx, email, driveIDs)
-	acct.AuthState = authHealth.State
-	acct.AuthReason = string(authHealth.Reason)
-	acct.AuthAction = authHealth.Action
-	setAccountSignInRequired(&acct)
-
-	for _, cid := range driveIDs {
-		d := cfg.Drives[cid]
-		drive := buildConfiguredStatusDrive(ctx, cfg, cid, &d, &acct, syncQ)
-		children := childrenByParent[cid]
-		for childIndex := range children {
-			childDrive := buildChildStatusDrive(
-				ctx,
-				&d,
-				&children[childIndex],
-				syncQ,
-			)
-			drive.SharedFolders = append(drive.SharedFolders, childDrive)
-			drive.ChildMounts = append(drive.ChildMounts, childDrive)
-		}
-		acct.Drives = append(acct.Drives, drive)
-		acct.Mounts = append(acct.Mounts, drive)
-	}
-
-	return acct
 }
 
 // readAccountMeta reads display name and org name from catalog account fields.
@@ -873,32 +788,14 @@ func buildChildStatusDrive(
 	return status
 }
 
-func buildChildStatusMount(
-	ctx context.Context,
-	parentDrive *config.Drive,
-	child *childMountStatusInput,
-) statusMount {
-	return buildChildStatusDrive(ctx, parentDrive, child, nil)
-}
-
-func querySyncState(
-	ctx context.Context,
-	statePath string,
-	logger *slog.Logger,
-) *syncStateInfo {
-	return querySyncStateWithOptions(ctx, statePath, logger, syncengine.ContentFilterConfig{}, false, false, defaultVisiblePaths)
-}
-
 func querySyncStateWithOptions(
 	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
 	filter syncengine.ContentFilterConfig,
-	history bool,
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {
-	_ = history
 	snapshot, err := readDriveStatusSnapshot(ctx, statePath, logger, filter)
 	info := buildSyncStateInfo(&snapshot, verbose, examplesLimit)
 	if err != nil {

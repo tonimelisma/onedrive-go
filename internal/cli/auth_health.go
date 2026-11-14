@@ -36,10 +36,6 @@ type accountAuthRequirement struct {
 	StateDBs    int              `json:"state_dbs,omitempty"`
 }
 
-type accountAuthChecker interface {
-	CheckAccountAuth(ctx context.Context, account string, driveIDs []driveid.CanonicalID) accountAuthHealth
-}
-
 type authProofRecorder struct {
 	logger  *slog.Logger
 	mu      sync.Mutex // guards cleared so one successful proof clears scopes once per account

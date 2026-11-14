@@ -5,8 +5,7 @@ import (
 	"strings"
 )
 
-func printDriveSyncSections(w io.Writer, indent string, ss *syncStateInfo, history bool) error {
-	_ = history
+func printDriveSyncSections(w io.Writer, indent string, ss *syncStateInfo) error {
 	if ss == nil {
 		return nil
 	}
@@ -105,24 +104,4 @@ func printIssuePaths(w io.Writer, indent string, paths []string, totalCount int)
 	}
 
 	return nil
-}
-
-func printMountSyncSections(w io.Writer, indent string, ss *syncStateInfo, history bool) error {
-	return printDriveSyncSections(w, indent, ss, history)
-}
-
-func printConditionSection(w io.Writer, indent string, nextIndent string, groups []statusConditionJSON) error {
-	_ = nextIndent
-	return printIssueSection(w, indent, groups)
-}
-
-func printConditionPaths(w io.Writer, indent string, paths []string, totalCount int) error {
-	return printIssuePaths(w, indent, paths, totalCount)
-}
-
-func printStatusNextLine(w io.Writer, indent string, hint string) error {
-	if hint == "" {
-		return nil
-	}
-	return writef(w, "%sAction: %s\n", indent, hint)
 }
