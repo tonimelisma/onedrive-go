@@ -3084,6 +3084,47 @@ func TestExecutor_LocalMove_ViewFields(t *testing.T) {
 	assert.Equal(t, ItemTypeFile, o.ItemType)
 }
 
+// A move takes the baseline's remote modification time only when its view
+// did not observe the remote side. A remote item observed with no time is
+// recorded with none: the planner compares the baseline's remote time with
+// the remote row's, and a baseline time put over an observed "no time" is a
+// metadata difference and one more baseline update on the next pass.
+//
+// Validates: R-2.2.3
+func TestExecutor_MoveOutcome_TakesTheBaselineRemoteTimeOnlyForAnUnobservedRemoteSide(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	baseline := &BaselineEntry{
+		ItemType:        ItemTypeFile,
+		LocalHash:       "hash",
+		RemoteHash:      "hash",
+		RemoteSize:      42,
+		RemoteSizeKnown: true,
+		RemoteMtime:     9876543210,
+	}
+	move := func(remote *remoteState) actionOutcome {
+		return e.moveOutcome(&Action{
+			Type:    ActionLocalMove,
+			Path:    "exec-dst.txt",
+			OldPath: "exec-src.txt",
+			ItemID:  "item1",
+			DriveID: driveid.New(synctest.TestDriveID),
+			View:    &pathView{Path: "exec-dst.txt", Remote: remote, Baseline: baseline},
+		})
+	}
+
+	observedWithNoTime := move(&remoteState{Hash: "hash", Size: 42, ItemType: ItemTypeFile})
+	assert.Zero(t, observedWithNoTime.RemoteMtime, "the remote item was observed, and it carries no time")
+
+	observedWithATime := move(&remoteState{Hash: "hash", Size: 42, Mtime: 5, ItemType: ItemTypeFile})
+	assert.Equal(t, int64(5), observedWithATime.RemoteMtime)
+
+	unobserved := move(nil)
+	assert.Equal(t, baseline.RemoteMtime, unobserved.RemoteMtime, "the remote side was not observed")
+}
+
 // Fix 12: Test large-file upload delegates to Uploader with correct size.
 func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	t.Parallel()

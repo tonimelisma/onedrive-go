@@ -237,7 +237,7 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 		(!ta.IsTrial || ta.TrialScopeKey.IsZero() || row.ScopeKey != ta.TrialScopeKey):
 		decision.Kind = admissionHoldScope
 		decision.ScopeKey = row.ScopeKey
-	case row.NextRetryAt > 0:
+	case storedTimeIsSet(row.NextRetryAt):
 		nextRetryAt := time.Unix(0, row.NextRetryAt)
 		if nextRetryAt.After(now) {
 			decision.Kind = admissionHoldRetry

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
-	_ "modernc.org/sqlite"
+	"net/url"
+	"time"
 )
 
 // storeInspector is a read-only sync-state boundary for CLI status and other
@@ -22,8 +22,9 @@ type storeInspector struct {
 	betweenSnapshotReads func()
 }
 
-// sqlCountRemoteDriftItems counts already-observed remote-side differences
-// that are not yet reflected in baseline. This is the durable remote half of
+// sqlListRemoteDriftItems lists already-observed remote-side differences
+// that are not yet reflected in baseline, for countVisibleRemoteDrift to
+// count the ones the content filter shows. This is the durable remote half of
 // "not fully converged yet"; exact local-only drift still requires a live scan.
 // The content test mirrors the planner's remote_changed (sqlite_compare.go):
 // folders change only by path or type, and a file's hash decides when either
@@ -240,6 +241,10 @@ func readWithInspector[T any](
 	return read(inspector)
 }
 
+// finalizeInspectorRead joins the inspector's close error to the read's
+// result. A close that fails after a successful read is logged at Debug and
+// dropped on purpose: the connection is read-only and the rows are already
+// read, so the read's answer stands.
 func finalizeInspectorRead[T any](
 	dbPath string,
 	logger *slog.Logger,
@@ -278,9 +283,18 @@ func openStoreInspector(dbPath string, logger *slog.Logger) (*storeInspector, er
 	}, nil
 }
 
+// inspectorBusyTimeout is how long a read-only inspector statement waits for
+// a lock another connection holds before it fails with SQLITE_BUSY.
+const inspectorBusyTimeout = time.Second
+
 func openReadOnlySyncStoreDB(dbPath string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(1000)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open(sqliteDriverName, sqliteFileURI(dbPath, url.Values{
+		"mode": {"ro"},
+		sqlitePragmaParam: {
+			"query_only(1)",
+			fmt.Sprintf("busy_timeout(%d)", inspectorBusyTimeout.Milliseconds()),
+		},
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("open read-only sync store %s: %w", dbPath, err)
 	}

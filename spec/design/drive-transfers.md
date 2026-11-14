@@ -38,7 +38,11 @@ Implements: R-6.2.3 [verified]
 4. Verify hash and size against API metadata
 5. Set the partial's mtime, give it its final mode and fsync it, atomically
    rename it over the target, then fsync the directory (best effort where the
-   filesystem answers EINVAL, ENOTSUP or EOPNOTSUPP: FUSE, SMB)
+   filesystem answers EINVAL, ENOTSUP or EOPNOTSUPP: FUSE, SMB). The mtime is
+   `DownloadOpts.RemoteMtime`, a `time.Time` the caller decodes (sync's
+   stored value through `remoteModTime`, sync-store.md "Stored times"); its
+   zero value sets none, and driveops decodes no stored integer
+   (`TestDownloadToFile_SetsTheGivenModificationTimeAndLeavesAZeroOneAlone`)
 
 Every step goes through a `TargetFS` (`transfer_target.go`): `LocalTarget`
 for CLI `get` (absolute paths; a missing parent is a folder in the user's

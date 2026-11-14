@@ -131,7 +131,7 @@ func (s *SyncStore) ReleaseOrphanBlockedRetryWork(ctx context.Context, now time.
 		SET blocked = 0, next_retry_at = ?
 		WHERE blocked = 1
 		  AND scope_key NOT IN (SELECT scope_key FROM block_scopes)`,
-		now.UnixNano(),
+		storedTimeNano(now),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("sync: releasing blocked retry_work without a scope: %w", err)
@@ -201,7 +201,7 @@ func (s *SyncStore) RecordRetryWorkFailure(
 	if found && existing != nil {
 		row.AttemptCount = existing.AttemptCount + 1
 	}
-	row.NextRetryAt = s.nowFunc().Add(delayFn(row.AttemptCount - 1)).UnixNano()
+	row.NextRetryAt = storedTimeNano(s.nowFunc().Add(delayFn(row.AttemptCount - 1)))
 
 	if err := upsertRetryWorkTx(ctx, tx, row); err != nil {
 		return nil, err
@@ -345,7 +345,11 @@ func (s *SyncStore) ClearBlockedRetryWork(
 }
 
 func (s *SyncStore) ListRetryWork(ctx context.Context) ([]RetryWorkRow, error) {
-	rows, err := s.db.QueryContext(ctx, sqlListRetryWork)
+	return listRetryWorkWithRunner(ctx, s.db)
+}
+
+func listRetryWorkWithRunner(ctx context.Context, runner sqlTxRunner) ([]RetryWorkRow, error) {
+	rows, err := runner.QueryContext(ctx, sqlListRetryWork)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying retry_work: %w", err)
 	}
@@ -405,28 +409,41 @@ func (s *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]RetryWorkRow, e
 	return scanRetryWorkRows(rows)
 }
 
+// PruneRetryWorkToCurrentActions deletes every retry_work row whose work is
+// not in work, in one transaction: a failure part way leaves every row.
 func (s *SyncStore) PruneRetryWorkToCurrentActions(
 	ctx context.Context,
 	work []RetryWorkKey,
-) error {
-	rows, err := s.ListRetryWork(ctx)
-	if err != nil {
-		return err
-	}
-
+) (err error) {
 	keep := make(map[RetryWorkKey]struct{}, len(work))
 	for i := range work {
 		keep[work[i]] = struct{}{}
 	}
 
+	tx, err := beginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("sync: beginning retry_work prune: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback retry_work prune")
+	}()
+
+	rows, err := listRetryWorkWithRunner(ctx, tx)
+	if err != nil {
+		return err
+	}
 	for i := range rows {
 		key := rows[i].WorkKey()
 		if _, ok := keep[key]; ok {
 			continue
 		}
-		if err := s.DeleteRetryWorkByWork(ctx, key); err != nil {
-			return err
+		if deleteErr := deleteRetryWorkByWorkTx(ctx, tx, key); deleteErr != nil {
+			return deleteErr
 		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing retry_work prune: %w", err)
 	}
 
 	return nil

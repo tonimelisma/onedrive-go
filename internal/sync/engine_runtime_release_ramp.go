@@ -222,7 +222,7 @@ func (flow *engineFlow) releaseScopeBatch(
 		}
 		if row, ok := flow.retries.rowsByKey[work]; ok {
 			row.Blocked = false
-			row.NextRetryAt = now.UnixNano()
+			row.NextRetryAt = storedTimeNano(now)
 			flow.retries.rowsByKey[work] = row
 		}
 		ta.IsTrial = true
