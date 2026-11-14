@@ -17,7 +17,7 @@ When the user runs `get <remote> [local]`, the system shall download the specifi
 - R-1.2.1: When the remote path is a folder, the system shall download recursively. [verified]
 - R-1.2.2: When the download is interrupted, the system shall resume via `.partial` files on retry. [verified]
 - R-1.2.3: When download completes, the system shall verify hash and size against API metadata. [verified]
-- R-1.2.4: When `--json` is passed, the system shall output structured JSON with path, size, and hash_verified; for folders, with files array, folders_created, total_size, and errors. [verified]
+- R-1.2.4: When `--json` is passed, the system shall output structured JSON with path, size, and hash_verified; for folders, with files array, folders_created (the folders the download made; a folder that was already there is not counted), total_size, and errors. [verified]
 - R-1.2.5: When the user runs `get <shared-target> [local]`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall resolve the underlying shared item and download it without requiring `drive add` first. Shared folder targets shall download recursively by item identity. [verified]
 - R-1.2.6: When the local destination of a file `get` ends in a path separator or names an existing directory, the system shall download into that directory under the remote name. When a download fails and keeps a partial file, it shall name that partial file. [verified]
 

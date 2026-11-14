@@ -23,10 +23,6 @@ import (
 // Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
 const graphRootID = "root"
 
-// localDirPerms are the standard permissions for directories we create inside
-// the sync root. Group/world execute keeps traversal semantics for normal dirs.
-const localDirPerms = 0o755
-
 // executorConfig holds the immutable configuration for creating per-call
 // Executor instances. Separated from mutable state to prevent temporal
 // coupling and enable thread safety.
@@ -283,7 +279,9 @@ func (e *executor) ExecuteFolderCreate(ctx context.Context, action *Action) acti
 	return e.createRemoteFolder(ctx, action)
 }
 
-// createLocalFolder creates a directory on the local filesystem.
+// createLocalFolder creates a directory on the local filesystem, and any
+// missing parent; the sync tree gives each the user-tree folder mode
+// (R-5.10.2).
 func (e *executor) createLocalFolder(action *Action) actionOutcome {
 	// The stored name inside its parents' spellings on disk (R-2.13.2):
 	// creating the stored spelling of an NFD-named parent would make a
@@ -299,7 +297,7 @@ func (e *executor) createLocalFolder(action *Action) actionOutcome {
 		)
 	}
 
-	if err := e.syncTree.MkdirAll(folder, localDirPerms); err != nil {
+	if err := e.syncTree.MkdirAll(folder); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			ActionFolderCreate,

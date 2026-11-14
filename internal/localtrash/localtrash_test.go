@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 func putEntry(t *testing.T, trash *Trash, syncRoot, rel, content string) Entry {
@@ -256,6 +257,63 @@ func TestTrash_IncompleteCrossFilesystemCopyIsNeverPurged(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), debris)
 	assert.FileExists(t, debris, "a refused restore leaves the copy where it was")
+}
+
+// The folders a restore creates for the file are in the user's sync folder,
+// not in the trash: 0777 minus the umask, like every folder the client makes
+// there. They used to get the trash's own 0700.
+//
+// Validates: R-6.4.9, R-5.10.2
+func TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask(t *testing.T) {
+	t.Parallel()
+	if !synctest.RunUnderUmask(t, synctest.GroupWritableUmask) {
+		return
+	}
+
+	trash := Open(t.TempDir(), nil)
+	syncRoot := t.TempDir()
+	entry := putEntry(t, trash, syncRoot, "Docs/Notes/a.txt", "content\n")
+
+	target, err := trash.Restore(entry.ID)
+	require.NoError(t, err)
+	assert.FileExists(t, target)
+
+	for _, rel := range []string{"Docs", filepath.Join("Docs", "Notes")} {
+		info, statErr := os.Stat(filepath.Join(syncRoot, rel))
+		require.NoError(t, statErr)
+		assert.Equal(t, os.FileMode(0o775), info.Mode().Perm(), "%s is 0777 minus the umask", rel)
+	}
+}
+
+// A restore into a sync folder that is gone used to create it again, as an
+// ordinary folder the drive's sync then refuses as not the one its state
+// belongs to. It is refused, and the file stays in the trash.
+//
+// Validates: R-6.4.9
+func TestTrash_RestoreRefusesAMissingSyncFolder(t *testing.T) {
+	t.Parallel()
+
+	trash := Open(t.TempDir(), nil)
+	syncRoot := filepath.Join(t.TempDir(), "OneDrive")
+	entry := putEntry(t, trash, syncRoot, "Docs/a.txt", "content\n")
+
+	_, err := trash.Restore(entry.ID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+	assert.NoDirExists(t, syncRoot)
+	entries, err := trash.List()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, entry.ID, entries[0].ID)
+}
+
+// Validates: R-6.4.9
+func TestRefuseSymlinkedAncestors_RefusesATargetItCannotPlaceInTheSyncFolder(t *testing.T) {
+	t.Parallel()
+
+	err := refuseSymlinkedAncestors("relative-sync-folder", filepath.Join(t.TempDir(), "a.txt"))
+	require.Error(t, err, "a target the sync folder cannot be related to is not inside it")
+	assert.Contains(t, err.Error(), "not inside its sync folder")
 }
 
 // Validates: R-6.4.9

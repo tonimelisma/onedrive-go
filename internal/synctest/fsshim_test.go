@@ -51,7 +51,7 @@ func TestCaseInsensitive_VariantNamesAreTheStoredEntry(t *testing.T) {
 	t.Parallel()
 
 	tree, dir := shimmedTree(t, CaseInsensitive)
-	require.NoError(t, tree.MkdirAll("Docs", 0o700))
+	require.NoError(t, tree.MkdirAll("Docs"))
 	writeTreeFile(t, tree, "Docs/Readme.txt", "first")
 
 	upper, err := tree.Lstat("DOCS/README.TXT")
@@ -153,7 +153,7 @@ func TestIdentityShim_ReportsTheRuledIdentityEverywhere(t *testing.T) {
 	)
 	shim := NewIdentityShim(IdentityRule{Path: "dir/new.txt", Inode: reportedInode, BirthTime: reportedBirth})
 	tree, dir := shimmedTree(t, shim.Wrap)
-	require.NoError(t, tree.MkdirAll("dir", 0o700))
+	require.NoError(t, tree.MkdirAll("dir"))
 	writeTreeFile(t, tree, "dir/new.txt", "new")
 	writeTreeFile(t, tree, "dir/other.txt", "other")
 

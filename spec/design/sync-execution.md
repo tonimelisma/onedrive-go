@@ -4,7 +4,7 @@ GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, inte
 
 LAYER: 3
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
 
 ## Overview
 
@@ -45,7 +45,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
 | Uploads read through a followed alias: a file beneath a directory symlink whose target is outside the sync root uploads with the target content, its followed facts are still checked against the plan, the same path still refuses a download, and a path that lexically leaves the root is refused. | `TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot`, `TestExecutor_Upload_UnderFollowedDirectoryAliasSucceeds`, `TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget`, `TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused`, `TestExecutor_Upload_PathLeavingSyncRootIsRefused`, `TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition` |
-| Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash`, `TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept`, `TestCopyVerified_WriteDuringCopyDiscardsTheCopy`, `TestTrash_CrashBetweenMoveAndCommitIsRecoverable`, `TestTrash_FailedCommitLeavesARecoverablePendingEntry`, `TestTrash_OrphanItemIsListedAndKept`, `TestTrash_RestoreAcrossFilesystemsCopies`, `TestTrash_RestoreRefusesSymlinkedAncestor`, `TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted`, `TestTrash_CrossFilesystemRestoreKeepsModeAndTime`, `TestTrash_UncheckableItemIsNeverPurged`, `TestLinkOrCopyNoReplace_FilesystemWithoutHardLinksCopies`, `TestLinkOrCopyNoReplace_SourceThatCannotBeRemovedIsReportedAfterSuccess` |
+| Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash`, `TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept`, `TestCopyVerified_WriteDuringCopyDiscardsTheCopy`, `TestTrash_CrashBetweenMoveAndCommitIsRecoverable`, `TestTrash_FailedCommitLeavesARecoverablePendingEntry`, `TestTrash_OrphanItemIsListedAndKept`, `TestTrash_RestoreAcrossFilesystemsCopies`, `TestTrash_RestoreRefusesSymlinkedAncestor`, `TestRefuseSymlinkedAncestors_RefusesATargetItCannotPlaceInTheSyncFolder`, `TestTrash_RestoreRefusesAMissingSyncFolder`, `TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask`, `TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted`, `TestTrash_CrossFilesystemRestoreKeepsModeAndTime`, `TestTrash_UncheckableItemIsNeverPurged`, `TestLinkOrCopyNoReplace_FilesystemWithoutHardLinksCopies`, `TestLinkOrCopyNoReplace_SourceThatCannotBeRemovedIsReportedAfterSuccess` |
 | A cross-filesystem trash placement or restore is durable before the source goes: the destination folder is fsynced after the rename, a sync failure discards the copy, and an entry left with only an interrupted `.copy-*` file is listed, never purged, and not restored as the file. | `TestCopyVerified_SyncsTheDestinationFolder`, `TestCopyVerified_DirectorySyncFailureLeavesNothingAtTheDestination`, `TestCopyVerified_ToleratesUnsupportedDirectorySync`, `TestTrash_CrossFilesystemRestoreSyncsTheTargetFolder`, `TestTrash_IncompleteCrossFilesystemCopyIsNeverPurged` |
 | A recursive remote folder delete refuses to take descendants sync never saw or that changed online; a remote delete re-checks local absence and the sync folder identity; a local folder delete over only ignored children converges and the folder stays deleted online until it holds something sync sees. | `TestExecuteRemoteDelete_FolderWithUnobservedChildIsStale`, `TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns`, `TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale`, `TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale`, `TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation`, `TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded`, `TestDeleteLocalFolder_OnlyIgnoredChildrenConverges`, `TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges`, `TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline` |
 | Through the engine, a folder whose live listing exceeds the cap is left on OneDrive, its delete recorded as a backed-off durable issue that the next pass neither relists nor retries; a child edited online after observation stops the folder delete and the edit comes back down; a folder back locally before its delete runs stays on both sides; and local absence still holds below a regular file and across a type change, so those remote deletes run. | `TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEveryPass`, `TestRunOnce_RemoteFolderDeleteRefusesAChildEditedOnlineAfterObservation`, `TestRunOnce_RemoteFolderDeleteRefusedWhenTheFolderIsBackLocally`, `TestExecuteRemoteDelete_LocalAbsenceHoldsBelowAFileAndAcrossATypeChange` |
@@ -522,6 +522,18 @@ Execution delegates transfer mechanics to `driveops.TransferManager`.
 - true creates still use parent-path upload because no remote item identity
   exists yet
 
+### Local folder creates
+
+A local folder create (`createLocalFolder`) makes the folder, and any parent
+it is missing, through the rooted sync tree, which takes no mode from it:
+`synctree.Root.MkdirAll` asks for `localpath.UserTreeDirPerm`, 0777, and the
+umask applies, as for every folder the client creates in a user's tree and
+for the files downloaded into it (R-5.10.2). It was 0755 whatever the umask,
+so under a umask of 002 the downloaded files were group-writable and their
+folders were not. The sync folder itself is not created here, and an
+existing folder is never chmodded
+(`TestExecutor_CreatedFolderFollowsTheUmask`).
+
 Successful outcomes still preserve remote ancestry for later baseline writes,
 but execution no longer reloads that parent ID from `remote_state`. Outcome
 parent recovery is:
@@ -628,18 +640,18 @@ at its own path, is never purged or expired, blocks `Placement.Abandon`, and
 is refused by `trash restore`, because it may be torn and the original was
 left set aside in the sync folder. Purge expires committed entries after 30
 days and only removes reservations whose directory holds no file at all; it
-never deletes an uncommitted file. Restore never
-that `trash list` shows and `trash restore` puts back (the crash point
-`delete.local_trashed` sits exactly there, and `delete.remote_done` right after
-a Graph DELETE succeeds; D-091, `spec/design/sync-engine.md`); an entry
-holding a file but no readable record is listed as an orphan with the file's
-location. Purge
-expires committed entries after 30 days and only removes reservations whose
-file never arrived; it never deletes an uncommitted file. Restore never
-overwrites (renameat2 `RENAME_NOREPLACE` on Linux, `renamex_np RENAME_EXCL` on
-macOS, link and unlink elsewhere, and on filesystems without hard links an
-`O_EXCL` create plus copy, which is not atomic but never replaces), refuses a
-symbolic link between the sync folder and the target, and copies, keeping mode
+never deletes an uncommitted file. The crash point `delete.local_trashed`
+sits exactly between the move and the commit, and `delete.remote_done` right
+after a Graph DELETE succeeds (D-091, `spec/design/sync-engine.md`). Restore
+never overwrites (renameat2 `RENAME_NOREPLACE` on Linux, `renamex_np
+RENAME_EXCL` on macOS, link and unlink elsewhere, and on filesystems without
+hard links an `O_EXCL` create plus copy, which is not atomic but never
+replaces), refuses a symbolic link between the sync folder and the target,
+refuses a sync folder that is gone (making it again would give the drive a
+new folder its sync refuses as not the one its state belongs to), creates the
+file's missing folders as folders in the user's tree
+(`localpath.UserTreeDirPerm`, 0777 minus the umask, R-5.10.2; they got the
+trash's own 0700), and copies, keeping mode
 and mtime, through a `.onedrive-go-restore-*` sibling when the trash is on
 another filesystem, and fsyncs the target's folder after the final rename
 before the trashed original is removed (`finishCopiedRestore`, through the

@@ -41,8 +41,9 @@ Implements: R-6.2.3 [verified]
    filesystem answers EINVAL, ENOTSUP or EOPNOTSUPP: FUSE, SMB)
 
 Every step goes through a `TargetFS` (`transfer_target.go`): `LocalTarget`
-for CLI `get` (absolute paths; missing parents created with 0777 minus the
-umask) or sync's rooted target, which never creates a parent. The final mode
+for CLI `get` (absolute paths; a missing parent is a folder in the user's
+tree, created with `localpath.UserTreeDirPerm`, 0777 minus the umask) or
+sync's rooted target, which never creates a parent. The final mode
 is the replaced file's permission bits, or 0666 minus the umask for a new
 file; the umask is read once per `TransferManager` from `/proc/self/status`
 on Linux, or by creating a probe file elsewhere, since reading it with
@@ -60,6 +61,31 @@ callback. `driveops` calls it after content/hash/mtime preparation and before
 the final rename. The callback owns sync stale-work policy; `driveops` only
 propagates the error and preserves the partial file like any other pre-rename
 failure.
+
+### Folder downloads (`get`)
+
+A folder `get` (`internal/cli/get.go`) counts first: it lists the whole tree
+and caches each listing under its folder's item ID, so a drive path (listed
+by path) and a shared folder (listed by item ID, `get_shared.go`) differ only
+in that pass. One walk, `downloadTree`, then creates each folder and starts
+the folder's file downloads. Every folder it creates is a folder in the
+user's tree: it asks for `localpath.UserTreeDirPerm`, 0777 minus the umask,
+like the files in it (R-5.10.2); it was 0755 whatever the umask, so under a
+umask of 002 the files were group-writable and their folders were not. A
+folder that is already there is used as it is, keeps its mode and is not
+counted in `folders_created` (R-1.2.4). Descent runs inline, on the caller's
+goroutine, and only file downloads run concurrently, under one semaphore of
+`defaultDownloadConcurrency` for the whole tree; the shared folder walk used
+to start a goroutine per subfolder and to drop a file it gave up on at
+cancellation without a word. Both flavors read `min_free_space` through
+`configuredMinFreeSpace`, which reports a value it cannot read instead of
+turning the disk-space check off. Evidence:
+`TestDownloadTree_CreatedFolderFollowsTheUmask`,
+`TestDownloadTree_CountsOnlyTheFoldersItCreates`,
+`TestDownloadTree_FileWhereAFolderBelongsIsReported`,
+`TestDownloadTree_DirectoryDescentDoesNotFanOutGoroutines`,
+`TestDownloadTree_RespectsContextCancellation`,
+`TestRunGet_SharedFolderDownloadsItsTree`, `TestConfiguredMinFreeSpace`.
 
 ### Upload
 

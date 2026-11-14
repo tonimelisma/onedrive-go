@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,13 +14,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
-
-// defaultDirPerm is the permission mode for directories created during recursive get.
-const defaultDirPerm = 0o755
 
 // defaultDownloadConcurrency is the maximum number of concurrent file downloads
 // across the entire directory tree (shared semaphore).
@@ -81,7 +81,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 			localPath = args[1]
 		}
 
-		return downloadFolder(cmd, cc, session, remotePath, localPath)
+		return downloadFolder(ctx, cc, session, item.ID, remotePath, localPath)
 	}
 
 	localPath := item.Name
@@ -89,23 +89,35 @@ func runGet(cmd *cobra.Command, args []string) error {
 		localPath = localFileTarget(args[1], item.Name)
 	}
 
-	// Parse min_free_space from config for disk space pre-check (R-6.2.6).
-	// Config is validated at load time, so ParseSize won't fail here;
-	// on error we leave minFree at 0 which disables the check (safe default).
-	var minFree int64
-	if cc.Cfg != nil && cc.Cfg.MinFreeSpace != "" {
-		if parsed, parseErr := config.ParseSize(cc.Cfg.MinFreeSpace); parseErr == nil {
-			minFree = parsed
-		}
+	minFree, err := configuredMinFreeSpace(cc)
+	if err != nil {
+		return err
 	}
 
 	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, logger,
 		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
 	)
 
-	result, err := tm.DownloadToFile(ctx, session.DriveID, item.ID, localPath, driveops.DownloadOptsForItem(item))
+	return downloadOneFile(ctx, cc, tm, session.DriveID, item.ID, item, localPath)
+}
+
+// downloadOneFile downloads one file to localPath and reports it, naming a
+// partial file the failure kept so the user can resume. itemID addresses the
+// file on driveID; item carries the metadata the download verifies against.
+func downloadOneFile(
+	ctx context.Context,
+	cc *CLIContext,
+	tm *driveops.TransferManager,
+	driveID driveid.ID,
+	itemID string,
+	item *graph.Item,
+	localPath string,
+) error {
+	opts := driveops.DownloadOptsForItem(item)
+
+	result, err := tm.DownloadToFile(ctx, driveID, itemID, localPath, opts)
 	if err != nil {
-		partialPath := driveops.DownloadPartialPath(localPath, driveops.DownloadOptsForItem(item))
+		partialPath := driveops.DownloadPartialPath(localPath, opts)
 		if _, statErr := localpath.Stat(partialPath); statErr == nil {
 			cc.Statusf("Partial download saved: %s\n", partialPath)
 			cc.Statusf("Re-run the same command to resume.\n")
@@ -114,7 +126,7 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("download file: %w", err)
 	}
 
-	logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
+	cc.Logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)
 
 	if cc.Flags.JSON {
 		return printGetJSON(cc.Output(), getJSONOutput{
@@ -127,6 +139,23 @@ func runGet(cmd *cobra.Command, args []string) error {
 	cc.Statusf("Downloaded %s (%s)\n", localPath, formatSize(result.Size))
 
 	return nil
+}
+
+// configuredMinFreeSpace is the drive's min_free_space in bytes for the disk
+// space check before a download (R-6.2.6): 0 without a configured drive or
+// with the check turned off. Config validates the value when it loads, so an
+// error here is a value that never went through that validation.
+func configuredMinFreeSpace(cc *CLIContext) (int64, error) {
+	if cc.Cfg == nil {
+		return 0, nil
+	}
+
+	minFree, err := config.ParseSize(cc.Cfg.MinFreeSpace)
+	if err != nil {
+		return 0, fmt.Errorf("reading min_free_space: %w", err)
+	}
+
+	return minFree, nil
 }
 
 // localFileTarget treats a destination that ends in a path separator or
@@ -180,49 +209,67 @@ type downloadState struct {
 	result      getFolderJSONOutput
 	done        int
 	total       int
-	childCache  map[string][]graph.Item // keyed by remote path
+	childCache  map[string][]graph.Item // keyed by folder item ID
 	countErrors []string                // non-fatal errors from counting pass
 }
 
-func downloadFolder(
-	cmd *cobra.Command,
-	cc *CLIContext,
-	session *driveops.MountSession,
-	remotePath, localPath string,
-) error {
-	ctx := cmd.Context()
-	logger := cc.Logger
-
-	state := &downloadState{
+func newDownloadState() *downloadState {
+	return &downloadState{
 		childCache: make(map[string][]graph.Item),
 		sem:        make(chan struct{}, defaultDownloadConcurrency),
 	}
+}
+
+// recordError adds one failure to the result.
+func (state *downloadState) recordError(failure string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	state.result.Errors = append(state.result.Errors, failure)
+}
+
+// downloadFolder downloads the folder folderID at remotePath into localPath.
+func downloadFolder(
+	ctx context.Context,
+	cc *CLIContext,
+	session *driveops.MountSession,
+	folderID, remotePath, localPath string,
+) error {
+	state := newDownloadState()
 
 	// Pass 1: count files and cache directory listings.
-	if err := countRemoteFiles(ctx, session, remotePath, state); err != nil {
+	if err := countRemoteFiles(ctx, session, remotePath, folderID, state); err != nil {
 		return err
 	}
 
-	// Parse min_free_space from config for disk space pre-check (R-6.2.6).
-	// Config is validated at load time, so ParseSize won't fail here;
-	// on error we leave minFree at 0 which disables the check (safe default).
-	var minFree int64
-	if cc.Cfg != nil && cc.Cfg.MinFreeSpace != "" {
-		if parsed, parseErr := config.ParseSize(cc.Cfg.MinFreeSpace); parseErr == nil {
-			minFree = parsed
-		}
+	minFree, err := configuredMinFreeSpace(cc)
+	if err != nil {
+		return err
 	}
 
-	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
-	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger,
+	store := driveops.NewSessionStore(config.DefaultDataDir(), cc.Logger)
+	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, cc.Logger,
 		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
 	)
 
+	// Pass 2: download. File downloads are bounded by the shared semaphore.
+	return finishFolderDownload(ctx, cc, tm, state, session.DriveID, folderID, localPath)
+}
+
+// finishFolderDownload runs the download pass over the listings the counting
+// pass cached, waits for every file, and reports the result.
+func finishFolderDownload(
+	ctx context.Context,
+	cc *CLIContext,
+	tm *driveops.TransferManager,
+	state *downloadState,
+	driveID driveid.ID,
+	folderID, localPath string,
+) error {
 	// Propagate non-fatal counting errors to the result.
 	state.result.Errors = append(state.result.Errors, state.countErrors...)
 
-	// Pass 2: download recursively. Goroutines are bounded by the shared semaphore.
-	downloadRecursive(ctx, cc, session, tm, state, remotePath, localPath)
+	downloadTree(ctx, cc, tm, state, driveID, folderID, localPath)
 	state.wg.Wait()
 
 	if cc.Flags.JSON {
@@ -239,7 +286,10 @@ func downloadFolder(
 	return bulkTransferError(cc.Status(), "download", state.result.Errors)
 }
 
-func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remotePath string, state *downloadState) error {
+// countRemoteFiles lists the folder folderID at remotePath and every folder
+// below it, caching each listing under its folder's item ID and counting the
+// files.
+func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remotePath, folderID string, state *downloadState) error {
 	children, err := session.ListChildren(ctx, remotePath)
 	if err != nil {
 		return newRemoteOpError("listing", remotePath, err)
@@ -248,7 +298,7 @@ func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remot
 	for i := range children {
 		if children[i].IsFolder {
 			childRemote := joinRemotePath(remotePath, children[i].Name)
-			if subErr := countRemoteFiles(ctx, session, childRemote, state); subErr != nil {
+			if subErr := countRemoteFiles(ctx, session, childRemote, children[i].ID, state); subErr != nil {
 				// Record subdirectory errors but continue counting accessible parts.
 				state.countErrors = append(state.countErrors, subErr.Error())
 			}
@@ -257,101 +307,131 @@ func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remot
 		}
 	}
 
-	state.childCache[remotePath] = children
+	state.childCache[folderID] = children
 
 	return nil
 }
 
-func downloadRecursive(
+// downloadTree creates localPath, as a folder in the user's tree (R-5.10.2),
+// downloads into it the files of the folder whose listing the counting pass
+// cached under folderID, and walks its subfolders the same way. A drive path
+// and a shared folder download through this one walk; only their counting
+// passes list differently.
+//
+// File downloads run concurrently under a shared semaphore that bounds total
+// in-flight transfers across the whole tree. Directory descent is
+// deliberately not concurrent: a goroutine per subdirectory makes the
+// goroutine count scale with the number of directories in the tree, which is
+// exactly the unbounded fan-out the semaphore exists to prevent, and the
+// semaphore never covered it. Nothing is lost by walking inline: the
+// listings are cached, so descent performs no network I/O, only a folder
+// creation and a map lookup, and transfers still start as soon as each
+// folder is reached.
+func downloadTree(
 	ctx context.Context,
 	cc *CLIContext,
-	session *driveops.MountSession,
 	tm *driveops.TransferManager,
 	state *downloadState,
-	remotePath, localPath string,
+	driveID driveid.ID,
+	folderID, localPath string,
 ) {
-	if err := localpath.MkdirAll(localPath, defaultDirPerm); err != nil {
-		state.mu.Lock()
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("creating %q: %v", localPath, err))
-		state.mu.Unlock()
+	created, err := createDownloadFolder(localPath)
+	if err != nil {
+		state.recordError(err.Error())
 
 		return
 	}
 
-	// Read from cache populated by countRemoteFiles — no extra API call.
-	children := state.childCache[remotePath]
+	if created {
+		state.mu.Lock()
+		state.result.FoldersCreated++
+		state.mu.Unlock()
+	}
 
-	state.mu.Lock()
-	state.result.FoldersCreated++
-	state.mu.Unlock()
-
-	// File downloads run concurrently under a shared semaphore that bounds
-	// total in-flight transfers across the whole tree. Directory descent is
-	// deliberately not concurrent: a goroutine per subdirectory made the
-	// goroutine count scale with the number of directories in the tree, which
-	// is exactly the unbounded fan-out the semaphore exists to prevent, and
-	// the semaphore never covered it.
-	//
-	// Nothing is lost by walking directories inline. Listings were already
-	// fetched by the counting pass and are served from childCache, so descent
-	// performs no network I/O -- only MkdirAll and a map lookup. Transfers
-	// still start as soon as each directory is reached and still overlap with
-	// each other.
+	children := state.childCache[folderID]
 	for i := range children {
-		if children[i].IsFolder {
-			child := children[i]
+		child := &children[i]
+		childLocal := filepath.Join(localPath, child.Name)
 
-			downloadRecursive(ctx, cc, session, tm, state,
-				joinRemotePath(remotePath, child.Name),
-				filepath.Join(localPath, child.Name),
-			)
+		if child.IsFolder {
+			downloadTree(ctx, cc, tm, state, driveID, child.ID, childLocal)
 
 			continue
 		}
-
-		child := children[i]
-		childLocal := filepath.Join(localPath, child.Name)
 
 		state.wg.Add(1)
 
 		go func() {
 			defer state.wg.Done()
 
-			// Acquire semaphore slot before starting the download.
-			// Respect context cancellation to avoid blocking forever.
-			select {
-			case state.sem <- struct{}{}:
-			case <-ctx.Done():
-				state.mu.Lock()
-				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.Name, ctx.Err()))
-				state.mu.Unlock()
-
-				return
-			}
-
-			defer func() { <-state.sem }()
-
-			dlResult, dlErr := tm.DownloadToFile(ctx, session.DriveID, child.ID, childLocal, driveops.DownloadOptsForItem(&child))
-
-			state.mu.Lock()
-			defer state.mu.Unlock()
-
-			if dlErr != nil {
-				state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", child.Name, dlErr))
-
-				return
-			}
-
-			state.result.Files = append(state.result.Files, getJSONOutput{
-				Path:         childLocal,
-				Size:         dlResult.Size,
-				HashVerified: dlResult.HashVerified,
-			})
-			state.result.TotalSize += dlResult.Size
-			state.done++
-			cc.Progressf("Downloaded %d/%d files", state.done, state.total)
+			downloadTreeFile(ctx, cc, tm, state, driveID, child, childLocal)
 		}()
 	}
+}
+
+// createDownloadFolder creates a folder a folder download needs and reports
+// whether this call created it: an existing folder is used as it is, keeps
+// its mode, and is not counted as created. Every error names the path once.
+func createDownloadFolder(localPath string) (bool, error) {
+	info, err := localpath.Stat(localPath)
+	switch {
+	case err == nil && info.IsDir():
+		return false, nil
+	case err == nil:
+		return false, fmt.Errorf("creating directory %s: it is not a folder", localPath)
+	case !errors.Is(err, os.ErrNotExist):
+		return false, err //nolint:wrapcheck // localpath already names the path
+	}
+
+	if mkdirErr := localpath.MkdirAll(localPath, localpath.UserTreeDirPerm); mkdirErr != nil {
+		return false, mkdirErr //nolint:wrapcheck // localpath already names the path
+	}
+
+	return true, nil
+}
+
+// downloadTreeFile downloads one file of a folder download once the shared
+// semaphore admits it, and records the outcome.
+func downloadTreeFile(
+	ctx context.Context,
+	cc *CLIContext,
+	tm *driveops.TransferManager,
+	state *downloadState,
+	driveID driveid.ID,
+	child *graph.Item,
+	childLocal string,
+) {
+	// Respect cancellation while waiting, so a canceled download never
+	// blocks on the semaphore.
+	select {
+	case state.sem <- struct{}{}:
+	case <-ctx.Done():
+		state.recordError(fmt.Sprintf("%s: %v", childLocal, ctx.Err()))
+
+		return
+	}
+
+	defer func() { <-state.sem }()
+
+	result, err := tm.DownloadToFile(ctx, driveID, child.ID, childLocal, driveops.DownloadOptsForItem(child))
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if err != nil {
+		state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", childLocal, err))
+
+		return
+	}
+
+	state.result.Files = append(state.result.Files, getJSONOutput{
+		Path:         childLocal,
+		Size:         result.Size,
+		HashVerified: result.HashVerified,
+	})
+	state.result.TotalSize += result.Size
+	state.done++
+	cc.Progressf("Downloaded %d/%d files", state.done, state.total)
 }
 
 // joinRemotePath joins a parent and child remote path segment.

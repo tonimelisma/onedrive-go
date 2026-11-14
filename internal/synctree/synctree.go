@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // Handle is the contained filesystem surface every sync-tree operation runs
@@ -855,9 +857,14 @@ func (r *Root) removeTreeNoFollow(rel string) error {
 // Components that resolve outside the root fail closed. Symlinks that stay
 // inside the root are ordinary content and are followed; callers that must
 // reject in-root symlinks too want MkdirAllNoFollow.
-func (r *Root) MkdirAll(rel string, perm os.FileMode) error {
+//
+// Every folder below the sync root is a folder in the user's tree, so the
+// mode is not the caller's to choose: each new folder asks for
+// localpath.UserTreeDirPerm and gets the umask (R-5.10.2). An existing
+// folder keeps its mode.
+func (r *Root) MkdirAll(rel string) error {
 	return r.mutateWithRoot(rel, "creating directory %s", func(root rootHandle, clean string) error {
-		return root.MkdirAll(clean, perm)
+		return r.ops.mkdirAll(root, clean, localpath.UserTreeDirPerm)
 	})
 }
 
@@ -908,7 +915,11 @@ func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
 	return nil
 }
 
-func (r *Root) MkdirAllNoFollow(rel string, perm os.FileMode) error {
+// MkdirAllNoFollow creates rel and any missing parents inside the sync root,
+// refusing any component that is a symbolic link or not a folder, even one
+// that stays inside the root. Like MkdirAll, each new folder asks for
+// localpath.UserTreeDirPerm (R-5.10.2) and an existing one keeps its mode.
+func (r *Root) MkdirAllNoFollow(rel string) error {
 	clean, err := cleanRelative(rel)
 	if err != nil {
 		return err
@@ -930,7 +941,7 @@ func (r *Root) MkdirAllNoFollow(rel string, perm os.FileMode) error {
 			continue
 		}
 		current = filepath.Join(current, component)
-		if err := ensureNoFollowDirectory(root, current, perm); err != nil {
+		if err := ensureNoFollowDirectory(root, current); err != nil {
 			return err
 		}
 	}
@@ -1199,7 +1210,9 @@ func (r *Root) openRootNoFollow() (rootHandle, error) {
 	return root, nil
 }
 
-func ensureNoFollowDirectory(root rootHandle, rel string, perm os.FileMode) error {
+// ensureNoFollowDirectory makes sure rel is a real folder, creating it with
+// the user-tree folder mode when it is missing.
+func ensureNoFollowDirectory(root rootHandle, rel string) error {
 	info, err := root.Lstat(rel)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
@@ -1210,7 +1223,7 @@ func ensureNoFollowDirectory(root rootHandle, rel string, perm os.FileMode) erro
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("checking directory %s: %w", rel, err)
 	}
-	if err := root.Mkdir(rel, perm); err != nil {
+	if err := root.Mkdir(rel, localpath.UserTreeDirPerm); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			info, statErr := root.Lstat(rel)
 			if statErr != nil {

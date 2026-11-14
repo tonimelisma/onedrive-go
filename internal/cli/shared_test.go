@@ -406,6 +406,57 @@ func TestRunPut_SharedFolderTargetRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "run 'onedrive-go drive add shared:user@example.com:b!drive1234567890:source-item-folder' first")
 }
 
+// A shared folder downloads through the walk every folder download uses, by
+// item ID: the whole tree exists when the command returns, and
+// folders_created counts the folders it made. Its own walk spawned a
+// goroutine per subfolder.
+//
+// Validates: R-1.2.5
+func TestRunGet_SharedFolderDownloadsItsTree(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	const selector = "shared:user@example.com:b!drive1234567890:source-item-folder"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case testSharedFolderGetItemPath:
+			writeTestResponse(t, w, `{"id": "source-item-folder", "name": "Shared Folder", "folder": {"childCount": 1},
+				"parentReference": {"id": "parent", "driveId": "b!drive1234567890"}}`)
+		case testSharedFolderGetItemPath + "/children":
+			writeTestResponse(t, w, `{"value": [{"id": "sub-1", "name": "Sub", "folder": {"childCount": 0}}]}`)
+		case "/drives/b!drive1234567890/items/sub-1/children":
+			writeTestResponse(t, w, `{"value": []}`)
+		default:
+			assert.Fail(t, "unexpected request", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	cc := &CLIContext{
+		Flags:        CLIFlags{JSON: true},
+		Logger:       testDriveLogger(t),
+		OutputWriter: &out,
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+	}
+	target := filepath.Join(t.TempDir(), "Shared Folder")
+
+	cmd := newGetCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+	require.NoError(t, runGet(cmd, []string{selector, target}))
+
+	assert.DirExists(t, filepath.Join(target, "Sub"))
+	var parsed getFolderJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
+	assert.Equal(t, 2, parsed.FoldersCreated)
+	assert.Empty(t, parsed.Errors)
+}
+
 func createTempFile(t *testing.T, name, content string) string {
 	t.Helper()
 

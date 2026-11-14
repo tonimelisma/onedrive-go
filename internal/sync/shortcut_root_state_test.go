@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -939,6 +940,72 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossL
 	assert.Equal(t, []string{"Archive/New"}, roots[0].ProtectedPaths)
 	require.NotNil(t, roots[0].LocalRootIdentity)
 	assert.True(t, synctree.SameIdentity(identity, *roots[0].LocalRootIdentity))
+}
+
+// A shared folder's shortcut folder sits in the parent's sync tree, and so
+// does a parent a moved one needs: folders in the user's tree like any other
+// sync creates, asked for 0777 and given the umask. They used to be 0700
+// whatever the umask. A folder that already exists keeps its mode.
+//
+// Validates: R-5.10.2, R-2.4.8
+func TestEngine_ShortcutRootFoldersFollowTheUmask(t *testing.T) {
+	t.Parallel()
+	if !synctest.RunUnderUmask(t, synctest.GroupWritableUmask) {
+		return
+	}
+
+	shortcutRoot := func(relativePath string, protected []string, identity *synctree.FileIdentity) ShortcutRootRecord {
+		return ShortcutRootRecord{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-1",
+			RelativeLocalPath: relativePath,
+			LocalAlias:        filepath.Base(relativePath),
+			RemoteDriveID:     driveid.New("drive-1"),
+			RemoteItemID:      "target-1",
+			RemoteIsFolder:    true,
+			State:             ShortcutRootStateActive,
+			ProtectedPaths:    protected,
+			LocalRootIdentity: identity,
+		}
+	}
+	folderMode := func(t *testing.T, syncRoot, rel string) os.FileMode {
+		t.Helper()
+		info, err := os.Stat(filepath.Join(syncRoot, filepath.FromSlash(rel)))
+		require.NoError(t, err)
+		return info.Mode().Perm()
+	}
+
+	t.Run("a shortcut folder and its parent", func(t *testing.T) {
+		eng, syncRoot := newTestEngine(t, &engineMockClient{})
+		eng.shortcutNamespaceID = shortcutNamespaceTestID
+		require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{
+			shortcutRoot("Shared/Docs", []string{"Shared/Docs"}, nil),
+		}))
+
+		_, err := eng.reconcileShortcutRootLocalState(t.Context())
+		require.NoError(t, err)
+
+		assert.Equal(t, os.FileMode(0o775), folderMode(t, syncRoot, "Shared"), "0777 minus the umask")
+		assert.Equal(t, os.FileMode(0o775), folderMode(t, syncRoot, "Shared/Docs"), "0777 minus the umask")
+	})
+
+	t.Run("the parent a moved shortcut folder needs", func(t *testing.T) {
+		eng, syncRoot := newTestEngine(t, &engineMockClient{})
+		eng.shortcutNamespaceID = shortcutNamespaceTestID
+		require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Old"), 0o700))
+		identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
+		require.NoError(t, err)
+		require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{
+			shortcutRoot("Archive/New", []string{"Archive/New", "Shared/Old"}, &identity),
+		}))
+		seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Old")
+
+		_, err = eng.reconcileShortcutRootLocalState(t.Context())
+		require.NoError(t, err)
+
+		assert.Equal(t, os.FileMode(0o775), folderMode(t, syncRoot, "Archive"), "0777 minus the umask")
+		assert.Equal(t, os.FileMode(0o700), folderMode(t, syncRoot, "Archive/New"), "the moved folder keeps its mode")
+	})
 }
 
 // Validates: R-2.4.8

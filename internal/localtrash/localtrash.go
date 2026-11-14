@@ -46,8 +46,8 @@ const Retention = 30 * 24 * time.Hour
 const (
 	itemName      = "item"
 	entryFileName = "entry.json"
-	dirPerm       = 0o700
-	filePerm      = 0o600
+	entryDirPerm  = 0o700
+	entryFilePerm = 0o600
 	idRandomBytes = 4
 	idTimeLayout  = "20060102T150405.000000000Z"
 	stateDBSuffix = ".db"
@@ -58,7 +58,6 @@ const (
 	// one left behind by a crash.
 	copyTempGlob          = restoreArtifactPrefix + "*"
 	restoreArtifactPrefix = ".onedrive-go-restore-"
-	maxListEntries        = 1 << 20
 	parentDirName         = ".."
 
 	// incompletePlacementGrace is how old a reservation without a file must
@@ -181,7 +180,7 @@ func (t *Trash) Reserve(syncRoot string, rel string, reason Reason) (*Placement,
 	}
 	id := now.Format(idTimeLayout) + "-" + hex.EncodeToString(random[:])
 	entryDir := filepath.Join(t.dir, id)
-	if err := localpath.MkdirAll(entryDir, dirPerm); err != nil {
+	if err := localpath.MkdirAll(entryDir, entryDirPerm); err != nil {
 		return nil, fmt.Errorf("creating trash entry: %w", err)
 	}
 
@@ -213,7 +212,7 @@ func (p *Placement) writeEntry() error {
 	if err != nil {
 		return fmt.Errorf("encoding trash entry: %w", err)
 	}
-	if err := localpath.AtomicWrite(filepath.Join(p.entryDir, entryFileName), data, filePerm, dirPerm, entryTempGlob); err != nil {
+	if err := localpath.AtomicWrite(filepath.Join(p.entryDir, entryFileName), data, entryFilePerm, entryDirPerm, entryTempGlob); err != nil {
 		return fmt.Errorf("recording trash entry: %w", err)
 	}
 	return nil
@@ -296,7 +295,7 @@ func (t *Trash) scan() ([]scannedEntry, error) {
 		return nil, fmt.Errorf("reading trash: %w", err)
 	}
 
-	scanned := make([]scannedEntry, 0, min(len(dirEntries), maxListEntries))
+	scanned := make([]scannedEntry, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
 		if !dirEntry.IsDir() {
 			continue
@@ -370,8 +369,9 @@ func (t *Trash) List() ([]Entry, error) {
 
 // Restore puts entry id back at its original path and removes it from the
 // trash. It never overwrites (ErrRestoreTargetExists), never writes through
-// a symbolic link inside the sync folder, and copies when the trash and the
-// sync folder are on different filesystems.
+// a symbolic link inside the sync folder, never re-creates a sync folder that
+// is gone, and copies when the trash and the sync folder are on different
+// filesystems.
 func (t *Trash) Restore(id string) (string, error) {
 	if id == "" || strings.ContainsAny(id, `/\`) || id == "." || id == parentDirName {
 		return "", fmt.Errorf("%w: %q", ErrEntryNotFound, id)
@@ -393,10 +393,15 @@ func (t *Trash) Restore(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := requireSyncFolder(&found.entry); err != nil {
+		return "", err
+	}
 	if err := refuseSymlinkedAncestors(found.entry.SyncRoot, target); err != nil {
 		return "", err
 	}
-	if err := localpath.MkdirAll(filepath.Dir(target), dirPerm); err != nil {
+	// The missing parents are in the user's sync folder, not in the trash:
+	// they get the user-tree folder mode, not the trash's own.
+	if err := localpath.MkdirAll(filepath.Dir(target), localpath.UserTreeDirPerm); err != nil {
 		return "", fmt.Errorf("creating %s: %w", filepath.Dir(target), err)
 	}
 	if err := t.moveNoReplace(found.entry.ItemPath, target); err != nil {
@@ -529,8 +534,11 @@ func copyToSibling(src, target string) (tempPath string, err error) {
 // file outside the sync folder.
 func refuseSymlinkedAncestors(syncRoot, target string) error {
 	rel, err := filepath.Rel(syncRoot, filepath.Dir(target))
-	if err != nil || rel == "." {
-		return nil //nolint:nilerr // the target folder is the sync folder itself
+	if err != nil {
+		return fmt.Errorf("not restoring %s: it is not inside its sync folder %s: %w", target, syncRoot, err)
+	}
+	if rel == "." {
+		return nil
 	}
 	current := syncRoot
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
@@ -547,6 +555,26 @@ func refuseSymlinkedAncestors(syncRoot, target string) error {
 		}
 	}
 	return nil
+}
+
+// requireSyncFolder refuses a restore into a sync folder that is gone.
+// Creating it again would make a new folder the drive's sync then refuses as
+// not the one its state belongs to, and the client creates a sync folder only
+// when a drive is set up, with the sync folder's own mode.
+func requireSyncFolder(entry *Entry) error {
+	info, err := localpath.Stat(entry.SyncRoot)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("not restoring trash entry %s: its sync folder %s does not exist; the file is at %s",
+			entry.ID, entry.SyncRoot, entry.ItemPath)
+	case err != nil:
+		return fmt.Errorf("checking the sync folder of trash entry %s: %w", entry.ID, err)
+	case !info.IsDir():
+		return fmt.Errorf("not restoring trash entry %s: its sync folder %s is not a folder; the file is at %s",
+			entry.ID, entry.SyncRoot, entry.ItemPath)
+	default:
+		return nil
+	}
 }
 
 // restoreTarget is the absolute original path of entry, refusing a recorded
