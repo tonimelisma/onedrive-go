@@ -76,7 +76,7 @@ func TestClearPausedKeys_ExpiredTimedPause_ClearedByResume(t *testing.T) {
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused, "raw paused flag should still be true")
 
-	// Run resumeSingleDrive — should clean up stale keys.
+	// Resuming the drive cleans up the stale keys.
 	var statusBuf strings.Builder
 	cc := &CLIContext{
 		CfgPath:      cfgPath,
@@ -84,7 +84,7 @@ func TestClearPausedKeys_ExpiredTimedPause_ClearedByResume(t *testing.T) {
 		StatusWriter: &statusBuf,
 	}
 
-	require.NoError(t, resumeSingleDrive(t.Context(), cc, cfg, cid.String()))
+	require.NoError(t, resumeSingleDriveWithNow(t.Context(), cc, time.Now, cfg, cid.String()))
 
 	// Verify stale keys were removed from config file.
 	data, err := localpath.ReadFile(cfgPath)

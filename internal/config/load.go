@@ -34,22 +34,11 @@ func configWarningText(path, message string) string {
 	return path + ": " + message
 }
 
-// Load reads and parses a TOML config file using a two-pass decode, validates
-// it, and returns the resulting Config. Unknown keys are treated as fatal
-// errors with "did you mean?" suggestions.
-func Load(path string, logger *slog.Logger) (*Config, error) {
-	return loadWithIO(path, logger, defaultConfigIO())
-}
-
-func loadWithIO(path string, logger *slog.Logger, io configIO) (*Config, error) {
-	cfg, err := newConfigLoader(io).load(path, logger)
-	return cfg, markInvalidConfig(err)
-}
-
-// LoadOrDefault reads a TOML config file if it exists, otherwise returns
-// a Config populated with all default values. Used by callers that want smart
-// error messages when config is missing rather than raw file-not-found
-// errors.
+// LoadOrDefault reads and parses a TOML config file if it exists, using a
+// two-pass decode, validates it, and returns the resulting Config; unknown
+// keys are fatal errors with "did you mean?" suggestions. A file that does
+// not exist yields a Config of default values instead of a file-not-found
+// error.
 func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 	return loadOrDefaultWithIO(path, logger, defaultConfigIO())
 }

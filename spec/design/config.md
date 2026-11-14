@@ -66,17 +66,18 @@ Only two environment variables: `ONEDRIVE_GO_CONFIG` (config path override) and 
 Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS.
 
 Dev builds (`version == "dev"`) require full XDG isolation before any command
-bootstrap can proceed: `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME`
-must all be set. Partial isolation is rejected because a single missing root can
-fall back to production config, token/state, or cache locations. `scripts/dev-env.sh`
-is the canonical local helper for setting those roots.
+bootstrap can proceed: `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, the two roots the
+client reads, must both be set. Partial isolation is rejected because a single
+missing root can fall back to production config or token/state locations. The
+client keeps no cache, so no cache root is asked for. `scripts/dev-env.sh` is
+the canonical local helper for setting those roots.
 
 `ControlSocketPath()` normally places the Unix control socket under
 `DefaultDataDir()`. Unix socket path length is platform-bounded, so when the
 full data-dir socket path is too long the config layer derives a stable,
 hash-named runtime directory under `os.TempDir()` and places only the socket
 there. Durable state, tokens, logs, and catalog/state artifacts remain under the normal
-config/data/cache roots.
+config and data roots.
 
 `ControlSocketPath()` returns `(path, error)`, not an empty-string sentinel.
 The config layer revalidates the hashed runtime fallback against the same Unix
@@ -481,7 +482,7 @@ afresh (`TestReconcileAccountEmail_AChangeStoppedBeforeItWasRecordedStartsAfresh
 **Where a change is finished.** `CompleteEmailChange` finishes a journal
 it finds and reports its renames. The CLI calls it once at its entry, in
 `initializeCLIContext`, before any command resolves its config (cli.md),
-never inside `config.Load`: completing needs the state DB mover of
+never inside the config loaders: completing needs the state DB mover of
 `internal/sync`, and a config read that renames files is a side effect no
 reader expects. With no journal it is one stat: no lock is taken and nothing
 is created (`TestCompleteEmailChange_WithNoJournalTouchesNothing`).
@@ -578,7 +579,7 @@ of treating absent optional state as a load failure.
 
 Implements: R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-6.4.3 [verified]
 
-Unknown config keys are fatal errors (`unknown.go`). There are no delete-threshold keys: the delete-safety hold uses fixed policy (`TestLoad_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
+Unknown config keys are fatal errors (`unknown.go`). There are no delete-threshold keys: the delete-safety hold uses fixed policy (`TestLoadOrDefault_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration`). Per-drive validation checks sync_dir, filter patterns, size parsing, and drive-specific constraints. Global validation checks log level, transfer workers, and safety thresholds. `checkSyncDirOverlap()` prevents overlapping sync directories using `filepath.Clean` + `strings.HasPrefix` with separator suffix. Called at both config load and control-plane startup.
 
 `ValidateResolved` and `ValidateResolvedForSync` treat only `os.ErrNotExist` as an acceptable sync-dir stat result. If the local path is unreadable or the filesystem returns another error, validation fails instead of silently accepting a broken path.
 
@@ -586,7 +587,7 @@ Unknown config keys are fatal errors (`unknown.go`). There are no delete-thresho
 
 Implements: R-4.8.4 [verified]
 
-Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`LoadOrDefaultLenient`) for informational commands.
+Two loading paths: strict (`LoadOrDefault`) for data commands, lenient (`LoadOrDefaultLenient`) for informational commands. Both return defaults when the file does not exist.
 
 **Strict path** (default): unknown keys and validation errors are fatal. Used by `sync`, file operations, `drive add`, `drive remove`.
 
@@ -602,7 +603,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
 
 Every failure returned by the exported read, parse, validate and resolve
-entrypoints (`Load`, `LoadOrDefault`, `LoadOrDefaultLenient`,
+entrypoints (`LoadOrDefault`, `LoadOrDefaultLenient`,
 `Validate`, `ValidateResolved`, `ValidateResolvedForSync`, `ResolveDrive`,
 `ResolveDrives`, `MatchDrive`, and the config-vs-catalog check in
 `LoadValidatedState`) matches `ErrInvalidConfig` (`failure_class.go`). The tag

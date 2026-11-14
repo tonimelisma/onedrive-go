@@ -1,10 +1,12 @@
 package driveops
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,12 +16,24 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 )
 
-// ErrCorruptSession is returned when a session file cannot be parsed as JSON.
-// The corrupt file is deleted automatically.
-var ErrCorruptSession = errors.New("corrupt session file")
+// ErrInvalidSessionRecord is returned when a session file holds anything but
+// a record in the one format Save writes: not JSON, a field the record does
+// not have, data after it, or another version. Load has already tried to
+// remove the file and warned once, with the removal's failure if it failed;
+// either way the upload starts over from a fresh session.
+var ErrInvalidSessionRecord = errors.New("invalid upload session record")
 
 // sessionSubdir is the subdirectory within the data dir for upload session files.
 const sessionSubdir = "upload-sessions"
+
+// sessionRecordSuffix ends every record file's name (sessionKey), and
+// sessionTempPattern names the temporary file a Save writes first. The
+// pattern must never end in sessionRecordSuffix: scope cleanup reads only
+// record files, so it never touches a Save in progress.
+const (
+	sessionRecordSuffix = ".json"
+	sessionTempPattern  = ".session-*.tmp"
+)
 
 // sessionFilePerms restricts session files to owner-only because they contain
 // pre-authenticated upload URLs.
@@ -32,14 +46,11 @@ const sessionDirPerms = 0o700
 // Graph API sessions expire in ~48 hours; 7 days is generous.
 const StaleSessionAge = 7 * 24 * time.Hour
 
-// currentSessionVersion is the schema version written by Save().
-// v0: unversioned (no "version" key), uses "remote_path".
-// v1: added "version" field, still uses "remote_path".
-// v2: renamed JSON key "remote_path" → "local_path" (B-300).
+// currentSessionVersion is the record version Save writes and the only one
+// Load reads.
 const currentSessionVersion = 2
 
 // SessionRecord is the on-disk JSON format for a persisted upload session.
-// Custom UnmarshalJSON reads both "remote_path" (v0/v1) and "local_path" (v2+).
 type SessionRecord struct {
 	Version    int       `json:"version"`
 	DriveID    string    `json:"drive_id"`
@@ -51,8 +62,8 @@ type SessionRecord struct {
 	FileSize   int64     `json:"file_size"`
 	CreatedAt  time.Time `json:"created_at"`
 	// ExpiresAt is the session's expirationDateTime. A session that is gone
-	// before it was invalidated, not expired (L-02). Zero for records
-	// written before it was kept.
+	// before it expired was invalidated, not expired (L-02). Zero when
+	// Graph's answer carried no expiration.
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	// ItemID and CreatedETag name the item a create's session writes: the
 	// empty item the create made, and its eTag then. A resume, an adoption
@@ -61,30 +72,25 @@ type SessionRecord struct {
 	CreatedETag string `json:"created_etag,omitempty"`
 }
 
-// UnmarshalJSON implements custom unmarshaling to support both the old
-// "remote_path" key (v0/v1) and the new "local_path" key (v2+).
-func (r *SessionRecord) UnmarshalJSON(data []byte) error {
-	// Alias avoids infinite recursion — the alias type has no UnmarshalJSON method.
-	type alias SessionRecord
+// decodeSessionRecord reads data as a record in the one format Save writes:
+// a single JSON object of known fields at the current version. Anything else
+// is an error; the client reads no format it does not write.
+func decodeSessionRecord(data []byte) (*SessionRecord, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 
-	// Embed the alias and add the old key as a separate field.
-	var raw struct {
-		alias
-		RemotePath string `json:"remote_path"`
+	var rec SessionRecord
+	if err := dec.Decode(&rec); err != nil {
+		return nil, fmt.Errorf("decoding session record: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("decoding session record: data after the record")
+	}
+	if rec.Version != currentSessionVersion {
+		return nil, fmt.Errorf("session record version %d, want %d", rec.Version, currentSessionVersion)
 	}
 
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("decode session record: %w", err)
-	}
-
-	*r = SessionRecord(raw.alias)
-
-	// If LocalPath is empty but RemotePath has a value, migrate from old key.
-	if r.LocalPath == "" && raw.RemotePath != "" {
-		r.LocalPath = raw.RemotePath
-	}
-
-	return nil
+	return &rec, nil
 }
 
 // SessionStore manages file-based upload session persistence. Session files
@@ -105,7 +111,9 @@ func NewSessionStore(dataDir string, logger *slog.Logger) *SessionStore {
 
 // Load reads a session record for the given drive and local path. The returned
 // found flag is false when no session file exists or when the session file is
-// older than StaleSessionAge (Graph API upload sessions expire in ~48h).
+// older than StaleSessionAge (Graph API upload sessions expire in ~48h). A file
+// that holds anything but a record in the format Save writes is removed, with
+// one warning, and reported as ErrInvalidSessionRecord.
 func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, error) {
 	path := s.filePath(driveID, localPath)
 	root, err := fsroot.Open(s.dir)
@@ -150,27 +158,52 @@ func (s *SessionStore) Load(driveID, localPath string) (*SessionRecord, bool, er
 		return nil, false, fmt.Errorf("reading session file: %w", err)
 	}
 
-	var rec SessionRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		// Corrupt file — delete and treat as absent. Info, and the one report
-		// of it: the upload proceeds with a fresh session, so the user has
-		// nothing to do, and the caller logs ErrCorruptSession at Debug only.
-		s.logger.Info("corrupt upload session file, deleting",
-			slog.String("path", path),
-			slog.Any("error", err),
-		)
+	rec, err := decodeSessionRecord(data)
+	if err != nil {
+		// The caller logs ErrInvalidSessionRecord at Debug only: this warning
+		// is the one report of it.
+		s.warnInvalidRecordOfUpload(path, localPath, err, removeInvalidRecord(root, name))
 
-		if rmErr := root.Remove(name); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			s.logger.Warn("failed to remove corrupt session file",
-				slog.String("path", path),
-				slog.Any("error", rmErr),
-			)
-		}
-
-		return nil, false, fmt.Errorf("%w: %w", ErrCorruptSession, err)
+		return nil, false, fmt.Errorf("%w: %w", ErrInvalidSessionRecord, err)
 	}
 
-	return &rec, true, nil
+	return rec, true, nil
+}
+
+// warnInvalidRecordOfUpload reports, once, that the session file at path held
+// no record Load can read (reason says why), so the upload of localPath (the
+// key Load was given: the local path, with the item in front for an
+// overwrite) starts over from a fresh session. rmErr is the failure to remove
+// the file, if any. The warning carries the decode error and never the
+// file's content, which may hold a pre-authenticated upload URL.
+func (s *SessionStore) warnInvalidRecordOfUpload(path, localPath string, reason, rmErr error) {
+	if rmErr != nil {
+		s.logger.Warn("Upload session file is not a valid record and could not be removed; the upload starts over",
+			slog.String("path", path),
+			slog.String("local_path", localPath),
+			slog.Any("reason", reason),
+			slog.Any("error", rmErr),
+		)
+
+		return
+	}
+
+	s.logger.Warn("Removed an upload session file that is not a valid record; the upload starts over",
+		slog.String("path", path),
+		slog.String("local_path", localPath),
+		slog.Any("reason", reason),
+	)
+}
+
+// removeInvalidRecord deletes the session file name, which holds no record
+// the store can read. Only Save writes these files, so such a file never names
+// a session this binary can resume. A file already gone is not a failure.
+func removeInvalidRecord(root *fsroot.Root, name string) error {
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing invalid session file %s: %w", name, err)
+	}
+
+	return nil
 }
 
 // Save persists a session record. Creates the session directory if needed.
@@ -194,7 +227,7 @@ func (s *SessionStore) Save(driveID, localPath string, rec *SessionRecord) error
 	}
 
 	name := filepath.Base(s.filePath(driveID, localPath))
-	if err := root.AtomicWrite(name, data, sessionFilePerms, sessionDirPerms, ".session-*.tmp"); err != nil {
+	if err := root.AtomicWrite(name, data, sessionFilePerms, sessionDirPerms, sessionTempPattern); err != nil {
 		return fmt.Errorf("writing session file: %w", err)
 	}
 
@@ -216,9 +249,13 @@ func (s *SessionStore) Delete(driveID, localPath string) error {
 	return nil
 }
 
-// DeleteForScope removes upload sessions owned by a mount scope. MountID is
-// exact; LocalRoot also matches records rooted below that path so child cleanup
-// catches records written while a shortcut root was temporarily nested.
+// DeleteForScope removes upload sessions owned by a mount scope and returns
+// how many it removed, with every file it could not read or remove, joined,
+// for its caller to report once. MountID is exact; LocalRoot also matches
+// records rooted below that path so child cleanup catches records written
+// while a shortcut root was temporarily nested. A file that holds no readable
+// record is removed too, whatever scope it was written for, and is not
+// counted.
 func (s *SessionStore) DeleteForScope(mountID, localRoot string) (int, error) {
 	mountID = strings.TrimSpace(mountID)
 	localRoot = strings.TrimSpace(localRoot)
@@ -242,33 +279,59 @@ func (s *SessionStore) DeleteForScope(mountID, localRoot string) (int, error) {
 	var errs []error
 	deleted := 0
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// Only record files: a Save in progress writes a temporary file
+		// first, and that is no record to decode or remove.
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), sessionRecordSuffix) {
 			continue
 		}
-		data, err := root.ReadFile(entry.Name())
+		removed, err := s.deleteRecordForScope(root, entry.Name(), mountID, localRoot)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("reading session file %s: %w", entry.Name(), err))
+			errs = append(errs, err)
 			continue
 		}
-		var rec SessionRecord
-		if err := json.Unmarshal(data, &rec); err != nil {
-			errs = append(errs, fmt.Errorf("decoding session file %s: %w", entry.Name(), err))
-			continue
+		if removed {
+			deleted++
 		}
-		if !sessionRecordMatchesScope(&rec, mountID, localRoot) {
-			continue
-		}
-		if err := root.Remove(entry.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("deleting session file %s: %w", entry.Name(), err))
-			continue
-		}
-		deleted++
 	}
 
 	return deleted, errors.Join(errs...)
+}
+
+// deleteRecordForScope removes the record file name when it belongs to the
+// scope, and reports whether it removed a record of the scope. A file that
+// holds no readable record can never be resumed, whatever scope it was
+// written for, so it is removed with one warning naming the file and the
+// reason, and is not counted; a file it cannot read or remove is the error.
+// A file gone since the listing is neither.
+func (s *SessionStore) deleteRecordForScope(root *fsroot.Root, name, mountID, localRoot string) (bool, error) {
+	data, err := root.ReadFile(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading session file %s: %w", name, err)
+	}
+
+	rec, err := decodeSessionRecord(data)
+	if err != nil {
+		if rmErr := removeInvalidRecord(root, name); rmErr != nil {
+			return false, rmErr
+		}
+		s.logger.Warn("Removed an upload session file that is not a valid record",
+			slog.String("path", filepath.Join(s.dir, name)),
+			slog.Any("reason", err),
+		)
+
+		return false, nil
+	}
+	if !sessionRecordMatchesScope(rec, mountID, localRoot) {
+		return false, nil
+	}
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("deleting session file %s: %w", name, err)
+	}
+
+	return true, nil
 }
 
 func sessionRecordMatchesScope(rec *SessionRecord, mountID, localRoot string) bool {
@@ -367,7 +430,7 @@ func (s *SessionStore) removeStaleEntries(root *fsroot.Root, entries []os.DirEnt
 // (e.g., driveID="a:", localPath="b" vs driveID="a", localPath=":b").
 func sessionKey(driveID, localPath string) string {
 	h := sha256.Sum256(fmt.Appendf(nil, "%d:%s:%s", len(driveID), driveID, localPath))
-	return fmt.Sprintf("%x.json", h)
+	return fmt.Sprintf("%x", h) + sessionRecordSuffix
 }
 
 // filePath returns the absolute path to the session file for the given key.

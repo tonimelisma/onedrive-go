@@ -48,9 +48,9 @@ func TestConfigFailuresAreTaggedInvalidConfig(t *testing.T) {
 	badValue := writeTestConfig(t, `transfer_workers = -1`)
 	logger := slog.New(slog.DiscardHandler)
 
-	_, loadSyntaxErr := Load(badSyntax, logger)
+	_, loadSyntaxErr := LoadOrDefault(badSyntax, logger)
 	_, loadUnknownErr := LoadOrDefault(unknownKey, logger)
-	_, loadValueErr := Load(badValue, logger)
+	_, loadValueErr := LoadOrDefault(badValue, logger)
 	_, _, lenientErr := LoadOrDefaultLenient(badSyntax, logger)
 	oneDrive := &Config{Drives: map[driveid.CanonicalID]Drive{
 		driveid.MustCanonicalID("personal:user@example.com"): {},

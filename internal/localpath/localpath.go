@@ -367,25 +367,6 @@ func RemoveAll(path string) error {
 	return nil
 }
 
-// Symlink creates dst as a symlink to src. Both are made absolute first, so
-// the link does not depend on the directory it lies in.
-func Symlink(src, dst string) error {
-	srcPath, err := absolutePath(src)
-	if err != nil {
-		return err
-	}
-	dstPath, err := absolutePath(dst)
-	if err != nil {
-		return err
-	}
-
-	if err := os.Symlink(srcPath, dstPath); err != nil {
-		return fmt.Errorf("symlinking %s to %s: %w", src, dst, err)
-	}
-
-	return nil
-}
-
 // WriteDisposableFile writes data directly to a disposable artifact path. It is
 // intentionally non-atomic; durable config, token, state, or user-content writes
 // must use an owner-specific atomic writer instead.

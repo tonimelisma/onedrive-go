@@ -5,12 +5,17 @@ import (
 	"time"
 )
 
-// ChunkAlignment is the required alignment for upload chunk sizes (320 KiB).
+// chunkAlignment is the required alignment for upload chunk sizes (320 KiB).
 // All chunks except the final one must be a multiple of this value.
-const ChunkAlignment = 320 * 1024
+const chunkAlignment = 320 * 1024
 
-// ChunkedUploadChunkSize is the chunk size for resumable uploads (10 MiB, aligned to 320 KiB).
-const ChunkedUploadChunkSize = 10 * 1024 * 1024
+// chunksOfAlignmentPerFragment is how many aligned chunks one upload fragment
+// carries.
+const chunksOfAlignmentPerFragment = 32
+
+// ChunkedUploadChunkSize is the chunk size for resumable uploads: 10 MiB,
+// a whole number of aligned chunks.
+const ChunkedUploadChunkSize = chunksOfAlignmentPerFragment * chunkAlignment
 
 // ProgressFunc is a callback invoked after each chunk upload completes.
 // bytesUploaded is cumulative; totalBytes is the full file size.

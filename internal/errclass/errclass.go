@@ -22,11 +22,8 @@ const (
 	ClassFatal
 )
 
-// Valid reports whether the class is one of the documented runtime classes.
-func (c Class) Valid() bool {
-	return c >= ClassSuccess && c <= ClassFatal
-}
-
+// String names the class as logs and errors print it; a value outside the
+// declared classes is "invalid", like ClassInvalid.
 func (c Class) String() string {
 	switch c {
 	case ClassInvalid:

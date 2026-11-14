@@ -264,7 +264,7 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 	assert.Equal(t, statusPerfUnavailableNoOwner, noOwnerReason)
 
 	accounts := []statusAccount{{
-		Mounts: []statusMount{{
+		Mounts: []statusDrive{{
 			MountID:     "drive:a",
 			CanonicalID: "drive:a",
 			SyncState:   nil,

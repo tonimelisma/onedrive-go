@@ -142,38 +142,3 @@ func TestID_IsZero_AllZerosPadded(t *testing.T) {
 		})
 	}
 }
-
-// Validates: R-6.7.2
-// TestItemKey_NormalizedEquality verifies that ItemKeys with differently
-// cased or padded DriveIDs but same logical identity are equal when used
-// as map keys.
-func TestItemKey_NormalizedEquality(t *testing.T) {
-	key1 := NewItemKey(New("D8EBBD13A0551216"), "item-123")
-	key2 := NewItemKey(New("d8ebbd13a0551216"), "item-123")
-	assert.Equal(t, key1, key2)
-
-	// Also verify as map key.
-	m := map[ItemKey]string{key1: "value"}
-	assert.Equal(t, "value", m[key2])
-}
-
-// Validates: R-6.7.2
-// TestItemKey_PaddedDriveIDEquality verifies that ItemKeys with short
-// vs full DriveIDs are equal.
-func TestItemKey_PaddedDriveIDEquality(t *testing.T) {
-	key1 := NewItemKey(New("24470056f5c3e43"), "item-abc")
-	key2 := NewItemKey(New("024470056f5c3e43"), "item-abc")
-	assert.Equal(t, key1, key2)
-}
-
-// TestItemKey_DifferentItemIDNotEqual verifies that same DriveID but
-// different ItemID produces different keys.
-func TestItemKey_DifferentItemIDNotEqual(t *testing.T) {
-	key1 := NewItemKey(New("d8ebbd13a0551216"), "item-1")
-	key2 := NewItemKey(New("d8ebbd13a0551216"), "item-2")
-	assert.NotEqual(t, key1, key2)
-}
-
-// TokenCanonicalID() was removed from CanonicalID (B-273).
-// Token resolution now lives in config.TokenCanonicalID(cid, cfg).
-// See internal/config/token_resolution_test.go for SharePoint and personal mapping coverage.

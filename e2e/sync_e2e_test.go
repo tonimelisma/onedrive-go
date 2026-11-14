@@ -200,7 +200,7 @@ func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (
 	t.Helper()
 
 	logger := slog.New(slog.DiscardHandler)
-	cfg, err := config.Load(cfgPath, logger)
+	cfg, err := config.LoadOrDefault(cfgPath, logger)
 	require.NoError(t, err)
 
 	canonicalID, driveCfg, err := config.MatchDrive(cfg, resolveDriveSelection(env, ""), logger)

@@ -116,22 +116,6 @@ func (c *Client) resolveDeltaToken(token string, buildPath deltaPathBuilder) (st
 	return path, nil
 }
 
-// buildDeltaPath constructs the API path for a root-scoped delta request.
-// Kept for test compatibility — delegates to resolveDeltaToken.
-func (c *Client) buildDeltaPath(driveID driveid.ID, token string) (string, error) {
-	return c.resolveDeltaToken(token, func() string {
-		return fmt.Sprintf("/drives/%s/root/delta", driveID)
-	})
-}
-
-// buildFolderDeltaPath constructs the API path for a folder-scoped delta request.
-// Kept for test compatibility — delegates to resolveDeltaToken.
-func (c *Client) buildFolderDeltaPath(driveID driveid.ID, folderID, token string) (string, error) {
-	return c.resolveDeltaToken(token, func() string {
-		return fmt.Sprintf("/drives/%s/items/%s/delta", driveID, folderID)
-	})
-}
-
 // DeltaAll fetches all pages of delta changes and returns the combined items
 // and the new delta token for the next sync run.
 // On success, the returned token is always a non-empty DeltaLink.

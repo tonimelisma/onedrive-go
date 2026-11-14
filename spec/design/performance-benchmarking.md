@@ -49,7 +49,7 @@ The implementation should stay deliberately small:
 | --- | --- |
 | The repo already has a machine-readable timing-summary foundation for live E2E timing windows rather than only human log output. | `TestE2ETimingRecorderWritesEventsAndAggregatedSummary`, `TestE2ETimingRecorderLoadsExistingEventsAcrossProcesses` |
 | The verifier already owns machine-readable run summaries instead of forcing downstream tooling to scrape console text. | `TestRunVerifyWritesSummaryJSONOnSuccess`, `TestRunVerifyWritesSummaryJSONOnFailure` |
-| Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestLookupBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
+| Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
 | The benchmark runner now owns one canonical live bidirectional catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, scoped live config, and no-commit dry-run delta readiness checks. | `TestLoadSyncBidirectionalCatchup100MFixturePlanIsDeterministicAndSized`, `TestSyncBidirectionalCatchupMutationSelectionIsDisjoint`, `TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs`, `TestWaitForBenchRemoteDeltaReadyRequiresExpectedRemotePlanAndStableCursor`, `TestWaitForBenchRemoteDeltaReadyFailsIfDryRunAdvancesCursor`, `TestRunBidirectionalSampleCommandOrderAndPerfSummary` |
 
 ## Objectives
@@ -150,8 +150,8 @@ result.
 ### Live Representative OneDrive Scenarios
 
 Live scenarios use a real account and a named remote fixture to measure the
-real user path. They are the truth surface for claims such as "a large
-partially-local catch-up sync behaves like this on real OneDrive."
+real user path. They are the truth surface for claims such as "catching up
+on a 100 MiB tree changed on both sides behaves like this on real OneDrive."
 
 These scenarios are expected to be noisier than controlled runs. They belong in
 explicit manual or scheduled lanes, not in required per-PR verification.
@@ -278,7 +278,6 @@ user-relevant metrics:
 - idle watch CPU and RSS
 - no-op reconcile time on a large tree
 - initial sync time for a representative file-count workload
-- partial-local catch-up sync time
 - local-change and remote-change convergence time
 
 ETA should be treated as a live UX aid rather than a canonical benchmark metric.
@@ -450,8 +449,8 @@ The implemented v1 scenario is `startup-empty-config`:
 - defaults: `runs=15`, `warmup=3`
 - command under test: `onedrive-go --config <cfg> --verbose drive list --json`
 
-For each sample, the scenario creates fresh temp `HOME`,
-`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_CACHE_HOME` roots and writes a
+For each sample, the scenario creates fresh temp `HOME`, `XDG_CONFIG_HOME`
+and `XDG_DATA_HOME` roots and writes a
 minimal config that enables info-level logging. Success requires exit code `0`
 and a valid `drive list --json` payload with empty `configured` and `available`
 arrays. The auth/degraded arrays follow the product CLI's existing JSON

@@ -120,11 +120,11 @@ func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 	t.Parallel()
 
 	accounts := []statusAccount{{
-		Mounts: []statusMount{{
+		Mounts: []statusDrive{{
 			MountID:     "parent",
 			CanonicalID: "parent",
 			State:       driveStateReady,
-			ChildMounts: []statusMount{{MountID: "child"}, {MountID: "idle-child"}},
+			ChildMounts: []statusDrive{{MountID: "child"}, {MountID: "idle-child"}},
 		}},
 	}}
 
@@ -152,7 +152,7 @@ func TestPrintMountStatus_ShowsRuntimeState(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := printMountStatus(&out, &statusMount{
+	err := printMountStatus(&out, &statusDrive{
 		MountID:      "personal:user@example.com",
 		CanonicalID:  "personal:user@example.com",
 		DisplayName:  "user@example.com",

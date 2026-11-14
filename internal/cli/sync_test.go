@@ -228,7 +228,7 @@ func TestNewSyncCmd_FullWatchMutualExclusivity(t *testing.T) {
 func TestDryRunFlagSurfaceOnlySyncCommand(t *testing.T) {
 	t.Parallel()
 
-	root := newRootCmd()
+	root := newRootCmdWithWriters(nil, nil)
 	var commandsWithDryRun []string
 	walkCommandTree(root, func(cmd *cobra.Command) {
 		if cmd.LocalFlags().Lookup("dry-run") != nil || cmd.PersistentFlags().Lookup("dry-run") != nil {

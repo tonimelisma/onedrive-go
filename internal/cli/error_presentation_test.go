@@ -133,7 +133,6 @@ func TestCommandErrorText_UsageErrorPointsAtHelp(t *testing.T) {
 func TestMainWithWriters_UsageErrorsExitTwo(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	for _, args := range [][]string{
 		{"get"},

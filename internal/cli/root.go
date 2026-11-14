@@ -444,12 +444,6 @@ func newGraphClientWithHTTP(
 	return client, nil
 }
 
-// newRootCmd builds and returns the fully-assembled root command with all
-// subcommands registered. Called once from main().
-func newRootCmd() *cobra.Command {
-	return newRootCmdWithWriters(nil, nil)
-}
-
 // cobraHelpCommandName and cobraCompletionCommandName are the commands cobra
 // adds to the root itself; cobra exports only the names of its hidden
 // completion requests.
@@ -923,13 +917,10 @@ func loadAndResolve(
 	return resolved, rawCfg, nil
 }
 
-// buildLogger creates an slog.Logger configured by CLI flags for console output.
-// Configured log_level applies only to file logging so ordinary command output
-// stays quiet unless the user asks for verbosity with --verbose or --debug.
-func buildLogger(cfg *config.ResolvedDrive, flags CLIFlags) *slog.Logger {
-	return buildLoggerWithStatusWriter(cfg, flags, nil)
-}
-
+// buildLoggerWithStatusWriter creates an slog.Logger configured by CLI flags
+// for console output on statusWriter (stderr when nil). Configured log_level
+// applies only to file logging so ordinary command output stays quiet unless
+// the user asks for verbosity with --verbose or --debug.
 func buildLoggerWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) *slog.Logger {
 	level := resolveConsoleLogLevel(flags)
 	opts := &slog.HandlerOptions{Level: level}
@@ -979,14 +970,11 @@ func resolveFileLogLevelWithStatusWriter(cfg *config.ResolvedDrive, statusWriter
 	return level
 }
 
-// buildHandler creates the appropriate slog.Handler based on the log_format
-// config setting. A nil cfg (bootstrap) or empty format means "auto", so the
-// bootstrap logger and the configured logger render the same way.
-// The w parameter specifies the output destination (typically os.Stderr).
-func buildHandler(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOptions) slog.Handler {
-	return buildHandlerWithStatusWriter(w, cfg, opts, w)
-}
-
+// buildHandlerWithStatusWriter creates the appropriate slog.Handler based on
+// the log_format config setting. A nil cfg (bootstrap) or empty format means
+// "auto", so the bootstrap logger and the configured logger render the same
+// way. w is the output destination (typically os.Stderr); statusWriter gets
+// the warning about an unknown log_format.
 func buildHandlerWithStatusWriter(
 	w io.Writer,
 	cfg *config.ResolvedDrive,
@@ -1158,14 +1146,11 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 	return &multiHandler{handlers: handlers}
 }
 
-// buildLoggerDual creates an slog.Logger with optional dual output. When
-// cfg.LogFile is set, logs go to both stderr (console format, CLI-flag-driven
-// level) and the file (JSON format, config log_level-driven level). Returns an
-// io.Closer for the log file (nil when no file is used).
-func buildLoggerDual(cfg *config.ResolvedDrive, flags CLIFlags) (*slog.Logger, io.Closer) {
-	return buildLoggerDualWithStatusWriter(cfg, flags, nil)
-}
-
+// buildLoggerDualWithStatusWriter creates an slog.Logger with optional dual
+// output. When cfg.LogFile is set, logs go to both statusWriter (stderr when
+// nil; console format, CLI-flag-driven level) and the file (JSON format,
+// config log_level-driven level). Returns an io.Closer for the log file (nil
+// when no file is used).
 func buildLoggerDualWithStatusWriter(
 	cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer,
 ) (*slog.Logger, io.Closer) {

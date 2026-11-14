@@ -70,33 +70,6 @@ func TestComputeQuickXorHash_NonexistentFile(t *testing.T) {
 }
 
 // Validates: R-5.5.1
-func TestHasHash(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		item *graph.Item
-		want bool
-	}{
-		{"quickxor only", &graph.Item{QuickXorHash: "abc123"}, true},
-		// SHA digests are never computed locally, so they can prove nothing.
-		{"sha256 only", &graph.Item{SHA256Hash: "def456"}, false},
-		{"sha1 only", &graph.Item{SHA1Hash: "ghi789"}, false},
-		{"no hashes", &graph.Item{}, false},
-		{"all empty strings", &graph.Item{QuickXorHash: "", SHA256Hash: "", SHA1Hash: ""}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := HasHash(tt.item)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// Validates: R-5.5.1
 func TestSelectHash_ReturnsOnlyQuickXor(t *testing.T) {
 	t.Parallel()
 

@@ -11,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -101,13 +100,12 @@ type benchObservationCursorReader interface {
 type benchSyncStoreObservationCursorReader struct{}
 
 type benchSyncPlanCounts struct {
-	FolderCreates   int
-	Downloads       int
-	Uploads         int
-	LocalDeletes    int
-	RemoteDeletes   int
-	ConflictCopies  int
-	BaselineUpdates int
+	FolderCreates  int
+	Downloads      int
+	Uploads        int
+	LocalDeletes   int
+	RemoteDeletes  int
+	ConflictCopies int
 }
 
 type benchDeltaReadyResult struct {
@@ -229,9 +227,7 @@ func loadSyncBidirectionalCatchup100MFixturePlan(slot string) (benchBidirectiona
 		return benchBidirectionalFixturePlan{}, fmt.Errorf("decode %s: %w", manifestPath, err)
 	}
 
-	files, directories, err := expandBenchLiveFixtureManifest(&benchLiveFixtureManifest{
-		Groups: manifest.Groups,
-	})
+	files, directories, err := expandBenchLiveFixtureGroups(manifest.Groups)
 	if err != nil {
 		return benchBidirectionalFixturePlan{}, fmt.Errorf("expand %s: %w", manifestPath, err)
 	}
@@ -680,8 +676,7 @@ func createBenchBidirectionalRuntime(
 	homeDir := filepath.Join(runtimeRoot, "home")
 	configHome := filepath.Join(runtimeRoot, "config")
 	dataHome := filepath.Join(runtimeRoot, "data")
-	cacheHome := filepath.Join(runtimeRoot, "cache")
-	for _, dir := range []string{homeDir, configHome, dataHome, cacheHome, syncDir} {
+	for _, dir := range []string{homeDir, configHome, dataHome, syncDir} {
 		if err := mkdirAll(dir, benchLiveFixtureDirPerm); err != nil {
 			return benchBidirectionalRuntime{}, fmt.Errorf("create benchmark runtime path %s: %w", dir, err)
 		}
@@ -714,7 +709,6 @@ func createBenchBidirectionalRuntime(
 		"HOME="+homeDir,
 		"XDG_CONFIG_HOME="+configHome,
 		"XDG_DATA_HOME="+dataHome,
-		"XDG_CACHE_HOME="+cacheHome,
 	)
 
 	return benchBidirectionalRuntime{
@@ -745,9 +739,7 @@ func (r *benchBidirectionalRuntime) commandSpec(args ...string) benchCommandSpec
 func (r *benchBidirectionalRuntime) asLiveRuntime() benchLiveCommandRuntime {
 	return benchLiveCommandRuntime{
 		rootDir:    r.rootDir,
-		syncDir:    r.syncDir,
 		configPath: r.configPath,
-		logPath:    r.logPath,
 		driveID:    r.driveID,
 		env:        r.env,
 	}
@@ -936,47 +928,23 @@ func benchRemoteDeltaPlanReady(plan benchSyncPlanCounts, expected benchBidirecti
 		plan.ConflictCopies == 0
 }
 
-// parseBenchSyncPlanOutput reads dry-run plan counts. Current builds list one
-// "Would <action> <path>" line per planned action; older builds (still
-// measured when comparing against earlier revisions) printed "Label: N"
-// counts. A binary prints only one of the two, so both are accepted.
+// parseBenchSyncPlanOutput reads dry-run plan counts: the dry run lists one
+// "Would <action> <path>" line per planned action.
 func parseBenchSyncPlanOutput(streams ...[]byte) benchSyncPlanCounts {
 	var counts benchSyncPlanCounts
 	for _, stream := range streams {
 		scanner := bufio.NewScanner(bytes.NewReader(stream))
 		for scanner.Scan() {
-			if countBenchPlannedActionLine(&counts, scanner.Text()) {
-				continue
-			}
-			label, value, ok := parseBenchSyncCountLine(scanner.Text())
-			if !ok {
-				continue
-			}
-
-			switch label {
-			case "folder creates":
-				counts.FolderCreates = value
-			case "downloads":
-				counts.Downloads = value
-			case "uploads":
-				counts.Uploads = value
-			case "local deletes":
-				counts.LocalDeletes = value
-			case "remote deletes":
-				counts.RemoteDeletes = value
-			case "conflict copies":
-				counts.ConflictCopies = value
-			case "baseline updates":
-				counts.BaselineUpdates = value
-			}
+			countBenchPlannedActionLine(&counts, scanner.Text())
 		}
 	}
 
 	return counts
 }
 
-// countBenchPlannedActionLine counts one "Would ..." dry-run line.
-func countBenchPlannedActionLine(counts *benchSyncPlanCounts, line string) bool {
+// countBenchPlannedActionLine counts one "Would ..." dry-run line; any other
+// line counts nothing.
+func countBenchPlannedActionLine(counts *benchSyncPlanCounts, line string) {
 	switch {
 	case strings.HasPrefix(line, "Would download "):
 		counts.Downloads++
@@ -990,29 +958,5 @@ func countBenchPlannedActionLine(counts *benchSyncPlanCounts, line string) bool 
 		counts.ConflictCopies++
 	case strings.HasPrefix(line, "Would create folder "):
 		counts.FolderCreates++
-	default:
-		return false
 	}
-
-	return true
-}
-
-func parseBenchSyncCountLine(line string) (string, int, bool) {
-	left, right, ok := strings.Cut(line, ":")
-	if !ok {
-		return "", 0, false
-	}
-
-	label := strings.ToLower(strings.TrimSpace(left))
-	valueText := strings.TrimSpace(right)
-	if valueText == "" {
-		return "", 0, false
-	}
-
-	value, err := strconv.Atoi(strings.Fields(valueText)[0])
-	if err != nil {
-		return "", 0, false
-	}
-
-	return label, value, true
 }

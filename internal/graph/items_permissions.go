@@ -68,19 +68,31 @@ func (a PermissionWriteAccess) String() string {
 	return permissionWriteAccessInconclusiveLabel
 }
 
+// permissionApplicability says whom one permission row grants its roles to,
+// as far as the row shows.
 type permissionApplicability uint8
 
 const (
-	permissionApplicabilityLegacy permissionApplicability = iota
+	// permissionApplicabilityUnattributed is a row whose grantees carry no
+	// e-mail address the client can compare: no sharing link, no granted
+	// address and no owner role. A row granted to a group, an application or
+	// a user without an address is one. Its roles are counted as the
+	// caller's, like a matching grant's: the client cannot know group
+	// membership, and a wrong guess ends in a refused write.
+	permissionApplicabilityUnattributed permissionApplicability = iota
 	permissionApplicabilityApplies
 	permissionApplicabilityOtherPrincipal
 	permissionApplicabilityAmbiguous
 )
 
 // EvaluateWriteAccess classifies the caller's effective write access from a
-// Graph permissions payload. It is intentionally conservative:
-//   - explicit matching grants or link grants count as caller-applicable
-//   - explicit grants for some other principal are ignored
+// Graph permissions payload:
+//   - grants to the caller's address and sharing-link grants count as the
+//     caller's
+//   - grants to another address are ignored
+//   - grants whose grantees carry no address (a group, an application, a
+//     user without one) count as the caller's, since membership cannot be
+//     checked
 //   - owner-only entries do not imply the caller can write unless they match
 //   - ambiguous write evidence yields Inconclusive so sync can fail open
 func EvaluateWriteAccess(perms []Permission, accountEmail string) PermissionWriteAccess {
@@ -99,7 +111,7 @@ func EvaluateWriteAccess(perms []Permission, accountEmail string) PermissionWrit
 			if permissionGrantsWrite(&perm) {
 				sawAmbiguousWrite = true
 			}
-		case permissionApplicabilityLegacy, permissionApplicabilityApplies:
+		case permissionApplicabilityUnattributed, permissionApplicabilityApplies:
 			if permissionGrantsWrite(&perm) {
 				return PermissionWriteAccessWritable
 			}
@@ -117,13 +129,6 @@ func EvaluateWriteAccess(perms []Permission, accountEmail string) PermissionWrit
 	}
 
 	return PermissionWriteAccessInconclusive
-}
-
-// HasWriteAccess returns true only when the permission payload positively
-// proves the caller can write. It no longer treats unrelated owner rows as
-// caller write access.
-func HasWriteAccess(perms []Permission) bool {
-	return EvaluateWriteAccess(perms, "") == PermissionWriteAccessWritable
 }
 
 func classifyPermissionApplicability(perm *Permission, accountEmail string) permissionApplicability {
@@ -149,7 +154,7 @@ func classifyPermissionApplicability(perm *Permission, accountEmail string) perm
 		return permissionApplicabilityAmbiguous
 	}
 
-	return permissionApplicabilityLegacy
+	return permissionApplicabilityUnattributed
 }
 
 func permissionLinkCarriesGrant(link *permissionLink) bool {

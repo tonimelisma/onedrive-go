@@ -126,8 +126,8 @@ func TestSymlinkTargetsBehaveLikeOrdinaryPaths(t *testing.T) {
 
 	dirLink := filepath.Join(base, "dir-link")
 	fileLink := filepath.Join(base, "file-link.txt")
-	require.NoError(t, Symlink(targetDir, dirLink))
-	require.NoError(t, Symlink(targetFile, fileLink))
+	require.NoError(t, os.Symlink(targetDir, dirLink))
+	require.NoError(t, os.Symlink(targetFile, fileLink))
 
 	info, err := Stat(dirLink)
 	require.NoError(t, err)

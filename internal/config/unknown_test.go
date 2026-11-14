@@ -9,66 +9,66 @@ import (
 )
 
 // Validates: R-4.8.1
-func TestLoad_UnknownKey_TopLevel(t *testing.T) {
+func TestLoadOrDefault_UnknownKey_TopLevel(t *testing.T) {
 	path := writeTestConfig(t, `unknown_section = "value"`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 }
 
 // Validates: R-4.8.1
-func TestLoad_UnknownKey_TypoInFlatKey(t *testing.T) {
+func TestLoadOrDefault_UnknownKey_TypoInFlatKey(t *testing.T) {
 	path := writeTestConfig(t, `transfer_worker = 8`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 	assert.Contains(t, err.Error(), "transfer_workers")
 }
 
 // Validates: R-4.8.1
-func TestLoad_UnknownKey_TypoInFilter(t *testing.T) {
+func TestLoadOrDefault_UnknownKey_TypoInFilter(t *testing.T) {
 	path := writeTestConfig(t, `poll_interva = "5m"`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "poll_interval")
 }
 
 // Validates: R-4.8.1
-func TestLoad_UnknownKey_NoSuggestion(t *testing.T) {
+func TestLoadOrDefault_UnknownKey_NoSuggestion(t *testing.T) {
 	path := writeTestConfig(t, `completely_unrelated_key = true`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown config key")
 	assert.NotContains(t, err.Error(), "did you mean")
 }
 
 // Validates: R-4.8.1
-func TestLoad_UnknownKeyInDriveSection(t *testing.T) {
+func TestLoadOrDefault_UnknownKeyInDriveSection(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 unknown_field = "value"
 `)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown key")
 	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
 }
 
 // Validates: R-4.8.1
-func TestLoad_TypoInDriveSection_Suggestion(t *testing.T) {
+func TestLoadOrDefault_TypoInDriveSection_Suggestion(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
 dispaly_name = "home"
 `)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "did you mean")
 	assert.Contains(t, err.Error(), "display_name")
 }
 
-func TestLoad_DriveSection_ValidKeysPass(t *testing.T) {
+func TestLoadOrDefault_DriveSection_ValidKeysPass(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -82,7 +82,7 @@ ignore_dotfiles = true
 ignore_junk_files = true
 follow_symlinks = true
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 }
@@ -140,10 +140,10 @@ func TestNewKnownDriveKeysList_Sorted(t *testing.T) {
 }
 
 // Validates: R-6.4.3
-func TestLoad_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration(t *testing.T) {
+func TestLoadOrDefault_UnknownKey_DeleteSafetyThresholdsAreNotConfiguration(t *testing.T) {
 	for _, key := range []string{"big_delete_threshold = 100", "delete_hold_min_files = 10", "max_delete = 50"} {
 		path := writeTestConfig(t, key)
-		_, err := Load(path, testLogger(t))
+		_, err := LoadOrDefault(path, testLogger(t))
 		require.Error(t, err, key)
 		assert.Contains(t, err.Error(), "unknown config key", key)
 	}

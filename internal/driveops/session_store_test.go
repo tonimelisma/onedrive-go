@@ -1,12 +1,15 @@
 package driveops
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -155,138 +158,282 @@ func TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot(t *testing.T) {
 	assert.Equal(t, otherRoot, rec.LocalRoot)
 }
 
-func TestSessionStore_VersionField(t *testing.T) {
+// Validates: R-5.2.3
+//
+// Save writes the one record format Load reads: every field under its own
+// key and the current version, and Load gives back what Save was given.
+func TestSessionStore_SaveAndLoadRoundTripTheCurrentRecord(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	store := NewSessionStore(dir, testLogger(t))
 
-	driveID := "drive-ver"
-	localPath := "/docs/versioned.txt"
+	const localPath = "/docs/round-trip.bin"
+	createdAt := time.Date(2026, 11, 13, 9, 30, 0, 0, time.UTC)
+	expiresAt := createdAt.Add(48 * time.Hour)
+	saved := SessionRecord{
+		MountID:     "mount-a",
+		LocalRoot:   "/sync/root",
+		SessionURL:  "https://example.com/upload/round-trip",
+		FileHash:    "round-trip-hash",
+		FileSize:    4096,
+		CreatedAt:   createdAt,
+		ExpiresAt:   expiresAt,
+		ItemID:      "item-1",
+		CreatedETag: `"etag,1"`,
+	}
+	require.NoError(t, store.Save(testSessionDriveID, localPath, &saved))
 
-	// Save sets Version to currentSessionVersion.
-	err := store.Save(driveID, localPath, &SessionRecord{
-		SessionURL: "https://example.com/upload/ver",
-		FileHash:   "vhash",
-		FileSize:   512,
-	})
+	data, err := localpath.ReadFile(store.filePath(testSessionDriveID, localPath))
 	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(data, &onDisk))
+	assert.InDelta(t, currentSessionVersion, onDisk["version"], 0)
+	assert.Equal(t, localPath, onDisk["local_path"])
 
-	rec, found, err := store.Load(driveID, localPath)
+	rec, found, err := store.Load(testSessionDriveID, localPath)
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, currentSessionVersion, rec.Version)
+	want := saved
+	want.Version = currentSessionVersion
+	want.DriveID = testSessionDriveID
+	want.LocalPath = localPath
+	assert.Equal(t, want, *rec)
 }
 
-func TestSessionStore_OldFormatVersionZero(t *testing.T) {
+// Validates: R-5.2.3, R-6.6.30
+//
+// A session file in any other shape than the one Save writes cannot name a
+// session to resume: Load removes it, warns once naming the file, the upload
+// and the reason (never the pre-authenticated upload URL it may hold), and
+// reports it as invalid, so the upload starts over from a fresh session.
+func TestSessionStore_Load_RemovesARecordInAnyOtherFormat(t *testing.T) {
+	t.Parallel()
+
+	const (
+		localPath  = "/docs/other-format.bin"
+		sessionURL = "https://example.com/upload/pre-authenticated-secret"
+	)
+	// current is a record in today's format without its closing brace.
+	current := fmt.Sprintf(`{"version":%d,"drive_id":%q,"local_path":%q,"session_url":%q,"file_hash":"h","file_size":100,"created_at":"2026-01-01T00:00:00Z"`,
+		currentSessionVersion, testSessionDriveID, localPath, sessionURL)
+
+	cases := []struct {
+		name       string
+		record     string
+		wantReason string
+	}{
+		{
+			name:       "not JSON",
+			record:     "{not valid json",
+			wantReason: "invalid character",
+		},
+		{
+			name:       "a record cut short",
+			record:     current,
+			wantReason: "unexpected EOF",
+		},
+		{
+			name:       "an empty file",
+			record:     "",
+			wantReason: "EOF",
+		},
+		{
+			name: "an unversioned record keyed by remote_path",
+			record: fmt.Sprintf(`{"drive_id":%q,"remote_path":%q,"session_url":%q,"file_hash":"h","file_size":100,"created_at":"2024-01-01T00:00:00Z"}`,
+				testSessionDriveID, localPath, sessionURL),
+			wantReason: `unknown field "remote_path"`,
+		},
+		{
+			name: "a version 1 record keyed by remote_path",
+			record: fmt.Sprintf(`{"version":1,"drive_id":%q,"remote_path":%q,"session_url":%q,"file_hash":"h","file_size":100,"created_at":"2025-06-01T00:00:00Z"}`,
+				testSessionDriveID, localPath, sessionURL),
+			wantReason: `unknown field "remote_path"`,
+		},
+		{
+			name: "a version 1 record in today's shape",
+			record: fmt.Sprintf(`{"version":1,"drive_id":%q,"local_path":%q,"session_url":%q,"file_hash":"h","file_size":100,"created_at":"2025-06-01T00:00:00Z"}`,
+				testSessionDriveID, localPath, sessionURL),
+			wantReason: "version 1",
+		},
+		{
+			name:       "a field the record does not have",
+			record:     current + `,"resumable":true}`,
+			wantReason: `unknown field "resumable"`,
+		},
+		{
+			name: "a version this binary does not know",
+			record: fmt.Sprintf(`{"version":99,"drive_id":%q,"local_path":%q,"session_url":%q,"file_hash":"h","file_size":100,"created_at":"2026-01-01T00:00:00Z"}`,
+				testSessionDriveID, localPath, sessionURL),
+			wantReason: "version 99",
+		},
+		{
+			name:       "a second value after the record",
+			record:     current + "}{}",
+			wantReason: "after the record",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			var logs bytes.Buffer
+			store := NewSessionStore(dir, textLogger(&logs))
+			recordPath := store.filePath(testSessionDriveID, localPath)
+			require.NoError(t, os.MkdirAll(filepath.Dir(recordPath), sessionDirPerms))
+			require.NoError(t, os.WriteFile(recordPath, []byte(tc.record), sessionFilePerms))
+
+			rec, found, err := store.Load(testSessionDriveID, localPath)
+			require.ErrorIs(t, err, ErrInvalidSessionRecord)
+			require.ErrorContains(t, err, tc.wantReason)
+			assert.False(t, found)
+			assert.Nil(t, rec)
+			assert.NoFileExists(t, recordPath, "a record that cannot be resumed is removed")
+
+			logged := unquotedLogs(&logs)
+			assert.Equal(t, 1, strings.Count(logged, "level=WARN"), "one warning: %s", logged)
+			assert.Contains(t, logged, filepath.Base(recordPath), "the warning names the file")
+			assert.Contains(t, logged, "local_path="+localPath, "the warning names the upload that starts over")
+			assert.Contains(t, logged, tc.wantReason, "the warning says why")
+			assert.NotContains(t, logged, sessionURL, "the warning never carries the upload URL")
+		})
+	}
+}
+
+// Validates: R-5.2.3, R-6.6.30
+//
+// An invalid record Load cannot remove is still reported once, with the
+// failure to remove it, and the upload still starts over.
+func TestSessionStore_Load_ReportsAnInvalidRecordItCannotRemove(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+
+	dir := t.TempDir()
+	var logs bytes.Buffer
+	store := NewSessionStore(dir, textLogger(&logs))
+	const localPath = "/docs/stuck.bin"
+	recordPath := store.filePath(testSessionDriveID, localPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(recordPath), sessionDirPerms))
+	require.NoError(t, os.WriteFile(recordPath, []byte(`{"version":1}`), sessionFilePerms))
+	makeReadOnlyForTest(t, filepath.Dir(recordPath))
+
+	rec, found, err := store.Load(testSessionDriveID, localPath)
+
+	require.ErrorIs(t, err, ErrInvalidSessionRecord)
+	assert.False(t, found)
+	assert.Nil(t, rec)
+	assert.FileExists(t, recordPath)
+	logged := unquotedLogs(&logs)
+	assert.Equal(t, 1, strings.Count(logged, "level=WARN"), "one warning: %s", logged)
+	assert.Contains(t, logged, "could not be removed")
+	assert.Contains(t, logged, "version 1", "the warning says why the record is invalid")
+	assert.Contains(t, logged, "permission denied", "and why it is still there")
+}
+
+// Validates: R-5.2, R-6.6.30
+//
+// Scope cleanup removes a session file it cannot read, with one warning
+// naming the file and the reason (never the upload URL), instead of failing
+// the cleanup over it on every attempt.
+func TestSessionStore_DeleteForScope_RemovesAnUnreadableRecord(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := NewSessionStore(dir, testLogger(t))
+	var logs bytes.Buffer
+	store := NewSessionStore(dir, textLogger(&logs))
+	require.NoError(t, store.Save(testSessionDriveID, "/owned.bin", &SessionRecord{
+		MountID:    "mount-a",
+		SessionURL: "https://example.com/owned",
+	}))
+	require.NoError(t, store.Save(testSessionDriveID, "/other.bin", &SessionRecord{
+		MountID:    "mount-b",
+		SessionURL: "https://example.com/other",
+	}))
+	const oldURL = "https://example.com/old-pre-authenticated"
+	oldShape := store.filePath(testSessionDriveID, "/old-shape.bin")
+	require.NoError(t, os.WriteFile(oldShape,
+		fmt.Appendf(nil, `{"version":1,"drive_id":"drive-1","remote_path":"/old-shape.bin","session_url":%q}`, oldURL),
+		sessionFilePerms))
 
-	// Write a JSON file without the "version" key (simulating old format).
-	driveID := "drive-old"
-	localPath := "/docs/old.txt"
+	deleted, err := store.DeleteForScope("mount-a", "")
 
-	sessDir := filepath.Join(dir, "upload-sessions")
-	require.NoError(t, os.MkdirAll(sessDir, 0o700))
-
-	oldJSON := `{"drive_id":"drive-old","remote_path":"/docs/old.txt","session_url":"https://old","file_hash":"h","file_size":100,"created_at":"2024-01-01T00:00:00Z"}`
-	fpath := store.filePath(driveID, localPath)
-	require.NoError(t, os.WriteFile(fpath, []byte(oldJSON), 0o600))
-
-	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
-	require.True(t, found)
-
-	// Old format has no "version" key — JSON unmarshal leaves int at zero.
-	assert.Equal(t, 0, rec.Version)
-
-	// B-300: LocalPath should be populated from old "remote_path" key.
-	assert.Equal(t, "/docs/old.txt", rec.LocalPath)
+	assert.Equal(t, 1, deleted, "only the scope's own record counts as deleted")
+	assert.NoFileExists(t, store.filePath(testSessionDriveID, "/owned.bin"))
+	assert.FileExists(t, store.filePath(testSessionDriveID, "/other.bin"))
+	assert.NoFileExists(t, oldShape)
+	logged := unquotedLogs(&logs)
+	assert.Equal(t, 1, strings.Count(logged, "level=WARN"), "one warning: %s", logged)
+	assert.Contains(t, logged, filepath.Base(oldShape), "the warning names the file")
+	assert.Contains(t, logged, `unknown field "remote_path"`, "the warning says why")
+	assert.NotContains(t, logged, oldURL, "the warning never carries the upload URL")
+	assert.NotContains(t, logged, "starts over", "cleanup cannot know whether an upload starts over")
 }
 
-// TestSessionStore_V1ToV2Migration verifies that v1 JSON files with the
-// "remote_path" key are correctly loaded and the LocalPath field is populated (B-300).
-func TestSessionStore_V1ToV2Migration(t *testing.T) {
+// Validates: R-5.2, R-6.6.30
+//
+// An invalid record scope cleanup cannot remove is returned with the
+// cleanup's other failures, for its caller to report once, and the store
+// does not warn about it as well.
+func TestSessionStore_DeleteForScope_ReturnsAnInvalidRecordItCannotRemove(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+
+	dir := t.TempDir()
+	var logs bytes.Buffer
+	store := NewSessionStore(dir, textLogger(&logs))
+	invalid := store.filePath(testSessionDriveID, "/old-shape.bin")
+	require.NoError(t, os.MkdirAll(filepath.Dir(invalid), sessionDirPerms))
+	require.NoError(t, os.WriteFile(invalid, []byte(`{"version":1}`), sessionFilePerms))
+	makeReadOnlyForTest(t, filepath.Dir(invalid))
+
+	deleted, err := store.DeleteForScope("mount-a", "")
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	assert.Contains(t, err.Error(), filepath.Base(invalid))
+	assert.Zero(t, deleted)
+	assert.FileExists(t, invalid)
+	assert.NotContains(t, logs.String(), "level=WARN")
+}
+
+// unquotedLogs is the text handler's output with the quotes it escapes inside
+// quoted values (the decode reasons) put back.
+func unquotedLogs(logs *bytes.Buffer) string {
+	return strings.ReplaceAll(logs.String(), `\"`, `"`)
+}
+
+// Validates: R-5.2
+//
+// Scope cleanup reads only record files: the temporary file of a Save still
+// in progress is neither a record to decode nor one to remove, so the cleanup
+// neither fails over it nor pulls it from under the Save.
+func TestSessionStore_DeleteForScope_LeavesASaveInProgressAlone(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := NewSessionStore(dir, testLogger(t))
+	var logs bytes.Buffer
+	store := NewSessionStore(dir, textLogger(&logs))
+	require.NoError(t, store.Save(testSessionDriveID, "/owned.bin", &SessionRecord{
+		MountID:    "mount-a",
+		SessionURL: "https://example.com/owned",
+	}))
+	inProgress := filepath.Join(dir, sessionSubdir, strings.Replace(sessionTempPattern, "*", "123", 1))
+	require.NoError(t, os.WriteFile(inProgress, []byte(`{"version":2,"drive_id"`), sessionFilePerms))
 
-	driveID := "drive-v1"
-	localPath := "/docs/migrated.txt"
+	deleted, err := store.DeleteForScope("mount-a", "")
 
-	sessDir := filepath.Join(dir, "upload-sessions")
-	require.NoError(t, os.MkdirAll(sessDir, 0o700))
-
-	// v1 format: has "version":1 and "remote_path" key.
-	v1JSON := `{"version":1,"drive_id":"drive-v1","remote_path":"/docs/migrated.txt","session_url":"https://v1","file_hash":"vh","file_size":256,"created_at":"2025-06-01T00:00:00Z"}`
-	fpath := store.filePath(driveID, localPath)
-	require.NoError(t, os.WriteFile(fpath, []byte(v1JSON), 0o600))
-
-	rec, found, err := store.Load(driveID, localPath)
 	require.NoError(t, err)
-	require.True(t, found)
-
-	assert.Equal(t, 1, rec.Version)
-	assert.Equal(t, "/docs/migrated.txt", rec.LocalPath)
-	assert.Equal(t, "https://v1", rec.SessionURL)
-}
-
-// TestSessionStore_V2RoundTrip verifies that v2 records with "local_path" key
-// round-trip correctly through Save and Load (B-300).
-func TestSessionStore_V2RoundTrip(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := NewSessionStore(dir, testLogger(t))
-
-	driveID := "drive-v2"
-	localPath := "/docs/v2file.txt"
-
-	err := store.Save(driveID, localPath, &SessionRecord{
-		SessionURL: "https://v2session",
-		FileHash:   "v2hash",
-		FileSize:   512,
-	})
-	require.NoError(t, err)
-
-	rec, found, err := store.Load(driveID, localPath)
-	require.NoError(t, err)
-	require.True(t, found)
-
-	assert.Equal(t, currentSessionVersion, rec.Version)
-	assert.Equal(t, localPath, rec.LocalPath)
-	assert.Equal(t, "https://v2session", rec.SessionURL)
-}
-
-// TestSessionStore_SaveWritesV2JSON verifies that Save writes the v2 JSON tag
-// "local_path" (not the old "remote_path") (B-300).
-func TestSessionStore_SaveWritesV2JSON(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := NewSessionStore(dir, testLogger(t))
-
-	driveID := "drive-v2write"
-	localPath := "/docs/written.txt"
-
-	err := store.Save(driveID, localPath, &SessionRecord{
-		SessionURL: "https://write-test",
-		FileHash:   "wh",
-		FileSize:   64,
-	})
-	require.NoError(t, err)
-
-	// Read raw JSON to verify key names.
-	fpath := store.filePath(driveID, localPath)
-	data, err := localpath.ReadFile(fpath)
-	require.NoError(t, err)
-
-	raw := string(data)
-	assert.Contains(t, raw, `"local_path"`, "saved JSON should contain \"local_path\" key, got: %s", raw)
-	assert.NotContains(t, raw, `"remote_path"`, "saved JSON should NOT contain \"remote_path\" key, got: %s", raw)
+	assert.Equal(t, 1, deleted)
+	assert.FileExists(t, inProgress)
+	assert.NotContains(t, logs.String(), "level=WARN")
 }
 
 func TestSessionStore_DeleteNonexistent(t *testing.T) {
@@ -297,34 +444,6 @@ func TestSessionStore_DeleteNonexistent(t *testing.T) {
 
 	// Delete of non-existent file should not error.
 	require.NoError(t, store.Delete(testSessionDriveID, "/nonexistent"))
-}
-
-func TestSessionStore_CorruptFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := NewSessionStore(dir, testLogger(t))
-
-	driveID := testSessionDriveID
-	localPath := "/corrupt.txt"
-
-	// Write a corrupt JSON file at the expected path.
-	sessionDir := filepath.Join(dir, sessionSubdir)
-	require.NoError(t, os.MkdirAll(sessionDir, sessionDirPerms))
-
-	key := sessionKey(driveID, localPath)
-	corruptPath := filepath.Join(sessionDir, key)
-	require.NoError(t, os.WriteFile(corruptPath, []byte("{not valid json"), sessionFilePerms))
-
-	// Load should return ErrCorruptSession (corrupt file deleted).
-	rec, found, err := store.Load(driveID, localPath)
-	require.ErrorIs(t, err, ErrCorruptSession)
-	require.False(t, found)
-	require.Nil(t, rec)
-
-	// Corrupt file should have been cleaned up.
-	_, statErr := os.Stat(corruptPath)
-	assert.True(t, os.IsNotExist(statErr), "corrupt file was not deleted")
 }
 
 func TestSessionStore_Overwrite(t *testing.T) {
