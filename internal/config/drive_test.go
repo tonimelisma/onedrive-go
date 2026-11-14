@@ -277,7 +277,7 @@ func TestBuildResolvedDrive_SharedBusinessOwnerDisablesFolderDelta(t *testing.T)
 }
 
 func TestBuildResolvedDrive_SharedUnknownOwnerDefaultsFolderDeltaCapable(t *testing.T) {
-	assertRemoteRootDeltaCapabilityForOwner(t, "not-a-canonical-id", true)
+	assertRemoteRootDeltaCapabilityForOwner(t, "", true)
 }
 
 func TestBuildResolvedDrive_TildeExpanded(t *testing.T) {
@@ -655,7 +655,7 @@ func TestCollectOtherSyncDirs_ComputesBaseForEmptySyncDir(t *testing.T) {
 	cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")] = Drive{} // no sync_dir
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// Without a catalog account entry, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	// Without a catalog account entry, business defaults to "~/OneDrive - Business" via baseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 
@@ -745,7 +745,7 @@ func TestCollectOtherSyncDirs_NoFallback(t *testing.T) {
 	cfg.Drives[cid] = Drive{} // no sync_dir, no catalog account entry
 
 	dirs := CollectOtherSyncDirs(cfg, selfID, testLogger(t))
-	// Without a catalog account entry, business defaults to "~/OneDrive - Business" via BaseSyncDir.
+	// Without a catalog account entry, business defaults to "~/OneDrive - Business" via baseSyncDir.
 	assert.Contains(t, dirs, "~/OneDrive - Business")
 }
 

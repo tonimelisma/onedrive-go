@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -8,19 +9,27 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
+// configIO is the package's file-access seam: production uses
+// defaultConfigIO, and tests substitute single functions to inject failures.
+// The two writers are used by drive enrollment, whose steps a test fails one
+// at a time.
 type configIO struct {
-	readManagedFile func(path string) ([]byte, error)
-	statManagedPath func(path string) (os.FileInfo, error)
-	readManagedDir  func(path string) ([]os.DirEntry, error)
-	statLocalPath   func(path string) (os.FileInfo, error)
+	readManagedFile   func(path string) ([]byte, error)
+	writeManagedFile  func(path string, data []byte) error
+	removeManagedFile func(path string) error
+	statManagedPath   func(path string) (os.FileInfo, error)
+	readManagedDir    func(path string) ([]os.DirEntry, error)
+	statLocalPath     func(path string) (os.FileInfo, error)
 }
 
 func defaultConfigIO() configIO {
 	return configIO{
-		readManagedFile: readManagedFile,
-		statManagedPath: statManagedPath,
-		readManagedDir:  readManagedDir,
-		statLocalPath:   localpath.Stat,
+		readManagedFile:   readManagedFile,
+		writeManagedFile:  atomicWriteFile,
+		removeManagedFile: removeManagedFile,
+		statManagedPath:   statManagedPath,
+		readManagedDir:    readManagedDir,
+		statLocalPath:     localpath.Stat,
 	}
 }
 
@@ -40,6 +49,35 @@ func readManagedFile(path string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// readManagedFileIfExists reads a managed file's bytes; a missing file is
+// reported as absent, not as an error.
+func readManagedFileIfExists(io configIO, path string) ([]byte, bool, error) {
+	data, err := io.readManagedFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+
+	return data, true, nil
+}
+
+// removeManagedFile removes one managed file. Removing a file that is already
+// gone is not an error.
+func removeManagedFile(path string) error {
+	root, name, err := fsroot.OpenPath(path)
+	if err != nil {
+		return fmt.Errorf("opening managed root for %s: %w", path, err)
+	}
+
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing managed file %s: %w", path, err)
+	}
+
+	return nil
 }
 
 func statManagedPath(path string) (os.FileInfo, error) {

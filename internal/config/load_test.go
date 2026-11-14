@@ -18,6 +18,13 @@ import (
 
 // testLogger returns a debug-level logger that writes to t.Log, ensuring all
 // config debug output appears in test output for CI visibility.
+// loadLenientFileForTest is the lenient load of a config file that must
+// exist: the path LoadOrDefaultLenient takes once the file is there.
+func loadLenientFileForTest(path string, logger *slog.Logger) (*Config, []ConfigWarning, error) {
+	cfg, warnings, err := newConfigLoader(defaultConfigIO()).loadLenient(path, logger)
+	return cfg, warnings, markInvalidConfig(err)
+}
+
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
 
@@ -157,11 +164,11 @@ func TestLoadOrDefault_StatError(t *testing.T) {
 }
 
 func TestLoadLenient_ReadManagedFileError(t *testing.T) {
-	_, _, err := loadLenientWithIO("/tmp/config.toml", testLogger(t), configIO{
+	_, _, err := newConfigLoader(configIO{
 		readManagedFile: func(path string) ([]byte, error) {
 			return nil, errors.New("boom")
 		},
-	})
+	}).loadLenient("/tmp/config.toml", testLogger(t))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading config file")
@@ -652,7 +659,7 @@ func TestLoadLenient_UnknownKeys_ReturnsWarnings(t *testing.T) {
 unknown_global_key = "value"
 transfer_workers = 8
 `)
-	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	cfg, warnings, err := loadLenientFileForTest(path, testLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	require.Len(t, warnings, 1)
@@ -663,7 +670,7 @@ transfer_workers = 8
 // Validates: R-4.8.4
 func TestLoadLenient_InvalidValues_ReturnsWarnings(t *testing.T) {
 	path := writeTestConfig(t, `transfer_workers = 0`)
-	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	cfg, warnings, err := loadLenientFileForTest(path, testLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	require.NotEmpty(t, warnings)
@@ -683,7 +690,7 @@ func TestLoadLenient_InvalidValues_ReturnsWarnings(t *testing.T) {
 // Validates: R-4.8.4
 func TestLoadLenient_ValidConfig_NoWarnings(t *testing.T) {
 	path := writeTestConfig(t, `log_level = "debug"`)
-	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	cfg, warnings, err := loadLenientFileForTest(path, testLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.Empty(t, warnings)
@@ -693,7 +700,7 @@ func TestLoadLenient_ValidConfig_NoWarnings(t *testing.T) {
 // Validates: R-4.8.4
 func TestLoadLenient_TOMLSyntaxError_Fatal(t *testing.T) {
 	path := writeTestConfig(t, `[invalid toml`)
-	_, _, err := LoadLenient(path, testLogger(t))
+	_, _, err := loadLenientFileForTest(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing config file")
 }
@@ -715,7 +722,7 @@ func TestLoadLenient_UnknownDriveKeys_ReturnsWarnings(t *testing.T) {
 sync_dir = "~/OneDrive"
 unknown_drive_key = "value"
 `)
-	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	cfg, warnings, err := loadLenientFileForTest(path, testLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	require.Len(t, warnings, 1)
@@ -730,7 +737,7 @@ func TestLoadLenient_MixedWarnings(t *testing.T) {
 unknown_global_key = "value"
 transfer_workers = 0
 `)
-	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	cfg, warnings, err := loadLenientFileForTest(path, testLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	// Should have at least 2 warnings: one for unknown key, one for invalid value.
@@ -739,7 +746,7 @@ transfer_workers = 0
 
 // Validates: R-4.8.4
 func TestLoadLenient_FileNotFound_Fatal(t *testing.T) {
-	_, _, err := LoadLenient("/nonexistent/path/config.toml", testLogger(t))
+	_, _, err := loadLenientFileForTest("/nonexistent/path/config.toml", testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading config file")
 }
@@ -752,7 +759,7 @@ func TestLoadLenient_DriveParseError_Warning(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused = "not-a-bool"
 `)
-	cfg, warnings, err := LoadLenient(path, testLogger(t))
+	cfg, warnings, err := loadLenientFileForTest(path, testLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	// The drive should not be in cfg.Drives (mapToDrive failed).
@@ -895,7 +902,7 @@ sync_dir = "~/OneDrive"
 
 // TestDecodeDriveSections_StrictAndLenient_IdenticalOutput verifies that valid
 // configs produce the same cfg.Drives from both the strict and lenient paths.
-// This is a regression guard for the unified decodeDriveSectionsInternal.
+// This is a regression guard for the one driveSectionDecoder.decode both use.
 func TestDecodeDriveSections_StrictAndLenient_IdenticalOutput(t *testing.T) {
 	data := []byte(`
 ["personal:toni@outlook.com"]

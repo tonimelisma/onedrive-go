@@ -50,19 +50,6 @@ func TokenAccountCanonicalID(cid driveid.CanonicalID) (driveid.CanonicalID, erro
 	return accountCIDForDrive(cid), nil
 }
 
-// tokenAccountCID resolves which account owns the OAuth token for a drive.
-// Personal and business drives own their token. SharePoint drives use the
-// business account's token. Shared drives use their parent account's
-// token, determined from the managed catalog.
-func tokenAccountCID(cid driveid.CanonicalID) driveid.CanonicalID {
-	tokenCID, err := TokenAccountCanonicalID(cid)
-	if err != nil {
-		return driveid.CanonicalID{}
-	}
-
-	return tokenCID
-}
-
 // resolveSharedTokenCID reads the catalog drive record for a shared drive to
 // find its parent account's canonical ID. Returns a zero CID if the catalog
 // entry is missing or lacks an owner account.
@@ -72,14 +59,10 @@ func resolveSharedTokenCID(cid driveid.CanonicalID) (driveid.CanonicalID, error)
 		return driveid.CanonicalID{}, fmt.Errorf("loading catalog for shared token resolution %s: %w", cid, err)
 	}
 	drive, found := catalog.DriveByCanonicalID(cid)
-	if !found || drive.OwnerAccountCanonical == "" {
+	if !found {
 		return driveid.CanonicalID{}, nil
 	}
 
-	accountCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
-	if err != nil {
-		return driveid.CanonicalID{}, fmt.Errorf("parse shared account canonical ID %q: %w", drive.OwnerAccountCanonical, err)
-	}
-
+	accountCID, _ := drive.Owner()
 	return accountCID, nil
 }

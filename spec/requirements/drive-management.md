@@ -27,10 +27,15 @@ The system shall support all four drive types:
 - R-3.3.1: When the user runs `login`, the system shall auto-add the account's
   primary drive to the configuration: `personal:<email>` for consumer Microsoft
   accounts, `business:<email>` for work/school accounts. Re-login shall refresh
-  the token and metadata without duplicating the drive section. Login shall
-  validate that the resolved sync directory is absolute, materialize it before
-  reporting success, roll token/catalog/config changes back if materialization
-  fails, and request a control-socket reload when a watch daemon is running.
+  the token and metadata without duplicating the drive section, and complete a
+  drive section that is configured but not fully set up, reporting it as
+  completed. Login shall validate that the resolved sync directory is absolute
+  and materialize it before reporting success. If saving the token or
+  enrolling the drive fails, login shall leave the config and the drive
+  inventory as enrollment found them (a sync directory it already created
+  stays, empty) and restore the previous token (or remove the new one when
+  there was none). Login shall request a control-socket
+  reload when a watch daemon is running.
   [verified]
 - R-3.3.2: When the user runs `drive list`, the system shall show two drive sections plus account-level warnings when needed. Section 1 ("Configured drives") shall list every drive in config with display name, sync directory (blank if not set), operational state (ready or paused), and auth status. Section 2 ("Available drives") shall list all not-yet-added drives discovered from authenticated accounts — personal and business drives, SharePoint document libraries (business accounts only, capped at 10 sites), and shared folders (all account types). Drives already in config shall not appear in the available section. If account discovery cannot proceed because authentication is required, the command shall surface that as an account-level warning instead of silently omitting the account. If `/me/drives` is temporarily unavailable after exhausting its transient retry budget, the command shall keep the account visible under `accounts_degraded`, fall back to `/me/drive` for the primary personal/business drive when possible, and continue independent shared-folder and SharePoint discovery. [verified]
 - R-3.3.3: Available drives in `drive list` that retain a state database from a
@@ -44,12 +49,18 @@ The system shall support all four drive types:
   the account. This works for any drive type: personal, business, SharePoint,
   or shared — including re-adding a default drive previously removed via
   `drive remove`. If the drive is already configured, the system shall report
-  it as such without creating a duplicate. Drive add shall materialize the
-  configured sync directory only after validating that the resolved path is
-  absolute. If that materialization fails, drive add shall roll back config
-  mutations made during the attempt, including backfilled `sync_dir` keys on
-  existing drive sections, and request a control-socket reload when a watch
-  daemon is running.
+  it as such without creating a duplicate. A drive that is configured but not
+  fully set up (a section without `sync_dir`, a shared folder's
+  `display_name`, its inventory record or its sync directory, as a section
+  written by hand or by an earlier version of the client can be) shall be
+  completed and reported as completed, in text and in
+  `--json`. Drive add shall materialize the configured sync directory only after
+  validating that the resolved path is absolute. If any step fails, drive add
+  shall leave the config and the drive inventory unchanged; a sync directory it
+  already created stays, empty. A process stopped part way leaves at most an
+  empty sync directory and an inventory record without a section, which
+  running the command again completes. Drive add
+  shall request a control-socket reload when a watch daemon is running.
   [verified]
 - R-3.3.6: When a search term without `:` is passed to `drive add`, the system
   shall match against shared folder names using case-insensitive substring

@@ -59,6 +59,8 @@ func TestLoadValidatedState_RejectsConfiguredDriveMissingCatalogEntry(t *testing
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is in config.toml")
 	assert.Contains(t, err.Error(), "not in onedrive-go's drive inventory")
+	assert.Contains(t, err.Error(), "run 'onedrive-go drive add personal:user@example.com'",
+		"drive add completes a section the inventory lacks, for every kind of drive")
 }
 
 // Validates: R-3.1.5

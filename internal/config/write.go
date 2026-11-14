@@ -3,10 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -31,6 +29,12 @@ const (
 	driveTypeBusiness   = driveid.DriveTypeBusiness
 	driveTypeSharePoint = driveid.DriveTypeSharePoint
 	driveTypeShared     = driveid.DriveTypeShared
+)
+
+// Drive-section keys that drive enrollment writes.
+const (
+	syncDirKey     = "sync_dir"
+	displayNameKey = "display_name"
 )
 
 // defaultConfigTemplate returns the first-login config content. All global
@@ -88,235 +92,163 @@ func defaultConfigTemplate() string {
 	)
 }
 
-// driveSection generates the TOML text for a new drive section. The blank
-// line before the header is intentional — it visually separates drive
-// sections from each other and from the global settings.
-func driveSection(canonicalID, syncDir string) string {
-	return fmt.Sprintf("\n[%q]\nsync_dir = %q\n", canonicalID, syncDir)
+// driveSection generates the TOML text for a new drive section holding keys,
+// in the order given. The blank line before the header is intentional — it
+// visually separates drive sections from each other and from the global
+// settings.
+func driveSection(canonicalID string, keys []driveKey) string {
+	var b strings.Builder
+	b.WriteString("\n" + renderSectionHeaderLine(canonicalID) + "\n")
+	for _, key := range keys {
+		b.WriteString(renderKeyValueLine(key.name, key.formattedValue, "") + "\n")
+	}
+
+	return b.String()
 }
 
-// AppendDriveSection appends a new drive section to a config file. If the file
-// does not exist, it is created from the default template first. Used by login
-// and `drive add`. The write is atomic to avoid partial writes on crash.
+// AppendDriveSection appends a new drive section to a config file, under the
+// config lock. If the file does not exist, it is created from the default
+// template first. A section that is already there is refused. Login and
+// `drive add` enroll drives through AddDrive instead; this is the plain
+// append that tests use to set up a configured drive.
 func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir string) error {
 	return withConfigMutationLock(path, true, func() error {
-		return appendDriveSectionSnapshot(path, canonicalID, syncDir)
-	})
-}
+		syncDirValue, err := newDriveKey(syncDirKey, syncDir)
+		if err != nil {
+			return err
+		}
 
-func appendDriveSectionSnapshot(path string, canonicalID driveid.CanonicalID, syncDir string) error {
-	data, err := readManagedFile(path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+		data, exists, err := readManagedFileIfExists(defaultConfigIO(), path)
+		if err != nil {
 			return fmt.Errorf("reading config file: %w", err)
 		}
 
-		// File doesn't exist — create from template.
-		content := defaultConfigTemplate() + driveSection(canonicalID.String(), syncDir)
+		content, err := withDriveSectionAppended(data, exists, canonicalID, []driveKey{syncDirValue})
+		if err != nil {
+			return err
+		}
 
-		return atomicWriteFile(path, []byte(content))
+		return atomicWriteFile(path, content)
+	})
+}
+
+// withDriveSectionAppended returns config text with a new drive section
+// appended: the default template comes first when the file does not exist
+// yet, and a newline when the existing text does not end with one, so the
+// header starts its own line. A section that is already there is refused: a
+// second table with the same name makes the whole file unloadable.
+func withDriveSectionAppended(
+	data []byte,
+	fileExists bool,
+	canonicalID driveid.CanonicalID,
+	keys []driveKey,
+) ([]byte, error) {
+	section := driveSection(canonicalID.String(), keys)
+	if !fileExists {
+		return []byte(defaultConfigTemplate() + section), nil
+	}
+
+	if _, found := findSectionByName(parseLines(string(data)), canonicalID.String()); found {
+		return nil, fmt.Errorf("drive section %q is already in the config", canonicalID.String())
 	}
 
 	content := string(data)
-
-	// Ensure the file ends with a newline before appending, so the new
-	// section header starts on its own line.
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
 
-	content += driveSection(canonicalID.String(), syncDir)
-
-	return atomicWriteFile(path, []byte(content))
+	return []byte(content + section), nil
 }
 
-// EnsureDriveInConfig is the single entry point for adding a drive to the config
-// file. It loads the config (or defaults if missing), checks whether the drive
-// already exists, computes the default sync_dir from catalog account data, and writes
-// the drive section. Returns the sync directory, whether a new section was added,
-// and any error. Used by both login and `drive add`.
-func EnsureDriveInConfig(path string, cid driveid.CanonicalID, logger *slog.Logger) (string, bool, error) {
-	result, err := EnsureDriveInConfigDetailed(path, cid, logger)
-	if err != nil {
-		return "", false, err
-	}
-
-	return result.SyncDir, result.Added, nil
+// driveKey is one key of a drive section and its value, already rendered as
+// TOML by newDriveKey.
+type driveKey struct {
+	name           string
+	formattedValue string
 }
 
-// EnsureDriveInConfigResult describes the config mutation performed by
-// EnsureDriveInConfigDetailed. Callers that need rollback semantics must use
-// these current-attempt flags rather than a stale pre-write snapshot.
-type EnsureDriveInConfigResult struct {
-	SyncDir                    string
-	Added                      bool
-	BackfilledSyncDir          bool
-	DriveBeforeSyncDirBackfill *Drive
+// newDriveKey renders value for a drive-section key by the kind of value the
+// schema (newDriveKeyKinds) says the key holds. A bool key takes "true" or
+// "false", written bare; a string key is always written as a TOML string, so
+// a display name "true" stays a name. A list key cannot be given one value,
+// and a key the schema does not have is refused: the strict load would refuse
+// the file it produced.
+func newDriveKey(name, value string) (driveKey, error) {
+	kind, known := newDriveKeyKinds()[name]
+	if !known {
+		return driveKey{}, fmt.Errorf("drive key %q is not a drive setting", name)
+	}
+
+	switch kind {
+	case driveKeyBool:
+		if value != "true" && value != "false" {
+			return driveKey{}, fmt.Errorf("drive key %q takes true or false, not %q", name, value)
+		}
+
+		return driveKey{name: name, formattedValue: value}, nil
+	case driveKeyString:
+		return driveKey{name: name, formattedValue: tomlString(value)}, nil
+	case driveKeyStringList:
+		return driveKey{}, fmt.Errorf("drive key %q holds a list; it cannot be set to one value", name)
+	default:
+		return driveKey{}, fmt.Errorf("drive key %q has a value kind the writer does not know", name)
+	}
 }
 
-// EnsureDriveInConfigDetailed is the mutation-reporting form of
-// EnsureDriveInConfig. It distinguishes newly added drive sections from existing
-// sections whose missing sync_dir key was backfilled.
-func EnsureDriveInConfigDetailed(path string, cid driveid.CanonicalID, logger *slog.Logger) (EnsureDriveInConfigResult, error) {
-	cfg, err := LoadOrDefault(path, logger)
-	if err != nil {
-		return EnsureDriveInConfigResult{}, fmt.Errorf("loading config: %w", err)
+// withDriveKeysSet returns config text with each key set in the drive's
+// section: an existing line is replaced, keeping its inline comment, and a
+// missing one is inserted after the header, in the order given.
+func withDriveKeysSet(data []byte, canonicalID driveid.CanonicalID, keys []driveKey) ([]byte, error) {
+	lines := parseLines(string(data))
+
+	headerIdx, found := findSectionByName(lines, canonicalID.String())
+	if !found {
+		return nil, fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
-	if d, exists := cfg.Drives[cid]; exists {
-		if d.SyncDir != "" {
-			return EnsureDriveInConfigResult{SyncDir: d.SyncDir}, nil
+	insertAt := headerIdx + 1
+	for _, key := range keys {
+		contentStart, contentEnd := sectionContentRange(lines, headerIdx)
+		if idx, keyFound := findKeyInRange(lines, contentStart, contentEnd, key.name); keyFound {
+			lines[idx].raw = renderKeyValueLine(key.name, key.formattedValue, lines[idx].inlineComment)
+			continue
 		}
 
-		orgName, displayName := ResolveAccountNames(cid, logger)
-		existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
-		syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
-		writtenSyncDir, inserted, driveBeforeBackfill, err := setDriveStringKeyIfMissing(path, cid, "sync_dir", syncDir)
-		if err != nil {
-			return EnsureDriveInConfigResult{}, fmt.Errorf("writing drive sync_dir: %w", err)
-		}
-		if !inserted {
-			return EnsureDriveInConfigResult{SyncDir: writtenSyncDir}, nil
-		}
-
-		return EnsureDriveInConfigResult{
-			SyncDir:                    syncDir,
-			BackfilledSyncDir:          true,
-			DriveBeforeSyncDirBackfill: driveBeforeBackfill,
-		}, nil
+		lines = slices.Insert(lines, insertAt, parseLine(renderKeyValueLine(key.name, key.formattedValue, "")))
+		insertAt++
 	}
 
-	// Use the catalog account record for org_name/display_name.
-	orgName, displayName := ResolveAccountNames(cid, logger)
-
-	existingDirs := CollectOtherSyncDirs(cfg, cid, logger)
-	syncDir := DefaultSyncDir(cid, orgName, displayName, existingDirs)
-
-	if err := AppendDriveSection(path, cid, syncDir); err != nil {
-		return EnsureDriveInConfigResult{}, fmt.Errorf("writing drive config: %w", err)
-	}
-
-	return EnsureDriveInConfigResult{
-		SyncDir: syncDir,
-		Added:   true,
-	}, nil
+	return []byte(renderLines(lines)), nil
 }
 
 // SetDriveKey finds a drive section by canonical ID and sets a key-value pair.
 // If the key already exists within the section, its line is replaced (preserving
 // any inline comment). If not found, the key is inserted after the section header.
 //
-// Value formatting: booleans ("true"/"false") are written without quotes;
-// all other values are written as quoted strings.
+// The value is written as the kind the key holds (newDriveKey): a bool key
+// refuses anything but "true" and "false", and a string key is always quoted.
+// A refused value leaves the file as it was.
 func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
 	return defaultConfigLocker().setDriveKey(path, canonicalID, key, value)
 }
 
 func setDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key, value string) error {
+	setting, err := newDriveKey(key, value)
+	if err != nil {
+		return err
+	}
+
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
 
-	lines := parseLines(string(data))
-
-	headerIdx, found := findSectionByName(lines, canonicalID.String())
-	if !found {
-		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
-	}
-
-	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
-	formattedValue := formatTOMLValue(value)
-
-	if idx, keyFound := findKeyInRange(lines, contentStart, contentEnd, key); keyFound {
-		// Replace existing key, preserving inline comment.
-		lines[idx].raw = renderKeyValueLine(key, formattedValue, lines[idx].inlineComment)
-	} else {
-		// Insert new key after section header.
-		newLine := parseLine(renderKeyValueLine(key, formattedValue, ""))
-		lines = append(lines[:headerIdx+1], append([]parsedLine{newLine}, lines[headerIdx+1:]...)...)
-	}
-
-	return atomicWriteFile(path, []byte(renderLines(lines)))
-}
-
-// setDriveStringKeyIfMissing inserts a string-valued key only when it is still
-// absent at write time. It reports the value now present and whether this call
-// inserted it, letting callers avoid treating concurrent writes as their own.
-func setDriveStringKeyIfMissing(
-	path string,
-	canonicalID driveid.CanonicalID,
-	key string,
-	value string,
-) (string, bool, *Drive, error) {
-	var valueNow string
-	var inserted bool
-	var driveBeforeInsert *Drive
-	if err := withConfigMutationLock(path, false, func() error {
-		var err error
-		valueNow, inserted, driveBeforeInsert, err = setDriveStringKeyIfMissingSnapshot(path, canonicalID, key, value)
+	content, err := withDriveKeysSet(data, canonicalID, []driveKey{setting})
+	if err != nil {
 		return err
-	}); err != nil {
-		return "", false, nil, err
 	}
 
-	return valueNow, inserted, driveBeforeInsert, nil
-}
-
-func setDriveStringKeyIfMissingSnapshot(
-	path string,
-	canonicalID driveid.CanonicalID,
-	key string,
-	value string,
-) (string, bool, *Drive, error) {
-	data, err := readManagedFile(path)
-	if err != nil {
-		return "", false, nil, fmt.Errorf("reading config file: %w", err)
-	}
-
-	lines := parseLines(string(data))
-
-	headerIdx, found := findSectionByName(lines, canonicalID.String())
-	if !found {
-		return "", false, nil, fmt.Errorf("drive section %q not found in config", canonicalID.String())
-	}
-
-	driveBeforeInsert, found, err := driveFromConfigSnapshot(path, data, canonicalID)
-	if err != nil {
-		return "", false, nil, err
-	}
-	if !found {
-		return "", false, nil, fmt.Errorf("drive section %q not found in config", canonicalID.String())
-	}
-
-	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
-	if idx, keyFound := findKeyInRange(lines, contentStart, contentEnd, key); keyFound {
-		existingValue, err := parseTOMLStringValue(lines[idx].value)
-		if err != nil {
-			return "", false, nil, fmt.Errorf("parse existing %s: %w", key, err)
-		}
-
-		return existingValue, false, nil, nil
-	}
-
-	formattedValue := formatTOMLValue(value)
-	newLine := parseLine(renderKeyValueLine(key, formattedValue, ""))
-	lines = append(lines[:headerIdx+1], append([]parsedLine{newLine}, lines[headerIdx+1:]...)...)
-
-	if err := atomicWriteFile(path, []byte(renderLines(lines))); err != nil {
-		return "", false, nil, err
-	}
-
-	return value, true, &driveBeforeInsert, nil
-}
-
-func parseTOMLStringValue(value string) (string, error) {
-	unquoted, err := strconv.Unquote(strings.TrimSpace(value))
-	if err != nil {
-		return "", fmt.Errorf("unquote string value: %w", err)
-	}
-
-	return unquoted, nil
+	return atomicWriteFile(path, content)
 }
 
 // DeleteDriveKey removes a single key from a drive section. Idempotent:
@@ -334,66 +266,12 @@ func deleteDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key st
 		return fmt.Errorf("reading config file: %w", err)
 	}
 
-	lines, sectionFound, _ := deleteDriveKeyFromSnapshot(data, canonicalID, key)
+	lines, sectionFound := deleteDriveKeyFromSnapshot(data, canonicalID, key)
 	if !sectionFound {
 		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
 	}
 
 	return atomicWriteFile(path, []byte(renderLines(lines)))
-}
-
-// DeleteDriveKeyIfDriveEquals removes a single key from a drive section only
-// when the currently loaded drive config equals expected. The equality check
-// and delete run under the config mutation lock and are derived from one
-// file snapshot so callers can use it for rollback without deleting keys from
-// unrelated config edits.
-func DeleteDriveKeyIfDriveEquals(
-	path string,
-	canonicalID driveid.CanonicalID,
-	key string,
-	expected *Drive,
-) (bool, error) {
-	var deleted bool
-	lockErr := withConfigMutationLock(path, false, func() error {
-		deletedNow, err := deleteDriveKeyIfDriveEqualsSnapshot(path, canonicalID, key, expected)
-		deleted = deletedNow
-		return err
-	})
-	if lockErr != nil {
-		return false, lockErr
-	}
-
-	return deleted, nil
-}
-
-func deleteDriveKeyIfDriveEqualsSnapshot(
-	path string,
-	canonicalID driveid.CanonicalID,
-	key string,
-	expected *Drive,
-) (bool, error) {
-	data, err := readManagedFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("reading config file: %w", err)
-	}
-
-	matches, err := driveSnapshotEquals(path, data, canonicalID, expected)
-	if err != nil {
-		return false, err
-	}
-	if !matches {
-		return false, nil
-	}
-
-	lines, sectionFound, keyDeleted := deleteDriveKeyFromSnapshot(data, canonicalID, key)
-	if !sectionFound || !keyDeleted {
-		return false, nil
-	}
-
-	return true, atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
 // DeleteDriveSection removes a drive section (header + all keys) from the
@@ -418,57 +296,6 @@ func deleteDriveSectionSnapshot(path string, canonicalID driveid.CanonicalID) er
 	}
 
 	return atomicWriteFile(path, []byte(renderLines(lines)))
-}
-
-// DeleteDriveSectionIfDriveEquals removes a drive section only when the
-// currently loaded drive config equals expected. The equality check and write
-// run under the config mutation lock and are derived from one file snapshot
-// for rollback-safe compare/delete semantics.
-func DeleteDriveSectionIfDriveEquals(
-	path string,
-	canonicalID driveid.CanonicalID,
-	expected *Drive,
-) (bool, error) {
-	var deleted bool
-	lockErr := withConfigMutationLock(path, false, func() error {
-		deletedNow, err := deleteDriveSectionIfDriveEqualsSnapshot(path, canonicalID, expected)
-		deleted = deletedNow
-		return err
-	})
-	if lockErr != nil {
-		return false, lockErr
-	}
-
-	return deleted, nil
-}
-
-func deleteDriveSectionIfDriveEqualsSnapshot(
-	path string,
-	canonicalID driveid.CanonicalID,
-	expected *Drive,
-) (bool, error) {
-	data, err := readManagedFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("reading config file: %w", err)
-	}
-
-	matches, err := driveSnapshotEquals(path, data, canonicalID, expected)
-	if err != nil {
-		return false, err
-	}
-	if !matches {
-		return false, nil
-	}
-
-	lines, deleted := deleteDriveSectionFromSnapshot(data, canonicalID)
-	if !deleted {
-		return false, nil
-	}
-
-	return true, atomicWriteFile(path, []byte(renderLines(lines)))
 }
 
 // driveSectionCollisionError is a section rename refused because a section
@@ -562,7 +389,7 @@ func renameDriveSectionsSnapshot(path string, renames map[driveid.CanonicalID]dr
 //
 // SharePoint: ~/SharePoint - {site} - {library} → + {displayName} → + {email}
 func DefaultSyncDir(cid driveid.CanonicalID, orgName, displayName string, existingDirs []string) string {
-	base := BaseSyncDir(cid, orgName, displayName)
+	base := baseSyncDir(cid, orgName, displayName)
 	if base == "" {
 		return ""
 	}
@@ -573,7 +400,7 @@ func DefaultSyncDir(cid driveid.CanonicalID, orgName, displayName string, existi
 
 	// Level 1: disambiguate with display name (friendly).
 	if displayName != "" {
-		withName := base + " - " + SanitizePathComponent(displayName)
+		withName := base + " - " + sanitizePathComponent(displayName)
 		if !containsExpanded(existingDirs, withName) {
 			return withName
 		}
@@ -583,20 +410,20 @@ func DefaultSyncDir(cid driveid.CanonicalID, orgName, displayName string, existi
 	return base + " - " + cid.Email()
 }
 
-// BaseSyncDir returns the base sync directory name for a drive type, without
-// collision detection. Exported for use by collectOtherSyncDirs which needs
-// the base name without triggering a collision cascade.
+// baseSyncDir returns the base sync directory name for a drive type, without
+// collision detection; otherSyncDirs uses it for drives whose section leaves
+// sync_dir to the default.
 //
 // The displayName parameter is only used for shared drives (to create
 // per-drive subdirectories under ~/OneDrive-Shared/). Personal, business,
 // and SharePoint drives ignore it.
-func BaseSyncDir(cid driveid.CanonicalID, orgName, displayName string) string {
+func baseSyncDir(cid driveid.CanonicalID, orgName, displayName string) string {
 	switch cid.DriveType() {
 	case driveTypePersonal:
 		return "~/OneDrive"
 	case driveTypeBusiness:
 		if orgName != "" {
-			return "~/OneDrive - " + SanitizePathComponent(orgName)
+			return "~/OneDrive - " + sanitizePathComponent(orgName)
 		}
 
 		return "~/OneDrive - Business"
@@ -604,13 +431,13 @@ func BaseSyncDir(cid driveid.CanonicalID, orgName, displayName string) string {
 		site, lib := cid.Site(), cid.Library()
 		if site != "" && lib != "" {
 			return fmt.Sprintf("~/SharePoint - %s - %s",
-				SanitizePathComponent(site), SanitizePathComponent(lib))
+				sanitizePathComponent(site), sanitizePathComponent(lib))
 		}
 
 		return "~/SharePoint"
 	case driveTypeShared:
 		if displayName != "" {
-			return "~/OneDrive-Shared/" + SanitizePathComponent(displayName)
+			return "~/OneDrive-Shared/" + sanitizePathComponent(displayName)
 		}
 
 		return "~/OneDrive-Shared"
@@ -633,9 +460,8 @@ func containsExpanded(dirs []string, candidate string) bool {
 	return false
 }
 
-// SanitizePathComponent replaces filesystem-unsafe characters with "-".
-// Exported for use by callers that build path components from user data.
-func SanitizePathComponent(s string) string {
+// sanitizePathComponent replaces filesystem-unsafe characters with "-".
+func sanitizePathComponent(s string) string {
 	// Replace: / \ : < > " | ? *
 	replacer := strings.NewReplacer(
 		"/", "-",
@@ -659,74 +485,24 @@ func SanitizePathComponent(s string) string {
 	return strings.Trim(result, "- ")
 }
 
-// formatTOMLValue formats a value for TOML output. Booleans are written
-// bare (true/false); all other values are quoted strings.
-func formatTOMLValue(value string) string {
-	if value == "true" || value == "false" {
-		return value
-	}
-
-	return fmt.Sprintf("%q", value)
-}
-
-func driveSnapshotEquals(path string, data []byte, canonicalID driveid.CanonicalID, expected *Drive) (bool, error) {
-	if expected == nil {
-		return false, fmt.Errorf("expected drive is nil")
-	}
-
-	drive, found, err := driveFromConfigSnapshot(path, data, canonicalID)
-	if err != nil {
-		return false, err
-	}
-
-	return found && drivesEqual(&drive, expected), nil
-}
-
-func driveFromConfigSnapshot(path string, data []byte, canonicalID driveid.CanonicalID) (Drive, bool, error) {
-	loader := newConfigLoader(defaultConfigIO())
-	cfg, md, err := loader.decodeBaseConfig(path, data)
-	if err != nil {
-		return Drive{}, false, fmt.Errorf("loading config: %w", err)
-	}
-
-	decodeErr := loader.decoder.decodeStrict(data, cfg)
-	if decodeErr != nil {
-		return Drive{}, false, fmt.Errorf("loading config: parsing config file %s: %w", path, decodeErr)
-	}
-
-	unknownErr := checkUnknownKeys(&md)
-	if unknownErr != nil {
-		return Drive{}, false, fmt.Errorf("loading config: %w", unknownErr)
-	}
-
-	validateErr := Validate(cfg)
-	if validateErr != nil {
-		return Drive{}, false, fmt.Errorf("loading config: config validation failed: %w", validateErr)
-	}
-
-	drive, found := cfg.Drives[canonicalID]
-	return drive, found, nil
-}
-
 func deleteDriveKeyFromSnapshot(
 	data []byte,
 	canonicalID driveid.CanonicalID,
 	key string,
-) ([]parsedLine, bool, bool) {
+) ([]parsedLine, bool) {
 	lines := parseLines(string(data))
 
 	headerIdx, found := findSectionByName(lines, canonicalID.String())
 	if !found {
-		return lines, false, false
+		return lines, false
 	}
 
 	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
 	if idx, keyFound := findKeyInRange(lines, contentStart, contentEnd, key); keyFound {
 		lines = append(lines[:idx], lines[idx+1:]...)
-		return lines, true, true
 	}
 
-	return lines, true, false
+	return lines, true
 }
 
 func deleteDriveSectionFromSnapshot(
@@ -751,48 +527,19 @@ func deleteDriveSectionFromSnapshot(
 	return append(lines[:blankStart], lines[contentEnd:]...), true
 }
 
-func drivesEqual(left *Drive, right *Drive) bool {
-	return left.SyncDir == right.SyncDir &&
-		boolPointersEqual(left.Paused, right.Paused) &&
-		stringPointersEqual(left.PausedUntil, right.PausedUntil) &&
-		left.DisplayName == right.DisplayName &&
-		left.Owner == right.Owner &&
-		slices.Equal(left.IgnoredDirs, right.IgnoredDirs) &&
-		slices.Equal(left.IncludedDirs, right.IncludedDirs) &&
-		slices.Equal(left.IgnoredPaths, right.IgnoredPaths) &&
-		left.IgnoreDotfiles == right.IgnoreDotfiles &&
-		boolPointersEqual(left.IgnoreJunkFiles, right.IgnoreJunkFiles) &&
-		left.FollowSymlinks == right.FollowSymlinks &&
-		left.CrossFilesystems == right.CrossFilesystems
-}
-
-func boolPointersEqual(left *bool, right *bool) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
-func stringPointersEqual(left *string, right *string) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
 // atomicWriteFile writes data to a temporary file in the same directory as
 // path, then renames it to the target path. This prevents partial writes
-// from corrupting the config file on crash. AtomicWrite creates missing
-// parent directories with configDirPermissions. Files are created with
-// configFilePermissions (0600).
+// from corrupting a managed file (config, catalog) on crash. AtomicWrite
+// creates missing parent directories with configDirPermissions. Files are
+// created with configFilePermissions (0600).
 func atomicWriteFile(path string, data []byte) (err error) {
 	root, name, err := fsroot.OpenPath(path)
 	if err != nil {
-		return fmt.Errorf("opening config root: %w", err)
+		return fmt.Errorf("opening the directory of %s: %w", path, err)
 	}
 
 	if err := root.AtomicWrite(name, data, configFilePermissions, configDirPermissions, ".config-*.tmp"); err != nil {
-		return fmt.Errorf("writing config file: %w", err)
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 
 	return nil

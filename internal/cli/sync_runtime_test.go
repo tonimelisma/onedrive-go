@@ -277,15 +277,16 @@ func TestStandaloneMountSelectionFromResolvedDrives_TokenOwnerFailureIsMountLoca
 	setTestDriveHome(t)
 
 	sharedCID := driveid.MustCanonicalID("shared:missing@example.com:remote-drive:remote-root")
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
-		catalog.UpsertDrive(&config.CatalogDrive{
-			CanonicalID:           sharedCID.String(),
-			OwnerAccountCanonical: "not-a-canonical-id",
-			DriveType:             sharedCID.DriveType(),
-			RemoteDriveID:         "remote-drive",
-		})
-		return nil
-	}))
+	// A catalog edited by hand so that the decoder refuses it (an owner that
+	// is not a drive ID): the token owner cannot be read.
+	catalog := config.DefaultCatalog()
+	catalog.UpsertDrive(&config.CatalogDrive{
+		CanonicalID:           sharedCID.String(),
+		OwnerAccountCanonical: "not-a-canonical-id",
+		DriveType:             sharedCID.DriveType(),
+		RemoteDriveID:         "remote-drive",
+	})
+	writeCatalogFileForTest(t, catalog)
 
 	drive := &config.ResolvedDrive{
 		CanonicalID:      sharedCID,

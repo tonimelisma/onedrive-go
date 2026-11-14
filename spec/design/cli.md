@@ -399,11 +399,11 @@ The mutating commands' documents:
 
 | Command | Document |
 | --- | --- |
-| `login` | `account`, `drive`, `drive_type`, `organization` (business), `sync_dir`, `added` (false on a re-login) |
+| `login` | `account`, `drive`, `drive_type`, `organization` (business), `sync_dir`, `added` (false on a re-login), `completed` (true when the drive was configured but not fully set up and this login finished it) |
 | `logout` | `account`, `token_removed`, `purged`, `drives` |
 | `pause` | `drive`, `paused`, `paused_until` (UTC; omitted for an open-ended pause) |
 | `resume` | `drives[]` of `drive`, `result` (`resumed`, `expired_pause_cleared`, `not_paused`, `failed`), `error` |
-| `drive add` | `drive`, `display_name`, `sync_dir`, `added` (false when already configured) |
+| `drive add` | `drive`, `display_name`, `sync_dir`, `added` (false when already configured), `completed` (true when the drive was configured but not fully set up and this run finished it) |
 | `drive remove` | `drive`, `removed_from_config`, `purged` |
 | `drive reset-sync-state` | `drive`, `reset` |
 | `drive rebind-root` | `drive`, `rebound`, `synced_files`, `files_in_folder` |

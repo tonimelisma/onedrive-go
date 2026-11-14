@@ -36,7 +36,6 @@ type shortcutChildArtifactCleanupFailureClass string
 const (
 	shortcutChildArtifactCleanupSetupFailure         shortcutChildArtifactCleanupFailureClass = "setup"
 	shortcutChildArtifactCleanupStateArtifactFailure shortcutChildArtifactCleanupFailureClass = "state_artifact"
-	shortcutChildArtifactCleanupCatalogFailure       shortcutChildArtifactCleanupFailureClass = "catalog"
 	shortcutChildArtifactCleanupUploadSessionFailure shortcutChildArtifactCleanupFailureClass = "upload_session"
 	shortcutChildArtifactCleanupParentAckFailure     shortcutChildArtifactCleanupFailureClass = "parent_ack"
 )
@@ -64,14 +63,6 @@ func (e shortcutChildArtifactCleanupError) Error() string {
 
 func (e shortcutChildArtifactCleanupError) Unwrap() error {
 	return e.err
-}
-
-func shortcutChildArtifactCleanupClass(err error) (shortcutChildArtifactCleanupFailureClass, bool) {
-	var cleanupErr shortcutChildArtifactCleanupError
-	if errors.As(err, &cleanupErr) {
-		return cleanupErr.class, true
-	}
-	return "", false
 }
 
 func shortcutChildArtifactCleanupClasses(err error) []shortcutChildArtifactCleanupFailureClass {
@@ -145,7 +136,6 @@ type shortcutChildArtifactCleanupExecutor struct {
 	dataDir              string
 	logger               *slog.Logger
 	remove               func(string) error
-	pruneCatalogRecord   func(string) error
 	deleteUploadSessions func(string, string) error
 }
 
@@ -154,9 +144,6 @@ func newShortcutChildArtifactCleanupExecutor(logger *slog.Logger, dataDir string
 		dataDir: dataDir,
 		logger:  logger,
 		remove:  localpath.Remove,
-		pruneCatalogRecord: func(childMountID string) error {
-			return pruneShortcutChildCatalogRecord(dataDir, childMountID)
-		},
 		deleteUploadSessions: func(childMountID string, localRoot string) error {
 			sessionStore := driveops.NewSessionStore(dataDir, logger)
 			_, err := sessionStore.DeleteForScope(childMountID, localRoot)
@@ -369,15 +356,18 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	return errors.Join(errs...)
 }
 
-// purge deletes a retired shortcut child's state DB family, catalog record
-// and unfinished uploads. It holds the child's store lock for the whole
-// cleanup (syncengine.LockDriveForOfflineChange): a store another engine
-// still has open, such as another configuration's child of the same
-// shortcut sharing the data directory, refuses it as a remaining state
-// artifact and nothing of the child is touched, so the parent publishes the
-// cleanup again and a later attempt finds the store free. Only the store is
-// locked, not the child's folder: a replacement shortcut's child may already
-// sync that folder, and its folder lock is not this store's.
+// purge deletes a retired shortcut child's state DB family and unfinished
+// uploads. A child mount has no catalog record: the catalog holds only
+// canonical drive IDs, which a child mount ID is not.
+//
+// purge holds the child's store lock for the whole cleanup
+// (syncengine.LockDriveForOfflineChange): a store another engine still has
+// open, such as another configuration's child of the same shortcut sharing
+// the data directory, refuses it as a remaining state artifact and nothing of
+// the child is touched, so the parent publishes the cleanup again and a later
+// attempt finds the store free. Only the store is locked, not the child's
+// folder: a replacement shortcut's child may already sync that folder, and
+// its folder lock is not this store's.
 func (e shortcutChildArtifactCleanupExecutor) purge(
 	ctx context.Context,
 	scope shortcutChildArtifactScope,
@@ -429,13 +419,6 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 			))
 		}
 	}
-	if catalogErr := e.pruneCatalogRecord(childMountID); catalogErr != nil {
-		errs = append(errs, classifiedShortcutChildCleanupError(
-			shortcutChildArtifactCleanupCatalogFailure,
-			"forget it in the drive catalog",
-			catalogErr,
-		))
-	}
 	if sessionErr := e.deleteUploadSessions(childMountID, scope.localRoot); sessionErr != nil {
 		errs = append(errs, classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupUploadSessionFailure,
@@ -463,44 +446,12 @@ func (e shortcutChildArtifactCleanupExecutor) requireConfigured() error {
 			fmt.Errorf("cleanup executor data dir is not configured"),
 		)
 	}
-	if e.remove == nil || e.pruneCatalogRecord == nil || e.deleteUploadSessions == nil {
+	if e.remove == nil || e.deleteUploadSessions == nil {
 		return classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupSetupFailure,
 			"configure cleanup executor",
 			fmt.Errorf("cleanup executor is not configured"),
 		)
-	}
-	return nil
-}
-
-func pruneShortcutChildCatalogRecord(dataDir string, childMountID string) error {
-	if !config.IsChildMountID(childMountID) {
-		return nil
-	}
-	catalogPath := config.CatalogPathForDataDir(dataDir)
-	if catalogPath == "" {
-		return nil
-	}
-	if _, err := localpath.Stat(catalogPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("stat catalog before child cleanup: %w", err)
-	}
-
-	catalog, err := config.LoadCatalogForDataDir(dataDir)
-	if err != nil {
-		return fmt.Errorf("load catalog before child cleanup: %w", err)
-	}
-	if _, found := catalog.Drives[childMountID]; !found {
-		return nil
-	}
-
-	if err := config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
-		delete(catalog.Drives, childMountID)
-		return nil
-	}); err != nil {
-		return fmt.Errorf("update catalog for child cleanup: %w", err)
 	}
 	return nil
 }

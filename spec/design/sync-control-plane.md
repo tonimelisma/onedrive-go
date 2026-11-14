@@ -288,8 +288,8 @@ durable truth on startup or later parent refresh. When release cleanup
 succeeds, the old binding stays in the parent store as
 `removed_child_cleanup_pending`: the alias path is no longer protected and no
 child runner is published, but the parent explicitly publishes a child artifact
-cleanup request. Multisync purges the child-owned DB, SQLite sidecars, catalog
-residue, and upload sessions, then acknowledges artifact cleanup to the same
+cleanup request. Multisync purges the child-owned DB, SQLite sidecars and
+upload sessions, then acknowledges artifact cleanup to the same
 live parent engine. The parent deletes the cleanup-pending row only after that
 acknowledgement, so cleanup retry is durable and parent-owned. Cleanup
 diagnostics on the control socket are transient executor status: a failure

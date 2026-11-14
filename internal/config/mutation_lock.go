@@ -39,11 +39,13 @@ var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 // opens the directory afresh, so a function that holds a lock must never take
 // the same directory's lock again: the inner call would wait on the outer one
 // and fail after the timeout. Locked callbacks only read and rewrite their
-// own file, with one exception. An account email change holds the lock on its
-// own folder (emailChanger.withLock), a directory no other lock names, around
-// steps that take the config lock or the catalog lock one after the other.
-// Nothing that holds the config lock or the catalog lock takes the email
-// change lock.
+// own file, with two exceptions. Drive enrollment holds the config lock and
+// then the catalog lock (withConfigAndCatalogLocks), always in that order and
+// as one lock when both files live in one directory. An account email change
+// holds the lock on its own folder (emailChanger.withLock), a directory no
+// other lock names, around steps that take the config lock or the catalog
+// lock one after the other. Nothing takes the catalog lock and then the
+// config lock, and nothing that holds either takes the email change lock.
 type configLocker struct {
 	flock        func(fd int, how int) error
 	sleep        func(time.Duration)
@@ -166,5 +168,47 @@ func loadUpdateSaveCatalog(dataDir string, update func(*Catalog) error) error {
 		return err
 	}
 
-	return SaveCatalogForDataDir(dataDir, catalog)
+	return saveCatalogForDataDir(dataDir, catalog)
+}
+
+// withConfigAndCatalogLocks runs fn holding the config lock and the catalog
+// lock, taken in that order. When the config file and the catalog live in one
+// directory (macOS, or a --config path inside the data directory) that is one
+// lock: a second acquisition on the same directory would wait on the first
+// and fail after the timeout. Both directories are created first, so the
+// comparison is between two existing directories, by identity rather than by
+// name.
+func (l configLocker) withConfigAndCatalogLocks(configPath, catalogPath string, fn func() error) error {
+	return l.withMutationLock(configPath, true, func() error {
+		catalogRoot, _, err := fsroot.OpenPath(catalogPath)
+		if err != nil {
+			return fmt.Errorf("opening catalog lock root: %w", err)
+		}
+		if mkErr := catalogRoot.MkdirAll(configDirPermissions); mkErr != nil {
+			return fmt.Errorf("creating catalog lock directory: %w", mkErr)
+		}
+
+		same, err := sameDirectory(filepath.Dir(configPath), filepath.Dir(catalogPath))
+		if err != nil {
+			return err
+		}
+		if same {
+			return fn()
+		}
+
+		return l.withMutationLock(catalogPath, true, fn)
+	})
+}
+
+func sameDirectory(left, right string) (bool, error) {
+	leftInfo, err := localpath.Stat(left)
+	if err != nil {
+		return false, fmt.Errorf("stating %s: %w", left, err)
+	}
+	rightInfo, err := localpath.Stat(right)
+	if err != nil {
+		return false, fmt.Errorf("stating %s: %w", right, err)
+	}
+
+	return os.SameFile(leftInfo, rightInfo), nil
 }

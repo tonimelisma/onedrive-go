@@ -448,14 +448,6 @@ func seedShortcutChildStateArtifactsForTest(
 		FileHash:   "queued-root-only",
 		FileSize:   43,
 	}))
-	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
-		catalog.Drives[childMountID] = config.CatalogDrive{
-			CanonicalID:   childMountID,
-			DisplayName:   "Accidental child catalog record",
-			RemoteDriveID: child.Engine.RemoteDriveID,
-		}
-		return nil
-	}))
 }
 
 func assertShortcutChildArtifactsPurgedForTest(
@@ -484,9 +476,6 @@ func assertShortcutChildArtifactsPurgedForTest(
 	_, found, err = sessionStore.Load(child.Engine.RemoteDriveID, "/root-only-upload.bin")
 	require.NoError(t, err)
 	assert.False(t, found)
-	catalog, err := config.LoadCatalogForDataDir(dataDir)
-	require.NoError(t, err)
-	assert.NotContains(t, catalog.Drives, childMountID)
 }
 
 // stubTokenSource implements graph.TokenSource for tests.
