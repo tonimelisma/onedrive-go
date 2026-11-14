@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,4 +87,58 @@ func TestTrashRestore_NeverOverwrites(t *testing.T) {
 	data, readErr := os.ReadFile(filepath.Join(syncRoot, "a.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, readErr)
 	assert.Equal(t, "current\n", string(data))
+}
+
+// restoreFailedAfterPlacing is the error of a restore that put the file back
+// and then could not make it durable.
+func restoreFailedAfterPlacing() error {
+	return fmt.Errorf("%w: syncing the folder: input/output error; the trash keeps its copy as entry e1",
+		localtrash.ErrRestoreNotDurable)
+}
+
+// Validates: R-6.4.9
+func TestReportTrashRestore_PlacedFileWithFailureIsPrintedAsRestored(t *testing.T) {
+	cc, out, cid := newTrashTestContext(t)
+
+	err := reportTrashRestore(cc, cid.String(), "e1", "/sync/Docs/report.txt", restoreFailedAfterPlacing())
+
+	require.ErrorIs(t, err, localtrash.ErrRestoreNotDurable, "the command fails although the file is back")
+	assert.Contains(t, out.String(), "Restored /sync/Docs/report.txt.", "the user is told where the file is")
+}
+
+// Validates: R-6.4.9
+func TestReportTrashRestore_JSONCarriesTheWarning(t *testing.T) {
+	cc, out, cid := newTrashTestContext(t)
+	cc.Flags.JSON = true
+	failure := restoreFailedAfterPlacing()
+
+	err := reportTrashRestore(cc, cid.String(), "e1", "/sync/Docs/report.txt", failure)
+
+	require.ErrorIs(t, err, localtrash.ErrRestoreNotDurable)
+	var doc trashRestoreJSONOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &doc))
+	assert.Equal(t, "/sync/Docs/report.txt", doc.RestoredTo)
+	assert.Equal(t, failure.Error(), doc.Warning)
+}
+
+// Validates: R-6.4.9
+func TestReportTrashRestore_CleanRestoreHasNoWarning(t *testing.T) {
+	cc, out, cid := newTrashTestContext(t)
+	cc.Flags.JSON = true
+
+	require.NoError(t, reportTrashRestore(cc, cid.String(), "e1", "/sync/a.txt", nil))
+
+	assert.NotContains(t, out.String(), "warning")
+}
+
+// Validates: R-6.4.9
+func TestReportTrashRestore_NothingPlacedPrintsNothing(t *testing.T) {
+	cc, out, cid := newTrashTestContext(t)
+	cc.Flags.JSON = true
+
+	err := reportTrashRestore(cc, cid.String(), "e1", "", localtrash.ErrRestoreTargetExists)
+
+	require.ErrorIs(t, err, localtrash.ErrRestoreTargetExists)
+	assert.Empty(t, out.String(), "a restore that placed nothing prints no document")
+	assert.NotErrorIs(t, err, localtrash.ErrRestoreNotDurable)
 }

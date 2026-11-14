@@ -63,8 +63,8 @@ var ErrNotRegularFile = errors.New("not a regular file")
 
 // OpenRegular opens path read-only and returns ErrNotRegularFile unless it is
 // a regular file. The open never blocks: a plain open of a FIFO waits for a
-// writer forever, which used to hang the whole sync engine (and its shutdown)
-// on any FIFO in the sync tree. O_NONBLOCK has no effect on regular files.
+// writer forever, which would hang the engine and its shutdown on any FIFO in
+// the sync tree. O_NONBLOCK has no effect on regular files.
 func OpenRegular(path string) (*os.File, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -134,7 +134,7 @@ func readAndClose(file *os.File, path string) ([]byte, error) {
 // path like every other step does.
 func closeAfterFailure(file *os.File, path string, cause error) error {
 	if closeErr := file.Close(); closeErr != nil {
-		return errors.Join(cause, fmt.Errorf("closing %s: %w", path, closeErr))
+		return JoinOnOneLine(cause, fmt.Errorf("closing %s: %w", path, closeErr))
 	}
 
 	return cause
@@ -170,6 +170,19 @@ func Lstat(path string) (os.FileInfo, error) {
 	}
 
 	return info, nil
+}
+
+// IsMissingName reports whether err carries the errno of a name that is not
+// there: ENOENT, or ENOTDIR for a folder on the way to it that is a file,
+// below which nothing can exist. Only the filesystem's own answer counts, so
+// a failure without an errno (a path escaping a rooted handle, the bare
+// fs.ErrNotExist sentinel) is never evidence of absence. It is one of the two
+// answers the rooted capabilities need before they report a failure as
+// os.ErrNotExist; the other is a rooted lstat that finds the name missing too.
+func IsMissingName(err error) bool {
+	errno, ok := errors.AsType[syscall.Errno](err)
+
+	return ok && (errno == syscall.ENOENT || errno == syscall.ENOTDIR)
 }
 
 // UserTreeDirPerm is the mode the client asks for when it creates a folder in
@@ -227,8 +240,8 @@ func Remove(path string) error {
 	return nil
 }
 
-// Rename moves src to dst and replaces a file already at dst.
-// RenameNoReplace is the move that refuses to replace one.
+// Rename moves src to dst and replaces a file already at dst. A move inside a
+// sync folder that must refuse to replace one is synctree.Root.RenameNoReplace.
 func Rename(src, dst string) error {
 	srcPath, err := absolutePath(src)
 	if err != nil {
@@ -392,6 +405,30 @@ func IsDirSyncUnsupported(err error) bool {
 	return errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }
 
+// IsLinkUnsupported reports the errnos of a hard link the filesystem cannot
+// make: no hard links at all (EPERM, ENOTSUP, EOPNOTSUPP), a folder (EPERM),
+// or a file with too many links already (EMLINK). It is the one answer to
+// whether an entry can be linked, for the no-replace rename that falls back
+// from a link and for the tests that need one.
+func IsLinkUnsupported(err error) bool {
+	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EMLINK)
+}
+
+// JoinOnOneLine returns first and second as one error, either alone when the
+// other is nil, on one line where errors.Join would print two: the console
+// prints a failure as one line. errors.Is finds each.
+func JoinOnOneLine(first, second error) error {
+	switch {
+	case first == nil:
+		return second
+	case second == nil:
+		return first
+	default:
+		return fmt.Errorf("%w; %w", first, second)
+	}
+}
+
 // AtomicWrite writes data to path via a temp file created in the target
 // directory, then fsyncs, closes, renames it into place and fsyncs the
 // directory (R-6.5.4): the rename is a directory update, and without the
@@ -430,7 +467,7 @@ func atomicWrite(
 			return
 		}
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			err = errors.Join(err, fmt.Errorf("removing temp file %s: %w", tempPath, removeErr))
+			err = JoinOnOneLine(err, fmt.Errorf("removing temp file %s: %w", tempPath, removeErr))
 		}
 	}()
 
@@ -472,7 +509,7 @@ func closeWithContext(temp *os.File, action string, cause error) error {
 	closeErr := temp.Close()
 	baseErr := fmt.Errorf("%s: %w", action, cause)
 	if closeErr != nil {
-		return errors.Join(baseErr, fmt.Errorf("closing temp file: %w", closeErr))
+		return JoinOnOneLine(baseErr, fmt.Errorf("closing temp file: %w", closeErr))
 	}
 
 	return baseErr

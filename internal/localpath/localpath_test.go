@@ -1,6 +1,7 @@
 package localpath
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -370,4 +371,40 @@ func TestOpenRegular_RejectsFIFOWithoutBlocking(t *testing.T) {
 	f, err := OpenRegular(regular)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+}
+
+// Validates: R-6.4.8
+//
+// A link the filesystem cannot make is told apart from one that failed for
+// another reason, however it is wrapped: no hard links, a folder, or too
+// many links already.
+func TestIsLinkUnsupported_OnlyTheErrnosOfALinkThatCannotBeMade(t *testing.T) {
+	t.Parallel()
+
+	for _, errno := range []syscall.Errno{syscall.EPERM, syscall.ENOTSUP, syscall.EOPNOTSUPP, syscall.EMLINK} {
+		assert.True(t, IsLinkUnsupported(&os.LinkError{Op: "linkat", Old: "a", New: "b", Err: errno}), errno.Error())
+	}
+	for _, errno := range []syscall.Errno{syscall.EEXIST, syscall.ENOENT, syscall.EACCES, syscall.EXDEV} {
+		assert.False(t, IsLinkUnsupported(fmt.Errorf("linking a: %w", errno)), errno.Error())
+	}
+	assert.False(t, IsLinkUnsupported(nil))
+}
+
+// Validates: R-6.6.18
+//
+// Two failures of one operation are reported on one line, each still
+// matching, and one failure alone is itself.
+func TestJoinOnOneLine_KeepsBothCausesOnOneLine(t *testing.T) {
+	t.Parallel()
+
+	first := errors.New("first failure")
+	second := errors.New("second failure")
+
+	joined := JoinOnOneLine(first, second)
+	require.ErrorIs(t, joined, first)
+	require.ErrorIs(t, joined, second)
+	assert.Equal(t, "first failure; second failure", joined.Error())
+	assert.Equal(t, first, JoinOnOneLine(first, nil))
+	assert.Equal(t, second, JoinOnOneLine(nil, second))
+	require.NoError(t, JoinOnOneLine(nil, nil))
 }

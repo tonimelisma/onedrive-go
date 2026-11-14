@@ -3841,8 +3841,8 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 // Validates: R-2.17.10
 //
 // A directory's conflict copy is a rename of the directory to a free
-// conflict name (D-059a). It used to be renamed onto a placeholder file and
-// failed with ENOTDIR on every pass.
+// conflict name (D-059a): the directory and what it holds move to the copy's
+// name, and nothing is left at the old one.
 func TestExecutor_ConflictCopy_DirectorySourceIsRenamed(t *testing.T) {
 	t.Parallel()
 
@@ -3853,7 +3853,8 @@ func TestExecutor_ConflictCopy_DirectorySourceIsRenamed(t *testing.T) {
 	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &pathView{Path: "thing"}})
 	requireOutcomeSuccess(t, &o)
 
-	assert.NoDirExists(t, filepath.Join(syncRoot, "thing"))
+	_, err := os.Lstat(filepath.Join(syncRoot, "thing"))
+	require.ErrorIs(t, err, os.ErrNotExist, "nothing of any kind is left at the old name")
 	assert.Contains(t, o.OldPath, "thing.conflict-")
 	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
 }

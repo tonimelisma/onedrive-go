@@ -610,11 +610,18 @@ func (e *executor) renameLocal(oldPath, newPath string, spellingOnly bool) error
 		return err
 	}
 
-	//nolint:wrapcheck // synctree names both paths
-	return e.syncTree.RenameWithTemporarySibling(
+	err = e.syncTree.RenameWithTemporarySibling(
 		filepath.Join(filepath.Dir(newPath), stored), newPath,
 		spellingRenameArtifactPrefix+filepath.Base(newPath), localSpellingRenameAttempts,
 	)
+	if errors.Is(err, synctree.ErrSourceNotRemoved) {
+		// The entry has its new spelling; a name left behind is reported.
+		e.logger.Warn("Renamed "+newPath+", but could not remove a name it was renamed from",
+			slog.String("path", newPath), slog.Any("error", err))
+		return nil
+	}
+
+	return err //nolint:wrapcheck // synctree names both paths
 }
 
 // storedNameSpelling returns the spelling the parent directory holds for the
