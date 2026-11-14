@@ -76,6 +76,8 @@ type moveScenarioRemote struct {
 	versions []string
 
 	uploads int
+	// downloads counts the file contents OneDrive served.
+	downloads int
 	// interruptCreates stops every create after its empty item exists.
 	interruptCreates bool
 	// churnInterruptedCreates also moves an interrupted create's eTag without
@@ -619,6 +621,9 @@ func (r *moveScenarioRemote) getItemByPath(remotePath string) (*graph.Item, erro
 func (r *moveScenarioRemote) download(itemID string, w io.Writer) (int64, error) {
 	r.mu.Lock()
 	content, ok := r.contents[itemID]
+	if ok {
+		r.downloads++
+	}
 	r.mu.Unlock()
 	if !ok {
 		return 0, graph.ErrNotFound

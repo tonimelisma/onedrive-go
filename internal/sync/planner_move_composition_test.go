@@ -340,14 +340,13 @@ func TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove(t *testing.
 	require.NoError(t, detectDependencyCycle(deps))
 }
 
-// Validates: R-2.17.1, R-2.8.11
+// Validates: R-2.17.1, R-2.17.6
 //
 // The user moved folder q to docs and re-created q, while OneDrive deleted
-// q/x. The cleanup of q/x waited for the re-created q (parent folder create),
-// the create waited for the move vacating q, and the move waited for the
-// cleanup under its source: a cycle, so all three were dropped every pass
-// and docs never reached OneDrive (model test seed 38). Removing an entry
-// never needs its parent created.
+// q/x. The re-created q waits for the move vacating q, and the move waits for
+// the cleanup under its source, so a cleanup of q/x that waited for the
+// re-created q would close a cycle and docs would never reach OneDrive.
+// Removing an entry never needs its parent created.
 func TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate(t *testing.T) {
 	t.Parallel()
 
@@ -365,11 +364,109 @@ func TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate(t 
 	assert.NotContains(t, deps[2], 1, "a cleanup does not wait for a folder create")
 }
 
-// Validates: R-2.8.11
+// Validates: R-2.17.6
+//
+// The plans of TestRunOnce_MoveIntoAFolderRecreatedAtAMovedFoldersPathConverges,
+// as its passes made them: the user moved docs to photos/photos, made a new
+// docs, and moved docs/50%.txt into the new docs as renamed-50%.txt, with a
+// run after each step or one run for both. Every plan has an order, and
+// nothing is dropped. In the one run, the file's move waits for the new docs,
+// the new docs waits for the folder move that vacates its path, and the
+// folder move does not wait for the file: the file leaves after it, into the
+// new folder, not first.
+func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	folderMove := Action{Type: ActionRemoteMove, OldPath: "docs", Path: "photos/photos", View: folder}
+	recreate := Action{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateRemote}
+
+	for _, tc := range []struct {
+		name     string
+		actions  []Action
+		wantDeps [][]int
+	}{
+		{name: "first of two runs", actions: []Action{folderMove, recreate}, wantDeps: [][]int{nil, {0}}},
+		{name: "second of two runs", actions: []Action{
+			{Type: ActionRemoteMove, OldPath: "photos/photos/50%.txt", Path: "docs/renamed-50%.txt", View: file},
+		}, wantDeps: [][]int{nil}},
+		{name: "one run", actions: []Action{
+			{Type: ActionRemoteMove, OldPath: "docs/50%.txt", Path: "docs/renamed-50%.txt", View: file},
+			folderMove,
+			recreate,
+		}, wantDeps: [][]int{{2}, nil, {1}}},
+		{name: "one run, the moves made on OneDrive", actions: []Action{
+			{Type: ActionLocalMove, OldPath: "docs/50%.txt", Path: "docs/renamed-50%.txt", View: file},
+			{Type: ActionLocalMove, OldPath: "docs", Path: "photos/photos", View: folder},
+			{Type: ActionFolderCreate, Path: "docs", CreateSide: createLocal},
+		}, wantDeps: [][]int{{2}, nil, {1}}},
+		{name: "one run, into a folder made inside the new one", actions: []Action{
+			{Type: ActionRemoteMove, OldPath: "docs/50%.txt", Path: "docs/new/50%.txt", View: file},
+			folderMove,
+			recreate,
+			{Type: ActionFolderCreate, Path: "docs/new", CreateSide: CreateRemote},
+		}, wantDeps: [][]int{{3}, nil, {1}, {2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			kept, deps := isolateDependencyCycles(tc.actions, nil)
+			assert.Len(t, kept, len(tc.actions), "no action is dropped as a cycle")
+			require.NoError(t, detectDependencyCycle(deps))
+			assert.Equal(t, tc.wantDeps, deps)
+		})
+	}
+}
+
+// Validates: R-2.17.6
+//
+// Only a move into or below a folder created at the path a folder move
+// vacates, on the side the move vacates it, leaves after the move. Without
+// that create, with a create on the other side, for a sibling that moves
+// elsewhere, or for a delete under the source, the folder move still waits
+// for the work under its source.
+func TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSource(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	folderMove := Action{Type: ActionRemoteMove, OldPath: "docs", Path: "photos/photos", View: folder}
+	fileMove := Action{Type: ActionRemoteMove, OldPath: "docs/a.txt", Path: "docs/b.txt", View: file}
+
+	for _, tc := range []struct {
+		name     string
+		actions  []Action
+		wantDeps [][]int
+	}{
+		{name: "no create at the vacated path", actions: []Action{fileMove, folderMove}, wantDeps: [][]int{nil, {0}}},
+		{name: "a create on the other side", actions: []Action{
+			fileMove, folderMove, {Type: ActionFolderCreate, Path: "docs", CreateSide: createLocal},
+		}, wantDeps: [][]int{{2}, {0}, nil}},
+		{name: "a sibling that moves elsewhere", actions: []Action{
+			fileMove,
+			folderMove,
+			{Type: ActionRemoteMove, OldPath: "docs/c.txt", Path: "c.txt", View: file},
+			{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateRemote},
+		}, wantDeps: [][]int{{3}, {2}, nil, {1}}},
+		{name: "a delete under the source", actions: []Action{
+			{Type: ActionRemoteDelete, Path: "docs/old.txt", View: file},
+			folderMove,
+			{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateRemote},
+		}, wantDeps: [][]int{nil, {0}, {1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.wantDeps, buildDependencies(tc.actions))
+		})
+	}
+}
+
+// Validates: R-2.17.6
 //
 // A dependency cycle drops only the actions on it and their dependents
-// (D-059c); it used to abort the whole plan, so one bad pair stopped every
-// other change from syncing.
+// (D-059c): a cycle never stops the rest of the plan.
 func TestIsolateDependencyCycles_KeepsUnrelatedWork(t *testing.T) {
 	t.Parallel()
 
