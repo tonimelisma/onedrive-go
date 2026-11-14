@@ -3246,11 +3246,15 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 	orch := NewOrchestrator(cfg)
 
 	var mu sync.Mutex
+	made := make(map[string]int)
 	started := make(map[string]int)
 	stopped := make(map[string]int)
 
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		mountID := string(req.Mount.id())
+		mu.Lock()
+		made[mountID]++
+		mu.Unlock()
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				mu.Lock()
@@ -3286,16 +3290,18 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 	insertDriveConfigLine(t, cfgPath, rd1.CanonicalID, `ignored_dirs = ["hidden"]`)
 	postControlReload(t, cfg.ControlSocketPath)
 
+	// The reload answers once it has stopped and made the engines of what it
+	// changes, so the counts are final when the answer arrives.
+	mu.Lock()
+	assert.Equal(t, 2, made[rd1ID], "the changed filter mount got a new engine")
+	assert.Equal(t, 1, made[rd2ID], "unchanged filter mount should not restart")
+	assert.Zero(t, stopped[rd2ID], "unchanged filter mount should not stop")
+	mu.Unlock()
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return started[rd1ID] == 2 && stopped[rd1ID] == 1
 	}, 5*time.Second, 10*time.Millisecond)
-	assert.Never(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return started[rd2ID] > 1 || stopped[rd2ID] > 0
-	}, 200*time.Millisecond, 10*time.Millisecond, "unchanged filter mount should not restart")
 
 	cancel()
 
@@ -3430,9 +3436,10 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	var started atomic.Int32
+	var made, started atomic.Int32
 
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		made.Add(1)
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
@@ -3466,9 +3473,9 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	assert.Contains(t, response.Message, "kept its previous settings")
 	assert.Contains(t, response.Message, "loading config for reload")
 
-	assert.Never(t, func() bool {
-		return started.Load() > 1
-	}, 200*time.Millisecond, 10*time.Millisecond, "mount should still be running after invalid config reload")
+	// The reload answers once it is done, so an engine it made for a restart
+	// would be counted by now.
+	assert.Equal(t, int32(1), made.Load(), "mount should still be running after invalid config reload")
 	assert.Equal(t, int32(1), started.Load(), "mount should still be running after invalid config reload")
 
 	cancel()
@@ -3508,8 +3515,9 @@ func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 
-	var started atomic.Int32
+	var made, started atomic.Int32
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		made.Add(1)
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
@@ -3543,9 +3551,9 @@ func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
 		require.Fail(t, "reload warning was not emitted")
 	}
 
-	assert.Never(t, func() bool {
-		return started.Load() > 1
-	}, 200*time.Millisecond, 10*time.Millisecond)
+	// The reload warns after it has made the engines of what it restarts,
+	// and the healthy mount did not change, so it kept its one engine.
+	assert.Equal(t, int32(1), made.Load(), "the healthy mount should not restart")
 
 	cancel()
 

@@ -1,11 +1,7 @@
 package sync
 
-import (
-	"time"
-)
-
-type engineDebugEventType string
-
+// The engine's own debug event kinds. The stream's vocabulary, the
+// observation events among it, is in domain_debug_events.go.
 const (
 	engineDebugEventScopeActivated                      engineDebugEventType = "scope_activated"
 	engineDebugEventScopeReleased                       engineDebugEventType = "scope_released"
@@ -66,11 +62,6 @@ const (
 )
 
 const (
-	engineDebugObserverLocal  = "local"
-	engineDebugObserverRemote = "remote"
-)
-
-const (
 	engineDebugNoteRemoteCurrent  = "remote_current"
 	engineDebugNoteLocalSkipped   = "local_skipped"
 	engineDebugNotePrimaryWatch   = "primary_watch"
@@ -78,24 +69,10 @@ const (
 	engineDebugNoteFullRefresh    = "full_refresh"
 )
 
-type engineDebugEvent struct {
-	At          time.Time
-	Type        engineDebugEventType
-	DriveID     string
-	ScopeKey    ScopeKey
-	Path        string
-	Observer    string
-	Delay       time.Duration
-	Note        string
-	Count       int
-	Outbox      int
-	Running     int
-	IdleWorkers int
-	Error       string
-}
-
-type DebugEvent = engineDebugEvent
-
+// emitDebugEvent stamps event with the engine's clock and drive and hands it
+// to the installed hook, if any. Every debug event of a run, the watch
+// observers' included, passes through here.
+//
 //nolint:gocritic // Value semantics are intentional so runtime hooks cannot mutate engine-owned events.
 func (e *Engine) emitDebugEvent(event engineDebugEvent) {
 	if event.At.IsZero() {
@@ -110,6 +87,9 @@ func (e *Engine) emitDebugEvent(event engineDebugEvent) {
 	}
 }
 
+// SetDebugEventHook installs the sink of the engine's debug event stream.
+// Call it before a run starts; the hook is called on the goroutine that
+// emits each event.
 func (e *Engine) SetDebugEventHook(hook func(DebugEvent)) {
 	e.debugEventHook = hook
 }

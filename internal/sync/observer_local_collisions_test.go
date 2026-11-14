@@ -226,12 +226,18 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// Create "Existing.txt" on disk. On case-insensitive FS (macOS),
-	// os.ReadDir returns this canonical name.
+	// Create "Existing.txt" on disk, then the created "existing.txt". On a
+	// case-insensitive FS (macOS) the second write is the same file, and
+	// os.ReadDir returns the canonical name; on a case-sensitive one it is a
+	// second file. Either way the create's stat succeeds, so what drops it
+	// is the collision check: a created path that is not there is dropped
+	// before the check.
 	writeTestFile(t, dir, "Existing.txt", "content")
+	writeTestFile(t, dir, "existing.txt", "other")
 
 	mockWatcher := newMockFsWatcher()
-	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
+	recorder := newDebugEventRecorder()
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{DebugEvents: recorder.record})
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
@@ -240,13 +246,9 @@ func TestWatch_CaseCollision_EventSuppressed(t *testing.T) {
 		Op:   fsnotify.Create,
 	}
 
-	// No event should be emitted — the case collision suppresses it.
-	select {
-	case ev := <-events:
-		require.FailNow(t, "expected no event", "got %+v", ev)
-	case <-time.After(500 * time.Millisecond):
-		// Good — no event emitted.
-	}
+	// The case collision suppresses the event: the observer reports the
+	// skip and emits nothing.
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("existing.txt"), "the collision skip of existing.txt")
 
 	stopWatch(t, cancel, done)
 }
@@ -257,7 +259,16 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// Create a subdirectory with two files that differ only in case.
+	caseSensitive := isCaseSensitiveFS(t, dir)
+
+	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{DebugEvents: recorder.record})
+
+	events := make(chan changeEvent, 10)
+	cancel, done := startMockWatchInLoop(t, obs, mockWatcher, dir, events)
+
+	// A new subdirectory with two files that differ only in case.
 	subDir := filepath.Join(dir, "subdir")
 	require.NoError(t, os.MkdirAll(subDir, 0o700))
 	writeTestFile(t, subDir, "Existing.txt", "content1")
@@ -265,46 +276,28 @@ func TestScanNewDirectory_CaseCollision_Skipped(t *testing.T) {
 	// On case-insensitive FS, this overwrites Existing.txt (same file).
 	// On case-sensitive FS, this creates a second file.
 	writeTestFile(t, subDir, "existing.txt", "content2")
-
-	mockWatcher := newMockFsWatcher()
-	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
-
-	events := make(chan changeEvent, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 	mockWatcher.events <- fsnotify.Event{
 		Name: subDir,
 		Op:   fsnotify.Create,
 	}
 
-	// Collect events within a window.
-	var received []changeEvent
-	timeout := time.After(500 * time.Millisecond)
-	for {
-		select {
-		case ev := <-events:
-			received = append(received, ev)
-			continue
-		case <-timeout:
-		}
+	// The directory's own event goes out before its contents are scanned.
+	dirEv := receiveWithin(t, events, "the event of the new directory")
+	assert.Equal(t, "subdir", dirEv.Path)
+	assert.Equal(t, ItemTypeFolder, dirEv.ItemType)
 
-		break
+	if !caseSensitive {
+		// One file on disk, no collision: the scan emits it, and it was the
+		// scan's last entry.
+		fileEv := receiveWithin(t, events, "the event of the one file on disk")
+		assert.Equal(t, "subdir/Existing.txt", fileEv.Path)
+		requireNoChangeEvent(t, events, "the scan's last entry")
+	} else {
+		// Two files whose names collide: the scan skips both, so neither is
+		// emitted.
+		requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("subdir/Existing.txt"), "the collision skip of Existing.txt")
+		requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("subdir/existing.txt"), "the collision skip of existing.txt")
 	}
-
-	// The directory event itself should be emitted. On case-sensitive FS,
-	// both files exist and the collision check skips both. On case-insensitive
-	// FS, only one file exists (no collision), so one file event is emitted.
-	// In both cases, we should NOT see two file events.
-	fileEvents := 0
-	for _, ev := range received {
-		if ev.ItemType == ItemTypeFile {
-			fileEvents++
-		}
-	}
-
-	// At most 1 file event (case-insensitive: 1 file on disk, no collision;
-	// case-sensitive: 2 files on disk, collision detected, both skipped → 0).
-	assert.LessOrEqual(t, fileEvents, 1,
-		"case collision should prevent duplicate file events; got %d file events", fileEvents)
 
 	stopWatch(t, cancel, done)
 }
@@ -330,8 +323,10 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 	require.NoError(t, os.Mkdir(xyzDir, 0o700))
 
 	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
+		DebugEvents:    recorder.record,
 	})
 
 	events := make(chan changeEvent, 10)
@@ -341,15 +336,8 @@ func TestWatch_DirectoryCollision_Suppressed(t *testing.T) {
 		Op:   fsnotify.Create,
 	}
 
-	// The directory create should be suppressed — case collision with "xyz".
-	select {
-	case ev := <-events:
-		if ev.ItemType == ItemTypeFolder && ev.Name == "Xyz" {
-			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
-		}
-	case <-time.After(500 * time.Millisecond):
-		// Good — no directory event emitted.
-	}
+	// The directory create is suppressed: case collision with "xyz".
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("Xyz"), "the collision skip of the Xyz directory")
 
 	stopWatch(t, cancel, done)
 }
@@ -372,8 +360,10 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 	require.NoError(t, os.Mkdir(docsLower, 0o700))
 
 	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
+		DebugEvents:    recorder.record,
 	})
 
 	events := make(chan changeEvent, 10)
@@ -385,15 +375,8 @@ func TestWatch_TwoDirectoryCollision_Suppressed(t *testing.T) {
 		Op:   fsnotify.Create,
 	}
 
-	// The directory create should be suppressed.
-	select {
-	case ev := <-events:
-		if ev.ItemType == ItemTypeFolder && ev.Name == docsName {
-			require.FailNow(t, "directory event should be suppressed due to case collision", "got %+v", ev)
-		}
-	case <-time.After(500 * time.Millisecond):
-		// Good — no directory event emitted.
-	}
+	// The directory create is suppressed.
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf(docsName), "the collision skip of the docs directory")
 
 	stopWatch(t, cancel, done)
 }
@@ -406,7 +389,17 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 	dir := t.TempDir()
 	skipIfCaseInsensitiveFS(t, dir)
 
-	// Create a parent directory with two subdirectories differing only in case.
+	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
+	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
+		CollisionPeers: make(map[string]map[string]struct{}),
+		DebugEvents:    recorder.record,
+	})
+
+	events := make(chan changeEvent, 10)
+	cancel, done := startMockWatchInLoop(t, obs, mockWatcher, dir, events)
+
+	// A new parent directory with two subdirectories differing only in case.
 	parentDir := filepath.Join(dir, "parent")
 	require.NoError(t, os.Mkdir(parentDir, 0o700))
 
@@ -416,46 +409,19 @@ func TestScanNewDirectory_SubdirCollision_Suppressed(t *testing.T) {
 	abcLower := filepath.Join(parentDir, "abc")
 	require.NoError(t, os.Mkdir(abcLower, 0o700))
 
-	mockWatcher := newMockFsWatcher()
-	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
-		CollisionPeers: make(map[string]map[string]struct{}),
-	})
-
-	events := make(chan changeEvent, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-
 	// Send Create for parent directory → triggers scanNewDirectory.
 	mockWatcher.events <- fsnotify.Event{
 		Name: parentDir,
 		Op:   fsnotify.Create,
 	}
 
-	// Collect events. At most 1 subdirectory should be emitted (the other
-	// should be suppressed by collision check).
-	var received []changeEvent
-	timeout := time.After(500 * time.Millisecond)
-	for {
-		select {
-		case ev := <-events:
-			received = append(received, ev)
-			continue
-		case <-timeout:
-		}
-
-		break
-	}
-
-	dirEvents := 0
-	for _, ev := range received {
-		if ev.ItemType == ItemTypeFolder && ev.Path != "parent" {
-			dirEvents++
-		}
-	}
-
-	// At most 1 subdirectory event (both ABC and abc exist, one should
-	// be suppressed by the collision check in scanNewDirectory).
-	assert.LessOrEqual(t, dirEvents, 1,
-		"case collision should suppress one of the colliding subdirectories; got %d dir events", dirEvents)
+	// The parent's own event goes out before its contents are scanned. ABC
+	// and abc collide with each other, so the scan skips both: neither
+	// subdirectory is emitted, let alone both.
+	parentEv := receiveWithin(t, events, "the event of the parent directory")
+	assert.Equal(t, "parent", parentEv.Path)
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("parent/ABC"), "the collision skip of ABC")
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("parent/abc"), "the collision skip of abc")
 
 	stopWatch(t, cancel, done)
 }
@@ -479,8 +445,10 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	require.NoError(t, os.WriteFile(lowerPath, []byte("content2"), 0o600))
 
 	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
+		DebugEvents:    recorder.record,
 	})
 
 	events := make(chan changeEvent, 10)
@@ -491,13 +459,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 		Name: lowerPath,
 		Op:   fsnotify.Create,
 	}
-
-	// Verify suppressed — no event within timeout.
-	select {
-	case ev := <-events:
-		require.FailNow(t, "expected create to be suppressed", "got %+v", ev)
-	case <-time.After(300 * time.Millisecond):
-	}
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("file.txt"), "the collision skip of file.txt")
 
 	// Now delete "file.txt" from disk — the file must be gone for the
 	// survivor's re-emitted handleCreate to see no collision.
@@ -558,8 +520,10 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	require.NoError(t, os.WriteFile(upperPath, []byte("content3"), 0o600))
 
 	mockWatcher := newMockFsWatcher()
+	recorder := newDebugEventRecorder()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
+		DebugEvents:    recorder.record,
 	})
 
 	events := make(chan changeEvent, 10)
@@ -576,13 +540,8 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 		Name: upperPath,
 		Op:   fsnotify.Create,
 	}
-
-	// Drain any spurious events.
-	select {
-	case ev := <-events:
-		require.FailNow(t, "expected no create events before delete", "got %+v", ev)
-	case <-time.After(300 * time.Millisecond):
-	}
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("file.txt"), "the collision skip of file.txt")
+	requireDroppedWithoutEvent(t, recorder, events, collisionSkipOf("FILE.txt"), "the collision skip of FILE.txt")
 
 	// Delete "file.txt" from disk.
 	require.NoError(t, os.Remove(lowerPath))
@@ -592,34 +551,17 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 		Op:   fsnotify.Remove,
 	}
 
-	// Expect only ChangeDelete for "file.txt". The re-emitted peers
-	// (File.txt and FILE.txt) still collide → suppressed again.
-	var received []changeEvent
-	timeout := time.After(1 * time.Second)
-
-	for {
-		select {
-		case ev := <-events:
-			received = append(received, ev)
-			continue
-		case <-timeout:
-		}
-
-		break
-	}
-
-	// Only the delete should come through; re-emitted creates are suppressed.
-	for _, ev := range received {
-		if ev.Type == changeCreate {
-			assert.FailNow(t, "expected no create events (survivors still collide)", "got %+v", ev)
-		}
-	}
-
-	assert.Len(t, received, 1, "expected exactly 1 event (the delete)")
-	if len(received) == 1 {
-		assert.Equal(t, ChangeDelete, received[0].Type)
-		assert.Equal(t, "file.txt", received[0].Name)
-	}
+	// Only the delete of "file.txt" comes through. The delete re-emits its
+	// peer FILE.txt before it sends its own event, and FILE.txt still
+	// collides with File.txt, so it is suppressed again: its second skip is
+	// reported before the delete, no create precedes the delete, and nothing
+	// follows it.
+	ev := receiveWithin(t, events, "the delete of file.txt")
+	assert.Equal(t, ChangeDelete, ev.Type, "expected no create events (survivors still collide): got %+v", ev)
+	assert.Equal(t, "file.txt", ev.Name)
+	require.Equal(t, 2, recorder.countEvents(collisionSkipOf("FILE.txt")),
+		"the re-emitted FILE.txt was skipped again before the delete went out")
+	requireNoChangeEvent(t, events, "the delete, which the re-emitted peers precede")
 
 	stopWatch(t, cancel, done)
 }

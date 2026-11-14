@@ -5,8 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -18,12 +23,36 @@ import (
 // (driveops.SessionUploader, ItemSessionUploader), and engineMockClient does
 // not: without these, scenario, chaos and model tests never ran the large-file
 // route, where the session request of a new file fails after its create.
+// Content goes up in fragments and a session keeps what it accepted, so a
+// fault between two fragments leaves a part-uploaded session for a resume to
+// finish.
 
-// scenarioSession is one open upload session: the item it writes and that
-// item's eTag when it was opened.
+// scenarioSession is one open upload session: the item it writes, that
+// item's eTag when it was opened, and the content it has accepted so far,
+// from offset 0. A request that fails loses none of it: OneDrive keeps a
+// session's fragments and answers a status query with the next expected
+// range.
 type scenarioSession struct {
-	itemID string
-	etag   string
+	itemID   string
+	etag     string
+	received string
+}
+
+// scenarioSessionFragmentSize is the size of every fragment but the last the
+// fake's session client sends. Graph's client sends 10 MiB
+// (graph.ChunkedUploadChunkSize); the fake sends an eighth of that, which is
+// four times Graph's 320 KiB alignment, so a file just above the 4 MiB
+// session threshold spans several fragments and a fault can land between two
+// of them.
+const scenarioSessionFragmentSize = graph.ChunkedUploadChunkSize / 8
+
+// scenarioFragment is one fragment that reached a session: where it starts,
+// how long it is, and whether the session accepted it (it was the next
+// expected range).
+type scenarioFragment struct {
+	offset   int64
+	size     int64
+	accepted bool
 }
 
 // scenarioSessionExpiry is when every scenario session expires: far enough
@@ -93,33 +122,91 @@ func (c *scenarioSessionClient) CreateUploadSessionForItem(
 	return c.chaos.createUploadSessionForItem(itemID, open)
 }
 
-// UploadFromSession sends the content through a fresh session.
+// UploadFromSession sends the content through a fresh session, fragment by
+// fragment, as graph.Client does.
 func (c *scenarioSessionClient) UploadFromSession(
 	_ context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, _ graph.ProgressFunc,
 ) (*graph.Item, error) {
-	upload := func() (*graph.Item, error) {
-		return c.remote.uploadThroughSession(c.t, session.UploadURL, content, totalSize, graph.ErrNotFound)
-	}
-	if c.chaos == nil {
-		return upload()
-	}
-
-	return c.chaos.sessionUpload(chaosOpSessionUpload, session, upload)
+	return c.sendFragments(c.faultStream(chaosOpSessionUpload, session), chaosOpSessionUpload, session, content, totalSize, 0)
 }
 
-// ResumeUpload resumes a recorded session; one OneDrive no longer holds has
-// expired.
+// ResumeUpload asks the session for its next expected range and sends the
+// content from there, as graph.Client does; a session OneDrive no longer
+// holds has expired.
 func (c *scenarioSessionClient) ResumeUpload(
 	_ context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, _ graph.ProgressFunc,
 ) (*graph.Item, error) {
-	resume := func() (*graph.Item, error) {
-		return c.remote.uploadThroughSession(c.t, session.UploadURL, content, totalSize, graph.ErrUploadSessionExpired)
+	cc := c.faultStream(chaosOpSessionResume, session)
+	if cc != nil {
+		if err := c.chaos.before(cc, chaosOpSessionResume); err != nil {
+			return nil, fmt.Errorf("graph: querying session for resume: %w", err)
+		}
 	}
-	if c.chaos == nil {
-		return resume()
+	next, open := c.remote.sessionNextExpected(session.UploadURL)
+	if !open {
+		return nil, fmt.Errorf("graph: querying session for resume: %w", graph.ErrUploadSessionExpired)
 	}
 
-	return c.chaos.sessionUpload(chaosOpSessionResume, session, resume)
+	return c.sendFragments(cc, chaosOpSessionResume, session, content, totalSize, next)
+}
+
+// faultStream is the chaos layer's fault stream for one upload call through
+// session, or nil without the layer.
+func (c *scenarioSessionClient) faultStream(op string, session *graph.UploadSession) *chaosCall {
+	if c.chaos == nil {
+		return nil
+	}
+
+	return c.chaos.call(op, chaosSessionKey(session))
+}
+
+// sendFragments sends content[from:] through the session in fragments of
+// scenarioSessionFragmentSize and returns the item the last one commits. A
+// failure stops it: what the session accepted before stays there for a
+// resume. As in graph.Client, a failure of the final fragment is uncertain
+// (graph.FinalFragmentError), because the content may have been committed.
+func (c *scenarioSessionClient) sendFragments(
+	cc *chaosCall, op string, session *graph.UploadSession, content io.ReaderAt, totalSize, from int64,
+) (*graph.Item, error) {
+	for offset := from; offset < totalSize; {
+		size := min(int64(scenarioSessionFragmentSize), totalSize-offset)
+		item, complete, err := c.sendFragment(cc, op, session, content, offset, size, totalSize)
+		switch {
+		case err != nil && offset+size == totalSize:
+			return nil, fmt.Errorf("graph: uploading final chunk at offset %d: %w", offset, &graph.FinalFragmentError{Err: err})
+		case err != nil:
+			return nil, fmt.Errorf("graph: uploading chunk at offset %d: %w", offset, err)
+		case complete:
+			return item, nil
+		}
+		offset += size
+	}
+
+	return nil, fmt.Errorf("graph: upload session has no range left to send from offset %d of %d", from, totalSize)
+}
+
+// sendFragment sends one fragment through the chaos layer, when there is
+// one: it may fail before it lands, and the final fragment may land and
+// lose its answer. It reports whether the fragment completed the content.
+func (c *scenarioSessionClient) sendFragment(
+	cc *chaosCall, op string, session *graph.UploadSession, content io.ReaderAt, offset, size, totalSize int64,
+) (*graph.Item, bool, error) {
+	data := make([]byte, size)
+	if _, err := content.ReadAt(data, offset); err != nil && err != io.EOF {
+		return nil, false, fmt.Errorf("read upload content at offset %d: %w", offset, err)
+	}
+	if cc != nil {
+		if err := c.chaos.fragmentFault(cc, op, offset); err != nil {
+			return nil, false, err
+		}
+	}
+	item, complete, err := c.remote.putFragment(c.t, session.UploadURL, offset, string(data), totalSize)
+	if err != nil || !complete || cc == nil || !cc.roll(chaosFaultOdds) {
+		return item, complete, err
+	}
+	_, lostErr := c.chaos.lostResponseError(cc, op)
+
+	return nil, true, lostErr
 }
 
 // CancelUploadSession drops a session.
@@ -216,33 +303,120 @@ func (r *moveScenarioRemote) openSessionLocked(itemID string) *graph.UploadSessi
 	return &graph.UploadSession{UploadURL: url, ExpirationTime: scenarioSessionExpiry(), ItemID: itemID}
 }
 
-// uploadThroughSession sends the whole content through the session at url
-// and commits it to the session's item. A session OneDrive no longer holds
-// answers gone; one whose item changed since it opened was invalidated by
-// that change and answers 404 (live probe L-02).
-func (r *moveScenarioRemote) uploadThroughSession(
-	t *testing.T, url graph.UploadURL, content io.ReaderAt, size int64, gone error,
-) (*graph.Item, error) {
-	t.Helper()
-	data, err := readScenarioUpload(content, size)
-	if err != nil {
-		return nil, err
-	}
-
+// sessionNextExpected is the start of the next expected range of the session
+// at url, as its status answers; open is false for a session OneDrive no
+// longer holds.
+func (r *moveScenarioRemote) sessionNextExpected(url graph.UploadURL) (next int64, open bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	session, ok := r.sessions[url]
-	if !ok {
-		return nil, gone
+
+	return int64(len(session.received)), ok
+}
+
+// putFragment accepts data at offset into the session at url, as Graph's
+// fragment PUT does, and reports whether the fragment completed the content,
+// with the item it then committed. A session OneDrive no longer holds, and
+// one whose item changed since it opened (invalidated by that change, live
+// probe L-02), answer 404; a fragment that is not the next expected range
+// answers 416 and is not accepted. The fragment that completes the content
+// commits it to the item and closes the session. interruptFragmentAt drops a
+// fragment before it reaches the session.
+func (r *moveScenarioRemote) putFragment(
+	t *testing.T, url graph.UploadURL, offset int64, data string, totalSize int64,
+) (*graph.Item, bool, error) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interruptFragmentAt != 0 && offset == r.interruptFragmentAt {
+		r.interruptFragmentAt = 0
+		return nil, false, errors.New(scenarioConnectionReset)
 	}
-	delete(r.sessions, url)
+	session, ok := r.sessions[url]
+	if !ok {
+		return nil, false, graph.ErrNotFound
+	}
 	item, ok := r.items[session.itemID]
 	if !ok || item.ETag != session.etag {
-		return nil, graph.ErrNotFound
+		delete(r.sessions, url)
+		return nil, false, graph.ErrNotFound
 	}
+	if r.sessionFragments == nil {
+		r.sessionFragments = map[graph.UploadURL][]scenarioFragment{}
+	}
+	fragment := scenarioFragment{offset: offset, size: int64(len(data)), accepted: offset == int64(len(session.received))}
+	r.sessionFragments[url] = append(r.sessionFragments[url], fragment)
+	if !fragment.accepted {
+		return nil, false, &graph.GraphError{StatusCode: http.StatusRequestedRangeNotSatisfiable, Err: graph.ErrRangeNotSatisfiable}
+	}
+	session.received += data
+	if int64(len(session.received)) < totalSize {
+		r.sessions[url] = session
+		return nil, false, nil
+	}
+
+	delete(r.sessions, url)
 	r.uploads++
-	r.setContent(t, session.itemID, data)
+	r.setContent(t, session.itemID, session.received)
 	copied := *r.items[session.itemID]
 
-	return &copied, nil
+	return &copied, true, nil
+}
+
+// fragmentsReceived lists the fragments that reached the session at url, in
+// the order they arrived.
+func (r *moveScenarioRemote) fragmentsReceived(url graph.UploadURL) []scenarioFragment {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]scenarioFragment(nil), r.sessionFragments[url]...)
+}
+
+// Validates: R-5.2.4
+//
+// A session keeps the fragments it accepted across a failed request, and a
+// resume asks for the next expected range and sends only what is missing:
+// every fragment that reaches the session is the next expected range, and
+// together they are the file, once.
+func TestScenarioSession_ResumeSendsOnlyTheMissingRanges(t *testing.T) {
+	t.Parallel()
+
+	const (
+		fragmentsInTheFile     = 4
+		acceptedBeforeTheFault = 2
+		lastFragmentSize       = 1024
+	)
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	client := remote.sessionClient(t)
+	content := strings.Repeat("r", (fragmentsInTheFile-1)*scenarioSessionFragmentSize+lastFragmentSize)
+	size := int64(len(content))
+	session, err := client.CreateUploadSession(t.Context(), remote.driveID, graphRootID, "big.bin", size, time.Time{})
+	require.NoError(t, err)
+
+	remote.mu.Lock()
+	remote.interruptFragmentAt = acceptedBeforeTheFault * scenarioSessionFragmentSize
+	remote.mu.Unlock()
+	_, err = client.UploadFromSession(t.Context(), session, strings.NewReader(content), size, nil)
+	require.Error(t, err)
+	assert.False(t, graph.IsFinalFragmentUncertain(err), "a fragment before the last failed: %v", err)
+	next, open := remote.sessionNextExpected(session.UploadURL)
+	require.True(t, open, "the session survives the failed fragment")
+	assert.Equal(t, int64(acceptedBeforeTheFault*scenarioSessionFragmentSize), next, "the session holds the fragments it accepted")
+
+	// driveops resumes from the recorded URL alone.
+	item, err := client.ResumeUpload(t.Context(), &graph.UploadSession{UploadURL: session.UploadURL}, strings.NewReader(content), size, nil)
+	require.NoError(t, err)
+	assert.Equal(t, size, item.Size)
+	assert.Equal(t, content, remote.tree()["big.bin"])
+	assert.False(t, remote.holdsSession(session.UploadURL), "the last fragment closed the session")
+
+	var sent int64
+	fragments := remote.fragmentsReceived(session.UploadURL)
+	for i, fragment := range fragments {
+		assert.True(t, fragment.accepted, "fragment %d at %d resent accepted bytes", i, fragment.offset)
+		assert.Equal(t, sent, fragment.offset, "fragment %d starts where the session's content ended", i)
+		sent += fragment.size
+	}
+	assert.Equal(t, size, sent, "every byte reached the session once")
+	assert.Len(t, fragments, fragmentsInTheFile, "the fragments before the fault, then the rest")
 }

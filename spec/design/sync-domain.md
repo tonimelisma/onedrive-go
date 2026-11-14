@@ -1,6 +1,6 @@
 # Sync Domain
 
-GOVERNS: internal/sync/actions.go, internal/sync/condition_keys.go, internal/sync/content_filter.go, internal/sync/core_types.go, internal/sync/crash_points.go, internal/sync/domain_clock.go, internal/sync/domain_delete_safety.go, internal/sync/domain_graph_error.go, internal/sync/domain_io_seams.go, internal/sync/domain_observation_mode.go, internal/sync/domain_path_kind.go, internal/sync/domain_runtime_decision.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/issue_types.go, internal/sync/permission_capability.go, internal/sync/retry_work_key.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/tracked_action.go, internal/sync/types.go, internal/sync/worker_result.go
+GOVERNS: internal/sync/actions.go, internal/sync/condition_keys.go, internal/sync/content_filter.go, internal/sync/core_types.go, internal/sync/crash_points.go, internal/sync/domain_clock.go, internal/sync/domain_debug_events.go, internal/sync/domain_delete_safety.go, internal/sync/domain_graph_error.go, internal/sync/domain_io_seams.go, internal/sync/domain_observation_mode.go, internal/sync/domain_path_kind.go, internal/sync/domain_runtime_decision.go, internal/sync/enums.go, internal/sync/errors.go, internal/sync/issue_types.go, internal/sync/permission_capability.go, internal/sync/retry_work_key.go, internal/sync/scope_block.go, internal/sync/scope_key.go, internal/sync/scope_semantics.go, internal/sync/tracked_action.go, internal/sync/types.go, internal/sync/worker_result.go
 
 LAYER: 0
 
@@ -12,7 +12,11 @@ This family owns the sync domain model: the vocabulary every other sync family
 speaks. `Action` and its action types, `ScopeKey` and the scope taxonomy,
 `ItemType`, `Baseline` and `BaselineEntry`, `RetryWorkKey`, the condition and
 issue keys, `SyncMode`, the content filter, the runtime decision vocabulary,
-and the engine clock capability.
+the engine clock capability, and the vocabulary of the engine's debug event
+stream (`domain_debug_events.go`: the event, its kinds the observers report,
+the observer names). The engine owns the stream's sink and its own event
+kinds (sync-engine.md); the vocabulary sits here because the watch observers,
+a lower family, report the inputs they drop into the same stream.
 
 It is a leaf. It performs no I/O, holds no mutable runtime state, and depends on
 no other sync family.

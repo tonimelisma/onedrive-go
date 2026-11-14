@@ -732,6 +732,10 @@ func TestRunWatch_OwnerLockHeldUntilRunnersDrain(t *testing.T) {
 	cancel()
 	<-canceled
 	lockPath := cfg.ControlSocketPath + controlLockSuffix
+	// A window, kept until the orchestrator gives a signal: this test needs
+	// the orchestrator's report that it is waiting for the canceled runner
+	// to drain (after that point a released lock is a bug), and the
+	// orchestrator reports no such thing yet.
 	assert.Never(t, func() bool {
 		lock, err := acquireOwnerLock(lockPath, cfg.ControlSocketPath)
 		if err != nil {
