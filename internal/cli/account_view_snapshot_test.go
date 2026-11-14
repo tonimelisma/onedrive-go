@@ -187,6 +187,25 @@ func TestAccountViewSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t *t
 	assert.Contains(t, err.Error(), "not in onedrive-go's drive inventory")
 }
 
+// Validates: R-4.1.5
+func TestAccountViewSnapshot_Load_NamesTheCatalogWhenItIsRefused(t *testing.T) {
+	setTestDriveHome(t)
+
+	catalog := config.DefaultCatalog()
+	catalog.UpsertDrive(&config.CatalogDrive{CanonicalID: "drive-123"})
+	writeCatalogFileForTest(t, catalog)
+
+	_, err := loadAccountViewSnapshot(t.Context(), &CLIContext{
+		Logger:       testDriveLogger(t),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      filepath.Join(t.TempDir(), "config.toml"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading config and catalog")
+	assert.Contains(t, err.Error(), config.CatalogPathForDataDir(config.DefaultDataDir()))
+}
+
 // Validates: R-3.1.5
 func TestAccountViewSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *testing.T) {
 	setTestDriveHome(t)

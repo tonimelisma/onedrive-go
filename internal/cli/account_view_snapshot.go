@@ -36,7 +36,7 @@ func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSn
 	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
 	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
-		return accountViewSnapshot{}, fmt.Errorf("loading config: %w", err)
+		return accountViewSnapshot{}, fmt.Errorf("loading config and catalog: %w", err)
 	}
 
 	if outcome.Class == errclass.ClassActionable {
@@ -70,17 +70,13 @@ func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 	// reporting them here too printed every warning twice.
 	validated, _, err := config.LoadValidatedState(cc.CfgPath, true, logger)
 	if err != nil {
-		return accountViewSnapshot{}, fmt.Errorf("loading config: %w", err)
+		return accountViewSnapshot{}, fmt.Errorf("loading config and catalog: %w", err)
 	}
 
 	for _, key := range validated.Catalog.SortedAccountKeys() {
 		account := validated.Catalog.Accounts[key]
-		tokenCID, err := driveid.NewCanonicalID(account.CanonicalID)
-		if err != nil {
-			logger.Debug("skip malformed catalog account during identity refresh",
-				"canonical_id", account.CanonicalID,
-				"error", err,
-			)
+		tokenCID, hasID := account.ID()
+		if !hasID {
 			continue
 		}
 		if _, err := cc.probeAccountIdentity(ctx, tokenCID, "account-view"); err != nil {

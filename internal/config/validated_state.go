@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // ValidatedState is the config-owned durable snapshot used by CLI inventory
@@ -78,8 +77,8 @@ func validateConfiguredDrivesInCatalog(cfg *Config, stored *Catalog) error {
 	for cid := range cfg.Drives {
 		if _, found := stored.DriveByCanonicalID(cid); !found {
 			return fmt.Errorf("drive %s is in config.toml but not in onedrive-go's drive inventory (catalog.json); "+
-				"run 'onedrive-go login --account %s' to register it, or remove its section from config.toml",
-				cid, cid.Email())
+				"run 'onedrive-go drive add %s' to complete it, or remove its section from config.toml",
+				cid, cid)
 		}
 	}
 
@@ -93,12 +92,9 @@ func validateCatalogDriveOwners(stored *Catalog) error {
 
 	for _, key := range stored.SortedDriveKeys() {
 		drive := stored.Drives[key]
-		if drive.OwnerAccountCanonical == "" {
+		ownerCID, hasOwner := drive.Owner()
+		if !hasOwner {
 			return fmt.Errorf("catalog invariant: drive %s has no owning account", drive.CanonicalID)
-		}
-		ownerCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
-		if err != nil {
-			return fmt.Errorf("catalog invariant: drive %s has malformed owning account %q: %w", drive.CanonicalID, drive.OwnerAccountCanonical, err)
 		}
 		if _, found := stored.AccountByCanonicalID(ownerCID); !found {
 			return fmt.Errorf("catalog invariant: drive %s owner %s is missing from the catalog", drive.CanonicalID, ownerCID)
@@ -115,17 +111,9 @@ func validatePrimaryDriveOwnership(stored *Catalog) error {
 
 	for _, key := range stored.SortedAccountKeys() {
 		account := stored.Accounts[key]
-		if account.PrimaryDriveCanonical == "" {
+		primaryCID, hasPrimary := account.PrimaryDrive()
+		if !hasPrimary {
 			continue
-		}
-		primaryCID, err := driveid.NewCanonicalID(account.PrimaryDriveCanonical)
-		if err != nil {
-			return fmt.Errorf(
-				"catalog invariant: account %s has malformed primary drive %q: %w",
-				account.CanonicalID,
-				account.PrimaryDriveCanonical,
-				err,
-			)
 		}
 		drive, found := stored.DriveByCanonicalID(primaryCID)
 		if !found {
@@ -144,6 +132,8 @@ func validatePrimaryDriveOwnership(stored *Catalog) error {
 	return nil
 }
 
+// MarkAccountAuthRequired records that the account must sign in again, for
+// the reason given. An account the catalog does not know is left alone.
 func MarkAccountAuthRequired(dataDir, email string, reason authstate.Reason) error {
 	if email == "" {
 		return nil

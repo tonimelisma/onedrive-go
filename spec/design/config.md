@@ -1,6 +1,6 @@
 # Configuration
 
-GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/email_change_journal.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/mutation_lock.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
+GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/config/catalog_lifecycle.go, internal/config/config.go, internal/config/decoder.go, internal/config/defaults.go, internal/config/discovery.go, internal/config/display_name.go, internal/config/drive.go, internal/config/drive_enroll.go, internal/config/email_change_journal.go, internal/config/email_reconcile.go, internal/config/env.go, internal/config/failure_class.go, internal/config/holder.go, internal/config/load.go, internal/config/managed_io.go, internal/config/mount_state_path.go, internal/config/mutation_lock.go, internal/config/paths.go, internal/config/resolved_validator.go, internal/config/resolver.go, internal/config/size.go, internal/config/token_resolution.go, internal/config/toml_lines.go, internal/config/unknown.go, internal/config/validate.go, internal/config/validate_drive.go, internal/config/validated_state.go, internal/config/validator.go, internal/config/write.go
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.1.5 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.6.31 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
@@ -47,7 +47,10 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Control-socket path derivation keeps the socket under the data dir when possible, falls back to a stable hashed runtime dir when necessary, and fails explicitly when neither path can satisfy the Unix socket length budget. | `TestControlSocketPath_UsesDataDirWhenShortEnough`, `TestControlSocketPath_UsesShortRuntimePathWhenDataDirIsTooLong`, `TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit` |
 | Child mount state DB path derivation is stable, collision-resistant, and bounded by common basename limits. | `TestMountStatePath_UsesManagedMountPrefix`, `TestMountStatePath_EncodesManagedMountIDWithoutCollisions`, `TestMountStatePath_LongIDUsesBoundedFilename` |
 | Token and state-database discovery treats a missing data directory as empty and an unreadable one as a Warn plus an error naming the directory, never as "nothing found". | `TestDiscoverCIDFiles_ReadDirError`, `TestDiscoverCIDFiles_MissingDataDirIsNotAnError`, `TestDiscoverTokensIn_NonexistentDir` |
-| Config writes are locked across processes and rollback deletes only the exact drive shape written by the current mutation. | `TestAppendDriveSection_CrossProcessCreatesPreserveAllSections`, `TestRestoreDriveAddConfigMutation_AddedSectionSkipsConcurrentEdits`, `TestRollbackSharedDriveAdd_PreservesCatalogWhenConfigChangedConcurrently` |
+| Config writes are locked across processes, and an append refuses a section that is already there. | `TestAppendDriveSection_CrossProcessCreatesPreserveAllSections`, `TestAppendDriveSection_RefusesASectionThatIsThere` |
+| The catalog is refused whole when a record key, a record's `canonical_id`, a drive's `owner_account_canonical_id` or an account's `primary_drive_canonical_id` is not a canonical drive ID, with an error naming the file, the record and the field and saying how to recover (R-4.1.4, R-4.1.5). | `TestDecodeCatalog_RefusesAMalformedCanonicalID`, `TestUpdateCatalog_RefusesToStoreAMalformedCanonicalID`, `TestDecodeCatalog_AcceptsWhatTheWritersWrite` |
+| Drive-section values are written as the kind the drive-key schema gives their key, a value the key cannot hold is refused with the file unchanged, and a section name keeps a quote or a backslash through append, find, set and delete (R-4.2.2). | `TestSetDriveKey_StringKeyGivenTrueLoadsBackAsAString`, `TestSetDriveKey_RefusesAValueItsKeyCannotHold`, `TestConfigSchema_DriveKeyKindsMatchTheDriveStruct`, `TestDriveSection_NameWithQuoteAndBackslashRoundTrips`, `TestParseSectionHeader_ReadsEveryHeaderForm`, `TestTOMLString_EveryValueLoadsBackUnchanged` |
+| Enrolling a drive (`AddDrive`, for `drive add` and `login`) is one transaction under the config lock and then the catalog lock: a failure at any step, a held lock included, leaves config and catalog as they were; a failed catalog restore is reported and leaves what a rerun completes; a rerun completes each partial state and reports it; a complete enrollment writes nothing; a shared folder's section is one write; two processes adding one drive add one section; one directory for config and data is one lock; a config that would not load is never written (R-3.3.5, R-3.3.1, R-4.4.4). | `TestAddDrive_FailureAtEachStepLeavesConfigAndCatalogUnchanged`, `TestAddDrive_FailedCatalogRestoreLeavesWhatARerunCompletes`, `TestAddDrive_RerunCompletesEachPartialState`, `TestAddDrive_CompleteEnrollmentWritesNothing`, `TestAddDrive_SharedSectionIsOneWrite`, `TestAddDrive_CrossProcessSameDriveAddsOneSection`, `TestAddDrive_SameDirectoryForConfigAndDataDoesNotSelfDeadlock`, `TestAddDrive_RefusesAConfigThatWouldNotLoad` |
 | A config or catalog change waits at most `configLockTimeout` (10 s, polled every 50 ms) for another holder and then fails with `ErrConfigLocked` naming the locked directory, without running the change; a holder that lets go within the wait is waited for; catalog read-modify-writes run under the same lock, so concurrent updates from two processes both survive (R-4.4.4). | `TestWithConfigMutationLock_HeldLockTimesOutWithTheDirectoryNamed`, `TestWithConfigMutationLock_AcquiresWhenTheHolderReleases`, `TestSetDriveKey_CrossProcessHolderIsNotWaitedForForever`, `TestUpdateCatalog_CrossProcessUpdatesAreNotLost` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
@@ -145,8 +148,8 @@ account currently has a usable saved login.
 
 | Operation | Durable mutation |
 | --- | --- |
-| `login` | write saved login, upsert account/primary-drive catalog records, append primary drive section |
-| `drive add` | register the drive in the catalog and append one drive section |
+| `login` | write saved login, then one enrollment transaction: upsert account/primary-drive catalog records, append (or complete) the primary drive section |
+| `drive add` | one enrollment transaction: register the drive in the catalog and append (or complete) one drive section |
 | `drive remove` | delete one drive section only |
 | `drive remove --purge` | delete one drive section, then (after a running watch is told) drive-owned retained state under the store lock; prune the catalog drive record when no longer needed, and keep it while a kept store remains |
 | `logout` | delete saved login and all configured drive sections for the selected account |
@@ -159,15 +162,44 @@ account currently has a usable saved login.
 Degraded discovery is intentionally outside this lifecycle model. It is a
 command-local discovery overlay, not a persisted account or drive state.
 
-Drive add is inventory-first once token/account preconditions are satisfied.
-The catalog admits the drive before the sync directory is materialized, and
-later config/materialization failures roll catalog state back only when the
-config section written by this command is still the section being removed.
-Shared-drive add follows the same shape: catalog admission happens before the
-config section is appended, and rollback restores or removes the catalog drive
-only when config deletion succeeded or config was never written. If another
-writer changes the section before rollback, the command preserves catalog state
-to avoid creating config/catalog divergence for that newer owner.
+Enrolling a drive is one transaction owned by `config` (`AddDrive`,
+`drive_enroll.go`); both `drive add` paths (an account's own drive and a shared
+folder) and `login` call it, and `internal/cli` rolls nothing back. The CLI
+keeps what is not durable inventory: selector resolution, the token
+precondition, the shared folder's display-name lookup (a Graph request, made
+before the transaction; the transaction never replaces a configured name), the
+token install and output. Under the config lock and then the catalog lock (one
+lock when both files live in one directory, compared with `os.SameFile` after
+both directories exist), the transaction reads `config.toml` and `catalog.json`
+once and decides everything from that snapshot: the drive's display name, its
+`sync_dir` (`DefaultSyncDir` over the other drives' directories and the account
+names in the catalog as this enrollment will leave it), the catalog record
+(`registerOwnedDrive`, `registerSharedDrive`, or for login `recordLogin`, which
+also writes the account), and the config text. A new section carries `sync_dir`
+and, for a shared folder, `display_name` in one append, which refuses a section
+that is already there; an existing section gets only the keys it lacks, and its
+existing values are never replaced. The new config text must pass the strict
+load (so two drives can never be left sharing a sync directory) before anything
+is written. Then, in order: the sync directory is created (the CLI's
+`materializeDriveSyncDir`, passed as `MakeSyncDir`), the catalog is written if
+it changed, and the config is written once if it changed, which is the commit
+point. When the config write fails, the catalog bytes read under the lock are
+written back (or the catalog file removed when this run created it), still
+under the lock; when that also fails, both errors are returned. A failure
+therefore leaves config and catalog as they were. A failure after the sync
+directory was created also leaves that directory, empty: it is not removed,
+since it may be a folder the user already had. A kill leaves at most an empty
+sync directory and a catalog record without a section. Running the same
+enrollment again completes it. An enrollment whose section exists but lacks
+something (its `sync_dir`, a shared folder's `display_name`, its catalog record
+or for login the account's, or its sync directory on disk), which a section
+written by hand or by an earlier version of the client can, is completed and
+reported as completed (`AddDriveResult.Completed`, `completed` in the commands'
+JSON); one that is complete writes nothing (a login still refreshes the
+account's catalog facts). Login installs the new token before the transaction
+and, when the transaction fails, puts the previous token back (or removes the
+new one when there was none); a catalog failure during login is an error, not a
+warning.
 
 `logout --purge` is intentionally recovery-oriented. When validated config and
 catalog state cannot be loaded together, callers may still fall back to the
@@ -235,7 +267,7 @@ Dry-run changes only the sync execution/commit semantics after setup.
 
 ## Config File Manipulation
 
-The config file is read with a TOML parser (`BurntSushi/toml`) but written with line-based text edits (`toml_lines.go`). This preserves all comments — both the initial defaults template and user additions. No TOML round-trip serialization.
+The config file is read with a TOML parser (`BurntSushi/toml`) but written with line-based text edits (`toml_lines.go`). This preserves all comments — both the initial defaults template and user additions. No TOML round-trip serialization. Every drive-section value is written as the kind the drive-key schema (`newDriveKeyKinds`, `unknown.go`, held to the `Drive` struct by a schema test) gives its key: a bool key takes only `true` or `false`, written bare; a string key is always a TOML basic string (`tomlString`), so a display name `true` stays a name; a list key cannot be set to one value; and a key the schema does not have is refused, leaving the file as it was. Section headers are written and read by one pair, `renderSectionHeaderLine` and `parseSectionHeader`, as TOML strings with their escapes undone, so a quote or a backslash in a SharePoint library's name finds its section again; a header may also be a literal string or carry a trailing comment.
 
 The first-login template is generated from the same default constants the
 runtime uses, so commented-out defaults stay aligned with the real schema.
@@ -286,8 +318,10 @@ helper `RemoteRootDeltaCapableForTokenOwner(...)`:
 
 - personal owner account -> folder delta capable
 - business/sharepoint owner account -> enumerate only
-- unknown or malformed owner metadata -> default to capable and let runtime
-  fallback prove otherwise
+- no drive record, or one without an owner -> default to capable and let
+  runtime fallback prove otherwise (the record's owner is read through
+  `CatalogDrive.Owner`; a catalog that was read or written cannot hold one
+  that is not a drive ID)
 
 The sync engine consumes that resolved boolean directly for configured
 standalone drives, while managed child mounts derive the same capability from
@@ -473,10 +507,27 @@ strict:
 - only the exact supported version is accepted
 - the decoder must reach EOF after the first top-level object, so trailing JSON
   or garbage is rejected
+- every account and drive key must be a canonical drive ID exactly as
+  `CanonicalID.String` renders it (a SharePoint ID with an empty site or
+  library, or a trailing colon, parses but renders differently, and every
+  lookup goes through the rendering), each record's `canonical_id` must equal
+  its key, and a drive's `owner_account_canonical_id` and an account's
+  `primary_drive_canonical_id` must be rendered canonical drive IDs when set
+  (`checkCanonicalIDs`). One that is not refuses the whole catalog, with an
+  error naming the file, the record and the field and saying to correct or
+  remove that entry, or remove the file and run `onedrive-go login` for each
+  account. Writing runs the same check: a write that would store such a value
+  fails with that error and leaves the file as it was, so a catalog on disk
+  holds one only when it was edited by hand or written by another program.
+  Readers parse a record's ID and its references in one place
+  (`CatalogAccount.ID`, `CatalogAccount.PrimaryDrive`, `CatalogDrive.Owner`)
+  and never meet one they would have to skip
 - every save is a full atomic rewrite of the file
 - every read-modify-write (`UpdateCatalog`, `UpdateCatalogForDataDir`, and so
   every catalog writer in the CLI and the running sync) loads, updates and
-  saves under the bounded lock on the catalog's directory (see Auto-Creation),
+  saves under the bounded lock on the catalog's directory (see Auto-Creation);
+  drive enrollment (`AddDrive`) writes the catalog under the same lock, which
+  it holds inside the config lock,
   so a CLI command and a running sync updating the catalog together cannot
   lose either update; reads take no lock, since the atomic rewrite means a
   reader always sees one whole version
@@ -504,15 +555,15 @@ Parent engines own the authoritative parent protected-path state in
 mount ID.
 
 When multisync releases a managed shortcut child, config provides only the
-stable path and catalog mutation primitives, wired once into multisync's child
-artifact cleanup executor. The parent snapshot supplies the exact child
+stable state path, wired once into multisync's child artifact cleanup
+executor. The parent snapshot supplies the exact child
 mount ID and local-root cleanup scope; multisync must not reconstruct that
 scope from parent namespace facts. The control plane owns deleting child-owned
-artifacts: the `state_mount_*.db` SQLite file family, upload sessions tagged
-with the child mount scope, and any accidental catalog drive record keyed by
-the automatic child mount ID. This purge is guarded by the child-mount ID shape
-(`parent|binding:<id>`) so an explicit user-configured shared-drive catalog
-entry or parent drive state is not removed by shortcut lifecycle cleanup.
+artifacts: the `state_mount_*.db` SQLite file family and upload sessions
+tagged with the child mount scope. This purge is guarded by the child-mount ID
+shape (`parent|binding:<id>`) so parent drive state is not removed by shortcut
+lifecycle cleanup. A child mount has no catalog record: the catalog holds only
+canonical drive IDs, which a child mount ID is not.
 
 ## Optional Catalog Fields
 
@@ -535,7 +586,7 @@ Unknown config keys are fatal errors (`unknown.go`). There are no delete-thresho
 
 Implements: R-4.8.4 [verified]
 
-Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`LoadLenient`/`LoadOrDefaultLenient`) for informational commands.
+Two loading paths: strict (`Load`/`LoadOrDefault`) for data commands, lenient (`LoadOrDefaultLenient`) for informational commands.
 
 **Strict path** (default): unknown keys and validation errors are fatal. Used by `sync`, file operations, `drive add`, `drive remove`.
 
@@ -551,7 +602,7 @@ successful loads with warnings map to `actionable`, and clean loads map to
 `success`.
 
 Every failure returned by the exported read, parse, validate and resolve
-entrypoints (`Load`, `LoadOrDefault`, `LoadLenient`, `LoadOrDefaultLenient`,
+entrypoints (`Load`, `LoadOrDefault`, `LoadOrDefaultLenient`,
 `Validate`, `ValidateResolved`, `ValidateResolvedForSync`, `ResolveDrive`,
 `ResolveDrives`, `MatchDrive`, and the config-vs-catalog check in
 `LoadValidatedState`) matches `ErrInvalidConfig` (`failure_class.go`). The tag
@@ -577,7 +628,7 @@ manager stops restarting a run that would fail the same way (R-6.6.31).
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory `flock` on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. The lock is taken by polling a non-blocking `flock` every `configLockPollInterval` (50 ms) for at most `configLockTimeout` (10 s), never by a blocking `flock`: a stopped or stuck holder (SIGSTOP, a hung filesystem, a foreign program holding the lock) would otherwise hang every config-writing command, and the watch daemon's reload, for as long as it lived. When the wait runs out the change is not made, and the error wraps `ErrConfigLocked` and names the directory (R-4.4.4). No caller has a context to give, so the wait is bounded rather than cancelable. The catalog takes the same lock on its own directory, the data directory; on macOS that is also the config directory, so there the two are one lock. `flock` locks belong to an open file description and every acquisition opens the directory afresh, so a locked callback must never call another locking function: it would wait on its own caller and fail after the timeout. Every locked callback only reads and rewrites its own file, and the multi-step flows (login, `drive add`, email reconciliation) take the config and catalog locks one after the other, never nested. An account email change holds one more lock around them, on its own folder `<data dir>/email-change/` (a directory no other lock names), and takes it first, so the nesting cannot wait on itself. `EnsureDriveInConfigDetailed` reports whether the current call added a section or actually inserted `sync_dir` at the write boundary; for backfills it also returns the pre-backfill drive state from the same locked write snapshot so CLI rollback can undo only the mutation it performed when the current section is otherwise unchanged. Config owns the rollback-safe conditional deletes: `DeleteDriveKeyIfDriveEquals` and `DeleteDriveSectionIfDriveEquals` compare the decoded drive and render the delete from the same locked file snapshot so rollback does not act on a different parsed section than the one it checked. `EnsureDriveInConfig` calls `ResolveAccountNames()` (reads catalog-backed account records only, no token file access). Shared drives bypass `EnsureDriveInConfig` and write config directly via `AppendDriveSection` + `SetDriveKey`; CLI enrollment then materializes the configured sync directory.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory `flock` on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. The lock is taken by polling a non-blocking `flock` every `configLockPollInterval` (50 ms) for at most `configLockTimeout` (10 s), never by a blocking `flock`: a stopped or stuck holder (SIGSTOP, a hung filesystem, a foreign program holding the lock) would otherwise hang every config-writing command, and the watch daemon's reload, for as long as it lived. When the wait runs out the change is not made, and the error wraps `ErrConfigLocked` and names the directory (R-4.4.4). No caller has a context to give, so the wait is bounded rather than cancelable. The catalog takes the same lock on its own directory, the data directory; on macOS that is also the config directory, so there the two are one lock. `flock` locks belong to an open file description and every acquisition opens the directory afresh, so a locked callback must never call another locking function: it would wait on its own caller and fail after the timeout. Every locked callback only reads and rewrites its own file, with one exception: drive enrollment (`AddDrive`, used by login and `drive add`) holds the config lock and, inside it, the catalog lock (`withConfigAndCatalogLocks`), always in that order and as one lock when both files are in one directory (see Persisted Facts And Lifecycle). Nothing takes them in the other order; email reconciliation takes them one after the other. An account email change holds one more lock around them, on its own folder `<data dir>/email-change/` (a directory no other lock names), and takes it first, so the nesting cannot wait on itself. Enrollment reads account names from the catalog snapshot it read under the lock, never token files.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

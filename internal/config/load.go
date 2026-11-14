@@ -47,9 +47,9 @@ func loadWithIO(path string, logger *slog.Logger, io configIO) (*Config, error) 
 }
 
 // LoadOrDefault reads a TOML config file if it exists, otherwise returns
-// a Config populated with all default values. Used by EnsureDriveInConfig
-// (config creation path) and callers that want smart error messages when
-// config is missing rather than raw file-not-found errors.
+// a Config populated with all default values. Used by callers that want smart
+// error messages when config is missing rather than raw file-not-found
+// errors.
 func LoadOrDefault(path string, logger *slog.Logger) (*Config, error) {
 	return loadOrDefaultWithIO(path, logger, defaultConfigIO())
 }
@@ -59,21 +59,11 @@ func loadOrDefaultWithIO(path string, logger *slog.Logger, io configIO) (*Config
 	return cfg, markInvalidConfig(err)
 }
 
-// LoadLenient reads and parses a TOML config file, collecting unknown keys and
-// validation errors as warnings instead of fatal errors. TOML syntax errors and
+// LoadOrDefaultLenient reads a TOML config file if it exists, collecting
+// unknown keys and validation errors as warnings instead of fatal errors, and
+// otherwise returns default Config with no warnings. TOML syntax errors and
 // file read errors remain fatal. Used by informational commands (drive list,
 // status, shared) that need to show what they can even when config has errors.
-func LoadLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, error) {
-	return loadLenientWithIO(path, logger, defaultConfigIO())
-}
-
-func loadLenientWithIO(path string, logger *slog.Logger, io configIO) (*Config, []ConfigWarning, error) {
-	cfg, warnings, err := newConfigLoader(io).loadLenient(path, logger)
-	return cfg, warnings, markInvalidConfig(err)
-}
-
-// LoadOrDefaultLenient reads a TOML config file leniently if it exists,
-// otherwise returns default Config with no warnings.
 func LoadOrDefaultLenient(path string, logger *slog.Logger) (*Config, []ConfigWarning, error) {
 	return loadOrDefaultLenientWithIO(path, logger, defaultConfigIO())
 }
@@ -106,6 +96,23 @@ func (l configLoader) load(path string, logger *slog.Logger) (*Config, error) {
 		return nil, fmt.Errorf("reading config file %s: %w", path, err)
 	}
 
+	cfg, err := l.parseStrict(path, data)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Debug("config file parsed successfully",
+		"path", path,
+		"drive_count", len(cfg.Drives),
+	)
+
+	return cfg, nil
+}
+
+// parseStrict is the strict pipeline over config bytes already read: decode,
+// decode the drive sections, refuse unknown keys, validate. path only names
+// the file in errors.
+func (l configLoader) parseStrict(path string, data []byte) (*Config, error) {
 	cfg, md, err := l.decodeBaseConfig(path, data)
 	if err != nil {
 		return nil, err
@@ -122,11 +129,6 @@ func (l configLoader) load(path string, logger *slog.Logger) (*Config, error) {
 	if err := Validate(cfg); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
-
-	logger.Debug("config file parsed successfully",
-		"path", path,
-		"drive_count", len(cfg.Drives),
-	)
 
 	return cfg, nil
 }

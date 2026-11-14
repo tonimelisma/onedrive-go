@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -228,6 +229,43 @@ func TestAppendDriveSection_CrossProcessWorker(t *testing.T) {
 	))
 }
 
+// Validates: R-4.2.1
+func TestAppendDriveSection_RefusesASectionThatIsThere(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:refuse@example.com")
+	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	before, err := localpath.ReadFile(path)
+	require.NoError(t, err)
+
+	err = AppendDriveSection(path, cid, "~/Elsewhere")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already in the config")
+
+	after, err := localpath.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}
+
+// Validates: R-4.2.2
+func TestTOMLString_EveryValueLoadsBackUnchanged(t *testing.T) {
+	values := []string{
+		"plain",
+		`quote " and backslash \`,
+		"tab\tnewline\nreturn\r",
+		"bell\a vertical\v delete\x7f escape\x1b",
+		"unicode ünïcödé 雲",
+	}
+
+	for _, value := range values {
+		var decoded struct {
+			Value string `toml:"value"`
+		}
+		_, err := toml.Decode("value = "+tomlString(value), &decoded)
+		require.NoError(t, err, "tomlString(%q) is not TOML", value)
+		assert.Equal(t, value, decoded.Value)
+	}
+}
+
 func TestConfigWrites_DoNotUseAmbientLogger(t *testing.T) {
 	var logOutput bytes.Buffer
 	previousLogger := slog.Default()
@@ -301,56 +339,103 @@ func TestSetDriveKey_InsertNewKey(t *testing.T) {
 	assert.Equal(t, "home", cfg.Drives[cid].DisplayName)
 }
 
-func TestSetDriveStringKeyIfMissing(t *testing.T) {
+// Validates: R-4.2.2
+func TestSetDriveKey_StringKeyGivenTrueLoadsBackAsAString(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:typed@example.com")
+	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+
+	require.NoError(t, SetDriveKey(path, cid, "display_name", "true"))
+
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err, "a string key must stay a string")
+	assert.Equal(t, "true", cfg.Drives[cid].DisplayName)
+}
+
+// Validates: R-4.2.2
+func TestSetDriveKey_RefusesAValueItsKeyCannotHold(t *testing.T) {
 	cases := []struct {
-		name        string
-		configBody  string
-		wantValue   string
-		wantSyncDir string
-		wantInsert  bool
+		name  string
+		key   string
+		value string
 	}{
-		{
-			name: "inserts missing key",
-			configBody: `["personal:toni@outlook.com"]
-display_name = "Home"
-`,
-			wantValue:   "~/OneDrive",
-			wantSyncDir: "~/OneDrive",
-			wantInsert:  true,
-		},
-		{
-			name: "preserves existing key",
-			configBody: `["personal:toni@outlook.com"]
-sync_dir = "~/Concurrent"
-`,
-			wantValue:   "~/Concurrent",
-			wantSyncDir: "~/Concurrent",
-			wantInsert:  false,
-		},
+		{name: "a bool key given a word", key: "paused", value: "yes"},
+		{name: "a key the schema does not have", key: "pasued", value: "true"},
+		{name: "a list key given one value", key: "ignored_dirs", value: "node_modules"},
 	}
 
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
-			cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-			require.NoError(t, os.WriteFile(path, []byte(tt.configBody), 0o600))
-
-			value, inserted, driveBeforeInsert, err := setDriveStringKeyIfMissing(path, cid, "sync_dir", "~/OneDrive")
+			cid := driveid.MustCanonicalID("personal:typed@example.com")
+			require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+			before, err := localpath.ReadFile(path)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantInsert, inserted)
-			assert.Equal(t, tt.wantValue, value)
-			if tt.wantInsert {
-				require.NotNil(t, driveBeforeInsert)
-				assert.Empty(t, driveBeforeInsert.SyncDir)
-				assert.Equal(t, "Home", driveBeforeInsert.DisplayName)
-			} else {
-				assert.Nil(t, driveBeforeInsert)
-			}
 
-			cfg, err := Load(path, testLogger(t))
+			err = SetDriveKey(path, cid, tc.key, tc.value)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.key)
+
+			after, err := localpath.ReadFile(path)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantSyncDir, cfg.Drives[cid].SyncDir)
+			assert.Equal(t, string(before), string(after), "a refused value must leave the file as it was")
 		})
+	}
+}
+
+// Validates: R-4.1.1, R-4.2.2
+func TestDriveSection_NameWithQuoteAndBackslashRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	other := driveid.MustCanonicalID("personal:other@example.com")
+	cid := driveid.MustCanonicalID(`sharepoint:alice@contoso.com:site:Docs "Q1" \ Archive`)
+	require.NoError(t, AppendDriveSection(path, other, "~/Other"))
+
+	require.NoError(t, AppendDriveSection(path, cid, "~/Archive"))
+	cfg, err := Load(path, testLogger(t))
+	require.NoError(t, err)
+	require.Contains(t, cfg.Drives, cid)
+	assert.Equal(t, "~/Archive", cfg.Drives[cid].SyncDir)
+
+	err = AppendDriveSection(path, cid, "~/Elsewhere")
+	require.Error(t, err, "the section must be found under its own name")
+	assert.Contains(t, err.Error(), "already in the config")
+
+	require.NoError(t, SetDriveKey(path, cid, "display_name", "Archive"))
+	cfg, err = Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, "Archive", cfg.Drives[cid].DisplayName)
+
+	require.NoError(t, DeleteDriveSection(path, cid))
+	cfg, err = Load(path, testLogger(t))
+	require.NoError(t, err)
+	assert.NotContains(t, cfg.Drives, cid)
+	assert.Contains(t, cfg.Drives, other)
+}
+
+// Validates: R-4.2.2
+func TestParseSectionHeader_ReadsEveryHeaderForm(t *testing.T) {
+	cases := []struct {
+		line     string
+		wantName string
+		wantOK   bool
+	}{
+		{line: `["personal:a@example.com"]`, wantName: "personal:a@example.com", wantOK: true},
+		{line: `[ "personal:a@example.com" ]`, wantName: "personal:a@example.com", wantOK: true},
+		{line: `["sharepoint:a@example.com:site:Docs \"Q1\" \\ Archive"]`, wantName: `sharepoint:a@example.com:site:Docs "Q1" \ Archive`, wantOK: true},
+		{line: `['personal:a@example.com']`, wantName: "personal:a@example.com", wantOK: true},
+		{line: `["personal:a@example.com"] # my drive`, wantName: "personal:a@example.com", wantOK: true},
+		{line: `[filter]`, wantName: "filter", wantOK: true},
+		{line: `[["personal:a@example.com"]]`, wantOK: false},
+		{line: `["personal:a@example.com"] trailing`, wantOK: false},
+		{line: `sync_dir = "~/OneDrive"`, wantOK: false},
+	}
+
+	for _, tc := range cases {
+		name, ok := parseSectionHeader(tc.line)
+		assert.Equal(t, tc.wantOK, ok, "%s", tc.line)
+		if tc.wantOK {
+			assert.Equal(t, tc.wantName, name, "%s", tc.line)
+		}
 	}
 }
 
@@ -589,49 +674,6 @@ func TestDeleteDriveKey_PausedUntilRoundTrip(t *testing.T) {
 	assert.Nil(t, d.PausedUntil)
 }
 
-// Validates: R-3.3.5
-func TestDeleteDriveKeyIfDriveEquals_SkipsChangedDrive(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "Concurrent"))
-
-	deleted, err := DeleteDriveKeyIfDriveEquals(path, cid, "sync_dir", &Drive{SyncDir: "~/OneDrive"})
-	require.NoError(t, err)
-	assert.False(t, deleted)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	drive := cfg.Drives[cid]
-	assert.Equal(t, "~/OneDrive", drive.SyncDir)
-	assert.Equal(t, "Concurrent", drive.DisplayName)
-}
-
-// Validates: R-3.3.5
-func TestDeleteDriveKeyIfDriveEquals_DeletesMatchingDrive(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "Home"))
-
-	deleted, err := DeleteDriveKeyIfDriveEquals(path, cid, "sync_dir", &Drive{
-		SyncDir:     "~/OneDrive",
-		DisplayName: "Home",
-	})
-	require.NoError(t, err)
-	assert.True(t, deleted)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	drive := cfg.Drives[cid]
-	assert.Empty(t, drive.SyncDir)
-	assert.Equal(t, "Home", drive.DisplayName)
-}
-
 // --- DeleteDriveSection tests ---
 
 func TestDeleteDriveSection_DeleteFromMiddle(t *testing.T) {
@@ -703,48 +745,6 @@ func TestDeleteDriveSection_FileNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "reading config file")
 }
 
-// Validates: R-3.3.5
-func TestDeleteDriveSectionIfDriveEquals_SkipsChangedDrive(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "Concurrent"))
-
-	deleted, err := DeleteDriveSectionIfDriveEquals(path, cid, &Drive{SyncDir: "~/OneDrive"})
-	require.NoError(t, err)
-	assert.False(t, deleted)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	drive, found := cfg.Drives[cid]
-	require.True(t, found)
-	assert.Equal(t, "~/OneDrive", drive.SyncDir)
-	assert.Equal(t, "Concurrent", drive.DisplayName)
-}
-
-// Validates: R-3.3.5
-func TestDeleteDriveSectionIfDriveEquals_DeletesMatchingDrive(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "Home"))
-
-	deleted, err := DeleteDriveSectionIfDriveEquals(path, cid, &Drive{
-		SyncDir:     "~/OneDrive",
-		DisplayName: "Home",
-	})
-	require.NoError(t, err)
-	assert.True(t, deleted)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	assert.NotContains(t, cfg.Drives, cid)
-}
-
 // --- DefaultSyncDir tests ---
 
 func TestDefaultSyncDir_Personal_NoCollision(t *testing.T) {
@@ -808,65 +808,65 @@ func TestDefaultSyncDir_SharePoint_Collision(t *testing.T) {
 	assert.Equal(t, "~/SharePoint - marketing - Documents - Bob Smith", result)
 }
 
-// --- SanitizePathComponent tests ---
+// --- sanitizePathComponent tests ---
 
 func TestSanitizePathComponent_Clean(t *testing.T) {
-	assert.Equal(t, "Contoso Ltd", SanitizePathComponent("Contoso Ltd"))
+	assert.Equal(t, "Contoso Ltd", sanitizePathComponent("Contoso Ltd"))
 }
 
 func TestSanitizePathComponent_UnsafeChars(t *testing.T) {
-	assert.Equal(t, "path-with-slashes", SanitizePathComponent("path/with\\slashes"))
-	assert.Equal(t, "file-name-here", SanitizePathComponent("file:name<here"))
-	assert.Equal(t, "pipe-and-question", SanitizePathComponent("pipe|and?question"))
-	assert.Equal(t, "quotes-and-star", SanitizePathComponent(`quotes"and*star`))
-	assert.Equal(t, "angle-brackets", SanitizePathComponent("angle>brackets"))
+	assert.Equal(t, "path-with-slashes", sanitizePathComponent("path/with\\slashes"))
+	assert.Equal(t, "file-name-here", sanitizePathComponent("file:name<here"))
+	assert.Equal(t, "pipe-and-question", sanitizePathComponent("pipe|and?question"))
+	assert.Equal(t, "quotes-and-star", sanitizePathComponent(`quotes"and*star`))
+	assert.Equal(t, "angle-brackets", sanitizePathComponent("angle>brackets"))
 }
 
 func TestSanitizePathComponent_Empty(t *testing.T) {
-	assert.Empty(t, SanitizePathComponent(""))
+	assert.Empty(t, sanitizePathComponent(""))
 }
 
-// --- BaseSyncDir tests ---
+// --- baseSyncDir tests ---
 
 func TestBaseSyncDir_Personal(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "")
+	result := baseSyncDir(driveid.MustCanonicalID("personal:user@example.com"), "", "")
 	assert.Equal(t, "~/OneDrive", result)
 }
 
 func TestBaseSyncDir_Business_WithOrg(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "Contoso", "")
+	result := baseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "Contoso", "")
 	assert.Equal(t, "~/OneDrive - Contoso", result)
 }
 
 func TestBaseSyncDir_Business_NoOrg(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "", "")
+	result := baseSyncDir(driveid.MustCanonicalID("business:alice@contoso.com"), "", "")
 	assert.Equal(t, "~/OneDrive - Business", result)
 }
 
 func TestBaseSyncDir_SharePoint(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), "", "")
+	result := baseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"), "", "")
 	assert.Equal(t, "~/SharePoint - marketing - Documents", result)
 }
 
 func TestBaseSyncDir_SharePoint_NoSiteOrLib(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com"), "", "")
+	result := baseSyncDir(driveid.MustCanonicalID("sharepoint:alice@contoso.com"), "", "")
 	assert.Equal(t, "~/SharePoint", result)
 }
 
 func TestBaseSyncDir_Shared_WithDisplayName(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "Project Alpha")
+	result := baseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "Project Alpha")
 	assert.Equal(t, "~/OneDrive-Shared/Project Alpha", result)
 }
 
 func TestBaseSyncDir_Shared_NoDisplayName(t *testing.T) {
-	result := BaseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "")
+	result := baseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "")
 	assert.Equal(t, "~/OneDrive-Shared", result)
 }
 
 func TestBaseSyncDir_Shared_UnsafeCharsInDisplayName(t *testing.T) {
-	// SanitizePathComponent replaces filesystem-unsafe chars (/ \ : < > " | ? *)
+	// sanitizePathComponent replaces filesystem-unsafe chars (/ \ : < > " | ? *)
 	// but not ampersand (filesystem-safe).
-	result := BaseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "Sales & Marketing/Q1")
+	result := baseSyncDir(driveid.MustCanonicalID("shared:alice@contoso.com:drv123:item456"), "", "Sales & Marketing/Q1")
 	assert.Equal(t, "~/OneDrive-Shared/Sales & Marketing-Q1", result)
 }
 
@@ -1073,24 +1073,37 @@ func TestAtomicWriteFile_InvalidDirectory(t *testing.T) {
 	err = atomicWriteFile(path, []byte("hello"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating root directory")
+	assert.Contains(t, err.Error(), path, "the error names the file")
 }
 
-// --- formatTOMLValue tests ---
+// --- newDriveKey tests ---
 
-func TestFormatTOMLValue_Boolean(t *testing.T) {
-	assert.Equal(t, "true", formatTOMLValue("true"))
-	assert.Equal(t, "false", formatTOMLValue("false"))
-}
+// Validates: R-4.2.2
+func TestNewDriveKey_RendersEachKindItsWay(t *testing.T) {
+	cases := []struct {
+		key  string
+		in   string
+		want string
+	}{
+		{key: "paused", in: "true", want: "true"},
+		{key: "follow_symlinks", in: "false", want: "false"},
+		{key: "display_name", in: "true", want: `"true"`},
+		{key: "sync_dir", in: "~/OneDrive", want: `"~/OneDrive"`},
+		{key: "paused_until", in: "2026-03-01T00:00:00Z", want: `"2026-03-01T00:00:00Z"`},
+	}
 
-func TestFormatTOMLValue_String(t *testing.T) {
-	assert.Equal(t, `"hello"`, formatTOMLValue("hello"))
-	assert.Equal(t, `"~/OneDrive"`, formatTOMLValue("~/OneDrive"))
+	for _, tc := range cases {
+		key, err := newDriveKey(tc.key, tc.in)
+		require.NoError(t, err, tc.key)
+		assert.Equal(t, tc.key, key.name)
+		assert.Equal(t, tc.want, key.formattedValue, tc.key)
+	}
 }
 
 // --- driveSection tests ---
 
 func TestDriveSection_Format(t *testing.T) {
-	result := driveSection("personal:toni@outlook.com", "~/OneDrive")
+	result := driveSection("personal:toni@outlook.com", []driveKey{{name: syncDirKey, formattedValue: `"~/OneDrive"`}})
 	assert.Equal(t, "\n[\"personal:toni@outlook.com\"]\nsync_dir = \"~/OneDrive\"\n", result)
 }
 
@@ -1404,136 +1417,7 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 	assert.Equal(t, "~/OneDrive-Fresh", d.SyncDir)
 }
 
-// --- EnsureDriveInConfig tests ---
-
-// Validates: R-4.2.1
-func TestEnsureDriveInConfig_NewDrive_NoConfigFile(t *testing.T) {
-	// Isolate HOME so token paths resolve to temp dir.
-	setConfigTestHome(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-
-	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
-	require.NoError(t, err)
-	assert.True(t, added)
-	assert.Equal(t, "~/OneDrive", syncDir)
-
-	// Config file should have been created with template + drive section.
-	data, err := localpath.ReadFile(path)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "# onedrive-go configuration")
-	assert.Contains(t, string(data), `["personal:user@example.com"]`)
-}
-
-func TestEnsureDriveInConfig_NewDrive_ExistingConfig(t *testing.T) {
-	setConfigTestHome(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	// Create config with one existing drive.
-	require.NoError(t, AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work"))
-
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-
-	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
-	require.NoError(t, err)
-	assert.True(t, added)
-	assert.Equal(t, "~/OneDrive", syncDir)
-
-	// Both drives should be in config.
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	require.Len(t, cfg.Drives, 2)
-}
-
-func TestEnsureDriveInConfig_ExistingDrive(t *testing.T) {
-	setConfigTestHome(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, AppendDriveSection(path, cid, "~/MyDrive"))
-
-	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
-	require.NoError(t, err)
-	assert.False(t, added, "should report not added for existing drive")
-	assert.Equal(t, "~/MyDrive", syncDir, "should return existing sync_dir")
-}
-
-func TestEnsureDriveInConfig_ExistingDriveMissingSyncDirSetsDefault(t *testing.T) {
-	setConfigTestHome(t)
-
-	path := filepath.Join(t.TempDir(), "config.toml")
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, os.WriteFile(path, []byte(`["personal:user@example.com"]
-`), 0o600))
-
-	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
-	require.NoError(t, err)
-	assert.False(t, added)
-	assert.Equal(t, "~/OneDrive", syncDir)
-
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
-	assert.Equal(t, "~/OneDrive", cfg.Drives[cid].SyncDir)
-}
-
-func TestEnsureDriveInConfigDetailed_ExistingDriveMissingSyncDirReportsBackfill(t *testing.T) {
-	setConfigTestHome(t)
-
-	path := filepath.Join(t.TempDir(), "config.toml")
-	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, os.WriteFile(path, []byte(`["personal:user@example.com"]
-`), 0o600))
-
-	result, err := EnsureDriveInConfigDetailed(path, cid, testLogger(t))
-	require.NoError(t, err)
-	assert.Equal(t, "~/OneDrive", result.SyncDir)
-	assert.False(t, result.Added)
-	assert.True(t, result.BackfilledSyncDir)
-	require.NotNil(t, result.DriveBeforeSyncDirBackfill)
-	assert.Empty(t, result.DriveBeforeSyncDirBackfill.SyncDir)
-}
-
-func TestEnsureDriveInConfig_CollisionDetection(t *testing.T) {
-	setConfigTestHome(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	// First personal drive takes ~/OneDrive.
-	cid1 := driveid.MustCanonicalID("personal:first@example.com")
-	require.NoError(t, AppendDriveSection(path, cid1, "~/OneDrive"))
-
-	// Second personal drive should get disambiguated.
-	cid2 := driveid.MustCanonicalID("personal:second@example.com")
-
-	syncDir, added, err := EnsureDriveInConfig(path, cid2, testLogger(t))
-	require.NoError(t, err)
-	assert.True(t, added)
-	// Should be disambiguated with email since no display_name metadata.
-	assert.Equal(t, "~/OneDrive - second@example.com", syncDir)
-}
-
-func TestEnsureDriveInConfig_NoFallback(t *testing.T) {
-	setConfigTestHome(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	// Business drive with no catalog account entry — should get plain default name.
-	cid := driveid.MustCanonicalID("business:noprofile@example.com")
-
-	syncDir, added, err := EnsureDriveInConfig(path, cid, testLogger(t))
-	require.NoError(t, err)
-	assert.True(t, added)
-	// Without a catalog account entry, falls back to BaseSyncDir ("~/OneDrive - Business").
-	assert.Equal(t, "~/OneDrive - Business", syncDir)
-}
+// --- RenameDriveSections tests ---
 
 func TestRenameDriveSections_PreservesCommentsAndKeyOrder(t *testing.T) {
 	dir := t.TempDir()

@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -84,4 +87,17 @@ func loadCatalogDrive(t *testing.T, cid driveid.CanonicalID) (config.CatalogDriv
 
 	drive, found := catalog.DriveByCanonicalID(cid)
 	return drive, found
+}
+
+// writeCatalogFileForTest writes catalog to the catalog file of the default
+// data directory as it is, without the checks a product write runs, to plant
+// a catalog edited by hand that the decoder then refuses.
+func writeCatalogFileForTest(t *testing.T, catalog *config.Catalog) {
+	t.Helper()
+
+	data, err := json.Marshal(catalog)
+	require.NoError(t, err)
+	path := config.CatalogPathForDataDir(config.DefaultDataDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, data, 0o600))
 }

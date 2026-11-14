@@ -64,8 +64,13 @@ func newDriveAddCmd() *cobra.Command {
 		Short: "Add a new drive to the configuration",
 		Long: `Add a drive to the configuration by canonical ID, raw shared-folder URL, or shared folder name.
 
-If the drive already exists in config, reports it as already configured.
 If the drive is new, it is added with a default sync directory.
+If it is configured but not fully set up (its section lacks sync_dir or a
+shared folder's display_name, the drive inventory lacks it, or its sync folder
+is gone), the missing parts are added and it is reported as completed.
+Otherwise it is reported as already configured. A failure leaves the config
+and the drive inventory as they were; a sync folder it already created stays,
+empty.
 
 For shared drives, you can use:
 - a shared selector (shared:<recipient>:<drive>:<item>)

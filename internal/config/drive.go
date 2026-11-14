@@ -214,7 +214,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		catalog = loadedCatalog
 	}
 
-	if drive, found := catalogDriveRecord(catalog, canonicalID); found && drive.RemoteDriveID != "" {
+	if drive, found := catalog.DriveByCanonicalID(canonicalID); found && drive.RemoteDriveID != "" {
 		resolved.DriveID = driveid.New(drive.RemoteDriveID)
 		logger.Debug("resolved drive ID from catalog drive record",
 			"drive_id", resolved.DriveID.String(),
@@ -230,7 +230,7 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 	}
 
 	if canonicalID.IsShared() {
-		resolved.RemoteRootDeltaCapable = remoteRootDeltaCapable(canonicalID, catalog, logger)
+		resolved.RemoteRootDeltaCapable = remoteRootDeltaCapable(canonicalID, catalog)
 	}
 
 	// Compute runtime default sync_dir when the drive has none configured.
@@ -245,36 +245,21 @@ func buildResolvedDrive(cfg *Config, canonicalID driveid.CanonicalID, drive *Dri
 		)
 	}
 
-	applyDriveOverrides(resolved, drive, logger)
-
 	return resolved
 }
 
-func catalogDriveRecord(catalog *Catalog, canonicalID driveid.CanonicalID) (CatalogDrive, bool) {
-	if catalog == nil {
-		return CatalogDrive{}, false
-	}
-
-	return catalog.DriveByCanonicalID(canonicalID)
-}
-
-func remoteRootDeltaCapable(
-	canonicalID driveid.CanonicalID,
-	catalog *Catalog,
-	logger *slog.Logger,
-) bool {
-	drive, found := catalogDriveRecord(catalog, canonicalID)
-	if !found || drive.OwnerAccountCanonical == "" {
+// remoteRootDeltaCapable reports whether a shared drive's mount root can use
+// folder delta, from the owner its catalog record names. A drive with no
+// record (catalog nil when it could not be read) or no owner defaults to
+// capable, and the runtime's fallback proves otherwise.
+func remoteRootDeltaCapable(canonicalID driveid.CanonicalID, catalog *Catalog) bool {
+	drive, found := catalog.DriveByCanonicalID(canonicalID)
+	if !found {
 		return true
 	}
 
-	ownerCID, err := driveid.NewCanonicalID(drive.OwnerAccountCanonical)
-	if err != nil {
-		logger.Debug("could not parse mount-root owner account type",
-			"canonical_id", canonicalID.String(),
-			"owner_account_canonical", drive.OwnerAccountCanonical,
-			"error", err,
-		)
+	ownerCID, hasOwner := drive.Owner()
+	if !hasOwner {
 		return true
 	}
 
@@ -296,8 +281,21 @@ func RemoteRootDeltaCapableForTokenOwner(ownerCID driveid.CanonicalID) bool {
 // CollectOtherSyncDirs collects sync_dir values from all drives in the config
 // except the specified one. For drives without explicit sync_dir, computes
 // the base name (without collision cascade) so all potential collisions are detected.
-// Pass a zero CanonicalID to include all drives (no exclusion).
+// Pass a zero CanonicalID to include all drives (no exclusion). An unreadable
+// catalog only costs those base names their organization name.
 func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *slog.Logger) []string {
+	catalog, err := LoadCatalog()
+	if err != nil {
+		logger.Debug("could not load catalog accounts for sync dirs", "error", err)
+		catalog = nil
+	}
+
+	return otherSyncDirs(cfg, catalog, excludeID)
+}
+
+// otherSyncDirs is CollectOtherSyncDirs over a catalog already in hand (nil
+// for none).
+func otherSyncDirs(cfg *Config, catalog *Catalog, excludeID driveid.CanonicalID) []string {
 	var dirs []string
 
 	for id := range cfg.Drives {
@@ -307,21 +305,8 @@ func CollectOtherSyncDirs(cfg *Config, excludeID driveid.CanonicalID, logger *sl
 
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
-			// Compute base name for this drive (without collision cascade).
-			// Use the catalog account record for org_name.
-			var orgName string
-
-			acctCID := accountCIDForDrive(id)
-			if !acctCID.IsZero() {
-				if catalog, err := LoadCatalog(); err != nil {
-					logger.Debug("could not load catalog account for sync dir",
-						"canonical_id", id.String(), "error", err)
-				} else if account, found := catalog.AccountByCanonicalID(acctCID); found && account.OrgName != "" {
-					orgName = account.OrgName
-				}
-			}
-
-			dir = BaseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
+			orgName, _ := accountNames(catalog, id)
+			dir = baseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
 		}
 
 		if dir != "" {
@@ -369,8 +354,7 @@ func EffectiveSyncDir(
 // account using the catalog account record. Returns empty strings if the
 // account record is unavailable.
 func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName, displayName string) {
-	acctCID := accountCIDForDrive(cid)
-	if acctCID.IsZero() {
+	if accountCIDForDrive(cid).IsZero() {
 		return "", ""
 	}
 
@@ -382,20 +366,18 @@ func ResolveAccountNames(cid driveid.CanonicalID, logger *slog.Logger) (orgName,
 		return "", ""
 	}
 
-	account, found := catalog.AccountByCanonicalID(acctCID)
+	return accountNames(catalog, cid)
+}
+
+// accountNames is ResolveAccountNames over a catalog already in hand (nil for
+// none).
+func accountNames(catalog *Catalog, cid driveid.CanonicalID) (orgName, displayName string) {
+	account, found := catalog.AccountByCanonicalID(accountCIDForDrive(cid))
 	if !found {
 		return "", ""
 	}
 
 	return account.OrgName, account.DisplayName
-}
-
-// applyDriveOverrides selectively replaces global config values with per-drive
-// values for fields that the drive explicitly sets.
-func applyDriveOverrides(resolved *ResolvedDrive, drive *Drive, logger *slog.Logger) {
-	_ = resolved
-	_ = drive
-	_ = logger
 }
 
 // ExpandTilde replaces a leading "~/" with the user's home directory. If

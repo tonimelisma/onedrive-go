@@ -3,7 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -33,25 +34,37 @@ func newKnownGlobalKeys() map[string]bool {
 // for Levenshtein matching. Sorted for deterministic suggestions when two
 // candidates have the same edit distance.
 func newKnownGlobalKeysList() []string {
-	m := newKnownGlobalKeys()
-	keys := make([]string, 0, len(m))
-
-	for k := range m {
-		keys = append(keys, k)
-	}
-
-	sort.Strings(keys)
-
-	return keys
+	return slices.Sorted(maps.Keys(newKnownGlobalKeys()))
 }
 
-// newKnownDriveKeys returns the set of valid keys inside a drive section.
-// Returns a fresh map each call to avoid package-level mutable state.
-func newKnownDriveKeys() map[string]bool {
-	return map[string]bool{
-		"sync_dir": true, "paused": true, "paused_until": true, "display_name": true, "owner": true,
-		"ignored_dirs": true, "included_dirs": true, "ignored_paths": true,
-		"ignore_dotfiles": true, "ignore_junk_files": true, "follow_symlinks": true, "cross_filesystems": true,
+// driveKeyKind is the TOML value kind a drive-section key holds.
+type driveKeyKind int
+
+const (
+	driveKeyString driveKeyKind = iota + 1
+	driveKeyBool
+	driveKeyStringList
+)
+
+// newDriveKeyKinds is the drive-section schema: every key a drive section may
+// hold, with the kind of value it holds. Both the unknown-key check and the
+// config writers learn a key from it, and a schema test holds it to the
+// Drive struct. Returns a fresh map each call to avoid package-level mutable
+// state.
+func newDriveKeyKinds() map[string]driveKeyKind {
+	return map[string]driveKeyKind{
+		syncDirKey:          driveKeyString,
+		"paused":            driveKeyBool,
+		"paused_until":      driveKeyString,
+		displayNameKey:      driveKeyString,
+		"owner":             driveKeyString,
+		"ignored_dirs":      driveKeyStringList,
+		"included_dirs":     driveKeyStringList,
+		"ignored_paths":     driveKeyStringList,
+		"ignore_dotfiles":   driveKeyBool,
+		"ignore_junk_files": driveKeyBool,
+		"follow_symlinks":   driveKeyBool,
+		"cross_filesystems": driveKeyBool,
 	}
 }
 
@@ -59,23 +72,14 @@ func newKnownDriveKeys() map[string]bool {
 // for Levenshtein matching. Sorted for deterministic suggestions when two
 // candidates have the same edit distance.
 func newKnownDriveKeysList() []string {
-	m := newKnownDriveKeys()
-	keys := make([]string, 0, len(m))
-
-	for k := range m {
-		keys = append(keys, k)
-	}
-
-	sort.Strings(keys)
-
-	return keys
+	return slices.Sorted(maps.Keys(newDriveKeyKinds()))
 }
 
 // collectUnknownGlobalKeyErrors inspects TOML metadata for undecoded keys
 // and returns individual errors for each unknown global key. Drive sections
 // (keys containing ":") are skipped because they are parsed separately.
 // Used by both the strict path (checkUnknownKeys) and the lenient path
-// (LoadLenient, which collects these as warnings).
+// (LoadOrDefaultLenient, which collects these as warnings).
 func collectUnknownGlobalKeyErrors(md *toml.MetaData) []error {
 	undecoded := md.Undecoded()
 	if len(undecoded) == 0 {
@@ -127,16 +131,16 @@ func buildGlobalKeyError(keyStr string) error {
 }
 
 // collectDriveUnknownKeyErrors returns individual errors for each unknown key
-// in a drive section. Used by decodeDriveSectionsInternal for both strict and
+// in a drive section. Used by driveSectionDecoder.decode for both strict and
 // lenient parsing modes.
 func collectDriveUnknownKeyErrors(driveMap map[string]any, canonicalID string) []error {
 	var errs []error
 
-	known := newKnownDriveKeys()
+	known := newDriveKeyKinds()
 	knownList := newKnownDriveKeysList()
 
 	for key := range driveMap {
-		if known[key] {
+		if _, isKnown := known[key]; isKnown {
 			continue
 		}
 
@@ -200,25 +204,11 @@ func levenshtein(a, b string) int {
 				cost = 0
 			}
 
-			curr[j+1] = minOf(curr[j]+1, prev[j+1]+1, prev[j]+cost)
+			curr[j+1] = min(curr[j]+1, prev[j+1]+1, prev[j]+cost)
 		}
 
 		prev, curr = curr, prev
 	}
 
 	return prev[len(b)]
-}
-
-// minOf returns the minimum of three integers.
-func minOf(a, b, c int) int {
-	m := a
-	if b < m {
-		m = b
-	}
-
-	if c < m {
-		m = c
-	}
-
-	return m
 }

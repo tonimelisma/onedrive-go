@@ -258,6 +258,27 @@ func TestLogoutCommand_PurgeRemovesCatalogAccountAndDrive(t *testing.T) {
 	assert.Contains(t, out.String(), "Sync directories untouched")
 }
 
+// Validates: R-3.1.3
+func TestLogoutCommand_ListsTheFolderOfADriveOnItsDefaultFolder(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:default-folder@example.com")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:default-folder@example.com"]
+`), 0o600))
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_default-folder@example.com.json")
+	seedCatalogDrive(t, cid, nil)
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	require.NoError(t, runLogoutWithContext(t.Context(), cc, false))
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), cid.String()+" ("+filepath.Join(home, "OneDrive")+")",
+		"a drive on its default folder is listed with that folder, not an empty setting")
+}
+
 func TestLogoutCommand_PurgeFallsBackWhenValidatedStateIsBroken(t *testing.T) {
 	setTestDriveHome(t)
 

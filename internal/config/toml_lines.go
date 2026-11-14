@@ -2,7 +2,15 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+)
+
+// tomlControlCharLimit is the first character that is not a control
+// character; tomlDelete is the one control character above it.
+const (
+	tomlControlCharLimit = 0x20
+	tomlDelete           = 0x7f
 )
 
 // lineKind classifies a line in a TOML file for structured editing.
@@ -57,27 +65,118 @@ func parseLine(raw string) parsedLine {
 	return parsedLine{kind: lineOther, raw: raw}
 }
 
-// parseSectionHeader extracts the section name from a line like [name] or ["quoted:name"].
-// Returns the unquoted name and true if successful.
+// renderSectionHeaderLine and parseSectionHeader are the one pair that writes
+// and reads a table header. The name is written as a TOML basic string and
+// read back with its escapes undone, so a quote or a backslash in a drive's
+// name (a SharePoint library may hold either) finds its section again.
+func renderSectionHeaderLine(name string) string {
+	return "[" + tomlString(name) + "]"
+}
+
+// parseSectionHeader reads a table header line: [name], ["basic string"] or
+// ['literal string'], with an optional trailing comment. It returns the name
+// with escapes undone and false for anything else, including an array of
+// tables ([[name]]), which the config does not use.
 func parseSectionHeader(trimmed string) (string, bool) {
-	if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+	if !strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "[[") {
 		return "", false
 	}
 
-	// Reject array-of-tables [[...]] — not used in our config but handled for safety.
-	if strings.HasPrefix(trimmed, "[[") {
+	name, rest, ok := cutHeaderName(strings.TrimSpace(trimmed[1:]))
+	if !ok {
 		return "", false
 	}
 
-	inner := trimmed[1 : len(trimmed)-1]
-	inner = strings.TrimSpace(inner)
-
-	// Handle quoted section names: ["personal:user@example.com"]
-	if len(inner) >= 2 && inner[0] == '"' && inner[len(inner)-1] == '"' {
-		return inner[1 : len(inner)-1], true
+	rest = strings.TrimSpace(rest)
+	if !strings.HasPrefix(rest, "]") {
+		return "", false
 	}
 
-	return inner, true
+	after := strings.TrimSpace(rest[1:])
+	if after != "" && !strings.HasPrefix(after, "#") {
+		return "", false
+	}
+
+	return name, true
+}
+
+// cutHeaderName splits a header's name from what follows it, undoing a
+// quoted name's escapes.
+func cutHeaderName(header string) (name, rest string, ok bool) {
+	switch {
+	case strings.HasPrefix(header, `"`):
+		end := closingBasicQuote(header)
+		if end < 0 {
+			return "", "", false
+		}
+
+		unquoted, err := strconv.Unquote(header[:end+1])
+		if err != nil {
+			return "", "", false
+		}
+
+		return unquoted, header[end+1:], true
+	case strings.HasPrefix(header, "'"):
+		end := strings.IndexByte(header[1:], '\'')
+		if end < 0 {
+			return "", "", false
+		}
+
+		return header[1 : end+1], header[end+2:], true
+	default:
+		end := strings.IndexByte(header, ']')
+		if end < 0 {
+			return "", "", false
+		}
+
+		return strings.TrimSpace(header[:end]), header[end:], true
+	}
+}
+
+// closingBasicQuote returns the index of the quote that closes the basic
+// string s starts with, skipping escaped characters, or -1.
+func closingBasicQuote(s string) int {
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '"':
+			return i
+		}
+	}
+
+	return -1
+}
+
+// tomlString renders s as a TOML basic string. Go's %q is not one: it writes
+// \a, \v and \xNN escapes, which TOML rejects, so a value holding such a
+// character would leave a config file that no longer loads. Every other
+// control character becomes a \uXXXX escape. Every string tomlString writes
+// is also a Go string literal, which is how parseSectionHeader reads one back.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < tomlControlCharLimit || r == tomlDelete:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+
+	return b.String()
 }
 
 // parseKeyValue splits a line into key, value, and inline comment.
@@ -169,10 +268,6 @@ func renderKeyValueLine(key, formattedValue, inlineComment string) string {
 	}
 
 	return line
-}
-
-func renderSectionHeaderLine(name string) string {
-	return fmt.Sprintf("[%q]", name)
 }
 
 // findSectionByName locates a section by its parsed name. Returns the

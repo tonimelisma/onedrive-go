@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -436,6 +437,17 @@ func TestOpenBrowser_CommandStartFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "start browser command")
 	assert.NotContains(t, err.Error(), "secret-token")
+}
+
+// resolveLogoutAccount is logout's account choice without --account, from the
+// catalog on disk.
+func resolveLogoutAccount(ctx context.Context, cfg *config.Config, purge bool, logger *slog.Logger) (string, error) {
+	stored, err := config.LoadCatalog()
+	if err != nil {
+		return "", fmt.Errorf("loading catalog: %w", err)
+	}
+
+	return resolveLogoutAccountWithCatalog(ctx, cfg, stored, "", purge, logger)
 }
 
 // Validates: R-3.1.4

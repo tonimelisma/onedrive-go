@@ -98,7 +98,7 @@ func TestCatalogDrive_CreatesDirectory(t *testing.T) {
 		drive.RemoteDriveID = "d123"
 	})
 
-	_, statErr := os.Stat(CatalogPath())
+	_, statErr := os.Stat(CatalogPathForDataDir(DefaultDataDir()))
 	require.NoError(t, statErr)
 
 	loaded, found := loadCatalogDrive(t, cid)

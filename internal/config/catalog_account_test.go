@@ -96,7 +96,7 @@ func TestCatalogAccount_CreatesDirectory(t *testing.T) {
 		account.PrimaryDriveID = catalogAccountTestDriveD123
 	})
 
-	_, statErr := os.Stat(CatalogPath())
+	_, statErr := os.Stat(CatalogPathForDataDir(DefaultDataDir()))
 	require.NoError(t, statErr)
 
 	account, found := loadCatalogAccount(t, cid)

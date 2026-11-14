@@ -195,7 +195,7 @@ func TestUpdateCatalog_CrossProcessUpdatesAreNotLost(t *testing.T) {
 	}
 
 	holderView.UpsertAccount(&holderAccount)
-	require.NoError(t, SaveCatalogForDataDir(dataDir, holderView))
+	require.NoError(t, saveCatalogForDataDir(dataDir, holderView))
 	releaseHolder()
 	resumeWaiter()
 	updater.Wait()

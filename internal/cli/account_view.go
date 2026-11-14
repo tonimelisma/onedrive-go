@@ -99,8 +99,7 @@ func populateStoredAccounts(byEmail map[string]*accountView, stored *config.Cata
 		}
 
 		view := ensureAccountView(byEmail, account.Email)
-		accountCID, err := driveid.NewCanonicalID(account.CanonicalID)
-		if err == nil {
+		if accountCID, hasID := account.ID(); hasID {
 			view.AccountCanonicalID = accountCID
 			view.TokenDriveIDs = appendUniqueCanonicalID(view.TokenDriveIDs, accountCID)
 		}
@@ -121,12 +120,12 @@ func populateConfiguredAccountViews(
 	for _, email := range order {
 		for _, cid := range grouped[email] {
 			driveRecord, found := stored.DriveByCanonicalID(cid)
-			if !found || driveRecord.OwnerAccountCanonical == "" {
+			if !found {
 				continue
 			}
 
-			accountCID, err := driveid.NewCanonicalID(driveRecord.OwnerAccountCanonical)
-			if err != nil {
+			accountCID, hasOwner := driveRecord.Owner()
+			if !hasOwner {
 				continue
 			}
 

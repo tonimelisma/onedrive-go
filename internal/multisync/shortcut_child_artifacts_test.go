@@ -16,6 +16,16 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
+// shortcutChildArtifactCleanupClass is the failure class of the first cleanup
+// error in err's chain.
+func shortcutChildArtifactCleanupClass(err error) (shortcutChildArtifactCleanupFailureClass, bool) {
+	var cleanupErr shortcutChildArtifactCleanupError
+	if errors.As(err, &cleanupErr) {
+		return cleanupErr.class, true
+	}
+	return "", false
+}
+
 // Validates: R-2.4.8
 func TestPurgeShortcutChildArtifacts_IgnoresExplicitMountID(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
@@ -51,9 +61,6 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(
 		remove: func(string) error {
 			return removeErr
 		},
-		pruneCatalogRecord: func(string) error {
-			return nil
-		},
 		deleteUploadSessions: func(string, string) error {
 			return nil
 		},
@@ -70,8 +77,8 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsStateArtifactRemoveFailure(
 // A child's state store another engine still has open (another
 // configuration's child of the same shortcut, sharing the data directory) is
 // not deleted under it. The cleanup fails as a remaining state artifact and
-// touches nothing else of the child: its catalog record and unfinished
-// uploads stay with its state until a later attempt finds the store free.
+// touches nothing else of the child: its unfinished uploads stay with its
+// state until a later attempt finds the store free.
 //
 // Validates: R-2.4.8, R-6.3.9
 func TestShortcutChildArtifactCleanupExecutor_KeepsTheStateWhileAnEngineHoldsIt(t *testing.T) {
@@ -92,10 +99,6 @@ func TestShortcutChildArtifactCleanupExecutor_KeepsTheStateWhileAnEngineHoldsIt(
 			touched = append(touched, "remove "+path)
 			return nil
 		},
-		pruneCatalogRecord: func(string) error {
-			touched = append(touched, "catalog")
-			return nil
-		},
 		deleteUploadSessions: func(string, string) error {
 			touched = append(touched, "uploads")
 			return nil
@@ -109,33 +112,7 @@ func TestShortcutChildArtifactCleanupExecutor_KeepsTheStateWhileAnEngineHoldsIt(
 
 	require.NoError(t, release())
 	require.NoError(t, executor.purge(t.Context(), shortcutChildArtifactScope{mountID: childMountID}))
-	assert.Len(t, touched, len(config.StateDBFamily(statePath))+2, "a later attempt cleans everything up")
-}
-
-// Validates: R-2.4.8
-func TestShortcutChildArtifactCleanupExecutor_ReturnsCatalogFailure(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-
-	childMountID := config.ChildMountID("personal:parent@example.com", "binding-catalog-fail")
-	executor := shortcutChildArtifactCleanupExecutor{
-		dataDir: t.TempDir(),
-		logger:  slog.New(slog.DiscardHandler),
-		remove: func(string) error {
-			return nil
-		},
-		pruneCatalogRecord: func(string) error {
-			return errors.New("catalog write denied")
-		},
-		deleteUploadSessions: func(string, string) error {
-			return nil
-		},
-	}
-
-	err := executor.purge(context.Background(), shortcutChildArtifactScope{mountID: childMountID})
-
-	require.Error(t, err)
-	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupCatalogFailure)
-	assert.Contains(t, err.Error(), "catalog write denied")
+	assert.Len(t, touched, len(config.StateDBFamily(statePath))+1, "a later attempt cleans everything up")
 }
 
 // Validates: R-2.4.8
@@ -147,9 +124,6 @@ func TestShortcutChildArtifactCleanupExecutor_ReturnsUploadSessionFailure(t *tes
 		dataDir: t.TempDir(),
 		logger:  slog.New(slog.DiscardHandler),
 		remove: func(string) error {
-			return nil
-		},
-		pruneCatalogRecord: func(string) error {
 			return nil
 		},
 		deleteUploadSessions: func(string, string) error {
@@ -227,7 +201,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-cleanup")
 	var removed []string
-	var pruned []string
 	var sessions []shortcutChildArtifactScope
 	var acked []string
 	orch := NewOrchestrator(&OrchestratorConfig{
@@ -238,10 +211,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 		logger:  orch.logger,
 		remove: func(path string) error {
 			removed = append(removed, path)
-			return nil
-		},
-		pruneCatalogRecord: func(mountID string) error {
-			pruned = append(pruned, mountID)
 			return nil
 		},
 		deleteUploadSessions: func(mountID string, localRoot string) error {
@@ -272,7 +241,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 
 	require.NoError(t, err)
 	assert.Len(t, removed, 4)
-	assert.Equal(t, []string{childMountID}, pruned)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, childMountID, sessions[0].mountID)
 	assert.Equal(t, []string{"ack"}, acked)
@@ -283,7 +251,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 	t.Parallel()
 
 	childMountID := config.ChildMountID("personal:parent@example.com", "binding-ack-fail")
-	var pruned []string
+	var cleaned []string
 	orch := NewOrchestrator(&OrchestratorConfig{
 		Logger: slog.New(slog.DiscardHandler),
 	})
@@ -293,11 +261,8 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 		remove: func(string) error {
 			return nil
 		},
-		pruneCatalogRecord: func(mountID string) error {
-			pruned = append(pruned, mountID)
-			return nil
-		},
-		deleteUploadSessions: func(string, string) error {
+		deleteUploadSessions: func(mountID string, _ string) error {
+			cleaned = append(cleaned, mountID)
 			return nil
 		},
 	}
@@ -322,7 +287,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 	require.Error(t, err)
 	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupParentAckFailure)
 	assert.Contains(t, err.Error(), "parent store temporarily unavailable")
-	assert.Equal(t, []string{childMountID}, pruned)
+	assert.Equal(t, []string{childMountID}, cleaned, "the artifacts are cleaned before the acknowledgement fails")
 	diagnostics := orch.shortcutCleanupDiagnosticSnapshot()
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, string(shortcutChildArtifactCleanupParentAckFailure), diagnostics[0].Class)
@@ -342,9 +307,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 		dataDir: t.TempDir(),
 		logger:  orch.logger,
 		remove: func(string) error {
-			return nil
-		},
-		pruneCatalogRecord: func(string) error {
 			return nil
 		},
 		deleteUploadSessions: func(string, string) error {
@@ -385,13 +347,10 @@ func TestOrchestratorPurgeShortcutChildArtifactsRecordsMixedCleanupDiagnostics(t
 		remove: func(string) error {
 			return nil
 		},
-		pruneCatalogRecord: func(mountID string) error {
+		deleteUploadSessions: func(mountID string, _ string) error {
 			if mountID == artifactFailMountID {
-				return errors.New("catalog write denied")
+				return errors.New("session store unavailable")
 			}
-			return nil
-		},
-		deleteUploadSessions: func(string, string) error {
 			return nil
 		},
 	}
@@ -426,7 +385,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsRecordsMixedCleanupDiagnostics(t
 	require.Error(t, err)
 	diagnostics := orch.shortcutCleanupDiagnosticSnapshot()
 	require.Len(t, diagnostics, 2)
-	assert.Equal(t, string(shortcutChildArtifactCleanupCatalogFailure), diagnostics[0].Class)
+	assert.Equal(t, string(shortcutChildArtifactCleanupUploadSessionFailure), diagnostics[0].Class)
 	assert.Equal(t, shortcutCleanupDiagnosticArtifactsRemaining, diagnostics[0].Phase)
 	assert.Equal(t, string(shortcutChildArtifactCleanupParentAckFailure), diagnostics[1].Class)
 	assert.Equal(t, shortcutCleanupDiagnosticParentAckFailed, diagnostics[1].Phase)
@@ -445,9 +404,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessful
 		dataDir: t.TempDir(),
 		logger:  orch.logger,
 		remove: func(string) error {
-			return nil
-		},
-		pruneCatalogRecord: func(string) error {
 			return nil
 		},
 		deleteUploadSessions: func(string, string) error {
@@ -495,9 +451,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 		remove: func(string) error {
 			return nil
 		},
-		pruneCatalogRecord: func(string) error {
-			return nil
-		},
 		deleteUploadSessions: func(string, string) error {
 			return nil
 		},
@@ -540,9 +493,6 @@ func TestOrchestratorPurgeShortcutChildArtifactsKeepsDiagnosticsForParentScopedN
 		dataDir: t.TempDir(),
 		logger:  orch.logger,
 		remove: func(string) error {
-			return nil
-		},
-		pruneCatalogRecord: func(string) error {
 			return nil
 		},
 		deleteUploadSessions: func(string, string) error {

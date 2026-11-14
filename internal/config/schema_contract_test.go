@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -244,7 +245,51 @@ func TestConfigSchema_DriveKeysMatchExpected(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, expectedDriveSchemaKeys(), sortedKeys(taggedKeysFromType(reflect.TypeOf(Drive{}))))
-	assert.Equal(t, expectedDriveSchemaKeys(), sortedKeys(knownKeysSet(newKnownDriveKeys())))
+	assert.Equal(t, expectedDriveSchemaKeys(), slices.Sorted(maps.Keys(newDriveKeyKinds())))
+}
+
+// taggedKindsFromType maps each TOML-tagged field of a struct (embedded
+// structs included) to the value kind its Go type decodes.
+func taggedKindsFromType(t *testing.T, typ reflect.Type) map[string]driveKeyKind {
+	t.Helper()
+
+	kinds := make(map[string]driveKeyKind)
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		if field.Anonymous {
+			maps.Copy(kinds, taggedKindsFromType(t, field.Type))
+			continue
+		}
+
+		tag := strings.Split(field.Tag.Get("toml"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+
+		fieldType := field.Type
+		if fieldType.Kind() == reflect.Pointer {
+			fieldType = fieldType.Elem()
+		}
+		switch {
+		case fieldType.Kind() == reflect.String:
+			kinds[tag] = driveKeyString
+		case fieldType.Kind() == reflect.Bool:
+			kinds[tag] = driveKeyBool
+		case fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.String:
+			kinds[tag] = driveKeyStringList
+		default:
+			require.Failf(t, "drive field of an unmapped kind", "%s has type %s", tag, field.Type)
+		}
+	}
+
+	return kinds
+}
+
+// Validates: R-4.2.2
+func TestConfigSchema_DriveKeyKindsMatchTheDriveStruct(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, taggedKindsFromType(t, reflect.TypeOf(Drive{})), newDriveKeyKinds())
 }
 
 // Validates: R-4.2.1, R-4.9.4

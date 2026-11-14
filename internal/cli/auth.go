@@ -15,7 +15,11 @@ authorization code flow (--browser).
 
 Discovers your account type automatically. For work or school accounts, also
 discovers the organization name.
-Creates or updates the config file with the new drive section.
+Creates or updates the config file with the new drive section. If the
+account's drive is configured but not fully set up, login completes it and
+says so. If saving the token or setting up the drive fails, the config, the
+drive inventory and the previous saved login are left as they were; a sync
+folder it already created stays, empty.
 
 The --browser flag opens your default browser for authentication, which can be
 useful when the device code flow is blocked by organizational policies.`,

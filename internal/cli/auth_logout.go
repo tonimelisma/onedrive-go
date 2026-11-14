@@ -14,18 +14,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// resolveLogoutAccount determines the account email for logout from the
-// validated offline account view. Plain logout auto-selects only when exactly
-// one known account still has a usable saved login. Purge-only cleanup may
-// auto-select a single known account even when its saved login is already gone.
-func resolveLogoutAccount(ctx context.Context, cfg *config.Config, purge bool, logger *slog.Logger) (string, error) {
-	stored, err := config.LoadCatalog()
-	if err != nil {
-		return "", fmt.Errorf("loading catalog: %w", err)
-	}
-	return resolveLogoutAccountWithCatalog(ctx, cfg, stored, "", purge, logger)
-}
-
+// resolveLogoutAccountWithCatalog determines the account email for logout
+// from the offline account view: --account when given; otherwise plain
+// logout auto-selects only when exactly one known account still has a usable
+// saved login, and purge-only cleanup may auto-select a single known account
+// even when its saved login is already gone.
 func resolveLogoutAccountWithCatalog(
 	ctx context.Context,
 	cfg *config.Config,
@@ -118,15 +111,15 @@ func executeLogout(
 	}
 	result.TokenRemoved = removed
 
-	if err := printAffectedDrives(w, cfg, affected); err != nil {
-		return result, err
-	}
-
 	// Each drive's folder as its engine locked it, read before the config
-	// forgets it, for the purge's lock.
+	// forgets it, for the listing below and the purge's lock.
 	syncDirs := make(map[driveid.CanonicalID]string, len(affected))
 	for _, cid := range affected {
 		syncDirs[cid] = driveSyncDir(cfg, cid, logger)
+	}
+
+	if err := printAffectedDrives(w, affected, syncDirs); err != nil {
+		return result, err
 	}
 
 	removedDrives, configErr := removeAccountDriveConfigs(cc.CfgPath, affected, logger)
@@ -165,7 +158,11 @@ func removeLogoutToken(
 ) (bool, error) {
 	tokenCanonicalID := canonicalIDForToken(account, affected)
 	if tokenCanonicalID.IsZero() {
-		tokenCanonicalID = config.AccountCanonicalIDByEmail(stored, account)
+		storedCID, err := config.AccountCanonicalIDByEmail(stored, account)
+		if err != nil {
+			return false, fmt.Errorf("finding the saved login of %s: %w", account, err)
+		}
+		tokenCanonicalID = storedCID
 	}
 
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
@@ -325,8 +322,10 @@ func canonicalIDForToken(account string, driveIDs []driveid.CanonicalID) driveid
 	return driveid.CanonicalID{}
 }
 
-// printAffectedDrives lists drives that can no longer sync after logout.
-func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.CanonicalID) error {
+// printAffectedDrives lists drives that can no longer sync after logout, each
+// with the folder it synced, also when its section left sync_dir to the
+// default.
+func printAffectedDrives(w io.Writer, affected []driveid.CanonicalID, syncDirs map[driveid.CanonicalID]string) error {
 	if len(affected) == 0 {
 		return nil
 	}
@@ -336,8 +335,7 @@ func printAffectedDrives(w io.Writer, cfg *config.Config, affected []driveid.Can
 	}
 
 	for _, id := range affected {
-		syncDir := cfg.Drives[id].SyncDir
-		if err := writef(w, "  %s (%s)\n", id.String(), syncDir); err != nil {
+		if err := writef(w, "  %s (%s)\n", id.String(), syncDirs[id]); err != nil {
 			return err
 		}
 	}
