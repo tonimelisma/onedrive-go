@@ -6,15 +6,11 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // verifyProfileUsage lists every verify profile for the usage line.
 const verifyProfileUsage = "default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test"
-
-// shortUnitTestTimeout is go test's per-package deadline in the short unit
-// tier: no race detector and no exhaustive tests, so a package that takes
-// ten minutes is hung, not slow.
-const shortUnitTestTimeout = "10m"
 
 // verifyShard is one slice of the short unit tier, `--shard index/count`.
 // A zero value means the whole tier.
@@ -102,6 +98,7 @@ func runPRLaneVerification(
 	stdout, stderr io.Writer,
 	plan verifyPlan,
 	shard verifyShard,
+	shortUnitTimeout time.Duration,
 ) error {
 	var steps []verifyStep
 	if plan.runLint {
@@ -126,7 +123,7 @@ func runPRLaneVerification(
 	}
 
 	return collector.runStep("short unit tests", func() error {
-		return runShortUnitTests(ctx, runner, repoRoot, env, shard, stdout, stderr)
+		return runShortUnitTests(ctx, runner, repoRoot, env, shard, shortUnitTimeout, stdout, stderr)
 	})
 }
 
@@ -145,16 +142,18 @@ func runHostBuild(ctx context.Context, runner commandRunner, repoRoot string, en
 // race detector or a coverage profile, optionally one shard of it. -short
 // skips the tests marked exhaustive (grep `exhaustive: runs in the full
 // verify profiles`), which are breadth, replay and randomized variants of
-// behavior the targeted tests cover; nothing else changes.
+// behavior the targeted tests cover; nothing else changes. The deadline is
+// go test's per-package one (resolveShortUnitTestTimeout).
 func runShortUnitTests(
 	ctx context.Context,
 	runner commandRunner,
 	repoRoot string,
 	env []string,
 	shard verifyShard,
+	timeout time.Duration,
 	stdout, stderr io.Writer,
 ) error {
-	args := []string{"test", "-short", "-timeout=" + shortUnitTestTimeout}
+	args := []string{"test", "-short", "-timeout=" + timeout.String()}
 	status := "==> go test -short"
 	if shard.enabled() {
 		args = append(args, "-run="+shard.runPattern())

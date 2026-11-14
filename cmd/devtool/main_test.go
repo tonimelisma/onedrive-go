@@ -53,6 +53,7 @@ func TestNewVerifyCmdLeavesTheProfileToTheVerifierByDefault(t *testing.T) {
 	assert.Zero(t, got.DODCITimeout, "no hard cap given: the wait derives one from the stall window")
 	assert.Equal(t, devtool.DefaultDODCIMaxReruns, got.DODCIMaxReruns)
 	assert.Zero(t, got.UnitTimeout, "no deadline given: the verifier scales it with the host's cores")
+	assert.Zero(t, got.ShortUnitTimeout, "no deadline given: the verifier scales it with the host's cores")
 }
 
 // Validates: R-6.10.1
@@ -89,6 +90,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--ci-timeout", "45m",
 		"--ci-max-reruns", "1",
 		"--unit-timeout", "50m",
+		"--short-unit-timeout", "25m",
 		"--failed-log", "/tmp/ci.log",
 		"--check-format",
 	})
@@ -111,6 +113,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 45*time.Minute, got.DODCITimeout)
 	assert.Equal(t, 1, got.DODCIMaxReruns)
 	assert.Equal(t, 50*time.Minute, got.UnitTimeout)
+	assert.Equal(t, 25*time.Minute, got.ShortUnitTimeout)
 	assert.Equal(t, "/tmp/ci.log", got.FailedTestLog)
 	assert.True(t, got.CheckFormat)
 }

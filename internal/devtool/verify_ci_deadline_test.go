@@ -126,6 +126,7 @@ func profileGoTestDeadlines(t *testing.T, runner *fakeRunner, profile VerifyProf
 		CoverageFile: coverFile,
 		// The CI runners have at least the reference core count.
 		UnitTimeout:        unitTestTimeoutForCores(unitTestReferenceCores),
+		ShortUnitTimeout:   shortUnitTestTimeoutForCores(unitTestReferenceCores),
 		E2ELogDir:          filepath.Join(t.TempDir(), "e2e-logs"),
 		SummaryJSONPath:    summaryPath,
 		ClassifyLiveQuirks: classify,
