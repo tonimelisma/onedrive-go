@@ -85,7 +85,7 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 	batches := make(chan localObservationBatch, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	obs.TrySendFullLocalSnapshot(ctx, result)
-	snapshot := receiveBatch(t, batches, "safety scan snapshot")
+	snapshot := receiveWithin(t, batches, "safety scan snapshot")
 	require.True(t, snapshot.fullSnapshot)
 	require.NoError(t, rt.handleWatchLocalObservationBatch(ctx, &snapshot))
 

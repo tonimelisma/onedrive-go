@@ -86,6 +86,7 @@ func (m *mockDeltaFetcher) Delta(_ context.Context, driveID driveid.ID, _ string
 // Tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.7.3
 func TestFullDelta_NewFiles(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +129,7 @@ func TestFullDelta_NewFiles(t *testing.T) {
 	assert.Equal(t, "world.txt", events[1].Name)
 }
 
+// Validates: R-6.7.3
 func TestFullDelta_ModifiedFile(t *testing.T) {
 	t.Parallel()
 
@@ -173,6 +175,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 	assert.Equal(t, "new-hash", fileEvent.Hash)
 }
 
+// Validates: R-2.4.17
 func TestFullDelta_DeletedFile(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +241,7 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 	assert.Equal(t, "new-hash", events[0].Hash)
 }
 
+// Validates: R-6.7.3
 func TestFullDelta_MovedFile(t *testing.T) {
 	t.Parallel()
 
@@ -518,6 +522,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 	assert.Equal(t, "Documents/report.pdf", fileEvent.Path)
 }
 
+// Validates: R-6.7.3
 func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 	t.Parallel()
 
@@ -545,6 +550,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 	assert.Equal(t, "Projects/GoApp/main.go", events[0].Path)
 }
 
+// Validates: R-6.7.3
 func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 	t.Parallel()
 
@@ -585,6 +591,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 	assert.Equal(t, "Documents/Reports/q1.pdf", fileEvent.Path)
 }
 
+// Validates: R-2.4.17
 func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 	t.Parallel()
 
@@ -614,6 +621,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 	assert.Equal(t, "work/budget.xlsx", events[0].Path)
 }
 
+// Validates: R-6.7.2
 func TestFullDelta_DriveIDNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -646,6 +654,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 	assert.True(t, fetcher.driveIDs[0].Equal(want), "fetcher received driveID = %q, want %q (normalized)", fetcher.driveIDs[0], want)
 }
 
+// Validates: R-2.13.1
 func TestFullDelta_NFCNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -675,6 +684,7 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 	assert.Equal(t, nfc, events[0].Path, "NFC-normalized")
 }
 
+// Validates: R-2.2.1
 func TestFullDelta_HashSelection(t *testing.T) {
 	t.Parallel()
 
@@ -808,6 +818,7 @@ func TestFullDelta_ContextCanceled(t *testing.T) {
 // Unit tests for helper functions
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.7.2
 func TestDriveIDNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -858,6 +869,7 @@ func TestClassifyItemType(t *testing.T) {
 	}
 }
 
+// Validates: R-2.2.1
 func TestSelectHash(t *testing.T) {
 	t.Parallel()
 
@@ -881,6 +893,7 @@ func TestSelectHash(t *testing.T) {
 	}
 }
 
+// Validates: R-6.7.16
 func TestToUnixNano(t *testing.T) {
 	t.Parallel()
 
@@ -889,6 +902,7 @@ func TestToUnixNano(t *testing.T) {
 	assert.Equal(t, int64(0), toUnixNano(time.Time{}))
 }
 
+// Validates: R-6.7.28
 func TestFullDelta_OrphanedItem(t *testing.T) {
 	t.Parallel()
 
@@ -1219,13 +1233,19 @@ func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	defer cancel()
 
 	batches := make(chan remoteObservationBatch, 1)
-	go func() {
-		batch := <-batches
-		assert.True(t, batch.shortcutTopology.shouldApply(), "expected applicable topology in watch batch")
-		batch.finishApplied(applyErr)
-	}()
+	runInBackground(t, ctx, func(consumerCtx context.Context) error {
+		select {
+		case batch := <-batches:
+			assert.True(t, batch.shortcutTopology.shouldApply(), "expected applicable topology in watch batch")
+			batch.finishApplied(applyErr)
+		case <-consumerCtx.Done():
+		}
+		return nil
+	})
 
-	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	err := runWithin(t, ctx, "Watch to return the topology apply failure", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	})
 	require.ErrorIs(t, err, applyErr)
 	assert.Empty(t, obs.CurrentDeltaToken())
 }
@@ -1253,13 +1273,19 @@ func TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor(t *testing.
 	defer cancel()
 
 	batches := make(chan remoteObservationBatch, 1)
-	go func() {
-		batch := <-batches
-		assert.True(t, batch.shortcutTopology.shouldApply(), "expected empty complete topology batch to be emitted")
-		batch.finishApplied(applyErr)
-	}()
+	runInBackground(t, ctx, func(consumerCtx context.Context) error {
+		select {
+		case batch := <-batches:
+			assert.True(t, batch.shortcutTopology.shouldApply(), "expected empty complete topology batch to be emitted")
+			batch.finishApplied(applyErr)
+		case <-consumerCtx.Done():
+		}
+		return nil
+	})
 
-	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	err := runWithin(t, ctx, "Watch to return the topology apply failure", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	})
 	require.ErrorIs(t, err, applyErr)
 	assert.Empty(t, obs.CurrentDeltaToken())
 }
@@ -1402,6 +1428,7 @@ func tryWake(ch chan struct{}) {
 	}
 }
 
+// Validates: R-2.1.2
 func TestWatch_PollsAtInterval(t *testing.T) {
 	t.Parallel()
 
@@ -1415,21 +1442,13 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, nil)
+	})
 
-	go func() {
-		// Wait for at least 2 events then cancel.
-		received := 0
-		for range events {
-			received++
-			if received >= 2 {
-				cancel()
-				return
-			}
-		}
-	}()
-
-	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, nil)
-	require.NoError(t, err, "Watch returned error")
+	receiveWithin(t, events, "the first poll's event")
+	receiveWithin(t, events, "the second poll's event")
+	stopWatch(t, cancel, done)
 
 	assert.GreaterOrEqual(t, fetcher.calls, 2)
 	assert.NotEmpty(t, obs.CurrentDeltaToken(), "delta token should be non-empty after successful polls")
@@ -1460,7 +1479,7 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	batches := make(chan remoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(ctx, batches, nil)
@@ -1479,7 +1498,9 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", batches, time.Hour, wakeCh, nil)
+	err := runWithin(t, ctx, "the wake's second delta cycle to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Hour, wakeCh, nil)
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.CallCount(), "wake should trigger a second delta cycle before fallback polling")
 }
@@ -1509,7 +1530,7 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	batches := make(chan remoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(ctx, batches, nil)
@@ -1529,11 +1550,14 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 		}
 	}()
 
-	err := obs.Watch(ctx, "", batches, time.Hour, wakeCh, nil)
+	err := runWithin(t, ctx, "the coalesced wake's delta cycle to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Hour, wakeCh, nil)
+	})
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.CallCount(), "burst wakes should collapse into one pending delta cycle")
 }
 
+// Validates: R-6.8.2
 func TestWatch_BackoffOnError(t *testing.T) {
 	t.Parallel()
 
@@ -1562,14 +1586,12 @@ func TestWatch_BackoffOnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Minute, nil, nil)
+	})
 
-	go func() {
-		<-events // wait for the successful event
-		cancel()
-	}()
-
-	err := obs.Watch(ctx, "", batches, time.Minute, nil, nil)
-	require.NoError(t, err, "Watch returned error")
+	receiveWithin(t, events, "the event of the poll that succeeded")
+	stopWatch(t, cancel, done)
 
 	// First sleep should be 5s (initial backoff), second should be 10s (doubled).
 	require.GreaterOrEqual(t, len(sleepDurations), 2, "sleep should be called for backoff")
@@ -1597,40 +1619,31 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 	store := newTestStore(t)
 	wakeCh := make(chan struct{}, 1)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
-	done := make(chan error, 1)
 	batches := make(chan remoteObservationBatch, 1)
-	go func() {
-		done <- obs.Watch(
-			ctx,
-			"old-token",
-			batches,
-			time.Hour,
-			wakeCh,
-			testPrimaryWatchBatchHandler(driveID),
-		)
-	}()
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "old-token", batches, time.Hour, wakeCh, testPrimaryWatchBatchHandler(driveID))
+	})
 	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 
 	require.Eventually(t, func() bool {
 		return fetcher.CallCount() >= 1
-	}, time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 	tryWake(wakeCh)
 	require.Eventually(t, func() bool {
 		return fetcher.CallCount() >= 2
-	}, time.Second, 10*time.Millisecond)
-	cancel()
+	}, eventWait, 10*time.Millisecond)
+	stopWatch(t, cancel, done)
 
-	err := <-done
-	require.NoError(t, err)
 	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
+// Validates: R-2.15.3, R-6.7.5
 func TestWatch_DeltaExpiredResets(t *testing.T) {
 	t.Parallel()
 
@@ -1655,20 +1668,19 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(ctx, batches, nil)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "old-expired-token", batches, time.Millisecond, nil, nil)
+	})
 
-	go func() {
-		<-events // wait for the resync event
-		cancel()
-	}()
-
-	err := obs.Watch(ctx, "old-expired-token", batches, time.Millisecond, nil, nil)
-	require.NoError(t, err, "Watch returned error")
+	receiveWithin(t, events, "the resync event")
+	stopWatch(t, cancel, done)
 
 	// After delta expired, token should have been reset to "" for resync,
 	// then updated to the new token from the successful full resync.
 	assert.Equal(t, "new-full-token", obs.CurrentDeltaToken())
 }
 
+// Validates: R-2.8.3, R-6.10.10
 func TestWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -1695,27 +1707,15 @@ func TestWatch_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	batches := make(chan remoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Hour, nil, nil)
+	})
 
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, "", batches, time.Hour, nil, nil)
-	}()
-
-	select {
-	case <-pollStarted:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for remote watch sleep")
-	}
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err, "Watch returned error")
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "Watch did not return after context cancellation")
-	}
+	receiveWithin(t, pollStarted, "the remote watch to sleep between polls")
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-2.1.2
 func TestWatch_CurrentDeltaToken(t *testing.T) {
 	t.Parallel()
 
@@ -1763,7 +1763,9 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 		return origSleep(ctx, d)
 	}}
 
-	err := obs.Watch(ctx, "initial-token", batches, time.Millisecond, nil, nil)
+	err := runWithin(t, ctx, "the second poll's sleep to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "initial-token", batches, time.Millisecond, nil, nil)
+	})
 	require.NoError(t, err, "Watch returned error")
 
 	// Token should have been updated by successful polls.
@@ -1794,7 +1796,9 @@ func TestWatch_IntervalClamping(t *testing.T) {
 
 	batches := make(chan remoteObservationBatch, 10)
 	// Pass zero interval — should be clamped to MinPollInterval (30s).
-	err := obs.Watch(t.Context(), "", batches, 0, nil, nil)
+	err := runWithin(t, t.Context(), "the first sleep's error to end the watch", func(ctx context.Context) error {
+		return obs.Watch(ctx, "", batches, 0, nil, nil)
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stop after first sleep")
 
@@ -1850,6 +1854,7 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 	assert.Equal(t, "new-name.txt", renameEvent.Name)
 }
 
+// Validates: R-2.2.1
 // TestSelectHash_FallbackChain verifies the hash priority: QuickXorHash >
 // SHA256Hash > SHA1Hash > empty (B-021).
 func TestSelectHash_FallbackChain(t *testing.T) {
@@ -1956,6 +1961,7 @@ func TestRemoteObserver_Stats(t *testing.T) {
 	assert.NotZero(t, stats.PollsCompleted, "PollsCompleted should be > 0 after a successful FullDelta")
 }
 
+// Validates: R-6.7.21
 // TestFullDelta_CrossDriveItems verifies path resolution for items that
 // reference a different drive than the observer's primary drive, e.g., shared
 // items where the item's DriveID differs from the observer's driveID (B-007).
@@ -2153,6 +2159,7 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 // Remote observer trusts server — no name filtering
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.2
 // TestClassifyItem_RemoteDoesNotApplyProductJunkFiltering validates that raw
 // remote observation keeps manageable provider rows; sync visibility filtering
 // happens later at the planner view boundary.
@@ -2240,6 +2247,7 @@ func TestClassifyItem_SkipsPackageItemsForSync(t *testing.T) {
 	assert.Nil(t, ev)
 }
 
+// Validates: R-2.1.2, R-2.4.2
 // TestWatch_CommitsObservations verifies that Watch commits observations
 // after each successful FullDelta poll.
 func TestWatch_CommitsObservations(t *testing.T) {
@@ -2273,20 +2281,12 @@ func TestWatch_CommitsObservations(t *testing.T) {
 		return err
 	})
 
-	go func() {
-		<-committed
-		cancel()
-	}()
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	})
 
-	err := obs.Watch(
-		ctx,
-		"",
-		batches,
-		time.Millisecond,
-		nil,
-		testPrimaryWatchBatchHandler(driveID),
-	)
-	require.NoError(t, err)
+	receiveWithin(t, committed, "the watch's first batch to be committed")
+	stopWatch(t, cancel, done)
 
 	assert.Equal(t, "token-1", readObservationCursor(t, store.rawDB(), driveID.String()))
 	row := readRemoteStateRow(t, store.rawDB(), "f1")
@@ -2330,13 +2330,15 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 
 	batches := make(chan remoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
-	err := obs.Watch(ctx, "", batches, time.Millisecond, nil, func(
-		context.Context,
-		[]changeEvent,
-		string,
-		shortcutTopologyBatch,
-	) (remoteObservationBatch, error) {
-		return remoteObservationBatch{}, filepath.ErrBadPattern
+	err := runWithin(t, ctx, "the batch policy failure to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, func(
+			context.Context,
+			[]changeEvent,
+			string,
+			shortcutTopologyBatch,
+		) (remoteObservationBatch, error) {
+			return remoteObservationBatch{}, filepath.ErrBadPattern
+		})
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, filepath.ErrBadPattern)
@@ -2361,7 +2363,6 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	}
 
 	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
-	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		pollCount++
@@ -2373,21 +2374,15 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		return nil
 	}}
 
+	// Nothing drains the channel: a batch the watch handed over would still
+	// be in it after the watch returns.
 	batches := make(chan remoteObservationBatch, 10)
-	err := obs.Watch(
-		ctx,
-		"old-token",
-		batches,
-		time.Millisecond,
-		nil,
-		testPrimaryWatchBatchHandler(driveID),
-	)
-	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	err := runWithin(t, ctx, "the first poll's sleep to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
 	})
 	require.NoError(t, err)
 
-	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "should not commit observations when 0 events returned")
+	assert.Empty(t, batches, "a poll that returned no events hands no batch to the store")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
 
@@ -2433,14 +2428,9 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 	_ = startTestRemoteBatchDrain(ctx, batches, func(batch remoteObservationBatch) error {
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
-	err := obs.Watch(
-		ctx,
-		"old-token",
-		batches,
-		time.Millisecond,
-		nil,
-		testPrimaryWatchBatchHandler(driveID),
-	)
+	err := runWithin(t, ctx, "the first poll's sleep to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, "token-after-deletes", obs.CurrentDeltaToken(),
@@ -2657,7 +2647,9 @@ func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (
 		emitted = append(emitted, batch.emitted...)
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
-	err := obs.Watch(ctx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	err := runWithin(t, ctx, "the poll's sleep to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, obs.CurrentDeltaToken(), readObservationCursor(t, store.rawDB(), driveID.String()),
@@ -2670,6 +2662,7 @@ func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (
 // Embedded shared-folder link handling
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.3
 func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	t.Parallel()
 
@@ -2696,6 +2689,7 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	assert.Equal(t, changeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
+// Validates: R-2.4.3
 func TestClassifyItem_EmbeddedSharedPlaceholdersIgnored(t *testing.T) {
 	t.Parallel()
 
@@ -2747,6 +2741,7 @@ func TestClassifyItem_EmbeddedSharedPlaceholdersIgnored(t *testing.T) {
 	}
 }
 
+// Validates: R-2.4.3
 func TestFullDelta_EmbeddedSharedLinksIgnored(t *testing.T) {
 	t.Parallel()
 

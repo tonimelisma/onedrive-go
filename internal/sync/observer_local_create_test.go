@@ -30,13 +30,12 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	var ev changeEvent
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for create event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.Equal(t, changeCreate, ev.Type)
 	assert.Equal(t, "new-file.txt", ev.Path)
@@ -64,7 +63,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	// Collect events until we find the file inside the subdirectory.
 	var foundInnerFile bool
 
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 
 	for !foundInnerFile {
 		select {
@@ -73,14 +72,11 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 				foundInnerFile = true
 			}
 		case <-timeout:
-			cancel()
-			<-done
 			require.Fail(t, "timeout waiting for inner file event")
 		}
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.True(t, foundInnerFile, "inner file event not received")
 }
@@ -112,7 +108,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	// because scanNewDirectory picks it up during directory creation handling.
 	var foundPreExisting bool
 
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 
 	for !foundPreExisting {
 		select {
@@ -121,14 +117,11 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 				foundPreExisting = true
 			}
 		case <-timeout:
-			cancel()
-			<-done
 			require.Fail(t, "timeout waiting for pre-existing file event (B-100)")
 		}
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.True(t, foundPreExisting, "pre-existing file in new directory was not detected")
 }
@@ -164,7 +157,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 		"level1/level2/level3": true,
 	}
 
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 
 	for !foundFile || len(foundDirs) < len(wantDirs) {
 		select {
@@ -179,15 +172,12 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 				}
 			}
 		case <-timeout:
-			cancel()
-			<-done
 			require.Fail(t, "timeout",
 				"foundFile=%v, foundDirs=%v (want %v)", foundFile, foundDirs, wantDirs)
 		}
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.True(t, foundFile, "deep file not detected")
 
@@ -199,7 +189,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 func waitForLocalCreateEvent(t *testing.T, events <-chan changeEvent, wantPath string) {
 	t.Helper()
 
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 	for {
 		select {
 		case ev := <-events:
@@ -216,6 +206,7 @@ func waitForLocalCreateEvent(t *testing.T, events <-chan changeEvent, wantPath s
 // Hash failure creates with empty hash (B-102) — Watch variant
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.12
 // TestWatch_HashFailureStillEmitsCreate verifies that a file whose hash cannot
 // be computed (e.g., unreadable) still generates a ChangeCreate event with an
 // empty hash instead of being silently dropped (B-102).
@@ -248,13 +239,12 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for create event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	require.Equal(t, changeCreate, ev.Type)
 	require.Equal(t, "unreadable.txt", ev.Path)

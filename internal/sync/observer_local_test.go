@@ -118,6 +118,8 @@ func (w *readySignalWatcher) Errors() <-chan error {
 	return w.inner.Errors
 }
 
+// startLocalWatch runs obs.Watch on dir with a real watcher in the background
+// (runInBackground) and returns once its loop is ready.
 func startLocalWatch(t *testing.T, obs *localObserver, dir string, events chan<- changeEvent) (context.CancelFunc, <-chan error) {
 	t.Helper()
 
@@ -126,19 +128,17 @@ func startLocalWatch(t *testing.T, obs *localObserver, dir string, events chan<-
 		return newReadySignalWatcher(ready)
 	})
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	tree := mustOpenSyncTree(t, dir)
+	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
+		return obs.Watch(ctx, tree, events)
+	})
 
 	select {
 	case err := <-done:
-		require.NoError(t, err, "watch exited before becoming ready")
+		require.FailNow(t, "watch exited before becoming ready", "returned %v", err)
 	case <-ready:
-	case <-time.After(5 * time.Second):
-		cancel()
-		require.Fail(t, "timeout waiting for watch loop readiness")
+	case <-time.After(eventWait):
+		require.FailNow(t, "timed out waiting for watch loop readiness")
 	}
 
 	return cancel, done
@@ -172,6 +172,7 @@ func findEvent(events []changeEvent, path string) *changeEvent {
 // FullScan tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.1, R-2.2.1
 func TestFullScan_NewFiles(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +198,7 @@ func TestFullScan_NewFiles(t *testing.T) {
 	assert.Equal(t, ItemTypeFile, ev.ItemType)
 }
 
+// Validates: R-2.1.1
 func TestFullScan_NewFolder(t *testing.T) {
 	t.Parallel()
 
@@ -216,6 +218,7 @@ func TestFullScan_NewFolder(t *testing.T) {
 	assert.Equal(t, "photos", ev.Path)
 }
 
+// Validates: R-2.2.1
 func TestFullScan_ModifiedFile(t *testing.T) {
 	t.Parallel()
 
@@ -239,6 +242,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	assert.Equal(t, SourceLocal, ev.Source)
 }
 
+// Validates: R-2.2.1
 func TestFullScan_UnchangedFile(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +262,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 	assert.Empty(t, result.Events, "file unchanged")
 }
 
+// Validates: R-2.1.1
 func TestFullScan_DeletedFile(t *testing.T) {
 	t.Parallel()
 
@@ -288,6 +293,7 @@ func TestFullScan_DeletedFile(t *testing.T) {
 	assert.Equal(t, int64(1234567890), ev.Mtime)
 }
 
+// Validates: R-2.17.2
 func TestFullScan_DeletedFolder(t *testing.T) {
 	t.Parallel()
 
@@ -309,6 +315,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 }
 
+// Validates: R-2.2.3, R-2.2.1
 func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	t.Parallel()
 
@@ -330,6 +337,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 	assert.Empty(t, result.Events, "mtime change only, hash matches")
 }
 
+// Validates: R-2.2.1
 func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 	t.Parallel()
 
@@ -512,6 +520,7 @@ func baselineEntryFromFile(t *testing.T, dir, rel, hash string) *BaselineEntry {
 	}
 }
 
+// Validates: R-2.2.4
 func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	t.Parallel()
 
@@ -546,6 +555,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	assert.Equal(t, hashContent(t, actualContent), ev.Hash)
 }
 
+// Validates: R-2.2.4, R-2.8.8
 func TestFullScan_RacilyCleanUnchangedFileStillProducesSnapshotRow(t *testing.T) {
 	t.Parallel()
 
@@ -578,6 +588,7 @@ func TestFullScan_RacilyCleanUnchangedFileStillProducesSnapshotRow(t *testing.T)
 	assert.Equal(t, hash, result.Rows[0].Hash)
 }
 
+// Validates: R-2.2.4
 func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	t.Parallel()
 
@@ -608,6 +619,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	assert.Equal(t, ChangeModify, result.Events[0].Type)
 }
 
+// Validates: R-2.4.4
 func TestFullScan_NosyncMarkerIsOrdinaryFile(t *testing.T) {
 	t.Parallel()
 
@@ -703,7 +715,7 @@ func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
 
 	require.NoError(t, os.Symlink(dir, filepath.Join(dir, "loop")), "Symlink")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
@@ -897,6 +909,7 @@ func TestFullScan_IncludedDirsPruneOutOfScopeSubtreesAndIssues(t *testing.T) {
 	assert.Equal(t, IssueInvalidFilename, result.Skipped[0].Reason)
 }
 
+// Validates: R-6.3.6, R-6.2.2
 func TestFullScan_ContextCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -934,6 +947,7 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 	assert.Equal(t, nfcName, result.Events[0].Name, "NFC-normalized")
 }
 
+// Validates: R-2.1.1
 func TestFullScan_NestedDirs(t *testing.T) {
 	t.Parallel()
 
@@ -961,6 +975,7 @@ func TestFullScan_NestedDirs(t *testing.T) {
 	require.NotNil(t, abEv, "folder 'a/b' event not found")
 }
 
+// Validates: R-2.2.1
 func TestFullScan_EmptyFile(t *testing.T) {
 	t.Parallel()
 
@@ -980,6 +995,7 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	assert.Equal(t, int64(0), ev.Size)
 }
 
+// Validates: R-2.1.1, R-2.2.1
 func TestFullScan_MixedChanges(t *testing.T) {
 	t.Parallel()
 
@@ -1031,6 +1047,7 @@ func TestFullScan_MixedChanges(t *testing.T) {
 	assert.Equal(t, ChangeDelete, delEv.Type)
 }
 
+// Validates: R-2.11.1, R-2.11.2, R-2.11.3
 func TestValidateOneDriveName(t *testing.T) {
 	t.Parallel()
 
@@ -1183,6 +1200,7 @@ func TestSkipEntry_Nil(t *testing.T) {
 	assert.NoError(t, got)
 }
 
+// Validates: R-2.4.4
 func TestFullScan_NosyncMarkerDirIsOrdinaryDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -1217,6 +1235,7 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	assert.Equal(t, "visible.txt", result.Events[0].Path)
 }
 
+// Validates: R-2.11.4
 func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	t.Parallel()
 
@@ -1257,6 +1276,7 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	assert.NotNil(t, findEvent(result.Events, "good.txt"), "good.txt event not found")
 }
 
+// Validates: R-2.4.12
 func TestFullScan_PermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses permission checks")
@@ -1381,6 +1401,7 @@ func TestItemTypeFromDirEntry_Table(t *testing.T) {
 // Hash failure creates with empty hash (B-102) -- FullScan variant
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.12
 // TestFullScan_HashFailureStillEmitsCreate verifies that FullScan emits a
 // ChangeCreate event with empty hash when hash computation fails (B-102).
 func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
@@ -1413,6 +1434,7 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 // Hash failure modifies with empty hash (B-102) -- FullScan variant
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.12, R-6.2.14
 // TestFullScan_HashFailureModifyStillEmitsEvent verifies that FullScan emits a
 // ChangeModify event with empty hash when hash computation fails for a modified
 // file (B-102). Before the fix, hash failures silently dropped modify events.
@@ -1451,6 +1473,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 // Sync root deletion detection (B-113)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.2.13
 func TestSyncRootExists(t *testing.T) {
 	t.Parallel()
 
@@ -1504,6 +1527,7 @@ func TestSyncRootExists(t *testing.T) {
 // Path too long (observation filter)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.11.5, R-2.11.7
 func TestFullScan_PathTooLong(t *testing.T) {
 	t.Parallel()
 
@@ -1777,6 +1801,7 @@ func TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) 
 // ValidateOneDriveName unit tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.11.1, R-2.11.2, R-2.11.4
 func TestValidateOneDriveName_AllCases(t *testing.T) {
 	t.Parallel()
 
@@ -1995,7 +2020,7 @@ func TestFullScan_SkipsFIFOAndSocketWithoutBlocking(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, listener.Close()) })
 
 	// Opening the FIFO for reading would block forever; the scan must not.
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(ctx, mustOpenSyncTree(t, dir))

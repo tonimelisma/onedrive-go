@@ -268,7 +268,9 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 		}},
 	})
 
-	require.NoError(t, source.Run(ctx, make(chan struct{}, 1)))
+	require.NoError(t, runWithin(t, ctx, "the fifth retry sleep to stop the wake source", func(runCtx context.Context) error {
+		return source.Run(runCtx, make(chan struct{}, 1))
+	}))
 
 	output := logs.String()
 	assert.Zero(t, countLevel(output, "WARN"))

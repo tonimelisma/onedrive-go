@@ -19,6 +19,7 @@ import (
 // Hash failure modifies with empty hash (B-102) — Watch variant
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.4.12, R-6.2.14
 // TestWatch_HashFailureModifyStillEmitsEvent verifies that a Write event for a
 // file whose hash cannot be computed (e.g., write-only permissions) still
 // generates a ChangeModify event with an empty hash instead of being silently
@@ -55,13 +56,12 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for modify event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	require.Equal(t, ChangeModify, ev.Type)
 	require.Equal(t, "watchable.txt", ev.Path)
@@ -76,6 +76,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 // Rapid writes coalescing into one hash one cooldown after the last write:
 // TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash.
 
+// Validates: R-2.8.16
 // TestHandleWrite_DifferentPathsNotCoalesced verifies that Write events for
 // different paths are independent — each gets its own timer and emits separately.
 func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
@@ -106,7 +107,6 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Write new content to both files.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileA.txt"), []byte("newA"), 0o600))
@@ -122,13 +122,13 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return clock.ActiveTimerCount() == 2
-	}, 5*time.Second, time.Millisecond)
+	}, eventWait, time.Millisecond)
 
 	clock.Advance(50 * time.Millisecond)
 
 	// Collect both events.
 	collected := make(map[string]changeEvent)
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 
 	for len(collected) < 2 {
 		select {
@@ -146,10 +146,10 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	require.Equal(t, hashContent(t, "newA"), collected["fileA.txt"].Hash)
 	require.Equal(t, hashContent(t, "newB"), collected["fileB.txt"].Hash)
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-2.8.16
 // TestHandleWrite_DeleteClearsTimer verifies that a Delete event cancels any
 // pending write coalesce timer for the deleted path.
 func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
@@ -174,7 +174,6 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Modify and send Write event (starts 200ms timer).
 	require.NoError(t, os.WriteFile(filePath, []byte("modified"), 0o600))
@@ -185,7 +184,7 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return clock.ActiveTimerCount() == 1
-	}, 5*time.Second, time.Millisecond)
+	}, eventWait, time.Millisecond)
 
 	// Delete the file before timer fires.
 	require.NoError(t, os.Remove(filePath))
@@ -196,14 +195,14 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return clock.ActiveTimerCount() == 0
-	}, 5*time.Second, time.Millisecond)
+	}, eventWait, time.Millisecond)
 
 	// Should get only the Delete event, not a Modify.
 	select {
 	case ev := <-events:
 		require.Equal(t, ChangeDelete, ev.Type, "first event should be Delete")
 		require.Equal(t, "doomed.txt", ev.Path)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for delete event")
 	}
 
@@ -215,10 +214,10 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	default:
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-2.8.3
 // TestCancelPendingTimers verifies that all pending timers are cleaned up when
 // the watchLoop exits (context cancellation).
 func TestCancelPendingTimers(t *testing.T) {
@@ -260,7 +259,7 @@ func TestCancelPendingTimers(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return clock.ActiveTimerCount() == 2
-	}, 5*time.Second, time.Millisecond)
+	}, eventWait, time.Millisecond)
 
 	// Cancel context — should trigger cancelPendingTimers via defer.
 	cancel()
@@ -268,7 +267,7 @@ func TestCancelPendingTimers(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "Watch did not return after context cancellation")
 	}
 
@@ -287,6 +286,7 @@ func TestCancelPendingTimers(t *testing.T) {
 // Hash retry cap tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.8.16
 // TestHashAndEmit_RetriesExhausted_EmitsEvent verifies that hashAndEmit emits
 // an event (no re-schedule) when the request's retry count has reached the cap.
 // This tests the MaxCoalesceRetries guard added to prevent infinite retry loops
@@ -332,7 +332,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		require.Equal(t, ChangeModify, ev.Type)
 		require.Equal(t, "exhausted.txt", ev.Path)
 		require.NotEmpty(t, ev.Hash, "hash should be computed for stable file")
-	case <-time.After(time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "expected event from hashAndEmit, got none")
 	}
 
@@ -340,6 +340,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	require.Empty(t, obs.PendingTimers, "no timer should be pending after exhausted retries")
 }
 
+// Validates: R-2.2.1
 // TestHashAndEmit_BaselineMatch_NoEvent verifies that hashAndEmit does NOT emit
 // an event when the file hash matches the baseline (no-op write detection).
 func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
@@ -418,7 +419,6 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Send a Write event for the lowercase file.
 	mockWatcher.events <- fsnotify.Event{
@@ -427,7 +427,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return clock.ActiveTimerCount() == 1
-	}, 5*time.Second, time.Millisecond)
+	}, eventWait, time.Millisecond)
 
 	clock.Advance(50 * time.Millisecond)
 
@@ -439,8 +439,7 @@ func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
 		// Good — no event emitted.
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.12.2
@@ -486,7 +485,6 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
-	defer cancel()
 
 	// Send a Write event for "existing.txt" — hashAndEmit should detect
 	// the collision via the pre-populated cache and suppress the event.
@@ -502,6 +500,5 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		// Good — no event emitted.
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }

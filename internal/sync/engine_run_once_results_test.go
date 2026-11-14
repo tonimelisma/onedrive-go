@@ -53,7 +53,9 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 	}
 	close(results)
 
-	err := runner.runResultsLoopWithInitialOutbox(t.Context(), nil, nil, results, nil)
+	err := runWithin(t, t.Context(), "the results loop to finish its closed channel", func(ctx context.Context) error {
+		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
+	})
 	require.NoError(t, err)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -103,7 +105,9 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	}
 	close(results)
 
-	err := runner.runResultsLoopWithInitialOutbox(t.Context(), nil, nil, results, nil)
+	err := runWithin(t, t.Context(), "the results loop to stop on the unauthorized completion", func(ctx context.Context) error {
+		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
+	})
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
 	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
@@ -318,30 +322,27 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 
 	ctx, cancel := context.WithCancel(t.Context())
 	results := make(chan actionCompletion, 1)
-	done := make(chan error, 1)
 
-	go func() {
+	runInBackground(t, ctx, func(workerCtx context.Context) error {
 		defer close(results)
-		dispatched := <-runner.sched.dispatchCh
-		results <- actionCompletion{
-			ActionID:   dispatched.ID,
-			Path:       dispatched.Action.Path,
-			ActionType: dispatched.Action.Type,
-			Success:    true,
+		select {
+		case dispatched := <-runner.sched.dispatchCh:
+			results <- actionCompletion{
+				ActionID:   dispatched.ID,
+				Path:       dispatched.Action.Path,
+				ActionType: dispatched.Action.Type,
+				Success:    true,
+			}
+			cancel()
+		case <-workerCtx.Done():
 		}
-		cancel()
-	}()
+		return nil
+	})
 
-	go func() {
-		done <- runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		require.FailNow(t, "one-shot results loop did not release due held work while idle")
-	}
+	err := runWithin(t, ctx, "the one-shot results loop to release due held work while idle", func(loopCtx context.Context) error {
+		return runner.runResultsLoopWithInitialOutbox(loopCtx, nil, nil, results, nil)
+	})
+	require.NoError(t, err)
 
 	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
 	assert.Empty(t, runner.retries.heldByKey)

@@ -114,6 +114,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	assert.Empty(t, rt.currentOutbox())
 }
 
+// Validates: R-2.8.3
 func TestWatchRuntime_RunNonDrainingWatchStep_ContextCancelStartsDrain(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +198,7 @@ func TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase(
 	assert.True(t, rt.isDraining())
 }
 
+// Validates: R-6.3.8
 func TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +219,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors(t 
 	assert.False(t, rt.isDraining())
 }
 
+// Validates: R-2.8.6
 func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) {
 	t.Parallel()
 
@@ -227,26 +230,17 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 	replanReady := make(chan dirtyBatch, 1)
 	replanReady <- dirtyBatch{}
 
-	type idleResult struct {
-		done bool
-		err  error
-	}
-	doneCh := make(chan idleResult, 1)
-	go func() {
-		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
+	var done bool
+	err := runWithin(t, t.Context(), "runNonDrainingWatchStep to consume replanReady while idle", func(ctx context.Context) error {
+		var stepErr error
+		done, stepErr = rt.runNonDrainingWatchStep(ctx, &watchPipeline{
 			runtime:     rt,
 			replanReady: replanReady,
 		}, nil)
-		doneCh <- idleResult{done: done, err: err}
-	}()
-
-	select {
-	case result := <-doneCh:
-		assert.False(t, result.done)
-		require.ErrorContains(t, result.err, "steady-state replan requires loaded baseline")
-	case <-time.After(time.Second):
-		require.FailNow(t, "runNonDrainingWatchStep did not consume replanReady while idle")
-	}
+		return stepErr
+	})
+	assert.False(t, done)
+	require.ErrorContains(t, err, "steady-state replan requires loaded baseline")
 }
 
 // Validates: R-2.8.6

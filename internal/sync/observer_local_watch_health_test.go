@@ -118,27 +118,15 @@ func TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan(t *testing.T) {
 		return nil, syscall.EMFILE
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
+	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started after watcher creation failed with EMFILE")
 
 	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err, "a watcher that cannot be created must degrade, not fail the session")
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "RunWatch did not return within timeout")
-	}
+	require.NoError(t, receiveWithin(t, done, "RunWatch to return after cancellation"),
+		"a watcher that cannot be created must degrade, not fail the session")
 }
 
 // Validates: R-2.8.22
@@ -158,38 +146,31 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	obs.beforeWatchLoop = func() { close(watching) }
 
 	events := make(chan changeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	tree := mustOpenSyncTree(t, dir)
+	_, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
+		return obs.Watch(ctx, tree, events)
+	})
 
 	select {
 	case <-watching:
 	case err := <-done:
-		require.NoError(t, err, "watch exited before becoming ready")
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for watch setup")
+		require.FailNow(t, "watch exited before becoming ready", "returned %v", err)
+	case <-time.After(eventWait):
+		require.FailNow(t, "timed out waiting for watch setup")
 	}
 
 	newDir := filepath.Join(dir, "newdir")
 	require.NoError(t, os.Mkdir(newDir, 0o700))
 	watcher.events <- fsnotify.Event{Name: newDir, Op: fsnotify.Create}
 
-	select {
-	case err := <-done:
-		// kqueue holds a descriptor per watched directory: once they run out,
-		// keeping the watcher starves transfers and SQLite, so watching stops
-		// and the runtime falls back to periodic scans.
-		require.ErrorIs(t, err, errLocalWatchUnavailable)
-		cause, ok := watchUnavailableCauseOf(err)
-		require.True(t, ok)
-		assert.Equal(t, watchCauseFileLimit, cause)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "watch kept running after the descriptor limit was reached")
-	}
+	// kqueue holds a descriptor per watched directory: once they run out,
+	// keeping the watcher starves transfers and SQLite, so watching stops and
+	// the runtime falls back to periodic scans.
+	err := receiveWithin(t, done, "the watch to stop at the descriptor limit")
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
+	cause, ok := watchUnavailableCauseOf(err)
+	require.True(t, ok)
+	assert.Equal(t, watchCauseFileLimit, cause)
 }
 
 // ---------------------------------------------------------------------------
@@ -231,10 +212,6 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 	events := make(chan changeEvent, 64)
 	cancel, done := startLocalWatch(t, obs, dir, events)
-	defer func() {
-		cancel()
-		<-done
-	}()
 
 	require.NoError(t, os.Rename(filepath.Join(dir, "a"), filepath.Join(dir, "b")))
 
@@ -251,6 +228,7 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 	}, "event for the file created inside the renamed tree")
 	assert.Equal(t, "b/sub/new.txt", ev.Path,
 		"a descendant watch must not keep reporting the directory's old path")
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.8.14
@@ -320,7 +298,7 @@ func registerWatchedForTest(obs *localObserver, paths ...string) {
 func waitForLocalEvent(t *testing.T, events <-chan changeEvent, match func(changeEvent) bool, what string) changeEvent {
 	t.Helper()
 
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 	for {
 		select {
 		case ev := <-events:
@@ -357,30 +335,27 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
-	defer func() {
-		cancel()
-		<-done
-	}()
 
 	watcher.errs <- fsnotify.ErrEventOverflow
 
-	suspect := receiveBatch(t, batches, "suspect marker")
+	suspect := receiveWithin(t, batches, "suspect marker")
 	assert.True(t, suspect.markSuspect)
 
 	// Before the fix nothing rescanned until the five-minute safety scan.
 	var timer capturedTimer
 	select {
 	case timer = <-timers:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "an overflow must arm a recovery rescan")
 	}
 	assert.Equal(t, recoveryScanDelay, timer.delay)
 
 	timer.fn()
 
-	snapshot := receiveBatch(t, batches, "recovery full snapshot")
+	snapshot := receiveWithin(t, batches, "recovery full snapshot")
 	require.True(t, snapshot.fullSnapshot, "the recovery scan replaces local truth with a full snapshot")
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"), "the change the kernel dropped is observed")
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.8.13
@@ -428,18 +403,6 @@ type capturedTimer struct {
 type noopSyncTimer struct{}
 
 func (noopSyncTimer) Stop() bool { return true }
-
-func receiveBatch(t *testing.T, batches <-chan localObservationBatch, what string) localObservationBatch {
-	t.Helper()
-
-	select {
-	case batch := <-batches:
-		return batch
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for "+what)
-		return localObservationBatch{}
-	}
-}
 
 func containsLocalRow(rows []localStateRow, path string) bool {
 	for i := range rows {
@@ -547,33 +510,6 @@ func newFallbackTestEngine(t *testing.T) (*testEngine, *debugEventRecorder, *man
 	return eng, recorder, clock
 }
 
-func runWatchInBackground(t *testing.T, eng *testEngine) (context.CancelFunc, <-chan error) {
-	t.Helper()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-
-	return cancel, done
-}
-
-func stopWatch(t *testing.T, cancel context.CancelFunc, done <-chan error) {
-	t.Helper()
-
-	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "RunWatch did not return after cancellation")
-	}
-}
-
 // Validates: R-2.8.22
 func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	t.Parallel()
@@ -582,7 +518,7 @@ func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	eng.localWatcherFactory = func() (fsWatcher, error) { return newEnospcWatcher(1), nil }
 	tickerCreated := installTickerCreatedSignal(eng, localWatchHealthySafetyScanInterval)
 
-	cancel, done := runWatchInBackground(t, eng)
+	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackStarted
@@ -593,7 +529,7 @@ func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 		return event.Type == engineDebugEventObserverFallbackScanned
 	}, "immediate fallback scan")
 
-	waitForSignal(t, tickerCreated, "fallback scans run at the safety-scan interval, not hourly")
+	receiveWithin(t, tickerCreated, "fallback scans to run at the safety-scan interval, not hourly")
 	clock.Advance(localWatchHealthySafetyScanInterval)
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackScanned
@@ -617,19 +553,19 @@ func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
 	}
 	retryArmed := installAfterFuncCreatedSignal(eng, localWatchRetryInitialDelay)
 
-	cancel, done := runWatchInBackground(t, eng)
+	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
-	waitForSignal(t, retryArmed, "a watcher retry is scheduled")
+	receiveWithin(t, retryArmed, "a watcher retry to be scheduled")
 
 	// The limit was transient. Before the fix the session stayed degraded.
 	clock.Advance(localWatchRetryInitialDelay)
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventObserverFallbackStopped
 	}, "fallback ends for the retry")
-	waitForSignal(t, recovered.Added(), "the retried watcher is established")
+	receiveWithin(t, recovered.Added(), "the retried watcher to be established")
 	assert.Equal(t, int64(2), factoryCalls.Load())
 
 	stopWatch(t, cancel, done)
@@ -660,29 +596,26 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, &watcher.mockFsWatcher, dir, make(chan changeEvent, 10))
-	defer func() {
-		cancel()
-		<-done
-	}()
 
 	// The kernel dropped the Create for this directory.
 	missed := filepath.Join(dir, "created-during-overflow")
 	require.NoError(t, os.MkdirAll(filepath.Join(missed, "inner"), 0o700))
 	watcher.errs <- fsnotify.ErrEventOverflow
 
-	assert.True(t, receiveBatch(t, batches, "suspect marker").markSuspect)
+	assert.True(t, receiveWithin(t, batches, "suspect marker").markSuspect)
 	var timer capturedTimer
 	select {
 	case timer = <-timers:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "an overflow must arm a recovery rescan")
 	}
 	timer.fn()
-	require.True(t, receiveBatch(t, batches, "recovery snapshot").fullSnapshot)
+	require.True(t, receiveWithin(t, batches, "recovery snapshot").fullSnapshot)
 
 	// Before the fix the directory stayed unwatched for the whole session.
 	assert.Contains(t, watcher.addedPaths(), missed, "the recovery scan watches the directory it found")
 	assert.Contains(t, watcher.addedPaths(), filepath.Join(missed, "inner"))
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.8.13
