@@ -153,7 +153,9 @@ func (h *testDepGraphHelper) drainAndComplete(completions <-chan actionCompletio
 // runPoolWithDrain starts the pool, drains completions in a goroutine (calling
 // Complete on each), waits for all actions to finish, then stops the pool
 // and returns the collected completions.
-func runPoolWithDrain(ctx context.Context, pool *workerPool, dgh *testDepGraphHelper) []actionCompletion {
+func runPoolWithDrain(t *testing.T, ctx context.Context, pool *workerPool, dgh *testDepGraphHelper) []actionCompletion {
+	t.Helper()
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -166,10 +168,10 @@ func runPoolWithDrain(ctx context.Context, pool *workerPool, dgh *testDepGraphHe
 		close(done)
 	}()
 
-	<-dgh.CompleteCh()
+	receiveWithin(t, dgh.CompleteCh(), "every action to complete")
 	cancel()
 	pool.Stop()
-	<-done
+	receiveWithin(t, done, "the completions drain to finish")
 	return results
 }
 
@@ -192,7 +194,7 @@ func requireCompletionsChannelClosed(t *testing.T, pool *workerPool, reason stri
 	select {
 	case _, ok := <-pool.Completions():
 		assert.False(t, ok, reason)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, reason)
 	}
 }
@@ -239,7 +241,7 @@ func TestWorkerPool_StopIsIdempotentAfterCompletionsClose(t *testing.T) {
 	select {
 	case _, ok := <-pool.Completions():
 		assert.False(t, ok, "completions channel should close after dispatch channel close")
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "completions channel did not close after dispatch channel close")
 	}
 
@@ -279,6 +281,7 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 // Tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-5.1.1
 func TestWorkerPool_FolderCreate(t *testing.T) {
 	t.Parallel()
 
@@ -306,7 +309,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 
 	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, dgh)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, failed, "failed actions")
@@ -362,7 +365,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	dgh.Add(&actions[1], 1, []int64{0})
 
 	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, dgh)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, failed, "failed actions")
@@ -374,6 +377,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	assert.Equal(t, "file-content", string(content))
 }
 
+// Validates: R-2.8.3
 func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	t.Parallel()
 
@@ -418,7 +422,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for worker download start")
 	}
 
@@ -432,7 +436,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	select {
 	case <-done:
 		// Success.
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "Stop() did not return within timeout")
 	}
 }
@@ -459,7 +463,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	dgh.Add(&actions[0], 42, nil)
 
 	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, dgh)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	// Verify result for the action.
 	var found bool
@@ -473,6 +477,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	require.True(t, found, "expected result for result-test.txt in channel")
 }
 
+// Validates: R-6.8.9
 // TestWorkerPool_FailedOutcome verifies that when an action execution fails,
 // the worker reports the failure via the result channel.
 func TestWorkerPool_FailedOutcome(t *testing.T) {
@@ -510,7 +515,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 
 	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, dgh)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, succeeded)
@@ -532,6 +537,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 // Regression: B-090 — parent resolution via baseline (no createdFolders map)
 // ---------------------------------------------------------------------------
 
+// Validates: R-5.1.1
 // TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline verifies
 // that when action 0 creates a folder and action 1 uploads a file into that
 // folder, the upload resolves its parentID from the baseline.
@@ -587,7 +593,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	dgh.Add(&actions[1], 1, []int64{0})
 
 	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, dgh)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
 	assert.Equal(t, 0, failed, "failed actions")
@@ -637,7 +643,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 
 	pool := newWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
-	results := runPoolWithDrain(ctx, pool, dgh)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	// If we got here, the panic was recovered — the process didn't crash.
 	_, failed := countResults(results)
@@ -688,7 +694,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	select {
 	case r := <-pool.Completions():
 		result = r
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for action completion")
 	}
 
@@ -712,7 +718,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	select {
 	case <-dgh.CompleteCh():
 		// Expected: settle signal fires after engine calls Complete.
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "helper settle signal did not fire after Complete")
 	}
 
@@ -750,7 +756,7 @@ func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 	select {
 	case r := <-pool.Completions():
 		result = r
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for action completion")
 	}
 
@@ -810,7 +816,7 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 	select {
 	case r := <-pool.Completions():
 		result = r
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for action completion")
 	}
 
@@ -867,6 +873,7 @@ func TestExtractRetryAfter_Nil(t *testing.T) {
 // Engine-owned counters (R-6.8.9)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.8.9
 func TestEngineOwnsCounters(t *testing.T) {
 	t.Parallel()
 
@@ -932,9 +939,9 @@ func TestEngineOwnsCounters(t *testing.T) {
 		close(done)
 	}()
 
-	<-dgh.CompleteCh()
+	receiveWithin(t, dgh.CompleteCh(), "both actions to complete")
 	pool.Stop()
-	<-done
+	receiveWithin(t, done, "the completions drain to finish")
 
 	assert.Equal(t, int32(1), succeeded.Load(), "engine should count 1 success")
 	assert.Equal(t, int32(1), failed.Load(), "engine should count 1 failure")
@@ -1050,7 +1057,7 @@ func TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload(t *testing.T) {
 
 	select {
 	case <-hashing:
-	case <-time.After(10 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "the worker never reached the pre-upload hash")
 	}
 
@@ -1062,7 +1069,7 @@ func TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload(t *testing.T) {
 
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "Stop must not wait on a hash that honors the pool context")
 	}
 }

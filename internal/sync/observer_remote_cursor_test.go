@@ -202,7 +202,9 @@ func TestWatch_TransientErrorRetriesAndKeepsToken(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 
-	require.NoError(t, obs.Watch(ctx, "kept-token", batches, time.Hour, nil, nil))
+	require.NoError(t, runWithin(t, ctx, "the third sleep to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "kept-token", batches, time.Hour, nil, nil)
+	}))
 
 	assert.Equal(t, []string{"kept-token", "kept-token", "kept-token"}, fetcher.seen())
 	assert.Equal(t, "kept-token", obs.CurrentDeltaToken())
@@ -232,7 +234,9 @@ func TestWatch_SustainedServerErrorsOnTheCursorResetIt(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 
-	require.NoError(t, obs.Watch(ctx, "stuck-token", batches, time.Minute, nil, nil))
+	require.NoError(t, runWithin(t, ctx, "the cursor reset's re-enumeration to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "stuck-token", batches, time.Minute, nil, nil)
+	}))
 
 	select {
 	case <-recovered:
@@ -276,7 +280,9 @@ func TestWatch_RepeatedlyFailingRecoveryBacksOff(t *testing.T) {
 	batches := make(chan remoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(ctx, batches, nil)
 
-	require.NoError(t, obs.Watch(ctx, "expired", batches, time.Minute, nil, nil))
+	require.NoError(t, runWithin(t, ctx, "the last recovery attempt to end the watch", func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "expired", batches, time.Minute, nil, nil)
+	}))
 
 	require.Len(t, recoveredAt, attempts)
 	for i := 1; i < attempts; i++ {

@@ -206,10 +206,20 @@ func (c *chaosGraph) transientError(cc *chaosCall, op string) error {
 	return err
 }
 
+// chaosResponseLostSuffix ends the fault kind of a request that took effect
+// and lost its answer (lostResponseError). chaosOpCreate counts the faults of
+// a small file's create request (uploadCreating): before it reached OneDrive,
+// or with its answer lost (chaosCreateResponseLost).
+const (
+	chaosResponseLostSuffix = ":response-lost"
+	chaosOpCreate           = "create"
+	chaosCreateResponseLost = chaosOpCreate + chaosResponseLostSuffix
+)
+
 // lostResponseError is what the client sees when the request took effect but
 // the answer never arrived.
 func (c *chaosGraph) lostResponseError(cc *chaosCall, op string) error {
-	c.count(op + ":response-lost")
+	c.count(op + chaosResponseLostSuffix)
 	if cc.intN(2) == 0 {
 		return &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
 	}
@@ -306,17 +316,18 @@ func (c *chaosGraph) before(cc *chaosCall, op string) error {
 
 // chaosMutation runs a mutating call through the layer: it may fail before
 // reaching OneDrive, or take effect and lose its response.
-func chaosMutation(c *chaosGraph, op, key string, call func() (*graph.Item, error)) (*graph.Item, error) {
+func chaosMutation[T any](c *chaosGraph, op, key string, call func() (T, error)) (T, error) {
+	var none T
 	cc := c.call(op, key)
 	if err := c.before(cc, op); err != nil {
-		return nil, err
+		return none, err
 	}
-	item, err := call()
+	result, err := call()
 	if err == nil && cc.roll(chaosFaultOdds) {
-		return nil, c.lostResponseError(cc, op)
+		return none, c.lostResponseError(cc, op)
 	}
 
-	return item, err
+	return result, err
 }
 
 // chaosCreateFunc is the scenario fake's two-step create.
@@ -328,13 +339,16 @@ type chaosCreateFunc func(context.Context, string, string, io.ReaderAt, int64, g
 // does not, and for some of them its eTag moved meanwhile
 // (chaosPlaceholderChurned). Or the creating request's own answer is lost
 // (createResponseLost). A create that fails before it reaches OneDrive reads
-// as graph.CreateFile reports it (chaosCreateFailure).
+// as graph.CreateFile reports it (chaosCreateFailure). A fault of the create
+// itself counts under chaosOpCreate, the session's under "upload-session";
+// the call's fault stream keeps its "upload-session" name, so every seed
+// draws the faults it drew before the two were told apart.
 func (c *chaosGraph) uploadCreating(
 	ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 	inner chaosCreateFunc,
 ) (*graph.Item, error) {
 	cc := c.call("upload-session", parentID+"/"+name)
-	if err := c.before(cc, "upload-session"); err != nil {
+	if err := c.before(cc, chaosOpCreate); err != nil {
 		return nil, chaosCreateFailure(name, err)
 	}
 	if !cc.roll(chaosFaultOdds) {
@@ -387,7 +401,7 @@ func (c *chaosGraph) createResponseLost(
 		return item, err
 	}
 
-	return nil, chaosCreateFailure(name, c.lostResponseError(cc, "create"))
+	return nil, chaosCreateFailure(name, c.lostResponseError(cc, chaosOpCreate))
 }
 
 // chaosCreateFailure is a failed create as graph.CreateFile reports it: an
@@ -536,13 +550,28 @@ func (r *modelRun) takeConcurrentEdits() []modelEdit {
 	return edits
 }
 
+// chaosRaceSeed is the one seed of the chaos run under -race. Its
+// modelRaceBatches batches draw both faults of a create that took effect: a
+// create whose own answer was lost and a session that timed out once the
+// empty item existed. Of seeds 1 to 16 it is the only one that draws a lost
+// create answer in two batches (seed 1 draws no create fault at all). The run
+// asserts that the seed still draws both, so a change that renumbers what a
+// seed does cannot quietly drop them.
+const chaosRaceSeed = 2
+
+// chaosRaceSeedFaults are the fault kinds chaosRaceSeed must draw.
+func chaosRaceSeedFaults() []string {
+	return []string{chaosCreateResponseLost, chaosSessionTimedOut}
+}
+
 // Validates: R-2.3.1, R-6.8.9
 //
 // The model test through the chaos Graph layer: every batch's first passes
 // run in a storm of seeded transient faults, lost responses, interrupted
 // sessions, truncated downloads, odd delta windows and concurrent writers;
 // once it passes, sync converges with every model check and invariant
-// holding. ONEDRIVE_GO_CHAOS_SEEDS widens the search (or name one seed with
+// holding. Each seed logs its fault summary when it ends, failing or not.
+// ONEDRIVE_GO_CHAOS_SEEDS widens the search (or name one seed with
 // ONEDRIVE_GO_MODEL_SEED).
 func TestModel_ChaosGraphConverges(t *testing.T) {
 	skipInShort(t)
@@ -557,24 +586,32 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 			}
 			run := runModelScenarioWith(t, seed, opts)
 			require.Positive(t, run.chaos.faultCount(), "the storm injected no fault")
-			t.Logf("seed %d faults: %s", seed, run.chaos.faultSummary())
+			if seed != chaosRaceSeed {
+				return
+			}
+			run.chaos.mu.Lock()
+			defer run.chaos.mu.Unlock()
+			for _, kind := range chaosRaceSeedFaults() {
+				assert.Positive(t, run.chaos.faults[kind], "seed %d drew no %s fault", seed, kind)
+			}
 		})
 	}
 }
 
 // chaosSeeds is the chaos run's seeds: one named seed, a count from the
-// environment, or chaosDefaultSeeds (one under -race).
+// environment, or chaosDefaultSeeds (chaosRaceSeed alone under -race).
 func chaosSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
 	if os.Getenv(modelSeedEnv) != "" {
 		return modelSeeds(t)
 	}
-	count := chaosDefaultSeeds
-	if raceDetectorEnabled {
-		count = 1
+	raw := os.Getenv(chaosSeedEnv)
+	if raceDetectorEnabled && raw == "" {
+		return []uint64{chaosRaceSeed}
 	}
-	if raw := os.Getenv(chaosSeedEnv); raw != "" {
+	count := chaosDefaultSeeds
+	if raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		require.NoError(t, err, chaosSeedEnv)
 		count = parsed
@@ -628,7 +665,7 @@ func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.
 	require.Positive(t, lost, "no create lost its answer in %d attempts", attempts)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	assert.Equal(t, lost, c.faults["create:response-lost"])
+	assert.Equal(t, lost, c.faults[chaosCreateResponseLost])
 }
 
 // Validates: R-5.6.15

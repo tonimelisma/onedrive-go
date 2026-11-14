@@ -27,8 +27,6 @@ func newFakeDirtyDebounceTimer() *fakeDirtyDebounceTimer {
 	}
 }
 
-const dirtyBufferTestTimeout = time.Second
-
 func (t *fakeDirtyDebounceTimer) Chan() <-chan time.Time { return t.ch }
 func (t *fakeDirtyDebounceTimer) Stop() bool {
 	t.mu.Lock()
@@ -99,7 +97,7 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 	buf.MarkDirty()
 	select {
 	case <-timer.resetCh:
-	case <-time.After(time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timed out waiting for debounce reset")
 	}
 	resetCount := timer.resetCountSnapshot()
@@ -127,7 +125,7 @@ func TestDirtyBuffer_FlushDebounced_CoalescesMultipleDirtySignalsIntoOneBatch(t 
 
 	select {
 	case <-timer.resetCh:
-	case <-time.After(time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timed out waiting for debounce reset")
 	}
 
@@ -148,7 +146,7 @@ func fireDirtyDebounceUntilBatch(t *testing.T, timer *fakeDirtyDebounceTimer, ou
 	t.Helper()
 
 	timer.Fire()
-	timeout := time.After(dirtyBufferTestTimeout)
+	timeout := time.After(eventWait)
 	for {
 		select {
 		case batch, ok := <-out:
@@ -184,7 +182,7 @@ func TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait(t *testing.T
 		t.Helper()
 		select {
 		case <-timer.resetCh:
-		case <-time.After(dirtyBufferTestTimeout):
+		case <-time.After(eventWait):
 			require.Fail(t, "timed out waiting for "+what)
 		}
 	}
@@ -208,7 +206,7 @@ func TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait(t *testing.T
 	select {
 	case batch := <-out:
 		assert.True(t, batch.FullRefresh)
-	case <-time.After(dirtyBufferTestTimeout):
+	case <-time.After(eventWait):
 		require.Fail(t, "continuous observations must still flush at the max wait")
 	}
 }

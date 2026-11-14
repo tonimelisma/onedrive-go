@@ -124,6 +124,7 @@ func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "non-zero drive ID")
 }
 
+// Validates: R-2.1.1
 func TestRunOnce_NoChanges(t *testing.T) {
 	t.Parallel()
 
@@ -869,6 +870,7 @@ func TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken
 	assert.Equal(t, clock.Now().Add(remoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 }
 
+// Validates: R-6.6.28
 func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	t.Parallel()
 
@@ -919,6 +921,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	assert.True(t, ok, "good.txt not in baseline after partial commit")
 }
 
+// Validates: R-6.6.28
 func TestRunOnce_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -962,6 +965,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	assert.Equal(t, "new-delta-token", token)
 }
 
+// Validates: R-2.1.1
 func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 	t.Parallel()
 
@@ -1135,6 +1139,7 @@ func requireIncompatibleStoreEngineError(t *testing.T, dbPath string) *StateStor
 	return resetErr
 }
 
+// Validates: R-2.15.3, R-6.7.5
 func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	t.Parallel()
 
@@ -1240,7 +1245,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	select {
 	case <-done:
 		// Good — completed.
-	case <-time.After(10 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunOnce deadlocked on empty action plan")
 	}
 
@@ -1248,6 +1253,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	assert.Equal(t, 0, report.Failed, "failed")
 }
 
+// Validates: R-2.15.1
 // TestRunOnce_DeltaTokenCommittedWithObservations verifies that the delta token
 // is committed atomically with observations in CommitObservation, even when
 // subsequent actions fail. Failed items are tracked in remote_state for retry
@@ -1271,6 +1277,7 @@ func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 		"delta token should advance with observations even when actions fail")
 }
 
+// Validates: R-6.6.28
 func TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging(t *testing.T) {
 	t.Parallel()
 

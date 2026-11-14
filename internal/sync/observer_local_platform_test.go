@@ -75,14 +75,11 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 	}
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
-	defer func() {
-		cancel()
-		<-done
-	}()
 
-	require.Eventually(t, func() bool { return manualTickerIntervals(clock) != nil }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return manualTickerIntervals(clock) != nil }, eventWait, time.Millisecond)
 	assert.Equal(t, []time.Duration{networkSafetyScanInterval}, manualTickerIntervals(clock),
 		"changes made on other machines reach only the rescan, so it runs more often")
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.8.19

@@ -294,6 +294,8 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	if opts.chaos {
 		chaos = newChaosGraph(seed)
 		client = chaos.wrap(client)
+		// A cleanup, so a failing seed prints what the storm did too.
+		t.Cleanup(func() { t.Logf("seed %d chaos faults: %s", seed, chaos.faultSummary()) })
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
 	run := &modelRun{

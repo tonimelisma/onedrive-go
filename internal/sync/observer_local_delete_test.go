@@ -41,13 +41,12 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 	var ev changeEvent
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for delete event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.Equal(t, ChangeDelete, ev.Type)
 	assert.Equal(t, "doomed.txt", ev.Path)
@@ -81,13 +80,12 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for delete event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	require.Equal(t, ChangeDelete, ev.Type)
 	require.Equal(t, "subdir", ev.Path)
@@ -433,6 +431,7 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 	}
 }
 
+// Validates: R-2.8.16
 // TestHandleDelete_CancelsCoalesceTimer verifies that handleDelete cancels
 // any pending write coalesce timer for the deleted path (B-107).
 func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {

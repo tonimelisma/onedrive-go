@@ -76,21 +76,8 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 		return newEnospcWatcher(1 << 20), nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-	select {
-	case <-uploadStarted:
-	case <-time.After(debugEventTimeout):
-		require.Fail(t, "bootstrap upload should start before observers")
-	}
+	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
+	receiveWithin(t, uploadStarted, "the bootstrap upload to start before the observers")
 	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap upload is blocked")
@@ -107,14 +94,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not exit after cancellation")
-	}
+	stopWatch(t, cancel, done)
 
 	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
 		func(event engineDebugEvent) bool {
@@ -170,21 +150,11 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
-			PollInterval: 20 * time.Millisecond,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-	select {
-	case <-downloadStarted:
-	case <-time.After(debugEventTimeout):
-		require.Fail(t, "bootstrap download should start before remote observer")
-	}
+	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, WatchOptions{
+		PollInterval: 20 * time.Millisecond,
+		Debounce:     5 * time.Millisecond,
+	})
+	receiveWithin(t, downloadStarted, "the bootstrap download to start before the remote observer")
 
 	assert.Equal(t, int32(1), deltaCalls.Load(),
 		"remote observer must not start polling until bootstrap has drained")
@@ -204,14 +174,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
 	}, "remote observer started")
 
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not exit after cancellation")
-	}
+	stopWatch(t, cancel, done)
 
 	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
 		func(event engineDebugEvent) bool {
@@ -253,16 +216,7 @@ func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) 
 	}))
 
 	recorder := attachDebugEventRecorder(eng)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
+	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
 	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventBootstrapQuiesced
@@ -273,14 +227,7 @@ func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) 
 
 	assert.Equal(t, int32(0), uploadCalls.Load(), "future-held retry work must not dispatch during bootstrap")
 
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not exit after cancellation")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.1.2, R-2.10.5
@@ -330,22 +277,9 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 	}))
 
 	recorder := attachDebugEventRecorder(eng)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncUploadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
-
-	select {
-	case <-uploadStarted:
-	case <-time.After(debugEventTimeout):
-		require.Fail(t, "due trial should dispatch bootstrap work before observers start")
-	}
+	receiveWithin(t, uploadStarted, "the due trial to dispatch bootstrap work before the observers start")
 
 	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventBootstrapQuiesced
@@ -363,14 +297,7 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "RunWatch did not exit after cancellation")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +316,7 @@ func TestWaitForQuiescence_EmptyGraph(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-2.8.3
 func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	t.Parallel()
 
@@ -431,6 +359,7 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Validates: R-2.1.2
 func TestBootstrapSync_WithChanges(t *testing.T) {
 	t.Parallel()
 
@@ -455,7 +384,9 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	ctx := t.Context()
 	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncDownloadOnly, 2)
 
-	err := testWatchRuntime(t, eng).bootstrapSync(ctx, SyncDownloadOnly, pipe)
+	err := runWithin(t, ctx, "bootstrap to finish the download", func(runCtx context.Context) error {
+		return testWatchRuntime(t, eng).bootstrapSync(runCtx, SyncDownloadOnly, pipe)
+	})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
@@ -504,7 +435,9 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 
 	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncBidirectional, 1)
 
-	err := testWatchRuntime(t, eng).bootstrapSync(ctx, SyncDownloadOnly, pipe)
+	err := runWithin(t, ctx, "bootstrap to finish the local delete", func(runCtx context.Context) error {
+		return testWatchRuntime(t, eng).bootstrapSync(runCtx, SyncDownloadOnly, pipe)
+	})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(syncRoot, "gone.txt"))

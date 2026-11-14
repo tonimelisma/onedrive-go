@@ -99,7 +99,7 @@ func (s *sleepRecorder) sleep(_ context.Context, d time.Duration) error {
 func (s *sleepRecorder) waitForCalls(t *testing.T, n int) {
 	t.Helper()
 
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(eventWait)
 
 	for {
 		s.mu.Lock()
@@ -134,6 +134,7 @@ func (s *sleepRecorder) getCalls() []time.Duration {
 // Watch tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.2
 func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 	dir := t.TempDir()
 	mockWatcher := newMockFsWatcher()
@@ -144,27 +145,15 @@ func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 	obs.startupSafetyScan = true
 	events := make(chan changeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
-	var observed changeEvent
-	select {
-	case observed = <-events:
-	case err := <-done:
-		require.NoError(t, err, "watch exited before startup safety scan observed the change")
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "timeout waiting for startup safety scan event")
-	}
-
-	cancel()
-	require.NoError(t, <-done)
+	observed := receiveWithin(t, events, "the startup safety scan's event")
+	stopWatch(t, cancel, done)
 	assert.Equal(t, changeCreate, observed.Type)
 	assert.Equal(t, "during-setup.txt", observed.Path)
 }
 
+// Validates: R-2.1.2
 func TestWatch_DetectsFileModify(t *testing.T) {
 	t.Parallel()
 
@@ -187,13 +176,12 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 	var ev changeEvent
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for modify event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.Equal(t, ChangeModify, ev.Type)
 	assert.Equal(t, "existing.txt", ev.Path)
@@ -220,17 +208,17 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	var ev changeEvent
 	select {
 	case ev = <-events:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		cancel()
 		require.Fail(t, "timeout waiting for any event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	assert.Equal(t, "valid.txt", ev.Path, "excluded file should be ignored")
 }
 
+// Validates: R-2.8.3
 func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -239,20 +227,14 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 
 	events := make(chan changeEvent, 10)
 	cancel, done := startLocalWatch(t, obs, dir, events)
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err, "Watch should return nil after context cancellation")
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "Watch did not return after context cancellation")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // ---------------------------------------------------------------------------
 // watchLoop backoff reset tests (B-189)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.8.2
 // TestWatchLoop_BackoffResetsOnSafetyScan verifies that after a safety scan
 // fires, the error backoff resets to the initial value. Without this reset,
 // a previous error escalation would persist, causing unnecessarily long
@@ -285,21 +267,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	}
 
 	events := make(chan changeEvent, 50)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err, "watch exited before becoming ready")
-	case <-mockWatcher.Added():
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for mock watch setup")
-	}
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Step 1: Inject a watcher error → watchLoop sleeps with initial backoff (1s).
 	mockWatcher.errs <- errors.New("test watcher error 1")
@@ -316,7 +284,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	select {
 	case ev := <-events:
 		require.Equal(t, "safety-scan.txt", ev.Path)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for safety-scan event")
 	}
 
@@ -329,10 +297,10 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	require.Equal(t, retry.WatchLocalPolicy().Base, calls[1],
 		"second error after safety scan should use initial backoff (reset)")
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-6.8.2
 // TestWatchLoop_BackoffEscalatesWithoutReset verifies that without a safety
 // scan, consecutive errors escalate the backoff exponentially.
 func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
@@ -361,21 +329,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	}
 
 	events := make(chan changeEvent, 50)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err, "watch exited before becoming ready")
-	case <-mockWatcher.Added():
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for mock watch setup")
-	}
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Inject two consecutive errors.
 	mockWatcher.errs <- errors.New("error 1")
@@ -389,14 +343,14 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	require.Equal(t, retry.WatchLocalPolicy().Base*time.Duration(retry.WatchLocalPolicy().Multiplier), calls[1],
 		"second error: escalated backoff (no safety scan to reset)")
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
 // ---------------------------------------------------------------------------
 // Combined fsnotify event tests (B-108, B-117, B-118)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.2
 // TestWatchLoop_ChmodCreateCombinedEvent verifies that a combined Chmod|Create
 // fsnotify event (which some watcher backends deliver) is handled as a
 // Create, not filtered out as a pure Chmod (B-108). The filter at
@@ -411,13 +365,7 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan changeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Inject a combined Chmod|Create event — a backend-dependent edge case.
 	mockWatcher.events <- fsnotify.Event{
@@ -430,14 +378,14 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 		require.Equal(t, changeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
 		require.Equal(t, "combo.txt", ev.Path)
 		require.Equal(t, SourceLocal, ev.Source)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for combined Chmod|Create event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-2.1.2
 // TestWatchLoop_TransientFileCreateDelete verifies that a transient file
 // (created then immediately deleted) does not cause errors when the Remove
 // event arrives for a path that was never observed by the watcher (B-117).
@@ -453,13 +401,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
 	events := make(chan changeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Inject a Remove event for a path that was never created (from the
 	// watcher's perspective). This simulates macOS kqueue coalescing a
@@ -477,14 +419,14 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 		require.Equal(t, ItemTypeFile, ev.ItemType,
 			"unknown path defaults to ItemTypeFile")
 		require.True(t, ev.IsDeleted)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for transient file delete event")
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-2.1.2
 // TestWatchLoop_MoveOutOfOrderRenameCreate verifies that out-of-order events
 // from a local `mv file.txt dir/file.txt` are handled correctly (B-118).
 // The move produces fsnotify Rename (delete at old path) + Create (at new
@@ -526,13 +468,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	}
 
 	events := make(chan changeEvent, 10)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, mustOpenSyncTree(t, dir), events)
-	}()
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
 
 	// Inject events in REVERSED order: Create at new path before Rename
 	// (delete) at old path. This can happen when fsnotify delivers events
@@ -548,7 +484,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 
 	// Collect both events.
 	var collected []changeEvent
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(eventWait)
 
 	for len(collected) < 2 {
 		select {
@@ -559,8 +495,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		}
 	}
 
-	cancel()
-	<-done
+	stopWatch(t, cancel, done)
 
 	// Find the Create and Delete events (order may vary).
 	var createEv, deleteEv *changeEvent

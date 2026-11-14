@@ -98,7 +98,7 @@ func newSocketIOTestServer(
 }
 
 func writeSocketIOText(ctx context.Context, conn *websocket.Conn, packet string) error {
-	writeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	writeCtx, cancel := context.WithTimeout(ctx, eventWait)
 	defer cancel()
 	if err := conn.Write(writeCtx, websocket.MessageText, []byte(packet)); err != nil {
 		return fmt.Errorf("write websocket text %q: %w", packet, err)
@@ -108,7 +108,7 @@ func writeSocketIOText(ctx context.Context, conn *websocket.Conn, packet string)
 }
 
 func readSocketIOText(ctx context.Context, conn *websocket.Conn) (string, error) {
-	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, eventWait)
 	defer cancel()
 
 	typ, payload, err := conn.Read(readCtx)
@@ -185,23 +185,18 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 	})
 
 	wakes := make(chan struct{}, 1)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- source.Run(ctx, wakes)
-	}()
+	_, done := runInBackground(t, ctx, func(runCtx context.Context) error {
+		return source.Run(runCtx, wakes)
+	})
 
-	select {
-	case <-wakes:
-	case <-time.After(2 * time.Second):
-		require.FailNow(t, "expected wake signal from socket.io notification")
-	}
+	receiveWithin(t, wakes, "a wake from the socket.io notification")
 
 	cancel()
 	close(holdConn)
-	require.NoError(t, <-done)
+	require.NoError(t, receiveWithin(t, done, "the wake source to stop"))
 	assert.Equal(t, 1, fetcher.CallCount())
 	assert.True(t, containsLifecycleEvent(lifecycleEvents, socketIOLifecycleEventConnected))
 	assert.True(t, containsLifecycleEvent(lifecycleEvents, socketIOLifecycleEventNotificationWake))
@@ -255,23 +250,18 @@ func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 	})
 
 	wakes := make(chan struct{}, 1)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- source.Run(ctx, wakes)
-	}()
+	_, done := runInBackground(t, ctx, func(runCtx context.Context) error {
+		return source.Run(runCtx, wakes)
+	})
 
-	select {
-	case <-wakes:
-	case <-time.After(2 * time.Second):
-		require.FailNow(t, "expected wake after reconnect")
-	}
+	receiveWithin(t, wakes, "a wake after the reconnect")
 
 	cancel()
 	close(holdSecond)
-	require.NoError(t, <-done)
+	require.NoError(t, receiveWithin(t, done, "the wake source to stop"))
 	assert.GreaterOrEqual(t, fetcher.CallCount(), 2, "disconnect should force endpoint refetch and reconnect")
 }
 
@@ -287,7 +277,6 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	const (
 		refreshLeadTime   = 2 * time.Minute
 		firstEndpointTTL  = 10 * time.Minute
-		testWaitTimeout   = 30 * time.Second
 		longLivedEndpoint = time.Hour
 	)
 
@@ -327,39 +316,30 @@ func TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry(t *testing.T) {
 	})
 
 	wakes := make(chan struct{}, 1)
-	ctx, cancel := context.WithTimeout(t.Context(), testWaitTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- source.Run(ctx, wakes)
-	}()
+	_, done := runInBackground(t, ctx, func(runCtx context.Context) error {
+		return source.Run(runCtx, wakes)
+	})
 
-	select {
-	case delay := <-refreshArmed:
-		assert.Equal(t, firstEndpointTTL-refreshLeadTime, delay,
-			"the refresh is due the lead time before the endpoint expires")
-	case <-ctx.Done():
-		require.FailNow(t, "the first connection never armed its refresh")
-	}
+	assert.Equal(t, firstEndpointTTL-refreshLeadTime, receiveWithin(t, refreshArmed, "the first connection to arm its refresh"),
+		"the refresh is due the lead time before the endpoint expires")
 
 	clock.Advance(firstEndpointTTL - refreshLeadTime - time.Nanosecond)
 	assert.Equal(t, 1, fetcher.CallCount(), "nothing refreshes before the deadline")
 
 	clock.Advance(time.Nanosecond)
-	select {
-	case <-wakes:
-	case <-ctx.Done():
-		require.FailNow(t, "expected wake from the refreshed endpoint")
-	}
+	receiveWithin(t, wakes, "a wake from the refreshed endpoint")
 
 	cancel()
 	close(firstReleased)
 	close(holdSecond)
-	require.NoError(t, <-done)
+	require.NoError(t, receiveWithin(t, done, "the wake source to stop"))
 	assert.Equal(t, 2, fetcher.CallCount(), "the deadline refreshes the endpoint once")
 }
 
+// Validates: R-2.8.5
 func TestSocketIOWakeSource_EndpointFetchFailureEmitsLifecycleEvent(t *testing.T) {
 	t.Parallel()
 
@@ -378,12 +358,15 @@ func TestSocketIOWakeSource_EndpointFetchFailureEmitsLifecycleEvent(t *testing.T
 		},
 	})
 
-	err := source.Run(ctx, make(chan struct{}, 1))
+	err := runWithin(t, ctx, "the wake source to stop after the endpoint fetch failed", func(runCtx context.Context) error {
+		return source.Run(runCtx, make(chan struct{}, 1))
+	})
 	require.NoError(t, err)
 	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventEndpointFetchFail))
 	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventStopped))
 }
 
+// Validates: R-2.8.5
 func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
 	t.Parallel()
 
@@ -412,12 +395,15 @@ func TestSocketIOWakeSource_ConnectFailureEmitsLifecycleEvent(t *testing.T) {
 		},
 	})
 
-	err := source.Run(ctx, make(chan struct{}, 1))
+	err := runWithin(t, ctx, "the wake source to stop after the dial failed", func(runCtx context.Context) error {
+		return source.Run(runCtx, make(chan struct{}, 1))
+	})
 	require.NoError(t, err)
 	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventConnectFail))
 	assert.True(t, containsLifecycleEvent(events, socketIOLifecycleEventStopped))
 }
 
+// Validates: R-2.8.5
 func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 	t.Parallel()
 
@@ -455,22 +441,17 @@ func TestSocketIOWakeSource_PingPongHandling(t *testing.T) {
 		Logger: synctest.TestLogger(t),
 	})
 
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- source.Run(ctx, make(chan struct{}, 1))
-	}()
+	_, done := runInBackground(t, ctx, func(runCtx context.Context) error {
+		return source.Run(runCtx, make(chan struct{}, 1))
+	})
 
-	select {
-	case <-pongSeen:
-	case <-time.After(time.Second):
-		require.FailNow(t, "expected socket.io pong response")
-	}
+	receiveWithin(t, pongSeen, "the socket.io pong")
 	cancel()
 	close(holdConn)
-	require.NoError(t, <-done)
+	require.NoError(t, receiveWithin(t, done, "the wake source to stop"))
 }
 
 func containsLifecycleEvent(events []socketIOLifecycleEvent, target socketIOLifecycleEventType) bool {
@@ -541,8 +522,9 @@ func TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL(t *testing.T)
 		}},
 	}
 
-	// Run is synchronous and the dial never succeeds, so no other goroutine
-	// logs: a plain buffer is safe here.
+	// The dial never succeeds, so Run's goroutine is the only one that logs,
+	// and the test reads the buffer only once Run has returned: a plain buffer
+	// is safe here.
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -562,7 +544,9 @@ func TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL(t *testing.T)
 		},
 	})
 
-	require.NoError(t, source.Run(ctx, make(chan struct{}, 1)))
+	require.NoError(t, runWithin(t, ctx, "the wake source to stop after the refused dial", func(runCtx context.Context) error {
+		return source.Run(runCtx, make(chan struct{}, 1))
+	}))
 
 	var connectFail *socketIOLifecycleEvent
 	for i := range events {

@@ -203,6 +203,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 // Full reconciliation tests (Step 2)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.6, R-2.8.4
 func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	t.Parallel()
 
@@ -229,6 +230,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	assert.True(t, orphans[0].IsDeleted)
 }
 
+// Validates: R-2.1.6
 func TestFindOrphans_NoOrphans(t *testing.T) {
 	t.Parallel()
 
@@ -249,6 +251,7 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 	assert.Empty(t, orphans, "should find no orphans when all items are in seen set")
 }
 
+// Validates: R-2.1.6
 func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	t.Parallel()
 
@@ -290,6 +293,7 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 	assert.Equal(t, "SharedFolder/sub/b.txt", orphans[0].Path)
 }
 
+// Validates: R-2.1.6, R-2.8.4
 func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	t.Parallel()
 
@@ -354,6 +358,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 // projectObservedItems — empty ItemID guard (Item 4)
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.7.28
 func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
@@ -370,6 +375,7 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	assert.Equal(t, "valid-2", items[1].ItemID)
 }
 
+// Validates: R-2.8.4
 func TestShouldRunFullRemoteRefresh_NoCursor(t *testing.T) {
 	t.Parallel()
 
@@ -380,6 +386,7 @@ func TestShouldRunFullRemoteRefresh_NoCursor(t *testing.T) {
 	assert.True(t, shouldRun)
 }
 
+// Validates: R-2.8.4
 func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 	t.Parallel()
 
@@ -399,6 +406,7 @@ func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 	assert.True(t, shouldRun)
 }
 
+// Validates: R-2.8.4
 func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 	t.Parallel()
 
@@ -418,6 +426,7 @@ func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 	assert.False(t, shouldRun)
 }
 
+// Validates: R-2.8.4
 func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 	t.Parallel()
 
@@ -439,6 +448,7 @@ func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 // observeAndCommitRemoteFull tests (Item 6)
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.1.6, R-2.15.1
 func TestObserveAndCommitRemoteFull(t *testing.T) {
 	t.Parallel()
 
@@ -575,8 +585,8 @@ func waitForRefreshDone(t *testing.T, ctx context.Context, eng *testEngine) {
 	select {
 	case result := <-rt.resources.refreshResults:
 		require.NoError(t, rt.applyRemoteRefreshResult(ctx, &result))
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "refresh result was not delivered within 10s")
+	case <-time.After(eventWait):
+		require.Fail(t, "refresh result was not delivered")
 	}
 
 	assert.False(t, rt.resources.refreshActive, "refreshActive should be false after applying refresh result")
@@ -674,6 +684,7 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	assert.True(t, batch.FullRefresh)
 }
 
+// Validates: R-2.8.4
 func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	t.Parallel()
 
@@ -708,6 +719,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	waitForRefreshDone(t, t.Context(), e)
 }
 
+// Validates: R-2.8.4
 func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	t.Parallel()
 
@@ -741,6 +753,7 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	testWatchRuntime(t, e).resources.refreshActive = false
 }
 
+// Validates: R-2.8.3
 func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
 	t.Parallel()
 
@@ -759,11 +772,12 @@ func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "watch cleanup left refresh result senders blocked")
 	}
 }
 
+// Validates: R-2.8.4
 func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	t.Parallel()
 
@@ -873,14 +887,13 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	refreshC := make(chan time.Time, 1)
 	rt.resources.refreshCh = refreshC
-	done := make(chan error, 1)
-	go func() {
-		done <- rt.runWatchLoop(ctx, &watchPipeline{
+	_, done := runInBackground(t, ctx, func(loopCtx context.Context) error {
+		return rt.runWatchLoop(loopCtx, &watchPipeline{
 			runtime: rt,
 			bl:      bl,
 			mode:    SyncBidirectional,
 		})
-	}()
+	})
 
 	refreshC <- time.Now()
 
@@ -901,16 +914,10 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 	savedToken := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "watch-refresh-token", savedToken)
 
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "watch loop did not stop after cancellation")
-	}
+	stopWatch(t, cancel, done)
 }
 
+// Validates: R-2.8.3
 func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	t.Parallel()
 
@@ -1016,6 +1023,7 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 	testWatchRuntime(t, e).resources.refreshActive = false
 }
 
+// Validates: R-6.6.14
 func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 	t.Parallel()
 
@@ -1073,6 +1081,7 @@ func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 		"completion log must include duration field")
 }
 
+// Validates: R-6.6.14
 func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 	t.Parallel()
 

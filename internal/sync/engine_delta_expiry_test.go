@@ -216,18 +216,17 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	defer cancel()
 	batches := make(chan remoteObservationBatch, 4)
 	events := startTestRemoteBatchDrain(ctx, batches, nil)
-	done := make(chan error, 1)
-	go func() {
-		done <- obs.Watch(ctx, "expired-token", batches, time.Hour, nil, nil)
-	}()
+	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
+		return obs.Watch(watchCtx, "expired-token", batches, time.Hour, nil, nil)
+	})
 
-	assert.Equal(t, resyncKindUploadDifferences, <-recovered, "the resync flavor reaches the full refresh")
-	emitted := <-events
+	assert.Equal(t, resyncKindUploadDifferences, receiveWithin(t, recovered, "the delta-expired recovery to run"),
+		"the resync flavor reaches the full refresh")
+	emitted := receiveWithin(t, events, "the full refresh's batch")
 	assert.True(t, emitted.ReuploadLocal, "the full refresh's batch, orphans included, is what watch emits")
 	require.Eventually(t, func() bool { return obs.CurrentDeltaToken() == "token-after-full-refresh" },
-		time.Second, time.Millisecond)
-	cancel()
-	require.NoError(t, <-done)
+		eventWait, time.Millisecond)
+	stopWatch(t, cancel, done)
 
 	assert.Equal(t, []string{"expired-token"}, fetcher.seen(),
 		"watch never re-enumerates on its own, without orphan detection")

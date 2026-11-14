@@ -119,21 +119,15 @@ func (c *gatedUploadClient) releaseAll() {
 	}
 }
 
-// gatedArrivalTimeout bounds a wait for an upload to reach the gate. The
-// first arrival follows a whole observe-plan-start of the pass, which under
-// the race detector with other engines running on a small host takes
-// seconds, so the bound is generous; it only turns a wedged pass into a
-// failure instead of a hang.
-const gatedArrivalTimeout = time.Minute
-
-// waitArrivals blocks until n uploads have arrived in total.
+// waitArrivals blocks until n uploads have arrived in total, each within
+// eventWait: the first follows a whole observe-plan-start of the pass.
 func (c *gatedUploadClient) waitArrivals(t *testing.T, n int) {
 	t.Helper()
 
 	for c.arrivalCount() < n {
 		select {
 		case <-c.arrived:
-		case <-time.After(gatedArrivalTimeout):
+		case <-time.After(eventWait):
 			require.Failf(t, "uploads did not arrive", "waited for %d arrivals, have %d", n, c.arrivalCount())
 		}
 	}
@@ -213,7 +207,7 @@ func (tr *coldStartTrace) waitHandedOver(t *testing.T) {
 
 	select {
 	case <-tr.handedOver:
-	case <-time.After(debugEventTimeout):
+	case <-time.After(eventWait):
 		require.Fail(t, "the slow start was not handed over to a scope")
 	}
 }
@@ -224,7 +218,7 @@ func (tr *coldStartTrace) waitRaised(t *testing.T, want int) {
 	select {
 	case got := <-tr.raised:
 		require.Equal(t, want, got, "slow-start allowance")
-	case <-time.After(debugEventTimeout):
+	case <-time.After(eventWait):
 		require.Failf(t, "allowance not raised", "waited for the allowance to reach %d", want)
 	}
 }
@@ -349,7 +343,7 @@ func TestColdStart_OneShotRampsInFlightFromTwo(t *testing.T) {
 	select {
 	case err := <-runErr:
 		require.NoError(t, err)
-	case <-time.After(debugEventTimeout):
+	case <-time.After(eventWait):
 		require.Fail(t, "the pass did not finish")
 	}
 
@@ -447,7 +441,7 @@ func (run *coldStartHandOverRun) runThrottledFirstPass(t *testing.T) BlockScope 
 	select {
 	case err := <-runErr:
 		require.NoError(t, err)
-	case <-time.After(debugEventTimeout):
+	case <-time.After(eventWait):
 		require.Fail(t, "the first pass did not finish")
 	}
 	assert.Equal(t, sentWhenThrottled, gate.arrivalCount(), "nothing more is sent after the 429 is applied")

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	stdsync "sync"
@@ -83,6 +84,7 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 	assert.Empty(t, obs.watchedDirs.paths(), "rollback should remove newly added watches from observer state")
 }
 
+// Validates: R-2.8.22
 func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	t.Parallel()
 
@@ -142,6 +144,7 @@ func (w *permErrWatcher) Close() error {
 // Watch returns errLocalWatchUnavailable
 // ---------------------------------------------------------------------------
 
+// Validates: R-2.8.22
 func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -154,9 +157,11 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
 
 	events := make(chan changeEvent, 256)
-	ctx := t.Context()
+	tree := mustOpenSyncTree(t, root)
 
-	err := obs.Watch(ctx, mustOpenSyncTree(t, root), events)
+	err := runWithin(t, t.Context(), "the watch to stop at the watch limit", func(ctx context.Context) error {
+		return obs.Watch(ctx, tree, events)
+	})
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errLocalWatchUnavailable,
@@ -167,6 +172,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 // FullScan pre-flight check tests
 // ---------------------------------------------------------------------------
 
+// Validates: R-6.2.13
 func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +186,7 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 		"FullScan should return ErrSyncRootMissing, got: %v", err)
 }
 
+// Validates: R-6.2.12
 func TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable(t *testing.T) {
 	t.Parallel()
 

@@ -580,11 +580,6 @@ type debugEventRecorder struct {
 	history []engineDebugEvent
 }
 
-// debugEventTimeout gives race-covered watch tests enough headroom to observe
-// bootstrap and shutdown events under the repo's full verify load. These tests
-// validate event ordering, not sub-second latency.
-const debugEventTimeout = 10 * time.Second
-
 func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
 	return attachDebugEventRecorderWithHook(eng, nil)
 }
@@ -615,7 +610,7 @@ func (r *debugEventRecorder) waitForEvent(
 ) {
 	t.Helper()
 
-	timer := time.NewTimer(debugEventTimeout)
+	timer := time.NewTimer(eventWait)
 	defer timer.Stop()
 
 	for {
@@ -646,7 +641,7 @@ func (r *debugEventRecorder) waitUntilSeenOrExit(
 		return
 	}
 
-	timer := time.NewTimer(debugEventTimeout)
+	timer := time.NewTimer(eventWait)
 	defer timer.Stop()
 
 	for {
@@ -682,7 +677,7 @@ func (r *debugEventRecorder) waitUntilSeen(
 		return
 	}
 
-	timer := time.NewTimer(debugEventTimeout)
+	timer := time.NewTimer(eventWait)
 	defer timer.Stop()
 
 	for {
@@ -915,7 +910,7 @@ func (c *manualClock) autoAdvanceTimers(t *testing.T) {
 		c.mu.Lock()
 		c.armed = nil
 		c.mu.Unlock()
-		<-done
+		receiveWithin(t, done, "the manual clock's advancing goroutine to stop")
 	})
 }
 

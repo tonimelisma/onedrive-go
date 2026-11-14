@@ -33,6 +33,16 @@ var (
 // testDriveID is the canonical drive ID used by engine tests.
 const testDriveID = synctest.TestDriveID
 
+// eventWait is how long a test waits for an event that must come: a debug
+// event, an observer's change, a pass's result, a goroutine's return. A wait
+// returns the moment its event arrives, so a passing test never spends it; it
+// only bounds how long a broken one hangs. It is long because events that take
+// milliseconds alone took over ten seconds on a loaded two-core host under the
+// race detector, and a ten-second wait failed tests there that were correct.
+// A wait that proves something does NOT happen is the opposite case: its
+// expiry is the passing path, so it stays short, at its use.
+const eventWait = time.Minute
+
 // emptyBaseline returns a Baseline with initialized but empty maps.
 func emptyBaseline() *Baseline {
 	return NewBaselineForTest(nil)

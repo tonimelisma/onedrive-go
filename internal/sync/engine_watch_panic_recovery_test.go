@@ -31,9 +31,9 @@ func TestRecoverObserverPanic_DeliversPanicAsObserverError(t *testing.T) {
 		panic("observer exploded")
 	}()
 
-	<-done
+	receiveWithin(t, done, "the panicking goroutine to finish")
 
-	err := <-errs
+	err := receiveWithin(t, errs, "the panic's error")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "observer exploded")
 	assert.Contains(t, err.Error(), "local")
@@ -51,7 +51,7 @@ func TestRecoverObserverPanic_CleanExitReportsNothing(t *testing.T) {
 		defer recoverObserverPanic(synctest.TestLogger(t), "remote", errs)
 	}()
 
-	<-done
+	receiveWithin(t, done, "the observer goroutine to finish")
 
 	assert.Empty(t, errs, "a clean observer exit must not synthesize an error")
 }
@@ -75,7 +75,7 @@ func TestRecoverObserverPanic_FullChannelDoesNotBlock(t *testing.T) {
 		panic("observer exploded")
 	}()
 
-	<-done
+	receiveWithin(t, done, "the panicking goroutine to finish despite the full channel")
 }
 
 // Validates: R-6.3.8
@@ -91,21 +91,11 @@ func TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing(t *testing.T) {
 		panic("watcher factory exploded")
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(t.Context(), SyncUploadOnly, WatchOptions{
-			PollInterval: 1 * time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
+	_, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	select {
-	case err := <-done:
-		require.Error(t, err, "a panicking observer must fail watch mode")
-		assert.Contains(t, err.Error(), "watcher factory exploded")
-	case <-time.After(30 * time.Second):
-		require.Fail(t, "watch mode did not report the observer panic")
-	}
+	err := receiveWithin(t, done, "watch mode to report the observer panic")
+	require.Error(t, err, "a panicking observer must fail watch mode")
+	assert.Contains(t, err.Error(), "watcher factory exploded")
 }
 
 // Validates: R-6.3.8
@@ -142,7 +132,7 @@ func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T
 		require.Error(t, applyErr, "a panicking refresh must fail the mount")
 		assert.Contains(t, applyErr.Error(), "delta exploded")
 		assert.Contains(t, applyErr.Error(), "full remote refresh")
-	case <-time.After(10 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "the refresh panic was not delivered to the loop")
 	}
 
@@ -168,26 +158,11 @@ func TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning(t *testing.T) {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		done <- eng.RunWatch(ctx, SyncDownloadOnly, WatchOptions{
-			PollInterval: time.Hour,
-			Debounce:     5 * time.Millisecond,
-		})
-	}()
+	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
 
-	select {
-	case <-entered:
-	case <-time.After(30 * time.Second):
-		require.Fail(t, "the wake source was never started")
-	}
+	receiveWithin(t, entered, "the wake source to start")
 
 	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err, "watch keeps running without its wake source and stops cleanly")
-	case <-time.After(30 * time.Second):
-		require.Fail(t, "watch mode did not stop after the wake source panic")
-	}
+	require.NoError(t, receiveWithin(t, done, "watch mode to stop after the wake source panic"),
+		"watch keeps running without its wake source and stops cleanly")
 }
