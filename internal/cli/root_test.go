@@ -38,95 +38,95 @@ func (c *countingCloser) Close() error {
 	return c.err
 }
 
-// --- buildLogger tests ---
+// --- buildLoggerWithStatusWriter tests ---
 
-func TestBuildLogger_Default(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_Default(t *testing.T) {
 	flags := CLIFlags{}
 
 	// nil config = bootstrap mode (pre-config).
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
 	// Default level is Warn.
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 }
 
-func TestBuildLogger_Verbose(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_Verbose(t *testing.T) {
 	flags := CLIFlags{Verbose: true}
 
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
 	// --verbose sets Info.
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
-func TestBuildLogger_Debug(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_Debug(t *testing.T) {
 	flags := CLIFlags{Debug: true}
 
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
 // Validates: R-4.7.1, R-6.6.2
-func TestBuildLogger_ConfigDebugDoesNotAffectConsole(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_ConfigDebugDoesNotAffectConsole(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "debug"},
 	}
 	flags := CLIFlags{}
 
-	logger := buildLogger(cfg, flags)
+	logger := buildLoggerWithStatusWriter(cfg, flags, nil)
 
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
-func TestBuildLogger_VerboseOverrides(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_VerboseOverrides(t *testing.T) {
 	// Config says error, but --verbose should override to Info.
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
 	flags := CLIFlags{Verbose: true}
 
-	logger := buildLogger(cfg, flags)
+	logger := buildLoggerWithStatusWriter(cfg, flags, nil)
 
 	// --verbose enables Info level, but not Debug.
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
-func TestBuildLogger_QuietOverrides(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_QuietOverrides(t *testing.T) {
 	// --quiet sets Error level.
 	flags := CLIFlags{Quiet: true}
 
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
 	// Error is enabled, but warn should not be.
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelError))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 }
 
-func TestBuildLogger_DebugOverrides(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_DebugOverrides(t *testing.T) {
 	// Config says error, but --debug should override to Debug.
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "error"},
 	}
 	flags := CLIFlags{Debug: true}
 
-	logger := buildLogger(cfg, flags)
+	logger := buildLoggerWithStatusWriter(cfg, flags, nil)
 
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelDebug))
 }
 
-func TestBuildLogger_ConfigInfoDoesNotAffectConsole(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_ConfigInfoDoesNotAffectConsole(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "info"},
 	}
 	flags := CLIFlags{}
 
-	logger := buildLogger(cfg, flags)
+	logger := buildLoggerWithStatusWriter(cfg, flags, nil)
 
 	assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 	assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
@@ -460,7 +460,7 @@ func TestNewGraphClientWithHTTP_ReturnsConstructionError(t *testing.T) {
 	assert.Contains(t, err.Error(), "creating graph client")
 }
 
-func TestNewRootCmd_MutualExclusivity(t *testing.T) {
+func TestNewRootCmdWithWriters_MutualExclusivity(t *testing.T) {
 	setTestDriveHome(t)
 
 	// Cobra enforces mutual exclusivity during Execute(). Verify that
@@ -476,7 +476,7 @@ func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 
 	for _, flags := range pairs {
 		t.Run(flags[0]+"_"+flags[1], func(t *testing.T) {
-			cmd := newRootCmd()
+			cmd := newRootCmdWithWriters(nil, nil)
 			cmd.SetArgs(append(flags, "status"))
 
 			err := cmd.Execute()
@@ -486,10 +486,10 @@ func TestNewRootCmd_MutualExclusivity(t *testing.T) {
 	}
 }
 
-func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
+func TestNewRootCmdWithWriters_AuthSkipsConfig(t *testing.T) {
 	setTestDriveHome(t)
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 
 	// Auth and account management commands should pass through PersistentPreRunE
 	// without error, because they have the skipConfigAnnotation (Phase 2 skipped).
@@ -516,10 +516,10 @@ func TestNewRootCmd_AuthSkipsConfig(t *testing.T) {
 	}
 }
 
-func TestNewRootCmd_DriveSubcommandsSkipConfig(t *testing.T) {
+func TestNewRootCmdWithWriters_DriveSubcommandsSkipConfig(t *testing.T) {
 	setTestDriveHome(t)
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 
 	// drive, drive add, and drive remove should skip config loading via annotation.
 	driveSubCmds := []struct {
@@ -570,7 +570,7 @@ func TestAnnotationTreeWalk(t *testing.T) {
 		"onedrive-go recycle-bin empty":   true,
 	}
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
@@ -633,9 +633,9 @@ sync_dir = "` + tmpDir + `/OneDrive"
 	require.NoError(t, err)
 
 	flags := CLIFlags{ConfigPath: cfgFile}
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 	cmd.SetContext(t.Context())
 
 	resolved, rawCfg, err := loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
@@ -653,7 +653,7 @@ func TestLoadAndResolve_MissingFile_NoDrives_Error(t *testing.T) {
 
 	// No config file and no tokens: matchNoDrives returns "no accounts
 	// configured" because no tokens exist on disk.
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 	cmd.SetArgs([]string{"--drive", "personal:zeroconfig@example.com", "--config", cfgPath, "ls"})
 
 	err := cmd.Execute()
@@ -690,7 +690,7 @@ func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {
 	setTestDriveHome(t)
 
 	// Verify that PersistentPreRunE populates CLIFlags for auth commands.
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 	cmd.SetArgs([]string{"--verbose", "status"})
 
 	require.NoError(t, cmd.Execute())
@@ -713,9 +713,9 @@ func TestLoadAndResolve_InvalidTOML(t *testing.T) {
 	require.NoError(t, err)
 
 	flags := CLIFlags{ConfigPath: cfgFile}
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 	cmd.SetContext(t.Context())
 
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
@@ -738,9 +738,9 @@ sync_dir = "` + tmpDir + `/two"
 	require.NoError(t, err)
 
 	flags := CLIFlags{ConfigPath: cfgFile}
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 	cmd.SetContext(t.Context())
 
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
@@ -759,9 +759,9 @@ func TestLoadAndResolve_NoDoubleWrapping(t *testing.T) {
 	require.NoError(t, err)
 
 	flags := CLIFlags{ConfigPath: cfgFile}
-	logger := buildLogger(nil, flags)
+	logger := buildLoggerWithStatusWriter(nil, flags, nil)
 
-	cmd := newRootCmd()
+	cmd := newRootCmdWithWriters(nil, nil)
 	cmd.SetContext(t.Context())
 
 	_, _, err = loadAndResolve(cmd, flags, config.EnvOverrides{}, logger)
@@ -771,36 +771,36 @@ func TestLoadAndResolve_NoDoubleWrapping(t *testing.T) {
 		"loadAndResolve must not double-wrap errors from ResolveDrive")
 }
 
-// --- buildHandler / format tests ---
+// --- buildHandlerWithStatusWriter / format tests ---
 // These tests are safe for t.Parallel() — no mutable globals; TTY detection
-// is based on the io.Writer passed to buildHandler, not package-level state.
+// is based on the io.Writer passed to buildHandlerWithStatusWriter, not package-level state.
 
-func TestBuildHandler_FormatText(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_FormatText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "text"},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "expected *slog.TextHandler")
 }
 
-func TestBuildHandler_FormatJSON(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_FormatJSON(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "json"},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
 	_, ok := handler.(*slog.JSONHandler)
 	assert.True(t, ok, "expected *slog.JSONHandler")
 }
 
 // Validates: R-6.6.21
-func TestBuildHandler_FormatAutoIsHumanAtDefaultVerbosity(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_FormatAutoIsHumanAtDefaultVerbosity(t *testing.T) {
 	t.Parallel()
 
 	// The console is for people: auto never switches it to JSON, even when
@@ -809,7 +809,7 @@ func TestBuildHandler_FormatAutoIsHumanAtDefaultVerbosity(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelWarn})
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelWarn}, &buf)
 	_, ok := handler.(*consoleLogHandler)
 	require.True(t, ok, "expected *consoleLogHandler at default verbosity")
 
@@ -818,47 +818,47 @@ func TestBuildHandler_FormatAutoIsHumanAtDefaultVerbosity(t *testing.T) {
 }
 
 // Validates: R-6.6.21
-func TestBuildHandler_FormatAutoVerboseKeepsTimestampedDetail(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_FormatAutoVerboseKeepsTimestampedDetail(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelInfo})
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelInfo}, &buf)
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "--verbose keeps full key=value detail")
 }
 
-func TestBuildHandler_NilConfigUsesText(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_NilConfigUsesText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	handler := buildHandler(&buf, nil, &slog.HandlerOptions{})
+	handler := buildHandlerWithStatusWriter(&buf, nil, &slog.HandlerOptions{}, &buf)
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "nil config should use *slog.TextHandler")
 }
 
-func TestBuildHandler_EmptyFormatUsesText(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_EmptyFormatUsesText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: ""},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "empty format should use *slog.TextHandler")
 }
 
-func TestBuildHandler_UnknownFormatWarnsAndFallsBack(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsAndFallsBack(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "xml"},
 	}
-	handler := buildHandler(&buf, cfg, &slog.HandlerOptions{})
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
 
 	// Should fall back to text handler.
 	_, ok := handler.(*slog.TextHandler)
@@ -886,7 +886,7 @@ func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsToStatusWriter(t *testin
 }
 
 // Validates: R-4.7.2, R-6.6.4
-func TestBuildHandler_JSONOutputFormat(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_JSONOutputFormat(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -897,7 +897,7 @@ func TestBuildHandler_JSONOutputFormat(t *testing.T) {
 		},
 	}
 	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
-	handler := buildHandler(&buf, cfg, opts)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, opts, &buf)
 	logger := slog.New(handler)
 
 	logger.Info("test message", slog.String("key", "value"))
@@ -911,7 +911,7 @@ func TestBuildHandler_JSONOutputFormat(t *testing.T) {
 	assert.Contains(t, record, "time")
 }
 
-func TestBuildHandler_JSONFormatWithDebugLevel(t *testing.T) {
+func TestBuildHandlerWithStatusWriter_JSONFormatWithDebugLevel(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -923,7 +923,7 @@ func TestBuildHandler_JSONFormatWithDebugLevel(t *testing.T) {
 	}
 	level := resolveFileLogLevelWithStatusWriter(cfg, nil)
 	opts := &slog.HandlerOptions{Level: level}
-	handler := buildHandler(&buf, cfg, opts)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, opts, &buf)
 
 	// Verify correct handler type.
 	_, ok := handler.(*slog.JSONHandler)
@@ -980,9 +980,9 @@ func TestResolveFileLogLevelWithStatusWriter_UnknownLogLevelWarnsToProvidedWrite
 
 // --- B-296: sync command log_level fix ---
 
-// TestBuildLogger_RawConfigLogLevelDoesNotAffectConsole verifies that the sync
+// TestBuildLoggerWithStatusWriter_RawConfigLogLevelDoesNotAffectConsole verifies that the sync
 // command's raw config logging shim keeps terminal verbosity flag-owned.
-func TestBuildLogger_RawConfigLogLevelDoesNotAffectConsole(t *testing.T) {
+func TestBuildLoggerWithStatusWriter_RawConfigLogLevelDoesNotAffectConsole(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1016,7 +1016,7 @@ func TestBuildLogger_RawConfigLogLevelDoesNotAffectConsole(t *testing.T) {
 			rd := &config.ResolvedDrive{
 				LoggingConfig: config.LoggingConfig{LogLevel: tc.logLevel},
 			}
-			logger := buildLogger(rd, CLIFlags{})
+			logger := buildLoggerWithStatusWriter(rd, CLIFlags{}, nil)
 
 			assert.True(t, logger.Handler().Enabled(t.Context(), slog.LevelWarn))
 			assert.False(t, logger.Handler().Enabled(t.Context(), slog.LevelInfo))
@@ -1181,20 +1181,20 @@ func TestMultiHandler_WithGroup(t *testing.T) {
 	assert.Contains(t, buf2.String(), "mygroup", "group should propagate to json handler")
 }
 
-// --- buildLogger dual-output tests ---
+// --- buildLoggerDualWithStatusWriter tests ---
 
-func TestBuildLoggerDual_NoLogFile(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_NoLogFile(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.ResolvedDrive{}
 	flags := CLIFlags{}
-	logger, closer := buildLoggerDual(cfg, flags)
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
 
 	assert.NotNil(t, logger)
 	assert.Nil(t, closer, "closer should be nil when no log file is set")
 }
 
-func TestBuildLoggerDual_LogFileOpenFailureFallsBack(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_LogFileOpenFailureFallsBack(t *testing.T) {
 	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
 	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
 
@@ -1205,7 +1205,7 @@ func TestBuildLoggerDual_LogFileOpenFailureFallsBack(t *testing.T) {
 		},
 	}
 
-	logger, closer := buildLoggerDual(cfg, CLIFlags{})
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, nil)
 	assert.NotNil(t, logger)
 	assert.Nil(t, closer, "log open failure should fall back to console-only logging")
 }
@@ -1233,7 +1233,7 @@ func TestBuildLoggerDualWithStatusWriter_LogFileOpenFailureWritesWarning(t *test
 //
 // An expired log that retention cannot remove is reported once, in the log
 // itself, and the log still opens.
-func TestBuildLoggerDual_ReportsAnExpiredLogItCannotRemoveOnce(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_ReportsAnExpiredLogItCannotRemoveOnce(t *testing.T) {
 	t.Parallel()
 
 	if os.Geteuid() == 0 {
@@ -1274,7 +1274,7 @@ func TestBuildLoggerDual_ReportsAnExpiredLogItCannotRemoveOnce(t *testing.T) {
 }
 
 // Validates: R-4.7.1, R-6.6.1
-func TestBuildLoggerDual_WithLogFile(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_WithLogFile(t *testing.T) {
 	t.Parallel()
 
 	logPath := filepath.Join(t.TempDir(), "test.log")
@@ -1286,7 +1286,7 @@ func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 	}
 	flags := CLIFlags{}
 
-	logger, closer := buildLoggerDual(cfg, flags)
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
 	require.NotNil(t, logger)
 	require.NotNil(t, closer, "closer should be non-nil when log file is set")
 
@@ -1300,7 +1300,7 @@ func TestBuildLoggerDual_WithLogFile(t *testing.T) {
 }
 
 // Validates: R-4.7.2, R-6.6.4
-func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_FileGetsJSON(t *testing.T) {
 	t.Parallel()
 
 	logPath := filepath.Join(t.TempDir(), "json.log")
@@ -1312,7 +1312,7 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 	}
 	flags := CLIFlags{}
 
-	logger, closer := buildLoggerDual(cfg, flags)
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
 	require.NotNil(t, closer)
 
 	logger.Info("json check")
@@ -1328,7 +1328,7 @@ func TestBuildLoggerDual_FileGetsJSON(t *testing.T) {
 }
 
 // Validates: R-4.7.1, R-6.6.2
-func TestBuildLoggerDual_InfoLevelGoesToFileNotConsole(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_InfoLevelGoesToFileNotConsole(t *testing.T) {
 	t.Parallel()
 
 	logPath := filepath.Join(t.TempDir(), "info.log")
@@ -1354,7 +1354,7 @@ func TestBuildLoggerDual_InfoLevelGoesToFileNotConsole(t *testing.T) {
 }
 
 // Validates: R-6.6.3
-func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
+func TestBuildLoggerDualWithStatusWriter_IndependentLevels(t *testing.T) {
 	t.Parallel()
 
 	logPath := filepath.Join(t.TempDir(), "levels.log")
@@ -1367,7 +1367,7 @@ func TestBuildLoggerDual_IndependentLevels(t *testing.T) {
 	// CLI flag sets console to error-only, but file should still get debug.
 	flags := CLIFlags{Quiet: true}
 
-	logger, closer := buildLoggerDual(cfg, flags)
+	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
 	require.NotNil(t, closer)
 
 	logger.Debug("debug for file only")

@@ -79,7 +79,7 @@ func queryLiveSyncState(ctx context.Context, statePath string, logger *slog.Logg
 
 // printMountStatus prints one drive the way status prints it inside an
 // account: derived fields filled in first, then the drive block.
-func printMountStatus(w io.Writer, mount *statusMount) error {
+func printMountStatus(w io.Writer, mount *statusDrive) error {
 	drives := []statusDrive{*mount}
 	normalizeStatusDrives(drives)
 
@@ -88,7 +88,7 @@ func printMountStatus(w io.Writer, mount *statusMount) error {
 
 // statusMountLabel is the heading status prints for one drive once its
 // derived fields are filled in.
-func statusMountLabel(mount *statusMount) string {
+func statusMountLabel(mount *statusDrive) string {
 	drives := []statusDrive{*mount}
 	normalizeStatusDrives(drives)
 
@@ -376,7 +376,7 @@ func buildStatusLifecycleMount(
 	t *testing.T,
 	parentCID driveid.CanonicalID,
 	tc *shortcutStatusLifecycleCase,
-) statusMount {
+) statusDrive {
 	t.Helper()
 
 	record := testShortcutStatusRecord(parentCID, tc.state)
@@ -394,7 +394,7 @@ func buildStatusLifecycleMount(
 	return buildChildStatusDrive(t.Context(), &config.Drive{SyncDir: "/tmp/sync-root"}, &child, nil)
 }
 
-func assertStatusLifecycleMount(t *testing.T, mount *statusMount, tc *shortcutStatusLifecycleCase) {
+func assertStatusLifecycleMount(t *testing.T, mount *statusDrive, tc *shortcutStatusLifecycleCase) {
 	t.Helper()
 
 	assert.Equal(t, tc.displayState, mount.State)
@@ -417,7 +417,7 @@ func assertStatusLifecycleMount(t *testing.T, mount *statusMount, tc *shortcutSt
 	}
 }
 
-func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc *shortcutStatusLifecycleCase) {
+func assertStatusLifecycleText(t *testing.T, mount *statusDrive, tc *shortcutStatusLifecycleCase) {
 	t.Helper()
 
 	var text bytes.Buffer
@@ -443,7 +443,7 @@ func assertStatusLifecycleText(t *testing.T, mount *statusMount, tc *shortcutSta
 	}
 }
 
-func assertStatusLifecycleJSON(t *testing.T, mount *statusMount, tc *shortcutStatusLifecycleCase) {
+func assertStatusLifecycleJSON(t *testing.T, mount *statusDrive, tc *shortcutStatusLifecycleCase) {
 	t.Helper()
 
 	encoded, err := json.Marshal(mount)
@@ -520,7 +520,7 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printMountStatus(&buf, &statusMount{
+	err := printMountStatus(&buf, &statusDrive{
 		MountID:        "child-docs",
 		NamespaceID:    "personal:alice@example.com",
 		ProjectionKind: statusProjectionChild,
@@ -546,7 +546,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 
 	autoRetry := true
 	var buf bytes.Buffer
-	err := printMountStatus(&buf, &statusMount{
+	err := printMountStatus(&buf, &statusDrive{
 		MountID:                "child-docs",
 		NamespaceID:            "personal:alice@example.com",
 		ProjectionKind:         statusProjectionChild,
@@ -1352,7 +1352,7 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 			Email:     "alice@example.com",
 			DriveType: "business",
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "business:alice@example.com",
 					SyncDir:     "~/Work",
@@ -1439,14 +1439,14 @@ func TestComputeSummary_Mixed(t *testing.T) {
 	accounts := []statusAccount{
 		{
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{State: driveStateReady, SyncState: &syncStateInfo{ConditionCount: 3}},
 				{State: driveStatePaused},
 			},
 		},
 		{
 			AuthState: authStateAuthenticationNeeded,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{State: driveStateReady},
 				{State: driveStateReady, SyncState: &syncStateInfo{ConditionCount: 1}},
 			},
@@ -1468,9 +1468,9 @@ func TestComputeSummary_IncludesNestedChildMounts(t *testing.T) {
 	accounts := []statusAccount{
 		{
 			AuthState: authStateReady,
-			Mounts: []statusMount{{
+			Mounts: []statusDrive{{
 				State: driveStateReady,
-				ChildMounts: []statusMount{
+				ChildMounts: []statusDrive{
 					{State: driveStatePaused, SyncState: &syncStateInfo{ConditionCount: 2}},
 				},
 			}},
@@ -1514,7 +1514,7 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 			Email:     "alice@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "personal:alice@example.com",
 					SyncDir:     "~/OneDrive",
@@ -1548,7 +1548,7 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 			Email:     "alice@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "personal:alice@example.com",
 					SyncDir:     "~/OneDrive",
@@ -1590,52 +1590,6 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 	assert.Equal(t, "Shared/Team Docs", result.Accounts[0].Drives[0].SyncState.Conditions[0].Scope)
 }
 
-func TestPrintStatusJSON_SyncStateOmitsLegacyHistoryKeys(t *testing.T) {
-	t.Parallel()
-
-	accounts := []statusAccount{
-		{
-			Email:     "alice@example.com",
-			DriveType: "personal",
-			AuthState: authStateReady,
-			Mounts: []statusMount{
-				{
-					CanonicalID: "personal:alice@example.com",
-					SyncDir:     "~/OneDrive",
-					State:       driveStateReady,
-					SyncState: &syncStateInfo{
-						FileCount:      12,
-						ConditionCount: 0,
-						ExamplesLimit:  5,
-					},
-				},
-			},
-		},
-	}
-
-	var buf bytes.Buffer
-	require.NoError(t, printStatusJSON(&buf, accounts))
-
-	var decoded struct {
-		Accounts []struct {
-			Drives []struct {
-				SyncState json.RawMessage `json:"sync_state"`
-			} `json:"drives"`
-		} `json:"accounts"`
-	}
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
-	require.Len(t, decoded.Accounts, 1)
-	require.Len(t, decoded.Accounts[0].Drives, 1)
-	require.NotEmpty(t, decoded.Accounts[0].Drives[0].SyncState)
-
-	var raw map[string]any
-	require.NoError(t, json.Unmarshal(decoded.Accounts[0].Drives[0].SyncState, &raw))
-	assert.Contains(t, raw, "file_count")
-	assert.NotContains(t, raw, "last_sync_time")
-	assert.NotContains(t, raw, "last_sync_duration")
-	assert.NotContains(t, raw, "last_error")
-}
-
 // --- printStatusText ---
 
 func TestPrintStatusText_NoMounts(t *testing.T) {
@@ -1658,7 +1612,7 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 			DriveType:   "business",
 			OrgName:     "Contoso",
 			AuthState:   authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "business:alice@contoso.com",
 					SyncDir:     "~/Work",
@@ -1728,7 +1682,7 @@ func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
 			AuthState:  authStateAuthenticationNeeded,
 			AuthReason: string(authReasonSyncAuthRejected),
 			AuthAction: authAction(authReasonSyncAuthRejected),
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "personal:alice@example.com",
 					SyncDir:     "~/OneDrive",
@@ -1755,7 +1709,7 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 			Email:     "bob@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "personal:bob@example.com",
 					SyncDir:     "~/OneDrive",
@@ -1782,7 +1736,7 @@ func TestPrintStatusText_EmptySyncDir(t *testing.T) {
 			Email:     "bob@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "personal:bob@example.com",
 					SyncDir:     "",
@@ -1913,7 +1867,7 @@ func requireSingleStatusDriveJSON(
 	t *testing.T,
 	decoded *statusOutput,
 	canonicalID string,
-) (statusMount, *syncStateInfo) {
+) (statusDrive, *syncStateInfo) {
 	t.Helper()
 
 	drive, syncState := findStatusDriveJSON(t, decoded, canonicalID)
@@ -1925,13 +1879,13 @@ func findStatusDriveJSON(
 	t *testing.T,
 	decoded *statusOutput,
 	canonicalID string,
-) (statusMount, *syncStateInfo) {
+) (statusDrive, *syncStateInfo) {
 	t.Helper()
 	require.NotNil(t, decoded)
 
 	var (
-		foundDrive statusMount
-		firstDrive statusMount
+		foundDrive statusDrive
+		firstDrive statusDrive
 		found      bool
 		count      int
 	)
@@ -1956,9 +1910,9 @@ func findStatusDriveJSON(
 	return foundDrive, foundDrive.SyncState
 }
 
-func findStatusMountRecursive(mount *statusMount, identity string) (statusMount, bool) {
+func findStatusMountRecursive(mount *statusDrive, identity string) (statusDrive, bool) {
 	if mount == nil {
-		return statusMount{}, false
+		return statusDrive{}, false
 	}
 	if mount.CanonicalID == identity || mount.MountID == identity {
 		return *mount, true
@@ -1972,7 +1926,7 @@ func findStatusMountRecursive(mount *statusMount, identity string) (statusMount,
 		}
 	}
 
-	return statusMount{}, false
+	return statusDrive{}, false
 }
 
 // seedDamagedStatusDrive configures one drive whose state database the test
@@ -1998,7 +1952,7 @@ func seedDamagedStatusDrive(t *testing.T) (driveid.CanonicalID, string) {
 
 // runStatusJSONForDrive runs `status --json --drive <cid>` and returns the
 // one drive it rendered.
-func runStatusJSONForDrive(t *testing.T, cfgPath string, cid driveid.CanonicalID) (statusMount, *syncStateInfo, string) {
+func runStatusJSONForDrive(t *testing.T, cfgPath string, cid driveid.CanonicalID) (statusDrive, *syncStateInfo, string) {
 	t.Helper()
 
 	var out bytes.Buffer
@@ -2017,7 +1971,7 @@ func runStatusJSONForDrive(t *testing.T, cfgPath string, cid driveid.CanonicalID
 	return drive, syncState, logBuf.String()
 }
 
-func assertStatusDriveSyncStateUnreadable(t *testing.T, drive *statusMount, syncState *syncStateInfo, logs string) {
+func assertStatusDriveSyncStateUnreadable(t *testing.T, drive *statusDrive, syncState *syncStateInfo, logs string) {
 	t.Helper()
 
 	assert.Equal(t, driveStateUnavailable, drive.State, "an unreadable state database is not 'up to date'")
@@ -2138,7 +2092,7 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{State: driveStateReady, SyncState: &syncStateInfo{RemoteDrift: 3, Retrying: 1}},
 				{State: driveStateReady, SyncState: &syncStateInfo{RemoteDrift: 2, Retrying: 4}},
 			},

@@ -450,9 +450,6 @@ func printSyncStateText(w io.Writer, indent string, ss *syncStateInfo) error {
 		if err := printSyncStateSummaryLines(w, indent, ss); err != nil {
 			return err
 		}
-		if err := printSyncStateStoreLines(w, indent, ss); err != nil {
-			return err
-		}
 		if err := printDriveSyncSections(w, indent, ss); err != nil {
 			return err
 		}
@@ -486,11 +483,6 @@ func printSyncStateSummaryLines(w io.Writer, indent string, ss *syncStateInfo) e
 		}
 	}
 
-	return nil
-}
-
-func printSyncStateStoreLines(w io.Writer, _ string, ss *syncStateInfo) error {
-	_ = ss
 	return nil
 }
 

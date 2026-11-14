@@ -3029,10 +3029,9 @@ func TestTransferManager_UploadFile_CanceledContextStopsAtTheHash(t *testing.T) 
 // Validates: R-5.6.13, R-6.6.30
 //
 // A session record that cannot be read (here a directory where the record
-// should be; a permission problem behaves the same) used to be logged at
-// Debug with a comment claiming the store had already reported it. The store
-// reports only corrupt records. The upload still starts over from a fresh
-// session, but the user is now told why a multi-GB upload did not resume.
+// should be; a permission problem behaves the same) is not one the store
+// reports itself, so the upload warns once, naming the file, and starts over
+// from a fresh session: a multi-GB upload that did not resume says why.
 func TestTransferManager_SessionUpload_UnreadableRecordWarnsAndStartsOver(t *testing.T) {
 	t.Parallel()
 
@@ -3049,15 +3048,42 @@ func TestTransferManager_SessionUpload_UnreadableRecordWarnsAndStartsOver(t *tes
 	// A directory where the record should be: Stat succeeds, the read fails.
 	require.NoError(t, os.MkdirAll(store.filePath(driveStr, localPath), 0o700))
 
-	var resumeCalled, createCalled bool
-	ul := &tmMockUploader{
+	ul := newFreshSessionUploader(t)
+	tm := NewTransferManager(&tmSimpleDownloader{}, ul.uploader, store, logger)
+
+	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "unreadable.bin", localPath, UploadOpts{})
+	require.NoError(t, err, "UploadFile")
+
+	assert.False(t, ul.resumeCalled)
+	assert.True(t, ul.createCalled, "the upload starts over from a fresh session")
+	assert.Equal(t, "fresh-item", result.Item.ID)
+
+	logs := logBuf.String()
+	assert.Equal(t, 1, strings.Count(logs, "Could not read the saved upload session"), "one Warn per attempt")
+	assert.Contains(t, logs, "level=WARN")
+	assert.Contains(t, logs, localPath, "the Warn names the file")
+}
+
+// freshSessionUploader is an uploader that refuses to resume and uploads
+// through a fresh session, recording which of the two it was asked to do.
+type freshSessionUploader struct {
+	uploader     *tmMockUploader
+	resumeCalled bool
+	createCalled bool
+}
+
+func newFreshSessionUploader(t *testing.T) *freshSessionUploader {
+	t.Helper()
+
+	fresh := &freshSessionUploader{}
+	fresh.uploader = &tmMockUploader{
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			resumeCalled = true
+			fresh.resumeCalled = true
 
 			return nil, fmt.Errorf("unexpected resume")
 		},
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
-			createCalled = true
+			fresh.createCalled = true
 
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh"}, nil
 		},
@@ -3066,17 +3092,56 @@ func TestTransferManager_SessionUpload_UnreadableRecordWarnsAndStartsOver(t *tes
 		},
 	}
 
-	tm := NewTransferManager(&tmSimpleDownloader{}, ul, store, logger)
+	return fresh
+}
 
-	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "unreadable.bin", localPath, UploadOpts{})
+// Validates: R-5.2.3, R-5.6.13, R-6.6.30
+//
+// A record an older binary wrote (version 1, keyed by remote_path) names a
+// session this binary does not read: it is removed with one warning and the
+// upload starts over from a fresh session, never resuming the recorded one
+// and never canceling it, since nothing is read from a file that is not a
+// record.
+func TestTransferManager_SessionUpload_RecordInAnOlderFormatStartsOver(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store := NewSessionStore(dir, logger)
+
+	localPath := filepath.Join(dir, "older.bin")
+	largeData := make([]byte, persistedSessionMinSize+1)
+	require.NoError(t, os.WriteFile(localPath, largeData, 0o600))
+
+	fileHash, err := ComputeQuickXorHashContext(t.Context(), localPath)
+	require.NoError(t, err)
+
+	// Everything but its shape matches this upload, so only the format keeps
+	// it from being resumed.
+	driveStr := driveid.New("d1").String()
+	const recordedURL = "https://upload.example.com/recorded"
+	recordPath := store.filePath(driveStr, localPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(recordPath), sessionDirPerms))
+	require.NoError(t, os.WriteFile(recordPath, fmt.Appendf(nil,
+		`{"version":1,"drive_id":%q,"remote_path":%q,"session_url":%q,"file_hash":%q,"file_size":%d}`,
+		driveStr, localPath, recordedURL, fileHash, len(largeData)), sessionFilePerms))
+
+	ul := newFreshSessionUploader(t)
+	tm := NewTransferManager(&tmSimpleDownloader{}, ul.uploader, store, logger)
+
+	result, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "older.bin", localPath, UploadOpts{})
 	require.NoError(t, err, "UploadFile")
 
-	assert.False(t, resumeCalled)
-	assert.True(t, createCalled, "the upload starts over from a fresh session")
+	assert.False(t, ul.resumeCalled, "the recorded session is never resumed")
+	assert.True(t, ul.createCalled, "the upload starts over from a fresh session")
+	assert.NotContains(t, ul.uploader.canceledSessions, graph.UploadURL(recordedURL),
+		"a URL read from no valid record is never used, not even to cancel")
 	assert.Equal(t, "fresh-item", result.Item.ID)
 
 	logs := logBuf.String()
-	assert.Equal(t, 1, strings.Count(logs, "Could not read the saved upload session"), "one Warn per attempt")
-	assert.Contains(t, logs, "level=WARN")
-	assert.Contains(t, logs, localPath, "the Warn names the file")
+	assert.Equal(t, 1, strings.Count(logs, "level=WARN"), "one warning: %s", logs)
+	assert.Contains(t, logs, filepath.Base(recordPath), "the warning names the record file")
+	assert.Contains(t, logs, "local_path="+localPath, "the warning names the upload that starts over")
+	assert.NotContains(t, logs, recordedURL, "the warning never carries the upload URL")
 }

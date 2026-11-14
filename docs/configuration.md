@@ -20,10 +20,9 @@ Other files onedrive-go keeps:
 | What | Linux | macOS |
 | --- | --- | --- |
 | Sign-in tokens, sync state databases, control socket | `~/.local/share/onedrive-go/` | `~/Library/Application Support/onedrive-go/` |
-| Cache | `~/.cache/onedrive-go/` | `~/Library/Caches/onedrive-go/` |
 
-`XDG_DATA_HOME` and `XDG_CACHE_HOME` override the data and cache locations on
-both platforms.
+`XDG_DATA_HOME` overrides the data location on both platforms. onedrive-go
+keeps no cache directory.
 
 ## Choosing a different file or drive
 

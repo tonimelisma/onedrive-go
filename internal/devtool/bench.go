@@ -35,9 +35,6 @@ const (
 	syncBidirectionalCatchup100MRuns = 3
 	syncBidirectionalCatchup100MWarm = 0
 	benchDefaultFixtureSlot          = "slot-00"
-	syncPartialLocalCatchup100MID    = "sync-partial-local-catchup-100m"
-	syncPartialLocalCatchup100MRuns  = 3
-	syncPartialLocalCatchup100MWarm  = 0
 
 	benchSubjectKindRepoCLI = "repo_cli_binary"
 	benchBuildModeRepoHead  = "repo_head"
@@ -312,29 +309,11 @@ func BenchSubjectIDs() []string {
 	return []string{DefaultBenchSubjectID}
 }
 
-func LookupBenchSubject(id string) (BenchSubjectSpec, error) {
-	def, err := lookupBenchSubjectDefinition(id)
-	if err != nil {
-		return BenchSubjectSpec{}, err
-	}
-
-	return def.Spec, nil
-}
-
 func BenchScenarioIDs() []string {
 	return []string{
 		startupEmptyConfigScenarioID,
 		syncBidirectionalCatchup100MID,
 	}
-}
-
-func LookupBenchScenario(id string) (BenchScenarioSpec, error) {
-	def, err := lookupBenchScenarioDefinition(id)
-	if err != nil {
-		return BenchScenarioSpec{}, err
-	}
-
-	return def.Spec, nil
 }
 
 //nolint:gocritic // BenchOptions is a CLI boundary value; copying keeps the internal runner side-effect free.
@@ -699,8 +678,7 @@ func runStartupEmptyConfigSample(
 	homeDir := filepath.Join(runtimeRoot, "home")
 	configHome := filepath.Join(runtimeRoot, "config")
 	dataHome := filepath.Join(runtimeRoot, "data")
-	cacheHome := filepath.Join(runtimeRoot, "cache")
-	for _, path := range []string{homeDir, configHome, dataHome, cacheHome} {
+	for _, path := range []string{homeDir, configHome, dataHome} {
 		if mkdirErr := mkdirAll(path, benchResultDirPerm); mkdirErr != nil {
 			return benchFixtureFailureSample(sample, fmt.Errorf("create runtime path %s: %w", path, mkdirErr))
 		}
@@ -718,7 +696,6 @@ func runStartupEmptyConfigSample(
 		"HOME="+homeDir,
 		"XDG_CONFIG_HOME="+configHome,
 		"XDG_DATA_HOME="+dataHome,
-		"XDG_CACHE_HOME="+cacheHome,
 	)
 
 	process, err := subject.measure(ctx, benchCommandSpec{

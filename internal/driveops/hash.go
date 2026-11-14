@@ -18,18 +18,11 @@ import (
 // file (R-6.3.6).
 const hashReadChunkSize = 1 << 20
 
-// HasHash reports whether the item has a content hash the client can compare.
-// Items without one (some SharePoint files, SHA-only items) cannot be
-// hash-verified.
-func HasHash(item *graph.Item) bool {
-	return SelectHash(item) != ""
-}
-
 // SelectHash returns the item's content hash in the only algorithm the local
-// side computes: QuickXorHash. It used to fall back to SHA-256 and SHA-1,
-// which can never equal a local QuickXor digest, so such an item failed every
-// download verification and never compared equal (D-041); now it is hashless
-// and its size is the evidence. SHA digests stay on the item for diagnostics.
+// side computes: QuickXorHash, or "" for an item without one (some SharePoint
+// files). An item that carries only SHA-256 or SHA-1 digests is hashless
+// here, since those can never equal a local QuickXor digest, and its size is
+// the evidence (D-041). SHA digests stay on the item for diagnostics.
 func SelectHash(item *graph.Item) string {
 	if item == nil {
 		return ""

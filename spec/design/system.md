@@ -45,7 +45,7 @@ internal/
 
   config/                     TOML config, drive sections, XDG paths, override chain
   devtool/                    Verifier, benchmark, worktree, and cleanup-audit helpers
-  driveid/                    Type-safe drive identity: ID, CanonicalID, ItemKey (leaf, stdlib-only)
+  driveid/                    Type-safe drive identity: ID, CanonicalID (leaf, stdlib-only)
   driveops/                   Authenticated drive access: sessions, transfers, hashing
   errclass/                   Shared runtime failure class enum (leaf, stdlib-only)
   fsroot/                     Root-bound managed-state file capabilities

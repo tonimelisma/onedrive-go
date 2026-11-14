@@ -34,8 +34,8 @@ golangci-lint run
 ```
 
 An unversioned build reports version `dev` and refuses to run without
-`XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` set, so development
-runs can never touch your real OneDrive configuration or files.
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` set, so development runs can never
+touch your real OneDrive configuration or files.
 
 The canonical local verification entrypoint is:
 

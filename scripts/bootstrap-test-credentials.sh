@@ -43,7 +43,6 @@ echo ""
 
 XDG_DATA_HOME="$TESTDATA/data" \
 XDG_CONFIG_HOME="$TESTDATA/config" \
-XDG_CACHE_HOME="$TESTDATA/cache" \
 HOME="$TESTDATA/home" \
   go run . login --browser
 
@@ -53,9 +52,11 @@ cp "$DATA_SUBDIR"/token_*.json "$TESTDATA/" 2>/dev/null || true
 cp "$DATA_SUBDIR"/catalog.json "$TESTDATA/" 2>/dev/null || true
 cp "$CONFIG_SUBDIR/config.toml" "$TESTDATA/config.toml" 2>/dev/null || true
 
-# Clean up subdirs. chmod first because go module cache is read-only.
+# Clean up subdirs. go run keeps its module and build caches under the
+# redirected HOME unless the environment says otherwise; chmod first because
+# the module cache is read-only.
 chmod -R u+w "$TESTDATA/home" 2>/dev/null || true
-rm -rf "$TESTDATA/data" "$TESTDATA/config" "$TESTDATA/cache" "$TESTDATA/home"
+rm -rf "$TESTDATA/data" "$TESTDATA/config" "$TESTDATA/home"
 
 echo ""
 echo "=== Bootstrap complete ==="

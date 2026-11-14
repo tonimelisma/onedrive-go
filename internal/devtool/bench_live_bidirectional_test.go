@@ -1,6 +1,7 @@
 package devtool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -149,10 +150,39 @@ func TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
 	assert.Contains(t, string(configBody), `included_dirs = ["benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00"]`)
-	assert.Equal(t,
-		filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go", "state_personal_user@example.com.db"),
-		runtime.stateDBPath,
-	)
+	dataDir := filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go")
+	assert.Equal(t, filepath.Join(dataDir, "state_personal_user@example.com.db"), runtime.stateDBPath)
+	copiedToken, err := readFile(filepath.Join(dataDir, "token_personal_user@example.com.json"))
+	require.NoError(t, err, "the sign-in file is copied into the runtime's data dir")
+	assert.JSONEq(t, `{"token":"x"}`, string(copiedToken))
+}
+
+// Validates: R-6.10.14
+//
+// A live sample whose drive is not configured is a fixture failure, not a
+// failure of the subject, and the scenario still cleans up after it.
+func TestBidirectionalCatchupScenarioMissingPrerequisitesReturnsFixtureFailure(t *testing.T) {
+	t.Setenv(benchPrimaryDriveEnvVar, "")
+	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "")
+	t.Setenv("ONEDRIVE_TEST_DRIVE_2", "")
+
+	scenario, err := lookupSyncBidirectionalCatchup100MScenario()
+	require.NoError(t, err)
+
+	prepared, err := prepareBenchScenario(t.Context(), &scenario, t.TempDir(), preparedBenchSubject{
+		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
+			return benchMeasuredProcess{}, nil
+		},
+	}, "")
+	require.NoError(t, err)
+
+	sample := prepared.run(t.Context(), preparedBenchSubject{}, benchSamplePhaseMeasured, 1)
+	assert.Equal(t, BenchSampleFixtureFailed, sample.Status)
+	assert.Contains(t, sample.FailureExcerpt, benchPrimaryDriveEnvVar+" not set")
+
+	var stderr bytes.Buffer
+	warnBenchCleanup(&stderr, "scenario", prepared.cleanup)
+	assert.Empty(t, stderr.String())
 }
 
 // Validates: R-6.10.14
@@ -196,9 +226,7 @@ func TestWaitForBenchRemoteDeltaReadyRequiresExpectedRemotePlanAndStableCursor(t
 
 	subject := preparedBenchSubject{
 		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
-			return benchMeasuredProcess{
-				Stdout: []byte("Dry run — no changes applied\n\nPlan:\n  Downloads:       2\n  Local deletes:   1\n"),
-			}, nil
+			return benchMeasuredProcess{Stdout: []byte(benchDryRunRemoteDeltaReady)}, nil
 		},
 	}
 
@@ -222,7 +250,7 @@ func TestWaitForBenchRemoteDeltaReadyFailsIfDryRunAdvancesCursor(t *testing.T) {
 
 	subject := preparedBenchSubject{
 		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
-			return benchMeasuredProcess{Stdout: []byte("Plan:\n  Downloads: 1\n")}, nil
+			return benchMeasuredProcess{Stdout: []byte("Would download docs/modified.txt\n")}, nil
 		},
 	}
 
@@ -374,11 +402,19 @@ func (s *scriptedBidirectionalSampleSubject) measureSync(spec benchCommandSpec) 
 func (s *scriptedBidirectionalSampleSubject) measureDryRun() benchMeasuredProcess {
 	s.dryRuns++
 	if s.dryRuns == 1 {
-		return benchMeasuredProcess{Stdout: []byte("Plan:\n  Baseline updates: 4\n")}
+		return benchMeasuredProcess{Stdout: []byte("Dry run: nothing to do.\n")}
 	}
 
-	return benchMeasuredProcess{Stdout: []byte("Plan:\n  Downloads: 2\n  Local deletes: 1\n")}
+	return benchMeasuredProcess{Stdout: []byte(benchDryRunRemoteDeltaReady)}
 }
+
+// benchDryRunRemoteDeltaReady is what a dry run prints once the remote
+// mutations are visible: two downloads and one local delete.
+const benchDryRunRemoteDeltaReady = "Checking (dry run) ~/OneDrive...\n" +
+	"Would download docs/modified.txt\n" +
+	"Would download remote-created/new.bin\n" +
+	"Would delete locally docs/deleted.txt\n" +
+	"Dry run, nothing was changed. Would download 2 files, delete 1 file locally.\n"
 
 func benchCommandName(spec benchCommandSpec) string {
 	if len(spec.Arg) < 5 {
@@ -392,23 +428,25 @@ func isBenchDryRunCommand(spec benchCommandSpec) bool {
 }
 
 // Validates: R-6.10.14, R-6.6.18
-func TestParseBenchSyncPlanOutput_ReadsCurrentAndLegacyDryRunFormats(t *testing.T) {
+func TestParseBenchSyncPlanOutput_CountsOneWouldLinePerAction(t *testing.T) {
 	t.Parallel()
 
-	current := parseBenchSyncPlanOutput([]byte(
-		"Checking (dry run) ~/OneDrive with user@example.com...\n" +
-			"Would download a.txt\n" +
-			"Would download b.txt\n" +
-			"Would delete locally c.txt\n" +
-			"Would upload d.txt\n" +
+	plan := parseBenchSyncPlanOutput([]byte(
+		"Checking (dry run) ~/OneDrive with user@example.com...\n"+
+			"Would download a.txt\n"+
+			"Would download b.txt\n"+
+			"Would delete locally c.txt\n"+
+			"Would upload d.txt\n"+
+			"Would create folder e\n"+
+			"Would keep both versions of f.txt\n"+
 			"Dry run, nothing was changed. Would download 2 files, delete 1 file locally, upload 1 file.\n",
-	))
-	assert.Equal(t, 2, current.Downloads)
-	assert.Equal(t, 1, current.LocalDeletes)
-	assert.Equal(t, 1, current.Uploads)
-	assert.Zero(t, current.RemoteDeletes)
-
-	legacy := parseBenchSyncPlanOutput(nil, []byte("Plan:\n  Downloads: 2\n  Local deletes: 1\n"))
-	assert.Equal(t, 2, legacy.Downloads)
-	assert.Equal(t, 1, legacy.LocalDeletes)
+	), []byte("Would delete on OneDrive g.txt\n"))
+	assert.Equal(t, benchSyncPlanCounts{
+		FolderCreates:  1,
+		Downloads:      2,
+		Uploads:        1,
+		LocalDeletes:   1,
+		RemoteDeletes:  1,
+		ConflictCopies: 1,
+	}, plan)
 }

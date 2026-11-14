@@ -90,7 +90,7 @@ Features:
   makes a replay of a committed create a harmless 409 (R-6.8.21,
   `TestRetryTransport_ReplaySafePostIsRetriedWithItsBody`)
 - `X-Retry-Count` header annotation on retried requests
-- request-scoped log target override via `WithLogTarget(ctx, target)`
+- request-scoped log target override via `WithRequestLogTarget(req, target)`
 - retryable status codes: 408, 429, 500, 502, 503, 504, 509
 
 Sync action execution does not use `RetryTransport`. Workers issue one request,

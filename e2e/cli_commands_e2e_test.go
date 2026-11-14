@@ -196,33 +196,6 @@ func TestE2E_Status_PerDrive_NoIssuesOrRetries(t *testing.T) {
 	assert.Zero(t, status.Retrying)
 }
 
-// Validates: R-2.3.4
-// TestE2E_Status_NoLegacyHistorySurface validates that `status` stays the only
-// sync-health surface and rejects the removed `--history` flag.
-func TestE2E_Status_NoLegacyHistorySurface(t *testing.T) {
-	t.Parallel()
-	registerLogDump(t)
-
-	syncDir := t.TempDir()
-	cfgPath, env := writeSyncConfig(t, syncDir)
-
-	testFolder := fmt.Sprintf("e2e-cli-noconfl-%d", time.Now().UnixNano())
-	t.Cleanup(func() { cleanupRemoteFolder(t, testFolder) })
-
-	localDir := filepath.Join(syncDir, testFolder)
-	require.NoError(t, os.MkdirAll(localDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localDir, "clean.txt"), []byte("clean file"), 0o600))
-
-	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
-
-	current := readStatusSyncState(t, cfgPath, env)
-	assert.Zero(t, current.IssueCount, "clean status should show no durable issues")
-	assert.Empty(t, current.Issues)
-
-	output := runCLIWithConfigExpectError(t, cfgPath, env, "status", "--history")
-	assert.Contains(t, output, "unknown flag: --history", "status should expose the current issue view only")
-}
-
 // Validates: R-2.3.4, R-2.3.10, R-6.6.28
 // TestE2E_Status_JSON_IssueDetails validates that status JSON exposes the
 // current structured issue payload.

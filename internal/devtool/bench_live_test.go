@@ -1,7 +1,6 @@
 package devtool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,83 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// Validates: R-6.10.14
-func TestLoadBenchLiveFixturePlanIsDeterministicAndSized(t *testing.T) {
-	t.Parallel()
-
-	planA, err := loadSyncPartialLocalCatchup100MFixturePlan()
-	require.NoError(t, err)
-
-	planB, err := loadSyncPartialLocalCatchup100MFixturePlan()
-	require.NoError(t, err)
-
-	assert.Equal(t, planA, planB)
-	assert.Equal(t, syncPartialLocalCatchup100MID, planA.Manifest.ScenarioID)
-	assert.Equal(t, "benchmarks/sync-partial-local-catchup-100m", planA.ScopeRootRelativePath)
-	assert.Equal(t, 2668, planA.Denominators.FileCount)
-	assert.Equal(t, 113, planA.Denominators.DirectoryCount)
-	assert.Equal(t, int64(100<<20), sumBenchLiveFixtureBytes(planA.Files))
-	assert.Equal(t, sumBenchLiveFixtureBytes(planA.Files), int64(100<<20))
-	assert.Len(t, planA.Directories, planA.Denominators.DirectoryCount)
-	assert.Equal(t, 192, planA.Denominators.ChangedItemCount)
-	assert.Equal(t, 192, planA.Denominators.ExpectedTransfers)
-	assert.Zero(t, planA.Denominators.ExpectedDeletes)
-}
-
-// Validates: R-6.10.14
-func TestLoadBenchLiveFixturePlanMutationSelectionIsStable(t *testing.T) {
-	t.Parallel()
-
-	plan, err := loadSyncPartialLocalCatchup100MFixturePlan()
-	require.NoError(t, err)
-
-	assert.Len(t, plan.Mutations.Deletes, 96)
-	assert.Len(t, plan.Mutations.Truncates, 96)
-
-	deleted := make(map[string]struct{}, len(plan.Mutations.Deletes))
-	for _, entry := range plan.Mutations.Deletes {
-		deleted[entry.File.RelativePath] = struct{}{}
-	}
-	for _, entry := range plan.Mutations.Truncates {
-		_, overlap := deleted[entry.File.RelativePath]
-		assert.False(t, overlap, "truncate list should not overlap deletes")
-		assert.Zero(t, entry.TruncateToBytes)
-	}
-
-	assert.Equal(t, "assets/tier-00/set-00/assets-00000.bin", plan.Mutations.Deletes[0].File.RelativePath)
-	assert.Equal(t, "assets/tier-00/set-00/assets-00007.bin", plan.Mutations.Truncates[0].File.RelativePath)
-}
-
-// Validates: R-6.10.14
-func TestPerturbBenchLiveFixtureAppliesDeletesAndTruncates(t *testing.T) {
-	t.Parallel()
-
-	scopeRoot := t.TempDir()
-	files := []benchLiveFileEntry{
-		{RelativePath: "docs/a.txt", SizeBytes: 64},
-		{RelativePath: "docs/b.txt", SizeBytes: 64},
-		{RelativePath: "media/c.bin", SizeBytes: 128},
-	}
-	require.NoError(t, materializeBenchLiveFixture(scopeRoot, files))
-
-	err := perturbBenchLiveFixture(scopeRoot, benchLiveMutationPlan{
-		Deletes: []benchLiveMutationEntry{
-			{File: files[0]},
-		},
-		Truncates: []benchLiveMutationEntry{
-			{File: files[2], TruncateToBytes: 0},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = stat(filepath.Join(scopeRoot, "docs", "a.txt"))
-	require.Error(t, err)
-
-	info, err := stat(filepath.Join(scopeRoot, "media", "c.bin"))
-	require.NoError(t, err)
-	assert.Zero(t, info.Size())
-}
 
 // Validates: R-6.10.14
 func TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup(t *testing.T) {
@@ -128,71 +50,18 @@ func TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup(t *testing.T) {
 }
 
 // Validates: R-6.10.14
-func TestLiveCatchupScenarioMissingPrerequisitesReturnsFixtureFailure(t *testing.T) {
-	t.Setenv("ONEDRIVE_TEST_DRIVE", "")
-	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "")
-	t.Setenv("ONEDRIVE_TEST_DRIVE_2", "")
-
-	scenario, err := lookupSyncPartialLocalCatchup100MScenario()
-	require.NoError(t, err)
-
-	prepared, err := prepareBenchScenario(t.Context(), &scenario, t.TempDir(), preparedBenchSubject{
-		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
-			return benchMeasuredProcess{}, nil
-		},
-	}, "")
-	require.NoError(t, err)
-
-	sample := prepared.run(t.Context(), preparedBenchSubject{}, benchSamplePhaseMeasured, 1)
-	assert.Equal(t, BenchSampleFixtureFailed, sample.Status)
-	assert.Contains(t, sample.FailureExcerpt, "ONEDRIVE_TEST_DRIVE not set")
-
-	var stderr bytes.Buffer
-	warnBenchCleanup(&stderr, "scenario", prepared.cleanup)
-	assert.Empty(t, stderr.String())
-}
-
-// Validates: R-6.10.14
 func TestBenchScopeRootRelativePathValidatesInputs(t *testing.T) {
 	t.Parallel()
 
-	relative, err := benchScopeRootRelativePath("/benchmarks/sync-partial-local-catchup-100m")
+	relative, err := benchScopeRootRelativePath("/benchmarks/catchup-scope")
 	require.NoError(t, err)
-	assert.Equal(t, "benchmarks/sync-partial-local-catchup-100m", relative)
+	assert.Equal(t, "benchmarks/catchup-scope", relative)
 
 	_, err = benchScopeRootRelativePath("/")
 	require.Error(t, err)
 
 	_, err = benchScopeRootRelativePath("relative/path")
 	require.Error(t, err)
-}
-
-// Validates: R-6.10.14
-func TestCreateBenchLiveRuntimeCopiesCredentialsAndWritesConfig(t *testing.T) {
-	t.Parallel()
-
-	workRoot := t.TempDir()
-	credentialDir := t.TempDir()
-	require.NoError(t, writeFile(
-		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
-		[]byte(`{"token":"x"}`),
-	))
-
-	runtime, err := createBenchLiveRuntime(
-		workRoot,
-		credentialDir,
-		"personal:user@example.com",
-		"",
-	)
-	require.NoError(t, err)
-
-	dataRoot := filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go")
-	_, err = stat(filepath.Join(dataRoot, "token_personal_user@example.com.json"))
-	require.NoError(t, err)
-	configBody, err := readFile(runtime.configPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
-	assert.Contains(t, string(configBody), runtime.syncDir)
 }
 
 // Validates: R-6.10.14
@@ -230,7 +99,7 @@ func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
 				return benchMeasuredProcess{Stderr: []byte("not found")}, assert.AnError
 			case 2:
 				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/benchmarks"}, spec.Arg)
-				return benchMeasuredProcess{Stdout: []byte("sync-partial-local-catchup-100m\nbenchmarks\ntest")}, nil
+				return benchMeasuredProcess{Stdout: []byte("other-scope\nbenchmarks\ntest")}, nil
 			default:
 				require.Failf(t, "unexpected extra call", "spec.Arg=%v", spec.Arg)
 				return benchMeasuredProcess{}, nil
@@ -289,167 +158,33 @@ func TestClassifyBenchVisibilityErrorAllowsRetryableFamilies(t *testing.T) {
 }
 
 // Validates: R-6.10.14
-func TestPrepareAndMeasureCatchupSampleRestoresFixtureAndReadsPerfSummary(t *testing.T) {
+//
+// A sample that succeeded but leaves a runtime root it cannot remove is a
+// fixture failure; one that already failed keeps its own classification.
+func TestFinalizeBenchLiveSampleRuntimeReportsARootItCannotRemove(t *testing.T) {
 	t.Parallel()
 
-	workRoot := t.TempDir()
-	scopeRelativePath := "benchmarks/test-scope"
-	fixture := &benchLiveFixturePlan{
-		ScopeRootRelativePath: scopeRelativePath,
-		Files: []benchLiveFileEntry{
-			{RelativePath: "docs/a.txt", SizeBytes: 64},
-			{RelativePath: "docs/b.txt", SizeBytes: 64},
-		},
-		Directories: []string{"docs"},
-		Mutations: benchLiveMutationPlan{
-			Deletes: []benchLiveMutationEntry{
-				{File: benchLiveFileEntry{RelativePath: "docs/a.txt", SizeBytes: 64}},
-			},
-			Truncates: []benchLiveMutationEntry{
-				{File: benchLiveFileEntry{RelativePath: "docs/b.txt", SizeBytes: 64}, TruncateToBytes: 0},
-			},
-		},
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
 	}
 
-	runtimeRoot := filepath.Join(workRoot, "runtime")
-	syncRoot := filepath.Join(runtimeRoot, "sync-root")
-	scopeRoot := filepath.Join(syncRoot, filepath.FromSlash(scopeRelativePath))
-	require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
+	parent := t.TempDir()
+	runtimeRoot := filepath.Join(parent, "runtime")
+	require.NoError(t, mkdirAll(filepath.Join(runtimeRoot, "sync-root"), 0o700))
+	//nolint:gosec // directories need execute bits; the test makes the parent read-only on purpose.
+	require.NoError(t, os.Chmod(parent, 0o500))
+	t.Cleanup(func() {
+		//nolint:gosec // directories need execute bits; 0700 restores the private test directory.
+		assert.NoError(t, os.Chmod(parent, 0o700))
+	})
 
-	logPath := filepath.Join(runtimeRoot, "bench.log")
-	require.NoError(t, mkdirAll(runtimeRoot, 0o700))
-	require.NoError(t, writeFile(logPath, []byte{}))
+	succeeded := benchSample{Phase: benchSamplePhaseMeasured, Iteration: 1, Status: BenchSampleSuccess}
+	result := finalizeBenchLiveSampleRuntime(runtimeRoot, succeeded)
+	assert.Equal(t, BenchSampleFixtureFailed, result.Status)
+	assert.Contains(t, result.FailureExcerpt, "cleanup sample runtime")
 
-	state := &benchLiveScenarioState{
-		fixture: *fixture,
-	}
-	baselineCalls := 0
-	subject := preparedBenchSubject{
-		measure: func(_ context.Context, _ benchCommandSpec) (benchMeasuredProcess, error) {
-			baselineCalls++
-			if baselineCalls == 1 {
-				return benchMeasuredProcess{}, nil
-			}
-
-			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
-			require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
-				DurationMS:      42,
-				Result:          "success",
-				DownloadCount:   2,
-				DownloadBytes:   128,
-				RefreshRunCount: 1,
-			}))
-			return benchMeasuredProcess{
-				ElapsedMicros: 1500,
-				PeakRSSBytes:  8192,
-			}, nil
-		},
-	}
-
-	runtime := benchLiveCommandRuntime{
-		rootDir: runtimeRoot,
-		syncDir: syncRoot,
-		logPath: logPath,
-	}
-	sample := benchSample{Phase: benchSamplePhaseMeasured, Iteration: 1, Status: BenchSampleSuccess}
-
-	preparedSample, ok := state.prepareMeasuredCatchup(t.Context(), subject, runtime, scopeRoot, sample)
-	require.True(t, ok)
-
-	result := state.measureCatchupSample(t.Context(), subject, runtime, scopeRoot, preparedSample)
-	assert.Equal(t, BenchSampleSuccess, result.Status)
-	require.NotNil(t, result.PerfSummary)
-	assert.EqualValues(t, 42, result.PerfSummary.DurationMS)
-	assert.Equal(t, 2, result.PerfSummary.DownloadCount)
-	assert.EqualValues(t, 1500, result.ElapsedMicros)
-}
-
-// Validates: R-6.10.14
-func TestRunSampleReturnsFixtureFailureWhenRuntimeCleanupFails(t *testing.T) {
-	repoRoot := t.TempDir()
-	credentialDir := filepath.Join(repoRoot, ".testdata")
-	require.NoError(t, mkdirAll(credentialDir, 0o700))
-	require.NoError(t, writeFile(
-		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
-		[]byte(`{"token":"x"}`),
-	))
-	t.Setenv("ONEDRIVE_TEST_DRIVE", "personal:user@example.com")
-	t.Setenv("ONEDRIVE_ALLOWED_TEST_ACCOUNTS", "personal:user@example.com")
-	t.Setenv("ONEDRIVE_TEST_DRIVE_2", "")
-
-	fixture := benchLiveFixturePlan{
-		Manifest: benchLiveFixtureManifest{
-			RemoteScopePath: "/benchmarks/test-scope",
-		},
-		ScopeRootRelativePath: "benchmarks/test-scope",
-		Files: []benchLiveFileEntry{
-			{RelativePath: "docs/a.txt", SizeBytes: 64},
-		},
-		Directories: []string{"docs"},
-		Mutations: benchLiveMutationPlan{
-			Deletes: []benchLiveMutationEntry{
-				{File: benchLiveFileEntry{RelativePath: "docs/a.txt", SizeBytes: 64}},
-			},
-		},
-	}
-
-	state := &benchLiveScenarioState{
-		repoRoot: repoRoot,
-		fixture:  fixture,
-		workRoot: t.TempDir(),
-	}
-	state.setupOnce.Do(func() {})
-
-	var runtimeRoot string
-	callCount := 0
-	subject := preparedBenchSubject{
-		measure: func(_ context.Context, spec benchCommandSpec) (benchMeasuredProcess, error) {
-			callCount++
-			runtimeRoot = spec.CWD
-			scopeRoot := filepath.Join(spec.CWD, "sync-root", filepath.FromSlash(fixture.ScopeRootRelativePath))
-			logPath := filepath.Join(spec.CWD, "bench.log")
-
-			require.Equal(
-				t,
-				[]string{"--config", filepath.Join(spec.CWD, "config.toml"), "--drive", "personal:user@example.com", "sync", "--download-only"},
-				spec.Arg,
-			)
-
-			if callCount == 1 {
-				require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
-				return benchMeasuredProcess{}, nil
-			}
-			require.Equal(t, 2, callCount, "runSample should only measure baseline and catchup once each")
-
-			require.NoError(t, materializeBenchLiveFixture(scopeRoot, fixture.Files))
-			require.NoError(t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
-				DurationMS:      42,
-				Result:          "success",
-				DownloadCount:   1,
-				DownloadBytes:   64,
-				RefreshRunCount: 1,
-			}))
-			//nolint:gosec // directories need execute bits; this test intentionally makes the directory read-only.
-			require.NoError(t, os.Chmod(spec.CWD, 0o500))
-
-			return benchMeasuredProcess{
-				ElapsedMicros: 1234,
-				PeakRSSBytes:  8192,
-			}, nil
-		},
-	}
-
-	sample := state.runSample(t.Context(), subject, benchSamplePhaseMeasured, 1)
-	assert.Equal(t, BenchSampleFixtureFailed, sample.Status)
-	assert.Contains(t, sample.FailureExcerpt, "cleanup sample runtime")
-
-	if runtimeRoot != "" {
-		if _, err := stat(runtimeRoot); err == nil {
-			//nolint:gosec // directory permissions require execute bits; 0700 is the intended private runtime root.
-			require.NoError(t, os.Chmod(runtimeRoot, 0o700))
-			require.NoError(t, removeAll(runtimeRoot))
-		}
-	}
+	failed := benchSample{Phase: benchSamplePhaseMeasured, Iteration: 1, Status: BenchSampleInvalid}
+	assert.Equal(t, failed, finalizeBenchLiveSampleRuntime(runtimeRoot, failed))
 }
 
 func sumBenchLiveFixtureBytes(files []benchLiveFileEntry) int64 {

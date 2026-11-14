@@ -253,14 +253,14 @@ func TestValidateDrives_NonexistentSyncDir_NoPanic(t *testing.T) {
 }
 
 func TestValidateDrives_InvalidCanonicalID_RejectedAtParseTime(t *testing.T) {
-	// Invalid canonical IDs are now rejected at parse time (decodeDriveSections),
+	// Invalid canonical IDs are rejected at parse time (driveSectionDecoder),
 	// not at validation time. This test verifies that the TOML load path catches them.
 	// The key must contain ":" to be recognized as a drive section.
 	path := writeTestConfig(t, `
 ["badtype:user@example.com"]
 sync_dir = "~/OneDrive"
 `)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid canonical ID")
 }

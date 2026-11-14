@@ -11,6 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// platformLinux is runtime.GOOS on Linux, for tests whose expectations
+// differ by platform.
+const platformLinux = "linux"
+
 func TestDefaultConfigDir_NonEmpty(t *testing.T) {
 	dir := DefaultConfigDir()
 	assert.NotEmpty(t, dir)
@@ -19,12 +23,6 @@ func TestDefaultConfigDir_NonEmpty(t *testing.T) {
 
 func TestDefaultDataDir_NonEmpty(t *testing.T) {
 	dir := DefaultDataDir()
-	assert.NotEmpty(t, dir)
-	assert.Contains(t, dir, appName)
-}
-
-func TestDefaultCacheDir_NonEmpty(t *testing.T) {
-	dir := DefaultCacheDir()
 	assert.NotEmpty(t, dir)
 	assert.Contains(t, dir, appName)
 }
@@ -60,19 +58,6 @@ func TestDefaultDataDir_MacOS(t *testing.T) {
 
 	dir := DefaultDataDir()
 	assert.Contains(t, dir, "Library/Application Support")
-}
-
-// Validates: R-4.1.2
-func TestDefaultCacheDir_MacOS(t *testing.T) {
-	if runtime.GOOS != platformDarwin {
-		t.Skip("macOS-only test")
-	}
-
-	t.Setenv("XDG_CACHE_HOME", "")
-	require.NoError(t, os.Unsetenv("XDG_CACHE_HOME"))
-
-	dir := DefaultCacheDir()
-	assert.Contains(t, dir, "Library/Caches")
 }
 
 // XDG override tests: work on ALL platforms (the whole point of the change).
@@ -152,29 +137,10 @@ func TestControlSocketPath_ReturnsErrorWhenFallbackStillExceedsLimit(t *testing.
 	assert.Contains(t, err.Error(), "exceeds the limit")
 }
 
-// Validates: R-4.1.2
-func TestDefaultCacheDir_XDGOverride(t *testing.T) {
-	xdgDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", xdgDir)
-
-	result := DefaultCacheDir()
-	assert.Equal(t, filepath.Join(xdgDir, appName), result)
-}
-
-func TestDefaultCacheDir_XDGFallback(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", "")
-	require.NoError(t, os.Unsetenv("XDG_CACHE_HOME"))
-
-	result := DefaultCacheDir()
-	assert.NotEmpty(t, result)
-	assert.Contains(t, result, appName)
-}
-
 func TestCheckDevSafe_RefusesWithoutXDG(t *testing.T) {
 	// t.Setenv("") sets to empty string (not unset); CheckDevSafe treats "" as unset.
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("XDG_CACHE_HOME", "")
 
 	require.ErrorIs(t, CheckDevSafe(), ErrDevBuildUnsafe)
 }
@@ -182,18 +148,19 @@ func TestCheckDevSafe_RefusesWithoutXDG(t *testing.T) {
 func TestCheckDevSafe_NamesMissingVariablesWithPartialXDG(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("XDG_CACHE_HOME", "")
 
 	err := CheckDevSafe()
 	require.ErrorIs(t, err, ErrDevBuildUnsafe)
-	assert.Contains(t, err.Error(), "missing: XDG_CONFIG_HOME, XDG_CACHE_HOME")
+	assert.Contains(t, err.Error(), "(missing: XDG_CONFIG_HOME)")
 	assert.Contains(t, err.Error(), "Building from Source")
 }
 
-func TestCheckDevSafe_PassesWithFullXDG(t *testing.T) {
+// The client reads only the config and data roots, so those two are full
+// isolation; no cache root is asked for.
+func TestCheckDevSafe_PassesWithTheConfigAndDataRoots(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/test-data")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/test-config")
-	t.Setenv("XDG_CACHE_HOME", "/tmp/test-cache")
+	t.Setenv("XDG_CACHE_HOME", "")
 
 	require.NoError(t, CheckDevSafe())
 }

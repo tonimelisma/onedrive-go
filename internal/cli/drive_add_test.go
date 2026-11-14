@@ -82,7 +82,8 @@ func TestDriveAdd_SharedRerunWritesTheMissingDisplayName(t *testing.T) {
 	assert.False(t, result.Added)
 	assert.Contains(t, out.String(), "Completed")
 
-	cfg, err := config.Load(cfgPath, testDriveLogger(t))
+	require.FileExists(t, cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, driveAddTestSharedName, cfg.Drives[sharedCID].DisplayName)
 }

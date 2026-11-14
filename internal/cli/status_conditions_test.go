@@ -331,7 +331,7 @@ func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printMountStatus(&buf, &statusMount{
+	require.NoError(t, printMountStatus(&buf, &statusDrive{
 		CanonicalID: "personal:blank@example.com",
 		State:       driveStatePaused,
 	}))
@@ -349,7 +349,7 @@ func TestPrintDriveStatus_UpToDateIsNamedAndWatchIsShown(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printMountStatus(&buf, &statusMount{
+	require.NoError(t, printMountStatus(&buf, &statusDrive{
 		CanonicalID: "personal:user@example.com",
 		Folder:      "~/OneDrive",
 		State:       driveStateReady,
@@ -363,7 +363,7 @@ func TestPrintDriveStatus_UpToDateIsNamedAndWatchIsShown(t *testing.T) {
 	)
 
 	buf.Reset()
-	require.NoError(t, printMountStatus(&buf, &statusMount{
+	require.NoError(t, printMountStatus(&buf, &statusDrive{
 		CanonicalID:  "personal:user@example.com",
 		Folder:       "~/OneDrive",
 		State:        driveStateReady,
@@ -412,7 +412,7 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 		OrgName:        "Contoso",
 		DegradedReason: driveCatalogUnavailableReason,
 		DegradedAction: degradedAction(driveCatalogUnavailableReason),
-		Mounts: []statusMount{
+		Mounts: []statusDrive{
 			{
 				CanonicalID: "business:alice@example.com",
 				DisplayName: "Documents",
@@ -471,7 +471,7 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 			Email:     "ready@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "personal:ready@example.com",
 					State:       driveStateReady,
@@ -491,7 +491,7 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 			AuthState:  authStateAuthenticationNeeded,
 			AuthReason: string(authReasonMissingLogin),
 			AuthAction: authAction(authReasonMissingLogin),
-			Mounts: []statusMount{
+			Mounts: []statusDrive{
 				{
 					CanonicalID: "business:needs-auth@example.com",
 					State:       driveStatePaused,

@@ -264,7 +264,6 @@ func runSyncWatchDaemonFirstSignalHelper() {
 		{env: "HOME", path: filepath.Join(tmpRoot, "home")},
 		{env: "XDG_CONFIG_HOME", path: filepath.Join(tmpRoot, "xdg-config")},
 		{env: "XDG_DATA_HOME", path: filepath.Join(tmpRoot, "xdg-data")},
-		{env: "XDG_CACHE_HOME", path: filepath.Join(tmpRoot, "xdg-cache")},
 	}
 	for i := range paths {
 		if err := os.MkdirAll(paths[i].path, 0o750); err != nil {

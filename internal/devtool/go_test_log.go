@@ -188,12 +188,6 @@ func (l goTestLog) shuffleSeed(pkg string) string {
 	return l.seedByPackage[normalizeFailedGoTestPackage(pkg)]
 }
 
-// hitDeadline reports whether a test binary of the log panicked at its
-// -timeout.
-func (l goTestLog) hitDeadline() bool {
-	return l.deadline
-}
-
 // timeoutListing is where a timeout panic's list of running tests stands in
 // one scope.
 type timeoutListing int

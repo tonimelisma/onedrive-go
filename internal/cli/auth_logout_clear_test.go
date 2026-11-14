@@ -23,7 +23,6 @@ import (
 func TestExecutePlainLogout_ClearsPersistedAuthRequirement(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	accountCID := driveid.MustCanonicalID("personal:logout-user@example.com")
 	email := accountCID.Email()

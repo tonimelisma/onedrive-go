@@ -97,14 +97,9 @@ func sleepObserved(req *http.Request, sleepFn SleepFunc, d time.Duration) error 
 	return sleepFn(req.Context(), d)
 }
 
-func WithLogTarget(ctx context.Context, target string) context.Context {
-	if target == "" {
-		return ctx
-	}
-
-	return context.WithValue(ctx, logTargetKey{}, target)
-}
-
+// WithRequestLogTarget returns req carrying target as the name the transport
+// logs for it in place of its URL, which for a pre-authenticated request is a
+// credential. An empty target leaves req as it is.
 func WithRequestLogTarget(req *http.Request, target string) *http.Request {
 	if target == "" {
 		return req

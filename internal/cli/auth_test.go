@@ -638,7 +638,7 @@ func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedPr
 	}
 
 	require.NoError(t, runStatusCommand(t.Context(), cc, false))
-	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
 	assert.NotContains(t, out.String(), "Sign-in required")
 	assert.Contains(t, out.String(), "Storage: 1 B of 2 B used")
 }

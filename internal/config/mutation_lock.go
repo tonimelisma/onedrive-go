@@ -71,9 +71,9 @@ func withConfigMutationLock(path string, createDir bool, fn func() error) error 
 // withMutationLock runs fn while holding the lock on path's parent directory.
 // Existing-file operations lock the parent directory when it exists, even if
 // the file itself is currently missing. If the parent directory is missing and
-// createDir is false, the mutation produces its historical missing-file result
-// instead of creating directories just to lock. fn never runs when the lock
-// was not taken.
+// createDir is false, there is nothing to lock or protect: fn runs unlocked
+// and meets the missing file itself, rather than directories being created
+// just to lock. In every other case fn never runs when the lock was not taken.
 func (l configLocker) withMutationLock(path string, createDir bool, fn func() error) (err error) {
 	root, _, err := fsroot.OpenPath(path)
 	if err != nil {

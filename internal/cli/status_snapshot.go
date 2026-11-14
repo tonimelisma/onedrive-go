@@ -54,8 +54,6 @@ const (
 	statusProjectionChild      = "child"
 )
 
-type statusMount = statusDrive
-
 // statusAccount groups configured drives under a single account email.
 type statusAccount struct {
 	Email          string                `json:"email"`

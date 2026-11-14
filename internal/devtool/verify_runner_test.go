@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -643,10 +646,8 @@ func TestFullE2EExecutionManifestCoversTaggedTestsExactlyOnce(t *testing.T) {
 	fullTests, err := discoverTaggedE2ETests(filepath.Join(repoRoot, "e2e"), "e2e && e2e_full")
 	require.NoError(t, err)
 
-	assigned := make(map[string]int)
-	for _, name := range fullE2EStandaloneTests() {
-		assigned[name]++
-	}
+	// The full fixture preflight runs on its own, ahead of the buckets.
+	assigned := map[string]int{fullE2EFixturePreflight: 1}
 	for _, bucket := range fullE2EBuckets() {
 		for _, name := range bucket.TestNames {
 			assigned[name]++
@@ -694,6 +695,70 @@ func TestFastE2EExecutionManifestKeepsOnlySmokeLiveTests(t *testing.T) {
 	assert.NotContains(t, fastTests, "TestE2E_ErrorCases")
 	assert.NotContains(t, fastTests, "TestE2E_JSONOutput")
 	assert.NotContains(t, fastTests, "TestE2E_QuietFlag")
+}
+
+// discoverTaggedE2ETests lists, in name order, the top-level Test functions
+// of the e2e test files whose build constraint is exactly buildExpression.
+func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
+	entries, err := os.ReadDir(e2eDir)
+	if err != nil {
+		return nil, fmt.Errorf("read e2e dir: %w", err)
+	}
+
+	tests := make([]string, 0)
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+
+		path := filepath.Join(e2eDir, entry.Name())
+		data, err := readFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		if !hasBuildExpression(string(data), buildExpression) {
+			continue
+		}
+
+		file, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+				continue
+			}
+
+			tests = append(tests, fn.Name.Name)
+		}
+	}
+
+	slices.Sort(tests)
+	return tests, nil
+}
+
+// hasBuildExpression reports whether source's leading comment block carries
+// a //go:build line equal to buildExpression.
+func hasBuildExpression(source string, buildExpression string) bool {
+	for _, line := range strings.Split(source, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "//") {
+			break
+		}
+		if !strings.HasPrefix(line, "//go:build ") {
+			continue
+		}
+
+		return strings.TrimSpace(strings.TrimPrefix(line, "//go:build ")) == buildExpression
+	}
+
+	return false
 }
 
 func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {

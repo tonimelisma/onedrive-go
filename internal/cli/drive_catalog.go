@@ -101,33 +101,6 @@ func buildConfiguredDriveEntries(
 	return entries
 }
 
-func buildConfiguredAuthRequirements(
-	cfg *config.Config,
-	authByEmail map[string]accountAuthHealth,
-	logger *slog.Logger,
-) []accountAuthRequirement {
-	grouped, order := groupDrivesByAccount(cfg)
-	var result []accountAuthRequirement
-
-	for _, email := range order {
-		health := authByEmail[email]
-		if health.State != authStateAuthenticationNeeded {
-			continue
-		}
-
-		driveIDs := grouped[email]
-		result = append(result, authRequirement(
-			email,
-			readAccountDisplayName(email, driveIDs, logger),
-			accountDriveType(driveIDs),
-			stateDBCountForEmail(email, logger),
-			health,
-		))
-	}
-
-	return result
-}
-
 func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[string]accountAuthHealth) {
 	for i := range entries {
 		email := entries[i].parsedCID.Email()

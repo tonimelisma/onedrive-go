@@ -14,16 +14,6 @@ const Notice = slog.LevelInfo + 2
 // noticeName is how Notice is spelled in log output.
 const noticeName = "NOTICE"
 
-// Name returns the name a handler should print for level: NOTICE for Notice,
-// slog's own name for everything else.
-func Name(level slog.Level) string {
-	if level == Notice {
-		return noticeName
-	}
-
-	return level.String()
-}
-
 // ReplaceLevelName is a slog.HandlerOptions.ReplaceAttr that prints NOTICE
 // instead of slog's default "INFO+2".
 func ReplaceLevelName(groups []string, attr slog.Attr) slog.Attr {

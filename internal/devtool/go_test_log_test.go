@@ -35,7 +35,7 @@ func TestParseGoTestLog_TimestampedRawLines(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, goTestFailure{pkg: testSyncPackage, test: "TestWatchLoop/closed_scheduler"}, last)
 	assert.Equal(t, "1731340000000000000", log.shuffleSeed(testSyncPackage))
-	assert.False(t, log.hitDeadline())
+	assert.False(t, log.deadline)
 }
 
 // Validates: R-6.10.23, R-6.10.26
@@ -120,7 +120,7 @@ func TestParseGoTestLog_TimeoutPanicNamesTheRunningTest(t *testing.T) {
 
 			log := parseGoTestLog(tc.log)
 			assert.Equal(t, []string{"TestHang", "TestOther"}, log.failedTopLevelTests())
-			assert.True(t, log.hitDeadline())
+			assert.True(t, log.deadline)
 			last, ok := log.lastFailure()
 			require.True(t, ok)
 			assert.Equal(t, goTestFailure{pkg: testSyncPackage, test: "TestOther/sub", timedOut: true}, last)

@@ -12,7 +12,7 @@ import (
 
 // validateDrives checks all drive-level constraints: required fields,
 // per-drive setting validity, and sync_dir uniqueness. Canonical ID format
-// is already validated at parse time (decodeDriveSections).
+// is already validated at parse time (driveSectionDecoder).
 func validateDrives(cfg *Config) []error {
 	if len(cfg.Drives) == 0 {
 		return nil // no drives is valid (user hasn't logged in yet)

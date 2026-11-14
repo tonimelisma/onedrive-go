@@ -91,7 +91,6 @@ func cliManagedStateRoots() []string {
 		os.Getenv("HOME"),
 		os.Getenv("XDG_DATA_HOME"),
 		os.Getenv("XDG_CONFIG_HOME"),
-		os.Getenv("XDG_CACHE_HOME"),
 	}
 }
 

@@ -117,10 +117,6 @@ func printStatJSONWithOptions(w io.Writer, item *graph.Item, opts statPrintOptio
 	return nil
 }
 
-func printStatText(w io.Writer, item *graph.Item) error {
-	return printStatTextWithOptions(w, item, statPrintOptions{})
-}
-
 func printStatTextWithOptions(w io.Writer, item *graph.Item, opts statPrintOptions) error {
 	itemType := typeFile
 	if item.IsFolder {

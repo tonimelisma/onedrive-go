@@ -2461,7 +2461,7 @@ func TestListChildrenRecursive_MaxDepth(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ListItemPermissions + HasWriteAccess tests
+// ListItemPermissions + EvaluateWriteAccess tests
 // ---------------------------------------------------------------------------
 
 func TestListItemPermissions_ReadOnly(t *testing.T) {
@@ -2479,7 +2479,7 @@ func TestListItemPermissions_ReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, perms, 1)
 	assert.Equal(t, []string{"read"}, perms[0].Roles)
-	assert.False(t, HasWriteAccess(perms))
+	assert.Equal(t, PermissionWriteAccessReadOnly, EvaluateWriteAccess(perms, ""))
 }
 
 func TestListItemPermissions_Writable(t *testing.T) {
@@ -2494,7 +2494,6 @@ func TestListItemPermissions_Writable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, perms, 1)
 	assert.Equal(t, PermissionWriteAccessWritable, EvaluateWriteAccess(perms, ""))
-	assert.True(t, HasWriteAccess(perms))
 }
 
 func TestListItemPermissions_Error(t *testing.T) {
@@ -2510,26 +2509,29 @@ func TestListItemPermissions_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestHasWriteAccess(t *testing.T) {
+// Without the caller's address, only rows whose grantees carry no address
+// and sharing-link rows count as the caller's; an owner row alone proves
+// nothing.
+func TestEvaluateWriteAccess_WithoutAccountEmail(t *testing.T) {
 	tests := []struct {
 		name  string
 		perms []Permission
-		want  bool
+		want  PermissionWriteAccess
 	}{
-		{"empty", nil, false},
-		{"read only", []Permission{{Roles: []string{"read"}}}, false},
-		{"write", []Permission{{Roles: []string{"write"}}}, true},
-		{"owner", []Permission{{Roles: []string{"owner"}}}, false},
-		{"mixed read and write", []Permission{{Roles: []string{"read"}}, {Roles: []string{"write"}}}, true},
-		{"member only", []Permission{{Roles: []string{"member"}}}, false},
-		{"owner in mixed", []Permission{{Roles: []string{"read", "owner"}}}, false},
-		{"view link", []Permission{{Roles: []string{"read"}, Link: &permissionLink{Type: "view"}}}, false},
-		{"edit link", []Permission{{Roles: []string{"read"}, Link: &permissionLink{Type: "edit"}}}, true},
+		{"empty", nil, PermissionWriteAccessInconclusive},
+		{"read only", []Permission{{Roles: []string{"read"}}}, PermissionWriteAccessReadOnly},
+		{"write", []Permission{{Roles: []string{"write"}}}, PermissionWriteAccessWritable},
+		{"owner", []Permission{{Roles: []string{"owner"}}}, PermissionWriteAccessInconclusive},
+		{"mixed read and write", []Permission{{Roles: []string{"read"}}, {Roles: []string{"write"}}}, PermissionWriteAccessWritable},
+		{"member only", []Permission{{Roles: []string{"member"}}}, PermissionWriteAccessInconclusive},
+		{"owner in mixed", []Permission{{Roles: []string{"read", "owner"}}}, PermissionWriteAccessInconclusive},
+		{"view link", []Permission{{Roles: []string{"read"}, Link: &permissionLink{Type: "view"}}}, PermissionWriteAccessReadOnly},
+		{"edit link", []Permission{{Roles: []string{"read"}, Link: &permissionLink{Type: "edit"}}}, PermissionWriteAccessWritable},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, HasWriteAccess(tt.perms))
+			assert.Equal(t, tt.want, EvaluateWriteAccess(tt.perms, ""))
 		})
 	}
 }
@@ -2559,7 +2561,7 @@ func TestEvaluateWriteAccess_IgnoresOwnerPermissionForDifferentUser(t *testing.T
 	}`), &resp))
 
 	assert.Equal(t, PermissionWriteAccessReadOnly, EvaluateWriteAccess(resp.Value, "recipient@example.com"))
-	assert.False(t, HasWriteAccess(resp.Value))
+	assert.Equal(t, PermissionWriteAccessInconclusive, EvaluateWriteAccess(resp.Value, ""))
 }
 
 func TestEvaluateWriteAccess_IgnoresWriteGrantForDifferentUser(t *testing.T) {
@@ -2842,7 +2844,8 @@ func TestListItemPermissions_FollowsNextLinkAcrossPages(t *testing.T) {
 	require.Len(t, perms, 2)
 	assert.Equal(t, "perm-1", perms[0].ID)
 	assert.Equal(t, "perm-2", perms[1].ID)
-	assert.True(t, HasWriteAccess(perms), "the write grant on the second page must be seen")
+	assert.Equal(t, PermissionWriteAccessWritable, EvaluateWriteAccess(perms, ""),
+		"the write grant on the second page must be seen")
 	firstPagePath := "/drives/" + driveid.New("drive-1").String() + "/items/item-1/permissions"
 	assert.Equal(t, []string{firstPagePath, secondPagePath}, requestedPaths,
 		"the absolute nextLink must be followed at its own path, not appended to the base URL")

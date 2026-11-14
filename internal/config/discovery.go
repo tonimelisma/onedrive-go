@@ -13,8 +13,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// cidFileSuffix is the file extension for legacy CID-based file-name tests.
-// Token files still use this extension in steady state.
+// cidFileSuffix is the extension of the token files whose names
+// discoverCIDFiles reads canonical IDs from ("token_{type}_{email}.json").
 const cidFileSuffix = ".json"
 
 // discoverCIDFiles scans dir for token files matching

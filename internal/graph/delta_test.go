@@ -335,49 +335,43 @@ func TestDeltaAll_MaxPages(t *testing.T) {
 	assert.Contains(t, err.Error(), "3")
 }
 
-func TestBuildDeltaPath_EmptyToken(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	path, err := client.buildDeltaPath(driveid.New("my-drive"), "")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/00000000my-drive/root/delta", path)
-}
+// An empty token, or one that is not a URL, starts from the initial path;
+// a token Graph returned as a full URL continues from that URL's path.
+// Delta and DeltaFolder build their initial paths, which
+// TestDelta_EmptyToken and TestDeltaFolder_SinglePage check on the wire.
+func TestResolveDeltaToken(t *testing.T) {
+	t.Parallel()
 
-func TestBuildDeltaPath_NonHTTPToken(t *testing.T) {
+	const initialPath = "/drives/000000000000000d/items/folder-abc/delta"
+	initial := func() string { return initialPath }
 	client := newTestClient(t, "http://localhost")
-	path, err := client.buildDeltaPath(driveid.New("my-drive"), "not-a-url")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/00000000my-drive/root/delta", path)
-}
 
-func TestBuildDeltaPath_FullURLToken(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	path, err := client.buildDeltaPath(driveid.New("d"), "http://localhost/drives/000000000000000d/root/delta?token=abc")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/000000000000000d/root/delta?token=abc", path)
+	cases := []struct {
+		name   string
+		cursor string
+		want   string
+	}{
+		{name: "empty token", cursor: "", want: initialPath},
+		{name: "token that is not a URL", cursor: "not-a-url", want: initialPath},
+		{
+			name:   "full URL token",
+			cursor: "http://localhost/drives/000000000000000d/items/folder-abc/delta?token=xyz",
+			want:   "/drives/000000000000000d/items/folder-abc/delta?token=xyz",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path, err := client.resolveDeltaToken(tc.cursor, initial)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, path)
+		})
+	}
 }
 
 // --- DeltaFolder tests ---
-
-func TestBuildFolderDeltaPath_EmptyToken(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	path, err := client.buildFolderDeltaPath(driveid.New("d"), "folder-abc", "")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta", path)
-}
-
-func TestBuildFolderDeltaPath_NonHTTPToken(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	path, err := client.buildFolderDeltaPath(driveid.New("d"), "folder-abc", "not-a-url")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta", path)
-}
-
-func TestBuildFolderDeltaPath_FullURLToken(t *testing.T) {
-	client := newTestClient(t, "http://localhost")
-	path, err := client.buildFolderDeltaPath(driveid.New("d"), "folder-abc", "http://localhost/drives/000000000000000d/items/folder-abc/delta?token=xyz")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/000000000000000d/items/folder-abc/delta?token=xyz", path)
-}
 
 func TestDeltaFolder_SinglePage(t *testing.T) {
 	var srv *httptest.Server

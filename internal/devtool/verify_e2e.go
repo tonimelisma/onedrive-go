@@ -5,13 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -55,10 +51,6 @@ func fullE2EBuckets() []fullE2EBucketSpec {
 	}
 }
 
-func fullE2EStandaloneTests() []string {
-	return []string{fullE2EFixturePreflight}
-}
-
 func fullE2EParallelMiscTestNames() []string {
 	return []string{
 		"TestE2E_DriveList_HappyPath_Text",
@@ -93,7 +85,6 @@ func fullE2EParallelMiscTestNames() []string {
 		"TestE2E_Resume_NotPaused",
 		"TestE2E_Resume_AllDrives",
 		"TestE2E_Status_PerDrive_NoIssuesOrRetries",
-		"TestE2E_Status_NoLegacyHistorySurface",
 		"TestE2E_Status_JSON_IssueDetails",
 		"TestE2E_CLI_NoResolveCommand",
 		"TestE2E_InternalBaselineVerification_AfterSync",
@@ -275,66 +266,6 @@ func readE2EQuirkEventCount(logDir string) (int, error) {
 	}
 
 	return len(summary.Events), nil
-}
-
-func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
-	entries, err := readDir(e2eDir)
-	if err != nil {
-		return nil, fmt.Errorf("read e2e dir: %w", err)
-	}
-
-	tests := make([]string, 0)
-	fset := token.NewFileSet()
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-
-		path := filepath.Join(e2eDir, entry.Name())
-		data, err := readFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
-		}
-		if !hasBuildExpression(string(data), buildExpression) {
-			continue
-		}
-
-		file, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
-		}
-
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
-				continue
-			}
-
-			tests = append(tests, fn.Name.Name)
-		}
-	}
-
-	sort.Strings(tests)
-	return tests, nil
-}
-
-func hasBuildExpression(source string, buildExpression string) bool {
-	for _, line := range strings.Split(source, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, "//") {
-			break
-		}
-		if !strings.HasPrefix(line, "//go:build ") {
-			continue
-		}
-
-		return strings.TrimSpace(strings.TrimPrefix(line, "//go:build ")) == buildExpression
-	}
-
-	return false
 }
 
 // runE2EFullCompileCheck compiles the full-tagged E2E package without running

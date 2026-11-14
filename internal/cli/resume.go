@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -32,10 +31,6 @@ func runResume(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
 	return runResumeCommand(ctx, mustCLIContext(ctx), time.Now)
-}
-
-func resumeSingleDrive(ctx context.Context, cc *CLIContext, cfg *config.Config, selector string) error {
-	return resumeSingleDriveWithNow(ctx, cc, time.Now, cfg, selector)
 }
 
 // clearPausedKeys removes both paused and paused_until keys from a drive section.

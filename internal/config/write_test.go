@@ -69,8 +69,7 @@ func TestAppendDriveSection_RoundTrip(t *testing.T) {
 	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 2)
 
 	personal := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
@@ -91,8 +90,7 @@ sync_dir = "~/OneDrive"`))
 	err := AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 2)
 	assert.Equal(t, "~/Work", cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")].SyncDir)
 }
@@ -119,8 +117,7 @@ func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	assert.Contains(t, content, `sync_dir = "~/OneDrive"`)
 
 	// Round-trip: verify the config loads correctly.
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 1)
 	assert.Equal(t, "~/OneDrive", cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")].SyncDir)
 }
@@ -151,8 +148,7 @@ func TestAppendDriveSection_ConcurrentCreatesPreserveAllSections(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Contains(t, cfg.Drives, cids[0])
 	assert.Contains(t, cfg.Drives, cids[1])
 }
@@ -204,8 +200,7 @@ func TestAppendDriveSection_CrossProcessCreatesPreserveAllSections(t *testing.T)
 		require.NoError(t, err, worker.output.String())
 	}
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	for _, cid := range cids {
 		drive, found := cfg.Drives[cid]
 		require.True(t, found, "missing drive section %s", cid.String())
@@ -334,8 +329,7 @@ func TestSetDriveKey_InsertNewKey(t *testing.T) {
 	err = SetDriveKey(path, cid, "display_name", "home")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "home", cfg.Drives[cid].DisplayName)
 }
 
@@ -347,8 +341,7 @@ func TestSetDriveKey_StringKeyGivenTrueLoadsBackAsAString(t *testing.T) {
 
 	require.NoError(t, SetDriveKey(path, cid, "display_name", "true"))
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err, "a string key must stay a string")
+	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "true", cfg.Drives[cid].DisplayName)
 }
 
@@ -391,23 +384,20 @@ func TestDriveSection_NameWithQuoteAndBackslashRoundTrips(t *testing.T) {
 	require.NoError(t, AppendDriveSection(path, other, "~/Other"))
 
 	require.NoError(t, AppendDriveSection(path, cid, "~/Archive"))
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Contains(t, cfg.Drives, cid)
 	assert.Equal(t, "~/Archive", cfg.Drives[cid].SyncDir)
 
-	err = AppendDriveSection(path, cid, "~/Elsewhere")
+	err := AppendDriveSection(path, cid, "~/Elsewhere")
 	require.Error(t, err, "the section must be found under its own name")
 	assert.Contains(t, err.Error(), "already in the config")
 
 	require.NoError(t, SetDriveKey(path, cid, "display_name", "Archive"))
-	cfg, err = Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg = loadWrittenConfig(t, path)
 	assert.Equal(t, "Archive", cfg.Drives[cid].DisplayName)
 
 	require.NoError(t, DeleteDriveSection(path, cid))
-	cfg, err = Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg = loadWrittenConfig(t, path)
 	assert.NotContains(t, cfg.Drives, cid)
 	assert.Contains(t, cfg.Drives, other)
 }
@@ -456,8 +446,7 @@ func TestSetDriveKey_UpdateExistingKey(t *testing.T) {
 	err = SetDriveKey(path, cid, "display_name", "personal")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "personal", cfg.Drives[cid].DisplayName)
 }
 
@@ -479,8 +468,7 @@ func TestSetDriveKey_BooleanFormatting(t *testing.T) {
 	assert.Contains(t, string(data), "paused = true")
 	assert.NotContains(t, string(data), `paused = "true"`)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
@@ -515,8 +503,7 @@ func TestSetDriveKey_RoundTrip(t *testing.T) {
 	err = SetDriveKey(path, cid, "paused", "false")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	require.NotNil(t, d.Paused)
 	assert.False(t, *d.Paused)
@@ -557,8 +544,7 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 	err = SetDriveKey(path, businessCID, "paused", "true")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 
 	// First section should be unaffected
 	personal := cfg.Drives[personalCID]
@@ -593,8 +579,7 @@ func TestDeleteDriveKey_KeyExists(t *testing.T) {
 	assert.NotContains(t, string(data), "paused")
 
 	// Round-trip: verify the config loads correctly.
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	assert.Nil(t, d.Paused)
 }
@@ -609,8 +594,7 @@ func TestDeleteDriveKey_KeyAbsent(t *testing.T) {
 	// Deleting a key that doesn't exist should be idempotent.
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	assert.Nil(t, d.Paused)
 }
@@ -655,8 +639,7 @@ func TestDeleteDriveKey_PausedUntilRoundTrip(t *testing.T) {
 	require.NoError(t, SetDriveKey(path, cid, "paused_until", "2026-03-01T00:00:00Z"))
 
 	// Verify both keys load.
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	require.NotNil(t, d.Paused)
 	assert.True(t, *d.Paused)
@@ -667,8 +650,7 @@ func TestDeleteDriveKey_PausedUntilRoundTrip(t *testing.T) {
 	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
 	require.NoError(t, DeleteDriveKey(path, cid, "paused_until"))
 
-	cfg, err = Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg = loadWrittenConfig(t, path)
 	d = cfg.Drives[cid]
 	assert.Nil(t, d.Paused)
 	assert.Nil(t, d.PausedUntil)
@@ -697,8 +679,7 @@ func TestDeleteDriveSection_DeleteFromMiddle(t *testing.T) {
 	err = DeleteDriveSection(path, businessCID)
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 2)
 	assert.Contains(t, cfg.Drives, personalCID)
 	assert.Contains(t, cfg.Drives, spCID)
@@ -721,8 +702,7 @@ func TestDeleteDriveSection_RoundTrip(t *testing.T) {
 	err = DeleteDriveSection(path, personalCID)
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 1)
 	assert.Equal(t, "~/Work", cfg.Drives[businessCID].SyncDir)
 }
@@ -1152,8 +1132,7 @@ paused = true
 	assert.NotContains(t, resultStr, "paused = true")
 	assert.Contains(t, resultStr, "paused_until")
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	assert.Nil(t, d.Paused, "paused should be nil after deletion")
 	require.NotNil(t, d.PausedUntil, "paused_until should be preserved")
@@ -1173,8 +1152,7 @@ sync_dir="~/OneDrive"
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/NewPath"))
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "~/NewPath", cfg.Drives[cid].SyncDir)
 }
 
@@ -1208,8 +1186,7 @@ sync_dir = "~/path#with#hash"
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	require.NoError(t, SetDriveKey(path, cid, "display_name", "my drive"))
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	// Original value with # should be preserved.
 	assert.Equal(t, "~/path#with#hash", cfg.Drives[cid].SyncDir)
 	assert.Equal(t, "my drive", cfg.Drives[cid].DisplayName)
@@ -1233,8 +1210,7 @@ func TestScenario_FirstLoginThenSecondLogin(t *testing.T) {
 	err = AppendDriveSection(path, businessCID, "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 2)
 
 	// Defaults are loaded correctly
@@ -1258,8 +1234,7 @@ func TestScenario_DriveRemove(t *testing.T) {
 	err = DeleteDriveSection(path, businessCID)
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 1)
 	assert.Contains(t, cfg.Drives, personalCID)
 	assert.NotContains(t, cfg.Drives, businessCID)
@@ -1290,8 +1265,7 @@ func TestScenario_LogoutPurge_AllDrives(t *testing.T) {
 	err = DeleteDriveSection(path, spCID)
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 1)
 	assert.Contains(t, cfg.Drives, personalCID)
 }
@@ -1312,8 +1286,7 @@ func TestScenario_SetKeyThenDeleteSection(t *testing.T) {
 	err = DeleteDriveSection(path, cid)
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Empty(t, cfg.Drives)
 }
 
@@ -1330,8 +1303,7 @@ func TestSetDriveKey_UpdateSyncDir(t *testing.T) {
 	err = SetDriveKey(path, cid, "sync_dir", "~/NewDrive")
 	require.NoError(t, err)
 
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "~/NewDrive", cfg.Drives[cid].SyncDir)
 }
 
@@ -1364,8 +1336,7 @@ func TestScenario_LogoutRegular(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify config has 0 drives.
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	assert.Empty(t, cfg.Drives)
 
 	// Verify state DB files are still on disk (not deleted by config operations).
@@ -1390,8 +1361,7 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify paused is set before removal.
-	cfg, err := Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, path)
 	require.NotNil(t, cfg.Drives[cid].Paused)
 	assert.True(t, *cfg.Drives[cid].Paused)
 
@@ -1399,8 +1369,7 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 	err = DeleteDriveSection(path, cid)
 	require.NoError(t, err)
 
-	cfg, err = Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg = loadWrittenConfig(t, path)
 	assert.Empty(t, cfg.Drives)
 
 	// Re-add the drive with a different sync_dir.
@@ -1408,8 +1377,7 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reload and verify fresh defaults (Paused should be nil, new sync_dir).
-	cfg, err = Load(path, testLogger(t))
-	require.NoError(t, err)
+	cfg = loadWrittenConfig(t, path)
 	require.Len(t, cfg.Drives, 1)
 
 	d := cfg.Drives[cid]

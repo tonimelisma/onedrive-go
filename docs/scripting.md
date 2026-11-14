@@ -129,5 +129,5 @@ same reason.
 | --- | --- |
 | `ONEDRIVE_GO_CONFIG` | Config file path (same as `--config`) |
 | `ONEDRIVE_GO_DRIVE` | Drive selector (same as `--drive`) |
-| `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | Base directories for config, data and cache, on Linux and macOS |
+| `XDG_CONFIG_HOME`, `XDG_DATA_HOME` | Base directories for config and data, on Linux and macOS |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy settings |

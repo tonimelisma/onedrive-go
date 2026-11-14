@@ -1,6 +1,6 @@
 # Drive Identity
 
-GOVERNS: internal/cli/drive.go, internal/cli/drive_*.go, internal/cli/purge.go, internal/driveid/canonical.go, internal/driveid/id.go, internal/driveid/itemkey.go
+GOVERNS: internal/cli/drive.go, internal/cli/drive_*.go, internal/cli/purge.go, internal/driveid/canonical.go, internal/driveid/id.go
 
 Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-6.7.2 [verified], R-3.6.4 [verified], R-3.6.5 [verified], R-6.10.6 [verified]
 
@@ -21,7 +21,7 @@ Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [veri
 
 | Behavior | Evidence |
 | --- | --- |
-| Canonical drive IDs remain the single typed identity format for personal, business, SharePoint, and shared drives. | `internal/driveid/canonical_test.go`, `internal/driveid/id_test.go`, `internal/driveid/itemkey_test.go` |
+| Canonical drive IDs remain the single typed identity format for personal, business, SharePoint, and shared drives. | `internal/driveid/canonical_test.go`, `internal/driveid/id_test.go` |
 | CLI drive rendering and matching continue to derive display/match behavior from canonical identity rather than ad hoc strings. | `TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir`, `TestPrintDriveListText_SharedDrive`, `TestDriveListEntry_SharedFieldsJSON` |
 
 ## Canonical Drive ID
@@ -83,10 +83,6 @@ original raw share URL. Both inputs are normalized immediately to the canonical
 `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` drive ID before any
 config mutation happens. Shared files never become drives and are rejected by
 `drive add`.
-
-## ItemKey Type (`driveid.ItemKey`)
-
-Composite `(DriveID, ItemID)` map key for cross-drive item lookup. Used by the sync engine for collision detection.
 
 ## Display Names
 

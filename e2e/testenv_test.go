@@ -111,9 +111,8 @@ func setupIsolation() func() {
 	tempHome := filepath.Join(tempRoot, "home")
 	tempConfig := filepath.Join(tempRoot, "config")
 	tempData := filepath.Join(tempRoot, "data")
-	tempCache := filepath.Join(tempRoot, "cache")
 
-	for _, d := range []string{tempHome, tempConfig, tempData, tempCache} {
+	for _, d := range []string{tempHome, tempConfig, tempData} {
 		if mkErr := os.MkdirAll(d, 0o700); mkErr != nil {
 			fmt.Fprintf(os.Stderr, "FATAL: creating dir %s: %v\n", d, mkErr)
 			os.Exit(1)
@@ -123,7 +122,6 @@ func setupIsolation() func() {
 	mustSetenv("HOME", tempHome)
 	mustSetenv("XDG_CONFIG_HOME", tempConfig)
 	mustSetenv("XDG_DATA_HOME", tempData)
-	mustSetenv("XDG_CACHE_HOME", tempCache)
 	setenvIfNotEmpty("GOPATH", realGoPath)
 	setenvIfNotEmpty("GOMODCACHE", realGoModCache)
 	setenvIfNotEmpty("GOCACHE", realGoCache)
@@ -252,8 +250,9 @@ func verifyIsolation(tempRoot string) {
 		crash("ONEDRIVE_GO_DRIVE is set — would leak production drive into tests")
 	}
 
-	// 2. All XDG/HOME vars must point to temp (not production).
-	for _, v := range []string{"HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
+	// 2. HOME and the two XDG roots the client reads must point to temp (not
+	// production).
+	for _, v := range []string{"HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
 		val := os.Getenv(v)
 		if val == "" || !strings.HasPrefix(val, tempRoot) {
 			crash(v + " not overridden to temp dir")
@@ -300,14 +299,6 @@ func TestIsolation_XDGConfigDir(t *testing.T) {
 	xdg := os.Getenv("XDG_CONFIG_HOME")
 	assert.NotEmpty(t, xdg, "XDG_CONFIG_HOME should be set")
 	assert.NotContains(t, xdg, realHomeDir, "XDG_CONFIG_HOME should not be under real home")
-}
-
-func TestIsolation_XDGCacheDir(t *testing.T) {
-	t.Parallel()
-
-	xdg := os.Getenv("XDG_CACHE_HOME")
-	assert.NotEmpty(t, xdg, "XDG_CACHE_HOME should be set")
-	assert.NotContains(t, xdg, realHomeDir, "XDG_CACHE_HOME should not be under real home")
 }
 
 func TestIsolation_TokenInTempDir(t *testing.T) {

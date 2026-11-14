@@ -87,9 +87,8 @@ func setupIntegrationIsolation() func() {
 	tempHome := filepath.Join(tempRoot, "home")
 	tempConfig := filepath.Join(tempRoot, "config")
 	tempData := filepath.Join(tempRoot, "data")
-	tempCache := filepath.Join(tempRoot, "cache")
 
-	for _, d := range []string{tempHome, tempConfig, tempData, tempCache} {
+	for _, d := range []string{tempHome, tempConfig, tempData} {
 		if mkErr := os.MkdirAll(d, 0o700); mkErr != nil {
 			fmt.Fprintf(os.Stderr, "FATAL: creating dir %s: %v\n", d, mkErr)
 			os.Exit(1)
@@ -99,7 +98,6 @@ func setupIntegrationIsolation() func() {
 	mustSetenvIntegration("HOME", tempHome)
 	mustSetenvIntegration("XDG_CONFIG_HOME", tempConfig)
 	mustSetenvIntegration("XDG_DATA_HOME", tempData)
-	mustSetenvIntegration("XDG_CACHE_HOME", tempCache)
 
 	// Copy token file from .testdata/ to isolated data dir.
 	appDataDir := filepath.Join(tempData, "onedrive-go")
@@ -204,20 +202,19 @@ func verifyIntegrationIsolation(tempRoot string) {
 		crash("ONEDRIVE_GO_DRIVE is set — would leak production drive into tests")
 	}
 
-	// 2. All XDG/HOME vars must point to temp.
-	for _, v := range []string{"HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
+	// 2. HOME and the two XDG roots the client reads must point to temp.
+	for _, v := range []string{"HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
 		val := os.Getenv(v)
 		if val == "" || !strings.HasPrefix(val, tempRoot) {
 			crash(v + " not overridden to temp dir")
 		}
 	}
 
-	// 3. DefaultDataDir/ConfigDir/CacheDir must resolve under temp.
+	// 3. DefaultDataDir/ConfigDir must resolve under temp.
 	// Integration tests CAN import internal/config.
 	for name, fn := range map[string]func() string{
 		"DefaultDataDir":   config.DefaultDataDir,
 		"DefaultConfigDir": config.DefaultConfigDir,
-		"DefaultCacheDir":  config.DefaultCacheDir,
 	} {
 		dir := fn()
 		if !strings.HasPrefix(dir, tempRoot) {

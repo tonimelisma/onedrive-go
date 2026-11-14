@@ -445,7 +445,7 @@ func TestStatePath_SharePoint_ColonsReplaced(t *testing.T) {
 // --- Integration: TOML parsing -> resolution ---
 
 // Validates: R-4.1.1, R-3.4.1
-func TestLoad_FullConfigWithDrives(t *testing.T) {
+func TestLoadOrDefault_FullConfigWithDrives(t *testing.T) {
 	path := writeTestConfig(t, `
 log_level = "debug"
 
@@ -457,7 +457,7 @@ display_name = "home"
 sync_dir = "~/OneDrive-Work"
 display_name = "work"
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, "debug", cfg.LogLevel)

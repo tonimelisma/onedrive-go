@@ -163,7 +163,9 @@ func assertEmailReconcileFixtureRenamed(
 	require.True(t, found)
 	assert.Equal(t, fixture.newBusiness.String(), sharedIdentity.OwnerAccountCanonical)
 
-	cfg, err := Load(fixture.configPath, logger)
+	// The reconcile rewrote the config: it must exist, not read as the defaults.
+	require.FileExists(t, fixture.configPath)
+	cfg, err := LoadOrDefault(fixture.configPath, logger)
 	require.NoError(t, err)
 	assert.Contains(t, cfg.Drives, fixture.newBusiness)
 	assert.Contains(t, cfg.Drives, fixture.newSharePoint)
@@ -271,8 +273,7 @@ func TestReconcileAccountEmail_AStateDBInUseChangesNothing(t *testing.T) {
 	assert.FileExists(t, DriveTokenPath(fixture.oldBusiness), "the token keeps its name")
 	assert.NoFileExists(t, DriveTokenPath(fixture.newBusiness))
 	assert.FileExists(t, DriveStatePath(fixture.oldBusiness), "the state DB keeps its name")
-	cfg, loadErr := Load(fixture.configPath, logger)
-	require.NoError(t, loadErr)
+	cfg := loadWrittenConfig(t, fixture.configPath)
 	assert.Contains(t, cfg.Drives, fixture.oldBusiness, "the config keeps the old section")
 	assert.NotContains(t, cfg.Drives, fixture.newBusiness)
 	_, found := loadCatalogAccount(t, fixture.oldBusiness)
@@ -370,8 +371,7 @@ sync_dir = "~/Business"
 	assert.NoFileExists(t, emailChangeJournalPath(DefaultDataDir()), "a refused change is never put on record")
 	assert.FileExists(t, DriveTokenPath(oldBusiness))
 
-	cfg, loadErr := Load(configPath, logger)
-	require.NoError(t, loadErr)
+	cfg := loadWrittenConfig(t, configPath)
 	assert.Contains(t, cfg.Drives, oldBusiness)
 	assert.NotContains(t, cfg.Drives, newBusiness)
 }

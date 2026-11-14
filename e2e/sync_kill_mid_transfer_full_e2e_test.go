@@ -37,6 +37,7 @@ const (
 	stderrUploadSessionExpired  = "upload session expired"
 	stderrDownloadPartialResume = "resuming download from partial file"
 	uploadSessionsSubdir        = "upload-sessions"
+	uploadSessionRecordGlob     = "*.json"
 	downloadPartialGlob         = ".onedrive-go.*.partial"
 )
 
@@ -81,7 +82,8 @@ func TestE2E_Sync_KillMidUploadResumesSession(t *testing.T) {
 	t.Logf("killed the upload after %d accepted fragment(s)",
 		strings.Count(first.Stderr.String(), stderrUploadChunkAccepted))
 
-	sessions, err := filepath.Glob(filepath.Join(env["XDG_DATA_HOME"], "onedrive-go", uploadSessionsSubdir, "*"))
+	// Record files only: a temporary file a Save left is no persisted session.
+	sessions, err := filepath.Glob(filepath.Join(env["XDG_DATA_HOME"], "onedrive-go", uploadSessionsSubdir, uploadSessionRecordGlob))
 	require.NoError(t, err)
 	require.NotEmpty(t, sessions, "the killed upload left no persisted upload session")
 

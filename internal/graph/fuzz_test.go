@@ -67,7 +67,8 @@ func FuzzDeltaResponseUnmarshal(f *testing.F) {
 }
 
 // FuzzPermissionUnmarshal feeds arbitrary JSON to json.Unmarshal into a
-// listPermissionsResponse and then calls HasWriteAccess. Verifies no panics.
+// listPermissionsResponse and then calls EvaluateWriteAccess. Verifies no
+// panics.
 func FuzzPermissionUnmarshal(f *testing.F) {
 	f.Add([]byte(`{"value":[{"id":"p1","roles":["read"]}]}`))
 	f.Add([]byte(`{"value":[{"id":"p1","roles":["write","read"]}]}`))
@@ -81,6 +82,6 @@ func FuzzPermissionUnmarshal(f *testing.F) {
 		}
 
 		// Must not panic.
-		_ = HasWriteAccess(resp.Value)
+		_ = EvaluateWriteAccess(resp.Value, "")
 	})
 }

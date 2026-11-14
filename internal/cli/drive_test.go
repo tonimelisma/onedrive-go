@@ -912,8 +912,9 @@ sync_dir = "~/Marketing"
 	require.NoError(t, err)
 	assert.Equal(t, affected, removed)
 
-	// Reload and verify 0 drives remain.
-	cfg, loadErr := config.Load(cfgPath, testDriveLogger(t))
+	// Reload and verify 0 drives remain in the file.
+	require.FileExists(t, cfgPath)
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
 	assert.Empty(t, cfg.Drives)
 }
@@ -941,8 +942,9 @@ sync_dir = "~/OneDrive"
 	assert.Contains(t, err.Error(), "business:nobody@example.com")
 	assert.Equal(t, []driveid.CanonicalID{driveid.MustCanonicalID("personal:user@example.com")}, removed)
 
-	// The existing drive should still have been removed.
-	cfg, loadErr := config.Load(cfgPath, testDriveLogger(t))
+	// The existing drive should still have been removed from the file.
+	require.FileExists(t, cfgPath)
+	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
 	assert.Empty(t, cfg.Drives)
 }
@@ -1009,9 +1011,7 @@ func TestAddOwnDrive_SyncDirCreateFailureLeavesConfigAndCatalogUnchanged(t *test
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
-	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
-	require.NoError(t, loadErr)
-	assert.NotContains(t, cfg.Drives, cid)
+	assert.NoFileExists(t, cfgPath, "a failed add must not create the config")
 	_, found := loadCatalogDrive(t, cid)
 	assert.False(t, found, "a failed add must not leave a catalog record")
 }
@@ -1036,6 +1036,7 @@ func TestAddOwnDrive_SyncDirCreateFailureLeavesASectionWithoutSyncDirAsItWas(t *
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
+	require.FileExists(t, cfgPath)
 	cfg, loadErr := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, loadErr)
 	drive, found := cfg.Drives[cid]
@@ -1412,7 +1413,6 @@ func setTestDriveHome(t *testing.T) {
 		filepath.Join(tmpRoot, "home"),
 		filepath.Join(tmpRoot, "data"),
 		filepath.Join(tmpRoot, "config"),
-		filepath.Join(tmpRoot, "cache"),
 	}
 	for _, path := range paths {
 		require.NoError(t, os.MkdirAll(path, 0o750))
@@ -1421,7 +1421,6 @@ func setTestDriveHome(t *testing.T) {
 	t.Setenv("HOME", paths[0])
 	t.Setenv("XDG_DATA_HOME", paths[1])
 	t.Setenv("XDG_CONFIG_HOME", paths[2])
-	t.Setenv("XDG_CACHE_HOME", paths[3])
 }
 
 // writeTestTokenFile creates a token file using the canonical tokenfile.Save,
@@ -1852,6 +1851,7 @@ func TestDriveAdd_SharedTargetFolderAddsCanonicalSharedDrive(t *testing.T) {
 	err := runDriveAddWithContext(context.Background(), cc, []string{"https://1drv.ms/f/c/example"})
 	require.NoError(t, err)
 
+	require.FileExists(t, cfgPath)
 	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, err)
 	_, exists := cfg.Drives[driveid.MustCanonicalID("shared:user@example.com:b!drive1234567890:source-item-folder")]
@@ -2115,6 +2115,7 @@ func TestDriveAdd_SharedNameHonorsAccountFilter(t *testing.T) {
 
 	require.NoError(t, runDriveAddWithContext(context.Background(), cc, []string{"Project Folder"}))
 
+	require.FileExists(t, cfgPath)
 	cfg, err := config.LoadOrDefault(cfgPath, testDriveLogger(t))
 	require.NoError(t, err)
 	_, exists := cfg.Drives[driveid.MustCanonicalID("shared:user@example.com:0000b!drive-user:source-item-user")]
@@ -2323,34 +2324,6 @@ func TestSortedDriveSearchResults_ReturnsSortedClone(t *testing.T) {
 }
 
 // Validates: R-3.3.10
-func TestBuildConfiguredAuthRequirements_UsesOnlyAccountsNeedingAuth(t *testing.T) {
-	setTestDriveHome(t)
-
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{
-			driveid.MustCanonicalID("personal:ready@example.com"):   {},
-			driveid.MustCanonicalID("business:blocked@example.com"): {},
-		},
-	}
-
-	requirements := buildConfiguredAuthRequirements(cfg, map[string]accountAuthHealth{
-		"ready@example.com": {
-			State: authStateReady,
-		},
-		"blocked@example.com": {
-			State:  authStateAuthenticationNeeded,
-			Reason: authReasonSyncAuthRejected,
-			Action: authAction(authReasonSyncAuthRejected),
-		},
-	}, testDriveLogger(t))
-
-	require.Len(t, requirements, 1)
-	assert.Equal(t, "blocked@example.com", requirements[0].Email)
-	assert.Equal(t, driveid.DriveTypeBusiness, requirements[0].DriveType)
-	assert.Equal(t, authReasonSyncAuthRejected, requirements[0].Reason)
-}
-
-// Validates: R-3.3.10
 func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 	t.Parallel()
 
@@ -2422,5 +2395,5 @@ func TestDriveList_ClearsPersistedAuthScopeAfterSuccessfulDiscovery(t *testing.T
 	}
 
 	require.NoError(t, runDriveListWithContext(t.Context(), cc, false))
-	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
 }

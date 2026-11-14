@@ -291,8 +291,7 @@ func TestAddDrive_FailedCatalogRestoreLeavesWhatARerunCompletes(t *testing.T) {
 func assertEnrollmentComplete(t *testing.T, f enrollFixture, req *AddDriveRequest) {
 	t.Helper()
 
-	cfg, err := Load(f.configPath, testLogger(t))
-	require.NoError(t, err)
+	cfg := loadWrittenConfig(t, f.configPath)
 	section, found := cfg.Drives[req.Drive]
 	require.True(t, found, "no section for %s", req.Drive)
 	require.NotEmpty(t, section.SyncDir)
@@ -590,8 +589,7 @@ func TestAddDrive_CrossProcessSameDriveAddsOneSection(t *testing.T) {
 	data, err := localpath.ReadFile(f.configPath)
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(data), renderSectionHeaderLine(drive.String())))
-	_, err = Load(f.configPath, testLogger(t))
-	require.NoError(t, err, "the config must still load")
+	loadWrittenConfig(t, f.configPath) // the config must still load
 }
 
 func TestAddDrive_CrossProcessWorker(t *testing.T) {
@@ -675,8 +673,7 @@ func TestAddDrive_ChoosesTheSyncDirFromTheLockedSnapshot(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantDir, result.SyncDir)
 
-			cfg, err := Load(f.configPath, testLogger(t))
-			require.NoError(t, err)
+			cfg := loadWrittenConfig(t, f.configPath)
 			assert.Equal(t, tc.wantDir, cfg.Drives[driveid.MustCanonicalID(tc.drive)].SyncDir)
 		})
 	}

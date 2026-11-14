@@ -2,10 +2,9 @@
 // identifiers. It consolidates normalization logic (lowercase, zero-padding)
 // and provides compile-time safety over raw string usage.
 //
-// Three types cover the codebase's identity needs:
+// Two types cover the codebase's identity needs:
 //   - ID: normalized Graph API drive identifier (lowercase, zero-padded)
 //   - CanonicalID: config-level "type:email" identifier
-//   - ItemKey: composite (DriveID, ItemID) pair for map keys
 //
 // This is a leaf package with zero external dependencies beyond stdlib.
 package driveid
