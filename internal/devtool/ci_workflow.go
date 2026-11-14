@@ -11,17 +11,24 @@ import (
 
 // The events of the CI workflow that devtool asks about: a DoD wait follows
 // a pull request's run before merge and the push run of the merge commit
-// after it.
+// after it; the nightly check and report read the scheduled run, and a
+// manual dispatch runs the same jobs.
 const (
-	ciEventPullRequest = "pull_request"
-	ciEventPush        = "push"
+	ciEventPullRequest      = "pull_request"
+	ciEventPush             = "push"
+	ciEventSchedule         = "schedule"
+	ciEventWorkflowDispatch = "workflow_dispatch"
 
 	ciJobsKey              = "jobs:"
 	ciJobIndent            = "  "
 	ciJobKeyIndent         = "    "
 	ciJobIfKey             = "if"
+	ciJobNameKey           = "name"
+	ciJobNeedsKey          = "needs"
+	ciJobPermissionsKey    = "permissions"
 	ciJobTimeoutKey        = "timeout-minutes"
 	ciJobConcurrencyKey    = "concurrency"
+	ciBlockListPrefix      = "- "
 	ciConcurrencyGroupKey  = "group"
 	ciConcurrencyCancelKey = "cancel-in-progress"
 	ciExpressionPrefix     = "${{"
@@ -43,6 +50,9 @@ var (
 
 	// ciConcurrencyGroupPattern is a plain concurrency group name.
 	ciConcurrencyGroupPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+	// ciJobNamePattern is a job key as `needs:` names it.
+	ciJobNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 )
 
 // ciWorkflowJob is one job of the CI workflow: its name and the lines of its
@@ -296,9 +306,46 @@ func (j ciWorkflowJob) concurrencyGroup() (string, bool, error) {
 	return group, true, nil
 }
 
-// blockEntries returns the lines of the map one of the job's own keys opens,
-// trimmed and with their comments dropped: the lines indented six spaces
-// below it.
+// needs returns the jobs this job waits for, nil when it waits for none. The
+// forms read are `needs: <job>`, the flow list `needs: [<job>, ...]` and a
+// block list of `- <job>` lines; any other value, an expression among them,
+// fails naming the job, because the nightly's bound and the report's order
+// could not tell what runs first.
+func (j ciWorkflowJob) needs() ([]string, error) {
+	value, set, err := j.key(ciJobNeedsKey)
+	if err != nil || !set {
+		return nil, err
+	}
+
+	var names []string
+	switch {
+	case value == "":
+		for _, entry := range j.blockEntries(ciJobNeedsKey) {
+			name, ok := strings.CutPrefix(entry, ciBlockListPrefix)
+			if !ok {
+				return nil, fmt.Errorf("%s: job %s: needs: entry %q is not a list item", ciWorkflowPath, j.name, entry)
+			}
+			names = append(names, strings.TrimSpace(name))
+		}
+	case strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]"):
+		for _, name := range strings.Split(strings.Trim(value, "[]"), ",") {
+			names = append(names, strings.TrimSpace(name))
+		}
+	default:
+		names = []string{value}
+	}
+	for _, name := range names {
+		if !ciJobNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("%s: job %s: needs: %q is not a job name", ciWorkflowPath, j.name, name)
+		}
+	}
+
+	return names, nil
+}
+
+// blockEntries returns the lines of the map or list one of the job's own keys
+// opens, trimmed and with their comments dropped: the lines indented six
+// spaces below it.
 func (j ciWorkflowJob) blockEntries(name string) []string {
 	header := ciJobKeyIndent + name + ":"
 	var entries []string

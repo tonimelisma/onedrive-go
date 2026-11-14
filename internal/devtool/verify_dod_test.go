@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -377,32 +379,160 @@ func TestDODPostMergeCIClassificationRejectsSkippedPushRun(t *testing.T) {
 
 // Validates: R-6.10.16
 //
+// A scheduled or dispatched run can run on the merge commit too, and a red
+// nightly there is not the merged pull request's failure: the post-merge
+// stage waits for the push run alone.
+func TestDODPostMergeCIClassificationIgnoresRunsOfOtherEvents(t *testing.T) {
+	t.Parallel()
+
+	nightly := githubRun{
+		DatabaseID: 333, Name: "CI", Event: ciEventSchedule, Status: checkStatusCompleted,
+		Conclusion: checkConclusionFailure, HeadSHA: "merge-sha",
+	}
+	push := githubRun{
+		DatabaseID: 222, Name: "CI", Event: ciEventPush, Status: checkStatusCompleted,
+		Conclusion: checkConclusionSuccess, HeadSHA: "merge-sha",
+	}
+
+	snapshot := classifyPostMergeRuns([]githubRun{nightly, push}, "merge-sha")
+	assert.Equal(t, prCheckStatePass, snapshot.state)
+
+	snapshot = classifyPostMergeRuns([]githubRun{nightly}, "merge-sha")
+	assert.Equal(t, prCheckStatePending, snapshot.state, "only a push run decides; none has been listed yet")
+	assert.Zero(t, snapshot.failedRunID)
+}
+
+// Validates: R-6.10.16
+func TestLoadMainRunsForCommitAsksForPushRunsOnly(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{outputFunc: func(string, []string, string, ...string) ([]byte, error) { return []byte("[]"), nil }}
+	_, err := loadMainRunsForCommit(t.Context(), newGHClient(runner, nil), "/repo", "merge-sha")
+	require.NoError(t, err)
+
+	require.Len(t, runner.outputCommands, 1)
+	args := runner.outputCommands[0].args
+	event := slices.Index(args, "--event")
+	require.GreaterOrEqual(t, event, 0)
+	assert.Equal(t, ciEventPush, args[event+1])
+}
+
+// nightlyStageRunner runs a whole DoD stage against two fakes: the nightly
+// step's gh commands and claim-ref git commands go to a claimRemote, every
+// other command to a fakeRunner.
+type nightlyStageRunner struct {
+	*fakeRunner
+	remote *claimRemote
+}
+
+// isNightlyStepCommand reports whether a command is one of the nightly
+// step's: any gh command, and the git commands that read and write claims.
+func isNightlyStepCommand(name string, args []string) bool {
+	if name == githubCLI {
+		return true
+	}
+	claimCommands := []string{"for-each-ref", "commit-tree", "push"}
+
+	return name == nightlyTestGit && len(args) > 0 &&
+		(slices.Contains(claimCommands, args[0]) || slices.Contains(args, nightlyClaimRefspec))
+}
+
+func (r *nightlyStageRunner) Run(ctx context.Context, cwd string, env []string, stdout, stderr io.Writer, name string, args ...string) error {
+	if isNightlyStepCommand(name, args) {
+		return r.remote.Run(ctx, cwd, env, stdout, stderr, name, args...)
+	}
+	return r.fakeRunner.Run(ctx, cwd, env, stdout, stderr, name, args...)
+}
+
+func (r *nightlyStageRunner) Output(ctx context.Context, cwd string, env []string, name string, args ...string) ([]byte, error) {
+	if isNightlyStepCommand(name, args) {
+		return r.remote.Output(ctx, cwd, env, name, args...)
+	}
+	return r.fakeRunner.Output(ctx, cwd, env, name, args...)
+}
+
+func (r *nightlyStageRunner) CombinedOutput(ctx context.Context, cwd string, env []string, name string, args ...string) ([]byte, error) {
+	if isNightlyStepCommand(name, args) {
+		return r.remote.CombinedOutput(ctx, cwd, env, name, args...)
+	}
+	return r.fakeRunner.CombinedOutput(ctx, cwd, env, name, args...)
+}
+
+// Validates: R-6.10.16, R-6.10.23
+//
 // The full race tier cannot finish inside its deadline on a two-core host, so
 // a pre-pr stage that demanded it could not be run where the work happens.
 // The stage's default is the profile such a host can finish; CI stays the
-// full gate.
+// full gate. After the gates the stage renews the branch's nightly claim and
+// prints the latest verdict.
 func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
 	writeRequirementsBackedReadme(t, repoRoot)
-	runner := &fakeRunner{}
+	remote := failingNightlyRemote(t)
+	now := time.Now()
+	remote.runs = nightlyRunListAt(t, now, nightlyListedRun{
+		id: nightlyTestRunID, status: checkStatusCompleted, conclusion: checkConclusionFailure, age: time.Hour,
+	})
+	remote.seed(nightlyTestKey, &nightlyClaim{
+		State: nightlyStateClaimed, Owner: nightlyTestOwner, At: now.Add(-20 * time.Hour).UTC().Format(time.RFC3339),
+	})
+	runner := &nightlyStageRunner{fakeRunner: &fakeRunner{}, remote: remote}
 	stdout := &bytes.Buffer{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot: repoRoot,
-		DOD:      true,
-		DODStage: DODStagePrePR,
-		Stdout:   stdout,
-		Stderr:   &bytes.Buffer{},
+		RepoRoot:  repoRoot,
+		DOD:       true,
+		DODStage:  DODStagePrePR,
+		DODBranch: nightlyTestOwner,
+		Stdout:    stdout,
+		Stderr:    &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
 	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
 	expected = append(expected, "git fetch origin", "git merge-base --is-ancestor")
-	assert.Equal(t, expected, recordedCommandSequence(runner))
-	assert.Empty(t, runner.outputCommands, "the pr profile reports no coverage")
+	assert.Equal(t, expected, recordedCommandSequence(runner.fakeRunner))
+	assert.False(t, slices.ContainsFunc(runner.outputCommands, func(command recordedCommand) bool {
+		return command.name == goCommandName
+	}), "the pr profile reports no coverage")
 	assert.Contains(t, stdout.String(), "dod pre-pr:")
+
+	require.Len(t, remote.pushes, 1, "the stage renews the branch's one claim")
+	assert.True(t, strings.HasSuffix(remote.pushes[0], ":"+nightlyClaimRefPrefix+nightlyClaimRefName(nightlyTestKey)))
+	assert.Contains(t, stdout.String(), "nightly: renewed "+nightlyTestOwner+"'s claim on "+nightlyTestKey+"\n")
+	assert.Contains(t, stdout.String(), fmt.Sprintf("nightly: run %d on %s concluded failure", nightlyTestRunID, shortSHA(nightlyTestRunHead)))
+	assert.Contains(t, stdout.String(), "  e2e: failed\n")
+}
+
+// Validates: R-6.10.16, R-6.10.23
+//
+// post-merge marks the nightly claims of --branch fixed and removes that
+// branch, so a --branch that is not the pull request's head is refused
+// before anything is merged.
+func TestDODPostMergeRefusesABranchThatIsNotThePRsHead(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"gh pr view 7 --json " + pullRequestStateFields: []byte(`{"state":"OPEN","headRefName":"fix/the-head"}`),
+	}}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:    writeWorkflowFixture(t, nightlyBoundWorkflow),
+		DOD:         true,
+		DODStage:    DODStagePostMerge,
+		DODPR:       7,
+		DODWorktree: "/worktrees/other",
+		DODBranch:   "fix/another-branch",
+		Stdout:      &bytes.Buffer{},
+		Stderr:      &bytes.Buffer{},
+	})
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "fix/another-branch")
+	assert.Contains(t, err.Error(), "fix/the-head")
+	assert.Empty(t, runner.combinedCommands, "nothing is merged")
+	assert.Empty(t, runner.runCommands, "no claim is touched and no branch removed")
 }
 
 // Validates: R-6.10.16
@@ -466,7 +596,7 @@ func requireMergedPRAfterMergeError(t *testing.T, mergeOutput string) {
 			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
 		},
 		outputs: map[string][]byte{
-			"gh pr view 682 --json state,mergedAt,mergeCommit,statusCheckRollup,url": []byte(`{"state":"MERGED","mergedAt":"2026-04-30T04:15:18Z","mergeCommit":{"oid":"merge-sha"}}`),
+			"gh pr view 682 --json " + pullRequestStateFields: []byte(`{"state":"MERGED","mergedAt":"2026-04-30T04:15:18Z","mergeCommit":{"oid":"merge-sha"}}`),
 		},
 	}
 
@@ -488,7 +618,7 @@ func TestDODMergeWrapperFailsWhenServerSideMergeDidNotComplete(t *testing.T) {
 			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
 		},
 		outputs: map[string][]byte{
-			"gh pr view 682 --json state,mergedAt,mergeCommit,statusCheckRollup,url": []byte(`{"state":"OPEN"}`),
+			"gh pr view 682 --json " + pullRequestStateFields: []byte(`{"state":"OPEN"}`),
 		},
 	}
 

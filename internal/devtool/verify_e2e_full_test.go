@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,6 +267,38 @@ func TestRunVerifyE2EFullReportsTheAuthPreflightRerunFailure(t *testing.T) {
 
 // Validates: R-6.10.26
 //
+// A rerun that skipped the preflight test names no failed test, so the red
+// step names the one the first attempt failed.
+func TestRunVerifyE2EFullNamesTheFailedTestWhenTheAuthPreflightRerunSkipped(t *testing.T) {
+	t.Parallel()
+
+	authKey := goCommandKey(authE2EPreflightArgs())
+	authRuns := 0
+	runner := &fakeRunner{
+		runErrSequenceByKey: map[string][]error{authKey: {assert.AnError}},
+		runStdoutFunc: func(args []string) string {
+			if goCommandKey(args) != authKey {
+				return passingGoTestOutput(args)
+			}
+
+			authRuns++
+			if authRuns == 1 {
+				return rawFailLines(authPreflightTestName)
+			}
+
+			return "=== RUN   " + authPreflightTestName + "\n--- SKIP: " + authPreflightTestName + " (0.00s)\n" +
+				"PASS\nok  \t" + testE2EPackage + "\t0.100s\n"
+		},
+	}
+
+	summary, _, err := runE2EFullForTest(t, runner, true)
+	require.ErrorIs(t, err, errE2EPreflight)
+	require.ErrorContains(t, err, "skipped "+authPreflightTestName)
+	assert.Equal(t, []string{authPreflightTestName}, requireVerifySummaryStep(t, summary, "auth preflight").FailedTests)
+}
+
+// Validates: R-6.10.26
+//
 // The auth preflight skips when Microsoft reports a read-only window: the
 // lane could not run. Recording that as a pass would claim a verification
 // that did not happen.
@@ -302,4 +335,98 @@ func TestRunVerifyRecordsASkippedAuthPreflightAsSkipped(t *testing.T) {
 	assert.Equal(t, verifySummaryStatusSkipped, requireVerifySummaryStep(t, summary, "auth preflight").Status)
 	assert.Contains(t, stdout.String(), authPreflightSkippedNotice)
 	assert.Contains(t, stdout.String(), "auth preflight: "+verifySummaryStatusSkipped)
+}
+
+// The made-up live test and incident of the classified rerun tests.
+const (
+	rerunTestName     = "TestE2E_WidgetRoundTrip"
+	rerunTestIncident = "LI-20990101-01"
+)
+
+// runClassifiedRerunForTest reruns rerunTestName the way a classified path
+// does, the fake go test printing output and ending with goTestErr, and
+// returns the collector, what the rerun printed and its error.
+func runClassifiedRerunForTest(t *testing.T, output string, goTestErr error) (*verifySummaryCollector, string, error) {
+	t.Helper()
+
+	runner := &fakeRunner{runErr: goTestErr, runStdoutFunc: func([]string) string { return output }}
+	stdout := &bytes.Buffer{}
+	collector := newVerifySummaryCollector(VerifyE2EFull, stdout, "", "")
+	_, err := rerunClassifiedQuirk(t.Context(), runner, t.TempDir(), nil, collector, stdout, &bytes.Buffer{}, classifiedQuirkRerun{
+		incidentID: rerunTestIncident,
+		phase:      "widget bucket",
+		trigger:    rerunTestName,
+		args:       []string{"test", "-run=^" + rerunTestName + "$", "-count=1", "-v", "./e2e/..."},
+		firstErr:   assert.AnError,
+	})
+
+	return collector, stdout.String(), err
+}
+
+// Validates: R-6.10.23
+//
+// The nightly's log reader takes a pass for a classified rerun's only inside
+// the window the rerun's marker line opens, so the marker must come before
+// the rerun's go test prints anything: the failure the rerun answers is then
+// not keyed.
+func TestRerunClassifiedQuirkPrintsItsMarkerBeforeItsGoTest(t *testing.T) {
+	t.Parallel()
+
+	rerun := "=== RUN   " + rerunTestName + "\n--- PASS: " + rerunTestName + " (1.00s)\nPASS\nok  \t" + testE2EPackage + "\t1.100s\n"
+	_, printed, err := runClassifiedRerunForTest(t, rerun, nil)
+	require.NoError(t, err)
+
+	assert.True(t, strings.HasPrefix(printed, classifiedRerunMarkerPrefix+rerunTestIncident+"\n"+rerun),
+		"the marker line comes first, then the rerun's output: %q", printed)
+	failure := jsonFailLines(rerunTestName)
+	assert.Empty(t, parseGoTestLog(failure+printed).failedTopLevelTestsByPackage(), "the rerun's pass answers the failure")
+}
+
+// Validates: R-6.10.26
+//
+// A rerun that skips the test it reruns verified nothing, so it is no pass:
+// go test exits 0 and its output shows a test selected, but the first
+// failure stays and the rerun is recorded as failed. A subtest that skips
+// inside a passing test is the test passing.
+func TestRerunClassifiedQuirkFailsARerunThatSkippedItsTest(t *testing.T) {
+	t.Parallel()
+
+	const result = "PASS\nok  \t" + testE2EPackage + "\t0.100s\n"
+	skippedRaw := "=== RUN   " + rerunTestName + "\n--- SKIP: " + rerunTestName + " (0.00s)\n    widget_test.go:12: no widget\n" + result
+	skippedJSON := `{"Action":"skip","Package":"` + testE2EPackage + `","Test":"` + rerunTestName + `"}` + "\n" +
+		`{"Action":"pass","Package":"` + testE2EPackage + `"}` + "\n"
+	for name, output := range map[string]string{"raw": skippedRaw, "-json": skippedJSON} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			collector, printed, err := runClassifiedRerunForTest(t, output, nil)
+			require.ErrorContains(t, err, "skipped "+rerunTestName)
+			require.ErrorIs(t, err, assert.AnError, "the error carries the first attempt's")
+			require.Len(t, collector.summary.ClassifiedReruns, 1)
+			assert.Equal(t, verifySummaryStatusFail, collector.summary.ClassifiedReruns[0].Status)
+			assert.NotContains(t, printed, "after successful rerun")
+		})
+	}
+
+	subtestSkipped := "=== RUN   " + rerunTestName + "\n    --- SKIP: " + rerunTestName + "/personal (0.00s)\n" +
+		"--- PASS: " + rerunTestName + " (0.20s)\n" + result
+	_, _, err := runClassifiedRerunForTest(t, subtestSkipped, nil)
+	require.NoError(t, err)
+}
+
+// Validates: R-6.10.26
+//
+// The skip verdict is for a rerun go test passed. A rerun go test failed
+// keeps that failure as its error, whatever its output shows skipped.
+func TestRerunClassifiedQuirkKeepsTheErrorOfARerunThatFailedAndSkipped(t *testing.T) {
+	t.Parallel()
+
+	goTestErr := errors.New("go test of the rerun failed")
+	output := "=== RUN   " + rerunTestName + "\n--- SKIP: " + rerunTestName + " (0.00s)\nFAIL\t" + testE2EPackage + "\t0.100s\n"
+	collector, _, err := runClassifiedRerunForTest(t, output, goTestErr)
+	require.ErrorIs(t, err, goTestErr)
+	require.ErrorIs(t, err, assert.AnError, "the error carries the first attempt's")
+	assert.NotContains(t, err.Error(), "verified nothing")
+	require.Len(t, collector.summary.ClassifiedReruns, 1)
+	assert.Equal(t, verifySummaryStatusFail, collector.summary.ClassifiedReruns[0].Status)
 }

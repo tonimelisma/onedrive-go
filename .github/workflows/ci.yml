@@ -7,13 +7,22 @@ on:
   # merges and retargets it to main.
   pull_request:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'The nightly-report job prints the commit status and the issue text it would write, and writes nothing'
+        type: boolean
+        default: true
   schedule:
-    # 10:00 UTC: 03:00 Pacific daylight time, 02:00 standard time.
-    - cron: '0 10 * * *'
+    # 10:17 UTC: 03:17 Pacific daylight time, 02:17 standard time. Off the
+    # hour, where GitHub delays scheduled runs the most.
+    - cron: '17 10 * * *'
 
-# Cancel stale PR runs; never cancel push, scheduled or manual runs.
+# Cancel stale PR runs; never cancel push, scheduled or manual runs. The group
+# is per event, so a push run and a scheduled or manual run of one commit
+# neither queue behind nor cancel each other. The live jobs keep their own
+# job-level groups, one per test account across every event.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege by default. id-token: write is granted per-job to the two
@@ -41,9 +50,12 @@ permissions:
 # every exhaustive test), `stress` (race repetition of ./internal/multisync
 # and the ./internal/sync/... tree), and the live `e2e-full` profile. A data
 # race or a coverage drop can therefore reach main and be caught by the next
-# nightly run; that is the trade-off for a three-minute PR lane. Locally, the
-# DoD pre-pr stage runs the `pr` profile (lint, then quick), and
-# `verify default` still runs the full unit tier.
+# nightly run; that is the trade-off for a three-minute PR lane. The
+# `nightly-report` job makes that run's verdict visible: the commit status
+# `nightly` on the commit it ran on, and one issue labelled `nightly-failure`
+# open while the nightly is red. Locally, the DoD pre-pr stage runs the `pr`
+# profile (lint, then quick), and `verify default` still runs the full unit
+# tier.
 #
 # The live jobs (`integration`, `e2e`) run on pull requests, dispatch and the
 # schedule, never on push to main: their shared test accounts serialize runs,
@@ -213,9 +225,10 @@ jobs:
   # 1/3)" and so on, so the required name never appears and every PR stays
   # blocked forever. This aggregate keeps the required name stable and
   # independent of how many jobs and shards the lane grows. It waits on every
-  # tier: on a PR or a push the full tier is skipped by its own condition, on
-  # the schedule the PR lane is, and a skipped job is not a failure. A run in
-  # which nothing at all ran is.
+  # verify tier, not on `stress` or the live jobs: on a PR or a push the full
+  # tier is skipped by its own condition, on the schedule the PR lane is, and
+  # a skipped job is not a failure. A run in which nothing at all ran is. The
+  # nightly's verdict over all of its jobs is the `nightly-report` job's.
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -600,3 +613,46 @@ jobs:
           echo "::warning::E2E test auth may have failed."
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap."
           echo "::warning::See CLAUDE.md 'Test credential pipeline' for re-bootstrap instructions."
+
+  # The verdict of a full-tier run, where a person sees it (R-6.10.24): the
+  # commit status `nightly` on the run's head commit and, for a scheduled run
+  # of main, one issue labelled `nightly-failure`, opened or commented on by a
+  # red night and closed by a green one. It runs after every job the night
+  # requires, whatever they concluded; which jobs those are, the verdict and
+  # the issue text are `devtool nightly report`'s, and
+  # TestNightlyRequiredJobsExistInWorkflow holds this job's needs to them. A
+  # manual dispatch only prints what it would write unless its dry_run input
+  # is turned off, and never writes the issue. One report runs at a time, so
+  # two cannot both open the issue, and a running report is never canceled;
+  # GitHub keeps at most one report waiting and replaces it with a newer one.
+  # Only the report of the newest scheduled run of main writes the issue. The
+  # job uses the run's own token: it reads the code and the run, and writes
+  # commit statuses and issues, nothing else.
+  nightly-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [verify-full, verify, stress, integration, e2e]
+    if: always() && github.event_name == 'schedule' || always() && github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: nightly-report
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Report the nightly verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          DRY_RUN: ${{ github.event_name != 'schedule' && inputs.dry_run }}
+        run: go run ./cmd/devtool nightly report --run-id "${RUN_ID}" --dry-run="${DRY_RUN}"
