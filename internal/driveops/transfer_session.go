@@ -71,10 +71,11 @@ func existingItemSessionKey(localPath, itemID string) string {
 	return "item::" + itemID + "::" + localPath
 }
 
-// cancelSessionTimeout bounds each best-effort cleanup after a failed upload:
-// the cancel of a dropped session, and the removal of the empty item a create
-// left (removePlaceholder).
-const cancelSessionTimeout = 10 * time.Second
+// placeholderRemovalTimeout bounds the best-effort removal of the empty item a
+// failed create left (removePlaceholder): every read and conditional delete of
+// RemoveEmptyItem together. The cancel of a dropped session is a different
+// request, bounded by graph.SessionCancelTimeout.
+const placeholderRemovalTimeout = 10 * time.Second
 
 // persistedSessionUpload uploads through a recorded, resumable session.
 //
@@ -467,7 +468,7 @@ func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID drivei
 		return
 	}
 
-	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelSessionTimeout)
+	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placeholderRemovalTimeout)
 	defer cancel()
 
 	removed, err := remover.RemoveEmptyItem(removeCtx, driveID, itemID)
@@ -496,7 +497,7 @@ func (tm *TransferManager) dropSession(ctx context.Context, driveID, key string,
 		return
 	}
 
-	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelSessionTimeout)
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), graph.SessionCancelTimeout)
 	defer cancel()
 
 	if err := canceler.CancelUploadSession(cancelCtx, &graph.UploadSession{UploadURL: uploadURL}); err != nil {

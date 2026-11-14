@@ -19,11 +19,15 @@ Callers receive clean, consistent data via `graph.Item` and never deal with API 
 
 `internal/graphtransport` constructs the concrete HTTP profiles used for Graph work:
 
-- `BootstrapMetadataClient(logger)`: retrying metadata client for login/bootstrap/account discovery before account identity is known
-- `InteractiveMetadataClient(logger, gate)`: retrying metadata client for one interactive target, with caller-owned shared 429 coordination
-- `InteractiveTransferClient(logger)`: retrying transfer client for upload/download/copy-monitor flows
+- `BootstrapMetadataClient(logger, notices)`: retrying metadata client for login/bootstrap/account discovery before account identity is known
+- `InteractiveMetadataClient(logger, gate, notices)`: retrying metadata client for one interactive target, with caller-owned shared 429 coordination
+- `InteractiveTransferClient(logger, notices)`: retrying transfer client for upload/download/copy-monitor flows
 - `SyncClientSet()`: non-retrying metadata/transfer clients for sync classification and sync uploads/downloads
 - `AuthClient()`: the sign-in service's client (token refresh, device code, code exchange), not Graph-facing; see Authentication below
+
+Every retrying builder takes the caller's shared `*retry.Notices`, so one
+outage or long rate-limit wait is announced once per process rather than once
+per client (R-6.6.8); a nil `notices` gives the client private announcements.
 
 `driveops.SessionRuntime` composes those stateless builders into the three runtime shapes the app actually uses:
 
@@ -83,7 +87,8 @@ This keeps domain-specific logic close to its tests without reopening the public
 | Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go` (`TestDo_ErrorClassification`, `TestDo_ParsesStructuredGraphErrors`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), `internal/graph/normalize_test.go` |
 | Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/shares_test.go` (`TestResolveShareURL_PreservesRemoteItemIdentity`), `internal/graph/items_test.go` (`TestToItem_SharedOwner_FallbackChain`), `internal/graph/quirks_test.go` (`TestQueryUploadSession_ReturnsNextExpectedRanges`), `internal/graph/upload_test.go` |
 | `@microsoft.graph.downloadUrl` is validated against the content host allow-list before either download route sends a request, the refusal never echoes the URL, and only a loopback base URL (a test fixture) admits loopback pre-auth URLs (R-6.8.22). | `TestDownload_RejectsUntrustedDownloadURL`, `TestValidateDownloadURL`, `TestParseAndValidatePreAuthURL`, `TestNewClient_LoopbackBaseURLAcceptsLoopbackPreAuthURLs` |
-| The 401 refresh-and-retry resends the whole request body, or fails with an error naming the body when it cannot be rewound; it never sends a second request with a consumed body (R-6.8.14). | `TestDo_401WithNonSeekableBodyFailsLoudly`, `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`, `TestDoOnce_401_RefreshSucceeds` |
+| The authenticated request helpers take the body as bytes, and every attempt, the 401 refresh-and-retry included, is built from them: the retry sends exactly the bytes of the first request, and a body that cannot be replayed cannot be passed (R-6.8.14). | `TestDo_401RetrySendsTheBytesOfTheFirstRequest`, `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`, `TestDoOnce_401_RefreshSucceeds`, `TestDo_ContentTypeForBody` |
+| A request that never left the client (token source failed, context already ended, request not buildable, a retry after a refusal not sent) carries `errRequestNotSent`, and neither the create mark nor the final-fragment mark is set on it (R-5.6.12, R-5.6.15). | `TestCreateFile_TokenFailureIsNotOutcomeUnknown`, `TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown`, `TestCreateFile_UnsentRetryIsNotOutcomeUnknown`, `TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile`, `TestUploadFromSession_UnsentFinalFragmentIsNotUncertain`, `TestDo_ContextCancellation` |
 | The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
 | Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
 | Every sign-in request (silent refresh, device code and its polls, code exchange) goes through the injected auth client, whose deadlines (30 s headers, 60 s request) release every caller of a stalled token endpoint; a nil auth client and a nil Graph HTTP client are errors, never `http.DefaultClient` (R-6.8.27). | `TestAuthClient_BoundsEveryRequest`, `TestTokenSourceFromPath_RefreshUsesTheInjectedClient`, `TestTokenSourceFromPath_StalledTokenEndpointTimesOut`, `TestTokenSourceFromPath_NilAuthClientIsAnError`, `TestLoginFlows_NilAuthClientIsAnError`, `TestLogin_UsesTheInjectedAuthClient`, `TestLoginWithBrowser_UsesTheInjectedAuthClient`, `TestNewClient_NilHTTPClientIsAnError` |
@@ -186,7 +191,7 @@ The client owns its safety guards and Graph-specific request metadata:
 - `driveDiscoveryPolicy`: transient 403 retry policy for `/me/drives`
 - `rootChildrenPolicy`: transient 404 retry policy for `root/children`
 - `downloadMetadataPolicy`: transient 404 retry policy for item-by-ID download metadata lookup
-- `uploadSessionCreatePolicy`: transient 404 retry policy for create-upload-session requests against freshly created parents
+- `fileCreatePolicy`: transient 404 retry policy for the create of a new file (`CreateFile`) under a freshly created parent
 - `copyDestinationPolicy`: transient 404 retry policy for copy requests whose destination folder is already visible by path but not yet accepted by Graph's copy verifier
 - `deltaPreferHeader`: prebuilt alias-ID delta header plus `Include-Feature=AddToOneDrive`
 - `childrenPreferHeader`: prebuilt `Include-Feature=AddToOneDrive` header for child listing
@@ -276,7 +281,7 @@ instead of a raw "any write/owner role means writable" heuristic:
 ## Transfers
 
 - `download.go`: streaming download with content URL. `@microsoft.graph.downloadUrl` is server-supplied, so both routes pass it through `validatedDownloadURL` — HTTPS, no IP literal, a host on the content allow-list shared with upload sessions (`preAuthContentHosts`) — before building the request, and the refusal never echoes the URL (R-6.8.22, `TestDownload_RejectsUntrustedDownloadURL`). A ranged read is bound to a `DownloadVersion` and accepted only as a 206 whose Content-Range starts at the offset and spans the item (`validateContentRange`, `ErrRangeResumeRejected`); for a hashless item, an HTML or JSON answer of another type whose length is not the item's is `ErrUnexpectedDownloadBody` (`checkDownloadBodyType`); hashed items are never gated by type, since the hash decides
-- `item_create.go`: new files. `CreateFile` posts the name in a JSON body with `conflictBehavior=fail`; `Upload` and `CreateUploadSession` then send the content by item ID through a session conditional on the created eTag, and a zero-byte file is the created item alone (R-5.6.14, L-01). No name ever goes into a URL: a path route turned `v1.0` into folder `_api` holding `v2.0` (probe 4). A failed `CreateFile` that does not say whether the file was created carries `ErrCreateOutcomeUnknown`: no response, a canceled or expired context, a 5xx, a 408, and a 2xx whose item could not be decoded or read back. A definite refusal (409, 429, any other 4xx) does not, so the sync executor can keep its create intent for exactly the first kind (R-5.6.15, `TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile`)
+- `item_create.go`: new files. `CreateFile` posts the name in a JSON body with `conflictBehavior=fail`; `Upload` and `CreateUploadSession` then send the content by item ID through a session conditional on the created eTag, and a zero-byte file is the created item alone (R-5.6.14, L-01). No name ever goes into a URL: a path route turned `v1.0` into folder `_api` holding `v2.0` (probe 4). A failed `CreateFile` that does not say whether the file was created carries `ErrCreateOutcomeUnknown`: no response, a context that ended while the request was out, a 5xx, a 408, and a 2xx whose item could not be decoded or read back. A definite refusal (409, 429, any other 4xx) does not, and neither does a create that never left the client (`errRequestNotSent`: the token source failed, the context had already ended, the request could not be built, or the retry after a 401 or a fresh parent's 404 was never sent; every attempt the graph client itself made before it was a refusal). Only the answers the client sees are judged: a retrying transport's own attempts inside one dispatch are not, and because the create is marked replay safe, under the CLI's transport a 5xx attempt can sit unseen before the last refusal. Sync, the only reader of the mark, uses a transport that retries nothing (R-6.8.8), so the sync executor keeps its create intent for exactly the first kind (R-5.6.15, `TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile`, `TestCreateFile_TokenFailureIsNotOutcomeUnknown`, `TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown`, `TestCreateFile_UnsentRetryIsNotOutcomeUnknown`)
 - `upload.go`: upload sessions for every non-empty file (320 KiB-aligned chunks) and the zero-byte simple PUT overwrite
 - `shares.go`: raw share-link resolution into underlying shared item identity
 - `upload_transfer.go` / `upload_session.go`: existing-item overwrite helpers
@@ -343,7 +348,7 @@ Every non-empty upload, create or overwrite, goes through an upload session
 whose creation carries `fileSystemInfo`, so content and mtime land in one
 version; zero-byte files are the created item, or a simple PUT overwrite, plus
 an mtime PATCH (D-034, live probe 7). The create by body retries the exact
-fresh-parent `404 itemNotFound` with `UploadSessionCreatePolicy()`; a
+fresh-parent `404 itemNotFound` with `FileCreatePolicy()`; a
 read-only shared folder answers it with the correct `403`, which is not
 retried. A create never replaces: 409 `nameAlreadyExists` is `ErrConflict`
 (`TestUpload_ExistingNameIsNeverReplaced`). When the content step fails
@@ -358,7 +363,15 @@ again after the read (LI-20261110-01: a session request the client has
 canceled still lands, up to 0.65 s later in a live probe), so the read and the delete are
 repeated, `placeholderCleanupAttempts` (3) attempts in all, on a context
 detached from the upload's and bounded as a whole by
-`placeholderCleanupTimeout` (10 s). An item that reads back with content or
+`placeholderCleanupTimeout` (10 s). The attempts follow one another without
+a pause: a live probe on Personal (2026-11-12) saw the eTag move once, when
+the session opened or a canceled session request landed, and then hold for a
+minute, and a delete conditional on the eTag read last succeeded every time
+([graph-api-quirks.md](../reference/graph-api-quirks.md), "An Upload Session
+Moves An Empty Item's eTag"). The session itself is canceled first, bounded
+by `SessionCancelTimeout` (10 s), the one bound for that request, which the
+transfer manager uses too; the cancel is best effort and the bound is not
+sized for a provider that refuses slowly. An item that reads back with content or
 without an eTag is never deleted; a 404 on either request counts as removed;
 any other failure ends the removal. Whatever remains is left in place for the
 next pass (R-5.6.14, `TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefused`,
@@ -367,6 +380,15 @@ next pass (R-5.6.14, `TestUpload_FailedContentStepReadsAgainWhenItsDeleteIsRefus
 `TestUpload_FailedContentStepStopsWhenItsEmptyItemIsAlreadyGone`,
 `TestRemoveEmptyItem`; live, in the integration tier,
 `TestIntegration_RemoveEmptyItem_AfterAbandonedUploadSession`).
+
+Only a last fragment that was sent can have committed the file, so only its
+failure is a `FinalFragmentError` (the caller looks the item up before
+uploading again). One that never left the client (`errRequestNotSent`: the
+session URL was refused before the request was built, or the context ended
+after the fragment before it) is a plain failure, and the placeholder of a
+create is removed as for any other content-step failure
+(`TestUploadFromSession_UnsentFinalFragmentIsNotUncertain`,
+`TestUploadFromSession_OnlyFinalFragmentFailureIsUncertain`).
 
 Overwrites by item ID take the caller's preflight eTag as `If-Match` on both
 routes (R-5.6.2, D-022, `TestUploadToItem_OverwriteIsConditionalOnBothRoutes`);
@@ -443,14 +465,14 @@ optionally project the attached retry evidence through `ExtractQuirkEvidence`
 when they intentionally degrade or summarize verifier output.
 
 Each documented quirk has an exported name constant (`graph.Quirk*`, for
-example `QuirkUploadSessionCreateTransient404`). That name is the stable
+example `QuirkFileCreateTransient404`). That name is the stable
 identifier: it is `QuirkRetryError.Quirk`, and it is the `graph.QuirkLogKey`
 (`graph_quirk`) field on the one debug record logged when a budget runs out
 (per-attempt records use `quirk`). Code and tests that must recognize a quirk
 use `errors.As` in process or that log field across a process boundary
 (the live-test fixture classifier reads it from `--debug` stderr), never the
 error text. `QuirkRetryError.Error()` is plain words for the symptom ("OneDrive
-kept reporting the upload's destination folder as missing, even after 7
+kept reporting the new file's folder as missing, even after 7
 tries: ...") and deliberately does not contain the quirk name, so rewording it
 cannot break a classifier.
 
@@ -542,7 +564,7 @@ escalation next to the request ID (`TestGraphError_KeepsAgsDiagnosticHeader`,
 
 Implements: R-6.8.8 [verified]
 
-Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The transport only replays methods that are safe at that generic boundary (`GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`); unsafe `POST` and `PATCH` calls return their first transient response to the graph operation that owns the mutation semantics. The one exception is an operation that marks its request `retry.WithReplaySafe`: `CreateFile` and `CreateFolder`, whose `conflictBehavior=fail` makes a replay of a committed create answer 409 without creating anything (R-6.8.21, `TestCreate_TransientFailureIsResentByARetryingTransport`). Before that, one 503 on a create failed `put` outright (e2e `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`). The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 or 502/503/504 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, transient 404 on create-upload-session requests against freshly created parents, and the documented simple-upload fallback path. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
+Generic retry has been extracted from the graph client into `retry.RetryTransport`, an `http.RoundTripper` wrapper. The graph client no longer has generic retry loops (`doRetry`/`doPreAuthRetry` deleted), throttle state, or transport-layer Retry-After coordination. The transport only replays methods that are safe at that generic boundary (`GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`); unsafe `POST` and `PATCH` calls return their first transient response to the graph operation that owns the mutation semantics. The one exception is an operation that marks its request `retry.WithReplaySafe`: `CreateFile` and `CreateFolder`, whose `conflictBehavior=fail` makes a replay of a committed create answer 409 without creating anything (R-6.8.21, `TestCreate_TransientFailureIsResentByARetryingTransport`). Before that, one 503 on a create failed `put` outright (e2e `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges`). The only client-local retries are documented Graph API quirk normalizations: transient 403 on `/me/drives`, transient 404 on root-child listing, transient 404 on item-by-ID download metadata fetch before a pre-authenticated download begins, transient 404 or 502/503/504 on the immediate post-simple-upload `UpdateFileSystemInfo` PATCH, transient 404 on the create of a new file under a freshly created parent, and the documented simple-upload fallback path. All other retry, backoff, Retry-After parsing, and shared 429 coordination live below `graph` in the retry/HTTP-profile layer.
 
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL, the token source and the HTTP client; a nil HTTP client is an error, not `http.DefaultClient`, whose missing deadlines would undo the transport profiles (R-6.8.27). `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `driveops.SessionRuntime` is the normal production runtime owner for those clients, and it composes the stateless `internal/graphtransport` builders into the concrete profiles the app needs:
 
@@ -570,7 +592,11 @@ canceled or declined, device code expired) to the plain sentinels
 Graph's absolute `@odata.nextLink` through `stripBaseURL`, drive listings
 included (`TestDrives_FollowsNextLinkAcrossPages`). A non-2xx copy-monitor
 reply is a `GraphError`, not a status document
-(`TestPollCopyStatus_NonSuccessStatusReturnsGraphError`).
+(`TestPollCopyStatus_NonSuccessStatusReturnsGraphError`). The poll goes
+through `doPreAuth` like every other pre-authenticated request, so a retry
+names it in the transport's log as `preauth:copy status`, never by its URL,
+and it carries the User-Agent (R-6.8.17, R-6.8.18,
+`TestPollCopyStatus_RetryLogNeverNamesTheMonitorURL`).
 
 Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks). It also attaches a request-scoped redacted log target such as `preauth:upload chunk`, so transport retry logs never emit the pre-authenticated URL itself. Transport failures come back from `http.Client.Do` as `*url.Error`, whose text embeds the full request URL; `dispatchRequest` scrubs it to scheme and host (`redactURLError`) before the error is wrapped, so surfaced error text and logs never carry the credential either. Implements: R-6.8.17 [verified]
 
@@ -580,17 +606,37 @@ Implements: R-6.8.14 [verified], R-6.6.34 [verified]
 
 Transparent token refresh on 401 inside `doOnce()`, independent of retry transport. On 401: refresh token → retry once. If still 401 → return `ErrUnauthorized` (fatal). Auth refresh is lifecycle management, not transient retry — it works regardless of whether the HTTP client has a `RetryTransport`.
 
-The retry resends the caller's body from the start: `rewindBody` seeks it back
-to offset 0. `nil` and `http.NoBody` need nothing; any other body must be an
-`io.Seeker`, and every caller passes a `bytes.Reader`. A body that cannot be
-rewound fails the request with `errBodyNotReplayable` ("rewinding request body
-after 401") before a second request is built, because resending a consumed
-stream would send a PATCH or POST with no body
-(`TestDo_401WithNonSeekableBodyFailsLoudly`,
+The retry sends exactly the bytes of the first request. `do`, `doRequest`,
+`doRequestVia`, `doOnce`, `retryUnauthorized` and `buildAuthorizedRequest`
+take the JSON body as `[]byte` (nil for none), and every attempt is built from those bytes through a
+fresh `bytes.Reader`, which also gives the request its exact `Content-Length`
+and the `GetBody` the transport's own replay uses (R-6.8.19,
+`spec/design/retry.md`). The type is the guard: a stream that a second
+request could not resend cannot be passed at all. When the helpers took an
+`io.Reader`, the 401 retry rewound the caller's reader with `Seek(0)` and
+failed loudly on one that could not seek; a reader that stood past bytes
+already read was rewound to the start of its buffer, and the retry sent bytes
+the first request had not (`TestDo_401RetrySendsTheBytesOfTheFirstRequest`,
 `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`,
-`TestDoOnce_401_RefreshSucceeds`). This is the graph client's own guard: the
-transport's replay check (R-6.8.19, `spec/design/retry.md`) never sees the 401
-retry, which `doOnce` builds as a new request.
+`TestDoOnce_401_RefreshSucceeds`). Every authenticated caller sends a small
+marshaled JSON body or none; content goes through `doRawUpload`, whose body
+is a fresh `io.SectionReader` over the caller's `io.ReaderAt` on every
+attempt, or through pre-authenticated URLs whose request builder runs again
+for each attempt. A request with a body declares `Content-Type:
+application/json`; `RestoreItem`, a body-less POST, passes the header itself,
+as it always has (`TestDo_ContentTypeForBody`, `TestRestoreItem_Success`).
+
+A failure before a request leaves carries `errRequestNotSent`: the token
+source failed, the context had already ended (net/http would not send it
+either; `buildAuthorizedRequest` reports it as not sent rather than leaving
+it to read as a dispatch failure), or the request could not be built. After a 401 the same holds for the retry: a
+failed token refresh, a failed forced refresh, a 401 body that would not
+close, or a retry that cannot be built leaves the refused request as the only
+one sent. `doPreAuth` marks a context that had ended and a request builder
+that failed the same way, and the quirk retry marks a backoff that its
+context ended. The mark is what keeps `ErrCreateOutcomeUnknown` and
+`FinalFragmentError` off failures that cannot have changed anything
+(`TestDo_ContextCancellation`, `TestDo_TokenError`).
 
 Ordinary Graph `401` is intentionally **not** a sync trial or backoff signal.
 The graph boundary gets exactly one lifecycle retry: refresh the saved login
@@ -677,7 +723,7 @@ The graph package intentionally keeps runtime ownership narrow:
 - Audit all `slog.*` calls for potential secret leakage (tokens, pre-auth URLs). [verified]
 - Audit all error message strings for embedded secrets — `GraphError.Message` and `RawBody` are redacted before exposure. [verified]
 - Test that captures log output and verifies no tokens or pre-auth URLs appear. [verified]
-- Authenticated request helpers are package-internal (`do`, `doGetWithHeaders`, and `doRequest`). External callers use higher-level graph operations instead of raw request dispatch. [verified]
+- Authenticated request helpers are package-internal (`do`, `doGetWithHeaders`, and `doRequest`) and take the body as bytes. External callers use higher-level graph operations instead of raw request dispatch. [verified]
 - Shared-item discovery uses only `GET /me/drive/root/search(q='*')`. Search
   results may omit owner identity or omit some shares entirely, so callers
   enrich actionable hits through `GET /drives/{driveId}/items/{itemId}` and

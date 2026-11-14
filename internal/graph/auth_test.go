@@ -1036,7 +1036,7 @@ func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
 		go func() {
 			browserErrCh <- browserSim(ctx, authURL)
 		}()
-		return fmt.Errorf("browser open failed")
+		return errors.New("browser open failed")
 	}
 
 	ts, err := doAuthCodeLogin(t.Context(), tokenPath, cfg, openURL, slog.Default())

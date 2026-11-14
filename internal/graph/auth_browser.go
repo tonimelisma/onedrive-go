@@ -89,7 +89,7 @@ func startCallbackServer(
 
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
-		baseErr := fmt.Errorf("graph: listener address is not TCP")
+		baseErr := errors.New("graph: listener address is not TCP")
 		if closeErr := listener.Close(); closeErr != nil {
 			return nil, 0, errors.Join(baseErr, fmt.Errorf("graph: closing callback listener: %w", closeErr))
 		}
@@ -102,7 +102,7 @@ func startCallbackServer(
 
 	srv := &http.Server{
 		Handler:           mux,
-		ReadHeaderTimeout: shutdownTimeout,
+		ReadHeaderTimeout: callbackHeaderReadTimeout,
 	}
 
 	go func() {
@@ -114,8 +114,6 @@ func startCallbackServer(
 	return srv, port, nil
 }
 
-// registerCallbackHandler adds the callback route to the mux.
-// Must be called before the browser redirects back.
 // deliverCallbackResult reports the first outcome of the OAuth callback and
 // drops any later one.
 //
@@ -132,6 +130,8 @@ func deliverCallbackResult(resultCh chan<- callbackResult, result callbackResult
 	}
 }
 
+// registerCallbackHandler adds the callback route to the mux.
+// Must be called before the browser redirects back.
 func registerCallbackHandler(mux *http.ServeMux, state string, resultCh chan<- callbackResult) {
 	mux.HandleFunc("GET "+callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		handleOAuthCallback(w, r, state, resultCh)
@@ -143,7 +143,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	// Validate state to prevent CSRF.
 	if r.URL.Query().Get("state") != state {
 		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
-		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: OAuth2 state mismatch (possible CSRF)")})
+		deliverCallbackResult(resultCh, callbackResult{err: errors.New("graph: OAuth2 state mismatch (possible CSRF)")})
 
 		return
 	}
@@ -160,7 +160,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		http.Error(w, "Missing authorization code", http.StatusBadRequest)
-		deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: callback missing authorization code")})
+		deliverCallbackResult(resultCh, callbackResult{err: errors.New("graph: callback missing authorization code")})
 
 		return
 	}
@@ -179,7 +179,7 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 // Accepts an explicit logger instead of using slog.Default() so the caller
 // controls logging configuration (B-146).
 func shutdownCallbackServer(ctx context.Context, srv *http.Server, logger *slog.Logger) {
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), callbackShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {

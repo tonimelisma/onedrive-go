@@ -254,7 +254,7 @@ func TestCreateUploadSession_RetriesTransientNotFoundOnCreate(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	client.policies.uploadSessionCreate = testRetryPolicy()
+	client.policies.fileCreate = testRetryPolicy()
 
 	session, err := client.CreateUploadSession(
 		t.Context(), driveid.New("d"), "parent", "retry-file.bin", 10485760, time.Time{},
@@ -1602,6 +1602,53 @@ func TestResumeUpload_SessionExpired(t *testing.T) {
 
 // Validates: R-5.6.12
 //
+// Only the session status answered 404 says the session is gone. The expired
+// error keeps that answer (its request ID is what support asks for), and any
+// other failure of the status request, such as the session URL's own
+// credential refused or a server error, leaves the session as it was. The 404
+// used to come back as the bare sentinel, without the answer.
+func TestResumeUpload_OnlyAGoneSessionIsExpired(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		code    string
+		expired bool
+		also    error
+	}{
+		{name: "404 session gone", status: http.StatusNotFound, code: "itemNotFound", expired: true, also: ErrNotFound},
+		{name: "401 URL refused", status: http.StatusUnauthorized, code: "unauthenticated", also: ErrPreAuthURLRejected},
+		{name: "503", status: http.StatusServiceUnavailable, code: "serviceNotAvailable", also: ErrServerError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("request-id", "status-request")
+				w.WriteHeader(tc.status)
+				writeTestResponsef(t, w, `{"error":{"code":%q}}`, tc.code)
+			}))
+			defer sessionSrv.Close()
+
+			client := newNoRetryTestClient(t, sessionSrv.URL)
+			session := &UploadSession{UploadURL: UploadURL(sessionSrv.URL + "/session")}
+
+			_, err := client.ResumeUpload(t.Context(), session, bytes.NewReader(nil), 1024, nil)
+			require.ErrorIs(t, err, tc.also)
+			if tc.expired {
+				require.ErrorIs(t, err, ErrUploadSessionExpired)
+			} else {
+				require.NotErrorIs(t, err, ErrUploadSessionExpired)
+			}
+
+			var graphErr *GraphError
+			require.ErrorAs(t, err, &graphErr, "the status answer stays readable")
+			assert.Equal(t, "status-request", graphErr.RequestID)
+		})
+	}
+}
+
+// Validates: R-5.6.12
+//
 // A session whose status lists no range left has received every byte: the
 // item is committed or committing. That is not a malformed status; the
 // caller looks the item up instead of starting the upload over.
@@ -2100,6 +2147,64 @@ func TestUploadFromSession_OnlyFinalFragmentFailureIsUncertain(t *testing.T) {
 
 			// Only a failed last fragment may have committed the file.
 			assert.Equal(t, failAt == 2, IsFinalFragmentUncertain(err))
+		})
+	}
+}
+
+// Validates: R-5.6.12, R-5.6.14
+//
+// A last fragment that never left the client cannot have committed the file,
+// so its failure is a plain failure: the session URL was refused before the
+// request was built, or the context ended after the fragment before it.
+func TestUploadFromSession_UnsentFinalFragmentIsNotUncertain(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    []byte
+		untrusted  bool // the session names a host off the upload allow-list
+		cancelAt   int64
+		wantPuts   int32
+		wantCancel bool
+	}{
+		{name: "session URL refused", content: []byte("abc"), untrusted: true},
+		{
+			name:     "context ended after the fragment before it",
+			content:  bytes.Repeat([]byte("F"), int(ChunkedUploadChunkSize+1024)),
+			cancelAt: ChunkedUploadChunkSize, wantPuts: 1, wantCancel: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var puts atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := io.Copy(io.Discard, r.Body)
+				assert.NoError(t, err)
+				puts.Add(1)
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer srv.Close()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			progress := func(sent, _ int64) {
+				if sent == tc.cancelAt {
+					cancel()
+				}
+			}
+
+			session := &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")}
+			if tc.untrusted {
+				session.UploadURL = "https://uploads.example.com/upload"
+			}
+
+			_, err := newNoRetryTestClient(t, srv.URL).UploadFromSession(
+				ctx, session, bytes.NewReader(tc.content), int64(len(tc.content)), progress)
+			require.Error(t, err)
+			assert.False(t, IsFinalFragmentUncertain(err), "the last fragment was never sent")
+			if tc.wantCancel {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			assert.Equal(t, tc.wantPuts, puts.Load())
 		})
 	}
 }

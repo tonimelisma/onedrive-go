@@ -16,12 +16,12 @@ import (
 // exhausted" debug record, so tests and incident tooling can recognize a
 // quirk without matching message wording.
 const (
-	QuirkDrivesTokenPropagation          = "drives-token-propagation"
-	QuirkCopyDestinationTransient404     = "copy-destination-transient-404"
-	QuirkUploadSessionCreateTransient404 = "upload-session-create-transient-404"
-	QuirkSimpleUploadMtimeTransient404   = "simple-upload-mtime-transient-404"
-	QuirkDownloadMetadataTransient404    = "download-metadata-transient-404"
-	QuirkRootChildrenTransient404        = "root-children-transient-404"
+	QuirkDrivesTokenPropagation        = "drives-token-propagation"
+	QuirkCopyDestinationTransient404   = "copy-destination-transient-404"
+	QuirkFileCreateTransient404        = "file-create-transient-404"
+	QuirkSimpleUploadMtimeTransient404 = "simple-upload-mtime-transient-404"
+	QuirkDownloadMetadataTransient404  = "download-metadata-transient-404"
+	QuirkRootChildrenTransient404      = "root-children-transient-404"
 )
 
 // QuirkLogKey is the structured log field naming the quirk whose bounded
@@ -35,11 +35,15 @@ type documentedGraphQuirkSpec struct {
 	match  func(error) (*GraphError, bool)
 }
 
+// doDocumentedGraphQuirkRetry runs op, and runs it again while it fails with
+// the answer spec.match recognizes, up to spec.policy.MaxAttempts attempts in
+// all (at least one). Any other failure is returned at once; the last matched failure
+// is returned as a *QuirkRetryError carrying every attempt's evidence.
 func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec documentedGraphQuirkSpec, op func() (T, error)) (T, error) {
 	var zero T
 	attempts := make([]QuirkRetryAttempt, 0, spec.policy.MaxAttempts)
 
-	for attempt := range spec.policy.MaxAttempts {
+	for attempt := 0; ; attempt++ {
 		value, err := op()
 		if err == nil {
 			return value, nil
@@ -51,25 +55,8 @@ func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec doc
 		}
 		attempts = append(attempts, buildQuirkRetryAttempt(attempt+1, graphErr))
 
-		if attempt >= spec.policy.MaxAttempts-1 {
-			quirkErr := &QuirkRetryError{
-				Quirk:    spec.name,
-				Attempts: attempts,
-				Err:      err,
-			}
-
-			// Debug only: quirkErr is returned and reported once by the caller
-			// (it unwraps to the underlying not-found or server error). The
-			// retry evidence stays in this record and on QuirkRetryError for
-			// --debug and live-test incident capture.
-			c.logger.Debug("graph quirk retry exhausted",
-				slog.String(QuirkLogKey, quirkErr.Quirk),
-				slog.Int("graph_quirk_attempt_count", len(quirkErr.Attempts)),
-				slog.Any("graph_quirk_attempts", quirkErr.Attempts),
-				slog.Any("error", err),
-			)
-
-			return zero, quirkErr
+		if attempt+1 >= spec.policy.MaxAttempts {
+			return zero, c.quirkRetryExhausted(spec.name, attempts, err)
 		}
 
 		backoff := spec.policy.Delay(attempt)
@@ -86,11 +73,32 @@ func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec doc
 		c.logger.Debug("retrying after documented graph quirk", attrs...)
 
 		if sleepErr := retry.TimeSleep(ctx, backoff); sleepErr != nil {
-			return zero, fmt.Errorf("graph: %s retry canceled: %w", spec.name, sleepErr)
+			// The retry never left; the attempt before it got the quirk's answer.
+			return zero, fmt.Errorf("graph: %s retry canceled: %w: %w", spec.name, errRequestNotSent, sleepErr)
 		}
 	}
+}
 
-	return zero, fmt.Errorf("graph: quirk retry exhausted without returning")
+// quirkRetryExhausted wraps the last matched failure of an exhausted quirk
+// retry. Debug only: the error is returned and reported once by the caller
+// (it unwraps to the underlying not-found or server error). The retry evidence
+// stays in this record and on QuirkRetryError for --debug and live-test
+// incident capture.
+func (c *Client) quirkRetryExhausted(quirk string, attempts []QuirkRetryAttempt, err error) *QuirkRetryError {
+	quirkErr := &QuirkRetryError{
+		Quirk:    quirk,
+		Attempts: attempts,
+		Err:      err,
+	}
+
+	c.logger.Debug("graph quirk retry exhausted",
+		slog.String(QuirkLogKey, quirkErr.Quirk),
+		slog.Int("graph_quirk_attempt_count", len(quirkErr.Attempts)),
+		slog.Any("graph_quirk_attempts", quirkErr.Attempts),
+		slog.Any("error", err),
+	)
+
+	return quirkErr
 }
 
 func buildQuirkRetryAttempt(attempt int, graphErr *GraphError) QuirkRetryAttempt {
@@ -183,7 +191,7 @@ func isTransientSimpleUploadMtimeError(err error) (*GraphError, bool) {
 	}
 }
 
-func isTransientUploadSessionCreateError(err error) (*GraphError, bool) {
+func isTransientFileCreateError(err error) (*GraphError, bool) {
 	return isTransientItemNotFoundError(err)
 }
 

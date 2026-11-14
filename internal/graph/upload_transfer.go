@@ -327,7 +327,7 @@ func (c *Client) chunkedUploadToExistingItem(
 
 	item, err := c.uploadAllChunks(ctx, session, content, size, progress)
 	if err != nil {
-		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), SessionCancelTimeout)
 		defer cancel()
 
 		cancelErr := c.CancelUploadSession(cancelCtx, session)
@@ -361,7 +361,7 @@ func (c *Client) uploadChunksFrom(
 	content io.ReaderAt, totalSize, startOffset int64, progress ProgressFunc,
 ) (*Item, error) {
 	if totalSize == 0 {
-		return nil, fmt.Errorf("graph: cannot upload zero-size file via chunked upload")
+		return nil, errors.New("graph: cannot upload zero-size file via chunked upload")
 	}
 
 	var lastItem *Item
@@ -390,11 +390,12 @@ func (c *Client) uploadChunksFrom(
 				continue
 			}
 
-			if offset+chunkSize == totalSize {
+			if offset+chunkSize == totalSize && !errors.Is(err, errRequestNotSent) {
 				// The last fragment may have committed even though its answer
 				// was lost or slow (a large file's commit can outlast the
 				// response-header timeout). The caller looks the item up
-				// before uploading again (D-036).
+				// before uploading again (D-036). One that never left cannot
+				// have committed anything: its failure is a plain one.
 				return nil, fmt.Errorf("graph: uploading final chunk at offset %d: %w", offset,
 					&FinalFragmentError{Err: err})
 			}
@@ -414,7 +415,7 @@ func (c *Client) uploadChunksFrom(
 	}
 
 	if lastItem == nil {
-		return nil, fmt.Errorf("graph: upload completed all chunks but received no final item")
+		return nil, errors.New("graph: upload completed all chunks but received no final item")
 	}
 
 	return lastItem, nil

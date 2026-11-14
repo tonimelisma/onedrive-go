@@ -3,7 +3,6 @@ package graph
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,33 +18,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// failOnSecondSeeker is an io.ReadSeeker that succeeds on the first Seek
-// but fails on subsequent ones. Used to test the rewindBody error path
-// when a body becomes non-seekable after the first rewind (e.g., stream
-// consumed by a failed attempt).
-type failOnSecondSeeker struct {
-	data  []byte
-	seeks int
-}
-
-func (f *failOnSecondSeeker) Read(p []byte) (int, error) {
-	return copy(p, f.data), io.EOF
-}
-
-func (f *failOnSecondSeeker) Seek(_ int64, _ int) (int64, error) {
-	f.seeks++
-	if f.seeks > 1 {
-		return 0, errors.New("seek failed on second attempt")
-	}
-
-	return 0, nil
-}
-
+// writeQuirksTestBody writes a fake server's answer. assert, not require: it
+// runs on the server's goroutine, and t.FailNow is only safe on the test's.
 func writeQuirksTestBody(t *testing.T, w http.ResponseWriter, body string) {
 	t.Helper()
 
 	_, err := w.Write([]byte(body))
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------
@@ -389,45 +368,6 @@ func TestDelta_HTTP410_TokenExpired(t *testing.T) {
 	_, err := client.Delta(t.Context(), driveid.New("drive1"), "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
-}
-
-// ---------------------------------------------------------------------------
-// §1: rewindBody edge cases
-// ---------------------------------------------------------------------------
-
-// TestRewindBody_EmptyBodiesNeedNoRewind validates that nil and http.NoBody,
-// which carry nothing to resend, rewind without error.
-//
-// Validates: R-6.8.14
-func TestRewindBody_EmptyBodiesNeedNoRewind(t *testing.T) {
-	require.NoError(t, rewindBody(nil))
-	require.NoError(t, rewindBody(http.NoBody))
-}
-
-// TestRewindBody_NonSeekerIsNotReplayable validates that a non-empty body
-// that is not an io.Seeker is refused rather than resent consumed.
-//
-// Validates: R-6.8.14
-func TestRewindBody_NonSeekerIsNotReplayable(t *testing.T) {
-	reader := strings.NewReader("data")
-	// strings.Reader IS a Seeker, so use a non-seekable wrapper.
-	err := rewindBody(io.NopCloser(reader))
-	require.ErrorIs(t, err, errBodyNotReplayable)
-}
-
-// TestRewindBody_FailOnSecondSeek validates the retry error path when
-// the body rewind fails on the retry attempt (not the initial attempt).
-func TestRewindBody_FailOnSecondSeek(t *testing.T) {
-	body := &failOnSecondSeeker{data: []byte("test")}
-
-	// First seek succeeds.
-	err := rewindBody(body)
-	require.NoError(t, err)
-
-	// Second seek fails — this is what happens on retry.
-	err = rewindBody(body)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "seeking request body")
 }
 
 // ---------------------------------------------------------------------------

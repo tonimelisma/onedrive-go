@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -16,27 +17,27 @@ func validateGraphBaseURL(raw string) error {
 	}
 
 	if parsed.User != nil {
-		return fmt.Errorf("graph: base URL must not contain userinfo")
+		return errors.New("graph: base URL must not contain userinfo")
 	}
 
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("graph: base URL must not contain query or fragment")
+		return errors.New("graph: base URL must not contain query or fragment")
 	}
 
 	if parsed.Hostname() == "" {
-		return fmt.Errorf("graph: base URL host is empty")
+		return errors.New("graph: base URL host is empty")
 	}
 
 	if isLoopbackHostname(parsed.Hostname()) {
 		if parsed.Scheme != deltaHTTPPrefix && parsed.Scheme != httpsScheme {
-			return fmt.Errorf("graph: loopback base URL must use http or https")
+			return errors.New("graph: loopback base URL must use http or https")
 		}
 
 		return nil
 	}
 
 	if parsed.Scheme != httpsScheme {
-		return fmt.Errorf("graph: base URL must use https")
+		return errors.New("graph: base URL must use https")
 	}
 
 	if !matchesAllowedHost(

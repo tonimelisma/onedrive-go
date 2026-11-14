@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 func newSingleItemServer(t *testing.T, body string) *httptest.Server {
@@ -1320,6 +1321,30 @@ func TestUpdateFileSystemInfo_NotFound(t *testing.T) {
 	}, ErrNotFound)
 }
 
+// Validates: R-6.7.34
+//
+// A zero modification time is refused before anything happens: no request
+// (OneDrive would replace the zero time with the current one), and no record
+// claiming an update that never starts.
+func TestUpdateFileSystemInfo_ZeroMtimeSendsNoRequest(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var logs strings.Builder
+	client := MustNewClient(srv.URL, http.DefaultClient, staticToken("test-token"),
+		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})), "test-agent")
+
+	item, err := client.UpdateFileSystemInfo(t.Context(), driveid.New("d"), "item-1", time.Time{})
+	require.ErrorContains(t, err, "needs a modification time")
+	assert.Nil(t, item)
+	assert.Zero(t, requests.Load())
+	assert.Empty(t, logs.String())
+}
+
 // --- GetItemByPath tests ---
 
 func TestGetItemByPath_Success(t *testing.T) {
@@ -2200,6 +2225,42 @@ func TestPollCopyStatus_NonSuccessStatusReturnsGraphError(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, graphErr.StatusCode)
 }
 
+// Validates: R-6.8.17, R-6.8.18
+//
+// The monitor URL carries a credential, so a retry of the poll names it in
+// the transport's log by its description only; and the poll carries the
+// User-Agent like every other request. It used to bypass doPreAuth and did
+// neither.
+func TestPollCopyStatus_RetryLogNeverNamesTheMonitorURL(t *testing.T) {
+	const credential = "monitor-credential-token"
+
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
+		if polls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{"status":"completed","percentageComplete":100,"resourceId":"copied-1"}`)
+	}))
+	defer srv.Close()
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	httpClient := &http.Client{Transport: &retry.RetryTransport{
+		Inner: http.DefaultTransport, Policy: testRetryPolicy(), Logger: logger, Sleep: noopSleep,
+	}}
+	client := MustNewClient(srv.URL, httpClient, staticToken("test-token"), logger, "test-agent")
+
+	status, err := client.PollCopyStatus(t.Context(), srv.URL+"/monitor/"+credential)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status.Status)
+	assert.Equal(t, "copied-1", status.ResourceID)
+	assert.Equal(t, int32(2), polls.Load(), "the 503 was retried")
+	assert.NotContains(t, logs.String(), credential)
+}
+
 // --- ListChildrenRecursive tests ---
 
 func TestListChildrenRecursive_FlatFolder(t *testing.T) {
@@ -2599,6 +2660,9 @@ func TestRestoreItem_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/drives/000000000000000d/items/deleted-1/restore", r.URL.Path)
+		// The request has always gone out body-less and declared JSON.
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Zero(t, r.ContentLength)
 		w.Header().Set("Content-Type", "application/json")
 		writeTestResponse(t, w, `{
 			"id": "restored-1",

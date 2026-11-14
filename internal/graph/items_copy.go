@@ -1,9 +1,9 @@
 package graph
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -61,7 +61,7 @@ func (c *Client) CopyItem(
 		policy: c.policies.copyDestination,
 		match:  isTransientCopyDestinationError,
 	}, func() (*http.Response, error) {
-		return c.do(ctx, http.MethodPost, apiPath, bytes.NewReader(bodyBytes))
+		return c.do(ctx, http.MethodPost, apiPath, bodyBytes)
 	})
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func (c *Client) CopyItem(
 
 	monitorURL := resp.Header.Get("Location")
 	if monitorURL == "" {
-		return nil, fmt.Errorf("graph: copy response missing Location header")
+		return nil, errors.New("graph: copy response missing Location header")
 	}
 
 	validatedMonitorURL, err := c.validatedCopyMonitorURL(monitorURL)
@@ -87,27 +87,29 @@ func (c *Client) CopyItem(
 
 // PollCopyStatus checks the progress of an async copy operation.
 // The monitor URL is a pre-authenticated Azure URL — no auth header needed.
+// It goes out through doPreAuth like every pre-authenticated request, so the
+// retrying transport logs it by name only (the URL carries a credential,
+// R-6.8.17) and it carries the User-Agent (R-6.8.18). A non-2xx monitor reply
+// (expired monitor, 404, 5xx) is a *GraphError, not a status document:
+// decoding it produced an empty Status and hid the HTTP failure.
 func (c *Client) PollCopyStatus(ctx context.Context, monitorURL string) (*CopyStatus, error) {
 	validatedMonitorURL, err := c.validatedCopyMonitorURL(monitorURL)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validatedMonitorURL, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("graph: creating copy status request: %w", err)
-	}
+	resp, err := c.doPreAuth(ctx, "copy status", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, validatedMonitorURL, http.NoBody)
+		if reqErr != nil {
+			return nil, fmt.Errorf("graph: creating copy status request: %w", reqErr)
+		}
 
-	resp, err := c.dispatchRequest(req)
+		req.Header.Set("User-Agent", c.userAgent)
+
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("graph: polling copy status: %w", err)
-	}
-
-	// A non-2xx monitor reply (expired monitor, 404, 5xx) is a failure to
-	// report, not a status document: decoding it produced an empty Status
-	// and hid the HTTP failure. buildError closes the body.
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("graph: polling copy status: %w", c.buildError(http.MethodGet, "copy monitor", resp))
 	}
 	defer resp.Body.Close() //nolint:errcheck // response body is read-only; its close reports nothing a caller can act on
 

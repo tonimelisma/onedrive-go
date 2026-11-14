@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,20 +35,6 @@ func closeClientTestResponse(t *testing.T, resp *http.Response) {
 	}
 
 	require.NoError(t, resp.Body.Close())
-}
-
-// failingSeeker is an io.ReadSeeker where Read succeeds but Seek always fails.
-// Used to test the rewindBody error path directly.
-type failingSeeker struct {
-	data []byte
-}
-
-func (f *failingSeeker) Read(p []byte) (int, error) {
-	return copy(p, f.data), io.EOF
-}
-
-func (f *failingSeeker) Seek(_ int64, _ int) (int64, error) {
-	return 0, errors.New("seek failed")
 }
 
 // staticToken is a test TokenSource that returns a fixed token.
@@ -107,7 +94,7 @@ func newTestClient(t *testing.T, url string) *Client {
 	client.policies.downloadMetadata = testRetryPolicy()
 	client.policies.createFolderReadback = testRetryPolicy()
 	client.policies.simpleUploadMtime = testRetryPolicy()
-	client.policies.uploadSessionCreate = testRetryPolicy()
+	client.policies.fileCreate = testRetryPolicy()
 	client.policies.copyDestination = testRetryPolicy()
 
 	return client
@@ -530,7 +517,9 @@ func TestDo_DebugLogsNeverExposeBearerToken(t *testing.T) {
 }
 
 func TestDo_ContextCancellation(t *testing.T) {
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
@@ -541,8 +530,9 @@ func TestDo_ContextCancellation(t *testing.T) {
 	client := newNoRetryTestClient(t, srv.URL)
 	resp, err := client.do(ctx, http.MethodGet, "/cancel", nil)
 	closeClientTestResponse(t, resp)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, errRequestNotSent, "a request whose context had ended is never sent")
+	assert.Zero(t, requests.Load())
 }
 
 func TestGraphError_ErrorsIs(t *testing.T) {
@@ -582,16 +572,30 @@ func TestDo_UserAgentHeader(t *testing.T) {
 }
 
 func TestDo_ContentTypeForBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
+	tests := []struct {
+		name            string
+		body            []byte
+		wantContentType string
+	}{
+		{name: "body", body: []byte(`{}`), wantContentType: "application/json"},
+		{name: "no body", body: nil, wantContentType: ""},
+	}
 
-	client := newTestClient(t, srv.URL)
-	resp, err := client.do(t.Context(), http.MethodPost, "/create", strings.NewReader(`{}`))
-	require.NoError(t, err)
-	defer resp.Body.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, tt.wantContentType, r.Header.Get("Content-Type"))
+				assert.Equal(t, int64(len(tt.body)), r.ContentLength)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			resp, err := client.do(t.Context(), http.MethodPost, "/create", tt.body)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+		})
+	}
 }
 
 func TestDo_TokenError(t *testing.T) {
@@ -599,7 +603,7 @@ func TestDo_TokenError(t *testing.T) {
 
 	resp, err := client.do(t.Context(), http.MethodGet, "/test", nil)
 	closeClientTestResponse(t, resp)
-	require.Error(t, err)
+	require.ErrorIs(t, err, errRequestNotSent)
 	assert.Contains(t, err.Error(), "token error")
 }
 
@@ -773,12 +777,7 @@ func TestDo_RetryWithReplayableBody(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.do(
-		t.Context(),
-		http.MethodPut,
-		"/content",
-		bytes.NewReader([]byte(retryBodyFixture)),
-	)
+	resp, err := client.do(t.Context(), http.MethodPut, "/content", []byte(retryBodyFixture))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -802,12 +801,7 @@ func TestDo_PostDoesNotUseGenericTransportRetry(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	resp, err := client.do(
-		t.Context(),
-		http.MethodPost,
-		"/create",
-		bytes.NewReader([]byte(retryBodyFixture)),
-	)
+	resp, err := client.do(t.Context(), http.MethodPost, "/create", []byte(retryBodyFixture))
 	closeClientTestResponse(t, resp)
 	require.ErrorIs(t, err, ErrServerError)
 	assert.Equal(t, int32(1), calls.Load())
@@ -815,15 +809,6 @@ func TestDo_PostDoesNotUseGenericTransportRetry(t *testing.T) {
 
 // TestIsRetryable was deleted: isRetryable moved to retry/transport.go.
 // Coverage is provided by retry/transport_test.go.
-
-func TestRewindBody_SeekError(t *testing.T) {
-	// Verify that rewindBody returns an error when Seek fails.
-	fs := &failingSeeker{data: []byte("test data")}
-	err := rewindBody(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "seeking request body")
-	assert.Contains(t, err.Error(), "seek failed")
-}
 
 func TestDo_NetworkError_MaxRetries(t *testing.T) {
 	// Point the client at an unreachable address and verify that all retries
@@ -1112,12 +1097,10 @@ func TestDoOnce_401_RefreshSucceeds(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
-		body   io.Reader
 	}{
-		{name: "nil body", method: http.MethodGet, body: nil},
-		// A body-less POST (items_permissions.go) sends http.NoBody, which is
-		// not an io.Seeker but has nothing to rewind.
-		{name: "http.NoBody", method: http.MethodPost, body: http.NoBody},
+		{name: "body-less GET", method: http.MethodGet},
+		// A body-less POST (RestoreItem) is retried like any other request.
+		{name: "body-less POST", method: http.MethodPost},
 	}
 
 	for _, tt := range tests {
@@ -1146,7 +1129,7 @@ func TestDoOnce_401_RefreshSucceeds(t *testing.T) {
 			ts := &switchingToken{oldTok: "expired-token", newTok: "refreshed-token"}
 			client := MustNewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent")
 
-			resp, err := client.do(t.Context(), tt.method, "/me", tt.body)
+			resp, err := client.do(t.Context(), tt.method, "/me", nil)
 			require.NoError(t, err)
 			defer resp.Body.Close()
 
@@ -1198,12 +1181,7 @@ func TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved(t *testing.T) {
 	ts := &switchingToken{oldTok: "expired-token", newTok: "refreshed-token"}
 	client := MustNewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent")
 
-	resp, err := client.do(
-		t.Context(),
-		http.MethodPatch,
-		"/items/item-1?"+expectedQuery,
-		bytes.NewReader([]byte(expectedBody)),
-	)
+	resp, err := client.do(t.Context(), http.MethodPatch, "/items/item-1?"+expectedQuery, []byte(expectedBody))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -1266,55 +1244,58 @@ func TestDoOnce_401_SameToken_Returns401(t *testing.T) {
 }
 
 // Validates: R-6.8.14
-func TestDo_401WithNonSeekableBodyFailsLoudly(t *testing.T) {
+func TestDo_401RetrySendsTheBytesOfTheFirstRequest(t *testing.T) {
 	t.Parallel()
 
 	const (
 		staleToken  = "stale-token"
 		freshToken  = "fresh-token"
 		freshBearer = "Bearer " + freshToken
-		payload     = `{"name":"streamed.txt"}`
+		alreadyRead = `{"ignored":"prefix"}`
+		payload     = `{"name":"renamed.txt"}`
 	)
 
-	var attempts atomic.Int32
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts.Add(1)
-
 		body, err := io.ReadAll(r.Body)
 		if !assert.NoError(t, err) {
 			return
 		}
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		mu.Unlock()
 
 		if r.Header.Get("Authorization") == freshBearer {
-			// Only a resend reaches this branch. It would carry what the
-			// first attempt left of the body, which is nothing.
 			w.WriteHeader(http.StatusOK)
 			writeClientTestBody(t, w, `{"id":"item-1"}`)
 
 			return
 		}
 
-		assert.JSONEq(t, payload, string(body))
 		w.WriteHeader(http.StatusUnauthorized)
 		writeClientTestBody(t, w, `{"error":"expired"}`)
 	}))
 	defer srv.Close()
 
-	// io.MultiReader is neither an io.Seeker nor a type http.NewRequest
-	// snapshots into GetBody, so nothing can bring back the bytes the first
-	// attempt sent.
-	body := io.MultiReader(strings.NewReader(payload))
-	_, isSeeker := body.(io.Seeker)
-	require.False(t, isSeeker)
+	// The body is the tail of a larger buffer, as it was when callers passed a
+	// reader that stood past bytes already consumed: the 401 retry then
+	// rewound to the buffer's start and sent alreadyRead too. The retry must
+	// send exactly the bytes the first attempt sent.
+	buffer := []byte(alreadyRead + payload)
+	body := buffer[len(alreadyRead):]
 
 	ts := &switchingToken{oldTok: staleToken, newTok: freshToken}
 	client := MustNewClient(srv.URL, http.DefaultClient, ts, slog.Default(), "test-agent")
 
 	resp, err := client.do(t.Context(), http.MethodPatch, "/items/item-1", body)
-	closeClientTestResponse(t, resp)
-	require.ErrorIs(t, err, errBodyNotReplayable)
-	require.ErrorContains(t, err, "PATCH /items/item-1")
-	require.ErrorContains(t, err, "after 401")
-	assert.Equal(t, int32(1), attempts.Load(), "the 401 retry must not resend a consumed body")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{payload, payload}, bodies, "both attempts carry exactly the first request's bytes")
 }
