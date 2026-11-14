@@ -104,7 +104,10 @@ type VerifyOptions struct {
 	Shard             string
 	// UnitTimeout is go test's per-package deadline in the full race tier.
 	// Zero derives it from the cores this process may use.
-	UnitTimeout        time.Duration
+	UnitTimeout time.Duration
+	// ShortUnitTimeout is go test's per-package deadline in the short unit
+	// tier. Zero derives it from the cores this process may use.
+	ShortUnitTimeout   time.Duration
 	E2ELogDir          string
 	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
@@ -320,7 +323,18 @@ func runVerifyProfileWithEnv(
 	); err != nil {
 		return err
 	}
-	if err := runPRLaneVerification(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr, plan, shard); err != nil {
+	if err := runPRLaneVerification(
+		ctx,
+		runner,
+		opts.RepoRoot,
+		env,
+		collector,
+		stdout,
+		stderr,
+		plan,
+		shard,
+		resolveShortUnitTestTimeout(opts.ShortUnitTimeout, runtime.GOMAXPROCS(0)),
+	); err != nil {
 		return err
 	}
 
@@ -743,33 +757,71 @@ const (
 	// base deadline (40 minutes) had ended it as a hang. 180 leaves that run
 	// about 40% of headroom: 90 minutes on 2 cores, 180 on one.
 	unitTestSmallHostCoreBudget = 180 * time.Minute
+
+	// shortUnitTestBaseTimeout is go test's per-package deadline in the short
+	// unit tier (no race detector, no exhaustive tests) on a host with at
+	// least unitTestReferenceCores cores: a package that takes ten minutes
+	// there is hung, not slow.
+	shortUnitTestBaseTimeout = 10 * time.Minute
+
+	// shortUnitTestSmallHostCoreBudget is the short tier's deadline on a host
+	// with fewer cores than the reference, as core time. It is measured, like
+	// the race tier's: on a shared 2-core host internal/sync's short tier
+	// passed in 2 to 8 minutes and ran into the 10-minute deadline in a
+	// pre-PR gate with no test hung, the same tests taking 2.5 times as long
+	// when other work shared the cores. The budget gives that host three
+	// times the run that failed: 30 minutes on 2 cores, 60 on one.
+	shortUnitTestSmallHostCoreBudget = 60 * time.Minute
 )
 
-// unitTestTimeoutForCores is the full tier's go test deadline for the cores the
-// run may use. The race tier is CPU-bound, and a deadline that fits a CI runner
-// fails a healthy run on a 2-core host, so a host below the reference gets
-// unitTestSmallHostCoreBudget divided by its cores. A host at the reference or
+// goTestTimeoutForCores is a unit tier's go test deadline for the cores the
+// run may use. The tiers are CPU-bound, and a deadline that fits a CI runner
+// fails a healthy run on a 2-core host, so a host below the reference gets the
+// tier's small-host budget divided by its cores. A host at the reference or
 // above keeps the base deadline: more cores do not shorten the deadline a real
 // hang is measured against, and the CI job timeouts are set above it.
-func unitTestTimeoutForCores(cores int) time.Duration {
+func goTestTimeoutForCores(cores int, base, smallHostCoreBudget time.Duration) time.Duration {
 	if cores < 1 {
 		cores = 1
 	}
 	if cores >= unitTestReferenceCores {
-		return unitTestBaseTimeout
+		return base
 	}
 
-	return unitTestSmallHostCoreBudget / time.Duration(cores)
+	return smallHostCoreBudget / time.Duration(cores)
+}
+
+// unitTestTimeoutForCores is the full race tier's go test deadline for the
+// cores the run may use.
+func unitTestTimeoutForCores(cores int) time.Duration {
+	return goTestTimeoutForCores(cores, unitTestBaseTimeout, unitTestSmallHostCoreBudget)
+}
+
+// shortUnitTestTimeoutForCores is the short unit tier's go test deadline for
+// the cores the run may use.
+func shortUnitTestTimeoutForCores(cores int) time.Duration {
+	return goTestTimeoutForCores(cores, shortUnitTestBaseTimeout, shortUnitTestSmallHostCoreBudget)
 }
 
 // resolveUnitTestTimeout returns the explicit deadline (`--unit-timeout`) when
-// one was given, else the deadline for the cores.
+// one was given, else the race tier's deadline for the cores.
 func resolveUnitTestTimeout(explicit time.Duration, cores int) time.Duration {
 	if explicit > 0 {
 		return explicit
 	}
 
 	return unitTestTimeoutForCores(cores)
+}
+
+// resolveShortUnitTestTimeout returns the explicit deadline
+// (`--short-unit-timeout`) when one was given, else the short tier's deadline
+// for the cores.
+func resolveShortUnitTestTimeout(explicit time.Duration, cores int) time.Duration {
+	if explicit > 0 {
+		return explicit
+	}
+
+	return shortUnitTestTimeoutForCores(cores)
 }
 
 // verifyStep is one named step of a verify profile, recorded in the summary
