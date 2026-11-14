@@ -33,6 +33,18 @@ const (
 	goTestTimeoutPanicPrefix = "panic: test timed out after "
 	goTestRunningTestsHeader = "running tests:"
 
+	// devtoolStatusPrefix starts the status line devtool prints before a
+	// command it runs. Other lines devtool prints carry no prefix, the
+	// warning after a passing classified rerun and the notice of a skipped
+	// auth preflight among them. classifiedRerunMarkerPrefix starts the line
+	// rerunClassifiedQuirk prints before the go test of a classified
+	// live-quirk rerun, whose window runs from the marker to the next line
+	// that starts with devtoolStatusPrefix, or to the end of the log: a go
+	// test devtool starts after a rerun must print a status line first, or
+	// its results would count as the rerun's.
+	devtoolStatusPrefix         = "==> "
+	classifiedRerunMarkerPrefix = devtoolStatusPrefix + "rerun known live quirk "
+
 	// logByteOrderMark starts a GitHub Actions job log.
 	logByteOrderMark = "\ufeff"
 	// rawGoTestScope is the scope of raw output: unlike a -json event, a raw
@@ -96,6 +108,24 @@ type goTestFailure struct {
 	// timedOut marks a test the timeout panic listed as running: it was
 	// killed at the binary's deadline, not failed by its own verdict.
 	timedOut bool
+	// attempt counts the go tests of its package that the log closed before
+	// the one that reported it: zero for the first go test of the package in
+	// the log.
+	attempt int
+}
+
+// goTestRun is one go test of a package in a log: the normalized package and
+// the attempt it is.
+type goTestRun struct {
+	pkg     string
+	attempt int
+}
+
+// goTestInRun is a test, or the package itself when test is empty, in one go
+// test of the package: a settled failure, or a classified rerun's pass.
+type goTestInRun struct {
+	run  goTestRun
+	test string
 }
 
 // goTestLog is what one go test log says about its failures. It is the one
@@ -106,6 +136,9 @@ type goTestFailure struct {
 type goTestLog struct {
 	// failures lists every failure in the order the log settles it.
 	failures []goTestFailure
+	// rerunPasses holds every top-level test a classified rerun passed, with
+	// its normalized package and the go test of the package that passed it.
+	rerunPasses map[goTestInRun]bool
 	// seedByPackage is the -shuffle seed each package printed, by normalized
 	// package.
 	seedByPackage map[string]string
@@ -117,15 +150,20 @@ type goTestLog struct {
 // decoration CI adds.
 func parseGoTestLog(log string) goTestLog {
 	scan := goTestLogScan{
-		log:            goTestLog{seedByPackage: map[string]string{}},
-		settled:        map[string]bool{},
-		failedPackages: map[string]bool{},
-		listing:        map[string]timeoutListing{},
+		log:        goTestLog{seedByPackage: map[string]string{}, rerunPasses: map[goTestInRun]bool{}},
+		settled:    map[goTestInRun]bool{},
+		failedRuns: map[goTestRun]bool{},
+		results:    map[string]int{},
+		listing:    map[string]timeoutListing{},
 	}
 	for line := range strings.Lines(log) {
 		text, event, isEvent := decodeGoTestLogLine(line)
 		if isEvent {
 			scan.observeEvent(event)
+			continue
+		}
+		if strings.HasPrefix(text, devtoolStatusPrefix) {
+			scan.inClassifiedRerun = strings.HasPrefix(text, classifiedRerunMarkerPrefix)
 			continue
 		}
 		scan.observeText(rawGoTestScope, text)
@@ -145,8 +183,8 @@ func (l goTestLog) failedTopLevelTests() []string {
 	tests := []string{}
 	seen := map[string]bool{}
 	for _, failure := range l.failures {
-		name, _, _ := strings.Cut(failure.test, "/")
-		if !strings.HasPrefix(name, "Test") || seen[name] {
+		name, isTest := topLevelTestName(failure.test)
+		if !isTest || seen[name] {
 			continue
 		}
 		seen[name] = true
@@ -154,6 +192,61 @@ func (l goTestLog) failedTopLevelTests() []string {
 	}
 
 	return tests
+}
+
+// failedTopLevelTestsByPackage names each failed top-level test with the
+// package that ran it, normalized and empty when the log never said, each
+// pair once and in log order: two packages can hold tests of one name. A
+// failure that a classified live-quirk rerun passed in the next go test of
+// its package, the go test that follows the rerun's marker line, is left
+// out. A failure in that rerun, in any go test after it or in an earlier go
+// test of the package than the one it reran is not, and a pass in any other
+// go test answers no failure: neither a later go test of the package nor
+// another iteration of -count inside the failing one.
+func (l goTestLog) failedTopLevelTestsByPackage() []goTestFailure {
+	tests := []goTestFailure{}
+	seen := map[string]bool{}
+	for _, failure := range l.failures {
+		name, isTest := topLevelTestName(failure.test)
+		pkg := normalizeFailedGoTestPackage(failure.pkg)
+		pair := goTestPair(pkg, name)
+		if !isTest || seen[pair] {
+			continue
+		}
+		if l.rerunPasses[goTestInRun{run: goTestRun{pkg: pkg, attempt: failure.attempt + 1}, test: name}] {
+			continue
+		}
+		seen[pair] = true
+		tests = append(tests, goTestFailure{pkg: pkg, test: name, timedOut: failure.timedOut, attempt: failure.attempt})
+	}
+
+	return tests
+}
+
+// failedPackageWithoutTest reports whether a package failed without naming a
+// failed test: a build or setup failure, a TestMain exit, a package timeout
+// with no test running.
+func (l goTestLog) failedPackageWithoutTest() bool {
+	for _, failure := range l.failures {
+		if failure.test == "" && failure.pkg != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// goTestPair is the map key of a normalized package and a test.
+func goTestPair(pkg string, test string) string {
+	return pkg + "\x00" + test
+}
+
+// topLevelTestName is the top-level test of a failure's full test name, and
+// whether it is a Test function's: a package failure names none.
+func topLevelTestName(test string) (string, bool) {
+	name, _, _ := strings.Cut(test, "/")
+
+	return name, strings.HasPrefix(name, "Test")
 }
 
 // classifiableFailures is what a classified live-quirk rerun may answer: the
@@ -206,12 +299,23 @@ type goTestLogScan struct {
 	// package, and a failure line printed by a package that then passed (a
 	// test's own fixture text) is no failure.
 	pending []pendingGoTestFailure
-	// settled holds the package and test of every settled failure, so a test
-	// reported twice (a -json fail event and its --- FAIL output line) counts
-	// once.
-	settled map[string]bool
-	// failedPackages holds the normalized packages with a settled failure.
-	failedPackages map[string]bool
+	// settled holds every settled failure, so a test reported twice in one go
+	// test (a -json fail event and its --- FAIL output line, or two
+	// iterations of -count) counts once, and a failure in a later go test of
+	// its package is a failure of its own.
+	settled map[goTestInRun]bool
+	// failedRuns holds the go tests of a package with a settled failure.
+	failedRuns map[goTestRun]bool
+	// results counts the results each normalized package reported: a
+	// package's attempt is the number of its results before it.
+	results map[string]int
+	// pendingPasses holds the top-level tests a raw `--- PASS:` line named,
+	// waiting for the result line that names their package.
+	pendingPasses []pendingGoTestPass
+	// inClassifiedRerun is set from the marker line of a classified rerun to
+	// the next line that starts with devtoolStatusPrefix, or the end of the
+	// log.
+	inClassifiedRerun bool
 	// pendingRawSeed is a raw seed line not yet followed by its package's
 	// result line.
 	pendingRawSeed string
@@ -223,6 +327,14 @@ type goTestLogScan struct {
 type pendingGoTestFailure struct {
 	scope   string
 	failure goTestFailure
+}
+
+// pendingGoTestPass is a passed top-level test waiting for the result of the
+// package that printed it; inRerun marks a pass a classified rerun printed.
+type pendingGoTestPass struct {
+	scope   string
+	test    string
+	inRerun bool
 }
 
 func (s *goTestLogScan) observeEvent(event goTestJSONEvent) {
@@ -240,7 +352,9 @@ func (s *goTestLogScan) observeEvent(event goTestJSONEvent) {
 	case goTestActionPass:
 		if event.Test == "" {
 			s.packagePassed(event.Package, event.Package)
+			return
 		}
+		s.recordPass(event.Package, event.Test, s.inClassifiedRerun)
 	}
 }
 
@@ -267,6 +381,14 @@ func (s *goTestLogScan) observeText(scope string, text string) {
 				failure: goTestFailure{pkg: scope, test: fields[0]},
 			})
 		}
+	case strings.HasPrefix(trimmed, rawGoTestPassPrefix):
+		if fields := strings.Fields(strings.TrimPrefix(trimmed, rawGoTestPassPrefix)); len(fields) > 0 {
+			s.pendingPasses = append(s.pendingPasses, pendingGoTestPass{scope: scope, test: fields[0], inRerun: s.inClassifiedRerun})
+		}
+	case scope != rawGoTestScope:
+		// go test -json prints a package's result line as output and then
+		// reports the result as the package's action: one result, which the
+		// action closes.
 	default:
 		// Only go test's own result line closes a package, matched on the
 		// untrimmed text: a line a test or a CLI under it prints that merely
@@ -331,9 +453,11 @@ func runningTestName(trimmed string) (string, bool) {
 }
 
 // packageFailed settles the failures scope reported with pkg as their
-// package, or the package itself when it failed without naming a test.
+// package, or the package itself when this go test of it failed without
+// naming a test.
 func (s *goTestLogScan) packageFailed(scope string, pkg string) {
 	s.claimRawSeed(scope, pkg)
+	s.claimPasses(scope, pkg)
 	kept := s.pending[:0]
 	for _, p := range s.pending {
 		if p.scope != scope {
@@ -344,15 +468,18 @@ func (s *goTestLogScan) packageFailed(scope string, pkg string) {
 		s.settle(p.failure)
 	}
 	s.pending = kept
-	if !s.failedPackages[normalizeFailedGoTestPackage(pkg)] {
+	normalized := normalizeFailedGoTestPackage(pkg)
+	if !s.failedRuns[goTestRun{pkg: normalized, attempt: s.results[normalized]}] {
 		s.settle(goTestFailure{pkg: pkg})
 	}
+	s.results[normalized]++
 }
 
 // packagePassed drops the failure lines scope printed: a package that passed
 // failed no test.
 func (s *goTestLogScan) packagePassed(scope string, pkg string) {
 	s.claimRawSeed(scope, pkg)
+	s.claimPasses(scope, pkg)
 	kept := s.pending[:0]
 	for _, p := range s.pending {
 		if p.scope != scope {
@@ -360,18 +487,48 @@ func (s *goTestLogScan) packagePassed(scope string, pkg string) {
 		}
 	}
 	s.pending = kept
+	s.results[normalizeFailedGoTestPackage(pkg)]++
 }
 
+// claimPasses records the passes scope printed as passes of pkg's current
+// attempt.
+func (s *goTestLogScan) claimPasses(scope string, pkg string) {
+	kept := s.pendingPasses[:0]
+	for _, p := range s.pendingPasses {
+		if p.scope != scope {
+			kept = append(kept, p)
+			continue
+		}
+		s.recordPass(pkg, p.test, p.inRerun)
+	}
+	s.pendingPasses = kept
+}
+
+// recordPass records that a classified rerun passed a top-level test of pkg
+// in the package's current attempt. A pass outside a classified rerun
+// answers no failure, and a subtest's pass says nothing about its parent.
+func (s *goTestLogScan) recordPass(pkg string, test string, inRerun bool) {
+	if !inRerun || strings.Contains(test, "/") {
+		return
+	}
+	normalized := normalizeFailedGoTestPackage(pkg)
+	s.log.rerunPasses[goTestInRun{run: goTestRun{pkg: normalized, attempt: s.results[normalized]}, test: test}] = true
+}
+
+// settle records a failure of its package's current go test, once per go
+// test.
 func (s *goTestLogScan) settle(failure goTestFailure) {
 	pkg := normalizeFailedGoTestPackage(failure.pkg)
-	key := pkg + "\x00" + failure.test
+	run := goTestRun{pkg: pkg, attempt: s.results[pkg]}
+	key := goTestInRun{run: run, test: failure.test}
 	if s.settled[key] {
 		return
 	}
 	s.settled[key] = true
 	if pkg != "" {
-		s.failedPackages[pkg] = true
+		s.failedRuns[run] = true
 	}
+	failure.attempt = run.attempt
 	s.log.failures = append(s.log.failures, failure)
 }
 

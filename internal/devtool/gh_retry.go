@@ -2,6 +2,7 @@ package devtool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -116,7 +117,7 @@ func (c ghClient) request(
 			return nil, false, fmt.Errorf("%s: %w", call, err)
 		}
 		if attempt == githubAttempts {
-			return nil, false, fmt.Errorf("%s: GitHub %s on all %d attempts: %w", call, cause, githubAttempts, err)
+			return nil, false, &githubUnavailableError{call: call, cause: cause, err: err}
 		}
 		if sleepErr := c.sleep(ctx, wait); sleepErr != nil {
 			return nil, false, fmt.Errorf("%s: wait to repeat after GitHub %s: %w", call, cause, sleepErr)
@@ -135,6 +136,38 @@ func (c ghClient) outputOnce(ctx context.Context, repoRoot string, call string, 
 	}
 
 	return out, nil
+}
+
+// githubUnavailableError is a request GitHub failed on every attempt in a way
+// that says nothing about the request: GitHub, not the request, is what has
+// to change before it can succeed.
+type githubUnavailableError struct {
+	// call names the request, and for the nightly reads its endpoint.
+	call string
+	// cause says how GitHub failed, "answered HTTP 502" and the like.
+	cause string
+	err   error
+}
+
+func (e *githubUnavailableError) Error() string {
+	return fmt.Sprintf("%s: GitHub %s on all %d attempts: %v", e.call, e.cause, githubAttempts, e.err)
+}
+
+func (e *githubUnavailableError) Unwrap() error {
+	return e.err
+}
+
+// githubUnavailableSentence is the one plain sentence a stage prints when err
+// is a request GitHub kept failing: GitHub, how it failed and the request,
+// without the command's own output. ok is false for any other error.
+func githubUnavailableSentence(err error) (string, bool) {
+	var unavailable *githubUnavailableError
+	if !errors.As(err, &unavailable) {
+		return "", false
+	}
+
+	return fmt.Sprintf("GitHub %s on all %d attempts at %s; run it again once GitHub answers",
+		unavailable.cause, githubAttempts, unavailable.call), true
 }
 
 // transientGitHubFailure reports whether a failed gh request failed in a way

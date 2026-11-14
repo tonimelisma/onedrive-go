@@ -671,20 +671,19 @@ func prChecksFingerprint(checks []prCheckRun) string {
 	return strings.Join(lines, "\n")
 }
 
-// classifyPostMergeRuns reads the CI run of the merge commit on main: pending
-// while there is none or it is still running, a pass when it succeeded, and a
-// failure otherwise, a skipped run included. Every push to main runs the quick
-// lane, which is what catches a merge that breaks main, since branch
-// protection does not require a pull request's branch to be up to date.
+// classifyPostMergeRuns reads the push run of the merge commit on main:
+// pending while there is none or it is still running, a pass when it
+// succeeded, and a failure otherwise, a skipped run included. Every push to
+// main runs the quick lane, which is what catches a merge that breaks main,
+// since branch protection does not require a pull request's branch to be up
+// to date. A scheduled or dispatched run of the same commit is not the merge's
+// verdict, a red nightly the merge did not touch least of all, so only push
+// runs are read.
 func classifyPostMergeRuns(runs []githubRun, commit string) ciSnapshot {
 	snapshot := ciSnapshot{fingerprint: postMergeRunsFingerprint(runs)}
-	if len(runs) == 0 {
-		snapshot.state, snapshot.reason = prCheckStatePending, "no main push CI run found for "+commit
-		return snapshot
-	}
 	for i := range runs {
 		run := runs[i]
-		if run.HeadSHA != commit {
+		if run.HeadSHA != commit || run.Event != ciEventPush {
 			continue
 		}
 		status := strings.ToLower(run.Status)
@@ -709,7 +708,7 @@ func classifyPostMergeRuns(runs []githubRun, commit string) ciSnapshot {
 		return snapshot
 	}
 
-	snapshot.state, snapshot.reason = prCheckStatePending, "no run matched merge commit "+commit
+	snapshot.state, snapshot.reason = prCheckStatePending, "no main push CI run found for "+commit
 	return snapshot
 }
 
@@ -787,6 +786,8 @@ func loadMainRunsForCommit(ctx context.Context, gh ghClient, repoRoot string, co
 		mainBranchName,
 		"--commit",
 		commit,
+		"--event",
+		ciEventPush,
 		"--json",
 		"databaseId,name,event,status,conclusion,headSha,createdAt,updatedAt,url",
 		"--limit",

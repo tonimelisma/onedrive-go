@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,10 +28,20 @@ type worktreeAddFunc func(context.Context, string, string, string) error
 type worktreeBootstrapFunc func(string, string) error
 
 func main() {
-	if err := newRootCmd().ExecuteContext(context.Background()); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	os.Exit(execute(context.Background(), newRootCmd(), os.Stderr))
+}
+
+// execute runs root and returns the process's exit code. It prints the error
+// root ends with, once: root leaves the printing to it.
+func execute(ctx context.Context, root *cobra.Command, stderr io.Writer) int {
+	if err := root.ExecuteContext(ctx); err != nil {
+		// The exit code reports the failure even when stderr cannot take the
+		// message, which has nowhere else to go.
+		fmt.Fprintln(stderr, err) //nolint:errcheck // the exit code reports the failure
+		return 1
 	}
+
+	return 0
 }
 
 func newRootCmd() *cobra.Command {
@@ -46,14 +57,37 @@ func newRootCmd() *cobra.Command {
 		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
 		newNightlyCmd(defaultCWD, defaultNightly),
 	)
+	silenceRunErrorUsage(cmd)
 
 	return cmd
+}
+
+// silenceRunErrorUsage makes a command that fails while it runs end with its
+// error alone, which execute prints once: cobra neither prints it a second
+// time nor follows it with the usage text, which says nothing about a GitHub
+// outage or a failed check. A mistake in the command line still shows the
+// usage: cobra reports a bad flag or argument before this hook runs, and the
+// hook checks the required flags and flag groups itself before it silences
+// the usage, because cobra checks them only after it.
+func silenceRunErrorUsage(root *cobra.Command) {
+	root.SilenceErrors = true
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		if err := cmd.ValidateRequiredFlags(); err != nil {
+			return fmt.Errorf("check required flags: %w", err)
+		}
+		if err := cmd.ValidateFlagGroups(); err != nil {
+			return fmt.Errorf("check flag groups: %w", err)
+		}
+		cmd.SilenceUsage = true
+
+		return nil
+	}
 }
 
 func newNightlyCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "nightly",
-		Short: "Check the nightly CI run and own its failures through claim refs",
+		Short: "Check the nightly CI run, own its failures through claim refs, and report its verdict",
 	}
 
 	var checkBranch string
@@ -103,9 +137,39 @@ func newNightlyCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
 	requireFlag(release, "branch")
 	requireFlag(release, "key")
 
-	cmd.AddCommand(check, release)
+	cmd.AddCommand(check, release, newNightlyReportCmd(getwd, runNightly))
 
 	return cmd
+}
+
+func newNightlyReportCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
+	var (
+		runID  int64
+		dryRun bool
+	)
+	report := &cobra.Command{
+		Use:   "report",
+		Short: "Post a scheduled run's verdict as the commit status nightly and the one nightly-failure issue",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			return runNightly(cmd.Context(), devtool.NightlyOptions{
+				RepoRoot: repoRoot,
+				Action:   devtool.NightlyActionReport,
+				RunID:    runID,
+				DryRun:   dryRun,
+				Stdout:   cmd.OutOrStdout(),
+			})
+		},
+	}
+	report.Flags().Int64Var(&runID, "run-id", 0, "the workflow run to report on")
+	report.Flags().BoolVar(&dryRun, "dry-run", false, "print the status and the issue text, write nothing")
+	requireFlag(report, "run-id")
+
+	return report
 }
 
 // verifyFlags holds the values of the verify command's flags.

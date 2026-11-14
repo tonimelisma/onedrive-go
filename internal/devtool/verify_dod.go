@@ -28,6 +28,8 @@ const (
 	checkStatusInProgress     = "in_progress"
 	checkConclusionSuccess    = "success"
 	checkConclusionSkipped    = "skipped"
+
+	pullRequestStateFields = "headRefName,state,mergedAt,mergeCommit,statusCheckRollup,url"
 )
 
 type DODStage string
@@ -104,6 +106,7 @@ type prCheckRun struct {
 }
 
 type pullRequestState struct {
+	HeadRefName       string
 	State             string
 	MergedAt          string
 	MergeCommit       mergeCommit
@@ -123,12 +126,16 @@ type githubRun struct {
 	DatabaseID int64
 	Name       string
 	Event      string
+	HeadBranch string
 	Status     string
 	Conclusion string
 	HeadSHA    string
 	CreatedAt  string
-	UpdatedAt  string
-	URL        string
+	// StartedAt is when the run's latest attempt started: a rerun starts a
+	// new attempt and keeps CreatedAt.
+	StartedAt string
+	UpdatedAt string
+	URL       string
 	// Jobs are the jobs of the run's latest attempt (`gh run view` only).
 	Jobs []githubJob
 }
@@ -138,6 +145,20 @@ type githubJob struct {
 	DatabaseID int64
 	Name       string
 	Conclusion string
+	// StartedAt is set once the job is queued, so it alone does not tell a
+	// job that ran from one canceled while it waited for a runner.
+	StartedAt string
+	// Steps are the job's steps; a runner adds the first when it picks the
+	// job up.
+	Steps []json.RawMessage
+}
+
+// started reports whether a runner picked the job up. A job canceled while
+// it waited for a runner or for its concurrency group lists no step.
+func (j githubJob) started() bool {
+	startedAt, err := time.Parse(time.RFC3339, j.StartedAt)
+
+	return err == nil && !startedAt.IsZero() && len(j.Steps) > 0
 }
 
 type dodReviewThreadApplySummary struct {
@@ -165,7 +186,7 @@ func RunVerifyDOD(ctx context.Context, runner commandRunner, opts *VerifyOptions
 	case DODStageStart:
 		return runDODStart(ctx, runner, gh, opts, stdout)
 	case DODStagePrePR:
-		return runDODPrePR(ctx, runner, opts, stdout)
+		return runDODPrePR(ctx, runner, gh, opts, stdout)
 	case DODStagePreMerge:
 		return runDODPreMerge(ctx, runner, gh, opts, stdout)
 	case DODStagePostMerge:
@@ -198,25 +219,73 @@ func runDODStart(ctx context.Context, runner commandRunner, gh ghClient, opts *V
 	if validateErr != nil {
 		return validateErr
 	}
-	if err := writeStatus(stdout, fmt.Sprintf("dod start: manifest ready at %s\n", manifestPath)); err != nil {
+	if writeErr := writeStatus(stdout, fmt.Sprintf("dod start: manifest ready at %s\n", manifestPath)); writeErr != nil {
+		return writeErr
+	}
+	owner, err := dodIncrementBranch(ctx, runner, opts)
+	if err != nil {
 		return err
 	}
-	return runDODStartNightly(ctx, runner, gh, opts, stdout)
+	return runDODNightly(ctx, runner, gh, opts.RepoRoot, DODStageStart, owner, time.Now, stdout)
 }
 
-// runDODStartNightly makes the latest nightly run part of every increment:
-// each open failure is either claimed for this increment, or already held by
-// another one. The stage fails when a failure would be left without an owner.
-func runDODStartNightly(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
-	owner := opts.DODBranch
-	if owner == "" {
-		branch, err := currentIncrementBranch(ctx, runner, opts.RepoRoot)
-		if err != nil {
-			return err
-		}
-		owner = branch
+// dodIncrementBranch is the branch that owns this increment's nightly
+// claims: --branch, or the checked-out branch, or "" on main.
+func dodIncrementBranch(ctx context.Context, runner commandRunner, opts *VerifyOptions) (string, error) {
+	if opts.DODBranch != "" {
+		return opts.DODBranch, nil
 	}
-	return checkNightly(ctx, runner, gh, opts.RepoRoot, owner, time.Now, stdout)
+	return currentIncrementBranch(ctx, runner, opts.RepoRoot)
+}
+
+// runDODNightly is the nightly step of every stage. The start stage makes
+// the latest nightly part of the increment: each open failure is claimed for
+// it or already held by another one, and the stage fails when a failure
+// would be left without an owner, when the nightly has no verdict, or when
+// GitHub still fails a read after the client's retries, in one plain
+// sentence. The later stages renew the branch's claims (pre-pr and
+// pre-merge; post-merge marks them fixed instead) and print the latest
+// verdict, and turn every failure of this step into a warning: an increment
+// that has started is not stopped by GitHub, nor by a nightly it did not
+// touch.
+func runDODNightly(
+	ctx context.Context,
+	runner commandRunner,
+	gh ghClient,
+	repoRoot string,
+	stage DODStage,
+	owner string,
+	now func() time.Time,
+	stdout io.Writer,
+) error {
+	if stage == DODStageStart {
+		return plainGitHubFailure(checkNightly(ctx, runner, gh, repoRoot, owner, now, stdout))
+	}
+
+	var b strings.Builder
+	warn := func(err error) {
+		fmt.Fprintf(&b, "dod %s: warning: %s\n", stage, plainGitHubFailure(err))
+	}
+	if owner != "" && stage != DODStagePostMerge {
+		renewed, err := renewNightlyClaims(ctx, runner, repoRoot, owner, now())
+		for _, key := range renewed {
+			fmt.Fprintf(&b, "nightly: renewed %s's claim on %s\n", owner, key)
+		}
+		if err != nil {
+			warn(err)
+		}
+	}
+	verdict, err := loadNightlyVerdict(ctx, gh, repoRoot, now())
+	switch {
+	case err != nil:
+		warn(err)
+	case verdict.finding != "":
+		warn(errors.New(verdict.finding))
+	case verdict.found:
+		writeNightlyRunVerdict(&b, &verdict.run, verdict.reports)
+	}
+
+	return writeStatus(stdout, b.String())
 }
 
 // runDODPrePR is the last local gate before a pull request. With no profile
@@ -224,7 +293,7 @@ func runDODStartNightly(ctx context.Context, runner commandRunner, gh ghClient, 
 // tier does not fit its deadline on a small host, and the nightly run owns the
 // race, coverage and exhaustive failures that reach main (R-6.10.22). Naming
 // `default` keeps the full tier as this stage's gate.
-func runDODPrePR(ctx context.Context, runner commandRunner, opts *VerifyOptions, stdout io.Writer) error {
+func runDODPrePR(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
 	profileOpts := *opts
 	profileOpts.DOD = false
 	if profileOpts.Profile == "" {
@@ -240,10 +309,19 @@ func runDODPrePR(ctx context.Context, runner commandRunner, opts *VerifyOptions,
 	if err != nil {
 		return err
 	}
-	if err := validateDODCommentManifest(manifest); err != nil {
-		return err
+	if validateErr := validateDODCommentManifest(manifest); validateErr != nil {
+		return validateErr
 	}
-	return writeStatus(stdout, "dod pre-pr: local verifier, rebase, and PR-comment manifest gates passed\n")
+	if writeErr := writeStatus(stdout, "dod pre-pr: local verifier, rebase, and PR-comment manifest gates passed\n"); writeErr != nil {
+		return writeErr
+	}
+	owner, err := dodIncrementBranch(ctx, runner, opts)
+	if err != nil {
+		if writeErr := writeStatus(stdout, fmt.Sprintf("dod pre-pr: warning: %s; no nightly claim renewed\n", err)); writeErr != nil {
+			return writeErr
+		}
+	}
+	return runDODNightly(ctx, runner, gh, opts.RepoRoot, DODStagePrePR, owner, time.Now, stdout)
 }
 
 func runDODPreMerge(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
@@ -254,7 +332,7 @@ func runDODPreMerge(ctx context.Context, runner commandRunner, gh ghClient, opts
 	if err != nil {
 		return err
 	}
-	err = requireNightlyClaimsInPR(ctx, runner, gh, opts.RepoRoot, opts.DODPR)
+	err = runDODPreMergeNightly(ctx, runner, gh, opts.RepoRoot, opts.DODPR, time.Now, stdout)
 	if err != nil {
 		return err
 	}
@@ -273,6 +351,27 @@ func runDODPreMerge(ctx context.Context, runner commandRunner, gh ghClient, opts
 	return writeStatus(stdout, formatDODPreMergeSummary(applySummary, gateSummary))
 }
 
+// runDODPreMergeNightly is pre-merge's nightly step. The pull request's head
+// branch owns its claims: the gate refuses a body that does not name each of
+// them, which fails the stage, and the step then renews them and prints the
+// latest verdict, warning instead of failing as every later stage does.
+func runDODPreMergeNightly(
+	ctx context.Context,
+	runner commandRunner,
+	gh ghClient,
+	repoRoot string,
+	prNumber int,
+	now func() time.Time,
+	stdout io.Writer,
+) error {
+	head, err := requireNightlyClaimsInPR(ctx, runner, gh, repoRoot, prNumber)
+	if err != nil {
+		return plainGitHubFailure(err)
+	}
+
+	return runDODNightly(ctx, runner, gh, repoRoot, DODStagePreMerge, head, now, stdout)
+}
+
 func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout, stderr io.Writer) error {
 	if opts.DODPR == 0 {
 		return fmt.Errorf("dod post-merge: --pr is required")
@@ -288,6 +387,9 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, ciEventPush, stdout)
 	if err != nil {
 		return err
+	}
+	if branchErr := requirePRHeadBranch(ctx, gh, opts.RepoRoot, opts.DODPR, opts.DODBranch); branchErr != nil {
+		return branchErr
 	}
 
 	prState, err := mergePR(ctx, runner, gh, opts.RepoRoot, opts.DODPR)
@@ -314,7 +416,25 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	}); err != nil {
 		return fmt.Errorf("dod post-merge cleanup audit: %w", err)
 	}
+	if err := runDODNightly(ctx, runner, gh, mainRoot, DODStagePostMerge, opts.DODBranch, time.Now, stdout); err != nil {
+		return err
+	}
 	return writeStatus(stdout, "dod post-merge: merge, cleanup, and post-merge CI interpretation passed\n")
+}
+
+// requirePRHeadBranch refuses a branch that is not the pull request's head:
+// post-merge marks that branch's nightly claims fixed with the merge commit
+// and removes the branch, so it is checked before anything is merged.
+func requirePRHeadBranch(ctx context.Context, gh ghClient, repoRoot string, prNumber int, branch string) error {
+	state, err := loadPullRequestState(ctx, gh, repoRoot, prNumber)
+	if err != nil {
+		return err
+	}
+	if state.HeadRefName != branch {
+		return fmt.Errorf("dod post-merge: --branch %s is not the head branch of PR #%d, %s", branch, prNumber, state.HeadRefName)
+	}
+
+	return nil
 }
 
 func dodRecentMerged(opts *VerifyOptions) int {
@@ -768,7 +888,7 @@ func loadPullRequestState(ctx context.Context, gh ghClient, repoRoot string, prN
 		"view",
 		strconv.Itoa(prNumber),
 		"--json",
-		"state,mergedAt,mergeCommit,statusCheckRollup,url",
+		pullRequestStateFields,
 	)
 	if err != nil {
 		return pullRequestState{}, err

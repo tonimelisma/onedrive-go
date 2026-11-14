@@ -679,10 +679,79 @@ func TestNewNightlyCmdPassesFlagsThrough(t *testing.T) {
 	missingKey.SetArgs([]string{"release", "--branch", "fix/x"})
 	require.Error(t, missingKey.Execute())
 
-	require.Len(t, got, 2)
+	report := newCmd()
+	report.SetArgs([]string{"report", "--run-id", "4242", "--dry-run=true"})
+	require.NoError(t, report.Execute())
+
+	scheduled := newCmd()
+	scheduled.SetArgs([]string{"report", "--run-id", "4243", "--dry-run=false"})
+	require.NoError(t, scheduled.Execute())
+
+	missingRun := newCmd()
+	missingRun.SetArgs([]string{"report"})
+	require.Error(t, missingRun.Execute())
+
+	require.Len(t, got, 4)
 	assert.Equal(t, devtool.NightlyActionCheck, got[0].Action)
 	assert.Equal(t, "fix/x", got[0].Branch)
 	assert.Equal(t, testRepoRoot, got[0].RepoRoot)
 	assert.Equal(t, devtool.NightlyActionRelease, got[1].Action)
 	assert.Equal(t, "TestY", got[1].Key)
+	assert.Equal(t, devtool.NightlyActionReport, got[2].Action)
+	assert.Equal(t, int64(4242), got[2].RunID)
+	assert.True(t, got[2].DryRun)
+	assert.Equal(t, int64(4243), got[3].RunID)
+	assert.False(t, got[3].DryRun)
+}
+
+// executeRoot runs devtool's own root command with args and returns the exit
+// code and everything it printed, cobra's output and the error alike.
+func executeRoot(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(args)
+
+	return execute(t.Context(), root, &out), out.String()
+}
+
+// Validates: R-6.10.23
+//
+// A command that fails while it runs prints its error exactly once, with no
+// usage text: the usage says nothing about a GitHub outage or a failed check.
+func TestRootCmdPrintsARunErrorOnceWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	code, out := executeRoot(t, "nightly", "report", "--run-id", "0")
+
+	assert.Equal(t, 1, code)
+	assert.Equal(t, "run nightly: nightly report: --run-id is required\n", out)
+}
+
+// Validates: R-6.10.23
+//
+// A command line that leaves out a required flag is a mistake in the command
+// line, found before the command runs: the usage is shown, and the error is
+// still printed once.
+func TestRootCmdShowsUsageForAMissingRequiredFlag(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		args    []string
+		message string
+	}{
+		{args: []string{"nightly", "report"}, message: `required flag(s) "run-id" not set`},
+		{args: []string{"nightly", "release", "--branch", "fix/x"}, message: `required flag(s) "key" not set`},
+		{args: []string{"nightly", "check", "--no-such-flag"}, message: "unknown flag: --no-such-flag"},
+	} {
+		code, out := executeRoot(t, tc.args...)
+
+		assert.Equal(t, 1, code, "%v", tc.args)
+		assert.Contains(t, out, "Usage:", "%v", tc.args)
+		assert.Equal(t, 1, strings.Count(out, tc.message), "%v: the error is printed once", tc.args)
+		assert.NotContains(t, out, "Error:", "%v: cobra does not print it a second time", tc.args)
+	}
 }
