@@ -2,10 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -141,7 +139,7 @@ func isNoOpMove(dest destInfo, sourceParentID, sourceName string) bool {
 // emitMoveResult writes the move result as JSON or status text.
 func emitMoveResult(cc *CLIContext, sourcePath, displayDest, itemID string) error {
 	if cc.Flags.JSON {
-		return printMvJSON(cc.Output(), mvJSONOutput{
+		return writeJSONDocument(cc.Output(), mvJSONOutput{
 			Source:      sourcePath,
 			Destination: displayDest,
 			ID:          itemID,
@@ -149,18 +147,6 @@ func emitMoveResult(cc *CLIContext, sourcePath, displayDest, itemID string) erro
 	}
 
 	cc.Statusf("Moved %s → %s\n", sourcePath, displayDest)
-
-	return nil
-}
-
-// printMvJSON writes the mv command's JSON output to w.
-func printMvJSON(w io.Writer, out mvJSONOutput) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode move output: %w", err)
-	}
 
 	return nil
 }

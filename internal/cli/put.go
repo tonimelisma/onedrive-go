@@ -2,10 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,14 +32,6 @@ type putJSONOutput struct {
 	Path string `json:"path"`
 	ID   string `json:"id"`
 	Size int64  `json:"size"`
-}
-
-// putFolderJSONOutput is the JSON output schema for uploading a directory.
-type putFolderJSONOutput struct {
-	Files          []putJSONOutput `json:"files"`
-	FoldersCreated int             `json:"folders_created"`
-	TotalSize      int64           `json:"total_size"`
-	Errors         []string        `json:"errors"`
 }
 
 type uploadParentResolver interface {
@@ -129,7 +119,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	logger.Debug("upload complete", "remote_path", remotePath, "item_id", result.Item.ID, "size", fi.Size())
 
 	if cc.Flags.JSON {
-		return printPutJSON(cc.Output(), putJSONOutput{
+		return writeJSONDocument(cc.Output(), putJSONOutput{
 			Path: remotePath,
 			ID:   visibleItem.ID,
 			Size: fi.Size(),
@@ -146,9 +136,9 @@ type putTargetResolver interface {
 }
 
 // resolvePutFileTarget treats a destination that ends in "/" or names an
-// existing folder as "into that folder", like cp and scp. Uploading to the
-// folder's own name used to send the file's bytes onto the folder, which
-// OneDrive rejects with a 501 the CLI then called a temporary server problem.
+// existing folder as "into that folder", like cp and scp. Otherwise an upload
+// to the folder's own name would send the file's bytes onto the folder, which
+// OneDrive rejects with a 501 that reads as a temporary server problem.
 func resolvePutFileTarget(ctx context.Context, session putTargetResolver, target, localName string) (string, error) {
 	if strings.HasSuffix(target, "/") {
 		return strings.TrimRight(target, "/") + "/" + localName, nil
@@ -165,33 +155,9 @@ func resolvePutFileTarget(ctx context.Context, session putTargetResolver, target
 	}
 }
 
-// printPutJSON writes the put command's single-file JSON output to w.
-func printPutJSON(w io.Writer, out putJSONOutput) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode upload output: %w", err)
-	}
-
-	return nil
-}
-
-// printPutFolderJSON writes the put command's folder JSON output to w.
-func printPutFolderJSON(w io.Writer, out putFolderJSONOutput) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode folder upload output: %w", err)
-	}
-
-	return nil
-}
-
 // uploadWalkState holds mutable state for the upload walk callback.
 type uploadWalkState struct {
-	result putFolderJSONOutput
+	result folderTransferJSONOutput[putJSONOutput]
 	dirIDs map[string]string
 	done   int
 	total  int
@@ -246,7 +212,7 @@ func uploadFolder(
 	}
 
 	if cc.Flags.JSON {
-		if err := printPutFolderJSON(cc.Output(), state.result); err != nil {
+		if err := writeJSONDocument(cc.Output(), state.result.withEmptyLists()); err != nil {
 			return err
 		}
 

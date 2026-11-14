@@ -12,15 +12,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func TestFormatRecycleBinTable_Empty(t *testing.T) {
+func TestPrintRecycleBinTable_Empty(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, formatRecycleBinTable(&buf, nil))
+	require.NoError(t, printRecycleBinTable(&buf, nil))
 	assert.Equal(t, "Recycle bin is empty\n", buf.String())
 }
 
-func TestFormatRecycleBinTable_Items(t *testing.T) {
+func TestPrintRecycleBinTable_Items(t *testing.T) {
 	t.Parallel()
 
 	items := []graph.Item{
@@ -42,7 +42,7 @@ func TestFormatRecycleBinTable_Items(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, formatRecycleBinTable(&buf, items))
+	require.NoError(t, printRecycleBinTable(&buf, items))
 	output := buf.String()
 
 	assert.Contains(t, output, "NAME")
@@ -57,7 +57,7 @@ func TestFormatRecycleBinTable_Items(t *testing.T) {
 	assert.Contains(t, output, "id-1")
 }
 
-func TestFormatRecycleBinJSON(t *testing.T) {
+func TestPrintRecycleBinJSON(t *testing.T) {
 	t.Parallel()
 
 	items := []graph.Item{
@@ -72,7 +72,7 @@ func TestFormatRecycleBinJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := formatRecycleBinJSON(&buf, items)
+	err := printRecycleBinJSON(&buf, items)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -107,35 +107,21 @@ func TestNewRecycleBinCmd_EmptyRequiresConfirm(t *testing.T) {
 	assert.NotNil(t, emptySub.Flags().Lookup("confirm"))
 }
 
-func TestItemType_File(t *testing.T) {
-	t.Parallel()
-
-	item := &graph.Item{IsFolder: false}
-	assert.Equal(t, "file", itemType(item))
-}
-
-func TestItemType_Folder(t *testing.T) {
-	t.Parallel()
-
-	item := &graph.Item{IsFolder: true}
-	assert.Equal(t, "folder", itemType(item))
-}
-
-func TestFormatRecycleBinJSON_Empty(t *testing.T) {
+func TestPrintRecycleBinJSON_Empty(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := formatRecycleBinJSON(&buf, nil)
+	err := printRecycleBinJSON(&buf, nil)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "[]")
 }
 
 // Validates: R-1.9.4
-func TestPrintRecycleBinRestoreJSON(t *testing.T) {
+func TestRecycleBinRestoreJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printRecycleBinRestoreJSON(&buf, recycleBinJSONItem{
+	err := writeJSONDocument(&buf, recycleBinJSONItem{
 		ID:      "item-restored-1",
 		Name:    "recovered-file.txt",
 		Size:    2048,
@@ -154,11 +140,11 @@ func TestPrintRecycleBinRestoreJSON(t *testing.T) {
 }
 
 // Validates: R-1.9.4
-func TestPrintRecycleBinRestoreJSON_Folder(t *testing.T) {
+func TestRecycleBinRestoreJSONOutput_Folder(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printRecycleBinRestoreJSON(&buf, recycleBinJSONItem{
+	err := writeJSONDocument(&buf, recycleBinJSONItem{
 		ID:      "folder-restored-1",
 		Name:    "recovered-folder",
 		Size:    0,

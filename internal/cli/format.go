@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const unknownTimeLabel = "unknown"
@@ -125,6 +127,27 @@ func formatSize(bytes int64) string {
 	}
 }
 
+// The item types the CLI prints, in text and in --json alike.
+const (
+	typeFile   = "file"
+	typeFolder = "folder"
+)
+
+// itemType returns the printed type of a drive item: folder or file.
+func itemType(item *graph.Item) string {
+	return folderOrFile(item.IsFolder)
+}
+
+// folderOrFile returns the printed type of anything known only as a folder or
+// not one.
+func folderOrFile(isFolder bool) string {
+	if isFolder {
+		return typeFolder
+	}
+
+	return typeFile
+}
+
 // formatTime returns a compact timestamp for display.
 func formatTime(t time.Time) string {
 	if t.IsZero() {
@@ -207,6 +230,23 @@ func printRow(w io.Writer, cells []string, widths []int) error {
 	}
 
 	return writeln(w, strings.Join(parts, "  "))
+}
+
+// folderTransferJSONOutput is the --json document of a folder get or put:
+// one entry per file transferred (getJSONOutput or putJSONOutput), the
+// folders created, the bytes transferred, and every item that failed.
+type folderTransferJSONOutput[F any] struct {
+	Files          []F      `json:"files"`
+	FoldersCreated int      `json:"folders_created"`
+	TotalSize      int64    `json:"total_size"`
+	Errors         []string `json:"errors"`
+}
+
+func (out folderTransferJSONOutput[F]) withEmptyLists() folderTransferJSONOutput[F] {
+	out.Files = emptyIfNil(out.Files)
+	out.Errors = emptyIfNil(out.Errors)
+
+	return out
 }
 
 // bulkTransferError names every item a folder get/put could not transfer

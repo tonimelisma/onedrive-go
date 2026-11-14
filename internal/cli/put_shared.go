@@ -52,7 +52,7 @@ func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileI
 	}
 
 	if cc.Flags.JSON {
-		return printPutJSON(cc.Output(), putJSONOutput{
+		return writeJSONDocument(cc.Output(), putJSONOutput{
 			Path: cc.SharedTarget.Selector(),
 			ID:   result.Item.ID,
 			Size: fi.Size(),

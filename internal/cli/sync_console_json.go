@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -77,17 +75,30 @@ func syncModeJSON(mode syncengine.SyncMode) string {
 	return ""
 }
 
-// emitJSON writes one event line. A syncJSONEvent holds only strings, numbers
-// and a map of numbers, which always encode, so a Marshal error is dropped
-// like a line the console cannot write (write): the sync must not stop over
-// its output, and the exit status still records the outcome.
+// emitJSON writes event as one line of stdout. A line that cannot be written
+// does not stop the sync: the failure is said once on stderr, and the lines
+// after it are still attempted.
 func (c *syncConsole) emitJSON(event *syncJSONEvent) {
-	line, err := json.Marshal(event)
-	if err != nil {
-		return
+	if err := c.writeJSONEvent(event); err != nil {
+		c.printErr("", "Warning: sync --json output is incomplete: "+err.Error())
 	}
+}
 
-	c.write(c.out, string(line))
+// writeJSONEvent writes event under mu, so lines from several mounts never
+// interleave. It returns only the first failure and drops the rest on
+// purpose: one warning says the stream is incomplete, and a stdout that is
+// gone (a closed pipe) must not repeat it for every later line.
+func (c *syncConsole) writeJSONEvent(event *syncJSONEvent) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	err := writeJSONLine(c.out, event)
+	if err == nil || c.jsonFailureReported {
+		return nil
+	}
+	c.jsonFailureReported = true
+
+	return err
 }
 
 func (c *syncConsole) jsonMountEvents(event string, mounts []multisync.StandaloneMountConfig, mode syncengine.SyncMode, dryRun bool) {

@@ -451,7 +451,7 @@ func TestRunGet_SharedFolderDownloadsItsTree(t *testing.T) {
 	require.NoError(t, runGet(cmd, []string{selector, target}))
 
 	assert.DirExists(t, filepath.Join(target, "Sub"))
-	var parsed getFolderJSONOutput
+	var parsed folderTransferJSONOutput[getJSONOutput]
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
 	assert.Equal(t, 2, parsed.FoldersCreated)
 	assert.Empty(t, parsed.Errors)

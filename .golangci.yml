@@ -191,6 +191,13 @@ linters:
           msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls
         - pattern: ^time\.Sleep$
           msg: use explicit test synchronization instead of wall-clock sleep
+        # Every byte of JSON a command prints is encoded in
+        # internal/cli/json_output.go (writeJSONDocument, writeJSONLine). The
+        # exclusion rules below scope this to the non-test files of
+        # internal/cli and name its exceptions.
+        - pattern: ^json\.(NewEncoder|Marshal|MarshalIndent)$
+          pkg: ^encoding/json$
+          msg: encode command output only through writeJSONDocument or writeJSONLine in internal/cli/json_output.go
 
     gocyclo:
       min-complexity: 15
@@ -356,6 +363,19 @@ linters:
       - path: internal/(fsroot|synctree|localpath)/
         linters:
           - forbidigo
+      # The JSON output rule binds internal/cli alone, and there neither its
+      # tests (they build fixtures and decode output) nor json_output.go, which
+      # owns the encoder. control_request.go holds the one other encode in the
+      # package and nothing else: the request body the CLI sends to the
+      # running sync over the control socket, which is not output.
+      - path-except: internal/cli/
+        linters:
+          - forbidigo
+        text: encode command output only through writeJSONDocument
+      - path: (_test\.go|internal/cli/json_output\.go|internal/cli/control_request\.go)$
+        linters:
+          - forbidigo
+        text: encode command output only through writeJSONDocument
       - path: internal/devtool/(fsutil|live_env)\.go
         linters:
           - gosec

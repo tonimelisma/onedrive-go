@@ -35,7 +35,7 @@ func TestPutJSONOutput_Serialization(t *testing.T) {
 }
 
 func TestPutFolderJSONOutput_Serialization(t *testing.T) {
-	out := putFolderJSONOutput{
+	out := folderTransferJSONOutput[putJSONOutput]{
 		Files: []putJSONOutput{
 			{Path: "dir/a.txt", ID: "id-1", Size: 100},
 			{Path: "dir/b.txt", ID: "id-2", Size: 200},
@@ -48,7 +48,7 @@ func TestPutFolderJSONOutput_Serialization(t *testing.T) {
 	data, err := json.Marshal(out)
 	require.NoError(t, err)
 
-	var decoded putFolderJSONOutput
+	var decoded folderTransferJSONOutput[putJSONOutput]
 	require.NoError(t, json.Unmarshal(data, &decoded))
 
 	assert.Len(t, decoded.Files, 2)
@@ -58,11 +58,11 @@ func TestPutFolderJSONOutput_Serialization(t *testing.T) {
 }
 
 // Validates: R-1.3.4
-func TestPrintPutJSON(t *testing.T) {
+func TestPutJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printPutJSON(&buf, putJSONOutput{
+	err := writeJSONDocument(&buf, putJSONOutput{
 		Path: "/remote/upload.txt",
 		ID:   "item-xyz",
 		Size: 8192,
@@ -77,25 +77,46 @@ func TestPrintPutJSON(t *testing.T) {
 }
 
 // Validates: R-1.3.4
-func TestPrintPutFolderJSON(t *testing.T) {
+func TestPutFolderJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printPutFolderJSON(&buf, putFolderJSONOutput{
+	err := writeJSONDocument(&buf, folderTransferJSONOutput[putJSONOutput]{
 		Files: []putJSONOutput{
 			{Path: "/remote/dir/a.txt", ID: "id-1", Size: 100},
 		},
 		FoldersCreated: 3,
 		TotalSize:      100,
 		Errors:         nil,
-	})
+	}.withEmptyLists())
 	require.NoError(t, err)
 
-	var decoded putFolderJSONOutput
+	var decoded folderTransferJSONOutput[putJSONOutput]
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
 	assert.Len(t, decoded.Files, 1)
 	assert.Equal(t, 3, decoded.FoldersCreated)
 	assert.Equal(t, int64(100), decoded.TotalSize)
+}
+
+// The folder form of put prints this document byte for byte: its field names
+// and their order, a path holding &, < and > as itself, and a list with
+// nothing in it as [].
+//
+// Validates: R-1.3.4, R-6.6.33
+func TestPutFolderJSONOutput_Golden(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, writeJSONDocument(&buf, folderTransferJSONOutput[putJSONOutput]{
+		Files: []putJSONOutput{
+			{Path: "/Backup/R&D <old>/a.txt", ID: "item-a", Size: 10},
+			{Path: "/Backup/R&D <old>/b>c.txt", ID: "item-b", Size: 20},
+		},
+		FoldersCreated: 3,
+		TotalSize:      30,
+	}.withEmptyLists()))
+
+	assertGoldenFile(t, "put_folder_json.golden", buf.Bytes())
 }
 
 func TestCountUploadFiles_NestedTree(t *testing.T) {

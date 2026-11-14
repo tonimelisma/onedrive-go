@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,7 +95,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printRmJSON(cc.Output(), rmJSONOutput{Deleted: remotePath})
+		return writeJSONDocument(cc.Output(), rmJSONOutput{Deleted: remotePath})
 	}
 
 	writeRmStatus(cc, remotePath, deleteMode)
@@ -202,16 +201,4 @@ func removableParentPath(remotePath string) string {
 	}
 
 	return parent
-}
-
-// printRmJSON writes the rm command's JSON output to w.
-func printRmJSON(w io.Writer, out rmJSONOutput) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode remove output: %w", err)
-	}
-
-	return nil
 }

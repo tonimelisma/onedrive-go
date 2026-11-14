@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 
@@ -85,11 +84,6 @@ func runRecycleBinEmpty(cmd *cobra.Command, _ []string) error {
 
 // --- formatting ---
 
-const (
-	typeFile   = "file"
-	typeFolder = "folder"
-)
-
 type recycleBinJSONItem struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -98,15 +92,7 @@ type recycleBinJSONItem struct {
 	Deleted string `json:"deleted"`
 }
 
-func itemType(item *graph.Item) string {
-	if item.IsFolder {
-		return typeFolder
-	}
-
-	return typeFile
-}
-
-func formatRecycleBinTable(w io.Writer, items []graph.Item) error {
+func printRecycleBinTable(w io.Writer, items []graph.Item) error {
 	if len(items) == 0 {
 		return writeln(w, "Recycle bin is empty")
 	}
@@ -115,15 +101,10 @@ func formatRecycleBinTable(w io.Writer, items []graph.Item) error {
 	rows := make([][]string, 0, len(items))
 
 	for i := range items {
-		typ := typeFile
-		if items[i].IsFolder {
-			typ = typeFolder
-		}
-
 		rows = append(rows, []string{
 			items[i].Name,
 			formatSize(items[i].Size),
-			typ,
+			itemType(&items[i]),
 			formatTime(items[i].ModifiedAt),
 			items[i].ID,
 		})
@@ -132,41 +113,25 @@ func formatRecycleBinTable(w io.Writer, items []graph.Item) error {
 	return printTable(w, headers, rows)
 }
 
-// printRecycleBinRestoreJSON writes the restore command's JSON output to w.
-func printRecycleBinRestoreJSON(w io.Writer, item recycleBinJSONItem) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
+// recycleBinListJSONOutput is `recycle-bin list --json`: one entry per item
+// in the recycle bin.
+type recycleBinListJSONOutput []recycleBinJSONItem
 
-	if err := enc.Encode(item); err != nil {
-		return fmt.Errorf("encode recycle bin restore output: %w", err)
-	}
-
-	return nil
+func (out recycleBinListJSONOutput) withEmptyLists() recycleBinListJSONOutput {
+	return emptyIfNil(out)
 }
 
-func formatRecycleBinJSON(w io.Writer, items []graph.Item) error {
-	out := make([]recycleBinJSONItem, 0, len(items))
+func printRecycleBinJSON(w io.Writer, items []graph.Item) error {
+	var out recycleBinListJSONOutput
 	for i := range items {
-		typ := typeFile
-		if items[i].IsFolder {
-			typ = typeFolder
-		}
-
 		out = append(out, recycleBinJSONItem{
 			ID:      items[i].ID,
 			Name:    items[i].Name,
 			Size:    items[i].Size,
-			Type:    typ,
+			Type:    itemType(&items[i]),
 			Deleted: formatAPITime(items[i].ModifiedAt),
 		})
 	}
 
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode recycle bin output: %w", err)
-	}
-
-	return nil
+	return writeJSONDocument(w, out.withEmptyLists())
 }

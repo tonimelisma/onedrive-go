@@ -232,11 +232,11 @@ func TestMvJSONOutput_Fields(t *testing.T) {
 }
 
 // Validates: R-1.7.1
-func TestPrintMvJSON(t *testing.T) {
+func TestMvJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printMvJSON(&buf, mvJSONOutput{
+	err := writeJSONDocument(&buf, mvJSONOutput{
 		Source:      "/docs/report.pdf",
 		Destination: "/archive/report.pdf",
 		ID:          "item-456",

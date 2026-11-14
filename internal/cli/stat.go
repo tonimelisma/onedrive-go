@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
-	"fmt"
 	"io"
 
 	"github.com/spf13/cobra"
@@ -37,10 +35,10 @@ func runStat(cmd *cobra.Command, args []string) error {
 		}
 
 		if cc.Flags.JSON {
-			return printStatJSONWithOptions(cc.Output(), item, opts)
+			return printStatJSON(cc.Output(), item, opts)
 		}
 
-		return printStatTextWithOptions(cc.Output(), item, opts)
+		return printStatText(cc.Output(), item, opts)
 	}
 
 	remotePath := args[0]
@@ -58,10 +56,10 @@ func runStat(cmd *cobra.Command, args []string) error {
 	}
 
 	if cc.Flags.JSON {
-		return printStatJSONWithOptions(cc.Output(), item, statPrintOptions{})
+		return printStatJSON(cc.Output(), item, statPrintOptions{})
 	}
 
-	return printStatTextWithOptions(cc.Output(), item, statPrintOptions{})
+	return printStatText(cc.Output(), item, statPrintOptions{})
 }
 
 // statJSONOutput is the JSON output schema for the stat command.
@@ -80,10 +78,8 @@ type statJSONOutput struct {
 	SharedSelector string `json:"shared_selector,omitempty"`
 }
 
-func printStatJSON(w io.Writer, item *graph.Item) error {
-	return printStatJSONWithOptions(w, item, statPrintOptions{})
-}
-
+// statPrintOptions carries what stat prints for an item reached through a
+// shared-item selector; it is empty for a drive path.
 type statPrintOptions struct {
 	SharedSelector string
 	AccountEmail   string
@@ -91,7 +87,7 @@ type statPrintOptions struct {
 	RemoteItemID   string
 }
 
-func printStatJSONWithOptions(w io.Writer, item *graph.Item, opts statPrintOptions) error {
+func printStatJSON(w io.Writer, item *graph.Item, opts statPrintOptions) error {
 	out := statJSONOutput{
 		ID:             item.ID,
 		Name:           item.Name,
@@ -107,26 +103,14 @@ func printStatJSONWithOptions(w io.Writer, item *graph.Item, opts statPrintOptio
 		SharedSelector: opts.SharedSelector,
 	}
 
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-
-	if err := enc.Encode(out); err != nil {
-		return fmt.Errorf("encode stat output: %w", err)
-	}
-
-	return nil
+	return writeJSONDocument(w, out)
 }
 
-func printStatTextWithOptions(w io.Writer, item *graph.Item, opts statPrintOptions) error {
-	itemType := typeFile
-	if item.IsFolder {
-		itemType = typeFolder
-	}
-
+func printStatText(w io.Writer, item *graph.Item, opts statPrintOptions) error {
 	if err := writef(w, "Name:     %s\n", item.Name); err != nil {
 		return err
 	}
-	if err := writef(w, "Type:     %s\n", itemType); err != nil {
+	if err := writef(w, "Type:     %s\n", itemType(item)); err != nil {
 		return err
 	}
 	if err := writef(w, "Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size); err != nil {

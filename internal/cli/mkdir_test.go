@@ -12,11 +12,11 @@ import (
 )
 
 // Validates: R-1.5.1
-func TestPrintMkdirJSON(t *testing.T) {
+func TestMkdirJSONOutput(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printMkdirJSON(&buf, mkdirJSONOutput{Created: "projects/new-folder", ID: "folder-abc123"})
+	err := writeJSONDocument(&buf, mkdirJSONOutput{Created: "projects/new-folder", ID: "folder-abc123"})
 	require.NoError(t, err)
 
 	var decoded mkdirJSONOutput

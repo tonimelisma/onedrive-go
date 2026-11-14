@@ -1,0 +1,17 @@
+{
+  "files": [
+    {
+      "path": "Q&A <draft>/notes.txt",
+      "size": 100,
+      "hash_verified": true
+    },
+    {
+      "path": "Q&A <draft>/v2>v1.txt",
+      "size": 200,
+      "hash_verified": false
+    }
+  ],
+  "folders_created": 2,
+  "total_size": 300,
+  "errors": []
+}

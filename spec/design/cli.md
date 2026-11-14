@@ -55,6 +55,7 @@ are inserted, updated, pruned, and validated.
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
 | Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
+| Every byte of `--json` output is encoded in `json_output.go`, with HTML escaping off, and an encoding failure and a write failure are told apart; a list prints `[]`, never `null`, and `accounts_requiring_auth` is always present; a `sync --json` line that cannot be written is reported once on stderr and the sync goes on (R-6.6.33, R-6.6.28, R-3.3.10, R-3.3.11). | `TestWriteJSONDocument_Format`, `TestWriteJSONLine_Format`, `TestWriteJSONOutput_WriteFailureIsNamed`, `TestJSONOutputTypes_NoListPrintsNull`, `TestListDepth_FindsTheDeepestList`, `TestJSONOutputCalls_PrintDeclaredTypesWithTheirListsFilled`, `TestCommandTree_EveryLeafHonorsJSON`, `TestGetFolderJSONOutput_EmptyErrors`, `TestGetFolderJSONOutput_Golden`, `TestPutFolderJSONOutput_Golden`, `TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays`, `TestPrintDriveSearchJSON_EmptySlice`, `TestSyncConsole_EmitJSONFailureIsReported` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 | `status` asks every account's live details at the same time under one budget (`statusLiveBudget`, 10 s, for all accounts together); an account whose answers did not arrive, or whose profile request failed for a reason other than sign-in, shows its local state with one stderr note naming the reason, `--json` stdout stays one document, and the command exits 0; a 401 still marks the account as needing sign-in, and a stopped command adds no note; the budget covers each request's token refresh and retry waits, so the note names the answer OneDrive gave when it gave one; one account's throttle never reaches another account, and a failure of Microsoft sign-in is named as that (R-6.8.28). | `TestStatus_PrintsLocalStateWhenOneDriveDoesNotAnswerInTheBudget`, `TestStatus_AsksAccountsAtTheSameTime`, `TestStatus_StorageCutShortByTheBudgetIsNoted`, `TestStatus_SaysWhyOneDriveGaveNoDetails`, `TestStatus_AStorageServerErrorIsNoted`, `TestStatus_ASlowTokenRefreshIsCutByTheBudget`, `TestStatus_OneAccountsThrottleLeavesTheOtherAlone`, `TestStatus_ASignInConnectionFailureIsNamedInTheNote`, `TestStatus_ASignInFailureStillMarksTheAccount`, `TestStatus_AStoppedCommandAddsNoNote` |
 | Every account-level Graph client a command builds (identity probe, `drive list` and `drive search` discovery, shared discovery, the `status` live overlay, shared-drive naming, share-URL bootstrap) comes from the command's session runtime, which also picks the Graph base URL in one place (`CLIContext.runtime`); only login holds a token source of its own, the one the sign-in produced (R-6.8.27). | `TestCLIBootstrapClientsUseTheSessionRuntime`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource` |
@@ -496,9 +497,9 @@ prints an empty document instead of prose.
 ignored it would hand a script prose where it asked for JSON (R-6.6.33). Each
 runnable command therefore does one of two things:
 
-- **Prints its result as JSON.** One document on stdout (`sync` streams JSON
-  lines), written once at the end through `writeJSONDocument` or the command's
-  own printer. The prose confirmation ("Removed drive ...", "Token removed for
+- **Prints its result as JSON.** One document on stdout, written once at the
+  end through `writeJSONDocument` (`sync` streams JSON lines, each written
+  through `writeJSONLine`). The prose confirmation ("Removed drive ...", "Token removed for
   ...") is dropped: helpers that print it take `CLIContext.resultWriter()`,
   which is `io.Discard` under `--json`. Warnings, prompts (the
   `reset-sync-state` RESET prompt, the sign-in code) and errors stay on
@@ -508,6 +509,54 @@ runnable command therefore does one of two things:
 - **Refuses `--json` as a `usageError`** (exit 2) before any side effect, when
   that form has no result to print: today only `drive add` with no drive,
   which prints guidance and points at `drive list --json`.
+
+One encoder writes every byte of that JSON. `json_output.go` holds the only
+two functions that print it: `writeJSONDocument` (one document, indented by
+two spaces, ending in one newline) and `writeJSONLine` (one compact line and a
+newline). Both go through `writeJSONOutput`, which encodes the value into
+memory and then writes it in one call, so the escaping is set once, a value
+that cannot be encoded writes nothing, and the two failures read differently:
+`encode JSON output: ...` for a value the encoder refused, `write JSON output:
+...` for a stdout that would not take the bytes, such as a closed pipe
+(`TestWriteJSONOutput_WriteFailureIsNamed`). HTML escaping is off: the
+readers are scripts, so a name holding `&`, `<` or `>` prints that character
+as itself rather than as a Unicode escape sequence. The forbidigo rule whose
+message is "encode command output only through writeJSONDocument or
+writeJSONLine" (`.golangci.yml`) refuses a direct call of `json.NewEncoder`,
+`json.Marshal` or `json.MarshalIndent` in the non-test files of
+`internal/cli` other than `json_output.go` and `control_request.go`, so such
+a call added to any other file, `control_client.go` included, fails lint.
+The one other encode in the package, the request body the CLI sends to the
+running sync over the control socket, is not output; `control_request.go`
+holds it and nothing else, and its `encodeControlRequest` takes only
+`synccontrol.PerfCaptureRequest`, so no other value passes through it.
+
+A list never prints as `null`: an empty list prints `[]` in every document and
+every line. Each output type that can hold a list has one normalizing step
+that turns each nil list into an empty one, and its printer hands the value
+over through it: the type's `withEmptyLists` method, called as
+`out.withEmptyLists()`, or for the status document `newStatusOutput`, which
+builds the whole document once and whose `normalizeStatusAccounts` leaves no
+list nil. A construction site does not fill a list the step fills again. The
+folder forms of `get` and `put` print one generic document type,
+`folderTransferJSONOutput`, with one `withEmptyLists`; its two golden files
+pin both documents byte for byte (`TestGetFolderJSONOutput_Golden`,
+`TestPutFolderJSONOutput_Golden`). A list tagged `omitempty` is still left
+out when empty, and a map or pointer absent by meaning keeps its `omitempty`.
+`accounts_requiring_auth` is always present, as a list, in every document
+that carries it (`shared`, `drive list`, `drive search`).
+`TestJSONOutputCalls_PrintDeclaredTypesWithTheirListsFilled` finds every value
+the package hands to the encoder, reads its type from the source, and fails
+unless the command's `--json` contract case declares that type and, for a type
+that can hold a list, the value comes through the step the declaration names;
+it also fails for a JSON-tagged type no declared type holds.
+`TestJSONOutputTypes_NoListPrintsNull` probes every declared type with its
+lists nil at each depth down to its deepest list, which `listDepth` finds by
+walking the type with no depth limit; a type holding a list no probe can
+reach (inside a recursive type, or under a map not keyed by strings) fails
+the test (`TestListDepth_FindsTheDeepestList`). A `sync --json` line that
+cannot be written is reported once on stderr, and the sync goes on
+(`TestSyncConsole_EmitJSONFailureIsReported`).
 
 The mutating commands' documents:
 
@@ -528,9 +577,12 @@ The mutating commands' documents:
 
 `TestCommandTree_EveryLeafHonorsJSON` walks the real command tree, runs every
 runnable leaf with `--json` against fakes (an in-memory Graph drive, a fake
-control socket, the sync runner seam) and asserts stdout parses as exactly one
-JSON value (or JSON lines), or that the flag is refused. A new command without
-a case fails the test. Two seams exist only so this can run offline:
+control socket, the sync runner seam) and asserts stdout is exactly one
+document of the type the case declares, opening with `{` or `[` as that type
+says, indented by two spaces, ending in one newline and holding no `null`
+where the type has a list (or compact JSON lines of the declared type, each
+ending in a newline), or that the flag is refused. A new command without a
+case fails the test. Two seams exist only so this can run offline:
 `completeLogin` is everything after the Microsoft sign-in exchange, and
 `cliSeams.cpAwaitCopy` stands in for polling the copy monitor, whose URL must
 be HTTPS on a Microsoft host. Cobra's generated `completion` and `help`

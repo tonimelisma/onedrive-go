@@ -1454,7 +1454,7 @@ func TestComputeSummary_Mixed(t *testing.T) {
 		},
 	}
 
-	s := computeSummary(accounts)
+	s := newStatusOutput(accounts).Summary
 	assert.Equal(t, 4, s.TotalMounts)
 	assert.Equal(t, 1, s.Ready)
 	assert.Equal(t, 2, s.Issues)
@@ -1478,7 +1478,7 @@ func TestComputeSummary_IncludesNestedChildMounts(t *testing.T) {
 		},
 	}
 
-	s := computeSummary(accounts)
+	s := newStatusOutput(accounts).Summary
 	assert.Equal(t, 2, s.TotalMounts)
 	assert.Equal(t, 1, s.Ready)
 	assert.Equal(t, 1, s.Paused)
@@ -1488,7 +1488,7 @@ func TestComputeSummary_IncludesNestedChildMounts(t *testing.T) {
 func TestComputeSummary_Empty(t *testing.T) {
 	t.Parallel()
 
-	s := computeSummary(nil)
+	s := newStatusOutput(nil).Summary
 	assert.Equal(t, 0, s.TotalMounts)
 	assert.Equal(t, 0, s.TotalConditions)
 }
@@ -2100,7 +2100,7 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 		},
 	}
 
-	s := computeSummary(accounts)
+	s := newStatusOutput(accounts).Summary
 	assert.Equal(t, 5, s.TotalRemoteDrift)
 	assert.Equal(t, 5, s.TotalRetrying)
 }

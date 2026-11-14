@@ -176,3 +176,74 @@ func TestDecodeControlJSONResponseHandlesSuccessAndDecodeFailure(t *testing.T) {
 	assert.Equal(t, synccontrol.ErrorInternal, daemonErr.code)
 	assert.Contains(t, daemonErr.message, "decode control response")
 }
+
+// Validates: R-2.9.3
+func TestDecodeControlJSONResponse_ClosesOnceAndNamesEachFailure(t *testing.T) {
+	t.Parallel()
+
+	errClose := errors.New("close refused")
+	tests := []struct {
+		name        string
+		statusCode  int
+		body        string
+		closeErr    error
+		wantMessage string
+	}{
+		{
+			name:        "success answer that does not decode",
+			statusCode:  http.StatusOK,
+			body:        `{`,
+			wantMessage: "decode control response: unexpected EOF",
+		},
+		{
+			name:        "success answer that neither decodes nor closes",
+			statusCode:  http.StatusOK,
+			body:        `{`,
+			closeErr:    errClose,
+			wantMessage: "decode control response: unexpected EOF (close: close refused)",
+		},
+		{
+			name:        "success answer that decodes but does not close",
+			statusCode:  http.StatusOK,
+			body:        `{"status":"ok"}`,
+			closeErr:    errClose,
+			wantMessage: "close control response: close refused",
+		},
+		{
+			name:        "error answer that neither decodes nor closes",
+			statusCode:  http.StatusConflict,
+			body:        `{`,
+			closeErr:    errClose,
+			wantMessage: "decode control response: unexpected EOF (close: close refused)",
+		},
+		{
+			name:        "error answer that decodes but does not close",
+			statusCode:  http.StatusConflict,
+			body:        `{"status":"error","code":"busy","message":"owner busy"}`,
+			closeErr:    errClose,
+			wantMessage: "close control response: close refused",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			closer := &countingCloser{err: tc.closeErr}
+			err := decodeControlJSONResponse(&http.Response{
+				StatusCode: tc.statusCode,
+				Body: struct {
+					io.Reader
+					io.Closer
+				}{Reader: strings.NewReader(tc.body), Closer: closer},
+			}, &synccontrol.MutationResponse{})
+
+			var daemonErr *controlDaemonError
+			require.ErrorAs(t, err, &daemonErr)
+			assert.Equal(t, tc.statusCode, daemonErr.statusCode)
+			assert.Equal(t, synccontrol.ErrorInternal, daemonErr.code)
+			assert.Equal(t, tc.wantMessage, daemonErr.message)
+			assert.Equal(t, 1, closer.callCount, "the body is closed exactly once")
+		})
+	}
+}
