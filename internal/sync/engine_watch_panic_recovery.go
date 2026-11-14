@@ -3,7 +3,8 @@ package sync
 import (
 	"fmt"
 	"log/slog"
-	"runtime/debug"
+
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // Observer names used when reporting a panic, so the log field and the error
@@ -31,14 +32,10 @@ func recoverObserverPanic(logger *slog.Logger, observer string, errs chan<- erro
 		return
 	}
 
-	// The stack is captured here rather than reconstructed from the value
-	// because a panic without one is close to undiagnosable in a daemon that
-	// has already discarded the failing goroutine.
-	logger.Error("panic in watch observer",
-		slog.String("observer", observer),
-		slog.Any("panic", r),
-		slog.String("stack", string(debug.Stack())),
-	)
+	// Logged with the stack on the panicking goroutine, because a daemon that
+	// has already discarded that goroutine cannot say where it failed.
+	panicErr := panicguard.Recovered(logger, "in the "+observer+" watch observer", r,
+		slog.String("observer", observer))
 
 	// Fatal rather than an ordinary observer exit. The runtime tolerates one
 	// observer stopping because the conditions it was built for -- watch-limit
@@ -47,8 +44,7 @@ func recoverObserverPanic(logger *slog.Logger, observer string, errs chan<- erro
 	// run the mount half-blind while its status still read healthy. Failing
 	// the mount is recoverable; silently observing nothing is not.
 	select {
-	case errs <- newFatalObserverError(
-		fmt.Errorf("sync: panic in %s watch observer: %v", observer, r)):
+	case errs <- newFatalObserverError(fmt.Errorf("sync: %w", panicErr)):
 	default:
 		logger.Error("dropped watch observer panic report: error channel full",
 			slog.String("observer", observer),

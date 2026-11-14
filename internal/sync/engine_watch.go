@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime/debug"
 	stdsync "sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -55,7 +55,17 @@ const quiescenceLogInterval = 30 * time.Second
 // Unlike the old approach (calling RunOnce with throwaway infrastructure),
 // bootstrapSync dispatches through the same DepGraph, active scope working
 // set, and WorkerPool that the steady-state watch loop uses.
-func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions) error {
+// A timer callback that panics ends the watch with an error wrapping
+// panicguard.ErrPanic (beginRun).
+func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions) (err error) {
+	runCtx, end := e.beginRun(ctx)
+	defer func() { err = end(err) }()
+
+	return e.runWatch(runCtx, mode, opts)
+}
+
+// runWatch is the watch RunWatch runs under its bound context.
+func (e *Engine) runWatch(ctx context.Context, mode SyncMode, opts WatchOptions) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
@@ -220,12 +230,10 @@ func (rt *watchRuntime) initWatchInfra(
 	}
 
 	pipe.cleanup = func() {
-		if rt.resources.socketIOWakeStop != nil {
-			close(rt.resources.socketIOWakeStop)
-			if rt.resources.socketIOWakeDone != nil {
-				<-rt.resources.socketIOWakeDone
-			}
-			rt.resources.socketIOWakeStop = nil
+		if rt.resources.socketIOWakeCancel != nil {
+			rt.resources.socketIOWakeCancel()
+			<-rt.resources.socketIOWakeDone
+			rt.resources.socketIOWakeCancel = nil
 			rt.resources.socketIOWakeDone = nil
 		}
 
@@ -363,7 +371,7 @@ func (rt *watchRuntime) startObservers(
 	// while the loop has not yet taken the previous one.
 	skippedCh := make(chan []skippedItem, 2)
 
-	localObs := newLocalObserver(bl, rt.deps.logger, rt.engine.checkWorkers)
+	localObs := rt.engine.buildLocalObserver(bl, rt.deps.logger)
 	hashCache, err := rt.engine.baseline.newLocalHashCache(ctx)
 	if err != nil {
 		return err
@@ -518,9 +526,12 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 
 	wakeCh := make(chan struct{}, 1)
 
-	stopCh := make(chan struct{})
-	rt.resources.socketIOWakeStop = stopCh
-	rt.resources.socketIOWakeDone = make(chan struct{})
+	// The runtime's cleanup cancels wakeCtx and waits for done.
+	//nolint:gosec // G118: the cancel is kept in socketIOWakeCancel, which the runtime's cleanup calls.
+	wakeCtx, wakeCancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	rt.resources.socketIOWakeCancel = wakeCancel
+	rt.resources.socketIOWakeDone = done
 	wakeSource := rt.engine.socketIOWakeSourceFactory(
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
@@ -531,57 +542,43 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		},
 	)
 
-	go func() {
-		wakeCtx, wakeCancel := context.WithCancel(ctx)
-		defer wakeCancel()
-		defer close(rt.resources.socketIOWakeDone)
-
-		go func() {
-			select {
-			case <-stopCh:
-				wakeCancel()
-			case <-wakeCtx.Done():
-			}
-		}()
-
-		if err := rt.runSocketIOWakeSource(wakeCtx, wakeSource, wakeCh); err != nil {
-			// Info: watch keeps polling on its interval regardless.
-			rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
-				slog.String("drive_id", rt.engine.driveID.String()),
-				slog.Any("error", err),
-			)
-		}
-	}()
+	go rt.runSocketIOWakeSource(wakeCtx, wakeSource, wakeCh, done)
 
 	return wakeCh
 }
 
-// runSocketIOWakeSource runs the wake source and is the panic boundary of its
-// goroutine. A panic becomes the error the goroutine's ordinary failure path
-// already handles: the wake source is an accelerator, so losing it leaves
-// watch polling on its interval and nothing else changes. The panic itself is
-// still logged at Error with its stack, because it is a bug. Before this
-// recover it took the process down with every mount.
+// runSocketIOWakeSource runs the wake source until ctx ends and closes done,
+// and is the panic boundary of its goroutine. A panic takes the goroutine's
+// ordinary failure path: the wake source is an accelerator, so losing it
+// leaves watch polling on its interval and nothing else changes. The panic
+// itself is still logged at Error with its stack, because it is a bug.
+// Unrecovered, it would end the process and every mount with it.
 func (rt *watchRuntime) runSocketIOWakeSource(
 	ctx context.Context,
 	wakeSource socketIOWakeSourceRunner,
 	wakeCh chan<- struct{},
-) (err error) {
+	done chan<- struct{},
+) {
+	defer close(done)
 	defer func() {
-		r := recover()
-		if r == nil {
-			return
+		if r := recover(); r != nil {
+			rt.reportSocketIOWakeSourceStop(panicguard.Recovered(rt.deps.logger, "in the socket.io wake source", r,
+				slog.String("drive_id", rt.engine.driveID.String())))
 		}
-		rt.deps.logger.Error("panic in socket.io wake source",
-			slog.String("drive_id", rt.engine.driveID.String()),
-			slog.Any("panic", r),
-			slog.String("stack", string(debug.Stack())),
-		)
-		err = fmt.Errorf("sync: panic in socket.io wake source: %v", r)
 	}()
 
-	//nolint:wrapcheck // The wake source's error is only logged by the caller, with its own context.
-	return wakeSource.Run(ctx, wakeCh)
+	if err := wakeSource.Run(ctx, wakeCh); err != nil {
+		rt.reportSocketIOWakeSourceStop(err)
+	}
+}
+
+// reportSocketIOWakeSourceStop says, at Info, that the wake source ended with
+// err: watch keeps polling on its interval regardless.
+func (rt *watchRuntime) reportSocketIOWakeSourceStop(err error) {
+	rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
+		slog.String("drive_id", rt.engine.driveID.String()),
+		slog.Any("error", err),
+	)
 }
 
 func (rt *watchRuntime) emitSocketIOLifecycleEvent(event socketIOLifecycleEvent) {

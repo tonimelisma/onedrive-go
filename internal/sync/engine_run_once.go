@@ -27,8 +27,18 @@ const oneShotMaxPasses = 4
 //  8. Wait for completion, commit delta token
 //
 // A dry run is always one pass: it executes nothing, so a second pass would
-// see the same truth. The returned report covers every pass.
-func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*Report, error) {
+// see the same truth. The returned report covers every pass. A timer
+// callback that panics during the run ends it with an error wrapping
+// panicguard.ErrPanic, beside the report it has (beginRun).
+func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (_ *Report, err error) {
+	runCtx, end := e.beginRun(ctx)
+	defer func() { err = end(err) }()
+
+	return e.runOnce(runCtx, mode, opts)
+}
+
+// runOnce is the one-shot sync RunOnce runs under its bound context.
+func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*Report, error) {
 	start := e.nowFunc()
 	runner := newOneShotRunner(e)
 
@@ -538,7 +548,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	kind resyncKind,
 ) (fullRemoteObservation, error) {
 	eng := flow.engine
-	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs := eng.buildRemoteObserver(bl, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {

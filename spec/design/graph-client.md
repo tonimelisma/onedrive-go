@@ -92,6 +92,7 @@ This keeps domain-specific logic close to its tests without reopening the public
 | The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
 | Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
 | Every sign-in request (silent refresh, device code and its polls, code exchange) goes through the injected auth client, whose deadlines (30 s headers, 60 s request) release every caller of a stalled token endpoint; a nil auth client and a nil Graph HTTP client are errors, never `http.DefaultClient` (R-6.8.27). | `TestAuthClient_BoundsEveryRequest`, `TestTokenSourceFromPath_RefreshUsesTheInjectedClient`, `TestTokenSourceFromPath_StalledTokenEndpointTimesOut`, `TestTokenSourceFromPath_NilAuthClientIsAnError`, `TestLoginFlows_NilAuthClientIsAnError`, `TestLogin_UsesTheInjectedAuthClient`, `TestLoginWithBrowser_UsesTheInjectedAuthClient`, `TestNewClient_NilHTTPClientIsAnError` |
+| The browser sign-in's callback server is owned: shutdown waits for its serving goroutine, a panic there is the login's callback error, and a handler's panic, which net/http recovers per connection, is logged through the login's logger, not the standard `log` package (R-6.3.10, R-6.3.4). | `TestCallbackServer_HandlerPanicIsLoggedAndShutdownWaitsForServe` |
 | One sign-in file has one token source per session runtime: account-level bootstrap clients and drive sessions share it, and the CLI builds no token source of its own (R-6.8.27). | `TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath`, `TestSessionRuntime_BootstrapClientKeepsNotLoggedIn`, `TestSessionRuntime_DefaultTokenSourceHasTheAuthClient`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource`, `TestCLIBootstrapClientsUseTheSessionRuntime` |
 
 ## Authentication (`auth.go`)
@@ -329,7 +330,11 @@ for headers, so a connection that delivered headers and went quiet held a
 worker forever (D-045, `TestDownload_StalledBodyIsAbandoned`,
 `TestUploadChunk_StalledBodyIsAbandoned`). The transfer and metadata
 transports also ping idle HTTP/2 connections (`graphtransport`,
-`TestTransferTransport_PingsIdleHTTP2Connections`).
+`TestTransferTransport_PingsIdleHTTP2Connections`). The stall timer's
+callback (`stalled`) recovers its own panic and cancels the transfer with the
+panic's error, which `explain` returns with the transfer's error kept as
+text, so that one transfer fails and nothing else (R-6.3.10,
+`TestStallWatchdog_ACallbackPanicFailsTheTransferWithIt`).
 
 Mutation answers go through `decodeMutatedItem`: a 2xx whose body is empty
 (204), not a driveItem (a 201 carrying `{"error":…}`), or an item without

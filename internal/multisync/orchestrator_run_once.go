@@ -10,6 +10,7 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -81,7 +82,7 @@ func (o *Orchestrator) RunOnce(
 	)
 	childCoordinator.registerParents(parentWork)
 
-	runIndexedParentMountWork(ctx, parentWork, parentReports, childCoordinator)
+	runIndexedMountWork(ctx, parentWork, parentReports, childCoordinator)
 	defer func() {
 		result.Stuck = errors.Join(result.Stuck, o.closeRunOnceEngines(ctx, parentWork, MountProjectionStandalone))
 	}()
@@ -101,21 +102,11 @@ func (o *Orchestrator) RunOnce(
 	}
 }
 
-func runIndexedMountWork(ctx context.Context, work []indexedMountWork, reports []*MountReport) {
-	var wg gosync.WaitGroup
-	for _, w := range work {
-		wg.Add(1)
-
-		go func(indexed indexedMountWork) {
-			defer wg.Done()
-			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
-		}(w)
-	}
-
-	wg.Wait()
-}
-
-func runIndexedParentMountWork(
+// runIndexedMountWork runs every work item on a goroutine of its own and
+// waits for all of them; each report lands at its item's index. With a
+// coordinator (the drives of a pass, not their shortcuts), each drive that
+// finishes tells it, which may start that drive's shortcuts.
+func runIndexedMountWork(
 	ctx context.Context,
 	work []indexedMountWork,
 	reports []*MountReport,
@@ -127,6 +118,13 @@ func runIndexedParentMountWork(
 
 		go func(indexed indexedMountWork) {
 			defer wg.Done()
+			// MountRunner.run recovers a panic of the drive's own run. This
+			// covers the work around it, so the pass still finishes and fails.
+			defer func() {
+				if r := recover(); r != nil {
+					reports[indexed.index] = withRecoveredPanic(reports[indexed.index], indexed.work.runner, r)
+				}
+			}()
 			reports[indexed.index] = indexed.work.runner.run(ctx, indexed.work.fn)
 			if coordinator != nil && indexed.work.mount != nil {
 				coordinator.markParentDone(ctx, indexed.work.mount.id())
@@ -135,6 +133,30 @@ func runIndexedParentMountWork(
 	}
 
 	wg.Wait()
+}
+
+// withRecoveredPanic is a drive's report once a panic recovered around its
+// run is added: joined into the error of the report the run already made, or
+// a report of its own when the run made none. Either way the drive has one
+// report, and the panic is not dropped.
+func withRecoveredPanic(report *MountReport, runner *MountRunner, r any) *MountReport {
+	var logger *slog.Logger
+	name := "a drive"
+	if runner != nil {
+		logger = runner.logger
+		name = runner.name()
+	}
+	err := panicguard.Recovered(logger, "while running the sync of "+name, r)
+
+	switch {
+	case report != nil:
+		report.Err = errors.Join(report.Err, err)
+		return report
+	case runner != nil:
+		return runner.report(nil, err)
+	default:
+		return &MountReport{Err: err}
+	}
 }
 
 // processFailureRunOnceResult reports a failure that stops the whole run
@@ -271,9 +293,10 @@ func (o *Orchestrator) buildEngineWork(
 // closeRunOnceEngines closes the engines of the work items of one projection
 // (the drives, or one drive's shortcuts), each with the same bound as a watch
 // runner's close (closeEngineWithin). An engine whose close runs over is
-// reported once with every goroutine's stack, and the returned error, which
-// joins those reports, wraps ErrSyncStuck: the pass's reports stand, but the
-// command fails so the process exits and the stuck engine's locks go.
+// reported once with every goroutine's stack, and one whose close panicked
+// once with its own; the returned error joins them and wraps ErrSyncStuck or
+// panicguard.ErrPanic: the pass's reports stand, but the command fails so the
+// process exits and the engine's locks go.
 func (o *Orchestrator) closeRunOnceEngines(
 	ctx context.Context,
 	work []indexedMountWork,
@@ -285,8 +308,8 @@ func (o *Orchestrator) closeRunOnceEngines(
 		if mount == nil || engine == nil || mount.projectionKind() != projection {
 			continue
 		}
-		if !o.closeEngineWithin(ctx, mount, engine) {
-			stuck = append(stuck, o.reportStuckSync(mount, engineCloseStuckDetail()))
+		if err := o.closeEngineWithin(ctx, mount, engine); err != nil {
+			stuck = append(stuck, err)
 		}
 		o.removeMountPerfCollector(mount.id().String())
 	}

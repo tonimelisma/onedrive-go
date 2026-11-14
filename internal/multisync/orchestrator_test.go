@@ -3075,9 +3075,9 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 
 // Validates: R-2.9.7
 //
-// A watch whose control server stopped kept syncing with no way to pause,
-// reload or query it, and said so in one warning (D15). Now the watch ends
-// with the error, so the CLI exits 1 and a service manager restarts it.
+// A watch whose control server stopped would sync on with no way to pause,
+// reload or query it. The watch ends with the error instead, so the CLI
+// exits 1 and a service manager restarts it.
 func TestRunWatch_ControlServerExitEndsTheWatch(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:control-exit@example.com", "ControlExit")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)

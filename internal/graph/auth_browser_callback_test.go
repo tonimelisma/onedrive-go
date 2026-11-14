@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-6.3.4
@@ -84,4 +88,40 @@ func TestHandleOAuthCallback_RepeatedStateMismatchDoesNotBlock(t *testing.T) {
 	result := <-resultCh
 	require.Error(t, result.err)
 	assert.Contains(t, result.err.Error(), "state mismatch")
+}
+
+// net/http recovers a callback handler's panic per connection and reports it
+// through the server's ErrorLog, the login's logger, so it reaches the log
+// file; with the standard log package's default it would not. Shutdown
+// returns only once the server has stopped serving, so no serving goroutine
+// outlives the login.
+//
+// Validates: R-6.3.10, R-6.3.4
+func TestCallbackServer_HandlerPanicIsLoggedAndShutdownWaitsForServe(t *testing.T) {
+	t.Parallel()
+
+	capture, logger := synctest.NewLogCapture()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /boom", func(http.ResponseWriter, *http.Request) {
+		panic("callback handler exploded")
+	})
+	server, port, err := startCallbackServer(t.Context(), mux, make(chan callbackResult, 1), logger)
+	require.NoError(t, err)
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/boom", port), http.NoBody)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	if err == nil {
+		require.NoError(t, response.Body.Close())
+	}
+	require.Error(t, err, "net/http drops the connection of a handler that panicked")
+	require.Eventually(t, func() bool { return capture.Contains("callback handler exploded") },
+		5*time.Second, time.Millisecond, "the handler's panic reaches the login's logger")
+
+	server.shutdown(t.Context(), slog.New(slog.DiscardHandler))
+	select {
+	case <-server.done:
+	default:
+		require.Fail(t, "shutdown returned before the server stopped serving")
+	}
 }

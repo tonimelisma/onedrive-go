@@ -171,7 +171,13 @@ func runSyncDaemonWithFactory(
 	// as the final STATUS=.
 	serviceNotifier := newSyncNotifier(notifier, logger, console)
 	defer func() { serviceNotifier.failed(err) }()
-	stopWatchdog := startSyncWatchdog(ctx, serviceNotifier)
+	// A helper goroutine of the watch that panics (the keepalive here, or one
+	// of the command's: the signal handler, the performance logger) cancels
+	// the watch with the panic as the cause; the watch drains as on a stop,
+	// and the cause is its error.
+	ctx, failWatch := context.WithCancelCause(ctx)
+	defer failWatch(nil)
+	stopWatchdog := startSyncWatchdog(ctx, serviceNotifier, failWatch)
 	defer stopWatchdog()
 	// Include paused drives — Orchestrator handles pause/resume internally.
 	drives, err := config.ResolveDrives(holder.Config(), selectors, true, logger)
@@ -226,15 +232,19 @@ func runSyncDaemonWithFactory(
 
 	console.Watching(standaloneSelection.Mounts, mode)
 
-	if err := orch.RunWatch(ctx, mode, opts); err != nil {
+	watchErr := orch.RunWatch(ctx, mode, opts)
+	if watchErr == nil {
+		watchErr = commandPanicCause(ctx)
+	}
+	if watchErr != nil {
 		// The terminal gets the message through main; the log file gets it
 		// here, so a watch that refuses to start (its sync folder missing,
 		// another sync owning the socket) leaves a trace where the rest of
-		// its history is (R-6.6.33).
-		logger.Error("sync --watch stopped with an error", slog.Any("error", err))
+		// its history is (R-6.6.35).
+		logger.Error("sync --watch stopped with an error", slog.Any("error", watchErr))
 		// The orchestrator's error already says what failed; a "run watch
 		// sync:" prefix only lengthened the line main prints.
-		return formatWatchStartupError(err)
+		return formatWatchStartupError(watchErr)
 	}
 
 	console.Stopped()

@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 type socketIOReadResult struct {
@@ -101,10 +102,18 @@ func (s *socketIOWakeSource) runConnection(
 	wakes chan<- struct{},
 ) error {
 	readCtx, cancelRead := context.WithCancel(ctx)
-	defer cancelRead()
-
 	readResults := make(chan socketIOReadResult, 1)
-	go s.readPackets(readCtx, conn.conn, readResults)
+	conn.readerDone = make(chan struct{})
+	go s.readPackets(readCtx, conn.conn, readResults, conn.readerDone)
+	// The connection ends in order: the close frame first, so the server sees
+	// a normal closure (a canceled read drops the connection without one),
+	// then the reader's cancel and the wait for it, so no reader outlives its
+	// connection. During shutdown the run's cancel has already ended the read.
+	defer func() {
+		s.closeConnection(ctx, conn)
+		cancelRead()
+		<-conn.readerDone
+	}()
 
 	// The refresh deadline was computed on s.clock, so the timer runs on it
 	// too: the endpoint is refreshed before it expires on the same clock that
@@ -153,7 +162,28 @@ func (s *socketIOWakeSource) runConnection(
 	}
 }
 
-func (s *socketIOWakeSource) readPackets(ctx context.Context, conn *websocket.Conn, out chan<- socketIOReadResult) {
+// readPackets reads the connection's text packets into out until a read fails
+// or ctx ends, and closes done as it returns.
+func (s *socketIOWakeSource) readPackets(
+	ctx context.Context,
+	conn *websocket.Conn,
+	out chan<- socketIOReadResult,
+	done chan<- struct{},
+) {
+	defer close(done)
+	// A panic ends the connection the way a failed read does, and the wake
+	// source with it (runIteration): reconnecting would only repeat the bug.
+	defer func() {
+		if r := recover(); r != nil {
+			panicErr := panicguard.Recovered(s.logger, "while reading socket.io packets", r,
+				slog.String("drive_id", s.driveID.String()))
+			select {
+			case out <- socketIOReadResult{err: panicErr}:
+			case <-ctx.Done():
+			}
+		}
+	}()
+
 	for {
 		typ, payload, err := conn.Read(ctx)
 		if err != nil {
@@ -172,6 +202,18 @@ func (s *socketIOWakeSource) readPackets(ctx context.Context, conn *websocket.Co
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// closeConnection sends the close frame and waits, within the library's
+// bounds, for the server's answer. A failure on a connection that already
+// broke, or during shutdown, changes nothing and is only noted.
+func (s *socketIOWakeSource) closeConnection(ctx context.Context, conn *socketIOConn) {
+	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !watchShouldStop(ctx, closeErr) {
+		s.logger.Debug("socket.io close failed",
+			slog.String("drive_id", s.driveID.String()),
+			slog.Any("error", closeErr),
+		)
 	}
 }
 

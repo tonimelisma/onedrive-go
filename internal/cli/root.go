@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/logfile"
 	"github.com/tonimelisma/onedrive-go/internal/loglevel"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
@@ -137,10 +138,11 @@ type cliSeams struct {
 	// ($NOTIFY_SOCKET, $WATCHDOG_USEC) of `sync --watch`.
 	notifyGetenv      func(string) string
 	statusLiveOverlay func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
-	// statusLiveBudget replaces the live overlay's statusLiveBudget when
-	// non-zero, so a test of a OneDrive that never answers does not wait 10 s.
-	statusLiveBudget time.Duration
-	cpAwaitCopy      func(context.Context, *CLIContext, *graph.Client, string) (string, error)
+	// statusLiveBudgetContext replaces the context that ends when the live
+	// overlay's budget (statusLiveBudget) runs out, so a test ends the budget
+	// itself instead of waiting 10 s or racing a shorter clock.
+	statusLiveBudgetContext func(context.Context) (context.Context, context.CancelFunc)
+	cpAwaitCopy             func(context.Context, *CLIContext, *graph.Client, string) (string, error)
 	// asideRestoreTimeout replaces restoreAsideTimeout when non-zero.
 	asideRestoreTimeout time.Duration
 	// effectiveUID replaces os.Geteuid for the sync root refusal.
@@ -754,20 +756,31 @@ func markUsageErrors(root *cobra.Command) {
 	walk(root)
 }
 
-func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
+func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitCode int) {
 	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
 
 	// Every command is interruptible, not just sync. Without this a signal
-	// killed the process outright and nothing deferred ran, so interrupting a
-	// transfer left its temporary state behind with no chance to clean up.
+	// would kill the process outright and nothing deferred would run, so an
+	// interrupted transfer would leave its temporary state behind with no
+	// chance to clean up.
 	// The signal logger writes to the status stream because the configured
 	// command logger does not exist until the command starts.
-	ctx, cancel := shutdownContext(context.Background(), newSignalLogger(statusWriter))
+	signalLogger := newSignalLogger(statusWriter)
+	ctx, cancel := shutdownContext(context.Background(), signalLogger)
 	defer cancel()
+	// The last line of defense: a panic on the command's own goroutine that
+	// nothing below recovered ends the command with exit 1, never Go's 2
+	// (R-6.3.10).
+	defer func() {
+		if r := recover(); r != nil {
+			exitCode = reportMainPanic(cmd, statusWriter, signalLogger, r)
+		}
+	}()
 
 	executed, err := cmd.ExecuteContextC(ctx)
 	err = asUsageError(executed, err)
+	err = withCommandPanic(cmd.Context(), err)
 	completeRootCommandPerf(cmd, err)
 	closeErr := closeRootCommandLogger(cmd)
 	if closeErr != nil {
@@ -778,7 +791,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 		}
 	}
 
-	exitCode := commandExitCode(err, ctx.Err() != nil)
+	exitCode = commandExitCode(err, ctx.Err() != nil)
 	switch exitCode {
 	case exitSuccess:
 	case exitInterrupted:
@@ -788,10 +801,45 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) int {
 	case exitUsage:
 		writeCommandError(statusWriter, commandErrorText(err, false))
 	default:
-		writeCommandError(statusWriter, commandErrorText(err, commandWantsErrorDetails(cmd)))
+		writeCommandError(statusWriter, commandFailureText(err, commandWantsErrorDetails(cmd)))
 	}
 
 	return exitCode
+}
+
+// commandFailureText is what main prints for a failed command. A command that
+// ended with a recovered panic also gets the panic's stack: run without a log
+// file, the command has nowhere else to keep what the bug report needs.
+func commandFailureText(err error, details bool) string {
+	text := commandErrorText(err, details)
+	if stack := panicguard.Stack(err); stack != "" {
+		text += "\n\n" + strings.TrimRight(stack, "\n")
+	}
+
+	return text
+}
+
+// reportMainPanic handles a panic on the command's goroutine that nothing
+// below recovered. It is logged once, with its stack, through the command
+// logger, which reaches the log file when there is one (before the command
+// logger exists, through fallback); the log file is then closed so the record
+// is on disk; and the error and the stack go to stderr, as for any command
+// that ends with a recovered panic.
+func reportMainPanic(cmd *cobra.Command, statusWriter io.Writer, fallback *slog.Logger, r any) int {
+	logger := fallback
+	if ctx := cmd.Context(); ctx != nil {
+		if cc := cliContextFrom(ctx); cc != nil && cc.Logger != nil {
+			logger = cc.Logger
+		}
+	}
+
+	err := panicguard.Recovered(logger, "in onedrive-go", r)
+	if closeErr := closeRootCommandLogger(cmd); closeErr != nil {
+		writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr)
+	}
+	writeCommandError(statusWriter, commandFailureText(err, false))
+
+	return exitFailure
 }
 
 func newCommandPerfSession(

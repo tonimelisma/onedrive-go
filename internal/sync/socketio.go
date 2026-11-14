@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -67,6 +68,9 @@ type socketIOWakeSourceOptions struct {
 
 type socketIOConn struct {
 	conn *websocket.Conn
+	// readerDone is closed as the connection's reader returns. runConnection
+	// creates it and waits for it, so no reader outlives its connection.
+	readerDone chan struct{}
 }
 
 // socketIOWakeSource owns the outbound Socket.IO/WebSocket lifecycle used to
@@ -147,7 +151,7 @@ func newSocketIOWakeSourceWithOptions(
 
 // Run maintains the Socket.IO connection until ctx is canceled. Connection
 // failures degrade silently to fallback polling while the wake source retries
-// in the background.
+// in the background; a panic of the connection's reader ends Run with it.
 func (s *socketIOWakeSource) Run(ctx context.Context, wakes chan<- struct{}) error {
 	if s.fetcher == nil {
 		return nil
@@ -225,17 +229,15 @@ func (s *socketIOWakeSource) runIteration(
 
 	bo.Reset()
 	runErr := s.runConnection(ctx, conn, endpoint.ID, refreshAt, wakes)
-	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !watchShouldStop(ctx, closeErr) {
-		// Debug: closing an already broken connection; nothing to do.
-		s.logger.Debug("socket.io close failed",
-			slog.String("drive_id", s.driveID.String()),
-			slog.Any("error", closeErr),
-		)
-	}
 
 	stop := ctx.Err() != nil || watchShouldStop(ctx, runErr)
 	if stop {
 		return true, nil
+	}
+	if errors.Is(runErr, panicguard.ErrPanic) {
+		// The connection's reader panicked. A reconnect would repeat the bug,
+		// so the wake source ends and watch keeps polling.
+		return false, runErr
 	}
 	if errors.Is(runErr, errSocketIORefreshRequired) {
 		s.logger.Info("socket.io endpoint refresh requested",

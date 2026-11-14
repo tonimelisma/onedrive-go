@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // Validates: R-6.8.16
@@ -29,6 +31,8 @@ func TestClassifyCommandError(t *testing.T) {
 	assert.Equal(t, errclass.ClassActionable, classifyCommandError(graph.ErrUnauthorized))
 	assert.Equal(t, errclass.ClassActionable, classifyCommandError(fmt.Errorf("load: %w", config.ErrInvalidConfig)))
 	assert.Equal(t, errclass.ClassFatal, classifyCommandError(errors.New("boom")))
+	assert.Equal(t, errclass.ClassFatal, classifyCommandError(errors.Join(testPanicError(t), context.Canceled)),
+		"a recovered panic is fatal even beside the cancellation it caused")
 }
 
 // Validates: R-6.6.31, R-6.6.27
@@ -78,6 +82,29 @@ func TestCommandExitCode(t *testing.T) {
 			err:           fmt.Errorf("stop: %w", multisync.ErrSyncStuck),
 			stopRequested: true,
 			want:          exitFailure,
+		},
+		// Validates: R-6.3.10
+		// A recovered panic exits 1, never Go's 2, also when it ended a stop
+		// the user asked for, travels with the cancellation it caused, or is
+		// joined with a failure that alone would exit 77 or 78 (a one-shot
+		// pass's drive error beside a stuck close, a helper's panic beside the
+		// command's own error).
+		{name: "recovered panic", err: fmt.Errorf("sync --watch: %w", panicguard.ErrPanic), want: exitFailure},
+		{
+			name:          "recovered panic on a user stop",
+			err:           errors.Join(panicguard.ErrPanic, context.Canceled),
+			stopRequested: true,
+			want:          exitFailure,
+		},
+		{
+			name: "recovered panic beside a sign-in failure",
+			err:  errors.Join(fmt.Errorf("session: %w", graph.ErrNotLoggedIn), panicguard.ErrPanic),
+			want: exitFailure,
+		},
+		{
+			name: "recovered panic beside an invalid config",
+			err:  errors.Join(panicguard.ErrPanic, fmt.Errorf("loading config: %w", config.ErrInvalidConfig)),
+			want: exitFailure,
 		},
 	}
 
@@ -140,4 +167,77 @@ func TestMainWithWriters_SignInRequiredExits77(t *testing.T) {
 	assert.Equal(t, exitSignInRequired, exitCode, stderr.String())
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "onedrive-go login")
+}
+
+// testPanicError is the error a boundary makes of a recovered panic.
+func testPanicError(t *testing.T) error {
+	t.Helper()
+
+	return panicguard.Recovered(slog.New(slog.DiscardHandler), "in a test helper", "boom")
+}
+
+// Validates: R-6.3.10
+//
+// A helper goroutine of the command (the signal handler, the systemd
+// watchdog, the performance logger) cancels the command with its panic as
+// the cause. The panic replaces the cancellation it caused, or the nil of a
+// command that finished regardless, and joins any other failure.
+func TestWithCommandPanic_AHelpersPanicIsTheCommandsError(t *testing.T) {
+	t.Parallel()
+
+	panicErr := testPanicError(t)
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(panicErr)
+
+	require.ErrorIs(t, commandPanicCause(ctx), panicguard.ErrPanic)
+	assert.Equal(t, panicErr, withCommandPanic(ctx, context.Canceled))
+	assert.Equal(t, panicErr, withCommandPanic(ctx, nil))
+	other := errors.New("upload failed")
+	joined := withCommandPanic(ctx, other)
+	require.ErrorIs(t, joined, panicguard.ErrPanic)
+	require.ErrorIs(t, joined, other)
+	assert.Equal(t, exitFailure, commandExitCode(withCommandPanic(ctx, context.Canceled), true),
+		"a stop the panic caused is no stop the user asked for")
+
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	require.NoError(t, commandPanicCause(stopped))
+	assert.Equal(t, context.Canceled, withCommandPanic(stopped, context.Canceled), "a plain stop stays a stop")
+}
+
+// panickingWriter is command output whose every write panics, as a bug in a
+// command's output path would.
+type panickingWriter struct{}
+
+func (panickingWriter) Write([]byte) (int, error) {
+	panic("output exploded")
+}
+
+// main recovers a panic on the command's own goroutine that nothing below
+// recovered: one record with the stack in the log file, the error and the
+// stack on stderr, and exit status 1. Unrecovered, it would end the process
+// with Go's exit status 2 (the usage-error status) and nothing in the log
+// file.
+//
+// Validates: R-6.3.10, R-6.6.31
+func TestMainWithWriters_PanicExitsOne(t *testing.T) {
+	setTestDriveHome(t)
+
+	logPath := filepath.Join(t.TempDir(), "onedrive-go.log")
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(fmt.Sprintf("log_file = %q\n", logPath)), 0o600))
+
+	var stderr bytes.Buffer
+	exitCode, escaped := func() (code int, escaped any) {
+		defer func() { escaped = recover() }()
+		return mainWithWriters([]string{"--config", cfgPath, "drive", "list"}, panickingWriter{}, &stderr), nil
+	}()
+
+	require.Nil(t, escaped, "the panic escaped main")
+	assert.Equal(t, exitFailure, exitCode)
+	assert.Contains(t, stderr.String(), "internal error in onedrive-go: output exploded")
+	assert.Contains(t, stderr.String(), "panickingWriter", "stderr carries the stack")
+	record := logFileRecord(t, readLogFile(t, logPath), "Internal error in onedrive-go; this is a bug, please report it")
+	assert.Equal(t, "output exploded", record["panic"])
+	assert.Contains(t, record["stack"], "panickingWriter", "the log file carries the stack")
 }

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -32,6 +34,7 @@ const defaultTransferStallTimeout = 2 * time.Minute
 type stallWatchdog struct {
 	timeout time.Duration
 	cancel  context.CancelCauseFunc
+	logger  *slog.Logger
 
 	// mu makes "is this reader's attempt still the current one" and the timer
 	// change that follows from it one step. The transport reads a body on its
@@ -59,11 +62,24 @@ func (c *Client) watchTransfer(ctx context.Context) (context.Context, *stallWatc
 	}
 
 	stallCtx, cancel := context.WithCancelCause(ctx)
-	watchdog := &stallWatchdog{timeout: timeout, cancel: cancel}
-	watchdog.timer = time.AfterFunc(timeout, func() { cancel(ErrTransferStalled) })
+	watchdog := &stallWatchdog{timeout: timeout, cancel: cancel, logger: c.logger}
+	watchdog.timer = time.AfterFunc(timeout, watchdog.stalled)
 	watchdog.timer.Stop()
 
 	return retry.WithBackoffObserver(stallCtx, watchdog.waitStarts), watchdog
+}
+
+// stalled is the stall timer's callback: it cancels the transfer with
+// ErrTransferStalled. It runs on a goroutine of its own, so a panic in it is
+// recovered here and fails this one transfer: the transfer is canceled with
+// the panic's error, which explain returns.
+func (w *stallWatchdog) stalled() {
+	defer func() {
+		if r := recover(); r != nil {
+			w.cancel(panicguard.Recovered(w.logger, "in the transfer stall watchdog", r))
+		}
+	}()
+	w.cancel(ErrTransferStalled)
 }
 
 // waitStarts runs before every retry or throttle wait: it disarms the
@@ -126,6 +142,13 @@ func (w *stallWatchdog) reader(r io.Reader) io.Reader {
 // context.Canceled, which every caller reads as a shutdown, so a stalled
 // transfer was dropped instead of retried.
 func (w *stallWatchdog) explain(ctx context.Context, err error) error {
+	// A panic in the stall timer's callback (stalled) fails the transfer
+	// with the panic's error, the inner error kept as text for the same
+	// reason.
+	if cause := context.Cause(ctx); err != nil && errors.Is(cause, panicguard.ErrPanic) {
+		//nolint:errorlint // the inner error is deliberately not wrapped, see above
+		return fmt.Errorf("%w (%v)", cause, err)
+	}
 	if err == nil || !errors.Is(context.Cause(ctx), ErrTransferStalled) {
 		return err
 	}

@@ -1935,7 +1935,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 			}
 			require.NotNil(t, found, "panicking file should be in Skipped")
 			assert.Equal(t, issueHashPanic, found.Reason)
-			assert.Contains(t, found.Detail, "panic:")
+			assert.Contains(t, found.Detail, "internal error while hashing "+tt.panicPath+": simulated hash panic")
 		})
 	}
 }

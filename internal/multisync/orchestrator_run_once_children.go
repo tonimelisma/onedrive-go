@@ -8,6 +8,7 @@ import (
 	"sort"
 	gosync "sync"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -25,7 +26,9 @@ type oneShotChildRuns struct {
 
 	// mu guards every field below it: cache, parents, parentAckers,
 	// parentDone, snapshots, started, startup, childReports and stuckCloses.
-	// Parent and child mount goroutines all write here as they finish.
+	// Parent and child mount goroutines all write here as they finish. Every
+	// holder releases it with defer: a panic boundary of the pass reports
+	// through it, and would wait forever on a lock a panic left held.
 	mu           gosync.Mutex
 	cache        *parentChildWorkSnapshots
 	parents      map[mountID]*mountSpec
@@ -36,7 +39,8 @@ type oneShotChildRuns struct {
 	startup      []MountStartupResult
 	childReports []*MountReport
 	// stuckCloses are the shortcut engines that did not close within their
-	// bound (closeRunOnceEngines), one joined error per parent.
+	// bound or whose close panicked (closeRunOnceEngines), one joined error
+	// per parent.
 	stuckCloses   []error
 	childRunGroup gosync.WaitGroup
 }
@@ -93,9 +97,7 @@ func (c *oneShotChildRuns) notifyParentSnapshot(
 		return nil
 	}
 
-	c.mu.Lock()
-	c.snapshots[parentID] = snapshot
-	c.mu.Unlock()
+	c.recordSnapshot(parentID, snapshot)
 	c.startChildrenForParent(ctx, parentID)
 	return nil
 }
@@ -104,10 +106,22 @@ func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID)
 	if c == nil || parentID == "" {
 		return
 	}
-	c.mu.Lock()
-	c.parentDone[parentID] = true
-	c.mu.Unlock()
+	c.recordParentDone(parentID)
 	c.startChildrenForParent(ctx, parentID)
+}
+
+// recordSnapshot keeps the latest work snapshot parentID published.
+func (c *oneShotChildRuns) recordSnapshot(parentID mountID, snapshot syncengine.ShortcutChildWorkSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshots[parentID] = snapshot
+}
+
+// recordParentDone marks parentID's own run finished.
+func (c *oneShotChildRuns) recordParentDone(parentID mountID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.parentDone[parentID] = true
 }
 
 func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID mountID) {
@@ -117,26 +131,37 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 	if ctx != nil && ctx.Err() != nil {
 		return
 	}
-	c.mu.Lock()
-	if c.started[parentID] || !c.parentDone[parentID] {
-		c.mu.Unlock()
+	parent, snapshot, claimed := c.claimChildRun(parentID)
+	if !claimed {
 		return
+	}
+
+	go c.runChildrenForParent(ctx, parentID, parent, snapshot)
+}
+
+// claimChildRun marks parentID's shortcuts started, once the parent has
+// finished and published work, and counts their run in childRunGroup; the
+// caller then starts that run. It reports false when there is nothing to
+// start yet, or nothing at all.
+func (c *oneShotChildRuns) claimChildRun(parentID mountID) (*mountSpec, syncengine.ShortcutChildWorkSnapshot, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.started[parentID] || !c.parentDone[parentID] {
+		return nil, syncengine.ShortcutChildWorkSnapshot{}, false
 	}
 	parent := cloneMountSpec(c.parents[parentID])
 	if parent == nil {
-		c.mu.Unlock()
-		return
+		return nil, syncengine.ShortcutChildWorkSnapshot{}, false
 	}
 	snapshot := c.snapshots[parentID]
 	if !shortcutChildWorkSnapshotHasWork(snapshot) {
-		c.mu.Unlock()
-		return
+		return nil, syncengine.ShortcutChildWorkSnapshot{}, false
 	}
 	c.started[parentID] = true
 	c.childRunGroup.Add(1)
-	c.mu.Unlock()
 
-	go c.runChildrenForParent(ctx, parentID, parent, snapshot)
+	return parent, snapshot, true
 }
 
 func (c *oneShotChildRuns) wait() {
@@ -199,6 +224,16 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	snapshot syncengine.ShortcutChildWorkSnapshot,
 ) {
 	defer c.childRunGroup.Done()
+	// Each shortcut's own run recovers its panic into its report
+	// (MountRunner). A panic in the work around them becomes a report against
+	// the drive, as a failed cleanup does, so the pass still finishes and
+	// fails; an engine it did not get to close is left to the process exit.
+	defer func() {
+		if r := recover(); r != nil {
+			c.appendReports(parentMountReport(parent, panicguard.Recovered(c.orchestrator.logger,
+				"while syncing the shortcuts of "+parent.label(), r)))
+		}
+	}()
 	decisions, err := c.orchestrator.buildRuntimeWorkForParentSnapshot(parent, snapshot)
 	if err != nil {
 		c.appendStartup(MountStartupResult{
@@ -222,7 +257,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		nil,
 	)
 	c.appendStartup(childStartup.Results...)
-	runIndexedMountWork(ctx, childWork, childReports)
+	runIndexedMountWork(ctx, childWork, childReports, nil)
 	stuckErr := c.orchestrator.closeRunOnceEngines(ctx, childWork, MountProjectionChild)
 	c.appendReports(childReports...)
 	if stuckErr != nil {
@@ -242,12 +277,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	); purgeErr != nil {
 		// The report is the user-facing channel for this failure; logging it
 		// at WARN as well printed it twice.
-		c.appendReports(&MountReport{
-			SelectionIndex: parent.selectionIndex(),
-			Identity:       parent.identity(),
-			DisplayName:    parent.displayName(),
-			Err:            fmt.Errorf("clean up removed shortcuts: %w", purgeErr),
-		})
+		c.appendReports(parentMountReport(parent, fmt.Errorf("clean up removed shortcuts: %w", purgeErr)))
 	}
 	if finalized, finalizeErr := c.orchestrator.finalizeSuccessfulFinalDrainMounts(
 		ctx,
@@ -256,17 +286,23 @@ func (c *oneShotChildRuns) runChildrenForParent(
 		parentAckers,
 		c.cache,
 	); finalizeErr != nil {
-		c.appendReports(&MountReport{
-			SelectionIndex: parent.selectionIndex(),
-			Identity:       parent.identity(),
-			DisplayName:    parent.displayName(),
-			Err:            fmt.Errorf("finish removing shortcuts: %w", finalizeErr),
-		})
+		c.appendReports(parentMountReport(parent, fmt.Errorf("finish removing shortcuts: %w", finalizeErr)))
 	} else if finalized {
 		c.orchestrator.logger.Info("Finished removing shortcuts",
 			slog.String("drive", parent.label()),
 			slog.String("parent_mount_id", parentID.String()),
 		)
+	}
+}
+
+// parentMountReport is a report against parent for work of its shortcuts
+// that failed outside any one shortcut's run.
+func parentMountReport(parent *mountSpec, err error) *MountReport {
+	return &MountReport{
+		SelectionIndex: parent.selectionIndex(),
+		Identity:       parent.identity(),
+		DisplayName:    parent.displayName(),
+		Err:            err,
 	}
 }
 
@@ -285,8 +321,8 @@ func (c *oneShotChildRuns) appendStartup(results ...MountStartupResult) {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.startup = append(c.startup, results...)
-	c.mu.Unlock()
 }
 
 func (c *oneShotChildRuns) appendReports(reports ...*MountReport) {
@@ -294,6 +330,6 @@ func (c *oneShotChildRuns) appendReports(reports ...*MountReport) {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.childReports = append(c.childReports, reports...)
-	c.mu.Unlock()
 }

@@ -20,7 +20,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 func TestShutdownContext_FirstSignalCancels(t *testing.T) {
@@ -371,4 +373,35 @@ func TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine(t *testing.
 		return runtime.NumGoroutine() <= before+2
 	}, 5*time.Second, 10*time.Millisecond,
 		"the signal goroutine must unwind once stop is called after a first signal")
+}
+
+// A panic in the signal handler cancels the command with the panic as the
+// cause, so the command ends and exits 1, not 130: the user's stop is not
+// what ended it. Unrecovered, it would end the process with Go's exit
+// status 2.
+//
+// Validates: R-6.3.10, R-6.3.6
+func TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	logger := slog.New(synctest.PanicOnMessage{
+		Message: "Stopping... (press Ctrl-C again to force quit)",
+		Next:    slog.DiscardHandler,
+	})
+	ctx, stop := shutdownContext(context.Background(), logger)
+	defer stop()
+
+	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the handler's panic did not end the command")
+	}
+
+	require.ErrorIs(t, commandPanicCause(ctx), panicguard.ErrPanic)
+	require.ErrorContains(t, commandPanicCause(ctx), "internal error in the signal handler: log call exploded")
+	assert.Equal(t, exitFailure, commandExitCode(withCommandPanic(ctx, ctx.Err()), true))
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
@@ -282,6 +283,15 @@ launchEnrichment:
 			defer wg.Done()
 			defer func() {
 				<-sema
+			}()
+			// A panic leaves this item without its sharer's identity, as a
+			// failed lookup does, while the other items are looked up
+			// (R-6.3.10).
+			defer func() {
+				if r := recover(); r != nil {
+					//nolint:errcheck // An item left unenriched is the lookup's only result; the error is only logged.
+					panicguard.Recovered(logger, "while looking up who shared "+target.Name, r)
+				}
 			}()
 
 			enrichSharedTarget(ctx, client, target, logger)

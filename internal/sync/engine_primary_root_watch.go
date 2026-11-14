@@ -28,7 +28,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		return
 	}
 
-	remoteObs := newRemoteObserver(rt.engine.fetcher, bl, rt.engine.driveID, rt.deps.logger)
+	remoteObs := rt.engine.buildRemoteObserver(bl, rt.deps.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
 	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
 	remoteObs.SetShortcutTopology(rt.engine.shortcutNamespaceID, rt.engine.currentProtectedRoots())

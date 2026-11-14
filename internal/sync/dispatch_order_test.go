@@ -163,6 +163,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow,
 		TestRunOnce_DeletesOlderThanTheWindowStopCounting,
 		TestRunOnce_ContextCancellation,
+		TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown,
 		TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
 		TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
 		TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped,

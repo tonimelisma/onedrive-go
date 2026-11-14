@@ -218,3 +218,31 @@ func TestDirtyMaxWait_ScalesWithLongDebounce(t *testing.T) {
 	assert.Equal(t, minDirtyMaxWait, dirtyMaxWait(5*time.Second))
 	assert.Equal(t, 6*time.Minute, dirtyMaxWait(time.Minute))
 }
+
+// The debounce loop is a goroutine of the mount's watch runtime. Its panic
+// ends the loop like any early exit: the batch channel closes outside
+// shutdown and the watch fails the mount, which restarts with the usual
+// backoff.
+//
+// Validates: R-6.3.8
+func TestDirtyBuffer_DebounceLoopPanicClosesTheBatchChannel(t *testing.T) {
+	t.Parallel()
+
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	buf := newDirtyBuffer(synctest.TestLogger(t))
+	buf.newTimer = func(time.Duration) debounceTimer {
+		panic("timer exploded")
+	}
+	out := buf.FlushDebounced(t.Context(), time.Second)
+
+	select {
+	case _, ok := <-out:
+		assert.False(t, ok, "the batch channel closes, which fails the mount")
+	case <-time.After(eventWait):
+		require.Fail(t, "the debounce loop neither panicked out nor closed its channel")
+	}
+}

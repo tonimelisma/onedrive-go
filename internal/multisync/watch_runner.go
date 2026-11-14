@@ -29,8 +29,9 @@ type watchRunner struct {
 	// stopRequestedAt is when the runner was first told to stop; its stop
 	// bound runs from then (retireWatchRunner).
 	stopRequestedAt time.Time
-	// stuckErr is set once the runner missed a stop or close bound. A stuck
-	// runner stays in the runner set and is never closed or replaced.
+	// stuckErr is set once the runner missed a stop or close bound, or its
+	// engine's close panicked. A stuck runner stays in the runner set and is
+	// never closed or replaced.
 	stuckErr error
 }
 
@@ -116,6 +117,18 @@ func (o *Orchestrator) startWatchRunner(
 		defer close(done)
 		defer mountCancel()
 		defer o.removeMountPerfCollector(mount.id().String())
+		// runWatchRunnerEngine turns a panic of the engine into runErr. This
+		// covers the hand-off after it: a panic there is the runner's failure
+		// all the same, sent as its event so the loop restarts the drive
+		// (R-6.3.8).
+		defer func() {
+			if r := recover(); r != nil {
+				sendWatchRunnerEvent(mountCtx, runnerEvents, watchRunnerEvent{
+					mountID: mount.id(), generation: generation,
+					err: recoveredSyncPanic(o.logger, mount.label(), mount.id().String(), r),
+				})
+			}
+		}()
 
 		report, runErr := o.runWatchRunnerEngine(mountCtx, mount, engine, mode, opts)
 

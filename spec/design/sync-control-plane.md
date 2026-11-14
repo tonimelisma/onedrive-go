@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified], R-6.3.9 [verified]
+Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified]
 
 ## Control Socket Exposure
 
@@ -78,7 +78,8 @@ runtime package that implements it.
 | A one-shot run closes its engines with the watch's bounded close on a detached context; an engine whose close runs over fails the run with `ErrSyncStuck` (exit 1) while the pass's reports stand, and a shortcut whose engine did not close is neither acknowledged nor cleaned up in that run (R-6.3.9). | `TestRunOnce_AnEngineThatDoesNotCloseFailsTheRun`, `TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged`, `internal/cli/sync_console_test.go` (`TestRunOnceResultError_AnEngineThatDidNotCloseFailsAPassThatSynced`) |
 | Every context the engine or the control plane detaches from cancellation carries a deadline, so the stop and close bounds rest on bounded waits (R-6.3.9). | `internal/sync/detached_context_test.go` (`TestDetachedContexts_AlwaysCarryADeadline`, `TestUnboundedDetachedContexts_FlagsOnlyTheUnboundedForm`) |
 | A `WatchReloaded` event states its outcome (`ReloadApplied`, `ReloadKeptPreviousSettings`), and the CLI's service status follows the outcome, not `Err` (R-6.6.32). | `TestRunWatch_ReportsLifecycleTransitions`, `internal/cli/sync_notify_test.go` (`TestSyncNotifier_ReloadStatusFollowsTheStatedOutcome`) |
-| A panic in one mount's runner goroutine (watch loop or final drain) is recovered, logged once at Error with its stack, and becomes that runner's error, so the mount is backed off and restarted while its siblings keep running; one-shot `MountRunner` panics take the same path. | `TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt`, `TestMountRunner_Run_PanicIsLoggedAtErrorWithStack`, `TestMountRunner_Run_Panic`, `TestMountRunner_Run_PanicWithError` |
+| A panic in one mount's runner goroutine (watch loop or final drain) is recovered, logged once at Error with its stack, and becomes that runner's error, so the mount is backed off and restarted while its siblings keep running; one-shot `MountRunner` panics take the same path, a shortcut's panic is that shortcut's report, and the pass still waits for every shortcut; a panic in the work around a drive's run (starting its shortcuts, building their engines) is joined into that drive's one report or is a report against it, and every lock a boundary reports through is released with defer, so the pass never hangs on it (R-6.3.8, R-6.3.10). | `TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt`, `TestMountRunner_Run_PanicIsLoggedAtErrorWithStack`, `TestMountRunner_Run_Panic`, `TestMountRunner_Run_PanicWithError`, `TestRunOnce_AShortcutPanicIsThatShortcutsErrorAndThePassFinishes`, `TestRunIndexedMountWork_APanicWhileStartingShortcutsIsThatDrivesReport`, `TestRunIndexedMountWork_APanicBeforeTheRunFillsTheDrivesReport`, `TestRunOnce_APanicAroundADrivesShortcutsIsThatDrivesReport` |
+| A panic outside a drive's runtime ends the watch with exit 1 after its drain: on the loop itself or during its startup (`RunWatch` registers the drain and the socket close before anything starts and recovers last), on the control server's goroutine or the config file watcher's (reported on the `fatal` channel), and in an engine's close (which fails closed like an overrun, in watch and one-shot mode). Each is logged once with its stack; a one-shot owner whose control server panicked finishes its pass, and a control handler's panic reaches the owner's logger (R-6.3.10). | `TestRunWatch_LoopPanicIsLoggedWithStackAndReturnsAnError`, `TestRunWatch_APanicDuringStartupStopsTheDrivesThatStarted`, `TestRunWatch_ControlServerPanicEndsTheWatch`, `TestRunOnce_ControlServerPanicIsLoggedAndThePassFinishes`, `TestWatchConfigReloadTriggers_PanicIsReportedOnTheFatalChannel`, `TestRetireWatchRunner_APanickingEngineCloseFailsClosed`, `TestRunOnce_APanickingEngineCloseFailsTheRun`, `TestControlServer_HandlerPanicIsLoggedThroughTheOwnersLogger` |
 | A reload the watch owner cannot apply is answered with `reload_failed` instead of `reloaded`, and the running drives keep their previous settings. Another sync owning the socket is one process-level startup failure, not one per drive, and its message names the way out rather than the socket path. | `TestOrchestrator_Reload_InvalidConfig`, `TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives` |
 | Control-socket reload applies add/remove/pause/expired-pause/filter diffs to the live runner set without bouncing unaffected mounts. | `TestOrchestrator_Reload_AddDrive`, `TestOrchestrator_Reload_RemoveMount`, `TestOrchestrator_Reload_PausedMount`, `TestOrchestrator_Reload_TimedPauseExpiry`, `TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount` |
 | A reload hands the config's `log_level` to `OrchestratorConfig.ApplyLogLevel`; the CLI's setter moves the log file handler's `slog.LevelVar` in place, so a level changed in `config.toml` reaches the file without a restart, and an unknown value keeps the level with one warning per value (R-2.8.1). A watch that stops with an error logs it at Error before the terminal line (R-6.6.35). | `TestOrchestrator_Reload_AppliesTheConfigLogLevel`, `TestApplyFileLogLevel_MovesTheFileLevelAndWarnsOnceForAnUnknownValue` |
@@ -387,13 +388,33 @@ until the resume. It listens for:
 - `ctx.Done()` for shutdown
 - JSON-over-HTTP requests on the Unix control socket
 - its `fatal` channel (buffered 1), on which a helper the watch cannot run
-  without reports its end; today that is the control server (see Control
-  Socket). `RunWatch` returns the error, so the watch exits 1 through the
-  same drain as any other return
+  without reports its end: the control server when `Serve` returns on its own
+  or panics (see Control Socket), and the config file watcher when it panics,
+  since a watch that no longer notices a config edit or a SIGHUP must not
+  carry on as if it did. `RunWatch` returns the error, so the watch exits 1
+  through the same drain as any other return
 
 The loop also ends when a runner it had to stop did not stop within its
 bound (see Stopping a runner): the reload, reconcile or event handler that
 met it returns `ErrSyncStuck`, and so does `RunWatch`.
+
+`RunWatch` is the panic boundary of the loop itself (R-6.3.10). Its first
+deferred call recovers, so it runs after the drain and the socket close: a
+panic on the loop stops the drives, closes the socket, is logged once with its
+stack through `panicguard.Recovered`, and is returned (wrapping
+`panicguard.ErrPanic`, joined with any drive that did not stop). The watch is
+not kept alive: the loop's maps and report memory are of unknown consistency,
+and exit 1 lets the service manager start a fresh process. The drain and the
+socket close are registered before anything starts (`startWatchRuntime` sets
+the control server once bound and adds each runner to the loop's map as it
+starts it), so a panic at any point, during startup or in the
+`WatchLifecycle` hook that runs on the loop, stops the drives that started
+and then closes the socket
+(`TestRunWatch_LoopPanicIsLoggedWithStackAndReturnsAnError`,
+`TestRunWatch_APanicDuringStartupStopsTheDrivesThatStarted`). Without the
+boundary a loop panic would end the process with Go's exit status 2 (the
+usage-error status), nothing in the log file and no failure status for
+systemd.
 
 Pause semantics come from `config.Drive.IsPaused()` and
 `config.ClearExpiredPauses()` for configured parents. Managed child mounts
@@ -502,7 +523,19 @@ converts it into that runner's error through `recoveredSyncPanic`, so it
 travels the same runner-event path as any other exit: the mount is reported
 stopped, backed off and restarted, and its siblings never notice. Without the
 recover a bug reachable from one account's data unwound the whole process
-past every other mount and the drain this design promises.
+past every other mount and the drain this design promises. The goroutine's
+own hand-off after the engine returns has a boundary of its own, which sends
+the same runner event, so nothing on the runner goroutine can take the
+process down (R-6.3.8).
+
+An engine close that panics fails closed like a close past its bound
+(`closeEngineWithin` returns the panic, logged once with its stack): the
+store and its locks are in an unknown state, so the runner stays stuck, its
+store is never reopened, acknowledged or cleaned up, and the watch ends with
+the panic; a one-shot pass reports it in `RunOnceResult.Stuck` and the
+command exits 1 (R-6.3.10,
+`TestRetireWatchRunner_APanickingEngineCloseFailsClosed`,
+`TestRunOnce_APanickingEngineCloseFailsTheRun`).
 
 ### Control Socket
 
@@ -630,7 +663,17 @@ channel and `RunWatch` returns it: the process exits 1 and a service manager
 restarts a watch it can reach again. The send is
 non-blocking; if another fatal error is already pending, this one is logged
 at Error. A one-shot owner has no fatal channel: it keeps its owner lock (the
-`flock`, not the socket), finishes its pass, and only logs the warning.
+`flock`, not the socket), finishes its pass, and only logs the warning. A
+panic on the serving goroutine takes the same path, logged once with its
+stack first (R-6.3.10, `TestRunWatch_ControlServerPanicEndsTheWatch`,
+`TestRunOnce_ControlServerPanicIsLoggedAndThePassFinishes`).
+
+A handler's panic is not the serving goroutine's: `net/http` recovers it per
+connection and reports it, with its stack, through `http.Server.ErrorLog`.
+`newControlHTTPServer` points that at the owner's logger
+(`slog.NewLogLogger`, at Error), so the record reaches the log file instead
+of the standard `log` package's stderr
+(`TestControlServer_HandlerPanicIsLoggedThroughTheOwnersLogger`).
 
 A capture request's `output_dir` must be absolute: the owner runs in its own
 working directory, so it refuses a relative path instead of resolving it
@@ -724,15 +767,16 @@ runner set.
 
 `MountRunner` wraps a single mount's sync function with panic recovery and
 error isolation. One mount panicking must become one isolated mount outcome,
-not
-a process-wide crash or a cross-mount failure cascade.
+not a process-wide crash or a cross-mount failure cascade.
 
 Both recoveries -- `MountRunner.run` for one-shot and the watch runner
 goroutine's `runWatchRunnerEngine` -- go through `recoveredSyncPanic`, so a
-panic reads the same in either mode. It logs once at Error with the `drive`,
-`panic` and `stack` attributes, as every recovered panic in this codebase is
-logged, and returns the report error ("internal error while syncing <drive>:
-<panic>. This is a bug; please report it") that is the user-facing account:
+panic reads the same in either mode. It calls `panicguard.Recovered`, which
+every recover in the product calls (system.md, R-6.3.10): one Error record
+with the `drive`, `mount_id`, `panic` and `stack` attributes, and the report
+error, wrapping `panicguard.ErrPanic` ("internal error while syncing <drive>:
+<panic>. This is a bug; please report it, with the log file if you have one"),
+that is the user-facing account:
 the CLI prints it for a one-shot sync, and the watch loop reports it as the
 reason the drive stopped before restarting it. The stack is captured on the
 panicking goroutine because the recovered value names what failed but not

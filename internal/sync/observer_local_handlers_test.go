@@ -457,7 +457,7 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		},
 		clock: &observerTestClock{
 			syncClock: realClock{},
-			afterFunc: realAfterFunc,
+			afterFunc: realClock{}.AfterFunc,
 			sleep:     func(_ context.Context, _ time.Duration) error { return nil },
 			tickCh:    make(chan time.Time),
 		},

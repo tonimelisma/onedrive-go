@@ -442,7 +442,7 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
-	obs.PendingTimers["file.txt"] = realAfterFunc(time.Hour, func() {})
+	obs.PendingTimers["file.txt"] = realClock{}.AfterFunc(time.Hour, func() {})
 
 	events := make(chan changeEvent, 10)
 	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt", events)

@@ -202,6 +202,58 @@ func TestSocketIOWakeSource_NotificationTriggersWake(t *testing.T) {
 	assert.True(t, containsLifecycleEvent(lifecycleEvents, socketIOLifecycleEventNotificationWake))
 }
 
+// A connection ends in order: the close frame first, so the server sees a
+// normal closure, then the reader is canceled and waited for, so no reader
+// outlives runConnection. A read canceled first would drop the connection
+// without a close frame.
+//
+// Validates: R-2.8.5, R-6.3.4
+func TestSocketIOWakeSource_ConnectionClosesNormallyAndLeavesNoReader(t *testing.T) {
+	t.Parallel()
+
+	closeStatus := make(chan websocket.StatusCode, 1)
+	server := newSocketIOTestServer(t, func(conn *websocket.Conn, r *http.Request) error {
+		if err := writeSocketIOText(r.Context(), conn, `0{"sid":"sid-close","pingInterval":25000,"pingTimeout":60000}`); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40"); err != nil {
+			return err
+		}
+		if err := expectSocketIOText(r.Context(), conn, "40/notifications"); err != nil {
+			return err
+		}
+		_, _, err := conn.Read(r.Context())
+		closeStatus <- websocket.CloseStatus(err)
+		return nil
+	})
+
+	endpoint := &graph.SocketIOEndpoint{
+		ID:              "endpoint-close",
+		NotificationURL: graph.SocketIONotificationURL(server.URL + "/callback?snthgk=secret-token"),
+	}
+	source := newSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
+		Logger: synctest.TestLogger(t),
+		Clock:  realClock{},
+	})
+	conn, _, _, err := source.connect(t.Context(), endpoint)
+	require.NoError(t, err)
+	// A refresh due at once ends the connection as an expiring endpoint does.
+	runErr := source.runConnection(t.Context(), conn, endpoint.ID, time.Now(), make(chan struct{}, 1))
+	require.ErrorIs(t, runErr, errSocketIORefreshRequired)
+
+	select {
+	case <-conn.readerDone:
+	default:
+		require.Fail(t, "the connection's reader outlived runConnection")
+	}
+	select {
+	case status := <-closeStatus:
+		assert.Equal(t, websocket.StatusNormalClosure, status, "the server saw a close frame")
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "the server never saw the connection end")
+	}
+}
+
 // Validates: R-2.8.5
 func TestSocketIOWakeSource_ReconnectsAfterDisconnect(t *testing.T) {
 	t.Parallel()

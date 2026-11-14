@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 const (
@@ -30,20 +31,47 @@ const (
 	statusLiveTestLocalName = "Local Name"
 	statusLiveTestLiveName  = "Live Name"
 
-	// statusLiveTestShortBudget stands in for the 10 s budget where the test
-	// is about what happens once it runs out.
-	statusLiveTestShortBudget = 20 * time.Millisecond
-	// statusLiveTestLongBudget is a budget no passing test reaches, for tests
-	// that are about what OneDrive answered.
-	statusLiveTestLongBudget = time.Minute
 	// statusLiveTestGuard fails a test whose status run never returns, the
 	// behavior before the budget existed. A passing run takes milliseconds.
 	statusLiveTestGuard = 30 * time.Second
 
 	statusLiveTestNotePrefix   = "Note: showing what is known locally for "
-	statusLiveTestUnanswered   = "OneDrive did not answer within "
+	statusLiveTestUnanswered   = "OneDrive did not answer within 10 s"
 	statusLiveTestStorageLabel = "Storage: "
 )
+
+// statusLiveTestBudget stands in for the 10 s budget of the live details. A
+// test's fake OneDrive ends it with spend while the request the test is about
+// is in flight, and a test about what OneDrive answered never ends it, so no
+// test waits for the clock or races it.
+type statusLiveTestBudget struct {
+	once  sync.Once
+	spent chan struct{}
+}
+
+func newStatusLiveTestBudget() *statusLiveTestBudget {
+	return &statusLiveTestBudget{spent: make(chan struct{})}
+}
+
+// spend ends the budget, as the clock does for the command.
+func (b *statusLiveTestBudget) spend() {
+	b.once.Do(func() { close(b.spent) })
+}
+
+// context is the command's statusLiveBudgetContext seam: ctx, which ends with
+// the cause the command's own budget ends with once the test spends the budget.
+func (b *statusLiveTestBudget) context(ctx context.Context) (context.Context, context.CancelFunc) {
+	askCtx, cancel := context.WithCancelCause(ctx)
+	go func() {
+		select {
+		case <-b.spent:
+			cancel(errStatusLiveBudgetSpent)
+		case <-askCtx.Done():
+		}
+	}()
+
+	return askCtx, func() { cancel(context.Canceled) }
+}
 
 // accountTokenSource hands each sign-in file a token of its own, so the fake
 // Graph server can tell the accounts apart. It cannot force a refresh, so a
@@ -64,8 +92,9 @@ type statusLiveRun struct {
 
 // newStatusLiveRun configures one personal drive per email, each with a valid
 // saved login and a local display name, and points the command's session
-// runtime at graphURL. budget replaces the live overlay's budget.
-func newStatusLiveRun(t *testing.T, graphURL string, budget time.Duration, emails ...string) *statusLiveRun {
+// runtime at graphURL. budget replaces the live overlay's budget: it ends
+// when the test spends it and not before.
+func newStatusLiveRun(t *testing.T, graphURL string, budget *statusLiveTestBudget, emails ...string) *statusLiveRun {
 	t.Helper()
 	setTestDriveHome(t)
 
@@ -94,7 +123,7 @@ func newStatusLiveRun(t *testing.T, graphURL string, budget time.Duration, email
 		StatusWriter: run.stderr,
 		CfgPath:      cfgPath,
 		Runtime:      runtime,
-		seams:        cliSeams{statusLiveBudget: budget},
+		seams:        cliSeams{statusLiveBudgetContext: budget.context},
 	}
 
 	return run
@@ -191,7 +220,7 @@ func TestStatus_ASignInFailureStillMarksTheAccount(t *testing.T) {
 	})
 
 	t.Run("text", func(t *testing.T) {
-		run := newStatusLiveRun(t, srv.URL, statusLiveTestLongBudget, statusLiveTestEmailA)
+		run := newStatusLiveRun(t, srv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA)
 
 		require.NoError(t, run.status(t, t.Context()))
 		assert.Contains(t, run.stdout.String(), "Sign-in required: ")
@@ -200,7 +229,7 @@ func TestStatus_ASignInFailureStillMarksTheAccount(t *testing.T) {
 	})
 
 	t.Run("json", func(t *testing.T) {
-		run := newStatusLiveRun(t, srv.URL, statusLiveTestLongBudget, statusLiveTestEmailA)
+		run := newStatusLiveRun(t, srv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA)
 		run.cc.Flags.JSON = true
 
 		require.NoError(t, run.status(t, t.Context()))
@@ -218,12 +247,22 @@ func TestStatus_ASignInFailureStillMarksTheAccount(t *testing.T) {
 //
 // Validates: R-6.8.28
 func TestStatus_PrintsLocalStateWhenOneDriveDoesNotAnswerInTheBudget(t *testing.T) {
-	srv := newStatusGraphServer(t, func(_ http.ResponseWriter, r *http.Request, release <-chan struct{}) {
-		blockUntilRequestEnds(r, release)
-	})
+	// The budget ends while the first request waits for an answer that never
+	// comes.
+	newRun := func(t *testing.T) *statusLiveRun {
+		t.Helper()
+
+		budget := newStatusLiveTestBudget()
+		srv := newStatusGraphServer(t, func(_ http.ResponseWriter, r *http.Request, release <-chan struct{}) {
+			budget.spend()
+			blockUntilRequestEnds(r, release)
+		})
+
+		return newStatusLiveRun(t, srv.URL, budget, statusLiveTestEmailA)
+	}
 
 	t.Run("text", func(t *testing.T) {
-		run := newStatusLiveRun(t, srv.URL, statusLiveTestShortBudget, statusLiveTestEmailA)
+		run := newRun(t)
 
 		require.NoError(t, run.status(t, t.Context()))
 		out := run.stdout.String()
@@ -231,14 +270,14 @@ func TestStatus_PrintsLocalStateWhenOneDriveDoesNotAnswerInTheBudget(t *testing.
 		assert.Contains(t, out, "Folder: ")
 		assert.NotContains(t, out, statusLiveTestStorageLabel)
 		assert.Equal(t, []string{
-			statusLiveTestNotePrefix + statusLiveTestEmailA + ": " + statusLiveTestUnanswered + "1 s.",
+			statusLiveTestNotePrefix + statusLiveTestEmailA + ": " + statusLiveTestUnanswered + ".",
 		}, run.notes())
 		assert.Equal(t, run.notes(), strings.Split(strings.TrimRight(run.stderr.String(), "\n"), "\n"),
 			"the note is all status writes to stderr")
 	})
 
 	t.Run("json", func(t *testing.T) {
-		run := newStatusLiveRun(t, srv.URL, statusLiveTestShortBudget, statusLiveTestEmailA)
+		run := newRun(t)
 		run.cc.Flags.JSON = true
 
 		require.NoError(t, run.status(t, t.Context()))
@@ -288,7 +327,7 @@ func TestStatus_AsksAccountsAtTheSameTime(t *testing.T) {
 		}
 	})
 
-	run := newStatusLiveRun(t, srv.URL, statusLiveTestLongBudget, statusLiveTestEmailA, statusLiveTestEmailB)
+	run := newStatusLiveRun(t, srv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA, statusLiveTestEmailB)
 
 	require.NoError(t, run.status(t, t.Context()))
 	out := run.stdout.String()
@@ -300,20 +339,23 @@ func TestStatus_AsksAccountsAtTheSameTime(t *testing.T) {
 
 // The budget covers every live request of the overlay, the storage lookups
 // after /me included: the name that arrived shows, the storage that did not
-// is left out, and the note says why.
+// is left out, and the note says why. The budget ends while the storage
+// request waits, after /me was answered, whatever the machine's speed.
 //
 // Validates: R-6.8.28
 func TestStatus_StorageCutShortByTheBudgetIsNoted(t *testing.T) {
+	budget := newStatusLiveTestBudget()
 	srv := newStatusGraphServer(t, func(w http.ResponseWriter, r *http.Request, release <-chan struct{}) {
 		switch r.URL.Path {
 		case testGraphMePath:
 			writeStatusTestUser(t, w, statusLiveTestLiveName)
 		default:
+			budget.spend()
 			blockUntilRequestEnds(r, release)
 		}
 	})
 
-	run := newStatusLiveRun(t, srv.URL, statusLiveTestShortBudget, statusLiveTestEmailA)
+	run := newStatusLiveRun(t, srv.URL, budget, statusLiveTestEmailA)
 
 	require.NoError(t, run.status(t, t.Context()))
 	out := run.stdout.String()
@@ -334,34 +376,39 @@ func TestStatus_SaysWhyOneDriveGaveNoDetails(t *testing.T) {
 		name   string
 		status int
 		body   string
-		budget time.Duration
-		reason string
+		// budgetEnds ends the budget once OneDrive has answered a request,
+		// while the command still retries.
+		budgetEnds bool
+		reason     string
 	}{
 		{
 			name:   "a refusal passes on OneDrive's message",
 			status: http.StatusForbidden,
 			body:   `{"error":{"code":"accessDenied","message":"The caller cannot read this profile."}}`,
-			budget: statusLiveTestLongBudget,
 			// OneDrive's own full stop is dropped: the note ends the sentence.
 			reason: "OneDrive refused the request: The caller cannot read this profile",
 		},
 		{
-			name:   "a server error still failing when the budget ends",
-			status: http.StatusServiceUnavailable,
-			body:   `{"error":{"code":"serviceNotAvailable","message":"Try again later."}}`,
-			budget: statusLiveTestShortBudget,
-			reason: statusLiveTestUnanswered + "1 s",
+			name:       "a server error still failing when the budget ends",
+			status:     http.StatusServiceUnavailable,
+			body:       `{"error":{"code":"serviceNotAvailable","message":"Try again later."}}`,
+			budgetEnds: true,
+			reason:     statusLiveTestUnanswered,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			budget := newStatusLiveTestBudget()
 			srv := newStatusGraphServer(t, func(w http.ResponseWriter, _ *http.Request, _ <-chan struct{}) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tc.status)
 				writeTestResponse(t, w, tc.body)
+				if tc.budgetEnds {
+					budget.spend()
+				}
 			})
-			run := newStatusLiveRun(t, srv.URL, tc.budget, statusLiveTestEmailA)
+			run := newStatusLiveRun(t, srv.URL, budget, statusLiveTestEmailA)
 
 			require.NoError(t, run.status(t, t.Context()))
 			assert.Contains(t, run.stdout.String(), statusAccountLine(statusLiveTestLocalName, statusLiveTestEmailA))
@@ -379,7 +426,7 @@ func TestStatus_AStoppedCommandAddsNoNote(t *testing.T) {
 	srv := newStatusGraphServer(t, func(_ http.ResponseWriter, r *http.Request, release <-chan struct{}) {
 		blockUntilRequestEnds(r, release)
 	})
-	run := newStatusLiveRun(t, srv.URL, statusLiveTestLongBudget, statusLiveTestEmailA)
+	run := newStatusLiveRun(t, srv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -387,6 +434,54 @@ func TestStatus_AStoppedCommandAddsNoNote(t *testing.T) {
 	require.NoError(t, run.status(t, ctx))
 	assert.Contains(t, run.stdout.String(), statusAccountLine(statusLiveTestLocalName, statusLiveTestEmailA))
 	assert.Empty(t, run.stderr.String())
+}
+
+// panickingTokenSource stands for a bug on one account's request path.
+type panickingTokenSource struct{}
+
+func (panickingTokenSource) Token() (string, error) { panic("token source bug") }
+
+// A panic while one account's live details are asked for costs that account
+// its details, not the command: status prints the account's local state with
+// a note, and the other account's live details arrive. The test runs in a
+// child test binary, where a panic that escaped the goroutine would end the
+// child instead of every test of the package.
+//
+// Validates: R-6.3.10, R-6.8.28
+func TestStatus_APanicAskingOneAccountLeavesItsLocalStateAndTheOthersDetails(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	srv := newStatusGraphServer(t, func(w http.ResponseWriter, r *http.Request, _ <-chan struct{}) {
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeStatusTestUser(t, w, statusLiveTestLiveName)
+		case primaryDrivePath:
+			writeStatusTestPrimaryDrive(t, w)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	run := newStatusLiveRun(t, srv.URL, newStatusLiveTestBudget(), statusLiveTestEmailA, statusLiveTestEmailB)
+	run.cc.Runtime.TokenSourceFn = func(_ context.Context, tokenPath string, _ *slog.Logger) (graph.TokenSource, error) {
+		if strings.Contains(filepath.Base(tokenPath), statusLiveTestEmailB) {
+			return panickingTokenSource{}, nil
+		}
+
+		return accountTokenSource{token: filepath.Base(tokenPath)}, nil
+	}
+
+	require.NoError(t, run.status(t, t.Context()))
+	out := run.stdout.String()
+	assert.Contains(t, out, statusAccountLine(statusLiveTestLiveName, statusLiveTestEmailA))
+	assert.Contains(t, out, statusAccountLine(statusLiveTestLocalName, statusLiveTestEmailB))
+	assert.Equal(t, 1, strings.Count(out, statusLiveTestStorageLabel), "only the first account's storage arrived")
+	assert.Equal(t, []string{
+		statusLiveTestNotePrefix + statusLiveTestEmailB + ": " + statusLiveInternalErrorReason + ".",
+	}, run.notes())
 }
 
 // statusAccountLine is the text status prints to head an account.

@@ -329,7 +329,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	}
 	savedToken := state.Cursor
 
-	obs := newRemoteObserver(eng.fetcher, bl, eng.driveID, eng.logger)
+	obs := eng.buildRemoteObserver(bl, eng.logger)
 	obs.SetItemClient(eng.itemsClient)
 	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
@@ -368,7 +368,7 @@ func (flow *engineFlow) observeLocal(
 		return scanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 
-	obs := newLocalObserver(bl, eng.logger, eng.checkWorkers)
+	obs := eng.buildLocalObserver(bl, eng.logger)
 	if recordHashes {
 		cache, cacheErr := eng.baseline.newLocalHashCache(ctx)
 		if cacheErr != nil {

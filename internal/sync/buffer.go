@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 type debounceTimer interface {
@@ -171,6 +173,15 @@ func (a *armedTimer) restart(delay time.Duration) {
 
 func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- dirtyBatch) {
 	defer close(out)
+	// A panic ends the loop like any other early exit: out closes outside
+	// shutdown, and the watch loop fails the mount ("dirty scheduler stopped
+	// unexpectedly"), which restarts with the usual backoff (R-6.3.8).
+	defer func() {
+		if r := recover(); r != nil {
+			//nolint:errcheck // The closed batch channel is how the mount learns of it; the error is only logged.
+			panicguard.Recovered(b.logger, "in the watch debounce loop", r)
+		}
+	}()
 
 	quiet := &armedTimer{timer: b.newTimer(debounce)}
 	quiet.timer.Stop()

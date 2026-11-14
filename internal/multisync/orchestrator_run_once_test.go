@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // A removed shared folder whose final sync does not finish keeps its local
@@ -33,7 +34,7 @@ func TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges(t *testing.T) {
 	}
 	require.NotNil(t, childMount)
 
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Logger = logger
 	orch := NewOrchestrator(cfg)
@@ -49,9 +50,9 @@ func TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges(t *testing.T) {
 
 	notices := keptDrainNotices(capture)
 	require.Len(t, notices, 1, "an unchanged kept copy is announced once")
-	assert.Contains(t, notices[0].message, "Keeping the local copy of removed shared folder "+childMount.label())
-	assert.NotContains(t, notices[0].message, childMount.id().String(), "user text names the folder, not the mount ID")
-	assert.Equal(t, slog.LevelInfo, notices[0].level)
+	assert.Contains(t, notices[0].Message, "Keeping the local copy of removed shared folder "+childMount.label())
+	assert.NotContains(t, notices[0].Message, childMount.id().String(), "user text names the folder, not the mount ID")
+	assert.Equal(t, slog.LevelInfo, notices[0].Level)
 
 	unavailable := []shortcutChildDrainResult{{
 		MountID: childMount.id().String(),
@@ -61,18 +62,18 @@ func TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges(t *testing.T) {
 	orch.reportKeptFinalDrains(unavailable, decisions.Mounts)
 	notices = keptDrainNotices(capture)
 	require.Len(t, notices, 2, "a changed reason is announced again")
-	assert.Contains(t, notices[1].message, "its local folder is unavailable")
+	assert.Contains(t, notices[1].Message, "its local folder is unavailable")
 
 	clean := []shortcutChildDrainResult{{MountID: childMount.id().String(), Status: shortcutChildDrainClean}}
 	orch.reportKeptFinalDrains(clean, decisions.Mounts)
 	assert.Len(t, keptDrainNotices(capture), 2, "a clean drain is not a kept copy")
-	assert.Empty(t, capture.atLeast(slog.LevelWarn))
+	assert.Empty(t, capture.AtLeast(slog.LevelWarn))
 }
 
-func keptDrainNotices(capture *logCapture) []capturedLog {
-	var out []capturedLog
-	for _, record := range capture.atLeast(slog.LevelInfo) {
-		if strings.Contains(record.message, "removed shared folder") {
+func keptDrainNotices(capture *synctest.LogCapture) []synctest.CapturedRecord {
+	var out []synctest.CapturedRecord
+	for _, record := range capture.AtLeast(slog.LevelInfo) {
+		if strings.Contains(record.Message, "removed shared folder") {
 			out = append(out, record)
 		}
 	}

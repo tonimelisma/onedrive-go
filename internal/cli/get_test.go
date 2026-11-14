@@ -294,17 +294,14 @@ func (d folderOnlyDownload) walk(t *testing.T, localPath string) {
 	downloadTree(t.Context(), d.cc, d.tm, d.state, d.driveID, "testdir", localPath)
 }
 
-// Directory descent used to spawn a goroutine per subdirectory, so the
-// goroutine count scaled with the number of directories in the tree. The
-// shared semaphore never covered that path, only file transfers, despite the
-// comment claiming it bounded the whole tree. A shared folder's download kept
-// that walk until it took the one every folder download uses.
-//
-// Descent is now inline, and the observable consequence is that the whole walk
-// has finished when downloadTree returns, without anyone waiting on the
-// WaitGroup: every directory is counted and every local directory exists.
-// Spawned descent cannot offer that, because the work is still queued when the
-// call returns.
+// Directory descent is inline, for a drive path and a shared folder alike: a
+// goroutine per subdirectory would make the goroutine count follow the number
+// of directories in the tree, and the shared semaphore bounds only file
+// transfers. The observable consequence is that the whole walk has finished
+// when downloadTree returns, without anyone waiting on the WaitGroup: every
+// directory is counted and every local directory exists. Spawned descent
+// cannot offer that, because its work would still be queued when the call
+// returns.
 //
 // This deliberately does not sample runtime.NumGoroutine. That counter is
 // process-global, so parallel tests move it between two samples and the

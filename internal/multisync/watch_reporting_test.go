@@ -16,15 +16,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // warningsContaining returns the WARN-and-above messages containing text.
-func warningsContaining(capture *logCapture, text string) []string {
+func warningsContaining(capture *synctest.LogCapture, text string) []string {
 	var out []string
-	for _, record := range capture.atLeast(slog.LevelWarn) {
-		if strings.Contains(record.message, text) {
-			out = append(out, record.message)
+	for _, record := range capture.AtLeast(slog.LevelWarn) {
+		if strings.Contains(record.Message, text) {
+			out = append(out, record.Message)
 		}
 	}
 	return out
@@ -125,7 +127,7 @@ func TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges(t *te
 type backoffHarness struct {
 	t         *testing.T
 	orch      *Orchestrator
-	capture   *logCapture
+	capture   *synctest.LogCapture
 	clock     *testClock
 	starts    atomic.Int32
 	id        mountID
@@ -140,7 +142,7 @@ func newBackoffHarness(t *testing.T) *backoffHarness {
 	rd := testStandaloneMount(t, "personal:backoff@example.com", "Backoff")
 	setupXDGIsolation(t, rd.CanonicalID)
 
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -260,7 +262,7 @@ func TestHandleWatchRunnerEvent_HealthyRunResetsBackoff(t *testing.T) {
 func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:backoff-loop@example.com", "BackoffLoop")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -330,8 +332,8 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 	}
 
 	assert.Len(t, warningsContaining(capture, "Stopped syncing BackoffLoop"), 1)
-	for _, record := range capture.atLeast(slog.LevelWarn) {
-		assert.NotContains(t, record.message, "context canceled", "clean shutdown must not warn")
+	for _, record := range capture.AtLeast(slog.LevelWarn) {
+		assert.NotContains(t, record.Message, "context canceled", "clean shutdown must not warn")
 	}
 }
 
@@ -343,7 +345,7 @@ func TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner(t *testing.
 	rd := testStandaloneMount(t, "personal:stale-event@example.com", "StaleEvent")
 	setupXDGIsolation(t, rd.CanonicalID)
 
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -363,7 +365,7 @@ func TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner(t *testing.
 		newParentChildWorkSnapshots(),
 	))
 
-	assert.Empty(t, capture.atLeast(slog.LevelWarn))
+	assert.Empty(t, capture.AtLeast(slog.LevelWarn))
 }
 
 // When the orchestrator cancels a final-drain child (reload, parent snapshot
@@ -480,33 +482,69 @@ func TestHumanDelay_UsesHumanUnits(t *testing.T) {
 
 // Validates: R-2.8.11
 func TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn(t *testing.T) {
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	orch := &Orchestrator{logger: logger, cfg: &OrchestratorConfig{}}
 
 	for range 3 {
 		orch.warnOnChange("k", "Couldn't update shortcuts", errors.New("bad command"))
 	}
-	assert.Len(t, capture.atLeast(slog.LevelWarn), 1)
+	assert.Len(t, capture.AtLeast(slog.LevelWarn), 1)
 
 	orch.warnOnChange("k", "Couldn't update shortcuts", errors.New("other reason"))
-	assert.Len(t, capture.atLeast(slog.LevelWarn), 2)
+	assert.Len(t, capture.AtLeast(slog.LevelWarn), 2)
 
 	orch.clearWarnOnChange("k")
 	orch.warnOnChange("k", "Couldn't update shortcuts", errors.New("other reason"))
-	assert.Len(t, capture.atLeast(slog.LevelWarn), 3, "a failure that cleared and came back is reported again")
+	assert.Len(t, capture.AtLeast(slog.LevelWarn), 3, "a failure that cleared and came back is reported again")
 }
 
 // A panic in one mount's watch loop is that mount's failure: it is reported
 // through the runner event path, backed off and restarted like any other
-// runner error, and its siblings never notice. Before the runner goroutine
-// had a recover, the panic unwound the process and every other mount with it.
+// runner error, and its siblings never notice. Without the recover at the
+// runner goroutine's boundary, the panic would unwind the process and every
+// other mount with it.
 //
 // Validates: R-6.3.8
 func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
+	capture := runFailingFirstWatchBesideASibling(t, func(*slog.Logger) error {
+		panic("watch loop exploded")
+	})
+
+	errorsLogged := capture.AtLeast(slog.LevelError)
+	require.Len(t, errorsLogged, 1, "the panic is logged once, at Error")
+	assert.Equal(t, "Panicky", errorsLogged[0].Attrs["drive"])
+	assert.Equal(t, "watch loop exploded", errorsLogged[0].Attrs["panic"])
+	assert.Contains(t, errorsLogged[0].Attrs["stack"], "goroutine")
+}
+
+// A run that a timer callback's panic ended returns an error wrapping
+// panicguard.ErrPanic, which the engine's boundary has logged. To the watch
+// loop that is the mount's failure like any other: the mount restarts on the
+// usual backoff, its sibling keeps running, and the panic is not logged again.
+//
+// Validates: R-6.3.8, R-6.3.10
+func TestRunWatch_ARunEndingInAPanicErrorFailsOnlyThatMountAndRestartsIt(t *testing.T) {
+	capture := runFailingFirstWatchBesideASibling(t, func(logger *slog.Logger) error {
+		return panicguard.Recovered(logger, "in a sync timer callback", "timer exploded")
+	})
+
+	errorsLogged := capture.AtLeast(slog.LevelError)
+	require.Len(t, errorsLogged, 1, "the engine's boundary logged the panic, and the watch loop does not log it again")
+	assert.Equal(t, "timer exploded", errorsLogged[0].Attrs["panic"])
+}
+
+// runFailingFirstWatchBesideASibling watches two mounts, Panicky and Sibling,
+// where Panicky's first run ends in what firstRun does, and checks what every
+// such failure comes to: a restart armed with the first backoff delay, one
+// "Stopped syncing" warning, a sibling that never stops, a restart when the
+// backoff fires, and a clean stop. It returns the log for the caller's checks.
+func runFailingFirstWatchBesideASibling(t *testing.T, firstRun func(*slog.Logger) error) *synctest.LogCapture {
+	t.Helper()
+
 	panicky := testStandaloneMount(t, "personal:panicky@example.com", "Panicky")
 	sibling := testStandaloneMount(t, "personal:sibling@example.com", "Sibling")
 	cfgPath := writeTestConfig(t, panicky.CanonicalID, sibling.CanonicalID)
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, panicky, sibling)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -522,7 +560,7 @@ func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
 		return fire, func() {}
 	}
 
-	engines := newPanicIsolationEngines(sibling.CanonicalID)
+	engines := newPanicIsolationEngines(sibling.CanonicalID, func() error { return firstRun(logger) })
 	orch.engineFactory = engines.factory
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -538,27 +576,21 @@ func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
 		require.FailNow(t, "sibling mount did not start")
 	}
 
-	// The panic reaches the loop as a runner failure: a restart is armed with
-	// the first backoff delay, and the drive is reported stopped once.
+	// The failure reaches the loop as a runner failure: a restart is armed
+	// with the first backoff delay, and the drive is reported stopped once.
 	select {
 	case delay := <-armed:
 		assert.Equal(t, runnerRestartBaseDelay, delay)
 	case <-time.After(5 * time.Second):
-		require.FailNow(t, "the panicking mount's restart was never armed")
+		require.FailNow(t, "the failed mount's restart was never armed")
 	}
 	require.Len(t, warningsContaining(capture, "Stopped syncing Panicky"), 1)
 
-	errorsLogged := capture.atLeast(slog.LevelError)
-	require.Len(t, errorsLogged, 1, "the panic is logged once, at Error")
-	assert.Equal(t, "Panicky", errorsLogged[0].attrs["drive"])
-	assert.Equal(t, "watch loop exploded", errorsLogged[0].attrs["panic"])
-	assert.Contains(t, errorsLogged[0].attrs["stack"], "goroutine")
-
 	select {
 	case <-engines.siblingStopped:
-		require.FailNow(t, "a panic in one mount must not stop its sibling")
+		require.FailNow(t, "a failure of one mount must not stop its sibling")
 	case err := <-errCh:
-		require.FailNow(t, "RunWatch must survive a mount panic", "returned %v", err)
+		require.FailNow(t, "RunWatch must survive a mount's failure", "returned %v", err)
 	default:
 	}
 
@@ -567,7 +599,7 @@ func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
 	select {
 	case <-engines.panickyRestarted:
 	case <-time.After(5 * time.Second):
-		require.FailNow(t, "the panicking mount was not restarted when its backoff fired")
+		require.FailNow(t, "the failed mount was not restarted when its backoff fired")
 	}
 
 	cancel()
@@ -578,22 +610,26 @@ func TestRunWatch_RunnerPanicFailsOnlyThatMountAndRestartsIt(t *testing.T) {
 		require.FailNow(t, "RunWatch did not stop in time")
 	}
 	assert.Equal(t, int32(2), engines.panickyStarts.Load())
+
+	return capture
 }
 
-// panicIsolationEngines builds the two engines of the panic-isolation test:
-// one whose first watch run panics and whose second run blocks, and a sibling
-// that blocks until canceled and reports when it starts and stops.
+// panicIsolationEngines builds the two engines of the isolation tests: one
+// whose first watch run ends in firstRun and whose second run blocks, and a
+// sibling that blocks until canceled and reports when it starts and stops.
 type panicIsolationEngines struct {
 	siblingCanonicalID driveid.CanonicalID
+	firstRun           func() error
 	panickyStarts      atomic.Int32
 	panickyRestarted   chan struct{}
 	siblingStarted     chan struct{}
 	siblingStopped     chan struct{}
 }
 
-func newPanicIsolationEngines(siblingCanonicalID driveid.CanonicalID) *panicIsolationEngines {
+func newPanicIsolationEngines(siblingCanonicalID driveid.CanonicalID, firstRun func() error) *panicIsolationEngines {
 	return &panicIsolationEngines{
 		siblingCanonicalID: siblingCanonicalID,
+		firstRun:           firstRun,
 		panickyRestarted:   make(chan struct{}),
 		siblingStarted:     make(chan struct{}),
 		siblingStopped:     make(chan struct{}),
@@ -615,7 +651,7 @@ func (e *panicIsolationEngines) factory(_ context.Context, req engineFactoryRequ
 	return &mockEngine{
 		runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 			if start == 1 {
-				panic("watch loop exploded")
+				return e.firstRun()
 			}
 			close(e.panickyRestarted)
 			<-ctx.Done()

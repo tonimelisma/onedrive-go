@@ -120,7 +120,12 @@ type Engine struct {
 	// clock is the engine's single time capability: now, delayed callbacks,
 	// tickers, sleeps, and retry jitter. See syncClock for why these are one
 	// value rather than five injectable fields.
-	clock     syncClock
+	clock syncClock
+	// wallClock is the engine's real clock: clock is it unless a test
+	// replaced clock, and every observer the engine builds runs on it. Its
+	// timer panics carry a timer callback's panic to the run it ends
+	// (beginRun).
+	wallClock realClock
 	nextRunID atomic.Int64
 
 	// mountRootDeltaFallbackReported is set once the engine has reported, at
@@ -236,7 +241,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		enableWebsocket:        cfg.EnableWebsocket,
 		minFreeSpace:           cfg.MinFreeSpace,
 		diskAvailableFn:        driveops.DiskAvailable,
-		clock:                  realClock{},
+		wallClock:              realClock{logger: cfg.Logger, panics: &timerPanics{}},
 		socketIOWakeSourceFactory: func(
 			fetcher socketIOEndpointFetcher,
 			driveID driveid.ID,
@@ -245,6 +250,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 			return newSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
+	e.clock = e.wallClock
 
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
@@ -259,6 +265,23 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 
 	storeOwnedByEngine = true
 	return e, nil
+}
+
+// buildLocalObserver builds a local observer on the engine's real clock.
+func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *localObserver {
+	obs := newLocalObserver(bl, logger, e.checkWorkers)
+	obs.clock = e.wallClock
+
+	return obs
+}
+
+// buildRemoteObserver builds an observer of the engine's drive on the
+// engine's real clock.
+func (e *Engine) buildRemoteObserver(bl *Baseline, logger *slog.Logger) *remoteObserver {
+	obs := newRemoteObserver(e.fetcher, bl, e.driveID, logger)
+	obs.clock = e.wallClock
+
+	return obs
 }
 
 func newEnginePermissionHandler(

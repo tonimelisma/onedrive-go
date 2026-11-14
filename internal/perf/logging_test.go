@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-6.6.14
@@ -51,6 +53,50 @@ func TestSession_EmitsPeriodicUpdateAndSummary(t *testing.T) {
 	assert.Equal(t, "success", summary["result"])
 	assert.EqualValues(t, 3, summary["command_items"])
 	assert.EqualValues(t, 1, summary["http_requests"])
+}
+
+// A panic in the periodic update ends the command: the context NewSession
+// returned is canceled with the panic as its cause, which the CLI turns into
+// exit status 1, and the summary is still written when the command completes.
+//
+// Validates: R-6.3.10, R-6.6.14
+func TestSession_UpdatePanicEndsTheCommandWithThePanic(t *testing.T) {
+	t.Parallel()
+
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	logBuf := &lockedBuffer{}
+	logger := slog.New(synctest.PanicOnMessage{Message: "performance update", Next: slog.NewJSONHandler(logBuf, nil)})
+	session, ctx := NewSession(context.Background(), logger, "command", "status", time.Millisecond, nil)
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "the update's panic did not end the command")
+	}
+	require.ErrorIs(t, context.Cause(ctx), panicguard.ErrPanic)
+	require.ErrorContains(t, context.Cause(ctx), "log call exploded")
+
+	session.Complete(nil)
+	assert.Contains(t, logBuf.String(), "Internal error in the performance logger")
+	assert.Contains(t, logBuf.String(), "performance summary", "the summary is still written")
+	require.ErrorIs(t, context.Cause(ctx), panicguard.ErrPanic, "completing keeps the panic as the cause")
+}
+
+// Validates: R-6.6.14
+func TestSession_CompleteReleasesTheCommandContext(t *testing.T) {
+	t.Parallel()
+
+	session, ctx := NewSession(t.Context(), slog.New(slog.DiscardHandler), "command", "status", 0, nil)
+	require.NoError(t, ctx.Err(), "the command context lives until the command completes")
+
+	session.Complete(nil)
+
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.ErrorIs(t, context.Cause(ctx), context.Canceled, "a clean command ends without a cause")
 }
 
 // Validates: R-6.6.16

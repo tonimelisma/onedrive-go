@@ -20,8 +20,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 const watchdogMessage = "WATCHDOG=1"
@@ -183,6 +185,73 @@ func TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, exitSignInRequired, commandExitCode(err, false))
 	assert.Equal(t, "STATUS=Sign-in required: run 'onedrive-go login'", socket.next())
+}
+
+// A watch whose loop panicked ends with the panic: the final STATUS= says
+// why, and the exit status is 1.
+//
+// Validates: R-6.3.10, R-6.6.32
+func TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne(t *testing.T) {
+	holder, _ := writeNotifyTestConfig(t)
+	socket := newFakeNotifySocket(t)
+	notifier := socket.notifier(map[string]string{})
+
+	orch := &lifecycleOrchestrator{err: panicguard.Recovered(slog.New(slog.DiscardHandler), "in the watch loop", "boom")}
+	err := runSyncDaemonWithFactory(t.Context(), holder, nil, syncengine.SyncBidirectional,
+		syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard, "/tmp/control.sock",
+		nil, notifier, func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			orch.cfg = cfg
+			return orch
+		})
+
+	require.ErrorIs(t, err, panicguard.ErrPanic)
+	assert.Equal(t, exitFailure, commandExitCode(err, false))
+	assert.Equal(t,
+		"STATUS=Failed: internal error in the watch loop: boom. This is a bug; please report it, with the log file if you have one",
+		socket.next())
+}
+
+// contextBoundOrchestrator is a watch that runs until its context ends.
+type contextBoundOrchestrator struct{}
+
+func (contextBoundOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+	<-ctx.Done()
+	return nil
+}
+
+// A panic in the systemd keepalive ends the watch through its context, with
+// the panic as the cause: the watch drains as on a stop and returns the
+// panic, so the command exits 1.
+//
+// Validates: R-6.3.10, R-6.6.32
+func TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	holder, _ := writeNotifyTestConfig(t)
+	address := shortSocketPath(t, "notify.sock")
+	receiver, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: address, Net: "unixgram"})
+	require.NoError(t, err)
+	env := map[string]string{sdnotify.EnvNotifySocket: address, sdnotify.EnvWatchdogUSec: "2000"}
+	notifier, err := sdnotify.Open(func(key string) string { return env[key] }, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, notifier.Close()) })
+	// With nobody listening, every keepalive fails, and the failure's log
+	// call is the one that panics.
+	require.NoError(t, receiver.Close())
+	logger := slog.New(synctest.PanicOnMessage{Message: "systemd watchdog keepalive failed", Next: slog.DiscardHandler})
+
+	err = runSyncDaemonWithFactory(t.Context(), holder, nil, syncengine.SyncBidirectional,
+		syncengine.WatchOptions{}, logger, io.Discard, "/tmp/control.sock",
+		nil, notifier, func(*multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			return contextBoundOrchestrator{}
+		})
+
+	require.ErrorIs(t, err, panicguard.ErrPanic)
+	require.ErrorContains(t, err, "internal error in the systemd watchdog keepalive: log call exploded")
+	assert.Equal(t, exitFailure, commandExitCode(err, false))
 }
 
 // Validates: R-6.6.32, R-6.6.31

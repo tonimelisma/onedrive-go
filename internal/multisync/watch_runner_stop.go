@@ -47,7 +47,9 @@ func (o *Orchestrator) nextWatchRunnerGeneration() uint64 {
 // under it. Every goroutine's stack is logged once at Error, and the returned
 // error wraps ErrSyncStuck: the caller ends the watch with it. The
 // stuck runner's goroutine, or an engine close that ran over, is left to the
-// process exit that follows. Only the RunWatch goroutine calls this.
+// process exit that follows. An engine close that panicked fails closed the
+// same way, with the panic as the error (closeEngineWithin). Only the
+// RunWatch goroutine calls this.
 func (o *Orchestrator) retireWatchRunner(ctx context.Context, runners map[mountID]*watchRunner, id mountID) error {
 	wr := runners[id]
 	if wr == nil {
@@ -61,8 +63,9 @@ func (o *Orchestrator) retireWatchRunner(ctx context.Context, runners map[mountI
 	if !o.waitWithin(wr.done, watchRunnerStopTimeout-o.clockNow().Sub(wr.stopRequestedAt)) {
 		return o.markWatchRunnerStuck(wr, "waited "+humanDelay(watchRunnerStopTimeout))
 	}
-	if !o.closeEngineWithin(ctx, wr.mount, wr.engine) {
-		return o.markWatchRunnerStuck(wr, engineCloseStuckDetail())
+	if err := o.closeEngineWithin(ctx, wr.mount, wr.engine); err != nil {
+		wr.stuckErr = err
+		return err
 	}
 
 	delete(runners, id)

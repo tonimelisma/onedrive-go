@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // sharePointSiteLimit caps the number of SharePoint sites fetched during
@@ -164,6 +165,16 @@ func discoverAvailableDrives(
 		authRequired []accountAuthRequirement
 		degraded     []accountDegradedNotice
 	)
+	// record is the one holder of mu, and releases it with defer: a token
+	// worker's panic boundary records through it, and would wait forever on a
+	// lock a panic left held.
+	record := func(tokenEntries []driveListEntry, tokenAuthRequired []accountAuthRequirement, tokenDegraded []accountDegradedNotice) {
+		mu.Lock()
+		defer mu.Unlock()
+		entries = append(entries, tokenEntries...)
+		authRequired = append(authRequired, tokenAuthRequired...)
+		degraded = append(degraded, tokenDegraded...)
+	}
 
 	var wg sync.WaitGroup
 
@@ -171,8 +182,17 @@ func discoverAvailableDrives(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A panic is this account's failure to load, reported the way a
+			// failed /me/drives is, while the other accounts load (R-6.3.10).
+			defer func() {
+				if r := recover(); r != nil {
+					//nolint:errcheck // The degraded notice is the account's report; the error is only logged.
+					panicguard.Recovered(logger, "while listing the drives of "+tokenCID.Email(), r)
+					record(nil, nil, []accountDegradedNotice{tokenDriveCatalogDegradedNotice(accounts, tokenCID, logger)})
+				}
+			}()
 
-			tokenEntries, tokenAuthRequired, tokenDegraded := discoverDrivesForToken(
+			record(discoverDrivesForToken(
 				ctx,
 				tokenCID,
 				cfg,
@@ -181,12 +201,7 @@ func discoverAvailableDrives(
 				logger,
 				recorder,
 				runtime,
-			)
-			mu.Lock()
-			entries = append(entries, tokenEntries...)
-			authRequired = append(authRequired, tokenAuthRequired...)
-			degraded = append(degraded, tokenDegraded...)
-			mu.Unlock()
+			))
 		}()
 	}
 

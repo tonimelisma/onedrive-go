@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -61,27 +62,45 @@ func (o *Orchestrator) closeEngine(ctx context.Context, mount *mountSpec, engine
 	)
 }
 
-// closeEngineWithin closes engine on a goroutine of its own and reports
-// whether the close finished within engineCloseTimeout. The close runs on a
+// closeEngineWithin closes engine on a goroutine of its own and returns nil
+// once the close finished within engineCloseTimeout. The close runs on a
 // context detached from the caller's cancellation: the engine has stopped,
 // and its store still deserves a clean close when the run is ending. The
-// caller owns the goroutine through this wait; past the bound it reports the
-// drive stuck, the run ends with ErrSyncStuck, and process exit ends the
-// goroutine.
-func (o *Orchestrator) closeEngineWithin(ctx context.Context, mount *mountSpec, engine engineRunner) bool {
+// caller owns the goroutine through this wait.
+//
+// Two outcomes leave the store and its locks in an unknown state, and both
+// return the error the run ends with, so the caller fails closed: never
+// reopening the store or acknowledging work on it. A close past the bound is
+// reported stuck (reportStuckSync, ErrSyncStuck) and process exit ends the
+// goroutine; a close that panicked is logged once with its stack and returned
+// (panicguard.ErrPanic).
+func (o *Orchestrator) closeEngineWithin(ctx context.Context, mount *mountSpec, engine engineRunner) error {
 	if engine == nil {
-		return true
+		return nil
 	}
 
 	closed := make(chan struct{})
+	// panicErr is written by the closer before closed is closed, and read
+	// only after that.
+	var panicErr error
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), engineCloseTimeout)
 	go func() {
 		defer close(closed)
 		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				panicErr = panicguard.Recovered(o.logger, "while closing the sync state for "+mount.label(), r,
+					slog.String("mount_id", mount.id().String()))
+			}
+		}()
 		o.closeEngine(closeCtx, mount, engine)
 	}()
 
-	return o.waitWithin(closed, engineCloseTimeout)
+	if !o.waitWithin(closed, engineCloseTimeout) {
+		return o.reportStuckSync(mount, engineCloseStuckDetail())
+	}
+
+	return panicErr
 }
 
 // waitWithin reports whether done closed within bound. It arms the retire

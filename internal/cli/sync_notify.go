@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
 )
 
@@ -181,8 +182,11 @@ func firstLine(text string) string {
 
 // startSyncWatchdog runs the keepalive loop when the unit set WatchdogSec=.
 // The returned stop ends the goroutine and waits for it, so the caller owns
-// its whole lifetime.
-func startSyncWatchdog(ctx context.Context, s *syncNotifier) (stop func()) {
+// its whole lifetime. A panic in the loop ends the watch through fail, with
+// the panic as the cause: a watch that has stopped proving it is alive would
+// be killed by systemd at its next deadline anyway, without a word in the log
+// (R-6.3.10).
+func startSyncWatchdog(ctx context.Context, s *syncNotifier, fail context.CancelCauseFunc) (stop func()) {
 	interval := s.notifier.WatchdogInterval()
 	if interval <= 0 {
 		return func() {}
@@ -193,6 +197,11 @@ func startSyncWatchdog(ctx context.Context, s *syncNotifier) (stop func()) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				fail(panicguard.Recovered(s.logger, "in the systemd watchdog keepalive", r))
+			}
+		}()
 		s.runWatchdog(watchdogCtx, ticker.C)
 	}()
 
