@@ -63,7 +63,7 @@ func TestCommandTree_EveryLeafHonorsJSON(t *testing.T) {
 	cases := jsonContractCases()
 
 	seen := map[string]bool{}
-	for _, leaf := range runnableLeaves(newRootCmd()) {
+	for _, leaf := range runnableLeaves(newRootCmdWithWriters(nil, nil)) {
 		path := leaf.CommandPath()
 		seen[path] = true
 
@@ -158,7 +158,7 @@ func runnableLeaves(root *cobra.Command) []*cobra.Command {
 func findLeaf(t *testing.T, path string) *cobra.Command {
 	t.Helper()
 
-	root := newRootCmd()
+	root := newRootCmdWithWriters(nil, nil)
 	args := strings.Fields(path)[1:]
 	leaf, _, err := root.Find(args)
 	require.NoError(t, err)

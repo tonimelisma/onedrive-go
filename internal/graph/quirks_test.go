@@ -166,24 +166,14 @@ func TestStripBaseURL_CrossDomainRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not match base URL")
 }
 
-// TestBuildDeltaPath_EmptyTokenIsInitialSync validates that an empty token
-// triggers the initial delta path (no token parameter).
-func TestBuildDeltaPath_EmptyTokenIsInitialSync(t *testing.T) {
+// TestResolveDeltaToken_FullURLTokenStripped validates that a full URL token
+// from a previous response is stripped of Graph's versioned base URL.
+func TestResolveDeltaToken_FullURLTokenStripped(t *testing.T) {
 	client := MustNewClient("https://graph.microsoft.com/v1.0", &http.Client{}, staticToken("tok"), nil, "")
 
-	path, err := client.buildDeltaPath(driveid.New("abc123def4567890"), "")
-	require.NoError(t, err)
-	assert.Equal(t, "/drives/abc123def4567890/root/delta", path)
-}
-
-// TestBuildDeltaPath_FullURLToken validates that a full URL token from a
-// previous response is correctly stripped to a relative path.
-func TestBuildDeltaPath_FullURLTokenStripped(t *testing.T) {
-	client := MustNewClient("https://graph.microsoft.com/v1.0", &http.Client{}, staticToken("tok"), nil, "")
-
-	path, err := client.buildDeltaPath(
-		driveid.New("abc123def4567890"),
+	path, err := client.resolveDeltaToken(
 		"https://graph.microsoft.com/v1.0/drives/abc123def4567890/root/delta?token=opaque",
+		func() string { return "/drives/abc123def4567890/root/delta" },
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/drives/abc123def4567890/root/delta?token=opaque", path)

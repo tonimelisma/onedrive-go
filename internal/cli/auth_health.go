@@ -170,21 +170,6 @@ func inspectSavedLogin(
 	return authReasonInvalidSavedLogin
 }
 
-func hasPersistedAccountAuthRequirement(account string, logger *slog.Logger) bool {
-	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), account)
-	if err != nil {
-		logger.Debug("loading catalog for auth projection", "account", account, "error", err)
-		return false
-	}
-
-	return required
-}
-
-func clearAccountAuthRequirement(email string, logger *slog.Logger) error {
-	_, err := clearAccountAuthRequirementWithCount(email, config.AuthClearSourceCLIProof, logger)
-	return err
-}
-
 func clearAccountAuthRequirementForSource(
 	email string,
 	source config.AuthClearSource,

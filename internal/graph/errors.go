@@ -342,9 +342,10 @@ func IsNotSupported(err error) bool {
 }
 
 // IsProviderUnavailable reports whether err is a provider-side condition that
-// no client retry or configuration change can clear. Callers use it to
-// distinguish "we could not test/serve because the provider is down" from "the
-// request was wrong".
+// no client retry or configuration change can clear. Only the live
+// integration tests (build tag integration) call it, to skip rather than fail
+// while OneDrive is in a read-only window; product code branches on
+// ErrProviderReadOnly itself.
 func IsProviderUnavailable(err error) bool {
 	return errors.Is(err, ErrProviderReadOnly)
 }

@@ -64,11 +64,23 @@ func TestClearAccountAuthScopes_ClearsPersistedAuthScope(t *testing.T) {
 		seedAuthScope(t, cid)
 	}
 
-	logger := testDriveLogger(t)
-	require.True(t, hasPersistedAccountAuthRequirement("user@example.com", logger))
+	require.True(t, hasPersistedAccountAuthRequirement(t, "user@example.com"))
 
-	require.NoError(t, clearAccountAuthRequirement("user@example.com", logger))
-	assert.False(t, hasPersistedAccountAuthRequirement("user@example.com", logger))
+	cleared, err := clearAccountAuthRequirementWithCount("user@example.com", config.AuthClearSourceCLIProof, testDriveLogger(t))
+	require.NoError(t, err)
+	assert.Equal(t, 1, cleared)
+	assert.False(t, hasPersistedAccountAuthRequirement(t, "user@example.com"))
+}
+
+// hasPersistedAccountAuthRequirement reports whether the catalog under the
+// test's data directory records that account must sign in again.
+func hasPersistedAccountAuthRequirement(t *testing.T, account string) bool {
+	t.Helper()
+
+	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), account)
+	require.NoError(t, err)
+
+	return required
 }
 
 // Validates: R-2.10.47
@@ -97,7 +109,7 @@ func TestAttachAccountAuthProof_ClearsOnAuthenticatedSuccess(t *testing.T) {
 
 	_, err := client.Me(t.Context())
 	require.NoError(t, err)
-	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
 }
 
 // Validates: R-2.10.47
@@ -120,7 +132,7 @@ func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
 
 	_, err := client.Me(t.Context())
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
-	assert.True(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
+	assert.True(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
 }
 
 // Validates: R-2.10.45, R-2.10.47
@@ -172,7 +184,7 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 	}
 
 	require.NoError(t, runStatusCommand(t.Context(), cc, false))
-	assert.True(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
+	assert.True(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
 }
 
 // Validates: R-2.10.45

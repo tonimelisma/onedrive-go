@@ -62,23 +62,15 @@ func (d driveSectionDecoder) decodeDrive(key string, drive *Drive) error {
 	return nil
 }
 
-// decodeDriveSections performs the strict second TOML decode pass to extract
-// drive sections. Returns an error on the first invalid section.
-func decodeDriveSections(data []byte, cfg *Config) error {
-	return newDriveSectionDecoder().decodeStrict(data, cfg)
-}
-
-// decodeDriveSectionsLenient is the lenient variant that collects errors as
-// warnings instead of failing. Drives with structural issues are skipped.
-func decodeDriveSectionsLenient(data []byte, cfg *Config) []ConfigWarning {
-	return newDriveSectionDecoder().decodeLenient(data, cfg)
-}
-
+// decodeStrict performs the strict second TOML decode pass to extract drive
+// sections. Returns an error on the first invalid section.
 func (d driveSectionDecoder) decodeStrict(data []byte, cfg *Config) error {
 	_, err := d.decode(data, cfg, decodeModeStrict)
 	return err
 }
 
+// decodeLenient is the lenient variant that collects errors as warnings
+// instead of failing. Drives with structural issues are skipped.
 func (d driveSectionDecoder) decodeLenient(data []byte, cfg *Config) []ConfigWarning {
 	warnings, err := d.decode(data, cfg, decodeModeLenient)
 	if err != nil {

@@ -11,11 +11,8 @@ import (
 	"strings"
 )
 
-// Platform identifiers.
-const (
-	platformLinux  = "linux"
-	platformDarwin = "darwin"
-)
+// platformDarwin is runtime.GOOS on macOS, whose default directories differ.
+const platformDarwin = "darwin"
 
 // Application directory name used across all platforms.
 const appName = "onedrive-go"
@@ -76,39 +73,19 @@ func DefaultDataDir() string {
 	}
 }
 
-// DefaultCacheDir returns the platform-specific directory for cache files.
-// XDG_CACHE_HOME is checked first on ALL platforms (enables test isolation).
-// Fallbacks: Linux ~/.cache, macOS ~/Library/Caches, other ~/.cache.
-func DefaultCacheDir() string {
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return filepath.Join(xdg, appName)
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-
-	switch runtime.GOOS {
-	case platformDarwin:
-		return filepath.Join(home, "Library", "Caches", appName)
-	default:
-		return filepath.Join(home, ".cache", appName)
-	}
-}
-
 // ErrDevBuildUnsafe reports a development build started without full XDG
 // isolation.
 var ErrDevBuildUnsafe = errors.New("refusing to run a development build without XDG isolation")
 
 // CheckDevSafe refuses a dev build (version=="dev") that is running without
-// full XDG isolation. Partial isolation is unsafe: setting only one XDG root
-// can still leave config, data, or cache operations falling back to
-// production paths. It returns a plain error rather than panicking, because
-// anyone who builds from source without the version ldflag gets a dev build.
+// full XDG isolation. Partial isolation is unsafe: setting only one of the two
+// XDG roots the client reads still leaves config or data operations falling
+// back to production paths. It returns a plain error rather than panicking,
+// because anyone who builds from source without the version ldflag gets a dev
+// build.
 func CheckDevSafe() error {
 	var missing []string
-	for _, name := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
+	for _, name := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
 		if os.Getenv(name) == "" {
 			missing = append(missing, name)
 		}
@@ -118,7 +95,7 @@ func CheckDevSafe() error {
 	}
 
 	return fmt.Errorf("%w, so it cannot touch your real OneDrive settings or data. "+
-		"For development, set XDG_DATA_HOME, XDG_CONFIG_HOME and XDG_CACHE_HOME (missing: %s), "+
+		"For development, set XDG_DATA_HOME and XDG_CONFIG_HOME (missing: %s), "+
 		"for example with 'source scripts/dev-env.sh'. To use it for real, build it with a version as shown "+
 		"in README.md under Building from Source",
 		ErrDevBuildUnsafe, strings.Join(missing, ", "))

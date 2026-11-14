@@ -26,7 +26,7 @@ func TestRunBenchRequiresRepoRootAndScenario(t *testing.T) {
 }
 
 // Validates: R-6.10.14
-func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
+func TestBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{DefaultBenchSubjectID}, BenchSubjectIDs())
@@ -35,19 +35,22 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 		syncBidirectionalCatchup100MID,
 	}, BenchScenarioIDs())
 
-	subject, err := LookupBenchSubject(DefaultBenchSubjectID)
+	subjectDef, err := lookupBenchSubjectDefinition(DefaultBenchSubjectID)
 	require.NoError(t, err)
+	subject := subjectDef.Spec
 	assert.Equal(t, DefaultBenchSubjectID, subject.ID)
 	assert.Equal(t, benchSubjectKindRepoCLI, subject.Kind)
 
-	scenario, err := LookupBenchScenario(startupEmptyConfigScenarioID)
+	scenarioDef, err := lookupBenchScenarioDefinition(startupEmptyConfigScenarioID)
 	require.NoError(t, err)
+	scenario := scenarioDef.Spec
 	assert.Equal(t, startupEmptyConfigScenarioID, scenario.ID)
 	assert.Equal(t, startupEmptyConfigDefaultRuns, scenario.DefaultRuns)
 	assert.Equal(t, startupEmptyConfigDefaultWarmups, scenario.DefaultWarmup)
 
-	liveScenario, err := LookupBenchScenario(syncBidirectionalCatchup100MID)
+	liveScenarioDef, err := lookupBenchScenarioDefinition(syncBidirectionalCatchup100MID)
 	require.NoError(t, err)
+	liveScenario := liveScenarioDef.Spec
 	assert.Equal(t, syncBidirectionalCatchup100MID, liveScenario.ID)
 	assert.Equal(t, syncBidirectionalCatchup100MRuns, liveScenario.DefaultRuns)
 	assert.Equal(t, syncBidirectionalCatchup100MWarm, liveScenario.DefaultWarmup)
@@ -69,14 +72,14 @@ func TestLookupBenchRegistriesAreSortedAndIncludeBuiltins(t *testing.T) {
 }
 
 // Validates: R-6.10.14
-func TestLookupBenchSubjectAndScenarioRejectUnknownIDs(t *testing.T) {
+func TestBenchDefinitionLookupsRejectUnknownIDs(t *testing.T) {
 	t.Parallel()
 
-	_, err := LookupBenchSubject("unknown")
+	_, err := lookupBenchSubjectDefinition("unknown")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), DefaultBenchSubjectID)
 
-	_, err = LookupBenchScenario("unknown")
+	_, err = lookupBenchScenarioDefinition("unknown")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), startupEmptyConfigScenarioID)
 	assert.Contains(t, err.Error(), syncBidirectionalCatchup100MID)

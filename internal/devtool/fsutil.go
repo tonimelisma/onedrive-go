@@ -44,15 +44,6 @@ func lstat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
-func readDir(path string) ([]os.DirEntry, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("read dir %s: %w", path, err)
-	}
-
-	return entries, nil
-}
-
 func mkdirAll(path string, perm os.FileMode) error {
 	if err := os.MkdirAll(path, perm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", path, err)

@@ -977,9 +977,9 @@ func TestRetryTransport_UsesRedactedLogTargetFromContext(t *testing.T) {
 		Sleep:  noopSleep,
 	}
 
-	ctx := retry.WithLogTarget(t.Context(), "preauth:upload chunk")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, opaqueSessionURL, http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, opaqueSessionURL, http.NoBody)
 	require.NoError(t, err)
+	req = retry.WithRequestLogTarget(req, "preauth:upload chunk")
 
 	resp, err := rt.RoundTrip(req)
 	require.NoError(t, err)

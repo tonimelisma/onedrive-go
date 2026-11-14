@@ -671,11 +671,11 @@ func prChecksFingerprint(checks []prCheckRun) string {
 	return strings.Join(lines, "\n")
 }
 
-// classifyPostMergeRuns reads the CI run of the merge commit on main. Every
-// push to main runs the quick lane (branch protection no longer requires a PR
-// branch to be up to date, so a stale-branch merge can break main and the
-// push run is what catches it), so a skipped run is a failure, not the old
-// squash-merge skip rule.
+// classifyPostMergeRuns reads the CI run of the merge commit on main: pending
+// while there is none or it is still running, a pass when it succeeded, and a
+// failure otherwise, a skipped run included. Every push to main runs the quick
+// lane, which is what catches a merge that breaks main, since branch
+// protection does not require a pull request's branch to be up to date.
 func classifyPostMergeRuns(runs []githubRun, commit string) ciSnapshot {
 	snapshot := ciSnapshot{fingerprint: postMergeRunsFingerprint(runs)}
 	if len(runs) == 0 {

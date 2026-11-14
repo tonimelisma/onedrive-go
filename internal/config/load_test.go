@@ -42,8 +42,21 @@ func writeTestConfig(t *testing.T, content string) string {
 	return path
 }
 
+// loadWrittenConfig loads the config file at path, which the code under test
+// wrote or rewrote. The file must exist: LoadOrDefault reads a missing file
+// as the defaults, which would hide a writer that deleted it.
+func loadWrittenConfig(t *testing.T, path string) *Config {
+	t.Helper()
+
+	require.FileExists(t, path)
+	cfg, err := LoadOrDefault(path, testLogger(t))
+	require.NoError(t, err)
+
+	return cfg
+}
+
 // Validates: R-4.1.1
-func TestLoad_ValidFullConfig(t *testing.T) {
+func TestLoadOrDefault_ValidFullConfig(t *testing.T) {
 	tomlContent := `
 transfer_workers = 16
 check_workers = 8
@@ -61,7 +74,7 @@ log_retention_days = 7
 `
 
 	path := writeTestConfig(t, tomlContent)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, 16, cfg.TransferWorkers)
@@ -80,9 +93,9 @@ log_retention_days = 7
 }
 
 // Validates: R-4.2.1
-func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
+func TestLoadOrDefault_MinimalConfig_UsesDefaults(t *testing.T) {
 	path := writeTestConfig(t, "")
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, 8, cfg.TransferWorkers)
@@ -91,36 +104,31 @@ func TestLoad_MinimalConfig_UsesDefaults(t *testing.T) {
 	assert.Equal(t, "5m", cfg.PollInterval)
 }
 
-func TestLoad_TransferWorkers_Default(t *testing.T) {
+func TestLoadOrDefault_TransferWorkers_Default(t *testing.T) {
 	path := writeTestConfig(t, "")
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 8, cfg.TransferWorkers)
 }
 
-func TestLoad_CheckWorkers_Default(t *testing.T) {
+func TestLoadOrDefault_CheckWorkers_Default(t *testing.T) {
 	path := writeTestConfig(t, "")
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 4, cfg.CheckWorkers)
 }
 
-func TestLoad_MalformedTOML(t *testing.T) {
+func TestLoadOrDefault_MalformedTOML(t *testing.T) {
 	path := writeTestConfig(t, `[filter
 not valid toml`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing config file")
 }
 
-func TestLoad_FileNotFound(t *testing.T) {
-	_, err := Load("/nonexistent/path/config.toml", testLogger(t))
-	require.Error(t, err)
-}
-
-func TestLoad_ValidationError(t *testing.T) {
+func TestLoadOrDefault_ValidationError(t *testing.T) {
 	path := writeTestConfig(t, `transfer_workers = 0`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validation failed")
 }
@@ -139,12 +147,12 @@ func TestLoadOrDefault_FileNotFound(t *testing.T) {
 	assert.Equal(t, 8, cfg.TransferWorkers)
 }
 
-func TestLoad_ReadManagedFileError(t *testing.T) {
-	_, err := loadWithIO("/tmp/config.toml", testLogger(t), configIO{
-		readManagedFile: func(path string) ([]byte, error) {
-			return nil, errors.New("boom")
-		},
-	})
+func TestLoadOrDefault_ReadManagedFileError(t *testing.T) {
+	io := defaultConfigIO()
+	io.readManagedFile = func(string) ([]byte, error) {
+		return nil, errors.New("boom")
+	}
+	_, err := loadOrDefaultWithIO(writeTestConfig(t, ""), testLogger(t), io)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading config file")
@@ -187,9 +195,9 @@ func TestLoadOrDefaultLenient_StatError(t *testing.T) {
 	assert.Contains(t, err.Error(), "boom")
 }
 
-func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
+func TestLoadOrDefault_PartialConfig_UsesDefaults(t *testing.T) {
 	path := writeTestConfig(t, `log_level = "warn"`)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, "warn", cfg.LogLevel)
@@ -201,7 +209,7 @@ func TestLoad_PartialConfig_UsesDefaults(t *testing.T) {
 // --- Two-pass decode: drive section tests ---
 
 // Validates: R-4.1.1
-func TestLoad_SingleDriveSection(t *testing.T) {
+func TestLoadOrDefault_SingleDriveSection(t *testing.T) {
 	path := writeTestConfig(t, `
 log_level = "debug"
 
@@ -209,7 +217,7 @@ log_level = "debug"
 sync_dir = "~/OneDrive"
 display_name = "home"
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
@@ -220,7 +228,7 @@ display_name = "home"
 }
 
 // Validates: R-4.1.1, R-3.4.1
-func TestLoad_MultipleDriveSections(t *testing.T) {
+func TestLoadOrDefault_MultipleDriveSections(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -230,7 +238,7 @@ display_name = "home"
 sync_dir = "~/OneDrive - Contoso"
 display_name = "work"
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 2)
 
@@ -243,7 +251,7 @@ display_name = "work"
 	assert.Equal(t, "work", business.DisplayName)
 }
 
-func TestLoad_DriveWithAllFields(t *testing.T) {
+func TestLoadOrDefault_DriveWithAllFields(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -257,7 +265,7 @@ ignore_dotfiles = true
 ignore_junk_files = true
 follow_symlinks = true
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 
 	d := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
@@ -274,13 +282,13 @@ follow_symlinks = true
 	assert.True(t, d.FollowSymlinks)
 }
 
-func TestLoad_SharePointDrive(t *testing.T) {
+func TestLoadOrDefault_SharePointDrive(t *testing.T) {
 	path := writeTestConfig(t, `
 ["sharepoint:alice@contoso.com:marketing:Documents"]
 sync_dir = "~/Contoso/Marketing"
 paused = true
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 	require.Len(t, cfg.Drives, 1)
 
@@ -527,16 +535,16 @@ sync_dir = "~/OneDrive"
 
 // --- Edge case: drive section is not a table ---
 
-func TestLoad_DriveSectionNotTable(t *testing.T) {
+func TestLoadOrDefault_DriveSectionNotTable(t *testing.T) {
 	// A drive section key containing ":" but with a scalar value instead of a table.
 	path := writeTestConfig(t, `"personal:toni@outlook.com" = "not a table"`)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must be a table")
 }
 
 // Validates: R-4.1.5
-func TestLoad_DriveSection_TypeMismatch(t *testing.T) {
+func TestLoadOrDefault_DriveSection_TypeMismatch(t *testing.T) {
 	// A drive section where "paused" is a string instead of a boolean is a
 	// type error, and it must name the line in config.toml that holds it.
 	path := writeTestConfig(t, `
@@ -544,7 +552,7 @@ func TestLoad_DriveSection_TypeMismatch(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused = "not-a-bool"
 `)
-	_, err := Load(path, testLogger(t))
+	_, err := LoadOrDefault(path, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "personal:toni@outlook.com")
 	assert.Contains(t, err.Error(), "line 4", "the line number must point into config.toml, not a re-encoded copy")
@@ -818,7 +826,7 @@ sync_dir = "~/OneDrive"
 paused = true
 paused_until = "`+expired+`"
 `)
-	cfg, err := Load(cfgPath, testLogger(t))
+	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
 	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
@@ -829,8 +837,8 @@ paused_until = "`+expired+`"
 	assert.Nil(t, d.PausedUntil, "paused_until should be nil after clearing expired pause")
 
 	// On-disk config should also have the keys removed.
-	reloaded, err := Load(cfgPath, testLogger(t))
-	require.NoError(t, err)
+	reloaded := loadWrittenConfig(t, cfgPath)
+	require.Contains(t, reloaded.Drives, cid, "the drive section stays")
 	rd := reloaded.Drives[cid]
 	assert.Nil(t, rd.Paused, "paused should be removed from config file")
 	assert.Nil(t, rd.PausedUntil, "paused_until should be removed from config file")
@@ -848,7 +856,7 @@ sync_dir = "~/OneDrive"
 paused = true
 paused_until = "`+future+`"
 `)
-	cfg, err := Load(cfgPath, testLogger(t))
+	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
 	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
@@ -871,7 +879,7 @@ func TestClearExpiredPauses_KeepsIndefinite(t *testing.T) {
 sync_dir = "~/OneDrive"
 paused = true
 `)
-	cfg, err := Load(cfgPath, testLogger(t))
+	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
 	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
@@ -890,7 +898,7 @@ func TestClearExpiredPauses_NoPausedDrives(t *testing.T) {
 ["personal:active@example.com"]
 sync_dir = "~/OneDrive"
 `)
-	cfg, err := Load(cfgPath, testLogger(t))
+	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
 	// Should be a no-op, no errors.
@@ -900,10 +908,10 @@ sync_dir = "~/OneDrive"
 	assert.Len(t, cfg.Drives, 1)
 }
 
-// TestDecodeDriveSections_StrictAndLenient_IdenticalOutput verifies that valid
+// TestDriveSectionDecoder_StrictAndLenient_IdenticalOutput verifies that valid
 // configs produce the same cfg.Drives from both the strict and lenient paths.
 // This is a regression guard for the one driveSectionDecoder.decode both use.
-func TestDecodeDriveSections_StrictAndLenient_IdenticalOutput(t *testing.T) {
+func TestDriveSectionDecoder_StrictAndLenient_IdenticalOutput(t *testing.T) {
 	data := []byte(`
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -915,11 +923,11 @@ owner = "Alice Smith"
 `)
 
 	strictCfg := DefaultConfig()
-	err := decodeDriveSections(data, strictCfg)
+	err := newDriveSectionDecoder().decodeStrict(data, strictCfg)
 	require.NoError(t, err)
 
 	lenientCfg := DefaultConfig()
-	warnings := decodeDriveSectionsLenient(data, lenientCfg)
+	warnings := newDriveSectionDecoder().decodeLenient(data, lenientCfg)
 	assert.Empty(t, warnings, "valid config should produce no warnings in lenient mode")
 
 	// Both should produce identical drive maps.
@@ -933,7 +941,7 @@ owner = "Alice Smith"
 }
 
 // Validates: R-2.4.14
-func TestLoad_IgnoreJunkFilesDefaultsOnAndExplicitFalseSticks(t *testing.T) {
+func TestLoadOrDefault_IgnoreJunkFilesDefaultsOnAndExplicitFalseSticks(t *testing.T) {
 	path := writeTestConfig(t, `
 ["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"
@@ -942,7 +950,7 @@ sync_dir = "~/OneDrive"
 sync_dir = "~/Work"
 ignore_junk_files = false
 `)
-	cfg, err := Load(path, testLogger(t))
+	cfg, err := LoadOrDefault(path, testLogger(t))
 	require.NoError(t, err)
 
 	omitted := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]

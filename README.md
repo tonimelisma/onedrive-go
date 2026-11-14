@@ -85,8 +85,8 @@ install -m 0755 onedrive-go ~/.local/bin/
 
 Keep the `-ldflags` part. A build without it (including `go install`) calls
 itself a development build and, to protect your real files, refuses to run
-unless `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` all point at a
-scratch location (`source scripts/dev-env.sh` sets them).
+unless `XDG_CONFIG_HOME` and `XDG_DATA_HOME` both point at a scratch location
+(`source scripts/dev-env.sh` sets them).
 
 ## Quick start
 

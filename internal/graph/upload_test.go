@@ -389,11 +389,11 @@ func TestUploadChunk_Intermediate(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
-	chunkData := bytes.Repeat([]byte("A"), ChunkAlignment)
+	chunkData := bytes.Repeat([]byte("A"), chunkAlignment)
 	item, complete, err := client.UploadChunk(
 		t.Context(), session,
 		bytes.NewReader(chunkData),
-		0, int64(ChunkAlignment), 2*int64(ChunkAlignment),
+		0, int64(chunkAlignment), 2*int64(chunkAlignment),
 	)
 	require.NoError(t, err)
 	assert.False(t, complete)
@@ -424,12 +424,12 @@ func TestUploadChunk_Final(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
-	chunkData := bytes.Repeat([]byte("B"), ChunkAlignment)
-	totalSize := 2 * int64(ChunkAlignment)
+	chunkData := bytes.Repeat([]byte("B"), chunkAlignment)
+	totalSize := 2 * int64(chunkAlignment)
 	item, complete, err := client.UploadChunk(
 		t.Context(), session,
 		bytes.NewReader(chunkData),
-		int64(ChunkAlignment), int64(ChunkAlignment), totalSize,
+		int64(chunkAlignment), int64(chunkAlignment), totalSize,
 	)
 	require.NoError(t, err)
 	assert.True(t, complete)
@@ -483,13 +483,13 @@ func TestUploadChunk_ContentRange(t *testing.T) {
 	client := newTestClient(t, "http://unused")
 	session := &UploadSession{UploadURL: UploadURL(chunkSrv.URL + "/upload")}
 
-	offset := int64(ChunkAlignment)
-	length := int64(ChunkAlignment)
-	total := int64(3 * ChunkAlignment)
+	offset := int64(chunkAlignment)
+	length := int64(chunkAlignment)
+	total := int64(3 * chunkAlignment)
 
 	_, complete, err := client.UploadChunk(
 		t.Context(), session,
-		bytes.NewReader(make([]byte, ChunkAlignment)),
+		bytes.NewReader(make([]byte, chunkAlignment)),
 		offset, length, total,
 	)
 	require.NoError(t, err)
@@ -600,7 +600,7 @@ func TestCancelUploadSession_ContextCanceled(t *testing.T) {
 
 // Validates: R-5.3.3, R-6.7.6
 func TestChunkAlignment(t *testing.T) {
-	assert.Equal(t, 327680, ChunkAlignment)
+	assert.Equal(t, 327680, chunkAlignment)
 }
 
 // Validates: R-5.6.4
@@ -1439,7 +1439,7 @@ func TestUpload_NilProgress(t *testing.T) {
 
 func TestUpload_ChunkedUploadChunkSize(t *testing.T) {
 	assert.Equal(t, 10*1024*1024, ChunkedUploadChunkSize)
-	assert.Equal(t, 0, ChunkedUploadChunkSize%ChunkAlignment, "chunk size must be aligned to 320 KiB")
+	assert.Equal(t, 0, ChunkedUploadChunkSize%chunkAlignment, "chunk size must be aligned to 320 KiB")
 }
 
 // --- Pre-auth retry tests for upload operations ---

@@ -109,11 +109,12 @@ func (tm *TransferManager) loadUsableSessionRecord(ctx context.Context, up *pers
 	rec, found, loadErr := tm.sessionStore.Load(driveStr, up.key)
 	if loadErr != nil {
 		// The upload proceeds with a fresh session, which for a large file
-		// means sending every byte again. SessionStore.Load reports a
-		// corrupt record itself (and deletes it); a stat or read failure
-		// comes back unreported, so it is named here, once per attempt.
-		if errors.Is(loadErr, ErrCorruptSession) {
-			tm.logger.Debug("saved upload session was corrupt; starting the upload over",
+		// means sending every byte again. SessionStore.Load reports an
+		// invalid record itself, once, whether or not it could remove the
+		// file; a stat or read failure comes back unreported, so it is
+		// named here, once per attempt.
+		if errors.Is(loadErr, ErrInvalidSessionRecord) {
+			tm.logger.Debug("saved upload session record was invalid; starting the upload over",
 				slog.String("path", up.localPath),
 				slog.Any("error", loadErr),
 			)

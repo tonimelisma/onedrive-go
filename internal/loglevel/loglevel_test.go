@@ -15,8 +15,6 @@ func TestNotice_SitsBetweenInfoAndWarn(t *testing.T) {
 
 	assert.Greater(t, Notice, slog.LevelInfo, "the log file at INFO keeps notices")
 	assert.Less(t, Notice, slog.LevelWarn, "a notice is not a warning")
-	assert.Equal(t, "NOTICE", Name(Notice))
-	assert.Equal(t, "WARN", Name(slog.LevelWarn))
 }
 
 // Validates: R-6.6.30

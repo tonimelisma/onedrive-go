@@ -298,10 +298,29 @@ L-02), and sync turns it into a stale precondition. Evidence:
 `TestUploadTransferError_InvalidatedSessionIsAStalePlan`.
 
 A session record that cannot be loaded does not stop the upload: it starts
-over from a fresh session. `SessionStore.Load` itself reports (and deletes) a
-corrupt record, so that case is Debug in the caller; a stat or read failure
-comes back unreported and `loadUsableSessionRecord` warns once per upload
-attempt, naming the file, since for a multi-GB file "did not resume" is
+over from a fresh session. The store reads only the format `Save` writes
+(R-5.2.3): one JSON object of known fields at `currentSessionVersion`. A file
+that is not JSON, is cut short or empty, carries a field the record does not
+have or data after it, or holds another version (a record an older binary
+wrote included) is invalid: `SessionStore.Load` removes it and warns once,
+naming the file, the upload that starts over and the reason and never the
+upload URL, and returns `ErrInvalidSessionRecord`, which the caller logs at
+Debug only. Nothing is read from such a file, its URL included, so its server
+session is not cancelled; Graph expires it (R-5.6.13). `DeleteForScope`
+removes such a file too, with one warning naming the file and the reason,
+instead of failing the scope cleanup over it; one it cannot remove is
+returned with its other failures for its caller to report once. It reads only
+record files, so the temporary file of a `Save` in progress
+(`sessionTempPattern`) is left alone
+(`TestSessionStore_Load_RemovesARecordInAnyOtherFormat`,
+`TestSessionStore_Load_ReportsAnInvalidRecordItCannotRemove`,
+`TestSessionStore_DeleteForScope_RemovesAnUnreadableRecord`,
+`TestSessionStore_DeleteForScope_ReturnsAnInvalidRecordItCannotRemove`,
+`TestSessionStore_DeleteForScope_LeavesASaveInProgressAlone`,
+`TestTransferManager_SessionUpload_RecordInAnOlderFormatStartsOver`,
+`TestSessionStore_SaveAndLoadRoundTripTheCurrentRecord`). A stat or read
+failure comes back unreported and `loadUsableSessionRecord` warns once per
+upload attempt, naming the file, since for a multi-GB file "did not resume" is
 otherwise invisible
 (`TestTransferManager_SessionUpload_UnreadableRecordWarnsAndStartsOver`).
 
@@ -490,7 +509,7 @@ work.
 
 ## Cleanup
 
-`cleanup.go` removes stale client-owned partial files and expired upload sessions when a one-shot sync that did work ends and when a watch's first sync settles. `stale_partials.go` detects orphaned `.onedrive-go.*.partial` files from interrupted downloads. Arbitrary user-created `*.partial` files are not transfer artifacts; sync housekeeping only treats them as removable junk when `ignore_junk_files` enables junk cleanup. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). `SessionStore.CleanStale` goes on past every session file it cannot check or delete and returns them all, joined, with the count it did delete, as `DeleteForScope` does. It used to skip a file whose age it could not read without a word and warn once per file it could not delete (`TestSessionStore_CleanStale_ReportsASessionItCannotRemove`, `TestSessionStore_RemoveStaleEntries_ReportsAnEntryItCannotStat`). Orphaned owned partial files live in the sync tree and are cleaned through `internal/synctree`; `CleanStalePartials` answers the same way, every partial it could not remove joined beside the count it did remove, and a partial already gone when the cleanup reaches it is neither (`TestCleanStalePartials_ReturnsEveryPartialItCannotRemove`). `CleanTransferArtifacts` runs both and returns each one's count and failure in a `TransferArtifactCleanup`; it logs no failure itself, because only its caller knows whether a failure is new (`TestCleanTransferArtifacts_ReturnsEachCleanupsFailureAndLogsNone`). The engine reports each cleanup's failures once per failure streak (R-6.6.30, [sync-engine.md](sync-engine.md) → Post-Sync Housekeeping), and an engine that closes reports its session cleanup once, at Warn with the count removed (`TestEngineClose_ReportsStaleSessionCleanupWithTheCount`). Both rooted boundaries carry unexported injectable ops so cleanup paths can be covered by deterministic create/write/rename/walk/remove failure tests.
+`cleanup.go` removes stale client-owned partial files and expired upload sessions when a one-shot sync that did work ends and when a watch's first sync settles. `stale_partials.go` detects orphaned `.onedrive-go.*.partial` files from interrupted downloads. Arbitrary user-created `*.partial` files are not transfer artifacts; sync housekeeping only treats them as removable junk when `ignore_junk_files` enables junk cleanup. Session files live under the managed-state boundary (`internal/fsroot` via `SessionStore`). `SessionStore.CleanStale` goes on past every session file it cannot check or delete and returns them all, joined, with the count it did delete, as `DeleteForScope` does: a file whose age it cannot read is one of them, and so is a file it cannot delete (`TestSessionStore_CleanStale_ReportsASessionItCannotRemove`, `TestSessionStore_RemoveStaleEntries_ReportsAnEntryItCannotStat`). Orphaned owned partial files live in the sync tree and are cleaned through `internal/synctree`; `CleanStalePartials` answers the same way, every partial it could not remove joined beside the count it did remove, and a partial already gone when the cleanup reaches it is neither (`TestCleanStalePartials_ReturnsEveryPartialItCannotRemove`). `CleanTransferArtifacts` runs both and returns each one's count and failure in a `TransferArtifactCleanup`; it logs no failure itself, because only its caller knows whether a failure is new (`TestCleanTransferArtifacts_ReturnsEachCleanupsFailureAndLogsNone`). The engine reports each cleanup's failures once per failure streak (R-6.6.30, [sync-engine.md](sync-engine.md) → Post-Sync Housekeeping), and an engine that closes reports its session cleanup once, at Warn with the count removed (`TestEngineClose_ReportsStaleSessionCleanupWithTheCount`). Both rooted boundaries carry unexported injectable ops so cleanup paths can be covered by deterministic create/write/rename/walk/remove failure tests.
 
 ## Disk Space Pre-Check
 

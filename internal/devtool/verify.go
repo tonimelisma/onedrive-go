@@ -22,8 +22,8 @@ const (
 	authPreflightTestName            = "TestE2E_AuthPreflight_Fast"
 	authE2EPreflightPattern          = "^" + authPreflightTestName + "$"
 	fastE2EPreflightPattern          = "^TestE2E_FixturePreflight_Fast$"
-	fullE2EPreflightPattern          = "^TestE2E_FixturePreflight_Full$"
 	fullE2EFixturePreflight          = "TestE2E_FixturePreflight_Full"
+	fullE2EPreflightPattern          = "^" + fullE2EFixturePreflight + "$"
 	stressSlowTestLimit              = 5
 	authPreflightIncidentID          = "LI-20260405-06"
 	fastDownloadIncidentID           = "LI-20260405-04"

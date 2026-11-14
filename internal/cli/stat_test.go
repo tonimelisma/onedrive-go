@@ -18,7 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func TestPrintStatText(t *testing.T) {
+func TestPrintStatTextWithOptions(t *testing.T) {
 	item := &graph.Item{
 		ID:         "item-123",
 		Name:       "photo.jpg",
@@ -30,7 +30,7 @@ func TestPrintStatText(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatText(&buf, item))
+	require.NoError(t, printStatTextWithOptions(&buf, item, statPrintOptions{}))
 	output := buf.String()
 
 	assert.Contains(t, output, "photo.jpg")
@@ -40,7 +40,7 @@ func TestPrintStatText(t *testing.T) {
 	assert.Contains(t, output, "image/jpeg")
 }
 
-func TestPrintStatText_Folder(t *testing.T) {
+func TestPrintStatTextWithOptions_Folder(t *testing.T) {
 	item := &graph.Item{
 		ID:         "folder-456",
 		Name:       "Documents",
@@ -51,7 +51,7 @@ func TestPrintStatText_Folder(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatText(&buf, item))
+	require.NoError(t, printStatTextWithOptions(&buf, item, statPrintOptions{}))
 	output := buf.String()
 
 	assert.Contains(t, output, "Documents")
@@ -85,7 +85,7 @@ func TestPrintStatJSON(t *testing.T) {
 	assert.Equal(t, "text/plain", parsed.MimeType)
 }
 
-func TestPrintStatText_ZeroTimestampsRenderUnknown(t *testing.T) {
+func TestPrintStatTextWithOptions_ZeroTimestampsRenderUnknown(t *testing.T) {
 	item := &graph.Item{
 		ID:         "id-zero",
 		Name:       "mystery.txt",
@@ -95,7 +95,7 @@ func TestPrintStatText_ZeroTimestampsRenderUnknown(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatText(&buf, item))
+	require.NoError(t, printStatTextWithOptions(&buf, item, statPrintOptions{}))
 	output := buf.String()
 
 	assert.Contains(t, output, "Modified: unknown")
@@ -172,5 +172,5 @@ func TestRunStat_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *te
 	cmd.SetArgs([]string{"/"})
 
 	require.NoError(t, cmd.Execute())
-	assert.False(t, hasPersistedAccountAuthRequirement(cid.Email(), testDriveLogger(t)))
+	assert.False(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
 }
