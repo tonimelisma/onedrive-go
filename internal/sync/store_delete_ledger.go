@@ -12,11 +12,12 @@ import (
 // the counts inside deleteSafetyWindow; a confirmation clears the side it
 // approved, and rows older than the window are pruned on read.
 
-// recordDeleteLedgerTx appends a committed, unconfirmed delete to the ledger
-// inside the outcome's own transaction, so a crash leaves the ledger and the
-// baseline agreeing.
+// recordDeleteLedgerTx appends a committed delete the hold counts to the
+// ledger inside the outcome's own transaction, so a crash leaves the ledger
+// and the baseline agreeing. A delete exempt from the hold is not recorded
+// (BaselineMutation.ExemptFromDeleteHold).
 func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
-	if o.DeleteConfirmed {
+	if o.ExemptFromDeleteHold {
 		return nil
 	}
 	if !o.Action.isMember() {

@@ -706,7 +706,7 @@ item is approved only by a row naming the same item); the rules are then
 applied to every other delete in that pass, so a batch that appeared after the
 user looked is held again rather than waved through. The approved deletes
 run as confirmed (`Action.DeleteConfirmed`, carried through the outcome to
-the mutation), so they never enter the ledger, and the confirmation clears
+the mutation as `ExemptFromDeleteHold`), so they never enter the ledger, and the confirmation clears
 the ledger of the sides it approved: it reviewed what went before it.
 The thresholds are fixed policy, not configuration (R-6.4.3).
 
@@ -727,3 +727,24 @@ That invariant is subtree-wide: if a read-denied boundary blocks truth for a
 folder, descendants and move endpoints below that boundary stay unavailable and
 must not produce delete, move, cleanup, or repair actions until observation
 restores trustworthy truth.
+
+## A Tree Being Released Creates Nothing New Locally
+
+A removed shared folder's final drain (`RunOptions.ReleaseLocalTree`) plans for
+a mount whose local tree is being released
+(`plannerMountContext.ReleasesLocalTree`). `planBuiltActions` admits its
+actions through one rule beside the mode, `leaveOutNewLocalItems`, after
+normalization: a download or a local folder create of an item with no
+baseline row and no local entry is left out. The mode stays bidirectional,
+every other action is admitted as before, and a plan without the flag is the
+plan it always was (`TestRunOnce_AnOrdinaryRunStillDownloadsANewRemoteFile`).
+A left-out folder stays when an admitted action below it needs it (anything
+but a delete or cleanup, as for a preserved parent): a synced item OneDrive
+moved into a folder new to the drain moves there, and the release then takes
+both (`TestRunOnce_FinalDrainMovesASyncedFileIntoANewFolderAndReleasesBoth`).
+What is left out is counted nowhere a run's left work is: not in
+`DeferredByMode` and not in the plan's follow-up, so it causes no extra pass
+and does not hold the tree; the plan logs its count once, at Debug
+(`TestRunOnce_FinalDrainCreatesNothingNewLocally`). An entry the release took
+is therefore never downloaded back by a later drain
+(`TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook`).

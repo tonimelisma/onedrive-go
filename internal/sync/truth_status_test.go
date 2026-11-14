@@ -107,7 +107,7 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 			// carries and observation never stores.
 			verdict: observationIssueTruthVerdict{},
 			members: []IssueType{
-				issueLocalInterruptedRemoval, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded,
+				issueLocalInterruptedRemoval, issueRemovedFolderKept, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded,
 				issueRateLimited, issueLocalWriteDenied, issueDiskFull, issueServiceOutage,
 				issueFileTooLargeForSpace, issueLocalNameTooLong, issueLocalReadOnly, issueDeletesHeld,
 				issueRemoteFolderUnverifiable, issueLocalFileTooLarge, issueLocalBusy, issueLocalCrossDevice,

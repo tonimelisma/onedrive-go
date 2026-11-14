@@ -434,6 +434,7 @@ func blockScopeActivationWording(key ScopeKey, conditionType IssueType, retryIn 
 		issueLocalMountBoundary,
 		issueRemoteFolderUnverifiable,
 		issueLocalInterruptedRemoval,
+		issueRemovedFolderKept,
 		issueLocalFileTooLarge,
 		issueLocalBusy,
 		issueLocalCrossDevice,

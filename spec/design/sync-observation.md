@@ -708,7 +708,11 @@ every `IssueType` constant named in a production file that builds a
 `skippedItem` must be managed or carry a recorded reason for staying
 unmanaged (none does), and every managed type must be one a local scan
 reports, since a full scan would otherwise delete a condition another writer
-owns. The store enforces the same rule at run time: a batch that reports an
+owns, or carry a recorded reason for being cleared by the scan alone. One
+does: `removed_folder_kept`, which a removed shared folder's release records
+after the run's last plan (sync-engine.md), so that a release that runs again
+records only what is still there and a folder shared again keeps no stale
+report. The store enforces the same rule at run time: a batch that reports an
 issue of a type it does not manage is refused, naming the type and the path
 (`sync-store.md`).
 

@@ -24,22 +24,23 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 	flow.engine.purgeExpiredTrash(true)
 }
 
-// housekeepingReport names one housekeeping step's failure streak and the
-// three lines it can log.
-type housekeepingReport struct {
+// streakReport names one repeated step's failure streak and the three lines
+// it can log.
+type streakReport struct {
 	failing   *atomic.Bool
 	warn      string // the first failure of a streak
 	repeat    string // every later failure of the streak, at Debug
 	recovered string // the first success after a streak, at Info
 }
 
-// reportHousekeepingOutcome keeps a housekeeping failure to one Warn per
-// streak (R-6.6.30). A step can run many times in one engine's life (the
-// watch purges its trash every hour), and a condition that stays would
+// reportStreakOutcome keeps the failure of a step that repeats to one Warn
+// per streak (R-6.6.30). A step can run many times in one engine's life (the
+// watch purges its trash every hour, and every final drain of a removed
+// shared folder releases its tree), and a condition that stays would
 // otherwise warn each time: the first failure warns, repeats are Debug, and
 // the first success after a streak says so at Info and ends it, so the next
 // streak warns once more. attrs go on every line.
-func (e *Engine) reportHousekeepingOutcome(report housekeepingReport, err error, attrs ...any) {
+func (e *Engine) reportStreakOutcome(report streakReport, err error, attrs ...any) {
 	if err == nil {
 		if report.failing.Swap(false) {
 			e.logger.Info(report.recovered, attrs...)
@@ -74,7 +75,7 @@ func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool 
 		return false
 	}
 
-	e.reportHousekeepingOutcome(housekeepingReport{
+	e.reportStreakOutcome(streakReport{
 		failing:   &e.protectedRootRefreshFailing,
 		warn:      "Could not refresh the shared-folder list; skipping transfer-leftover cleanup until it can be read",
 		repeat:    "refresh protected roots before housekeeping failed again; skipping transfer cleanup",
@@ -98,7 +99,7 @@ func (e *Engine) cleanTransferArtifacts() {
 		},
 	)
 
-	e.reportHousekeepingOutcome(housekeepingReport{
+	e.reportStreakOutcome(streakReport{
 		failing:   &e.partialCleanupFailing,
 		warn:      "Could not remove every leftover download file; the rest stay until this is fixed",
 		repeat:    "could not remove every leftover download file (still failing)",
@@ -108,7 +109,7 @@ func (e *Engine) cleanTransferArtifacts() {
 		e.logger.Info("cleaned stale partial files", slog.Int("count", result.PartialsRemoved))
 	}
 
-	e.reportHousekeepingOutcome(housekeepingReport{
+	e.reportStreakOutcome(streakReport{
 		failing:   &e.sessionCleanupFailing,
 		warn:      "Could not remove every expired upload session file; the rest stay until this is fixed",
 		repeat:    "could not remove every expired upload session file (still failing)",
@@ -139,7 +140,7 @@ func (e *Engine) purgeExpiredTrash(force bool) {
 	e.trashPurgedAt.Store(now.UnixNano())
 
 	removed, err := e.trash.Purge()
-	e.reportHousekeepingOutcome(housekeepingReport{
+	e.reportStreakOutcome(streakReport{
 		failing:   &e.trashPurgeFailing,
 		warn:      "Could not remove expired files from the sync trash; it will keep growing until this is fixed",
 		repeat:    "could not purge expired trash entries (still failing)",

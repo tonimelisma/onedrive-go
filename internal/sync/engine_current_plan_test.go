@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 func assertRuntimePlanEqual(t *testing.T, expected *runtimePlan, actual *runtimePlan) {
@@ -579,4 +582,46 @@ func TestRunSteadyStateReplan_UnclassifiedRowEndsTheReplanNamingThePath(t *testi
 	assert.False(t, applied)
 	assert.Empty(t, rt.currentOutbox())
 	assert.Zero(t, uploads.Load())
+}
+
+// Validates: R-2.2.4
+//
+// A pass's full local scan measures its racily-clean window on the run's
+// clock. The file's modification time is an hour ahead of the wall clock, so
+// by the wall clock it is inside the window and would be read again; on a
+// run clock two hours ahead it is outside it, and the scan trusts the hash
+// the baseline records.
+func TestObserveLocal_MeasuresTheRacilyCleanWindowOnTheRunsClock(t *testing.T) {
+	t.Parallel()
+
+	remote := newReleaseRemote(t)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+	full := filepath.Join(syncRoot, releaseFileTop)
+	ahead := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(full, ahead, ahead))
+	info, err := os.Stat(full)
+	require.NoError(t, err)
+	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
+	require.True(t, ok)
+	recorded := testQuickXor("the content the baseline records\n")
+	_, err = eng.baseline.rawDB().ExecContext(t.Context(),
+		`UPDATE baseline SET local_hash = ?, local_mtime = ?, local_ctime = ? WHERE path = ?`,
+		recorded, info.ModTime().UnixNano(), ctime, releaseFileTop)
+	require.NoError(t, err)
+	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	installManualClockForTestEngine(eng, newManualClock(ahead.Add(time.Hour)))
+	bl, err := eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+
+	result, err := eng.flow.observeLocal(t.Context(), bl, false)
+	require.NoError(t, err)
+
+	var scanned []string
+	for i := range result.Rows {
+		if result.Rows[i].Path == releaseFileTop {
+			scanned = append(scanned, result.Rows[i].Hash)
+		}
+	}
+	assert.Equal(t, []string{recorded}, scanned, "outside the window on the run's clock: the recorded hash is trusted")
 }

@@ -602,6 +602,17 @@ Local delete keeps the ordinary per-item safety rule:
 - if the file changed after planning, do **not** delete newer local content;
   return a stale-precondition/superseded outcome so the engine replans from
   current truth without retrying that exact old delete
+- a content hash that no longer matches the baseline is a proven change
+  (`localContentChangedError`), which its stat facts may not show (a damaged
+  block keeps size, times and identity): beside superseding the delete, the
+  engine clears that baseline row's stored change time
+  (`SyncStore.ForgetBaselineLocalCtime`, in `forgetLocalCtimeProvenChanged`
+  next to the remote-item-gone record), so the next scan reads the file
+  instead of trusting the row (R-2.2.4) and plans the local edit it is, a
+  re-upload beside a remote delete, rather than the same delete until it is
+  parked (`TestRunOnce_ALocalDeleteRefusedForAnUnseenChangePlansTheLocalEditNext`).
+  A refusal for a row with no hash, verified by size and mtime only, proves
+  nothing about content and records nothing
 
 Verification and removal are bound to one inode (D-010). `DeleteLocalFile`
 hands `synctree.DetachRegularFile` a verify function that hashes through the
@@ -685,6 +696,13 @@ rechecks the directory after disposable cleanup, then uses an `rmdir` syscall
 instead of generic file removal. A concurrent child creation or same-path
 replacement therefore fails closed and leaves the new content in place for the
 next observation pass instead of deleting content from a stale plan.
+
+The local delete is the only way a removed shared folder's release removes
+anything (`engine_shortcut_release.go`, sync-engine.md): it drives
+`ExecuteLocalDelete` for one synced entry at a time from the entry's baseline
+row, a file whose remote item still exists included, and keeps what the
+delete refuses. Content it keeps that sync does not sync is named in the
+folder-not-empty sentence a folder delete gives (`folderNotEmptyReason`).
 
 ## Conflict Execution
 

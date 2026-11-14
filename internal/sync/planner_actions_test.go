@@ -1,12 +1,14 @@
 package sync
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-2.1.1, R-2.1.3, R-2.1.4
@@ -1767,4 +1769,53 @@ func TestBuildDependencies_CaseVariantMovesDoNotWaitOnEachOther(t *testing.T) {
 	assert.Empty(t, deps[0])
 	assert.Empty(t, deps[1])
 	assert.Equal(t, []int{3}, deps[2], "a create waits for a move that vacates its case-variant name")
+}
+
+// Validates: R-2.4.8
+//
+// A plan that releases its local tree leaves out only what is new to it: three
+// new nested folders stay, because a synced file OneDrive moved into the
+// deepest one needs them, and the new file beside it is left out. The count
+// is logged once, at Debug.
+func TestLeaveOutNewLocalItems_KeepsTheNewFoldersAnAdmittedMoveNeeds(t *testing.T) {
+	t.Parallel()
+
+	newRemote := func(storedPath string, itemType ItemType) *pathView {
+		return &pathView{Path: storedPath, Remote: &remoteState{ItemID: "item-" + storedPath, ItemType: itemType}}
+	}
+	folders := []string{"New", "New/Deeper", "New/Deeper/Deepest"}
+	var actions []Action
+	for _, folder := range folders {
+		actions = append(actions, makeFolderCreate(newRemote(folder, ItemTypeFolder), createLocal))
+	}
+	moved := makeAction(ActionLocalMove, &pathView{
+		Path:     "New/Deeper/Deepest/moved.txt",
+		Baseline: &BaselineEntry{Path: "moved.txt", ItemID: "item-moved", ItemType: ItemTypeFile},
+		Remote:   &remoteState{ItemID: "item-moved", ItemType: ItemTypeFile},
+	})
+	moved.OldPath = "moved.txt"
+	actions = append(actions, moved, makeAction(ActionDownload, newRemote("New/Deeper/Deepest/beside.txt", ItemTypeFile)))
+	capture, logger := synctest.NewLogCapture()
+
+	kept := newPlanner(logger).leaveOutNewLocalItems(actions, SyncBidirectional)
+
+	paths := make([]string, 0, len(kept))
+	for i := range kept {
+		paths = append(paths, kept[i].Type.String()+" "+kept[i].Path)
+	}
+	assert.Equal(t, []string{
+		"folder_create New",
+		"folder_create New/Deeper",
+		"folder_create New/Deeper/Deepest",
+		"local_move New/Deeper/Deepest/moved.txt",
+	}, paths, "only the new file beside the moved one is left out")
+	var leftOut []synctest.CapturedRecord
+	for _, record := range capture.Records() {
+		if record.Message == "plan of a tree being released leaves out items new to it" {
+			leftOut = append(leftOut, record)
+		}
+	}
+	require.Len(t, leftOut, 1)
+	assert.Equal(t, slog.LevelDebug, leftOut[0].Level)
+	assert.Equal(t, "1", leftOut[0].Attrs["left_out"])
 }

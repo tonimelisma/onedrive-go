@@ -319,8 +319,11 @@ the outcome's own transaction and prunes rows older than the 24-hour window
 in the same write. At plan time the engine counts the rows inside the window
 per side (a read, so a dry run plans the same hold without writing); the proportional
 delete-safety rule adds them to the plan's deletes and to the baseline it
-measures against. A confirmed delete (`BaselineMutation.DeleteConfirmed`) is
-never recorded, and `sync --confirm-deletes` clears the sides it approved.
+measures against. A delete exempt from the hold
+(`BaselineMutation.ExemptFromDeleteHold`) is never recorded: a confirmed one,
+and the local deletes of a removed shared folder's release, which are not the
+user's and delete nothing on OneDrive. `sync --confirm-deletes` clears the
+sides it approved.
 
 ## `local_hash_cache`
 

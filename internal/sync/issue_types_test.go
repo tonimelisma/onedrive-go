@@ -193,7 +193,7 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 			// The leftover of an interrupted removal sits at an internal name
 			// sync never syncs; its report asks the user to look at it.
 			verdict: false,
-			members: []IssueType{issueDeletesHeld, issueLocalInterruptedRemoval},
+			members: []IssueType{issueDeletesHeld, issueLocalInterruptedRemoval, issueRemovedFolderKept},
 		},
 		issueTypeVerdictGroup[bool]{
 			// The scan found a path sync cannot represent, read or reach.

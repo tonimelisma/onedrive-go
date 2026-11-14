@@ -131,6 +131,13 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 	// findings batch leaves unmanaged on purpose, with the reason it must
 	// outlive the scan that stops reporting it. None does today.
 	keptUnmanaged := map[IssueType]string{}
+	// clearedOnly names each type the local findings batch manages though no
+	// scan reports it, with the reason a scan must clear it.
+	clearedOnly := map[IssueType]string{
+		issueRemovedFolderKept: "a removed shared folder's release records it after the run's last plan; " +
+			"the next full scan clears it, so a release that runs again records what is still there " +
+			"and a folder shared again keeps no stale report",
+	}
 
 	reported := localScanIssueTypesInSource(t)
 	require.Contains(t, reported, issueLocalInterruptedRemoval, "the source reading must see the scanner's findings")
@@ -153,7 +160,11 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 				"or record in keptUnmanaged why it must stay", files, issueType)
 	}
 	for issueType := range managed {
-		assert.Contains(t, reported, issueType, "%s is managed, but no local scan reports it", issueType)
 		assert.NotContains(t, keptUnmanaged, issueType, "%s is both managed and kept unmanaged", issueType)
+		if _, scanReports := reported[issueType]; scanReports {
+			assert.NotContains(t, clearedOnly, issueType, "%s is reported by a local scan, so it is not cleared only", issueType)
+			continue
+		}
+		assert.NotEmpty(t, clearedOnly[issueType], "%s is managed, but no local scan reports it", issueType)
 	}
 }

@@ -33,6 +33,10 @@ type BaselineMutation struct {
 	ETag                  string
 	// KeptLocally: see actionOutcome.KeptLocally.
 	KeptLocally bool
-	// DeleteConfirmed: see Action.DeleteConfirmed.
-	DeleteConfirmed bool
+	// ExemptFromDeleteHold leaves a delete out of the delete ledger the
+	// proportional hold counts: one the user approved with
+	// `sync --confirm-deletes` (Action.DeleteConfirmed), whose confirmation
+	// reviewed it, and the local deletes of a removed shared folder's
+	// release, which are not the user's and delete nothing on OneDrive.
+	ExemptFromDeleteHold bool
 }

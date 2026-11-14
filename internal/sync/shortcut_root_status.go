@@ -344,6 +344,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			transitions: map[shortcutRootLifecycleEvent][]ShortcutRootState{
 				shortcutRootEventProjectionCleanupFailed:    {ShortcutRootStateRemovedCleanupBlocked},
 				shortcutRootEventProjectionCleanupSucceeded: {ShortcutRootStateRemovedChildCleanupPending},
+				shortcutRootEventProjectionNotEmpty:         shortcutRootFinalDrainStates(),
 				shortcutRootEventWaitingReplacementPromote:  {ShortcutRootStateActive},
 			},
 		},
@@ -366,6 +367,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				shortcutRootEventChildFinalDrainClean:       {ShortcutRootStateRemovedReleasePending},
 				shortcutRootEventProjectionCleanupFailed:    {ShortcutRootStateRemovedCleanupBlocked},
 				shortcutRootEventProjectionCleanupSucceeded: {ShortcutRootStateRemovedChildCleanupPending},
+				shortcutRootEventProjectionNotEmpty:         shortcutRootFinalDrainStates(),
 				shortcutRootEventWaitingReplacementPromote:  {ShortcutRootStateActive},
 			},
 		},
@@ -434,6 +436,13 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 			},
 		},
 	}
+}
+
+// shortcutRootFinalDrainStates are the states a released alias root that is
+// not empty returns to: the final drain, or the final drain a same-path
+// replacement waits behind.
+func shortcutRootFinalDrainStates() []ShortcutRootState {
+	return []ShortcutRootState{ShortcutRootStateRemovedFinalDrain, ShortcutRootStateSamePathReplacementWaiting}
 }
 
 func shortcutRootTransitions(

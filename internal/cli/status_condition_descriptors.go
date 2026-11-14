@@ -132,6 +132,17 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 				"The file is your content; sync never deletes it on its own.",
 			"Check the file. Rename it back if you want to keep it, or delete it.",
 		)
+	case syncengine.ConditionRemovedFolderKept:
+		return newStatusConditionDescriptor(
+			"Kept in a removed shared folder",
+			"This shared folder was removed from your OneDrive. Sync kept these items, and with them the folder: "+
+				"they are not on OneDrive because sync does not sync them (a symbolic link, a special file, "+
+				"something your filters exclude) or the folder can no longer be reached to upload them; or they "+
+				"are folders that cannot be written to, so nothing in them could be removed; or they are synced "+
+				"items that could not be moved to the trash or deleted.",
+			"Move them somewhere else or delete them, or fix what keeps them (make a folder writable, free the "+
+				"trash); the next sync then removes the folder.",
+		)
 	case syncengine.ConditionLocalMountBoundary:
 		return newStatusConditionDescriptor(
 			"Another filesystem inside the sync folder",
@@ -271,6 +282,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
 		syncengine.ConditionLocalInterrupted,
+		syncengine.ConditionRemovedFolderKept,
 		syncengine.ConditionRemoteFolderUnverified,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
@@ -347,6 +359,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
 		syncengine.ConditionLocalInterrupted,
+		syncengine.ConditionRemovedFolderKept,
 		syncengine.ConditionRemoteFolderUnverified,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
@@ -443,6 +456,7 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
 		syncengine.ConditionLocalInterrupted,
+		syncengine.ConditionRemovedFolderKept,
 		syncengine.ConditionRemoteFolderUnverified,
 		syncengine.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()

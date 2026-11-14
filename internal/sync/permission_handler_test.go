@@ -254,7 +254,7 @@ func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
 				IssueUnauthorized, issueRemoteReadDenied, IssueQuotaExceeded, issueRateLimited,
 				issueCaseCollision, issueRemoteNameTwin, issueDiskFull, issueServiceOutage,
 				issueFileTooLargeForSpace, issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement,
-				issueLocalMountBoundary, issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueLocalFileTooLarge,
+				issueLocalMountBoundary, issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge,
 				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
 				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity, issueRequestTimeout,
 				issueTransientConflict, issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,
