@@ -156,7 +156,7 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 
 	// The same runtime token source the identity probe above used, unless the
 	// probe moved the sign-in file to a renamed account's path.
-	client, err := cc.runtime().BootstrapClient(ctx, tokenPath)
+	client, err := cc.runtime().BootstrapClient(tokenPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("load sign-in for shared target: %w", err)
 	}
@@ -179,7 +179,7 @@ func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref
 
 	accountCID = remapCanonicalIDWithResult(accountCID, &result)
 
-	clients, err := cc.runtime().SharedTargetClients(ctx, accountCID, ref.RemoteDriveID, ref.RemoteItemID)
+	clients, err := cc.runtime().SharedTargetClients(accountCID, ref.RemoteDriveID, ref.RemoteItemID)
 	if err != nil {
 		return nil, fmt.Errorf("create account clients: %w", err)
 	}

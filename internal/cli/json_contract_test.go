@@ -232,7 +232,7 @@ func jsonContractFileContext(t *testing.T) (*CLIContext, *fakeGraphDrive) {
 	logger := slog.New(slog.DiscardHandler)
 	runtime := driveops.NewSessionRuntime(nil, "test-agent", logger)
 	runtime.GraphBaseURL = srv.URL
-	runtime.TokenSourceFn = func(context.Context, string, *slog.Logger) (graph.TokenSource, error) {
+	runtime.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) {
 		return staticTokenSource{}, nil
 	}
 

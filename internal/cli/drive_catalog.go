@@ -203,7 +203,7 @@ func discoverDrivesForToken(
 		return nil, nil, nil
 	}
 
-	client, err := runtime.BootstrapClient(ctx, tokenPath)
+	client, err := runtime.BootstrapClient(tokenPath)
 	if err != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", err)
 

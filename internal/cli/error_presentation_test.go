@@ -238,6 +238,7 @@ func TestCommandErrorText_EveryTransportFailureIsPlain(t *testing.T) {
 		"HTTP/2 stream reset mid-download":   {during(http2StreamError{}), interrupted},
 		"connection reset mid-download":      {during(syscall.ECONNRESET), interrupted},
 		"response-header timeout":            {before(headerTimeoutError{}), slow},
+		"timeout a round tripper wrapped":    {before(fmt.Errorf("round trip: %w", context.DeadlineExceeded)), slow},
 		"read timeout while downloading":     {during(os.ErrDeadlineExceeded), slow},
 		"TLS alert":                          {before(tls.AlertError(40)), ""},
 		"unknown certificate authority":      {before(x509.UnknownAuthorityError{}), ""},

@@ -40,14 +40,14 @@ func closeClientTestResponse(t *testing.T, resp *http.Response) {
 // staticToken is a test TokenSource that returns a fixed token.
 type staticToken string
 
-func (t staticToken) Token() (string, error) {
+func (t staticToken) Token(context.Context) (string, error) {
 	return string(t), nil
 }
 
 // failingToken is a test TokenSource that always returns an error.
 type failingToken struct{}
 
-func (failingToken) Token() (string, error) {
+func (failingToken) Token(context.Context) (string, error) {
 	return "", errors.New("token error")
 }
 
@@ -1081,7 +1081,7 @@ type switchingToken struct {
 	calls  atomic.Int32
 }
 
-func (s *switchingToken) Token() (string, error) {
+func (s *switchingToken) Token(context.Context) (string, error) {
 	n := s.calls.Add(1)
 	if n == 1 {
 		return s.oldTok, nil

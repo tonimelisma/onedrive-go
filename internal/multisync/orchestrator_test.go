@@ -481,10 +481,10 @@ func assertShortcutChildArtifactsPurgedForTest(
 // stubTokenSource implements graph.TokenSource for tests.
 type stubTokenSource struct{}
 
-func (s *stubTokenSource) Token() (string, error) { return "test-token", nil }
+func (s *stubTokenSource) Token(context.Context) (string, error) { return "test-token", nil }
 
 // stubTokenSourceFn returns a TokenSourceFn that always succeeds.
-func stubTokenSourceFn(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+func stubTokenSourceFn(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 	return &stubTokenSource{}, nil
 }
 
@@ -2489,7 +2489,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 func TestRunOnce_TokenError_ReportsPerMount(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:notoken@example.com", "NoToken")
 	cfg := testOrchestratorConfig(t, rd)
-	cfg.Runtime.TokenSourceFn = func(_ context.Context, _ string, _ *slog.Logger) (graph.TokenSource, error) {
+	cfg.Runtime.TokenSourceFn = func(_ string, _ *slog.Logger) (graph.TokenSource, error) {
 		return nil, errors.New("token file not found")
 	}
 

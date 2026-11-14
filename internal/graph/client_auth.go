@@ -12,13 +12,15 @@ import (
 )
 
 // errRequestNotSent marks a request that never left the client: the token
-// source failed, the context had already ended, or the request could not be
-// built. OneDrive saw nothing, so nothing the request asked for happened. On
-// the 401 path the request not sent is the retry, and the attempt before it
-// was refused. doPreAuth marks the same failures of a pre-authenticated
-// request, and the quirk retry a backoff whose context ended. Callers that
-// must know whether a write may have landed (a file create, an upload's last
-// fragment) test for it with errors.Is.
+// source failed (a token refresh the request's context cut short included),
+// the context had already ended, the request could not be built, or the
+// retrying transport returned it unsent because the throttle wait outlasted
+// its deadline. OneDrive saw nothing, so nothing the request asked for
+// happened. On the 401 path the request not sent is the retry, and the
+// attempt before it was refused. doPreAuth and doRawUpload mark the same
+// failures of their requests, and the quirk retry a backoff whose context
+// ended. Callers that must know whether a write may have landed (a file
+// create, an upload's last fragment) test for it with errors.Is.
 var errRequestNotSent = errors.New("request not sent")
 
 // headerContentType and contentTypeJSON are how an authenticated request
@@ -130,9 +132,10 @@ func isTransientAuthRejection(graphErr *GraphError, wwwAuthenticate string) bool
 }
 
 // forceRefresher is the optional token-source capability to redeem the
-// refresh token before the cached access token expires.
+// refresh token before the cached access token expires. ctx is the context of
+// the request whose 401 asks for it, as for TokenSource.Token.
 type forceRefresher interface {
-	ForceRefresh() (string, error)
+	ForceRefresh(ctx context.Context) (string, error)
 }
 
 // doOnce executes a single HTTP request with authentication. Handles 401 token
@@ -149,7 +152,7 @@ func (c *Client) doOnce(
 		slog.String("url", url),
 	)
 
-	tok, err := c.token.Token()
+	tok, err := c.token.Token(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: obtaining token: %w", errRequestNotSent, err)
 	}
@@ -180,7 +183,7 @@ func (c *Client) doOnce(
 	)
 
 	// 401 token refresh: if the server rejects the token, try once more with
-	// a fresh token. ReuseTokenSource refreshes only an expired token, so
+	// a fresh token. The token source refreshes only an expired token, so
 	// when it hands back the same rejected token the refresh is forced. This
 	// is auth lifecycle management, not transient retry.
 	retryResp, outcome, err := c.retryUnauthorized(ctx, client, method, url, body, extraHeaders, tok, resp)
@@ -278,7 +281,7 @@ func (c *Client) retryUnauthorized(
 		return nil, unauthorizedRetry{}, nil
 	}
 
-	newTok, err := c.token.Token()
+	newTok, err := c.token.Token(ctx)
 	if err != nil {
 		// The 401 response is not handed back on an error, so it is closed
 		// here; leaving it open leaked the connection.
@@ -294,7 +297,7 @@ func (c *Client) retryUnauthorized(
 		if !canForce {
 			return nil, outcome, nil
 		}
-		newTok, err = refresher.ForceRefresh()
+		newTok, err = refresher.ForceRefresh(ctx)
 		if err != nil {
 			// invalid_grant arrives here as ErrLoginExpired+ErrUnauthorized:
 			// the sign-in really is gone, which is the only fatal 401.

@@ -56,7 +56,7 @@ are inserted, updated, pruned, and validated.
 | User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
 | Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
-| `status` asks every account's live details at the same time under one budget (`statusLiveBudget`, 10 s, for all accounts together); an account whose answers did not arrive, or whose profile request failed for a reason other than sign-in, shows its local state with one stderr note naming the reason, `--json` stdout stays one document, and the command exits 0; a 401 still marks the account as needing sign-in, and a stopped command adds no note (R-6.8.28). | `TestStatus_PrintsLocalStateWhenOneDriveDoesNotAnswerInTheBudget`, `TestStatus_AsksAccountsAtTheSameTime`, `TestStatus_StorageCutShortByTheBudgetIsNoted`, `TestStatus_SaysWhyOneDriveGaveNoDetails`, `TestStatus_ASignInFailureStillMarksTheAccount`, `TestStatus_AStoppedCommandAddsNoNote` |
+| `status` asks every account's live details at the same time under one budget (`statusLiveBudget`, 10 s, for all accounts together); an account whose answers did not arrive, or whose profile request failed for a reason other than sign-in, shows its local state with one stderr note naming the reason, `--json` stdout stays one document, and the command exits 0; a 401 still marks the account as needing sign-in, and a stopped command adds no note; the budget covers each request's token refresh and retry waits, so the note names the answer OneDrive gave when it gave one; one account's throttle never reaches another account, and a failure of Microsoft sign-in is named as that (R-6.8.28). | `TestStatus_PrintsLocalStateWhenOneDriveDoesNotAnswerInTheBudget`, `TestStatus_AsksAccountsAtTheSameTime`, `TestStatus_StorageCutShortByTheBudgetIsNoted`, `TestStatus_SaysWhyOneDriveGaveNoDetails`, `TestStatus_AStorageServerErrorIsNoted`, `TestStatus_ASlowTokenRefreshIsCutByTheBudget`, `TestStatus_OneAccountsThrottleLeavesTheOtherAlone`, `TestStatus_ASignInConnectionFailureIsNamedInTheNote`, `TestStatus_ASignInFailureStillMarksTheAccount`, `TestStatus_AStoppedCommandAddsNoNote` |
 | Every account-level Graph client a command builds (identity probe, `drive list` and `drive search` discovery, shared discovery, the `status` live overlay, shared-drive naming, share-URL bootstrap) comes from the command's session runtime, which also picks the Graph base URL in one place (`CLIContext.runtime`); only login holds a token source of its own, the one the sign-in produced (R-6.8.27). | `TestCLIBootstrapClientsUseTheSessionRuntime`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource` |
 
 ## Log Files Are Owner-Only
@@ -423,7 +423,21 @@ unexpected EOF, resets, closed connections and HTTP/2 stream or connection
 errors (matched by net/http's fixed "stream error:"/"http2: " text, since those
 types are unexported) are "the connection to OneDrive was interrupted". A disk
 error io.Copy returns during a download carries neither mark and is never
-described as a OneDrive problem.
+described as a OneDrive problem. When the failed request was one to Microsoft
+sign-in (a token refresh, or a login flow's request), which the graph client
+marks with `*graph.SignInRequestError`, every one of these names that service
+instead (`failedService`): "Microsoft sign-in did not answer in time", "the
+secure connection to Microsoft sign-in failed (...)", "the connection to
+Microsoft sign-in was interrupted", "can't reach Microsoft sign-in (...)". The
+presentation layer compares no host names. An answer the sign-in service gave
+(an expired or refused sign-in) is a sign-in problem as before, with its exit
+status. `status`'s note and the sync console use the same words, through
+`plainErrorReason` (`TestCommandErrorText_ASignInFailureNamesMicrosoftSignIn`,
+`TestCommandErrorText_AnExpiredSignInStillSaysSignInAgain`,
+`TestCommandErrorText_AGraphTimeoutStillNamesOneDrive`,
+`TestStatus_ASignInConnectionFailureIsNamedInTheNote`). The innermost cause
+in such a sentence follows an error that wraps several through the last one,
+past marks such as a request not sent (`innermostErrorText`).
 
 `ls` on a file lists that one file, as ls(1) does: when OneDrive refuses to
 list a path's children with HTTP 400/422, `ls` looks the path up once and
@@ -655,25 +669,30 @@ condition keys remain private implementation details.
   (`statusLiveBudget`, 10 s, R-6.8.28): `loadStatusLiveOverlay` asks every
   account at the same time on one context that ends with the budget (cause
   `errStatusLiveBudgetSpent`), and waits for each request it started, which
-  ends with its answer or with that context. The retry ladder still runs
-  inside the budget. Tests replace that context through the
-  `statusLiveBudgetContext` seam and end the budget themselves while the
-  request they are about is in flight, so none waits for the clock or races
-  it. An account whose `/me` failed for a reason other than
-  sign-in, or whose storage lookups the budget cut short, keeps what did
-  arrive and carries `Unanswered`, the reason in plain words: "OneDrive did not
-  answer within 10 s" when the budget ran out, otherwise a throttle, a server
-  problem, OneDrive's own message for a refusal, or `plainErrorReason`.
-  `runStatusCommand` prints one stderr line per such account ("Note: showing
-  what is known locally for <account>: <reason>."), and the error chain is
-  logged at INFO for `--verbose`. A 401 is an answer: the account is marked as
-  needing sign-in as before. A storage failure that is not the budget's (a
-  shared drive's owner quota, for one) leaves that drive's storage out at DEBUG
-  as before. A stopped command adds no note. The clients come from
-  `BootstrapClient` with the command's context, not the budget's, because the
-  runtime's cached token source refreshes with the context it was built under;
-  a token refresh is therefore bounded by the sign-in client's own 60 s
-  (R-6.8.27), not by the budget. `status` never reaches
+  ends with its answer or with that context. The budget covers the whole of
+  each request: its token refresh, which runs under the request's context
+  (R-6.8.27), and its retry ladder, which never starts a wait that would end
+  after the budget and returns OneDrive's answer instead (R-6.8.8). Tests
+  replace that context through the `statusLiveBudgetContext` seam and end the
+  budget themselves while the request they are about is in flight, so none
+  waits for the clock or races it; a test of the retry ladder's deadline rule
+  gives that context a deadline far past the test and shorter than the
+  `Retry-After` its fake OneDrive sends, so the header alone decides. An
+  account whose `/me` failed for a reason other than sign-in, or whose
+  storage lookups the budget cut short or OneDrive throttled or failed with a
+  server error, keeps what did arrive and carries `Unanswered`, the reason in
+  plain words: an answer OneDrive gave first (a throttle, "OneDrive had a
+  temporary server problem", OneDrive's own message for a refusal), then
+  "OneDrive did not answer within 10 s" when the budget ran out, otherwise
+  `plainErrorReason`. `runStatusCommand` prints one stderr line per such
+  account ("Note: showing what is known locally for <account>: <reason>."),
+  and the error chain is logged at INFO for `--verbose`. A 401 is an answer:
+  the account is marked as needing sign-in as before. Any other storage
+  failure (a shared drive's owner quota, for one) leaves that drive's storage
+  out at DEBUG. A stopped command adds no note
+  (`TestStatus_SaysWhyOneDriveGaveNoDetails`,
+  `TestStatus_AStorageServerErrorIsNoted`,
+  `TestStatus_ASlowTokenRefreshIsCutByTheBudget`). `status` never reaches
   `probeAccountIdentity`: it loads the account snapshot without the identity
   refresh. No other command decorates local state with a live request: `drive
   list` discovery, `drive search`, `shared`, `drive add`, `login` and the file

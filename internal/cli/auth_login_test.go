@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -52,6 +53,7 @@ func TestDiscoverAccount_PersonalSkipsOrganizationEndpoint(t *testing.T) {
 	cid, user, orgName, primaryDriveID, err := discoverAccount(
 		t.Context(),
 		staticTokenSource{},
+		filepath.Join(t.TempDir(), "pending.json"),
 		slog.New(slog.DiscardHandler),
 		runtime,
 	)
@@ -104,6 +106,7 @@ func TestDiscoverAccount_BusinessFetchesOrganizationName(t *testing.T) {
 	cid, user, orgName, primaryDriveID, err := discoverAccount(
 		t.Context(),
 		staticTokenSource{},
+		filepath.Join(t.TempDir(), "pending.json"),
 		slog.New(slog.DiscardHandler),
 		runtime,
 	)

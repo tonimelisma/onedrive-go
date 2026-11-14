@@ -88,12 +88,14 @@ This keeps domain-specific logic close to its tests without reopening the public
 | Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/shares_test.go` (`TestResolveShareURL_PreservesRemoteItemIdentity`), `internal/graph/items_test.go` (`TestToItem_SharedOwner_FallbackChain`), `internal/graph/quirks_test.go` (`TestQueryUploadSession_ReturnsNextExpectedRanges`), `internal/graph/upload_test.go` |
 | `@microsoft.graph.downloadUrl` is validated against the content host allow-list before either download route sends a request, the refusal never echoes the URL, and only a loopback base URL (a test fixture) admits loopback pre-auth URLs (R-6.8.22). | `TestDownload_RejectsUntrustedDownloadURL`, `TestValidateDownloadURL`, `TestParseAndValidatePreAuthURL`, `TestNewClient_LoopbackBaseURLAcceptsLoopbackPreAuthURLs` |
 | The authenticated request helpers take the body as bytes, and every attempt, the 401 refresh-and-retry included, is built from them: the retry sends exactly the bytes of the first request, and a body that cannot be replayed cannot be passed (R-6.8.14). | `TestDo_401RetrySendsTheBytesOfTheFirstRequest`, `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`, `TestDoOnce_401_RefreshSucceeds`, `TestDo_ContentTypeForBody` |
-| A request that never left the client (token source failed, context already ended, request not buildable, a retry after a refusal not sent) carries `errRequestNotSent`, and neither the create mark nor the final-fragment mark is set on it (R-5.6.12, R-5.6.15). | `TestCreateFile_TokenFailureIsNotOutcomeUnknown`, `TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown`, `TestCreateFile_UnsentRetryIsNotOutcomeUnknown`, `TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile`, `TestUploadFromSession_UnsentFinalFragmentIsNotUncertain`, `TestDo_ContextCancellation` |
+| A request that never left the client (token source failed, a token refresh its context cut short included, context already ended, request not buildable, a retry after a refusal not sent, a throttle wait the retrying transport would not start past the deadline) carries `errRequestNotSent`, and neither the create mark nor the final-fragment mark is set on it (R-5.6.12, R-5.6.15, R-6.8.27). | `TestCreateFile_TokenFailureIsNotOutcomeUnknown`, `TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown`, `TestCreateFile_UnsentRetryIsNotOutcomeUnknown`, `TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile`, `TestUploadFromSession_UnsentFinalFragmentIsNotUncertain`, `TestDo_ContextCancellation`, `TestDo_ATokenRefreshCutByTheContextIsNotSent`, `TestDo_AThrottleWaitPastTheDeadlineIsNotSent`, `TestSimpleUploadToItem_TokenError` |
 | The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
 | Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
-| Every sign-in request (silent refresh, device code and its polls, code exchange) goes through the injected auth client, whose deadlines (30 s headers, 60 s request) release every caller of a stalled token endpoint; a nil auth client and a nil Graph HTTP client are errors, never `http.DefaultClient` (R-6.8.27). | `TestAuthClient_BoundsEveryRequest`, `TestTokenSourceFromPath_RefreshUsesTheInjectedClient`, `TestTokenSourceFromPath_StalledTokenEndpointTimesOut`, `TestTokenSourceFromPath_NilAuthClientIsAnError`, `TestLoginFlows_NilAuthClientIsAnError`, `TestLogin_UsesTheInjectedAuthClient`, `TestLoginWithBrowser_UsesTheInjectedAuthClient`, `TestNewClient_NilHTTPClientIsAnError` |
+| Every sign-in request (silent refresh, device code and its polls, code exchange) goes through the injected auth client, whose deadlines (30 s headers, 60 s request) release every caller of a stalled token endpoint; a nil auth client, one without a timeout and a nil Graph HTTP client are errors, never `http.DefaultClient` (R-6.8.27). | `TestAuthClient_BoundsEveryRequest`, `TestTokenSourceFromPath_RefreshUsesTheInjectedClient`, `TestTokenSourceFromPath_StalledTokenEndpointTimesOut`, `TestTokenSourceFromPath_NilAuthClientIsAnError`, `TestSignInFlows_AuthClientWithoutATimeoutIsAnError`, `TestLoginFlows_NilAuthClientIsAnError`, `TestLogin_UsesTheInjectedAuthClient`, `TestLoginWithBrowser_UsesTheInjectedAuthClient`, `TestNewClient_NilHTTPClientIsAnError` |
 | The browser sign-in's callback server is owned: shutdown waits for its serving goroutine, a panic there is the login's callback error, and a handler's panic, which net/http recovers per connection, is logged through the login's logger, not the standard `log` package (R-6.3.10, R-6.3.4). | `TestCallbackServer_HandlerPanicIsLoggedAndShutdownWaitsForServe` |
-| One sign-in file has one token source per session runtime: account-level bootstrap clients and drive sessions share it, and the CLI builds no token source of its own (R-6.8.27). | `TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath`, `TestSessionRuntime_BootstrapClientKeepsNotLoggedIn`, `TestSessionRuntime_DefaultTokenSourceHasTheAuthClient`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource`, `TestCLIBootstrapClientsUseTheSessionRuntime` |
+| A token refresh runs under the context of the request that needs it: one refresh at a time, shared by every caller waiting for it, each caller waiting no longer than its own context (whose cause it keeps); a caller that leaves does not cancel it for the others, a refresh nobody waits for ends by the sign-in client's timeout, a panic in it fails its callers, and only a refresh that finished with a token writes the token file (R-6.8.27). | `TestTokenSource_ARefreshEndsWithTheCallersContext`, `TestTokenSource_ARefreshOneCallerAbandonedStillServesTheNext`, `TestTokenSource_AnAbandonedRefreshWritesNoTokenFile`, `TestTokenSource_ConcurrentCallersShareOneRefresh`, `TestTokenSource_ARefreshThatPanicsFailsItsCallers`, `TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst` |
+| A failed request to the sign-in service (refresh, device code, poll, code exchange) carries `*SignInRequestError` through every wrapping; a Graph request's failure does not (R-6.6.22). | `TestSignInRequestError_MarksEveryRequestToTheSignInService`, `TestSignInRequestError_NotOnAGraphRequest`, `TestCommandErrorText_ASignInFailureNamesMicrosoftSignIn` |
+| One sign-in file has one token source per session runtime, loaded once outside the runtime's lock: account-level bootstrap clients and drive sessions share it, and the CLI builds no token source of its own; each sign-in file has its own bootstrap metadata client, so its throttle is its own (R-6.8.27). | `TestSessionRuntime_BootstrapClientReusesOneTokenSourcePerPath`, `TestSessionRuntime_BootstrapClientKeepsNotLoggedIn`, `TestSessionRuntime_DefaultTokenSourceHasTheAuthClient`, `TestSessionRuntime_ATokenLoadDoesNotHoldTheRuntime`, `TestSessionRuntime_ConcurrentCallersOfOneSignInLoadItOnce`, `TestSessionRuntime_OneSignInsThrottleDoesNotReachAnother`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource`, `TestCLIBootstrapClientsUseTheSessionRuntime` |
 
 ## Authentication (`auth.go`)
 
@@ -114,21 +116,70 @@ the real oauth polling integration.
 
 **The sign-in HTTP client is injected, never defaulted (R-6.8.27).**
 `TokenSourceFromPath`, `Login` and `LoginWithBrowser` take an `*http.Client`
-and put it into the context as `oauth2.HTTPClient` before using the oauth2
-config, so the device-code request and its polls, the code exchange and every
-later silent refresh of the returned source go through it. Without it oauth2
-used `http.DefaultClient`, which has no timeout: a token endpoint that
-accepted the connection and never answered held the refresh, and, because
-the reuse source holds its lock across the refresh and `tokenBridge.Token`
-takes no context, every Graph request of the account, until the process
-stopped. Production passes `graphtransport.AuthClient()`: 30 s for response
-headers and 60 s for the whole request. Unlike the Graph profiles it sets
-`http.Client.Timeout`, because a sign-in answer is a small JSON body (oauth2
-caps it at 1 MiB) and nothing about it legitimately takes a minute; each
-device-code poll is one such request, so the deadline never cuts the polling
-loop short. A nil client is an error. The client has no retry wrapper; the
-token source's caller decides what a failed refresh means
-(`TestTokenSourceFromPath_StalledTokenEndpointTimesOut`).
+and put it into the context as `oauth2.HTTPClient` (`signInContext`) for each
+request to the sign-in service, so the device-code request and its polls, the
+code exchange and every later silent refresh of the returned source go
+through it. Without it oauth2 used `http.DefaultClient`, which has no
+timeout: a token endpoint that accepted the connection and never answered
+held the refresh, and every Graph request of the account waiting for it,
+until the process stopped. Production passes `graphtransport.AuthClient()`:
+30 s for response headers and 60 s for the whole request. Unlike the Graph
+profiles it sets `http.Client.Timeout`, because a sign-in answer is a small
+JSON body (oauth2 caps it at 1 MiB) and nothing about it legitimately takes
+a minute; each device-code poll is one such request, so the deadline never
+cuts the polling loop short. A nil client, or one without a `Timeout`, is an
+error (`checkAuthClient`): a refresh outlives the callers that stop waiting
+for it, and only that timeout ends it then. The client has no retry wrapper;
+the token source's caller decides what a failed refresh means
+(`TestTokenSourceFromPath_StalledTokenEndpointTimesOut`,
+`TestSignInFlows_AuthClientWithoutATimeoutIsAnError`).
+
+**A refresh runs under the context of the request that needs the token
+(R-6.8.27).** `TokenSource.Token(ctx)` and `ForceRefresh(ctx)` take the
+caller's context, and the source keeps none: `TokenSourceFromPath` takes no
+context, and neither do the login flows' returned sources. `tokenBridge`
+holds the cached token itself (no `oauth2.ReuseTokenSource`): a valid one is
+handed out at once; otherwise the caller joins the refresh under way or
+starts one (`tokenRefresh`). Each refresh is one token-endpoint request on a
+goroutine the bridge owns, run under `context.WithoutCancel` of the context
+of the caller that started it, so it keeps that context's values but not its
+cancellation. Every caller waits for it no longer than its own context allows
+and then fails with `refreshing access token: <context.Cause>`, which
+`doOnce` marks `errRequestNotSent`; the refresh goes on for the other
+callers, and when nobody waits any more it still ends, by the sign-in
+client's `Timeout`, and its outcome serves the next caller. A failed refresh
+keeps the old token, so the next caller refreshes again. The token endpoint's
+answer is saved by the oauth2 config's `OnTokenChange` inside the refresh,
+before any caller is given the token, so only a refresh that finished with a
+token writes the token file. A panic in the refresh (oauth2 or the sign-in
+transport) is recovered at that goroutine's boundary through
+`panicguard.Recovered` ("Internal error while refreshing the sign-in", logged
+once at Error with its stack), and its callers get the error, which wraps
+`panicguard.ErrPanic`; no later caller waits on it, so the next one
+refreshes again (R-6.3.10, `TestTokenSource_ARefreshEndsWithTheCallersContext`,
+`TestTokenSource_ARefreshOneCallerAbandonedStillServesTheNext`,
+`TestTokenSource_AnAbandonedRefreshWritesNoTokenFile`,
+`TestTokenSource_ConcurrentCallersShareOneRefresh`,
+`TestTokenSource_ARefreshThatPanicsFailsItsCallers`). A command's budget
+(`status`) therefore covers the refresh, and a cleanup that runs on a context
+detached from a canceled command (`replaceDestination`'s restore) can still
+refresh.
+
+**A failed sign-in request is marked as the sign-in service's (R-6.6.22).**
+Every request to the identity platform that fails, the token refresh, the
+device-code request, its polls and the browser sign-in's code exchange, has
+its error wrapped once in `*graph.SignInRequestError` by one function
+(`signInFailure`). The wrapper keeps the request's own error in the chain
+(`*url.Error`, `*oauth2.RetrieveError`, a context's error), and it survives
+the refresh's `refreshing access token:` wrapping and `doOnce`'s
+`errRequestNotSent`, so a caller asks for it with `errors.As`, as for
+`*graph.ResponseReadError`, without comparing host names. The CLI names the
+failed service from it: "Microsoft sign-in did not answer in time" rather
+than "OneDrive did not answer in time" (`cli.md`). A Graph request's own
+failure is never marked, and an answer the sign-in service gave (an expired
+or refused sign-in) is classified as before
+(`TestSignInRequestError_MarksEveryRequestToTheSignInService`,
+`TestSignInRequestError_NotOnAGraphRequest`).
 
 ## Quirk Normalization (`normalize.go`)
 
@@ -573,7 +624,7 @@ Generic retry has been extracted from the graph client into `retry.RetryTranspor
 
 `NewClient` accepts an `*http.Client` and returns `(*Client, error)` after validating the base URL, the token source and the HTTP client; a nil HTTP client is an error, not `http.DefaultClient`, whose missing deadlines would undo the transport profiles (R-6.8.27). `MustNewClient` is reserved for static/test setup where panic-on-bad-construction is intentional. `driveops.SessionRuntime` is the normal production runtime owner for those clients, and it composes the stateless `internal/graphtransport` builders into the concrete profiles the app needs:
 
-- interactive bootstrap/CLI metadata clients compose `RetryTransport{Policy: retry.TransportPolicy()}`
+- interactive bootstrap/CLI metadata clients compose `RetryTransport{Policy: retry.TransportPolicy()}`, one per sign-in file, so a `Retry-After` delays only the throttled sign-in's requests
 - interactive target-scoped metadata clients inject a shared `retry.ThrottleGate` so later requests against the same drive or shared target respect server `Retry-After`
 - sync clients pass raw `*http.Client`s so failures return immediately for engine-level classification
 
@@ -632,16 +683,24 @@ application/json`; `RestoreItem`, a body-less POST, passes the header itself,
 as it always has (`TestDo_ContentTypeForBody`, `TestRestoreItem_Success`).
 
 A failure before a request leaves carries `errRequestNotSent`: the token
-source failed, the context had already ended (net/http would not send it
+source failed (a refresh the request's context cut short included, with that
+context's cause), the context had already ended (net/http would not send it
 either; `buildAuthorizedRequest` reports it as not sent rather than leaving
 it to read as a dispatch failure), or the request could not be built. After a 401 the same holds for the retry: a
 failed token refresh, a failed forced refresh, a 401 body that would not
 close, or a retry that cannot be built leaves the refused request as the only
-one sent. `doPreAuth` marks a context that had ended and a request builder
-that failed the same way, and the quirk retry marks a backoff that its
-context ended. The mark is what keeps `ErrCreateOutcomeUnknown` and
+one sent. `doPreAuth` and `doRawUpload` mark a context that had ended and a
+request that could not be built (or, for `doRawUpload`, whose token could not
+be had) the same way, and the quirk retry marks a backoff that its context
+ended. `dispatchRequestWith` marks a request the retrying transport returned
+unsent because the throttle wait outlasts its deadline
+(`*retry.ThrottledError`), and adds `ErrThrottled`: it is the earlier 429's
+answer. The mark is what keeps `ErrCreateOutcomeUnknown` and
 `FinalFragmentError` off failures that cannot have changed anything
-(`TestDo_ContextCancellation`, `TestDo_TokenError`).
+(`TestDo_ContextCancellation`, `TestDo_TokenError`,
+`TestDo_ATokenRefreshCutByTheContextIsNotSent`,
+`TestDo_AThrottleWaitPastTheDeadlineIsNotSent`,
+`TestSimpleUploadToItem_TokenError`).
 
 Ordinary Graph `401` is intentionally **not** a sync trial or backoff signal.
 The graph boundary gets exactly one lifecycle retry: refresh the saved login
@@ -650,12 +709,13 @@ and retry the request once. If that still fails, callers receive
 condition for the current pass or watch session, and CLI surfaces present it as
 `Authentication required`.
 
-The refresh is forced when needed. `oauth2.ReuseTokenSource` refreshes only an
-expired token, so a token the service revoked early came back unchanged and
-the second attempt resent it. `tokenBridge.ForceRefresh` (the optional
-`forceRefresher` capability) redeems the refresh token now and swaps in the
-new source; concurrent 401s serialize on it and share one token-endpoint call
-per 30 s (`TestDoOnce_401_ForcesRefreshWhenCachedTokenIsUnchanged`,
+The refresh is forced when needed. The token source refreshes only an expired
+token, so a token the service revoked early came back unchanged and the second
+attempt resent it. `tokenBridge.ForceRefresh(ctx)` (the optional
+`forceRefresher` capability) redeems the refresh token now, under the
+request's context like any refresh; concurrent 401s join the refresh under
+way and share one token-endpoint call per 30 s
+(`TestDoOnce_401_ForcesRefreshWhenCachedTokenIsUnchanged`,
 `TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst`).
 
 A 401 is fatal (`ErrUnauthorized`) only when the refresh itself fails or a
@@ -699,10 +759,10 @@ The graph package intentionally keeps runtime ownership narrow:
 
 - `Client` holds immutable dependencies and per-instance policy knobs only; it owns no background goroutines, channels, or timers.
 - Browser auth owns one callback server goroutine plus one result channel per login attempt. `doAuthCodeLogin` starts them, waits for the callback, and shuts them down before returning.
-- Token refresh state is delegated to the token source implementation. `graph` consumes it synchronously; it does not run a background refresh coordinator.
+- The token source (`tokenBridge`) owns the cached token and at most one refresh goroutine at a time. The goroutine is started by the first caller that needs a refresh, runs detached from every caller's cancellation, and ends with its one token-endpoint request, which the sign-in client's `Timeout` bounds; its boundary hands a panic to `panicguard.Recovered` and gives the error to its waiters. `Client` consumes the source synchronously and starts no goroutine of its own.
 - The sole raw `http.Client.Do` production boundary is `client_preauth.go`, where validated pre-authenticated URLs are dispatched.
 - `driveops.SessionRuntime` owns the long-lived HTTP clients, the auth client its default token sources refresh through, one token source per sign-in file, and any caller-scoped shared throttle gates. It has no background goroutines and no package-level mutable state; the runtime instance is the owner.
-- Account-level calls made before or without a drive session (identity probes, drive and shared-item discovery, SharePoint search, shared-drive naming, share-URL resolution) get their client from `SessionRuntime.BootstrapClient(ctx, tokenPath)`: the bootstrap metadata profile, the runtime's base URL and the runtime's token source for that file, the one the drive sessions use. The CLI builds no token source of its own; a source scan in `internal/cli` keeps it so (R-6.8.27, `TestCLIBootstrapClientsUseTheSessionRuntime`). The one direct construction is login, which holds the source the sign-in just produced. A cached source keeps the context of the call that created it, so callers pass the command's or daemon's context, never a per-request one.
+- Account-level calls made before or without a drive session (identity probes, drive and shared-item discovery, SharePoint search, shared-drive naming, share-URL resolution) get their client from `SessionRuntime.BootstrapClient(tokenPath)`: that sign-in file's own bootstrap metadata client (`BootstrapMeta(tokenPath)`, so a throttle deadline is the throttled sign-in's), the runtime's base URL and the runtime's token source for that file, the one the drive sessions use. The CLI builds no token source of its own; a source scan in `internal/cli` keeps it so (R-6.8.27, `TestCLIBootstrapClientsUseTheSessionRuntime`). The one direct construction is login, which holds the source the sign-in just produced. No session constructor takes a context: a source keeps none and refreshes under each request's own, so one client serves requests with any deadline.
 
 ## Design Constraints
 

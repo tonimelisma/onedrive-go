@@ -98,9 +98,7 @@ func loadStatusLiveOverlay(
 			continue
 		}
 
-		// The command's context, not askCtx: the runtime keeps the token
-		// source with the context it was built under and refreshes with it.
-		client, err := runtime.BootstrapClient(ctx, tokenPath)
+		client, err := runtime.BootstrapClient(tokenPath)
 		if err != nil {
 			logger.Debug("status: loading sign-in for live overlay", "account", entry.Email, "error", err)
 			results[i], hasOverlay[i] = statusLiveAuthOverlay(err), true
@@ -144,15 +142,13 @@ func loadStatusLiveOverlay(
 
 // statusLiveUnansweredReason says in the user's words why OneDrive's live
 // details for an account are missing, or "" when the user stopped the
-// command: a canceled request is expected then, not news.
+// command: a canceled request is expected then, not news. An answer OneDrive
+// gave is the reason even when the budget ran out just after it: the retrying
+// transport returns a throttle or a server error at once when its next wait
+// would pass the budget (R-6.8.8), so such an answer is what happened.
 func statusLiveUnansweredReason(ctx, askCtx context.Context, err error) string {
 	if ctx.Err() != nil {
 		return ""
-	}
-	// The context's cause, not the error chain: a response body cut off by
-	// the budget reports the context's error without its cause.
-	if errors.Is(context.Cause(askCtx), errStatusLiveBudgetSpent) {
-		return "OneDrive did not answer within " + retry.HumanDuration(statusLiveBudget)
 	}
 
 	var graphErr *graph.GraphError
@@ -164,6 +160,10 @@ func statusLiveUnansweredReason(ctx, askCtx context.Context, err error) string {
 	case errors.As(err, &graphErr) && graphErr.Message != "":
 		// The note ends the sentence, so OneDrive's own full stop goes.
 		return "OneDrive refused the request: " + strings.TrimRight(graphErr.Message, ".")
+	// The context's cause, not the error chain: a response body cut off by
+	// the budget reports the context's error without its cause.
+	case errors.Is(context.Cause(askCtx), errStatusLiveBudgetSpent):
+		return "OneDrive did not answer within " + retry.HumanDuration(statusLiveBudget)
 	default:
 		return plainErrorReason(err)
 	}
@@ -207,10 +207,12 @@ func statusLiveAuthOverlay(err error) statusAccountLiveOverlay {
 // statusConfiguredDriveOverlay asks for one account's profile and its
 // configured drives' storage. A sign-in failure is an answer: the account is
 // marked as needing sign-in, and no error is returned. The error it returns
-// is what left the overlay incomplete: a failed profile request, or a storage
-// request ctx ended (later drives would fail the same way). Any other storage
-// failure leaves that drive's storage out, as before (a shared drive need not
-// show its owner's quota).
+// is what left the overlay incomplete: a failed profile request, a storage
+// request ctx ended (later drives would fail the same way), or the first
+// storage request OneDrive throttled or failed with a server error (later
+// drives are still asked). Any other storage failure leaves that drive's
+// storage out without a reason (a shared drive need not show its owner's
+// quota).
 func statusConfiguredDriveOverlay(
 	ctx context.Context,
 	client configuredStatusDriveClient,
@@ -235,6 +237,7 @@ func statusConfiguredDriveOverlay(
 		Storage:     make(map[string]statusStorage),
 	}
 
+	var incomplete error
 	for _, cid := range entry.ConfiguredDriveIDs {
 		drive, found, err := fetchConfiguredStatusDrive(ctx, client, snapshot.Stored, cid)
 		if err != nil {
@@ -244,6 +247,10 @@ func statusConfiguredDriveOverlay(
 			}
 			if ctx.Err() != nil {
 				return overlay, fmt.Errorf("ask OneDrive for drive storage: %w", err)
+			}
+			if incomplete == nil && (errors.Is(err, graph.ErrThrottled) || errors.Is(err, graph.ErrServerError)) {
+				incomplete = fmt.Errorf("ask OneDrive for drive storage: %w", err)
+				continue
 			}
 			logger.Debug("status: configured drive live storage unavailable",
 				"account", entry.Email,
@@ -257,7 +264,7 @@ func statusConfiguredDriveOverlay(
 		}
 	}
 
-	return overlay, nil
+	return overlay, incomplete
 }
 
 // markStatusAccountSignInRequired records that OneDrive rejected the

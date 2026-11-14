@@ -745,7 +745,7 @@ type refreshFailingToken struct {
 	calls atomic.Int32
 }
 
-func (s *refreshFailingToken) Token() (string, error) {
+func (s *refreshFailingToken) Token(context.Context) (string, error) {
 	if s.calls.Add(1) == 1 {
 		return "stale-token", nil
 	}

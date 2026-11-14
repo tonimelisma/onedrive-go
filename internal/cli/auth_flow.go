@@ -39,7 +39,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, tempPath string) error {
 	logger := cc.Logger
 
-	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, logger, cc.runtime())
+	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, tempPath, logger, cc.runtime())
 	if err != nil {
 		cleanupPendingToken(cc, tempPath, "discovery failure")
 		return fmt.Errorf("discovering account: %w", err)

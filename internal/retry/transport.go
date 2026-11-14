@@ -18,14 +18,16 @@ import (
 // automatic retry on transient failures (network errors, 429, 5xx) for HTTP
 // methods that are safe to replay at the transport boundary. It handles
 // exponential backoff, Retry-After headers, optional shared 429 throttle
-// coordination, and seekable body rewinding between attempts.
+// coordination, and seekable body rewinding between attempts. It never starts
+// a wait that would end after the request context's deadline (waitFits).
 //
-// CLI callers wrap http.DefaultTransport in a RetryTransport so the graph client
-// never needs to know about retries. Sync callers use a raw transport — failed
-// requests return immediately for engine-level classification and tracker
-// re-queuing (R-6.8.7: workers never block on retry backoff).
+// The CLI's clients (internal/graphtransport) wrap their transport in a
+// RetryTransport so the graph client never needs to know about retries. Sync
+// callers use a raw transport — failed requests return immediately for
+// engine-level classification and tracker re-queuing (R-6.8.7: workers never
+// block on retry backoff).
 type RetryTransport struct {
-	// Inner is the underlying transport (typically http.DefaultTransport).
+	// Inner is the underlying transport.
 	Inner http.RoundTripper
 
 	// Policy controls the retry loop: MaxAttempts, backoff base/max/multiplier.
@@ -55,6 +57,19 @@ type RetryTransport struct {
 
 	// localNotices backs Notices when the caller injected none.
 	localNotices Notices
+}
+
+// ThrottledError is what a request gets, unsent, when an earlier 429 told the
+// transport's scope to wait until Until and Until is after the request's own
+// deadline: waiting would only end in the deadline's error, later. It carries
+// no response because OneDrive was not asked.
+type ThrottledError struct {
+	Until time.Time
+}
+
+func (e *ThrottledError) Error() string {
+	return "retry: OneDrive is limiting requests until " + e.Until.Format(time.RFC3339) +
+		", after this request's deadline; not sent"
 }
 
 type logTargetKey struct{}
@@ -168,6 +183,31 @@ func (rt *RetryTransport) retriesLeft(attempt int) bool {
 	return attempt+1 < rt.Policy.MaxAttempts
 }
 
+// waitFits reports whether a wait of d, starting now, ends before the request
+// context's deadline; a context without a deadline always has the time. It is
+// the one rule for every wait the transport would start: a Retry-After, the
+// backoff ladder and the throttle deadline. No attempt can follow a wait that
+// outlasts the deadline, so instead of sleeping into the deadline's error the
+// transport returns what it already has, as when the attempts are used up
+// (R-6.8.8). A wait that does not fit is recorded at Debug and never
+// announced.
+func (rt *RetryTransport) waitFits(req *http.Request, d time.Duration, waitingFor string) bool {
+	deadline, hasDeadline := req.Context().Deadline()
+	if !hasDeadline || time.Now().Add(d).Before(deadline) {
+		return true
+	}
+
+	rt.Logger.Debug("not waiting past the request's deadline",
+		slog.String("method", req.Method),
+		slog.String("url", requestLogTarget(req)),
+		slog.String("waiting_for", waitingFor),
+		slog.Duration("wait", d.Round(retryLogPrecision)),
+		slog.Duration("deadline_in", time.Until(deadline).Round(retryLogPrecision)),
+	)
+
+	return false
+}
+
 func (rt *RetryTransport) notices() *Notices {
 	if rt.Notices != nil {
 		return rt.Notices
@@ -202,6 +242,9 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 	}
 
 	backoff := rt.Policy.Delay(attempt)
+	if !rt.waitFits(req, backoff, "network error backoff") {
+		return false, err
+	}
 	if collector := perf.FromContext(req.Context()); collector != nil {
 		collector.RecordHTTPRetry(backoff)
 	}
@@ -269,7 +312,12 @@ func (rt *RetryTransport) handleResponse(
 	}
 
 	// --- Retryable status → extract backoff, discard body, retry ---
-	backoff := rt.retryBackoff(resp, attempt, sleepFn)
+	backoff := rt.retryBackoff(resp, attempt)
+	if !rt.waitFits(req, backoff, "retryable status "+strconv.Itoa(resp.StatusCode)) {
+		// The answer goes back with its body unread, as when the attempts
+		// are used up.
+		return true, resp, nil
+	}
 	if collector := perf.FromContext(req.Context()); collector != nil {
 		collector.RecordHTTPRetry(backoff)
 	}
@@ -373,13 +421,18 @@ func (rt *RetryTransport) announceLongWait(status int, wait time.Duration) {
 
 // waitForThrottle blocks until the active throttle deadline passes. Called at
 // the start of every request to enforce 429 Retry-After across this transport
-// or an injected caller-owned gate.
+// or an injected caller-owned gate. A throttle deadline after the request's
+// own deadline is not waited for: the request is returned unsent, as a
+// *ThrottledError.
 func (rt *RetryTransport) waitForThrottle(req *http.Request, sleepFn SleepFunc) error {
-	deadline := rt.ThrottleDeadline()
+	throttledUntil := rt.throttleDeadline()
 
-	delay := time.Until(deadline)
+	delay := time.Until(throttledUntil)
 	if delay <= 0 {
 		return nil
+	}
+	if !rt.waitFits(req, delay, "throttle deadline") {
+		return &ThrottledError{Until: throttledUntil}
 	}
 
 	rt.announceLongWait(http.StatusTooManyRequests, delay)
@@ -394,7 +447,7 @@ func (rt *RetryTransport) waitForThrottle(req *http.Request, sleepFn SleepFunc) 
 // retryBackoff returns the backoff duration for a retryable response.
 // For 429 (throttled), the Retry-After header takes precedence over computed
 // backoff — ignoring it risks extended throttling by the Graph API.
-func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int, _ SleepFunc) time.Duration {
+func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int) time.Duration {
 	now := time.Now()
 	if ra := ResponseRetryAfter(resp, now); ra > 0 {
 		// 429: set the throttle deadline so later matching requests wait.
@@ -480,8 +533,8 @@ func rewindBody(req *http.Request) error {
 	return nil
 }
 
-// isRetryable reports whether the given HTTP status code should be retried.
-// Mirrors the Graph API retry set from architecture.md §7.4.
+// isRetryable reports whether the given HTTP status code should be retried:
+// the retryable status set of spec/design/retry.md.
 func isRetryable(code int) bool {
 	switch code {
 	case http.StatusRequestTimeout, // 408
@@ -498,23 +551,9 @@ func isRetryable(code int) bool {
 	}
 }
 
-// SetThrottleDeadline sets the current throttle deadline directly. Used by
-// tests to simulate a pre-existing throttle state.
-func (rt *RetryTransport) SetThrottleDeadline(deadline time.Time) {
-	if rt.ThrottleGate != nil {
-		rt.ThrottleGate.SetDeadline(deadline)
-
-		return
-	}
-
-	rt.throttleMu.Lock()
-	rt.throttledUntil = deadline
-	rt.throttleMu.Unlock()
-}
-
-// ThrottleDeadline returns the current throttle deadline. Used by tests to
-// verify 429 handling sets the deadline correctly.
-func (rt *RetryTransport) ThrottleDeadline() time.Time {
+// throttleDeadline is the deadline the transport's requests wait for: the
+// injected gate's, or its own when no gate is injected.
+func (rt *RetryTransport) throttleDeadline() time.Time {
 	if rt.ThrottleGate != nil {
 		return rt.ThrottleGate.Deadline()
 	}

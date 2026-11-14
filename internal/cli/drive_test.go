@@ -1462,7 +1462,7 @@ func writeTestTokenFile(t *testing.T, dir, name string) {
 // staticTokenSource implements graph.TokenSource for testing.
 type staticTokenSource struct{}
 
-func (s staticTokenSource) Token() (string, error) { return "test-token", nil }
+func (s staticTokenSource) Token(context.Context) (string, error) { return "test-token", nil }
 
 func newTestGraphClient(t *testing.T, baseURL string) *graph.Client {
 	t.Helper()

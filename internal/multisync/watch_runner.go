@@ -76,7 +76,7 @@ func (o *Orchestrator) startWatchRunner(
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 ) (*watchRunner, error) {
-	session, err := o.cfg.Runtime.SyncSession(ctx, mount.syncSessionConfig())
+	session, err := o.cfg.Runtime.SyncSession(mount.syncSessionConfig())
 	if err != nil {
 		// The caller reports this against the drive, so the text names only
 		// what failed, not which drive.
