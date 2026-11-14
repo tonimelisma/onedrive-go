@@ -718,7 +718,6 @@ func (c *itemConverter) classifyAndConvert(
 	}
 
 	ev := changeEvent{
-		Source:    sourceRemote,
 		ItemID:    item.ID,
 		ParentID:  item.ParentID,
 		DriveID:   itemDriveID,

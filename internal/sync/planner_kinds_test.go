@@ -188,7 +188,7 @@ type comparisonCaseGroup struct {
 // Only the combination with no side present, which no path can have (the row
 // set is the union of the three tables' paths), is unclassified. The diverged
 // facts the reconciliation CASE relies on hold too: a diverged row changed on
-// some side, and never has equal content after a remote change.
+// some side, and never has equal content, whichever side changed.
 //
 // Exhaustive (a few seconds, minutes under -race): the targeted tests of the
 // decision table cover single states; this proves every one.
@@ -226,8 +226,7 @@ GROUP BY 1, 2, 3, 4, 5`, comparisonCaseStateCount, strings.Join(columns, ",\n\t"
 			violations = append(violations, fmt.Sprintf("%s with a side present: %t", g.kind, g.anySide))
 		}
 		changedNowhere := !g.localChanged && !g.remoteChanged
-		equalAfterRemoteChange := g.currentEqual && g.remoteChanged
-		if g.kind == comparisonDiverged && (changedNowhere || equalAfterRemoteChange) {
+		if g.kind == comparisonDiverged && (changedNowhere || g.currentEqual) {
 			violations = append(violations, fmt.Sprintf("diverged with local_changed=%t remote_changed=%t current_equal=%t",
 				g.localChanged, g.remoteChanged, g.currentEqual))
 		}
@@ -438,4 +437,64 @@ func TestPlanCurrentState_FolderTransferFailsThePlan(t *testing.T) {
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)
 	require.ErrorContains(t, err, "local-dir")
+}
+
+// Validates: R-6.2.16
+//
+// PlanCurrentState builds every action from a constant, so only a
+// programming error makes one outside the enums; the test hands such actions
+// to planBuiltActions, the stage PlanCurrentState plans every built action
+// through. It used to plan them: mode admission refused an unlisted type and
+// the deferral counts had no bucket for it, so the action vanished and its
+// path silently stopped syncing. Now the plan fails before any step reads the
+// action, naming its path, whether reconciliation or move composition built
+// it, and for a folder create whose side is outside its enum too.
+func TestPlanCurrentState_UnlistedActionTypeFailsThePlan(t *testing.T) {
+	t.Parallel()
+
+	const (
+		unlistedAction = ActionCleanup + 1
+		unlistedSide   = CreateRemote + 1
+	)
+	listed := Action{Type: ActionUpload, Path: "docs/listed.txt", View: &pathView{Path: "docs/listed.txt"}}
+	plan := func(reconciled, composed []Action) (*actionPlan, error) {
+		return newPlanner(testLogger(t)).planBuiltActions(reconciled, composed,
+			&moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
+	}
+
+	control, err := plan([]Action{listed}, nil)
+	require.NoError(t, err)
+	require.Len(t, control.Actions, 1, "the control: a listed action is planned")
+
+	for _, tc := range []struct {
+		name                 string
+		reconciled, composed []Action
+		wantDetail           string
+	}{
+		{
+			name:       "reconciled",
+			reconciled: []Action{listed, {Type: unlistedAction, Path: "docs/a.txt"}},
+			wantDetail: `ActionType(10) at "docs/a.txt"`,
+		},
+		{
+			name:       "composed",
+			reconciled: []Action{listed},
+			composed:   []Action{{Type: unlistedAction, Path: "docs/b.txt", OldPath: "docs/old.txt"}},
+			wantDetail: `ActionType(10) at "docs/b.txt"`,
+		},
+		{
+			name:       "folder create side",
+			reconciled: []Action{{Type: ActionFolderCreate, CreateSide: unlistedSide, Path: "docs/c"}},
+			wantDetail: `folder_create on side FolderCreateSide(2) at "docs/c"`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			refused, err := plan(tc.reconciled, tc.composed)
+			require.ErrorIs(t, err, errUnlistedActionPlanned)
+			require.ErrorContains(t, err, tc.wantDetail)
+			assert.Nil(t, refused)
+		})
+	}
 }

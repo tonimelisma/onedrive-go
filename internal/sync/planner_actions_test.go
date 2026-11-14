@@ -1768,21 +1768,3 @@ func TestBuildDependencies_CaseVariantMovesDoNotWaitOnEachOther(t *testing.T) {
 	assert.Empty(t, deps[1])
 	assert.Equal(t, []int{3}, deps[2], "a create waits for a move that vacates its case-variant name")
 }
-
-// Validates: R-2.1.3, R-2.1.4
-//
-// Mode admission lists every action it allows; an action type or folder
-// create side no case lists is never admitted, in any mode.
-func TestActionAllowedInMode_AnUnlistedActionIsNeverAdmitted(t *testing.T) {
-	t.Parallel()
-
-	const (
-		unlistedAction = ActionCleanup + 1
-		unlistedSide   = CreateRemote + 1
-	)
-	for _, mode := range []SyncMode{SyncBidirectional, SyncDownloadOnly, SyncUploadOnly} {
-		assert.False(t, actionAllowedInMode(&Action{Type: unlistedAction}, mode), mode.String())
-		assert.False(t, actionAllowedInMode(&Action{Type: ActionFolderCreate, CreateSide: unlistedSide}, mode), mode.String())
-		assert.True(t, actionAllowedInMode(&Action{Type: ActionBaselineUpdate}, mode), mode.String())
-	}
-}

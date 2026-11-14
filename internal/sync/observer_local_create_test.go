@@ -39,7 +39,6 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 
 	assert.Equal(t, changeCreate, ev.Type)
 	assert.Equal(t, "new-file.txt", ev.Path)
-	assert.Equal(t, SourceLocal, ev.Source)
 }
 
 // Validates: R-2.1.2
@@ -248,7 +247,6 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 
 	require.Equal(t, changeCreate, ev.Type)
 	require.Equal(t, "unreadable.txt", ev.Path)
-	require.Equal(t, SourceLocal, ev.Source)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
 }
 

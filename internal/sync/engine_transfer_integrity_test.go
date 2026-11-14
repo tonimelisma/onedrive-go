@@ -61,6 +61,78 @@ func TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain(t *testing.T) {
 	}
 }
 
+// Validates: R-2.2.1, R-2.2.3, R-5.8.2
+//
+// After an accepted server transform the baseline holds the served bytes'
+// hash on the local side and OneDrive's reported hash on the remote side.
+// When the local file then comes to hold exactly the content OneDrive reports,
+// local changed against the baseline and OneDrive did not, but the two sides
+// are proven equal: nothing transfers. The pass used to upload the file, a new
+// version online for bytes OneDrive already holds. The baseline learns the
+// new local hash, size, mtime and identity beside the remote facts it had,
+// and planning the same state again is a no-op.
+func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
+	t.Parallel()
+
+	const (
+		fileName = "plan.docx"
+		reported = "unprotected" // the content OneDrive's size and hash describe
+		served   = "protected!!" // the same-size bytes it serves
+	)
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-1", "root", fileName, reported)
+	remote.contents["item-1"] = served
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	first := runScenarioPass(t, eng)
+	require.Equal(t, 1, first.Downloads)
+	ctx := t.Context()
+	accepted, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	acceptedEntry, ok := accepted.GetByPath(fileName)
+	require.True(t, ok)
+	before := *acceptedEntry
+	require.Equal(t, hashContentQuickXor(t, served), before.LocalHash, "the setup: the transform is accepted")
+	require.Equal(t, hashContentQuickXor(t, reported), before.RemoteHash)
+
+	writeLocalFile(t, syncRoot, fileName, reported)
+	second := runScenarioPass(t, eng)
+	assert.Zero(t, second.Uploads+second.Downloads, "equal content transfers nothing")
+	assert.Zero(t, remote.uploads)
+
+	var observed struct {
+		hash                      string
+		size, mtime, ctime, birth int64
+		device, inode             uint64
+	}
+	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+		`SELECT hash, size, mtime, ctime, local_birth_time, local_device, local_inode
+		FROM local_state WHERE path = ?`, fileName).Scan(
+		&observed.hash, &observed.size, &observed.mtime, &observed.ctime, &observed.birth, &observed.device, &observed.inode))
+	require.Equal(t, hashContentQuickXor(t, reported), observed.hash)
+
+	updated, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	after, ok := updated.GetByPath(fileName)
+	require.True(t, ok)
+	assert.Equal(t, observed.hash, after.LocalHash, "the baseline learns the local hash")
+	assert.Equal(t, observed.size, after.LocalSize)
+	assert.Equal(t, observed.mtime, after.LocalMtime)
+	assert.Equal(t, observed.ctime, after.LocalCtime)
+	assert.Equal(t, observed.birth, after.LocalBirthTime)
+	assert.Equal(t, observed.device, after.LocalDevice)
+	assert.Equal(t, observed.inode, after.LocalInode)
+	assert.True(t, after.LocalHasIdentity)
+	assert.Equal(t, before.ItemID, after.ItemID, "the remote side is unchanged")
+	assert.Equal(t, before.RemoteHash, after.RemoteHash)
+	assert.Equal(t, before.RemoteSize, after.RemoteSize)
+	assert.Equal(t, before.RemoteMtime, after.RemoteMtime)
+	assert.Equal(t, before.ETag, after.ETag)
+
+	assert.Empty(t, planCurrentStateForStore(t, eng.baseline).Actions, "the same state plans nothing, not even a baseline update")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-5.6.12
 func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
 	t.Parallel()

@@ -109,3 +109,29 @@ func validatePlannerKinds(comparisons []sQLiteComparisonRow, reconciliations []s
 
 	return nil
 }
+
+// errUnlistedActionPlanned is the class of a plan holding an action whose type,
+// or whose folder create side, is outside its enum (R-6.2.16). The planner
+// builds every action from a constant, so only a programming error makes one.
+// Every rule after the build decides by action type, and no rule has a verdict
+// for such a value: let through, its path would silently stop syncing. Like a
+// row outside the decision table, it fails the plan instead.
+var errUnlistedActionPlanned = errors.New("sync: planned action is outside the action enums")
+
+// validatePlannedActions refuses built actions holding a value outside the
+// action enums, naming the first. planBuiltActions runs it before any rule
+// reads the actions, so each rule's own default, which panics (outsideTheEnum),
+// stays unreachable.
+func validatePlannedActions(actions []Action) error {
+	for i := range actions {
+		action := &actions[i]
+		if !action.Type.isMember() {
+			return fmt.Errorf("%w: %s at %q", errUnlistedActionPlanned, action.Type, action.Path)
+		}
+		if action.Type == ActionFolderCreate && !action.CreateSide.isMember() {
+			return fmt.Errorf("%w: %s on side %s at %q", errUnlistedActionPlanned, action.Type, action.CreateSide, action.Path)
+		}
+	}
+
+	return nil
+}

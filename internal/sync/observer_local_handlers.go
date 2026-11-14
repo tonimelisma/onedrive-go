@@ -395,12 +395,11 @@ func (o *localObserver) handleCreate(
 	}
 
 	ev := changeEvent{
-		Source: SourceLocal,
-		Type:   changeCreate,
-		Path:   dbRelPath,
-		Name:   name,
-		Size:   info.Size(),
-		Mtime:  info.ModTime().UnixNano(),
+		Type:  changeCreate,
+		Path:  dbRelPath,
+		Name:  name,
+		Size:  info.Size(),
+		Mtime: info.ModTime().UnixNano(),
 	}
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok {
 		ev.LocalDevice = identity.Device
@@ -632,7 +631,6 @@ func (o *localObserver) scanNewDirectoryEntry(
 	}
 
 	fileEv := changeEvent{
-		Source:   SourceLocal,
 		Type:     changeCreate,
 		Path:     entryRelPath,
 		Name:     entryName,
@@ -714,7 +712,6 @@ func (o *localObserver) scanNewDirectoryChildDir(
 	}
 
 	dirEv := changeEvent{
-		Source:   SourceLocal,
 		Type:     changeCreate,
 		Path:     entryRelPath,
 		Name:     entryName,
@@ -1042,7 +1039,6 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	}
 
 	ev := changeEvent{
-		Source:   SourceLocal,
 		Type:     ChangeModify,
 		Path:     req.DbRelPath,
 		Name:     req.Name,
@@ -1164,7 +1160,6 @@ func (o *localObserver) HandleDelete(
 	}
 
 	ev := changeEvent{
-		Source:    SourceLocal,
 		Type:      ChangeDelete,
 		Path:      dbRelPath,
 		Name:      name,

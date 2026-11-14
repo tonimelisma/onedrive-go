@@ -537,11 +537,16 @@ comparison_state AS (
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 1 AND current_equal = 1 THEN 'create_equal'
 			WHEN baseline_present = 0 AND local_present = 1 AND remote_present = 1 THEN 'create_conflict'
 			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 1 AND local_changed = 0 AND remote_changed = 0 THEN 'unchanged'
-			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 1 AND current_equal = 1 AND remote_changed = 1 THEN 'equal_again'
+			-- Changed on some side, and the two sides are proven equal: nothing
+			-- transfers, whichever side changed. A local edit to the content
+			-- OneDrive reports (the baseline recorded other local bytes, as an
+			-- accepted server transform does) is a fast-forward of the baseline,
+			-- not an upload of bytes OneDrive already holds.
+			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 1 AND current_equal = 1 THEN 'equal_again'
 			WHEN baseline_present = 1 AND local_present = 0 AND remote_present = 1 THEN 'local_missing'
 			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 0 THEN 'remote_missing'
-			-- Only rows that changed on some side and are not equal after a
-			-- remote change get here; sqlReconciliationKindCase relies on it.
+			-- Only rows that changed on some side and whose content differs get
+			-- here; sqlReconciliationKindCase relies on it.
 			WHEN baseline_present = 1 AND local_present = 1 AND remote_present = 1 THEN 'diverged'
 			ELSE 'unclassified'
 		END`
@@ -598,9 +603,8 @@ ORDER BY path`
 	// a row no rule covers (an unclassified comparison, a comparison kind
 	// added without a rule, a flag outside 0 and 1), and planning fails on it
 	// (R-6.2.16) instead of leaving the path unsynced. Rules that the
-	// comparison stage makes unreachable are not written: a diverged row with
-	// equal content and a remote change (including a type change, which is
-	// one) is equal_again.
+	// comparison stage makes unreachable are not written: a diverged row never
+	// has equal content (that row is equal_again, whichever side changed).
 	// TestReconciliationKindCase_ReconcilesEveryClassifiedComparison evaluates
 	// it over every combination of its inputs.
 	sqlReconciliationKindCase = `CASE
@@ -676,10 +680,8 @@ ORDER BY path`
 			-- or changed below it is kept by the descendants' own rows.
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 0 THEN 'local_delete'
 			WHEN comparison_kind = 'remote_missing' AND local_changed = 1 THEN 'conflict_edit_delete'
-			-- A local edit uploads. When the edit made the file equal to
-			-- OneDrive's unchanged content (the baseline recorded other local
-			-- bytes, as an accepted server transform does), the upload is
-			-- redundant, not lossy.
+			-- A local edit uploads; an edit that made the file equal to
+			-- OneDrive's content is equal_again, never diverged.
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 0 THEN 'upload'
 			WHEN comparison_kind = 'diverged' AND local_changed = 0 AND remote_changed = 1 THEN 'download'
 			WHEN comparison_kind = 'diverged' AND local_changed = 1 AND remote_changed = 1 THEN 'conflict_edit_edit'

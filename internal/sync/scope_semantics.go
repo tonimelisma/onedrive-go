@@ -274,8 +274,9 @@ func localWriteScopeBlocksAction(actionType actionType) bool {
 		ActionRemoteDelete,
 		ActionRemoteMove:
 		return false
+	default:
+		panic(outsideTheEnum(actionType))
 	}
-	return false
 }
 
 func remoteWriteScopeBlocksAction(actionType actionType) bool {
@@ -292,6 +293,7 @@ func remoteWriteScopeBlocksAction(actionType actionType) bool {
 		ActionBaselineUpdate,
 		ActionCleanup:
 		return false
+	default:
+		panic(outsideTheEnum(actionType))
 	}
-	return false
 }

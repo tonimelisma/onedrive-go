@@ -19,13 +19,12 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 	if o.DeleteConfirmed {
 		return nil
 	}
-	var side deleteSafetySide
-	switch o.Action { //nolint:exhaustive // only deletes are ledgered; every other action falls through to the default
-	case ActionLocalDelete:
-		side = deleteSafetySideLocal
-	case ActionRemoteDelete:
-		side = deleteSafetySideRemote
-	default:
+	if !o.Action.isMember() {
+		// classifyMutation refuses this first, inside the same transaction.
+		return fmt.Errorf("sync: recording %s in the delete ledger: %s", o.Path, outsideTheEnum(o.Action))
+	}
+	side, isDelete := deleteSafetySideOf(o.Action)
+	if !isDelete {
 		return nil
 	}
 	now := s.nowFunc()

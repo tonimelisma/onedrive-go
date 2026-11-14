@@ -189,7 +189,6 @@ func TestFullScan_NewFiles(t *testing.T) {
 	ev := findEvent(result.Events, "hello.txt")
 	require.NotNil(t, ev, "hello.txt event not found")
 
-	assert.Equal(t, SourceLocal, ev.Source)
 	assert.Equal(t, changeCreate, ev.Type)
 	assert.Equal(t, "hello.txt", ev.Name)
 	assert.Equal(t, hashContent(t, "hello world"), ev.Hash)
@@ -239,7 +238,6 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	ev := result.Events[0]
 	assert.Equal(t, ChangeModify, ev.Type)
 	assert.Equal(t, hashContent(t, "updated content"), ev.Hash)
-	assert.Equal(t, SourceLocal, ev.Source)
 }
 
 // Validates: R-2.2.1
@@ -1427,7 +1425,6 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 	require.NotNil(t, ev, "unreadable file should still produce an event")
 	require.Equal(t, changeCreate, ev.Type)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
-	require.Equal(t, SourceLocal, ev.Source)
 }
 
 // ---------------------------------------------------------------------------
@@ -1466,7 +1463,6 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	require.NotNil(t, ev, "unreadable modified file should still produce an event")
 	require.Equal(t, ChangeModify, ev.Type)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
-	require.Equal(t, SourceLocal, ev.Source)
 }
 
 // ---------------------------------------------------------------------------

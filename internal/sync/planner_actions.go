@@ -21,7 +21,8 @@ var errFolderTransferPlanned = errors.New("sync: folder planned as a content tra
 // owns structural diff authority; Go maps those rows to runtime actions and
 // applies action-level normalization for execution semantics. A row the
 // decision table did not classify fails the whole plan before any row is
-// planned (validatePlannerKinds).
+// planned (validatePlannerKinds), and a built action outside the action enums
+// fails it before any rule reads one (planBuiltActions).
 func (p *planner) PlanCurrentState(
 	comparisons []sQLiteComparisonRow,
 	reconciliations []sQLiteReconciliationRow,
@@ -53,11 +54,11 @@ func (p *planner) PlanCurrentState(
 		return nil, err
 	}
 
-	moveInputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
-	composition := composeMoves(moveInputs.nodes, moveInputs.occupancy, moveInputs.frozen)
+	inputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
+	composition := composeMoves(inputs.nodes, inputs.occupancy, inputs.frozen)
 	logMoveNotices(p.logger, composition.notices)
 
-	var allActions []Action
+	var reconciled []Action
 	for i := range reconciliations {
 		rec := reconciliations[i]
 		cmp, ok := comparisonByPath[rec.Path]
@@ -70,14 +71,39 @@ func (p *planner) PlanCurrentState(
 			return nil, err
 		}
 
-		allActions = append(allActions, actions...)
+		reconciled = append(reconciled, actions...)
 	}
-	allActions = dropReconciliationOfComposedMoves(allActions, &composition)
-	allActions = append(allActions, buildComposedMoveActions(&composition, &moveInputs, views, baseline)...)
+	composed := buildComposedMoveActions(&composition, &inputs, views, baseline)
 
-	normalizedActions, trimmed := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(moveInputs.nodes), mode)
+	return p.planBuiltActions(reconciled, composed, &composition, &inputs, mount, mode)
+}
+
+// planBuiltActions turns the actions PlanCurrentState built, from the
+// reconciliation rows (reconciled) and by move composition (composed), into
+// the plan: it drops the reconciliation work composition replaces, normalizes,
+// admits by mode and orders. Every one of those steps decides by action type,
+// so the built actions are checked against the enums first
+// (validatePlannedActions): an action outside them fails the plan, as a row
+// outside the decision table does, before any step can answer it.
+func (p *planner) planBuiltActions(
+	reconciled, composed []Action,
+	composition *moveComposition,
+	inputs *moveInputs,
+	mount plannerMountContext,
+	mode SyncMode,
+) (*actionPlan, error) {
+	for _, built := range [][]Action{reconciled, composed} {
+		if err := validatePlannedActions(built); err != nil {
+			return nil, err
+		}
+	}
+
+	allActions := dropReconciliationOfComposedMoves(reconciled, composition)
+	allActions = append(allActions, composed...)
+
+	normalizedActions, trimmed := normalizeCurrentPlanActions(allActions, remoteToLocalFolderPrefixes(inputs.nodes), mode)
 	beforeDrop := len(normalizedActions)
-	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, &moveInputs, &composition)
+	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, inputs, composition)
 	droppedCreates := beforeDrop - len(normalizedActions)
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
@@ -124,11 +150,17 @@ func normalizeCurrentPlanActions(actions []Action, remoteToLocal []graphFolderMo
 func countRenames(actions []Action) int {
 	n := 0
 	for i := range actions {
-		switch {
-		case isMoveAction(&actions[i]), actions[i].Type == ActionConflictCopy:
+		switch actions[i].Type {
+		case ActionLocalMove, ActionRemoteMove, ActionConflictCopy:
 			n++
-		case actions[i].Type == ActionBaselineUpdate && actions[i].OldPath != "":
-			n++
+		case ActionBaselineUpdate:
+			if actions[i].OldPath != "" {
+				n++
+			}
+		case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
+			ActionFolderCreate, ActionCleanup:
+		default:
+			panic(outsideTheEnum(actions[i].Type))
 		}
 	}
 
@@ -165,9 +197,7 @@ func rebaseRemoteCreatesThroughLocalFolderMoves(actions []Action) []Action {
 	copy(rebased, actions)
 	for i := range rebased {
 		action := &rebased[i]
-		isRemoteCreate := action.Type == ActionUpload ||
-			(action.Type == ActionFolderCreate && action.CreateSide == CreateRemote)
-		if isRemoteCreate {
+		if createsOnSide(action, moveCoordRemote) {
 			action.Path = rebaseThroughFolderMoves(action.Path, folderMoves)
 		}
 	}
@@ -213,7 +243,7 @@ func writesLocally(action *Action) bool {
 	case ActionUpload, ActionRemoteMove, ActionRemoteDelete, ActionBaselineUpdate, ActionCleanup:
 		return false
 	default:
-		return false
+		panic(outsideTheEnum(action.Type))
 	}
 }
 
@@ -520,7 +550,7 @@ func keepBothDescendantAction(action *Action, remoteIsFolder bool) (Action, bool
 	if !remoteIsFolder {
 		return Action{}, false
 	}
-	if action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == createLocal) {
+	if createsOnSide(action, moveCoordLocal) {
 		return *action, true
 	}
 	if action.Type == ActionRemoteDelete && action.View != nil && action.View.Remote != nil {

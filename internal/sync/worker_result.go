@@ -132,7 +132,7 @@ func outcomeDisplaySize(outcome *actionOutcome) (int64, bool) {
 	case ActionLocalDelete, ActionRemoteDelete, ActionLocalMove, ActionRemoteMove,
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return 0, false
+	default:
+		panic(outsideTheEnum(outcome.Action))
 	}
-
-	return 0, false
 }

@@ -123,7 +123,6 @@ func TestFullDelta_NewFiles(t *testing.T) {
 	assert.Equal(t, "hello.txt", e.Path)
 	assert.Equal(t, "qxh1", e.Hash)
 	assert.Equal(t, int64(100), e.Size)
-	assert.Equal(t, sourceRemote, e.Source)
 
 	// Second file.
 	assert.Equal(t, "world.txt", events[1].Name)

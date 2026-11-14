@@ -15,7 +15,6 @@ import (
 
 func testRemoteCreateEvent(path string, itemID string, driveID string) changeEvent {
 	return changeEvent{
-		Source:   sourceRemote,
 		Type:     changeCreate,
 		Path:     path,
 		ItemID:   itemID,
@@ -180,7 +179,6 @@ func TestRemoteEventHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 			t.Parallel()
 
 			event := changeEvent{
-				Source:   sourceRemote,
 				Type:     ChangeModify,
 				Path:     tt.path,
 				OldPath:  tt.old,
@@ -482,7 +480,7 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 				bl.Put(&BaselineEntry{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: ItemTypeFolder})
 			}
 			batch := buildPrimaryWatchBatch(eng.Engine, bl, []changeEvent{{
-				Source: sourceRemote, Type: ChangeDelete, Path: "bin", ItemID: "item-bin", ParentID: "root",
+				Type: ChangeDelete, Path: "bin", ItemID: "item-bin", ParentID: "root",
 				DriveID: eng.driveID, ItemType: ItemTypeFile, IsDeleted: true,
 			}}, "cursor-after-delete")
 			require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))

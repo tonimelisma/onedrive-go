@@ -27,9 +27,36 @@ their invariants rather than merely carrying fields.
 `ScopeKey` is the clearest case: it decides `PersistsInBlockScopes()`,
 `BlocksAction()`, `CoveredPath()`, `IsGlobal()`, and its own human rendering --
 nineteen methods of policy that would otherwise be duplicated across the store,
-the planner, and the runtime. `actionType` answers `Direction()` and `Value()`.
+the planner, and the runtime. `actionType` answers `isMember()` and `Value()`.
 `permissionCapability` answers `IsLocal()`. Moving these apart from their data
 is what would produce an anemic model.
+
+`actionType` (`enums.go`) is held by the `exhaustive` linter: every switch on
+it names every member and none carries a `//nolint:exhaustive`, so lint
+passes only once a new member is decided in each. `isMember()` is the
+membership list; `Value()` refuses a value outside it, and
+`parseActionType` refuses a stored name outside it, so no store row carries
+one, and the planner refuses a built action outside it, or a folder create
+whose side is outside `folderCreateSide` (sync-planning.md). No decision can
+therefore meet such a value. Where one returns a plain value, its default
+panics with `outsideTheEnum`; where one returns an error, its default is one
+built with `outsideTheEnum`. The linter sees only the member lists, so
+`TestActionTypeSwitches_EveryDefaultRefuses` holds the defaults: it reads the
+package's product files, takes every switch whose case clauses name a
+constant of `actionType` or `folderCreateSide`, and fails when its default
+does not end in a panic or a return that calls `outsideTheEnum`, or when it
+has none; `String()` and `isMember()` are its named exceptions. Until
+2026-11-12 most defaults answered: not admitted by any mode, not a local
+write, creates nothing, fresh, no permission capability, not blocked by a
+write scope, no display size, nothing to ledger, a remote delete side for
+anything not a local delete. Which side a delete removes content from is one
+switch, `deleteSafetySideOf` (`domain_delete_safety.go`), for the planner's
+hold and its confirmation matching and for the store's delete ledger. A
+`Direction()` method classified action types as upload, download or delete;
+no product code read it, and it is gone with its type, as is a change event's
+source (`changeSource`), which every event carried and only one check read: a
+remote projection skipping events that were not remote, which no caller ever
+handed it.
 
 `IssueType` (`issue_types.go`) names every sync condition: the issue type of
 an observation issue, the condition type of a retry_work row, a scope's
@@ -104,7 +131,7 @@ and makes the family order a strict downward chain, which is what
 | Behavior | Evidence |
 | --- | --- |
 | Scope keys own their own blocking, path-coverage, and rendering policy rather than exporting raw fields for callers to interpret. | `TestScopeKey_BlocksAction`, `TestScopeKey_CoveredPath`, `TestScopeKey_CoveredPathMatchesFamilyAccessors`, `TestScopeKey_Humanize`, `TestScopeKey_IsGlobal`, `TestDescribeScopeKey_Service` |
-| Action types answer their own direction; an action type no case lists has none (the zero direction), never a guessed one. | `TestActionTypeDirection` |
+| Every decision on the action type panics on a value outside the enum instead of answering it, and every one that returns an error refuses such a value with one (the row value, mutation classification, the publication mutation, the delete ledger, the remote mirror, worker dispatch). | `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestActionTypeRefusals_ATypeOutsideTheEnumIsAnError`, `TestActionTypeSwitches_EveryDefaultRefuses` |
 | Every declared `IssueType` constant is a member and parses back to itself, with no two sharing a value; any other stored string, the empty one included, does not parse. | `TestIssueType_EveryDeclaredConstantIsAMemberAndParses`, `TestParseIssueType_RefusesAValueNoMemberHas` |
 | Every issue type, read from source, has a stated condition family or none (the transient runtime members, whose retried results then carry no `condition_key` rather than the unexpected one); a value outside the enum is the unexpected condition under any scope, never "no family"; every declared condition key has a display rank of its own. The engine's per-issue-type decisions are held the same way (sync-engine.md). | `TestConditionKeyForIssueType_EveryMemberIsDecided`, `TestConditionKeyForStoredCondition_ValueOutsideTheEnumIsUnexpectedUnderAnyScope`, `TestRuntimeConditionKey_TransientConditionsHaveNoFamily`, `TestConditionKeyRank_EveryDeclaredKeyHasItsOwnRank`, `TestConditionClearsAutomatically_EveryKeyIsDecided` |
 | `Baseline.GetCaseVariants` returns a copy of its sibling index under the read lock, so the watch observer can iterate it while workers commit outcomes through `Put` (R-6.3.4). | `TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut` |

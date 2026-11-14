@@ -24,7 +24,6 @@ func findBaselineOrphans(bl *Baseline, seen map[string]struct{}, driveID driveid
 		}
 
 		orphans = append(orphans, changeEvent{
-			Source:    sourceRemote,
 			Type:      ChangeDelete,
 			Path:      entry.Path,
 			ItemID:    entry.ItemID,
@@ -65,7 +64,6 @@ func findRemoteStateOrphans(
 		}
 
 		orphans = append(orphans, changeEvent{
-			Source:    sourceRemote,
 			Type:      ChangeDelete,
 			Path:      row.Path,
 			ItemID:    row.ItemID,

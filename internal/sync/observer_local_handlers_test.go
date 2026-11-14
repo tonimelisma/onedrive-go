@@ -377,7 +377,6 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	case ev := <-events:
 		require.Equal(t, changeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
 		require.Equal(t, "combo.txt", ev.Path)
-		require.Equal(t, SourceLocal, ev.Source)
 	case <-time.After(eventWait):
 		require.Fail(t, "timeout waiting for combined Chmod|Create event")
 	}
@@ -512,7 +511,6 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 
 	require.NotNil(t, createEv, "should have a ChangeCreate for the new path")
 	require.Equal(t, "dest/moved.txt", createEv.Path)
-	require.Equal(t, SourceLocal, createEv.Source)
 
 	require.NotNil(t, deleteEv, "should have a ChangeDelete for the old path")
 	require.Equal(t, "original.txt", deleteEv.Path)

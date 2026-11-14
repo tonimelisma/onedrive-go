@@ -1239,8 +1239,7 @@ func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) 
 		ItemID:   "unknown-item",
 		ItemType: ItemTypeFile,
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown action type")
+	require.ErrorContains(t, err, outsideTheEnum(actionType(999)))
 
 	var count int
 	queryErr := mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)

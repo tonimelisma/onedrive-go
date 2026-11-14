@@ -150,6 +150,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup,
 		TestRunOnce_AQuotaRefusalBelowTheWindowIsTimedRetryWorkNotABlock,
 		TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain,
+		TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing,
 		TestRunOnce_ActivityHookNamesEachCompletedFile,
 		TestRunOnce_BaselineUpdatedAfterRun,
 		TestRunOnce_Bidirectional_FullRun,
