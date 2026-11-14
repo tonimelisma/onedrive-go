@@ -22,14 +22,11 @@ func TestE2E_Shared_FileDiscoveryAndSelectorRoundTrip(t *testing.T) {
 	fixture := resolveSharedFileFixture(t, rawLink)
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.RecipientDriveID, t.TempDir())
 
-	assert.Equal(t, fixture.RecipientEmail, fixture.FileItem.AccountEmail)
-	assert.Equal(t, fixture.FileItem.Selector, fixture.RawStat.SharedSelector)
+	assertSharedFileFixtureConsistent(t, &fixture)
 
 	selectorStat := statSharedTargetJSON(t, cfgPath, env, fixture.FileItem.Selector)
-	assert.Equal(t, fixture.RawStat.RemoteDriveID, selectorStat.RemoteDriveID)
-	assert.Equal(t, fixture.RawStat.RemoteItemID, selectorStat.RemoteItemID)
+	assertStatNamesSharedItem(t, &fixture.FileItem, &selectorStat)
 	assert.Equal(t, fixture.RawStat.Name, selectorStat.Name)
-	assert.Equal(t, fixture.FileItem.Selector, selectorStat.SharedSelector)
 
 	originalContent := getSharedTargetContent(t, cfgPath, env, fixture.FileItem.Selector)
 	restoreFile := writeTempContentFile(t, originalContent)
@@ -90,9 +87,7 @@ func TestE2E_Shared_RawFolderLinkDriveAdd_NormalizesToCanonicalSharedDrive(t *te
 	cfgPath, env := writeSyncConfigForDriveID(t, folderFixture.RecipientDriveID, t.TempDir())
 
 	rawStat := statSharedTargetJSON(t, cfgPath, env, "--account", folderFixture.RecipientEmail, rawLink)
-	assert.Equal(t, folderFixture.FolderItem.RemoteDriveID, rawStat.RemoteDriveID)
-	assert.Equal(t, folderFixture.FolderItem.RemoteItemID, rawStat.RemoteItemID)
-	assert.Equal(t, folderFixture.FolderItem.Selector, rawStat.SharedSelector)
+	assertStatNamesSharedItem(t, &folderFixture.FolderItem, &rawStat)
 
 	runCLIWithoutDrive(t, cfgPath, env, "--account", folderFixture.RecipientEmail, "drive", "add", rawLink)
 

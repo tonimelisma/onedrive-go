@@ -66,8 +66,17 @@ func remoteNames(t *testing.T, cfgPath string, env map[string]string, remotePath
 func contentTree(t *testing.T, root string) map[string]string {
 	t.Helper()
 
+	tree, err := readContentTree(root)
+	require.NoError(t, err)
+
+	return tree
+}
+
+// readContentTree is contentTree without the assertion, for a poll predicate:
+// a tree that cannot be read yet (its root not synced down, say) is an error.
+func readContentTree(root string) (map[string]string, error) {
 	tree := map[string]string{}
-	require.NoError(t, filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -89,9 +98,20 @@ func contentTree(t *testing.T, root string) map[string]string {
 		}
 		tree[rel] = string(data)
 		return nil
-	}))
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf("read content tree %s: %w", root, walkErr)
+	}
 
-	return tree
+	return tree, nil
+}
+
+// contentTreeHolds reports whether the tree under root can be read and ready
+// accepts it. It asserts nothing, so a poll predicate can call it.
+func contentTreeHolds(root string, ready func(map[string]string) bool) bool {
+	tree, err := readContentTree(root)
+
+	return err == nil && ready(tree)
 }
 
 func writeLocal(t *testing.T, root, rel, content string) {
@@ -172,7 +192,7 @@ func TestE2E_Sync_CrossMoves(t *testing.T) {
 	runCLIWithConfig(t, cfgPath, env, "mv", "/box/inner.txt", "/inner.txt")
 	want := map[string]string{"box": "/", "box/top.txt": "top", "inner.txt": "inner"}
 	syncUntil(t, cfgPath, env, "both moves land", func() bool {
-		return assert.ObjectsAreEqual(want, contentTree(t, syncDir))
+		return contentTreeHolds(syncDir, func(tree map[string]string) bool { return assert.ObjectsAreEqual(want, tree) })
 	})
 	waitForRemoteReadContains(t, cfgPath, env, "", "top.txt", pollTimeout, "ls", "/box")
 	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "top.txt")
@@ -194,6 +214,29 @@ func namingCorpus() []string {
 	}
 }
 
+// namingCorpusContentFormat is the content of the i-th corpus file.
+const namingCorpusContentFormat = "corpus %d"
+
+// namingCorpusArrived reports whether tree holds every corpus name, up to
+// Unicode form, with the content the first client wrote under it.
+func namingCorpusArrived(tree map[string]string) bool {
+	for i, name := range namingCorpus() {
+		want := fmt.Sprintf(namingCorpusContentFormat, i)
+		arrived := false
+		for rel, content := range tree {
+			if norm.NFC.String(rel) == norm.NFC.String(name) && content == want {
+				arrived = true
+				break
+			}
+		}
+		if !arrived {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Validates: R-2.11.4, R-2.12.2, R-2.12.3, R-2.13.2, R-6.6.28
 //
 // Each corpus name uploads, comes back from OneDrive's listing as itself (up
@@ -207,7 +250,7 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	syncDir := t.TempDir()
 	cfgPath, env, root := writeIsolatedSharedRootWriterConfig(t, syncDir, "", nil)
 	for i, name := range namingCorpus() {
-		writeLocal(t, syncDir, "corpus/"+name, fmt.Sprintf("corpus %d", i))
+		writeLocal(t, syncDir, "corpus/"+name, fmt.Sprintf(namingCorpusContentFormat, i))
 	}
 	for _, name := range []string{"trailing-dot.", "trailing-space ", " leading-space.txt"} {
 		writeLocal(t, syncDir, "rejected/"+name, "stays local")
@@ -215,7 +258,9 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	writeLocal(t, syncDir, "cases/Mixed.txt", "upper")
 	writeLocal(t, syncDir, "cases/mixed.txt", "lower")
 
-	runCLIBestEffort(t, cfgPath, env, resolveDriveSelection(env, ""), "sync", "--upload-only")
+	// The names OneDrive cannot hold and the case pair stay unsynced, so the
+	// pass that uploaded everything else exits 1 (R-6.6.28).
+	runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 	waitForRemoteReadContains(t, cfgPath, env, "", "children", pollTimeout, "ls", "/corpus")
 
 	listed := map[string]bool{}
@@ -235,13 +280,18 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	// Download direction: the same names arriving from OneDrive.
 	otherDir := t.TempDir()
 	otherCfg, otherEnv, _ := writeIsolatedSharedRootWriterConfig(t, otherDir, "", root)
-	runCLIBestEffort(t, otherCfg, otherEnv, resolveDriveSelection(otherEnv, ""), "sync", "--download-only")
-	downloaded := contentTree(t, filepath.Join(otherDir, "corpus"))
+	otherCorpus := filepath.Join(otherDir, "corpus")
+	requireSyncEventuallyConverges(t, otherCfg, otherEnv, hardeningSyncTimeout,
+		"every corpus name arrives with its content on the second client",
+		func(result syncAttemptResult) bool {
+			return result.Err == nil && contentTreeHolds(otherCorpus, namingCorpusArrived)
+		}, "--download-only")
+	downloaded := contentTree(t, otherCorpus)
 	for i, name := range namingCorpus() {
 		found := false
 		for rel, content := range downloaded {
 			if norm.NFC.String(rel) == norm.NFC.String(name) {
-				found = assert.Equal(t, fmt.Sprintf("corpus %d", i), content, "%q", name)
+				found = assert.Equal(t, fmt.Sprintf(namingCorpusContentFormat, i), content, "%q", name)
 			}
 		}
 		assert.True(t, found, "%q arrives under its own name", name)
@@ -273,7 +323,7 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 	writeLocal(t, dirA, "doc/plan.txt", "plan v1")
 	runSyncThroughTransientFailures(t, cfgA, envA)
 	syncUntil(t, cfgB, envB, "B sees A's files", func() bool {
-		return contentTree(t, dirB)["doc/plan.txt"] == "plan v1"
+		return contentTreeHolds(dirB, func(tree map[string]string) bool { return tree["doc/plan.txt"] == "plan v1" })
 	})
 
 	// Both edit shared.txt; A syncs first, B meets a remote change and its
@@ -282,7 +332,9 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 	writeLocal(t, dirB, "shared.txt", "edited by B")
 	runSyncThroughTransientFailures(t, cfgA, envA)
 	syncUntil(t, cfgB, envB, "B reconciles the concurrent edit", func() bool {
-		return hasContent(contentTree(t, dirB), "edited by A") && hasContent(contentTree(t, dirB), "edited by B")
+		return contentTreeHolds(dirB, func(tree map[string]string) bool {
+			return hasContent(tree, "edited by A") && hasContent(tree, "edited by B")
+		})
 	})
 
 	// A renames the folder while B edits a file inside it.
@@ -290,11 +342,12 @@ func TestE2E_Sync_TwoWriters(t *testing.T) {
 	writeLocal(t, dirB, "doc/plan.txt", "plan v2 by B")
 	runSyncThroughTransientFailures(t, cfgA, envA)
 	syncUntil(t, cfgB, envB, "B applies A's rename and uploads its edit", func() bool {
-		return contentTree(t, dirB)["docs-renamed/plan.txt"] == "plan v2 by B"
+		return contentTreeHolds(dirB, func(tree map[string]string) bool { return tree["docs-renamed/plan.txt"] == "plan v2 by B" })
 	})
 
 	syncUntil(t, cfgA, envA, "A converges with B", func() bool {
-		return assert.ObjectsAreEqual(contentTree(t, dirB), contentTree(t, dirA))
+		treeB, err := readContentTree(dirB)
+		return err == nil && contentTreeHolds(dirA, func(treeA map[string]string) bool { return assert.ObjectsAreEqual(treeB, treeA) })
 	})
 	for _, content := range []string{"edited by A", "edited by B", "plan v2 by B"} {
 		assert.True(t, hasContent(contentTree(t, dirA), content), "%q survives", content)
@@ -380,7 +433,7 @@ func TestE2E_Sync_TypeChangesBothWays(t *testing.T) {
 	waitForRemoteDeleteDisappearance(t, cfgPath, env, "", "was-folder", "ls", "/")
 	putRemoteFile(t, cfgPath, env, "/was-folder", "now a file")
 	syncUntil(t, cfgPath, env, "the remote type change reaches the local tree", func() bool {
-		return contentTree(t, syncDir)["was-folder"] == "now a file"
+		return contentTreeHolds(syncDir, func(tree map[string]string) bool { return tree["was-folder"] == "now a file" })
 	})
 
 	assert.Equal(t, map[string]string{

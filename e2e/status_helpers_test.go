@@ -71,8 +71,14 @@ type statusSyncStateJSON struct {
 	Issues                []statusIssueJSON `json:"issues"`
 	ExamplesLimit         int               `json:"examples_limit"`
 	Verbose               bool              `json:"verbose"`
-	Perf                  map[string]any    `json:"perf,omitempty"`
+	Perf                  *statusPerfJSON   `json:"perf,omitempty"`
 	PerfUnavailableReason string            `json:"perf_unavailable_reason,omitempty"`
+}
+
+// statusPerfJSON is the part of a mount's live perf snapshot in
+// `status --perf --json` that the suite reads.
+type statusPerfJSON struct {
+	HTTPRequestCount int `json:"http_request_count"`
 }
 
 type statusIssueJSON struct {
@@ -153,7 +159,8 @@ func readStatus(t *testing.T, cfgPath string, env map[string]string) statusJSON 
 	t.Helper()
 
 	output, stdout, stderr, err := runStatusAllowError(t, cfgPath, env)
-	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
+	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s",
+		suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 
 	return output
 }
@@ -162,7 +169,8 @@ func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string) st
 	t.Helper()
 
 	output, stdout, stderr, err := runStatusAllDrivesAllowError(t, cfgPath, env)
-	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s", stdout, stderr)
+	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s",
+		suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 
 	return output
 }
@@ -348,6 +356,44 @@ func requireStatusDrive(
 	return requireStatusDriveByIdentity(t, status, canonicalID)
 }
 
+// waitForStatusPerfRequests waits up to daemonPollTimeout until
+// `status --perf --json` shows a live perf snapshot with at least one Graph
+// request for the drive that env selects, or else the suite's primary drive,
+// and returns that snapshot. Only a running sync owner that has made requests
+// for the mount publishes one.
+func waitForStatusPerfRequests(t *testing.T, cfgPath string, env map[string]string) statusPerfJSON {
+	t.Helper()
+
+	canonicalID := resolveDriveSelection(env, "")
+	var counted statusPerfJSON
+	pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		canonicalID,
+		daemonPollTimeout,
+		timingKindSyncConvergence,
+		"status --perf counts Graph requests for "+suiteDriveRoles.Role(canonicalID),
+		func(stdout, stderr string, err error) bool {
+			status, _, _, decodeErr := decodeStatusJSONResult(stdout, stderr, err)
+			if decodeErr != nil {
+				return false
+			}
+
+			drive, ok := findStatusDriveJSON(status, canonicalID)
+			if !ok || drive.SyncState == nil || drive.SyncState.Perf == nil {
+				return false
+			}
+
+			counted = *drive.SyncState.Perf
+			return counted.HTTPRequestCount > 0
+		},
+		"status", "--perf", "--json",
+	)
+
+	return counted
+}
+
 func readStatusSyncState(t *testing.T, cfgPath string, env map[string]string) statusSyncStateJSON {
 	t.Helper()
 
@@ -364,6 +410,47 @@ func readStatusSyncStateForDrive(
 
 	status := readStatus(t, cfgPath, env)
 	driveStatus := requireStatusDriveByIdentity(t, status, canonicalID)
-	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", canonicalID)
+	require.NotNil(t, driveStatus.SyncState, "expected sync_state for %s", suiteDriveRoles.Role(canonicalID))
 	return *driveStatus.SyncState
+}
+
+// statusDriveStatePaused is the state `status --json` gives a drive whose
+// pause has not expired.
+const statusDriveStatePaused = "paused"
+
+// readStatusDriveState reads, once, the state `status --json` reports for the
+// drive that env selects, or else the suite's primary drive.
+func readStatusDriveState(t *testing.T, cfgPath string, env map[string]string) string {
+	t.Helper()
+
+	status := readStatus(t, cfgPath, env)
+	return requireStatusDriveByIdentity(t, status, resolveDriveSelection(env, "")).State
+}
+
+// waitForStatusDriveUnpaused waits up to daemonPollTimeout until
+// `status --json` reports the drive that env selects, or else the suite's
+// primary drive, in a state other than paused: its timed pause has expired.
+func waitForStatusDriveUnpaused(t *testing.T, cfgPath string, env map[string]string) {
+	t.Helper()
+
+	canonicalID := resolveDriveSelection(env, "")
+	pollRemoteEventually(
+		t,
+		cfgPath,
+		env,
+		canonicalID,
+		daemonPollTimeout,
+		timingKindSyncConvergence,
+		"status reports "+suiteDriveRoles.Role(canonicalID)+" no longer paused",
+		func(stdout, stderr string, err error) bool {
+			status, _, _, decodeErr := decodeStatusJSONResult(stdout, stderr, err)
+			if decodeErr != nil {
+				return false
+			}
+
+			drive, ok := findStatusDriveJSON(status, canonicalID)
+			return ok && drive.State != statusDriveStatePaused
+		},
+		"status", "--json",
+	)
 }
