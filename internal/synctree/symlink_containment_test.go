@@ -82,7 +82,7 @@ func TestRoot_MkdirAll_ThroughSymlinkedAncestorFails(t *testing.T) {
 
 	f := newEscapeFixture(t)
 
-	err := f.root.MkdirAll("alias/created", 0o700)
+	err := f.root.MkdirAll("alias/created")
 	require.Error(t, err, "mkdirall through a symlinked ancestor must fail closed")
 	assert.NoDirExists(t, filepath.Join(f.outside, "created"))
 }
@@ -193,7 +193,7 @@ func TestRoot_MutationsWithinRootStillSucceed(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAll("a/b", 0o700))
+	require.NoError(t, root.MkdirAll("a/b"))
 	assert.DirExists(t, filepath.Join(dir, "a", "b"))
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "b", "f.txt"), []byte("data"), 0o600))
@@ -227,7 +227,7 @@ func TestRoot_MutationsThroughInRootSymlinkSucceed(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAll("inner/sub", 0o700))
+	require.NoError(t, root.MkdirAll("inner/sub"))
 	assert.DirExists(t, filepath.Join(dir, "real", "sub"))
 }
 

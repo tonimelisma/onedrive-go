@@ -879,6 +879,15 @@ root disappeared, moved away, or was deleted and recreated at the same path, the
 engine reports `ErrMountRootUnavailable` instead of producing an empty local
 snapshot that could plan remote deletes.
 
+The alias directory sits in the parent's sync tree and mirrors a shortcut the
+user added to their OneDrive, so the parent creates it, any parent it is
+missing, and any parent a moved alias needs, as folders in the user's tree:
+`synctree.Root.MkdirAllNoFollow` takes no mode and gives each
+`localpath.UserTreeDirPerm`, 0777 minus the umask (R-5.10.2). They were 0700
+whatever the umask, though the folders the child engine creates inside the
+alias were 0755. A moved alias keeps its own mode
+(`TestEngine_ShortcutRootFoldersFollowTheUmask`).
+
 Shortcut placeholder rename/delete mutations are parent-engine operations by
 binding item ID. The parent engine observes the need for local alias
 rename/delete from its protected-root scan/watch path, applies the Graph

@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	shortcutRootDirPerm             = os.FileMode(0o700)
 	shortcutRootCaseRenameAttempts  = 10
 	shortcutRootCaseRenameTempInfix = ".shortcut-alias-case-rename"
 )
@@ -221,9 +220,10 @@ func (e *Engine) materializeShortcutRoot(
 		return ShortcutRootRecord{}, false, false, nil
 	}
 	// Existing parents are addressed as spelled on disk; the folder itself,
-	// new, gets the stored name.
+	// new, gets the stored name. It and any parent it needs are folders in
+	// the user's tree, like any other the sync tree creates (R-5.10.2).
 	onDisk := e.shortcutRootOnDisk(relativePath)
-	createErr := e.syncTree.MkdirAllNoFollow(onDisk, shortcutRootDirPerm)
+	createErr := e.syncTree.MkdirAllNoFollow(onDisk)
 	if createErr != nil {
 		plan := planShortcutRootMaterializeResult(record, shortcutRootMaterializeResult{CreateErr: createErr})
 		return shortcutRootLocalPlanResult(&plan)
@@ -524,7 +524,7 @@ func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativeP
 		}
 		return fmt.Errorf("%w: current shortcut alias projection already exists", synctree.ErrUnsafePath)
 	}
-	if err := e.syncTree.MkdirAllNoFollow(filepath.Dir(toRelativePath), shortcutRootDirPerm); err != nil {
+	if err := e.syncTree.MkdirAllNoFollow(filepath.Dir(toRelativePath)); err != nil {
 		return fmt.Errorf("creating current shortcut alias parent: %w", err)
 	}
 	if err := e.syncTree.Rename(fromRelativePath, toRelativePath); err != nil {

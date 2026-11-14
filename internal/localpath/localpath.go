@@ -23,6 +23,8 @@ func cleanPath(path string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
+// absolutePath cleans path and resolves a relative one against the working
+// directory. An empty path is refused.
 func absolutePath(path string) (string, error) {
 	clean, err := cleanPath(path)
 	if err != nil {
@@ -37,6 +39,9 @@ func absolutePath(path string) (string, error) {
 	return abs, nil
 }
 
+// Open opens path for reading. Like every function in this package it
+// refuses an empty path, resolves a relative one against the working
+// directory and names the path as it was given in its error.
 func Open(path string) (*os.File, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -83,6 +88,8 @@ func OpenRegular(path string) (*os.File, error) {
 	return file, nil
 }
 
+// OpenFile opens path with flag. A file the call creates asks for perm; the
+// umask applies.
 func OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -98,6 +105,7 @@ func OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 	return file, nil
 }
 
+// ReadFile returns the whole content of the file at path.
 func ReadFile(path string) ([]byte, error) {
 	file, err := Open(path)
 	if err != nil {
@@ -132,6 +140,7 @@ func closeAfterFailure(file *os.File, path string, cause error) error {
 	return cause
 }
 
+// Stat describes what path names, following a symlink.
 func Stat(path string) (os.FileInfo, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -147,6 +156,7 @@ func Stat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// Lstat describes path itself: a symlink is described, not followed.
 func Lstat(path string) (os.FileInfo, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -162,6 +172,20 @@ func Lstat(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// UserTreeDirPerm is the mode the client asks for when it creates a folder in
+// a user's tree: below the sync folder (a synced folder, a shared folder's
+// shortcut folder and the parents a moved one needs; the sync tree applies
+// it to every folder it creates and takes no mode from its callers), a
+// folder `get` downloads into, a missing parent of a `get` target, and a
+// missing parent of a file restored from the trash. The kernel applies the
+// umask, as for any other program, so these folders get what the files in
+// them get (0666 minus the umask). The sync folder the client creates and
+// the client's own state are private and keep their own modes; an existing
+// folder is never changed.
+const UserTreeDirPerm os.FileMode = 0o777
+
+// MkdirAll creates path and its missing parents, each asking for perm; the
+// umask applies. A folder that exists keeps its mode.
 func MkdirAll(path string, perm os.FileMode) error {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -175,19 +199,7 @@ func MkdirAll(path string, perm os.FileMode) error {
 	return nil
 }
 
-func Mkdir(path string, perm os.FileMode) error {
-	abs, err := absolutePath(path)
-	if err != nil {
-		return err
-	}
-
-	if err := os.Mkdir(abs, perm); err != nil {
-		return fmt.Errorf("creating directory %s: %w", path, err)
-	}
-
-	return nil
-}
-
+// Chmod sets the mode of path to perm.
 func Chmod(path string, perm os.FileMode) error {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -201,6 +213,7 @@ func Chmod(path string, perm os.FileMode) error {
 	return nil
 }
 
+// Remove removes the file or the empty directory at path.
 func Remove(path string) error {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -214,6 +227,8 @@ func Remove(path string) error {
 	return nil
 }
 
+// Rename moves src to dst and replaces a file already at dst.
+// RenameNoReplace is the move that refuses to replace one.
 func Rename(src, dst string) error {
 	srcPath, err := absolutePath(src)
 	if err != nil {
@@ -231,6 +246,7 @@ func Rename(src, dst string) error {
 	return nil
 }
 
+// ReadDir lists the entries of the directory at path, sorted by name.
 func ReadDir(path string) ([]os.DirEntry, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -245,6 +261,8 @@ func ReadDir(path string) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
+// EvalSymlinks returns path as an absolute path with every symlink in it
+// resolved.
 func EvalSymlinks(path string) (string, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -259,6 +277,7 @@ func EvalSymlinks(path string) (string, error) {
 	return resolved, nil
 }
 
+// Chtimes sets the access and modification times of path.
 func Chtimes(path string, atime, mtime time.Time) error {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -301,6 +320,8 @@ func SyncDir(path string) error {
 	return nil
 }
 
+// CreateTemp creates a new file in dir, named from pattern as os.CreateTemp
+// names it, and returns it open for reading and writing.
 func CreateTemp(dir, pattern string) (*os.File, error) {
 	abs, err := absolutePath(dir)
 	if err != nil {
@@ -315,6 +336,8 @@ func CreateTemp(dir, pattern string) (*os.File, error) {
 	return file, nil
 }
 
+// MkdirTemp creates a new directory in dir, named from pattern as
+// os.MkdirTemp names it, and returns its path.
 func MkdirTemp(dir, pattern string) (string, error) {
 	abs, err := absolutePath(dir)
 	if err != nil {
@@ -329,6 +352,8 @@ func MkdirTemp(dir, pattern string) (string, error) {
 	return tempDir, nil
 }
 
+// RemoveAll removes path and everything below it. A path that does not
+// exist is not an error.
 func RemoveAll(path string) error {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -342,6 +367,8 @@ func RemoveAll(path string) error {
 	return nil
 }
 
+// Symlink creates dst as a symlink to src. Both are made absolute first, so
+// the link does not depend on the directory it lies in.
 func Symlink(src, dst string) error {
 	srcPath, err := absolutePath(src)
 	if err != nil {
@@ -458,6 +485,8 @@ func atomicWrite(
 	return nil
 }
 
+// closeWithContext closes temp after action failed with cause and returns
+// that failure, joined with the close failure, if any.
 func closeWithContext(temp *os.File, action string, cause error) error {
 	closeErr := temp.Close()
 	baseErr := fmt.Errorf("%s: %w", action, cause)

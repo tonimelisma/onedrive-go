@@ -228,6 +228,35 @@ func TestExecutor_CreateLocalFolder(t *testing.T) {
 	require.True(t, info.IsDir(), "expected directory")
 }
 
+// A folder sync creates in the sync tree is asked for 0777 and gets the
+// umask, like the files downloaded into it. It used to be 0755 whatever the
+// umask, so under 002 the files were group-writable and their folder was not.
+//
+// Validates: R-5.10.2
+func TestExecutor_CreatedFolderFollowsTheUmask(t *testing.T) {
+	t.Parallel()
+	if !synctest.RunUnderUmask(t, synctest.GroupWritableUmask) {
+		return
+	}
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	o := e.ExecuteFolderCreate(t.Context(), &Action{
+		Type:       ActionFolderCreate,
+		Path:       "docs/notes",
+		CreateSide: createLocal,
+		View:       &pathView{Remote: &remoteState{ItemID: "folder1"}},
+	})
+	requireOutcomeSuccess(t, &o)
+
+	for _, rel := range []string{"docs", "docs/notes"} {
+		info, err := os.Stat(filepath.Join(syncRoot, rel))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o775), info.Mode().Perm(), "%s is 0777 minus the umask", rel)
+	}
+}
+
 func TestExecutor_CreateRemoteFolder(t *testing.T) {
 	t.Parallel()
 
