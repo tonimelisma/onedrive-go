@@ -53,7 +53,7 @@ func TestBlockScopeActivationLine_EveryMemberIsDecided(t *testing.T) {
 				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueLocalReadDenied,
 				issueLocalWriteDenied, issueCaseCollision, issueRemoteNameTwin, issueFileTooLargeForSpace,
 				issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
-				issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueLocalFileTooLarge, issueLocalBusy,
+				issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge, issueLocalBusy,
 				issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen,
 				issueUploadVerification, issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict,
 				issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,

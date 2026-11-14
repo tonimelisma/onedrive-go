@@ -36,6 +36,12 @@ func localObservationManagedIssueTypes() []IssueType {
 		// it (the user renamed it back or deleted it) clears the report. The
 		// file itself is never touched (R-6.4.9).
 		issueLocalInterruptedRemoval,
+		// What a removed shared folder's release kept is recorded by the
+		// release after the run's last plan and by nothing else, so every
+		// full scan clears it: a release that runs again records what is
+		// still there, and a folder shared again keeps no stale report
+		// (R-2.4.8).
+		issueRemovedFolderKept,
 	}
 }
 

@@ -65,10 +65,10 @@ const (
 	// issueLocalUnsyncableReplacement marks a synced path whose item is now
 	// something sync cannot represent: replaced by a symlink or special file,
 	// or renamed to an invalid name or an excluded location. The synced path
-	// is unavailable truth, never a delete (D-004, P-5).
+	// is unavailable truth, never a delete (D-004, R-6.2.14).
 	issueLocalUnsyncableReplacement IssueType = "local_unsyncable_replacement"
 	// issueLocalMountBoundary marks a folder on another filesystem inside the
-	// sync folder; sync does not cross into it (D-003, P-11).
+	// sync folder; sync does not cross into it (D-003, R-6.2.15).
 	issueLocalMountBoundary IssueType = "local_mount_boundary"
 	// issueRemoteFolderUnverifiable marks a folder delete on OneDrive that
 	// sync will not run because the folder is too large to list first.
@@ -77,14 +77,21 @@ const (
 	// it and never moved out, because a run was interrupted. It is the
 	// user's content, so it is reported, never deleted.
 	issueLocalInterruptedRemoval IssueType = "local_interrupted_removal"
-	issueLocalFileTooLarge       IssueType = "local_file_too_large"
-	issueLocalBusy               IssueType = "local_busy"
-	issueLocalCrossDevice        IssueType = "local_cross_device"
-	issueUnsupportedOperation    IssueType = "unsupported_operation"
-	issueMalwareDetected         IssueType = "malware_detected"
-	issueLocalDatabaseOpen       IssueType = "local_database_open"
-	issueUploadVerification      IssueType = "upload_verification_failed"
-	issueDownloadIntegrity       IssueType = "download_integrity"
+	// issueRemovedFolderKept marks an entry of a removed shared folder's
+	// local copy that its release did not take (engine_shortcut_release.go):
+	// content sync does not manage, a synced folder that cannot be written
+	// to, a synced entry the local delete could not move to the trash or
+	// delete, or a change that can no longer be sent to the shared folder.
+	// It is the user's, so it is reported and kept.
+	issueRemovedFolderKept    IssueType = "removed_folder_kept"
+	issueLocalFileTooLarge    IssueType = "local_file_too_large"
+	issueLocalBusy            IssueType = "local_busy"
+	issueLocalCrossDevice     IssueType = "local_cross_device"
+	issueUnsupportedOperation IssueType = "unsupported_operation"
+	issueMalwareDetected      IssueType = "malware_detected"
+	issueLocalDatabaseOpen    IssueType = "local_database_open"
+	issueUploadVerification   IssueType = "upload_verification_failed"
+	issueDownloadIntegrity    IssueType = "download_integrity"
 
 	// Runtime transient (execution-time). These name a retryable failure in
 	// the result decision, its retry delay and its log lines; no store keeps
@@ -126,6 +133,7 @@ func (t IssueType) isMember() bool {
 		issueLocalMountBoundary,
 		issueRemoteFolderUnverifiable,
 		issueLocalInterruptedRemoval,
+		issueRemovedFolderKept,
 		issueLocalFileTooLarge,
 		issueLocalBusy,
 		issueLocalCrossDevice,
@@ -149,14 +157,20 @@ func (t IssueType) isMember() bool {
 // type keeps a file from syncing, so that a one-shot sync ending with it in
 // the store has work left and exits 1 (R-6.6.28). A type answers no only when
 // it records a deliberate hold or a fact that keeps no file from syncing:
-// deletes held for `sync --confirm-deletes`, and the leftover of an
-// interrupted removal, which sits at an internal name sync never syncs and is
-// reported for the user to look at. A value outside the enum, which the
-// stores refuse, is not known to be done, so it counts.
+// deletes held for `sync --confirm-deletes`, the leftover of an interrupted
+// removal, which sits at an internal name sync never syncs and is reported
+// for the user to look at, and what a removed shared folder's release kept:
+// content sync does not sync by design, a synced folder that cannot be
+// written to or a synced entry the local delete could not remove, both
+// already synced, or a change that can no longer be sent to the shared
+// folder, whose own remote_read_denied issue already counts.
+// A value outside the enum, which the stores refuse, is not known to be done,
+// so it counts.
 func issueTypeLeavesFileUnsynced(issueType IssueType) bool {
 	switch issueType {
 	case issueDeletesHeld,
-		issueLocalInterruptedRemoval:
+		issueLocalInterruptedRemoval,
+		issueRemovedFolderKept:
 		return false
 	case IssueInvalidFilename,
 		issuePathTooLong,

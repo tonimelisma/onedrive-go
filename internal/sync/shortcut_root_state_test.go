@@ -496,9 +496,9 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	// The child's final drain released the tree, so the root is empty.
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "uploaded.txt"), []byte("drained"), 0o600))
 	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
@@ -525,6 +525,54 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateRemovedChildCleanupPending, roots[0].State)
 	assert.Empty(t, roots[0].ProtectedPaths)
+}
+
+// Validates: R-2.4.8
+//
+// The parent never walks a removed shared folder's tree. A root that still
+// holds something when the child acknowledges its drain (it arrived after the
+// child's release) stays as it is, and the binding goes back to the final
+// drain, so the child runs again and releases or reports what is there.
+func TestEngine_AcknowledgeChildFinalDrainSendsANonEmptyRootBackToTheFinalDrain(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
+	require.NoError(t, os.MkdirAll(filepath.Join(aliasRoot, "sub"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "sub", "arrived-late.txt"), []byte("mine"), 0o600))
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+		NamespaceID:       shortcutNamespaceTestID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             ShortcutRootStateRemovedFinalDrain,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}}))
+
+	snapshot, err := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+		Ref: newShortcutChildAckRef("binding-1"),
+	})
+
+	require.NoError(t, err, "a root that is not empty is not a failed release")
+	assert.FileExists(t, filepath.Join(aliasRoot, "sub", "arrived-late.txt"), "nothing under the root is touched")
+	assert.Empty(t, snapshot.CleanupCommands, "the child's state is not purged")
+	require.Len(t, snapshot.RunCommands, 1, "the final drain runs again")
+	assert.Equal(t, ShortcutChildRunModeFinalDrain, snapshot.RunCommands[0].Mode)
+	roots, err := eng.baseline.listShortcutRoots(t.Context())
+	require.NoError(t, err)
+	require.Len(t, roots, 1)
+	assert.Equal(t, ShortcutRootStateRemovedFinalDrain, roots[0].State)
+	assert.Equal(t, []string{"Shared/Docs"}, roots[0].ProtectedPaths)
+
+	// Nothing changed: the next local reconcile leaves the record alone.
+	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.FileExists(t, filepath.Join(aliasRoot, "sub", "arrived-late.txt"))
 }
 
 // Validates: R-2.4.8
@@ -1016,7 +1064,6 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "drained.txt"), []byte("done"), 0o600))
 	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",

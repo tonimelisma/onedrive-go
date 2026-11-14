@@ -128,6 +128,9 @@ func TestValidateShortcutRootTransitionAllowsKnownLifecycleEdges(t *testing.T) {
 		{"cleanup failure stays protected", ShortcutRootStateRemovedFinalDrain, shortcutRootEventProjectionCleanupFailed, ShortcutRootStateRemovedCleanupBlocked},
 		{"clean drain enters release pending", ShortcutRootStateRemovedFinalDrain, shortcutRootEventChildFinalDrainClean, ShortcutRootStateRemovedReleasePending},
 		{"release pending cleanup can promote waiting replacement", ShortcutRootStateRemovedReleasePending, shortcutRootEventWaitingReplacementPromote, ShortcutRootStateActive},
+		{"a root that is not empty drains again", ShortcutRootStateRemovedReleasePending, shortcutRootEventProjectionNotEmpty, ShortcutRootStateRemovedFinalDrain},
+		{"a blocked root that is not empty drains again", ShortcutRootStateRemovedCleanupBlocked, shortcutRootEventProjectionNotEmpty, ShortcutRootStateRemovedFinalDrain},
+		{"a root that is not empty waits again", ShortcutRootStateRemovedReleasePending, shortcutRootEventProjectionNotEmpty, ShortcutRootStateSamePathReplacementWaiting},
 		{"duplicate target blocks active", ShortcutRootStateActive, shortcutRootEventDuplicateTargetDetected, ShortcutRootStateDuplicateTarget},
 		{"duplicate target resolves to active", ShortcutRootStateDuplicateTarget, shortcutRootEventDuplicateTargetResolved, ShortcutRootStateActive},
 		{"duplicate target local root ready stays duplicate", ShortcutRootStateDuplicateTarget, shortcutRootEventLocalRootReady, ShortcutRootStateDuplicateTarget},
@@ -248,6 +251,7 @@ func allShortcutRootLifecycleEventsForTest() []shortcutRootLifecycleEvent {
 		shortcutRootEventChildFinalDrainClean,
 		shortcutRootEventProjectionCleanupFailed,
 		shortcutRootEventProjectionCleanupSucceeded,
+		shortcutRootEventProjectionNotEmpty,
 		shortcutRootEventWaitingReplacementPromote,
 		shortcutRootEventChildArtifactsPurged,
 		shortcutRootEventDuplicateTargetDetected,
@@ -438,7 +442,7 @@ func TestPlanShortcutRootReleaseCleanupBlocksOnCleanupError(t *testing.T) {
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}
 
-	plan := planShortcutRootReleaseCleanup(&record, errors.New("permission denied"))
+	plan := planShortcutRootReleaseCleanup(&record, shortcutRootReleaseResult{Err: errors.New("permission denied")})
 
 	require.Error(t, plan.Err)
 	assert.True(t, plan.Changed)
@@ -468,7 +472,7 @@ func TestPlanShortcutRootReleaseCleanupPromotesWaitingReplacement(t *testing.T) 
 		},
 	}
 
-	plan := planShortcutRootReleaseCleanup(&record, nil)
+	plan := planShortcutRootReleaseCleanup(&record, shortcutRootReleaseResult{})
 
 	require.NoError(t, plan.Err)
 	assert.True(t, plan.Changed)
@@ -477,6 +481,60 @@ func TestPlanShortcutRootReleaseCleanupPromotesWaitingReplacement(t *testing.T) 
 	assert.Equal(t, ShortcutRootStateActive, plan.Records[1].State)
 	assert.Equal(t, "new-binding", plan.Records[1].BindingItemID)
 	assert.Empty(t, plan.Records[0].ProtectedPaths)
+}
+
+// Validates: R-2.4.8
+//
+// The parent removes a released alias root only as an empty directory. A root
+// that still holds something when the clean drain is acknowledged goes back
+// to the final drain, or to the final drain a same-path replacement waits
+// behind, so the child that owns the content runs again; it is not a blocked
+// cleanup.
+func TestPlanShortcutRootReleaseCleanupSendsANonEmptyRootBackToTheFinalDrain(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		waiting *ShortcutRootReplacement
+		want    ShortcutRootState
+	}{
+		{name: "alone", want: ShortcutRootStateRemovedFinalDrain},
+		{
+			name: "with a same-path replacement waiting",
+			waiting: &ShortcutRootReplacement{
+				BindingItemID: "new-binding", RelativeLocalPath: "Shared/Docs", LocalAlias: "Docs",
+				RemoteDriveID: driveid.New("new-drive"), RemoteItemID: "new-item", RemoteIsFolder: true,
+			},
+			want: ShortcutRootStateSamePathReplacementWaiting,
+		},
+	} {
+		for _, from := range []ShortcutRootState{ShortcutRootStateRemovedReleasePending, ShortcutRootStateRemovedCleanupBlocked} {
+			t.Run(tc.name+"/"+string(from), func(t *testing.T) {
+				t.Parallel()
+
+				record := ShortcutRootRecord{
+					BindingItemID:     "binding-1",
+					RelativeLocalPath: "Shared/Docs",
+					State:             from,
+					ProtectedPaths:    []string{"Shared/Docs"},
+					BlockedDetail:     "an earlier cleanup failure",
+					Waiting:           tc.waiting,
+				}
+
+				plan := planShortcutRootReleaseCleanup(&record, shortcutRootReleaseResult{NotEmpty: true})
+
+				require.NoError(t, plan.Err, "a root that is not empty is the child's, not a blocked cleanup")
+				assert.True(t, plan.Changed)
+				require.Len(t, plan.Records, 1)
+				assert.Equal(t, tc.want, plan.Records[0].State)
+				assert.Equal(t, []string{"Shared/Docs"}, plan.Records[0].ProtectedPaths, "the path stays protected")
+				assert.Empty(t, plan.Records[0].BlockedDetail)
+				assert.Equal(t, tc.waiting, plan.Records[0].Waiting)
+				assert.Equal(t, ShortcutChildRunModeFinalDrain, shortcutChildRunModeForRoot(plan.Records[0].State),
+					"the final drain runs again")
+			})
+		}
+	}
 }
 
 func assertShortcutStatusTextIsUserVocabulary(t *testing.T, state ShortcutRootState, texts ...string) {

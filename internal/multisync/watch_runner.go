@@ -211,7 +211,10 @@ func (o *Orchestrator) runWatchRunnerEngine(
 	// engineRunnerAdapter comment for why this layer adds no prefix.
 	if mount.isFinalDrainChild() {
 		//nolint:wrapcheck // The engine error carries its own context; this layer only reports it.
-		return engine.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{FullReconcile: true})
+		return engine.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{
+			FullReconcile:    true,
+			ReleaseLocalTree: true,
+		})
 	}
 
 	//nolint:wrapcheck // The engine error carries its own context; this layer only reports it.

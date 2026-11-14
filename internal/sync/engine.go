@@ -54,7 +54,7 @@ type Engine struct {
 	logger                 *slog.Logger
 	perfCollector          *perf.Collector
 	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
-	trash                  *localtrash.Trash      // local deletes and replaced files (P-4)
+	trash                  *localtrash.Trash      // local deletes and replaced files (R-6.4.9)
 	// trashPurgedAt is when housekeeping last purged expired trash entries;
 	// watch maintenance purges at most once per trashPurgeInterval.
 	trashPurgedAt   atomic.Int64
@@ -122,9 +122,10 @@ type Engine struct {
 	// value rather than five injectable fields.
 	clock syncClock
 	// wallClock is the engine's real clock: clock is it unless a test
-	// replaced clock, and every observer the engine builds runs on it. Its
-	// timer panics carry a timer callback's panic to the run it ends
-	// (beginRun).
+	// replaced clock, and every observer the engine builds runs on it, except
+	// that a pass's full local scan, which runs no timer, measures its
+	// racily-clean window on the run's clock (observeLocal). Its timer panics
+	// carry a timer callback's panic to the run it ends (beginRun).
 	wallClock realClock
 	nextRunID atomic.Int64
 
@@ -144,6 +145,13 @@ type Engine struct {
 	partialCleanupFailing       atomic.Bool
 	sessionCleanupFailing       atomic.Bool
 	trashPurgeFailing           atomic.Bool
+	// releasedRootJunkFailing and releaseRefusalFailing do the same for a
+	// removed shared folder's release that cannot remove the junk left in its
+	// emptied sync folder (emptyReleasedRoot) or a synced entry its local
+	// delete refuses (reportReleaseRefusals), which every later drain meets
+	// again.
+	releasedRootJunkFailing atomic.Bool
+	releaseRefusalFailing   atomic.Bool
 }
 
 // newEngine creates an Engine and opens the per-mount SyncStore. Existing
@@ -329,7 +337,7 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 }
 
 // configureEngineExecutor installs the mount-owned executor policy: the remote
-// root, pending-create store, local trash (P-4), content filter and the sync
+// root, pending-create store, local trash (R-6.4.9), content filter and the sync
 // folder identity remote deletes re-check (D-011). It returns the trash so the
 // engine's housekeeping purges the same one.
 func configureEngineExecutor(

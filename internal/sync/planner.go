@@ -14,8 +14,13 @@ type planner struct {
 	logger *slog.Logger
 }
 
+// plannerMountContext is what the plan knows of the mount it is for.
 type plannerMountContext struct {
 	DriveID driveid.ID
+	// ReleasesLocalTree is set for a removed shared folder's final drain
+	// (RunOptions.ReleaseLocalTree), whose run ends by releasing the local
+	// tree: its plan creates nothing new locally (leaveOutNewLocalItems).
+	ReleasesLocalTree bool
 }
 
 // newPlanner creates a planner with the given logger.

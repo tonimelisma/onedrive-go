@@ -103,10 +103,11 @@ func (e *Engine) acknowledgeChildArtifactsPurged(
 
 // confirmShortcutCompleteOmissions checks, before a complete observation is
 // applied, every active shortcut binding the observation did not return.
-// The planner turns a complete omission into a final drain, and releasing the
-// root removes its whole local projection, so one enumeration that dropped a
-// placeholder (a known transient Graph omission) deleted every file under it
-// (D-007). Here each omitted binding is looked up by ID:
+// The planner turns a complete omission into a final drain, and the release
+// that ends it takes every synced file of the local projection out of the
+// sync folder, so one enumeration that dropped a placeholder (a known
+// transient Graph omission) removed every file under it (D-007). Here each
+// omitted binding is looked up by ID:
 //   - still a live shortcut to the same target: it is re-added as observed and
 //     stays active;
 //   - 404, deleted, or now pointing elsewhere: it stays omitted and drains;

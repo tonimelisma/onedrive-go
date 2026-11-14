@@ -169,6 +169,9 @@ func (flow *engineFlow) applySupersededCompletion(
 	if err := flow.forgetRemoteItemProvenGone(ctx, r); err != nil {
 		return err
 	}
+	if err := flow.forgetLocalCtimeProvenChanged(ctx, r); err != nil {
+		return err
+	}
 	flow.results.superseded++
 	if streak := flow.recordSupersede(r); streak >= supersedeParkThreshold {
 		if err := flow.parkWedgedAction(ctx, r, current); err != nil {
@@ -196,6 +199,22 @@ func (flow *engineFlow) forgetRemoteItemProvenGone(ctx context.Context, r *actio
 	}
 	if err := flow.deps.store.ForgetRemoteItem(ctx, gone.itemID); err != nil {
 		return fmt.Errorf("sync: forgetting remote item %s proven gone: %w", gone.itemID, err)
+	}
+
+	return nil
+}
+
+// forgetLocalCtimeProvenChanged applies a local delete's content check to
+// local truth: the file no longer holds what its baseline row records, so the
+// row loses its stored change time and the next scan reads the file instead
+// of trusting the row, and plans the change as the local edit it is.
+func (flow *engineFlow) forgetLocalCtimeProvenChanged(ctx context.Context, r *actionCompletion) error {
+	var changed *localContentChangedError
+	if r == nil || !errors.As(r.Err, &changed) || flow.deps.store == nil {
+		return nil
+	}
+	if err := flow.deps.store.ForgetBaselineLocalCtime(ctx, changed.path); err != nil {
+		return fmt.Errorf("sync: recording the changed content of %s: %w", changed.path, err)
 	}
 
 	return nil
@@ -731,6 +750,7 @@ func retryDelayForCondition(condition IssueType) func(int) time.Duration {
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
 		issueLocalInterruptedRemoval,
+		issueRemovedFolderKept,
 		issueLocalFileTooLarge,
 		issueLocalBusy,
 		issueLocalCrossDevice,

@@ -805,54 +805,6 @@ func (r *Root) hashRegularFile(rel string) ([sha256.Size]byte, error) {
 	return sum, nil
 }
 
-// RemoveTreeNoFollow removes rel and its descendants without following
-// symlinks. It rejects the root itself and any unsupported entry encountered
-// while walking the tree.
-func (r *Root) RemoveTreeNoFollow(rel string) error {
-	clean, err := cleanRelative(rel)
-	if err != nil {
-		return err
-	}
-	if clean == "." {
-		return unsafePathf("refusing to remove the sync folder itself")
-	}
-
-	if err := r.removeTreeNoFollow(clean); err != nil {
-		return fmt.Errorf("removing folder %s: %w", rel, err)
-	}
-
-	return nil
-}
-
-func (r *Root) removeTreeNoFollow(rel string) error {
-	info, err := r.Lstat(rel)
-	if err != nil {
-		return err
-	}
-	switch {
-	case info.Mode()&os.ModeSymlink != 0:
-		return unsupportedEntryf("%s is a symbolic link", rel)
-	case info.IsDir():
-		children, err := r.ReadDir(rel)
-		if err != nil {
-			return err
-		}
-		sort.Slice(children, func(i, j int) bool {
-			return children[i].Name() < children[j].Name()
-		})
-		for _, child := range children {
-			if err := r.removeTreeNoFollow(filepath.Join(rel, child.Name())); err != nil {
-				return err
-			}
-		}
-		return r.Remove(rel)
-	case info.Mode().IsRegular():
-		return r.Remove(rel)
-	default:
-		return unsupportedEntryf("%s is not a regular file or folder (mode %s)", rel, info.Mode())
-	}
-}
-
 // MkdirAll creates rel and any missing parents inside the sync root.
 // Components that resolve outside the root fail closed. Symlinks that stay
 // inside the root are ordinary content and are followed; callers that must
@@ -980,8 +932,10 @@ func (r *Root) RemoveEmptyDirNoFollow(rel string) error {
 }
 
 // RemoveAll deletes rel and its descendants inside the sync root. Paths that
-// resolve outside the root fail closed. Callers that must also refuse in-root
-// symlinks want RemoveTreeNoFollow.
+// resolve outside the root fail closed. It checks nothing about what it
+// removes, so sync calls it only for bundled junk a folder delete has found
+// disposable all the way down; a user's tree leaves by the verified local
+// delete, one entry at a time.
 func (r *Root) RemoveAll(rel string) error {
 	return r.mutateWithRoot(rel, "removing tree %s", func(root rootHandle, clean string) error {
 		return r.ops.removeAll(root, clean)

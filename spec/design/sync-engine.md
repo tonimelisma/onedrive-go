@@ -120,8 +120,11 @@ that no longer reports a finding clears it, and the remote batch manages
 
 Every time-dependent decision in the runtime -- `Now`, delayed callbacks,
 tickers, sleeps, and retry jitter -- goes through a single `syncClock` value on
-the engine. The local and remote observers hold the same capability for their
-safety-scan ticks, retry sleeps, and write-coalesce timers.
+the engine. The local and remote observers the engine builds run on its real
+clock (`wallClock`, which is that value unless a test replaced it) for their
+safety-scan ticks, retry sleeps, and write-coalesce timers. A pass's full local
+scan, which runs no timer, measures its racily-clean window (R-2.2.4) on the
+run's clock (`TestObserveLocal_MeasuresTheRacilyCleanWindowOnTheRunsClock`).
 
 These were five independently injectable function fields (`nowFn`, `afterFunc`,
 `newTicker`, `sleepFn`, `jitterFn`) plus three more on the local observer. Each
@@ -542,15 +545,19 @@ but a removed shared folder's final drain is clean only when
 ### Post-Sync Housekeeping
 
 `postSyncHousekeeping` (`engine_housekeeping.go`) runs once when a one-shot
-run that executed something ends, and once when a watch's bootstrap sync
-settles: the transfer-artifact cleanup (`driveops.CleanTransferArtifacts`,
-owned partials and expired upload sessions) and the local-trash purge. Watch
-maintenance then repeats only the purge. All of it is best effort, and an
-engine can run a step many times, so a failure that stays would warn each
-time. Each step therefore reports a persistent failure once per streak
-(R-6.6.30) through one helper, `Engine.reportHousekeepingOutcome`: one Warn
-when the streak starts, Debug on repeats, Info once when the step works again.
-What a step did remove is a separate Info with the count, failure or not:
+run that executed something ends, once when a final drain that releases its
+tree ends, executed or not, so a partial an earlier run left never keeps the
+tree (`TestRunOnce_FinalDrainRemovesALeftoverDownloadPartialFirst`), and once
+when a watch's bootstrap sync settles: the transfer-artifact cleanup
+(`driveops.CleanTransferArtifacts`, owned partials and expired upload
+sessions) and the local-trash purge. Watch maintenance then repeats only the
+purge. All of it is best effort, and an engine can run a step many times, so a
+failure that stays would warn each time. Each step therefore reports a
+persistent failure once per streak (R-6.6.30) through one helper,
+`Engine.reportStreakOutcome`, which the release of a removed shared folder's
+local copy uses too: one Warn when the streak starts, Debug on
+repeats, Info once when the step works again. What a step did remove is a
+separate Info with the count, failure or not:
 
 - the artifact cleanup removes every owned partial outside the protected
   roots with no age check, so it runs only when
@@ -977,13 +984,22 @@ observation values and local actions (`noop`, `keepRecord`, `dropRecord`,
 Graph, filesystem, and SQLite effects only, then feeds those outcomes back
 through the same transition table.
 
-When a child final drain completes, multisync acknowledges that completion to
+A child final drain ends by releasing its local tree (below), and when it
+completes, multisync acknowledges that completion to
 the already-running parent engine through the concrete sync-owned
 `shortcutChildAckHandle` obtained from that live engine. A zero handle is an
 error, not a no-op, so multisync cannot synthesize an acknowledgement path
 outside a live parent runner. The parent engine first persists
-`removed_release_pending`, then releases its own protected alias projection or
-promotes a waiting same-path replacement to `active`. After parent release, the
+`removed_release_pending`, then removes the alias root, which the child has
+emptied, only as an empty directory (`RemoveEmptyDirNoFollow`; it never walks
+a tree it does not sync), or promotes a waiting same-path replacement to
+`active`. A root that is not empty at that moment (something arrived after
+the child's release) goes back to `removed_final_drain`, or to
+`same_path_replacement_waiting` when a replacement waits, so the child runs
+again (`TestEngine_AcknowledgeChildFinalDrainSendsANonEmptyRootBackToTheFinalDrain`,
+`TestPlanShortcutRootReleaseCleanupSendsANonEmptyRootBackToTheFinalDrain`);
+`removed_cleanup_blocked` is left for a root no drain can fix: the path is not
+a directory, or removing the empty directory fails. After parent release, the
 old binding remains in `removed_child_cleanup_pending` without protected paths
 and publishes a child artifact cleanup request carrying an opaque
 acknowledgement reference, child mount ID, child local root, and cleanup
@@ -994,6 +1010,107 @@ does the parent delete the cleanup-pending row. If cleanup is interrupted or
 blocked, startup and later parent shortcut refresh retry the release from
 `removed_release_pending` or `removed_cleanup_blocked`; a later complete remote
 observation batch is not required to release that parent protected-root.
+
+### Releasing a removed shared folder's local copy
+
+A final drain runs with `RunOptions.ReleaseLocalTree`. Its passes create
+nothing new locally: the plan leaves out the download or local folder create
+of a remote item with no baseline row and no local entry, unless an admitted
+action below that folder needs it (`leaveOutNewLocalItems`,
+sync-planning.md), and what it leaves out is neither follow-up work nor work
+left, so the drain makes no extra pass for it and it does not hold the tree
+(`TestRunOnce_FinalDrainCreatesNothingNewLocally`). After its last pass, the
+post-sync housekeeping (which runs for a release even when no pass executed
+anything, so a leftover partial does not keep the tree) and the read of what
+the run left, the child engine releases the tree it synced
+(`engine_shortcut_release.go`, R-2.4.8). The release obeys the rule of a
+folder deleted on OneDrive and nothing else:
+
+- every baseline row below the sync folder, deepest first, goes through the
+  executor's ordinary `ExecuteLocalDelete`: a file leaves only when its
+  content still matches the baseline, verified through the descriptor that is
+  removed, and goes to the trash; a folder leaves only once empty, bundled
+  junk disposable under `ignore_junk_files`; a symbolic link, followed or not,
+  is never acted on;
+- each row leaves the baseline in the commit a local delete makes, exempt
+  from the delete-safety hold (it is not the user's delete and deletes nothing
+  on OneDrive), and it leaves *before* its entry is touched: a batch of rows
+  is committed and the store checkpointed, then their entries are removed,
+  and an entry the delete refused gets its row back, without its stored
+  change time when the delete's content check proved the file changed
+  (`localContentChangedError`), so the next scan reads that file instead of
+  trusting the row and uploads the change
+  (`TestRunOnce_AReleaseRefusedForAnUnseenChangeUploadsItOnTheNextDrain`). A
+  crash or a lost write-ahead log can then leave an entry without its row,
+  which the next run adopts or keeps as a conflict copy, but never a row
+  without its entry, which it
+  would read as a local delete and delete in the shared folder; an entry the
+  crashed release already took is not downloaded back
+  (`TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete`, both crash
+  models);
+- while the shared folder can be read, a survey of the tree comes first and
+  what it can see blocks the whole release: it files everything the rule
+  would not remove (by kind, and a synced file by the stat facts the scan's
+  fast path compares: size, modification time, change time and identity),
+  and every folder it walks, the sync folder and each synced folder, that
+  cannot be written to (`isDirWritable`, `isOnReadOnlyFilesystem`). If
+  anything would stay, nothing is removed, and a second drain with nothing
+  changed does the same nothing
+  (`TestRunOnce_FinalDrainKeepsTheWholeTreeForWhatTheDeleteRuleDoesNotRemove`,
+  `TestRunOnce_FinalDrainKeepsATreeWithAFolderThatCannotBeWrittenTo`). A
+  refusal only the delete can find (content that changed where no stat fact
+  shows it, a trash that takes nothing, an immutable file) stops the release
+  at that entry: the rest of its batch gets its rows back in the same restore
+  as the refused row, and no later batch starts
+  (`TestReleaseLocalTree_AReadableFolderStopsAtTheFirstRefusal`,
+  `TestReleaseLocalTree_ARestoreThatFailsStillPutsBackTheRestOfTheBatch`).
+  What left before it stays gone: the next drain creates nothing new locally,
+  so a refusal that persists makes no download and no trash move on any later
+  drain (`TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook`).
+  Each refusal carries its cause (`releaseRefusal`): one the delete's content
+  check proved (`localContentChangedError`) is work left for the next drain,
+  which uploads the change; any other (the trash took nothing, the file is
+  immutable, a folder would not go) is an entry the release could not remove,
+  which no drain cures by itself;
+- content sync does not sync (a symbolic link, a FIFO or other special file,
+  an entry the content filter hides, a name sync reserves) is kept, counted in
+  `Report.KeptNotOnOneDrive` with at most three paths, and recorded as
+  `removed_folder_kept` issues, which `status` shows under the shared folder
+  and every full local scan clears; the drain is blocked with the
+  folder-not-empty sentence of an ordinary folder delete. A folder that cannot
+  be written to is counted in `Report.KeptNotWritable` and recorded the same
+  way, except the sync folder itself, which holds no issue and which the
+  drain's detail names. A synced entry the delete could not remove is counted
+  in `Report.KeptNotRemoved`, recorded the same way whether or not the shared
+  folder can be read, and named with what to do (remove it by hand or fix what
+  keeps it); the first cause is warned once per streak, repeats at Debug
+  (`reportReleaseRefusals`, R-6.6.30). Junk left in the emptied sync folder
+  that cannot be removed is kept and named too, and its cause is warned once
+  per streak, repeats at Debug;
+- a new or changed visible file the drain's last scan did not see is ordinary
+  work left (`LeftForNextSync`): the next drain uploads it and releases the
+  tree (`TestReleaseLocalTree_ANewOrChangedFileIsLeftForTheNextDrain`); so is
+  a synced row that lacks a stat fact the next scan records
+  (`TestReleaseLocalTree_ARowWithoutAModificationTimeWaitsForTheNextDrain`);
+- a file an interrupted removal set aside, or a held delete of a local file,
+  holds the tree before the release runs (`Report.LocalTreeHolds`); a synced
+  file already gone (deleted after the last scan, or the local copy of a delete
+  the hold kept from OneDrive) has nothing to remove, and its row leaves with
+  the release (`TestReleaseLocalTree_ASyncedFileAlreadyGoneLeavesWithItsRow`);
+- when the shared folder can no longer be read (the root's
+  `remote_read_denied` issue), the drain can never finish, and the release
+  runs anyway over that work: what matches the baseline leaves, a change that
+  cannot be uploaded stays, counted in `Report.KeptNotUploaded` and named "could
+  not be uploaded". A folder shared again at the same path plans no delete in
+  it: released files lost their rows with them, so the ordinary sync of the
+  folder downloads them, and kept changes are uploaded
+  (`TestRunOnce_UnreadableSharedFolderReleasesWhatMatchesAndTheReAddPlansNoDelete`).
+
+A released tree leaves the sync folder empty, for the parent to remove
+(`TestRunOnce_FinalDrainReleasesASyncedTreeToTheTrash`,
+`TestRunOnce_FinalDrainRemovesBundledJunkUnderTheConfiguredRule`). No product
+code removes a tree but the junk removal of the ordinary folder delete
+(`TestProductCode_RemovesATreeOnlyByTheVerifiedLocalDelete`).
 
 If the parent later observes that a retiring or cleanup-blocked shortcut alias
 directory is gone, it treats that as user-directed manual discard of the local

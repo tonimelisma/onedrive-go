@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	gosync "sync"
 
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
@@ -284,6 +285,7 @@ func (o *Orchestrator) buildEngineWork(
 			if mount.isFinalDrainChild() {
 				runMode = syncengine.SyncBidirectional
 				runOpts.FullReconcile = true
+				runOpts.ReleaseLocalTree = true
 			}
 			return engine.RunOnce(c, runMode, runOpts)
 		},
@@ -391,22 +393,23 @@ func (o *Orchestrator) reportKeptFinalDrains(results []shortcutChildDrainResult,
 			)
 			continue
 		}
-		o.logger.Info(keptFinalDrainNotice(label, result.Status),
+		o.logger.Info(keptFinalDrainNotice(label, result),
 			slog.String("detail", result.Detail),
 		)
 	}
 }
 
 // keptFinalDrainNotice is the plain sentence for a removed shared folder
-// whose local copy is kept, by why its final sync did not finish.
-func keptFinalDrainNotice(label string, status shortcutChildDrainStatus) string {
-	switch status {
+// whose local copy is kept, by why its final sync did not finish. A blocked
+// drain says what holds the copy, its release's leftovers named.
+func keptFinalDrainNotice(label string, result shortcutChildDrainResult) string {
+	switch result.Status {
 	case shortcutChildDrainRootUnavailable:
 		return fmt.Sprintf("Keeping removed shared folder %s: its local folder is unavailable, "+
 			"so its last changes can't be synced yet", label)
 	case shortcutChildDrainBlocked:
-		return fmt.Sprintf("Keeping the local copy of removed shared folder %s until its "+
-			"unsynced changes are resolved; run 'onedrive-go status' for details", label)
+		return fmt.Sprintf("Keeping the local copy of removed shared folder %s: %s; "+
+			"run 'onedrive-go status' for details", label, strings.TrimPrefix(result.Detail, childSyncDetailPrefix))
 	case shortcutChildDrainClean, shortcutChildDrainFailed:
 	}
 	return fmt.Sprintf("Keeping the local copy of removed shared folder %s until its last sync "+

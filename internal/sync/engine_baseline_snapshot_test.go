@@ -38,7 +38,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 
 	// Before: "sync: missing baseline entry for comparison path" tore down
 	// the drive runner.
-	plan, err := eng.buildCurrentActionPlanFromInputs(&inputs, cached, SyncBidirectional)
+	plan, err := eng.buildCurrentActionPlanFromInputs(&inputs, cached, SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.NotNil(t, plan)
 }

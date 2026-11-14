@@ -397,7 +397,7 @@ func TestRunOnce_ReportsTheFilesAnInterruptedRemovalSetAside(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.InterruptedRemovals)
 	assert.False(t, report.LeftWork().Any(), "%+v", report)
-	assert.Equal(t, LocalTreeHolds{SetAsideFiles: 1}, report.LocalTreeHolds())
+	assert.Equal(t, &LocalTreeHolds{SetAsideFiles: 1}, report.LocalTreeHolds())
 }
 
 // Validates: R-6.6.18, R-6.6.28

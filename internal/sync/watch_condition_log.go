@@ -133,6 +133,8 @@ func conditionLabelText(key ConditionKey) (label string, ok bool) {
 		return "on another filesystem inside the sync folder", true
 	case ConditionLocalInterrupted:
 		return "left set aside by an interrupted removal", true
+	case ConditionRemovedFolderKept:
+		return "kept in the local folder of a removed shared folder", true
 	case ConditionRemoteFolderUnverified:
 		return "too large to verify before deleting on OneDrive", true
 	case ConditionLocalFileTooLarge:
