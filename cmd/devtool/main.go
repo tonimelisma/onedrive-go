@@ -126,6 +126,7 @@ type verifyFlags struct {
 	dodCITimeout       time.Duration
 	dodCIMaxReruns     int
 	unitTimeout        time.Duration
+	shortUnitTimeout   time.Duration
 	failedTestLog      string
 	checkFormat        bool
 }
@@ -169,6 +170,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		CoverageFile:       f.coverageFile,
 		Shard:              f.shard,
 		UnitTimeout:        f.unitTimeout,
+		ShortUnitTimeout:   f.shortUnitTimeout,
 		E2ELogDir:          f.e2eLogDir,
 		SummaryJSONPath:    f.summaryJSONPath,
 		ClassifyLiveQuirks: f.classifyLiveQuirks,
@@ -210,6 +212,12 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 		"unit-timeout",
 		0,
 		"go test deadline of the full race tier; default 20m, longer on hosts with fewer cores than the CI runners",
+	)
+	cmd.Flags().DurationVar(
+		&f.shortUnitTimeout,
+		"short-unit-timeout",
+		0,
+		"go test deadline of the short unit tier; default 10m, longer on hosts with fewer cores than the CI runners",
 	)
 	cmd.Flags().StringVar(&f.e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&f.summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")

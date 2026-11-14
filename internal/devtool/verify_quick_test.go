@@ -4,13 +4,23 @@ import (
 	"bytes"
 	"context"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+// testShortUnitTimeout is an explicit short-tier deadline that is neither
+// tier's default on any host, so a test that passes it sees the option reach
+// go test rather than a default that happens to match.
+const (
+	testShortUnitTimeout    = 12 * time.Minute
+	testShortUnitTimeoutArg = "-timeout=12m0s"
 )
 
 func recordedCommandSequence(runner *fakeRunner) []string {
@@ -42,20 +52,22 @@ func TestRunVerifyQuickRunsExpectedSteps(t *testing.T) {
 	stdout := &bytes.Buffer{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot: repoRoot,
-		Profile:  VerifyQuick,
-		Stdout:   stdout,
-		Stderr:   &bytes.Buffer{},
+		RepoRoot:         repoRoot,
+		Profile:          VerifyQuick,
+		ShortUnitTimeout: testShortUnitTimeout,
+		Stdout:           stdout,
+		Stderr:           &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
 	// No lint (its own CI job), no race, no coverage profile, no compile
 	// guard and no live suite: the repository rules, the builds, the tagged
-	// vets and the short unit tier.
+	// vets and the short unit tier. --short-unit-timeout reaches go test as
+	// given, whatever the host's core count.
 	assert.Equal(t, quickCommandSequence(), recordedCommandSequence(runner))
 
 	unit := runner.runCommands[len(runner.runCommands)-1]
-	assert.Equal(t, []string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "./..."}, unit.args)
+	assert.Equal(t, []string{"test", "-short", testShortUnitTimeoutArg, "./..."}, unit.args)
 	assert.Empty(t, runner.outputCommands, "quick reports no coverage")
 	assert.Contains(t, stdout.String(), "==> go test -short\n")
 	assert.NotContains(t, stdout.String(), "==> coverage")
@@ -72,16 +84,17 @@ func TestRunVerifyQuickShardSelectsOneSliceOfTheShortTier(t *testing.T) {
 	stdout := &bytes.Buffer{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot: repoRoot,
-		Profile:  VerifyQuick,
-		Shard:    "2/3",
-		Stdout:   stdout,
-		Stderr:   &bytes.Buffer{},
+		RepoRoot:         repoRoot,
+		Profile:          VerifyQuick,
+		Shard:            "2/3",
+		ShortUnitTimeout: testShortUnitTimeout,
+		Stdout:           stdout,
+		Stderr:           &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
 	unit := runner.runCommands[len(runner.runCommands)-1]
-	assert.Equal(t, []string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "-run=^(.{3})*.{1}$", "./..."}, unit.args)
+	assert.Equal(t, []string{"test", "-short", testShortUnitTimeoutArg, "-run=^(.{3})*.{1}$", "./..."}, unit.args)
 	assert.Contains(t, stdout.String(), "==> go test -short (shard 2/3)\n")
 }
 
@@ -163,10 +176,11 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	stdout := &bytes.Buffer{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot: repoRoot,
-		Profile:  VerifyPR,
-		Stdout:   stdout,
-		Stderr:   &bytes.Buffer{},
+		RepoRoot:         repoRoot,
+		Profile:          VerifyPR,
+		ShortUnitTimeout: testShortUnitTimeout,
+		Stdout:           stdout,
+		Stderr:           &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
@@ -174,7 +188,7 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	assert.Equal(t, expected, recordedCommandSequence(runner))
 
 	unit := runner.runCommands[len(runner.runCommands)-1]
-	assert.Equal(t, []string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "./..."}, unit.args)
+	assert.Equal(t, []string{"test", "-short", testShortUnitTimeoutArg, "./..."}, unit.args)
 	assert.Empty(t, runner.outputCommands, "pr runs no race tier and reports no coverage")
 	assert.NotContains(t, stdout.String(), "==> coverage")
 }
@@ -186,11 +200,12 @@ func TestRunVerifyPlatformRunsHostBuildAndShortTier(t *testing.T) {
 	runner := &fakeRunner{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot: t.TempDir(),
-		Profile:  VerifyPlatform,
-		Shard:    "1/2",
-		Stdout:   &bytes.Buffer{},
-		Stderr:   &bytes.Buffer{},
+		RepoRoot:         t.TempDir(),
+		Profile:          VerifyPlatform,
+		Shard:            "1/2",
+		ShortUnitTimeout: testShortUnitTimeout,
+		Stdout:           &bytes.Buffer{},
+		Stderr:           &bytes.Buffer{},
 	})
 	require.NoError(t, err)
 
@@ -199,9 +214,65 @@ func TestRunVerifyPlatformRunsHostBuildAndShortTier(t *testing.T) {
 	// build and the short unit tier.
 	assert.Equal(t, []string{"go build ./...", "go test -short"}, recordedCommandSequence(runner))
 	assert.Equal(t,
-		[]string{"test", "-short", "-timeout=" + shortUnitTestTimeout, "-run=^(.{2})*$", "./..."},
+		[]string{"test", "-short", testShortUnitTimeoutArg, "-run=^(.{2})*$", "./..."},
 		runner.runCommands[1].args,
 	)
+}
+
+// The short tier's 10-minute deadline fits the CI runners, whose core count is
+// the reference. At the reference and above the deadline stays, so no CI job's
+// deadline moves past its job timeout. Below it the deadline is 60 core-minutes
+// divided by the cores, because the same tests take several times as long on a
+// small host that other work shares; a host that reports no cores counts as
+// one.
+//
+// Validates: R-6.10.22
+func TestShortUnitTestTimeoutForCoresGivesSmallHostsACoreBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, cores := range []int{3, 4, 8} {
+		assert.Equal(t, 10*time.Minute, shortUnitTestTimeoutForCores(cores), "cores %d", cores)
+	}
+
+	assert.Equal(t, 30*time.Minute, shortUnitTestTimeoutForCores(2))
+	assert.Equal(t, 60*time.Minute, shortUnitTestTimeoutForCores(1))
+	assert.Equal(t, 60*time.Minute, shortUnitTestTimeoutForCores(0))
+}
+
+// Validates: R-6.10.22
+func TestResolveShortUnitTestTimeoutPrefersTheExplicitValue(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 15*time.Minute, resolveShortUnitTestTimeout(15*time.Minute, 2))
+	assert.Equal(t, 30*time.Minute, resolveShortUnitTestTimeout(0, 2))
+	assert.Equal(t, 10*time.Minute, resolveShortUnitTestTimeout(0, 8))
+}
+
+// Validates: R-6.10.22
+//
+// With no --short-unit-timeout, every profile that runs the short tier gives
+// go test the deadline of the cores this process may use.
+func TestRunVerifyShortTierDeadlineComesFromTheCoresByDefault(t *testing.T) {
+	t.Parallel()
+
+	want := "-timeout=" + shortUnitTestTimeoutForCores(runtime.GOMAXPROCS(0)).String()
+
+	for _, profile := range []VerifyProfile{VerifyQuick, VerifyPR, VerifyPlatform} {
+		repoRoot := t.TempDir()
+		writeRequirementsBackedReadme(t, repoRoot)
+		runner := &fakeRunner{}
+
+		err := RunVerify(context.Background(), runner, &VerifyOptions{
+			RepoRoot: repoRoot,
+			Profile:  profile,
+			Stdout:   &bytes.Buffer{},
+			Stderr:   &bytes.Buffer{},
+		})
+		require.NoError(t, err, "profile %s", profile)
+
+		unit := runner.runCommands[len(runner.runCommands)-1]
+		assert.Equal(t, []string{"test", "-short", want, "./..."}, unit.args, "profile %s", profile)
+	}
 }
 
 // Validates: R-6.10.22
