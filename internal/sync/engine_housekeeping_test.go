@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	stdsync "sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -72,6 +74,126 @@ func TestPostSyncHousekeeping_SkipsProtectedShortcutRoots(t *testing.T) {
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, testOwnedPartialName("root.txt")))
 	assert.FileExists(t, filepath.Join(childRoot, testOwnedPartialName("shortcut-sentinel.txt")))
+}
+
+// Validates: R-6.3.4
+//
+// The parent's final-drain acknowledgement runs on the multisync
+// orchestrator's goroutine, through the ack handle, and rederives the
+// protected roots while the parent's own run does its housekeeping. Run under
+// -race: housekeeping reads the protected roots through the lock, like every
+// other reader of the field.
+//
+// The hand-off lies between housekeeping's refresh and its read. A refresh
+// failure streak that ends logs its recovery line after housekeeping's own
+// refresh and before the cleanup reads the list; the logger hands that line
+// to the acknowledging goroutine, which then rewrites the list. The test adds
+// no synchronization between the hand-off and the read: the logger takes no
+// lock, and housekeeping touches neither the sync store nor the context
+// until the acknowledgement is back. An unguarded read can therefore fail
+// under -race, though not in every run.
+func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
+	t.Parallel()
+
+	refreshed := make(chan struct{}, 1)
+	logger := slog.New(signalingHandler{
+		message: protectedRootRefreshRecoveredMessage,
+		signal:  refreshed,
+	})
+	eng, syncRoot := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	ack := eng.ShortcutChildAckHandle()
+
+	const rounds = 10
+	acked := make(chan error, 1)
+	stop := make(chan struct{})
+	var wg stdsync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-refreshed:
+				_, err := ack.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
+					Ref: newShortcutChildAckRef("binding-1"),
+				})
+				acked <- err
+			}
+		}
+	}()
+	defer wg.Wait()
+	defer close(stop)
+
+	for range rounds {
+		seedRemovedSharedFolders(t, eng.Engine, syncRoot)
+		eng.protectedRootRefreshFailing.Store(true)
+		eng.flow.postSyncHousekeeping(t.Context())
+		require.NoError(t, receiveWithin[error](t, acked,
+			"the final-drain acknowledgement, which starts when housekeeping logs its refresh recovery line"))
+		assert.Empty(t, eng.currentProtectedRoots(),
+			"the acknowledgement rewrote the list housekeeping had just refreshed")
+	}
+}
+
+// signalingHandler drops every record and sends on signal for each record
+// whose message is message. It takes no lock, so it orders nothing between
+// the goroutines that log through it.
+type signalingHandler struct {
+	message string
+	signal  chan<- struct{}
+}
+
+func (h signalingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+//nolint:gocritic // slog.Handler fixes the by-value Record parameter.
+func (h signalingHandler) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == h.message {
+		h.signal <- struct{}{}
+	}
+
+	return nil
+}
+
+func (h signalingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h signalingHandler) WithGroup(string) slog.Handler { return h }
+
+// seedRemovedSharedFolders stores two removed shared folders with emptied
+// local roots: one whose child is finishing its final drain, which the test
+// acknowledges, and one whose release is pending. The acknowledgement
+// releases the first itself; the shortcut-root reconcile it runs then
+// releases the second and rederives the protected roots.
+func seedRemovedSharedFolders(t *testing.T, eng *Engine, syncRoot string) {
+	t.Helper()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Docs"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Notes"), 0o700))
+	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{
+		{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-1",
+			RelativeLocalPath: "Shared/Docs",
+			LocalAlias:        "Docs",
+			RemoteDriveID:     driveid.New("drive-1"),
+			RemoteItemID:      "target-1",
+			RemoteIsFolder:    true,
+			State:             ShortcutRootStateRemovedFinalDrain,
+			ProtectedPaths:    []string{"Shared/Docs"},
+		},
+		{
+			NamespaceID:       shortcutNamespaceTestID,
+			BindingItemID:     "binding-2",
+			RelativeLocalPath: "Shared/Notes",
+			LocalAlias:        "Notes",
+			RemoteDriveID:     driveid.New("drive-1"),
+			RemoteItemID:      "target-2",
+			RemoteIsFolder:    true,
+			State:             ShortcutRootStateRemovedReleasePending,
+			ProtectedPaths:    []string{"Shared/Notes"},
+		},
+	}))
 }
 
 // Validates: R-2.4.10

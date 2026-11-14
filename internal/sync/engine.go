@@ -62,9 +62,14 @@ type Engine struct {
 	checkWorkers    int // goroutine limit for parallel file hashing
 	contentFilter   ContentFilterConfig
 	// protectedRootsMu guards protectedRoots. The loop goroutine reads them
-	// each time it builds an observer; refreshProtectedRootsFromStore rewrites
-	// them from the full-refresh goroutine and from the remote observer's
-	// expired-delta recovery, which run beside the loop. Read through
+	// each time it builds an observer and when housekeeping cleans up; the
+	// full-refresh goroutine and the remote observer's expired-delta recovery
+	// read them when they build theirs.
+	// refreshProtectedRootsFromStore rewrites them from the loop, from the
+	// full-refresh goroutine and the remote observer's expired-delta recovery,
+	// which run beside the loop, and from the multisync orchestrator's
+	// goroutine, whose final-drain acknowledgement through the ack handle
+	// (ShortcutChildAckHandle) reconciles the shortcut roots. Read through
 	// currentProtectedRoots, write through setProtectedRoots (R-6.3.4).
 	protectedRootsMu stdsync.Mutex
 	protectedRoots   []ProtectedRoot
@@ -73,8 +78,6 @@ type Engine struct {
 	shortcutNamespaceID   string
 	shortcutChildWorkSink ShortcutChildWorkSink
 	enableWebsocket       bool
-	minFreeSpace          int64 // startup disk-scope revalidation threshold
-	diskAvailableFn       func(string) (uint64, error)
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
@@ -140,16 +143,19 @@ type Engine struct {
 	// (R-6.6.30): a protected-root refresh, a leftover download file cleanup,
 	// an expired upload session cleanup and a trash purge that keeps failing.
 	// Each clears when its operation succeeds again, so the next streak is
-	// reported once more. Atomic for the same reason as the flag above.
+	// reported once more. Only the goroutine running the engine's RunOnce or
+	// RunWatch reads and writes them.
 	protectedRootRefreshFailing atomic.Bool
 	partialCleanupFailing       atomic.Bool
 	sessionCleanupFailing       atomic.Bool
 	trashPurgeFailing           atomic.Bool
-	// releasedRootJunkFailing and releaseRefusalFailing do the same for a
-	// removed shared folder's release that cannot remove the junk left in its
-	// emptied sync folder (emptyReleasedRoot) or a synced entry its local
-	// delete refuses (reportReleaseRefusals), which every later drain meets
-	// again.
+	// releasedRootJunkFailing and releaseRefusalFailing keep the same one Warn
+	// per streak for a removed shared folder's release that cannot remove the
+	// junk left in its emptied sync folder (emptyReleasedRoot) or a synced
+	// entry its local delete refuses (reportReleaseRefusals), which every
+	// later drain meets again. These two are also written from the multisync
+	// orchestrator's goroutine, whose final-drain acknowledgement runs the
+	// release through the ack handle.
 	releasedRootJunkFailing atomic.Bool
 	releaseRefusalFailing   atomic.Bool
 }
@@ -247,8 +253,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		shortcutNamespaceID:    cfg.ShortcutNamespaceID,
 		shortcutChildWorkSink:  cfg.ShortcutChildWorkSink,
 		enableWebsocket:        cfg.EnableWebsocket,
-		minFreeSpace:           cfg.MinFreeSpace,
-		diskAvailableFn:        driveops.DiskAvailable,
 		wallClock:              realClock{logger: cfg.Logger, panics: &timerPanics{}},
 		socketIOWakeSourceFactory: func(
 			fetcher socketIOEndpointFetcher,
@@ -585,5 +589,5 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 //  4. Derive SQL comparison and reconciliation from current snapshots
 //  5. Build the current actionable set in Go
 //  6. Return early if dry-run
-//  7. Build DepGraph, start worker pool
+//  7. Build the dependency graph, start worker pool
 //  8. Wait for completion, commit delta token
