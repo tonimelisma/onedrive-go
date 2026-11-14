@@ -65,7 +65,6 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 
 	require.Equal(t, ChangeModify, ev.Type)
 	require.Equal(t, "watchable.txt", ev.Path)
-	require.Equal(t, SourceLocal, ev.Source)
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
 }
 

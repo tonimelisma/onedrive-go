@@ -293,9 +293,9 @@ func evaluateMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs)
 		ActionBaselineUpdate,
 		ActionCleanup:
 		return freshAction()
+	default:
+		panic(outsideTheEnum(action.Type))
 	}
-
-	return freshAction()
 }
 
 func evaluateLocalMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs) actionFreshnessDecision {
@@ -418,9 +418,9 @@ func movePeerPath(action *Action) (string, bool) {
 		ActionBaselineUpdate,
 		ActionCleanup:
 		return "", false
+	default:
+		panic(outsideTheEnum(action.Type))
 	}
-
-	return "", false
 }
 
 func expectedRemoteIdentityPath(action *Action) string {

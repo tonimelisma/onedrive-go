@@ -66,9 +66,9 @@ func activityKindFor(t actionType) (ActivityKind, bool) {
 		return ActivityConflictCopy, true
 	case ActionBaselineUpdate, ActionCleanup:
 		return 0, false
+	default:
+		panic(outsideTheEnum(t))
 	}
-
-	return 0, false
 }
 
 // emitActivity publishes a classified completion. Shutdown and superseded

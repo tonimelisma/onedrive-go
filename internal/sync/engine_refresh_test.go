@@ -20,28 +20,12 @@ import (
 // projectObservedItems projection tests
 // ---------------------------------------------------------------------------
 
-func TestChangeEventsToObservedItems_RemoteOnly(t *testing.T) {
-	t.Parallel()
-
-	events := []changeEvent{
-		{Source: sourceRemote, ItemID: "r1", Path: "remote.txt", DriveID: driveid.New(testDriveID)},
-		{Source: SourceLocal, Path: "local.txt"},
-		{Source: sourceRemote, ItemID: "r2", Path: "remote2.txt", DriveID: driveid.New(testDriveID)},
-	}
-
-	items := projectObservedItems(slog.Default(), events)
-	assert.Len(t, items, 2, "should only include remote events")
-	assert.Equal(t, "r1", items[0].ItemID)
-	assert.Equal(t, "r2", items[1].ItemID)
-}
-
 func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
 	events := []changeEvent{
 		{
-			Source:    sourceRemote,
 			ItemID:    "item1",
 			ParentID:  "parent1",
 			DriveID:   driveID,
@@ -54,7 +38,6 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 			IsDeleted: false,
 		},
 		{
-			Source:    sourceRemote,
 			ItemID:    "item2",
 			DriveID:   driveID,
 			Path:      "docs/folder",
@@ -226,7 +209,6 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
 	assert.Equal(t, ChangeDelete, orphans[0].Type)
-	assert.Equal(t, sourceRemote, orphans[0].Source)
 	assert.True(t, orphans[0].IsDeleted)
 }
 
@@ -364,9 +346,9 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 	events := []changeEvent{
-		{Source: sourceRemote, ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
-		{Source: sourceRemote, ItemID: "", Path: "bad.txt", DriveID: driveID},
-		{Source: sourceRemote, ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
+		{ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
+		{ItemID: "", Path: "bad.txt", DriveID: driveID},
+		{ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
 	}
 
 	items := projectObservedItems(slog.Default(), events)

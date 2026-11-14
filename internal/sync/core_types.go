@@ -23,7 +23,10 @@ type skippedItem struct {
 // changeEvent is an immutable observation fact produced by observers. The
 // runtime uses these facts to mark coarse dirty/full-refresh signals and to describe local or
 // remote observation results, but they are not the durable sync truth and are
-// never stored in the database.
+// never stored in the database. An event carries no source: remote events
+// reach the engine only in a remoteObservationBatch and local ones only
+// through the local observer's own paths (its event channel, scan results,
+// localObservationBatch), so where an event came from is known by where it is.
 //
 // Per-observer field contract:
 //
@@ -35,7 +38,6 @@ type skippedItem struct {
 //	  ParentID, DriveID, ETag, CTag.
 //	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
 type changeEvent struct {
-	Source   changeSource
 	Type     changeType
 	Path     string     // NFC-normalized, relative to sync root
 	OldPath  string     // for moves only
@@ -312,7 +314,6 @@ func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pat
 		}
 
 		orphans = append(orphans, changeEvent{
-			Source:    sourceRemote,
 			Type:      ChangeDelete,
 			Path:      entry.Path,
 			ItemID:    entry.ItemID,

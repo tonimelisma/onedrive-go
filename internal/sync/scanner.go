@@ -359,7 +359,6 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 			}
 
 			ev := changeEvent{
-				Source:   SourceLocal,
 				Type:     changeType,
 				Path:     job.dbRelPath,
 				Name:     job.name,
@@ -690,7 +689,6 @@ func (o *localObserver) classifyObservedInfo(
 		if kind == observedKindDir {
 			// Folder creates go directly to events (no hashing needed).
 			*events = append(*events, changeEvent{
-				Source:   SourceLocal,
 				Type:     changeCreate,
 				Path:     dbRelPath,
 				Name:     name,
@@ -702,7 +700,6 @@ func (o *localObserver) classifyObservedInfo(
 			// A scan before this one hashed the file and recorded it; the
 			// file has not changed since by every fact the fast path checks.
 			*events = append(*events, changeEvent{
-				Source:   SourceLocal,
 				Type:     changeCreate,
 				Path:     dbRelPath,
 				Name:     name,
@@ -1153,7 +1150,6 @@ func (o *localObserver) detectDeletions(observed map[string]bool) []changeEvent 
 		}
 
 		events = append(events, changeEvent{
-			Source:    SourceLocal,
 			Type:      ChangeDelete,
 			Path:      path,
 			Name:      filepath.Base(path),

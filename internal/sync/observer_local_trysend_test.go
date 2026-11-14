@@ -22,7 +22,7 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	ctx := t.Context()
 
 	ev := changeEvent{
-		Source: SourceLocal, Type: changeCreate, Path: "test.txt",
+		Type: changeCreate, Path: "test.txt",
 		ItemType: ItemTypeFile,
 	}
 
@@ -47,14 +47,14 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 
 	// Fill the channel.
 	first := changeEvent{
-		Source: SourceLocal, Type: changeCreate, Path: "first.txt",
+		Type: changeCreate, Path: "first.txt",
 		ItemType: ItemTypeFile,
 	}
 	events <- first
 
 	// This should be dropped (channel full).
 	second := changeEvent{
-		Source: SourceLocal, Type: changeCreate, Path: "second.txt",
+		Type: changeCreate, Path: "second.txt",
 		ItemType: ItemTypeFile,
 	}
 
@@ -84,7 +84,7 @@ func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	events <- changeEvent{Path: "fill.txt"}
 
 	ev := changeEvent{
-		Source: SourceLocal, Type: changeCreate, Path: "test.txt",
+		Type: changeCreate, Path: "test.txt",
 		ItemType: ItemTypeFile,
 	}
 

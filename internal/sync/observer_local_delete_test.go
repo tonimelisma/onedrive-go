@@ -423,7 +423,6 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 				assert.Equal(t, "target", ev.Name)
 				assert.Equal(t, tt.baseType, ev.ItemType)
 				assert.True(t, ev.IsDeleted)
-				assert.Equal(t, SourceLocal, ev.Source)
 			default:
 				require.Fail(t, "expected a ChangeDelete event")
 			}

@@ -9,6 +9,10 @@ type remoteObservationResult struct {
 	emitted  []changeEvent
 }
 
+// projectRemoteObservations converts a remote observer's events into the
+// observed items CommitObservation records, and keeps every event as emitted.
+// Its callers hand it only events a remote observer built (delta and listing
+// conversion, synthesized orphan deletes).
 func projectRemoteObservations(
 	logger *slog.Logger,
 	events []changeEvent,
@@ -19,14 +23,8 @@ func projectRemoteObservations(
 	}
 
 	for i := range events {
-		ev := events[i]
-		if ev.Source != sourceRemote {
-			result.emitted = append(result.emitted, ev)
-			continue
-		}
-
-		result.observed = appendObservedEvent(logger, result.observed, &ev)
-		result.emitted = append(result.emitted, ev)
+		result.observed = appendObservedEvent(logger, result.observed, &events[i])
+		result.emitted = append(result.emitted, events[i])
 	}
 
 	return result

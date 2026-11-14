@@ -7,6 +7,20 @@ import (
 	"fmt"
 )
 
+// outsideTheEnum describes a value none of an enum's constants has: the panic
+// value of a decision that met one, and the text of the error a decision that
+// returns errors refuses one with. Neither enum it is used for can carry one
+// to a decision: the planner refuses an action whose type or folder create
+// side is outside its enum before any rule reads it (validatePlannedActions),
+// and the store refuses an action type outside the enum on read and on write
+// (parseActionType, Value). Reaching it is a programming error, so the
+// decision stops rather than answer with a verdict no case states.
+// TestActionTypeSwitches_EveryDefaultRefuses holds every switch on the two
+// enums to it.
+func outsideTheEnum(value fmt.Stringer) string {
+	return value.String() + " is outside its enum"
+}
+
 // string constants for enum serialization (shared by String() and Parse*).
 // Unexported: only used within this file for typed constant definitions
 // and String()/Parse* methods.
@@ -31,38 +45,6 @@ const (
 	strBaselineUpdate = "baseline_update"
 	strCleanup        = "cleanup"
 )
-
-// direction represents the direction of a sync action (upload, download, delete).
-// Stored as TEXT in SQLite — type direction string serializes identically to
-// raw strings, so no compatibility rewrite is needed.
-type direction string
-
-const (
-	directionDownload direction = strDownload
-	directionUpload   direction = strUpload
-	directionDelete   direction = strDelete
-)
-
-// changeSource identifies the origin of a change event.
-type changeSource int
-
-const (
-	// sourceRemote indicates the change was observed from the Graph API.
-	sourceRemote changeSource = iota
-	// SourceLocal indicates the change was observed from the local filesystem.
-	SourceLocal
-)
-
-func (s changeSource) String() string {
-	switch s {
-	case sourceRemote:
-		return strRemote
-	case SourceLocal:
-		return strLocal
-	default:
-		return fmt.Sprintf("ChangeSource(%d)", int(s))
-	}
-}
 
 // changeType classifies what kind of change occurred.
 type changeType int
@@ -216,20 +198,17 @@ func (a actionType) String() string {
 	}
 }
 
-// Direction returns the coarse sync direction of an action type. Logic that
-// decides anything must branch on the action type itself. An action type no
-// case lists has no direction (the zero value), never a guessed one.
-func (a actionType) Direction() direction {
+// isMember reports whether a is one of the constants above. The exhaustive
+// linter holds this switch, like every other switch on the action type, to
+// every member, so lint passes only once a new member is decided everywhere.
+func (a actionType) isMember() bool {
 	switch a {
-	case ActionUpload:
-		return directionUpload
-	case ActionLocalDelete, ActionRemoteDelete:
-		return directionDelete
-	case ActionDownload, ActionFolderCreate, ActionConflictCopy,
-		ActionLocalMove, ActionRemoteMove, ActionBaselineUpdate, ActionCleanup:
-		return directionDownload
+	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
+		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflictCopy,
+		ActionBaselineUpdate, ActionCleanup:
+		return true
 	default:
-		return ""
+		return false
 	}
 }
 
@@ -278,16 +257,14 @@ func (a *actionType) Scan(src any) error {
 	return nil
 }
 
-// Value implements driver.Valuer for ActionType TEXT columns.
+// Value implements driver.Valuer for ActionType TEXT columns. A value outside
+// the enum is refused, so no store row can carry one.
 func (a actionType) Value() (driver.Value, error) {
-	switch a {
-	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
-		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflictCopy,
-		ActionBaselineUpdate, ActionCleanup:
-		return a.String(), nil
-	default:
+	if !a.isMember() {
 		return nil, fmt.Errorf("sync: invalid ActionType %d", a)
 	}
+
+	return a.String(), nil
 }
 
 // folderCreateSide specifies where a new folder should be created.
@@ -297,6 +274,16 @@ const (
 	createLocal folderCreateSide = iota
 	CreateRemote
 )
+
+// isMember reports whether s is one of the constants above.
+func (s folderCreateSide) isMember() bool {
+	switch s {
+	case createLocal, CreateRemote:
+		return true
+	default:
+		return false
+	}
+}
 
 func (s folderCreateSide) String() string {
 	switch s {

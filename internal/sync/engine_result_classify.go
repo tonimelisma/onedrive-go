@@ -348,7 +348,7 @@ func effectiveRemotePermissionCapability(r *actionCompletion) permissionCapabili
 	case ActionConflictCopy, ActionLocalDelete, ActionLocalMove, ActionBaselineUpdate, ActionCleanup:
 		return permissionCapabilityUnknown
 	default:
-		return permissionCapabilityUnknown
+		panic(outsideTheEnum(r.ActionType))
 	}
 }
 
@@ -371,7 +371,7 @@ func effectiveLocalPermissionCapability(r *actionCompletion) permissionCapabilit
 	case ActionRemoteDelete, ActionRemoteMove, ActionBaselineUpdate:
 		return permissionCapabilityUnknown
 	default:
-		return permissionCapabilityUnknown
+		panic(outsideTheEnum(r.ActionType))
 	}
 }
 

@@ -681,15 +681,16 @@ func TestSQLSameLocalEntry_EveryAliasFollowsThePattern(t *testing.T) {
 	assert.Equal(t, sqlSameLocalEntrySrc, pattern("src"))
 }
 
-// Validates: R-2.2.1
+// Validates: R-2.2.1, R-2.2.3
 //
-// The diverged cell with a local change, no remote change and equal content:
-// the baseline recorded different local and remote hashes (an accepted server
-// transform keeps the served bytes locally and OneDrive's reported hash
-// remotely), and the local file now holds the content OneDrive reports. Local
-// changed against the baseline, OneDrive did not, so the row is an upload of
-// bytes OneDrive already holds: redundant, never a loss. Pinned as it is.
-func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsAnUpload(t *testing.T) {
+// A local change, no remote change and equal content: the baseline recorded
+// different local and remote hashes (an accepted server transform keeps the
+// served bytes locally and OneDrive's reported hash remotely), and the local
+// file now holds the content OneDrive reports. Content proven equal never
+// transfers, whichever side changed: the row is equal_again, a baseline
+// update. It used to be diverged and an upload of bytes OneDrive already
+// holds, which made a new version online for nothing.
+func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
@@ -710,12 +711,12 @@ func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsAnUpload(t *t
 	comparisonRows, err := store.QueryComparisonState(ctx)
 	require.NoError(t, err)
 	require.Len(t, comparisonRows, 1)
-	assert.Equal(t, comparisonDiverged, comparisonRows[0].ComparisonKind)
+	assert.Equal(t, comparisonEqualAgain, comparisonRows[0].ComparisonKind)
 	assert.True(t, comparisonRows[0].LocalChanged)
 	assert.False(t, comparisonRows[0].RemoteChanged)
 	assert.True(t, comparisonRows[0].CurrentEqual)
 
 	reconciliationRows, err := store.QueryReconciliationState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "upload", reconciliationKindsByPath(reconciliationRows)["a.txt"])
+	assert.Equal(t, "baseline_update", reconciliationKindsByPath(reconciliationRows)["a.txt"])
 }
