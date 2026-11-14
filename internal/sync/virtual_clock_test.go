@@ -123,7 +123,7 @@ func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 		mockWatcher := newMockFsWatcher()
 		obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 			Baseline:              baseline,
-			AfterFunc:             realAfterFunc,
+			AfterFunc:             realClock{}.AfterFunc,
 			WriteCoalesceCooldown: cooldown,
 		})
 		events := make(chan changeEvent, 10)

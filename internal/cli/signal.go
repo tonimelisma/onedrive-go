@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // shutdownContext returns a context that cancels on the first SIGINT/SIGTERM
@@ -22,8 +24,12 @@ import (
 // cancels the context, stops the signal goroutine and unregisters the handler,
 // which matters because this is installed once per command invocation rather
 // than once per process (R-6.3.6).
+//
+// A panic in the handler cancels the context with the panic as its cause, so
+// the command ends and exits 1 (commandPanicCause, R-6.3.10) instead of the
+// process dying with Go's exit status 2.
 func shutdownContext(parent context.Context, logger *slog.Logger) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancelCause(parent)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -37,16 +43,21 @@ func shutdownContext(parent context.Context, logger *slog.Logger) (context.Conte
 	var releaseOnce sync.Once
 	stop := func() {
 		releaseOnce.Do(func() { close(released) })
-		cancel()
+		cancel(nil)
 	}
 
 	go func() {
 		defer signal.Stop(sigCh)
+		defer func() {
+			if r := recover(); r != nil {
+				cancel(panicguard.Recovered(logger, "in the signal handler", r))
+			}
+		}()
 
 		select {
 		case <-sigCh:
 			logger.Info("Stopping... (press Ctrl-C again to force quit)")
-			cancel()
+			cancel(nil)
 		case <-ctx.Done():
 			return
 		}

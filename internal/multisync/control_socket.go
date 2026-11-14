@@ -17,6 +17,7 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -158,7 +159,7 @@ func startControlSocketServer(ctx context.Context, cfg *controlServerConfig) (*c
 		)
 	}
 
-	server := newControlHTTPServer(handler, cfg.timeouts)
+	server := newControlHTTPServer(handler, cfg.timeouts, logger)
 	control := &controlSocketServer{
 		path:     path,
 		server:   server,
@@ -171,9 +172,15 @@ func startControlSocketServer(ctx context.Context, cfg *controlServerConfig) (*c
 	// The owner closes the server (Close), and only once its drives have
 	// stopped: closing releases the owner lock, so closing it when the
 	// context is canceled let a reset or a second sync start while a drive
-	// was still draining into its store.
+	// was still draining into its store. A panic here ends Serve the way a
+	// failed listener does.
 	go func() {
 		defer close(control.done)
+		defer func() {
+			if r := recover(); r != nil {
+				reportControlServeEnd(logger, path, cfg.fatal, panicguard.Recovered(logger, "in the control server", r))
+			}
+		}()
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			reportControlServeEnd(logger, path, cfg.fatal, serveErr)
 		}
@@ -188,8 +195,12 @@ func startControlSocketServer(ctx context.Context, cfg *controlServerConfig) (*c
 // that waits (for the watch loop, for a capture) moves its own write deadline
 // through extendControlWriteDeadline, because a server-wide budget long
 // enough for a five-minute capture would bound nothing else.
-func newControlHTTPServer(handler http.Handler, timeouts controlTimeouts) *http.Server {
-	return &http.Server{
+//
+// net/http recovers a handler's panic per connection and reports it, with
+// its stack, through ErrorLog; without one it would write to the standard
+// log package, past slog and the log file. A nil logger keeps that default.
+func newControlHTTPServer(handler http.Handler, timeouts controlTimeouts, logger *slog.Logger) *http.Server {
+	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: timeouts.header,
 		ReadTimeout:       timeouts.read,
@@ -197,14 +208,19 @@ func newControlHTTPServer(handler http.Handler, timeouts controlTimeouts) *http.
 		IdleTimeout:       timeouts.idle,
 		MaxHeaderBytes:    maxControlHeaderBytes,
 	}
+	if logger != nil {
+		server.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelError)
+	}
+
+	return server
 }
 
 // reportControlServeEnd handles a Serve that returned although nobody closed
-// the server. A watch owner without its control channel cannot be paused,
-// reloaded or queried, so the end goes to the watch loop's fatal channel and
-// the watch stops with it instead of syncing on out of reach. A one-shot
-// owner (no fatal channel) keeps its owner lock, finishes its pass and only
-// logs.
+// the server, or that panicked. A watch owner without its control channel
+// cannot be paused, reloaded or queried, so the end goes to the watch loop's
+// fatal channel and the watch stops with it instead of syncing on out of
+// reach. A one-shot owner (no fatal channel) keeps its owner lock, finishes
+// its pass and only logs.
 func reportControlServeEnd(logger *slog.Logger, path string, fatal chan<- error, serveErr error) {
 	err := fmt.Errorf("the control channel stopped, so status, pause and resume could no longer reach this sync: %w", serveErr)
 	if fatal == nil {

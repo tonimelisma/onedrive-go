@@ -609,6 +609,8 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 // TestWorkerPool_PanicRecovery verifies that a panic in action execution
 // doesn't crash the process — the worker recovers and reports a failure
 // result. The pool completes normally.
+//
+// Validates: R-6.3.8
 func TestWorkerPool_PanicRecovery(t *testing.T) {
 	t.Parallel()
 
@@ -649,11 +651,11 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	_, failed := countResults(results)
 	assert.GreaterOrEqual(t, failed, 1, "panic should be recorded as failure")
 
-	// Verify the error message contains "panic:".
+	// The failure names the action and the panic value.
 	var foundPanicResult bool
 	for _, r := range results {
 		if !r.Success && r.Path == "panic-me.txt" {
-			assert.Contains(t, r.ErrMsg, "panic:")
+			assert.Contains(t, r.ErrMsg, "internal error while syncing panic-me.txt: intentional panic for testing")
 			foundPanicResult = true
 		}
 	}

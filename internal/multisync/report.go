@@ -140,8 +140,9 @@ type RunOnceResult struct {
 	Startup StartupSelectionSummary
 	Reports []*MountReport
 	// Stuck is set when a drive's engine did not close within its bound after
-	// the pass; it wraps ErrSyncStuck. The reports stand, but the command
-	// fails, so the process exits and the engine's locks are released.
+	// the pass (it wraps ErrSyncStuck) or its close panicked (it wraps
+	// panicguard.ErrPanic). The reports stand, but the command fails, so the
+	// process exits and the engine's locks are released.
 	Stuck error
 }
 

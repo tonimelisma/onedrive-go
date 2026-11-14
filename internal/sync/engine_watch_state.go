@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -107,9 +108,10 @@ type watchResources struct {
 	remoteObs *remoteObserver
 	localObs  *localObserver
 
-	// Socket.IO wake source lifecycle, when enabled for full-drive watch.
-	socketIOWakeStop chan struct{}
-	socketIOWakeDone chan struct{}
+	// Socket.IO wake source lifecycle, when enabled for full-drive watch: the
+	// cancel of its context, and a channel its goroutine closes on return.
+	socketIOWakeCancel context.CancelFunc
+	socketIOWakeDone   chan struct{}
 
 	// Full remote refresh is started by the watch loop and hands one loop-applied
 	// remote observation batch back over refreshResults. These channels stay

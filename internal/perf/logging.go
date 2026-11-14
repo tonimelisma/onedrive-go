@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 type Session struct {
@@ -19,8 +21,15 @@ type Session struct {
 	stopCh chan struct{}
 	doneCh chan struct{}
 	once   sync.Once
+	// cancel ends the context NewSession returned, with a cause.
+	cancel context.CancelCauseFunc
 }
 
+// NewSession starts a performance session for one command and returns the
+// command's context, which carries the session's collector. With an interval
+// it logs an update at every interval until Complete. A panic in those
+// updates ends the command: it cancels the returned context with the panic as
+// the cause, which the command returns and exits 1 with (R-6.3.10).
 func NewSession(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -33,6 +42,7 @@ func NewSession(
 		logger = slog.Default()
 	}
 
+	ctx, cancel := context.WithCancelCause(ctx)
 	collector := NewCollector(parent)
 	session := &Session{
 		name:      name,
@@ -41,6 +51,7 @@ func NewSession(
 		logger:    logger,
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
+		cancel:    cancel,
 	}
 
 	if interval > 0 {
@@ -66,8 +77,8 @@ func (s *Session) SetLogger(logger *slog.Logger) {
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.logger = logger
-	s.mu.Unlock()
 }
 
 func (s *Session) Complete(err error) {
@@ -82,11 +93,19 @@ func (s *Session) Complete(err error) {
 		close(s.stopCh)
 		<-s.doneCh
 		s.log("performance summary")
+		// The command is over; release its context. A cause set by a panic
+		// in the updates stays: the first cancel wins.
+		s.cancel(nil)
 	})
 }
 
 func (s *Session) runPeriodic(interval time.Duration) {
 	defer close(s.doneCh)
+	defer func() {
+		if r := recover(); r != nil {
+			s.cancel(panicguard.Recovered(s.currentLogger(), "in the performance logger", r))
+		}
+	}()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

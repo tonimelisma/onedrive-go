@@ -310,7 +310,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, 10),
 		},
-		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realAfterFunc},
+		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realClock{}.AfterFunc},
 	}
 
 	events := make(chan changeEvent, 5)
@@ -362,7 +362,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 			PendingTimers: make(map[string]syncTimer),
 			HashRequests:  make(chan hashRequest, 10),
 		},
-		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realAfterFunc},
+		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realClock{}.AfterFunc},
 	}
 
 	events := make(chan changeEvent, 5)
@@ -471,7 +471,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 		writeCoalesceCooldown: 50 * time.Millisecond,
 		clock: &observerTestClock{
 			syncClock: realClock{},
-			afterFunc: realAfterFunc,
+			afterFunc: realClock{}.AfterFunc,
 			sleep: func(_ context.Context, _ time.Duration) error {
 				return nil
 			},

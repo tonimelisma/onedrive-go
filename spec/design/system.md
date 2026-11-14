@@ -1,8 +1,8 @@
 # System Architecture
 
-GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go
+GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go, internal/panicguard/*.go
 
-Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.26 [verified], R-6.10.27 [verified]
+Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.3.10 [verified]
 
 ## Verified By
 
@@ -25,6 +25,7 @@ Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.
 | Dependency vulnerabilities are caught by tooling rather than by review, including in the forked oauth2 credential path. | `.github/workflows/ci.yml` (govulncheck step), `.github/dependabot.yml` |
 | Every platform claimed in README.md compiles on every verify run, and the darwin runtime is exercised by its own CI leg. | `TestRunVerifyDefaultRunsExpectedSteps`, `TestRunVerifyPublicRunsExpectedSteps`, `.github/workflows/ci.yml` |
 | Test assertion style and sleep discipline are enforced by repo verification, not only by contributor convention. | `internal/devtool/verify_test_conventions_test.go` |
+| No goroutine of the product can end the process with Go's exit status 2: every goroutine start (a go statement, a group's `Go` call, or the callback of a `time.AfterFunc` or `context.AfterFunc` call) begins with deferred calls that include a recover handing the value to `panicguard.Recovered`, every recover does, a start the scan cannot resolve to a function of its package (another package's function, an expression it cannot name) is a finding, and the scans reject what they police; `Recovered` logs one Error record with the panicking goroutine's stack and returns an error wrapping `ErrPanic` that carries the stack (R-6.3.10, R-6.3.8). A test whose subject panics on a goroutine of its own runs it in a child test binary (`synctest.RunInChild`), so a missing boundary fails the test instead of the package's run. | `TestEveryGoroutineHasAPanicBoundary`, `TestPanicRecoverySitesCaptureTheStack`, `TestBoundaryScans_RejectWhatTheyPolice`, `TestRecovered_LogsTheValueAndTheStackAtErrorAndWrapsErrPanic`, `TestRecovered_WithoutALoggerLogsThroughTheDefault`, `TestStack_FindsThePanicInsideAWrappedError`, `TestRunInChild_AnEscapedGoroutinePanicEndsOnlyTheChild`, `TestRunInChild_APassingChildPasses`, `TestLogCapture_KeepsEveryRecordWithItsAttributes`, `TestPanicOnMessage_PanicsOnlyOnItsMessage` |
 | `localpath.AtomicWrite` and `fsroot.Root.AtomicWrite` fsync the directory the rename landed in, report a sync failure, and tolerate only a filesystem that cannot sync a directory (R-6.5.4). | `TestAtomicWrite_SyncsTargetDirectory`, `TestAtomicWrite_ReportsDirectorySyncFailure`, `TestAtomicWrite_ToleratesUnsupportedDirectorySync`, `TestRoot_AtomicWrite_SyncsTargetDirectory`, `TestRoot_AtomicWrite_ReportsDirectorySyncFailure`, `TestRoot_AtomicWrite_ToleratesUnsupportedDirectorySync` |
 | `synctree.Root.Spelling` finds an entry by its spelling on disk when a stored NFC path differs from it in Unicode form only: the exact path first, then one listing per missing component; an ambiguous match, a missing parent and an unusable path resolve nothing, and `SpellingOfParent` never looks up the new entry's own name (R-2.13.2). | `TestRoot_SpellingFindsTheNameOnDisk`, `TestRoot_SpellingReturnsUnusablePathsAsGiven`, `TestRoot_SpellingOfParentResolvesOnlyTheParents`, `TestRoot_SpellingAddressesTheEntryForRootedOperations` |
 | Sync-tree mutation cannot escape the configured sync root through a symlinked ancestor, and a containment failure is never reported as absence. | `TestRoot_Rename_ThroughSymlinkedAncestorFailsAndPreservesTarget`, `TestRoot_MkdirAll_ThroughSymlinkedAncestorFails`, `TestRoot_RemoveAll_ThroughSymlinkedAncestorFails`, `TestRoot_Remove_ThroughSymlinkedAncestorFails`, `TestRoot_Chtimes_ThroughSymlinkedAncestorFails`, `TestRoot_Lstat_ThroughSymlinkedAncestorIsNotReportedAsNotExist`, `TestRoot_Stat_ThroughSymlinkedAncestorIsNotReportedAsNotExist`, `TestRoot_OpenFile_ThroughSymlinkedAncestorFails`, `TestRoot_NormalizeNotExist_DepthOnePathTerminates`, `TestRoot_MutationsWithinRootStillSucceed`, `TestRoot_MutationsThroughInRootSymlinkSucceed`, `TestRoot_ValidateNoSymlinkAncestors_NamesLinkAndNonFolderSeparately` |
@@ -54,6 +55,7 @@ internal/
   logfile/                    Log file creation and retention
   multisync/                  Multi-mount sync control plane and watch reload
   namekey/                    OneDrive's name-equivalence key (leaf, x/text only)
+  panicguard/                 A recovered panic as one log record with its stack and one error (leaf, stdlib-only)
   perf/                       Command-scoped and live sync performance instrumentation plus capture bundles
   retry/                      Retry policies, exponential backoff with jitter, retry transport
   sharedref/                  Shared item selector parsing and formatting
@@ -86,7 +88,24 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
 - `multisync` owns multi-mount lifecycle; `sync` owns the single mounted
   content-root runtime.
-- `authstate`, `driveid`, `errclass`, `localpath`, `loglevel`, `namekey`, `sdnotify` and `sharedref` are leaf packages (no internal imports), every package that is one today, held to it by the `leaf-internal` depguard rule. Three packages have exactly one internal dependency and are held to that one by a rule of their own: `tokenfile` imports only `fsroot`, `retry` only `perf`, and `fsroot` only `localpath` (for `IsDirSyncUnsupported`).
+- `authstate`, `driveid`, `errclass`, `localpath`, `loglevel`, `namekey`, `panicguard`, `sdnotify` and `sharedref` are leaf packages (no internal imports), every package that is one today, held to it by the `leaf-internal` depguard rule. Three packages have exactly one internal dependency and are held to that one by a rule of their own: `tokenfile` imports only `fsroot`, `retry` only `perf`, and `fsroot` only `localpath` (for `IsDirSyncUnsupported`).
+- `panicguard` is the one way a recovered panic is logged and turned into an
+  error (R-6.3.10). Every goroutine product code starts recovers at its
+  boundary: the deferred calls a goroutine's function begins with include a
+  recover that hands the value to `panicguard.Recovered`, which logs it once
+  at Error with the panicking goroutine's stack and returns an error wrapping
+  `panicguard.ErrPanic`. What follows is the boundary's own decision: a
+  drive's runtime fails that drive (R-6.3.8, sync-engine.md and
+  sync-control-plane.md), a helper the watch cannot run without ends the
+  watch, a CLI helper cancels the command with the panic as the cause
+  (cli.md, Exit Status), and a one-shot helper reports its unit's failure.
+  `TestEveryGoroutineHasAPanicBoundary` and
+  `TestPanicRecoverySitesCaptureTheStack` scan `main.go` and every package
+  under `internal/` and `pkg/` except the developer tool and the test
+  helpers, so a new package is covered without editing them; the goroutines
+  that need no boundary are named in the test with the reason, and an entry
+  no goroutine uses fails it. The CLI, the Graph client, `perf`,
+  `multisync` and `sync` import it.
 - `namekey` is the single authority for "are these two names in one folder the
   same OneDrive name". It is shared because both sides of the boundary ask:
   `graph` (path verification, created-item lookups), `driveops` (upload

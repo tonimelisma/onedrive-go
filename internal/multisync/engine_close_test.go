@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // A one-shot engine whose close runs over is closed under the same bound as a
@@ -23,7 +24,7 @@ import (
 // Validates: R-6.3.9
 func TestRunOnce_AnEngineThatDoesNotCloseFailsTheRun(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:close-stuck@example.com", "CloseStuck")
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -55,9 +56,9 @@ func TestRunOnce_AnEngineThatDoesNotCloseFailsTheRun(t *testing.T) {
 	require.Len(t, result.Reports, 1)
 	require.NoError(t, result.Reports[0].Err, "the pass itself succeeded")
 	assert.Equal(t, []time.Duration{engineCloseTimeout}, armed)
-	errorLogs := capture.atLeast(slog.LevelError)
+	errorLogs := capture.AtLeast(slog.LevelError)
 	require.Len(t, errorLogs, 1)
-	assert.Contains(t, errorLogs[0].attrs["stack"], "goroutine ")
+	assert.Contains(t, errorLogs[0].Attrs["stack"], "goroutine ")
 	closeCtx := <-closeCtxs
 	require.NoError(t, closeCtx.Err())
 	deadline, hasDeadline := closeCtx.Deadline()
@@ -77,7 +78,7 @@ func TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged(t *testing.T) 
 	parent := testStandaloneMount(t, "personal:child-close-stuck@example.com", "Parent")
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-close-stuck", "Shortcuts/Stuck")
 	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -127,5 +128,5 @@ func TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged(t *testing.T) 
 	require.ErrorContains(t, result.Stuck, "Stuck")
 	assert.NotContains(t, result.Stuck.Error(), "Parent:", "the drive's own engine closed")
 	assert.Zero(t, acks.Load(), "a shortcut whose engine may still write its store is not acknowledged")
-	assert.Len(t, capture.atLeast(slog.LevelError), 1)
+	assert.Len(t, capture.AtLeast(slog.LevelError), 1)
 }

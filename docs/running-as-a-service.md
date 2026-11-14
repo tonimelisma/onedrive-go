@@ -116,6 +116,34 @@ the journal line starting "Syncing ... did not stop when told to" together
 with the matching entry in onedrive-go's log file, which carries the stack of
 every goroutine.
 
+### A crash that repeats on every start
+
+A bug that makes onedrive-go panic outside one drive's sync is logged as an
+error with its stack (in the journal, and in onedrive-go's log file when one
+is configured), and onedrive-go exits with status 1. A panic inside one
+drive's sync only stops that drive, which restarts on its own. After an exit,
+`Restart=on-failure` starts the service again 30 seconds later
+(`RestartSec=30s`). If the bug is hit on every start, that is a restart every
+30 seconds, each one logged with its stack, until you stop the unit:
+systemd's default start limit (`DefaultStartLimitIntervalSec=10s` and
+`DefaultStartLimitBurst=5`, see `systemd-system.conf(5)`; user units use the
+same defaults) never trips at that pace. The example unit keeps retrying on
+purpose, because a sync client that gives up stays down until someone
+notices. To make it give up instead, add a start limit to its `[Unit]`
+section with an interval longer than the burst times `RestartSec`:
+
+```ini
+[Unit]
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+```
+
+systemd then stops after five starts within ten minutes (five restarts take
+about two and a half minutes). Once the cause is fixed,
+`systemctl --user reset-failed onedrive-go` and
+`systemctl --user start onedrive-go` start it again. Report the journal lines
+starting "Internal error", with the stack below them.
+
 ## macOS
 
 No launchd example is provided yet, and there is no `service install`

@@ -7,6 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // Process exit statuses. They are a stable contract for scripts and service
@@ -27,10 +28,14 @@ const (
 
 // classifyCommandError maps a command's final error into the shared failure
 // model (R-6.8.16). It branches only on sentinels and types, never on text.
+// A recovered panic is fatal even when it travels with the cancellation it
+// caused (R-6.3.10).
 func classifyCommandError(err error) errclass.Class {
 	switch {
 	case err == nil:
 		return errclass.ClassSuccess
+	case errors.Is(err, panicguard.ErrPanic):
+		return errclass.ClassFatal
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return errclass.ClassShutdown
 	case isSignInRequired(err), errors.Is(err, config.ErrInvalidConfig):
@@ -50,10 +55,15 @@ func isSignInRequired(err error) bool {
 
 // commandExitCode is the process exit status for a command's final error.
 // stopRequested is true when the user asked the run to stop (SIGINT or
-// SIGTERM); only then does a cancellation exit 130 rather than fail.
+// SIGTERM); only then does a cancellation exit 130 rather than fail. A
+// recovered panic anywhere in err exits 1, also beside a sign-in or config
+// failure that would exit 77 or 78 alone (R-6.3.10).
 func commandExitCode(err error, stopRequested bool) int {
 	if err == nil {
 		return exitSuccess
+	}
+	if errors.Is(err, panicguard.ErrPanic) {
+		return exitFailure
 	}
 
 	if stopRequested && classifyCommandError(err) == errclass.ClassShutdown {
@@ -70,5 +80,33 @@ func commandExitCode(err error, stopRequested bool) int {
 		return exitConfigInvalid
 	default:
 		return exitFailure
+	}
+}
+
+// commandPanicCause is the panic a helper goroutine of the command canceled
+// ctx with, or nil. A helper (the signal handler, the systemd watchdog, the
+// performance logger) has no error result to return to the command, so it
+// ends the command through the context instead (R-6.3.10).
+func commandPanicCause(ctx context.Context) error {
+	if cause := context.Cause(ctx); errors.Is(cause, panicguard.ErrPanic) {
+		//nolint:wrapcheck // The cause is the helper's panicguard error, already the whole account of the failure.
+		return cause
+	}
+
+	return nil
+}
+
+// withCommandPanic is the command's final error once a helper's panic is
+// counted: the panic replaces the cancellation it caused, or the nil result
+// of a command that finished regardless, and joins any other failure.
+func withCommandPanic(ctx context.Context, err error) error {
+	cause := commandPanicCause(ctx)
+	switch {
+	case cause == nil, errors.Is(err, panicguard.ErrPanic):
+		return err
+	case err == nil, errors.Is(err, context.Canceled):
+		return cause
+	default:
+		return errors.Join(cause, err)
 	}
 }

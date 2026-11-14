@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // defaultDownloadConcurrency is the maximum number of concurrent file downloads
@@ -200,9 +201,11 @@ func printGetFolderJSON(w io.Writer, out getFolderJSONOutput) error {
 // downloadState holds mutable state shared across the recursive download.
 type downloadState struct {
 	// mu guards result, done, total, and countErrors against the concurrent
-	// file-download goroutines. childCache needs no lock: the counting pass
-	// fills it before any download starts, and the directory walk that reads
-	// it runs inline on a single goroutine.
+	// file-download goroutines. Every holder releases it with defer: a file
+	// goroutine's panic boundary records its error through mu, and would wait
+	// forever on a lock a panic left held. childCache needs no lock: the
+	// counting pass fills it before any download starts, and the directory
+	// walk that reads it runs inline on a single goroutine.
 	mu          sync.Mutex
 	wg          sync.WaitGroup
 	sem         chan struct{} // shared semaphore bounding total concurrency
@@ -226,6 +229,14 @@ func (state *downloadState) recordError(failure string) {
 	defer state.mu.Unlock()
 
 	state.result.Errors = append(state.result.Errors, failure)
+}
+
+// recordFolderCreated counts one local folder the download created.
+func (state *downloadState) recordFolderCreated() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	state.result.FoldersCreated++
 }
 
 // downloadFolder downloads the folder folderID at remotePath into localPath.
@@ -343,9 +354,7 @@ func downloadTree(
 	}
 
 	if created {
-		state.mu.Lock()
-		state.result.FoldersCreated++
-		state.mu.Unlock()
+		state.recordFolderCreated()
 	}
 
 	children := state.childCache[folderID]
@@ -363,6 +372,14 @@ func downloadTree(
 
 		go func() {
 			defer state.wg.Done()
+			// A panic is this file's failure, listed with the others, while
+			// the rest of the tree downloads (R-6.3.10).
+			defer func() {
+				if r := recover(); r != nil {
+					panicErr := panicguard.Recovered(cc.Logger, "while downloading "+childLocal, r)
+					state.recordError(fmt.Sprintf("%s: %v", childLocal, panicErr))
+				}
+			}()
 
 			downloadTreeFile(ctx, cc, tm, state, driveID, child, childLocal)
 		}()

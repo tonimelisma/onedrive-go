@@ -16,7 +16,7 @@ Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`,
 | `pkg/quickxorhash/` | `spec/design/drive-transfers.md` | |
 | `internal/retry/` | `spec/design/retry.md` | |
 | `internal/errclass/` | `spec/design/error-model.md` | `spec/design/system.md` (carries its `GOVERNS:` line) |
-| `internal/localtrash/`, `internal/localpath/`, `internal/fsroot/`, `internal/namekey/`, `internal/sharedref/`, `internal/authstate/`, `internal/synctest/` | `spec/design/system.md` | `spec/design/sync-execution.md` (local trash), `spec/design/sync-observation.md` (name keys, root identity) |
+| `internal/localtrash/`, `internal/localpath/`, `internal/fsroot/`, `internal/namekey/`, `internal/sharedref/`, `internal/authstate/`, `internal/synctest/`, `internal/panicguard/` | `spec/design/system.md` | `spec/design/sync-execution.md` (local trash), `spec/design/sync-observation.md` (name keys, root identity) |
 | `internal/loglevel/` | `spec/design/cli.md` | `spec/reference/cli-output-guidelines.md` |
 | `internal/perf/` | `spec/design/system.md` | `spec/design/cli.md`, `spec/design/sync-control-plane.md` |
 | `internal/devtool/` | `spec/design/system.md` | |

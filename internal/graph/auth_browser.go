@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -38,7 +39,7 @@ func doAuthCodeLogin(
 		return nil, err
 	}
 
-	defer shutdownCallbackServer(ctx, srv, logger)
+	defer srv.shutdown(ctx, logger)
 
 	// Configure redirect URL with the actual port. No path suffix — must match
 	// the registered "http://localhost" URI exactly (port is ignored by v2.0).
@@ -72,14 +73,24 @@ func doAuthCodeLogin(
 	return exchangeAndSave(ctx, cfg, tokenPath, code, verifier, logger)
 }
 
+// callbackServer is the localhost server the browser redirects back to, and
+// the goroutine serving it, whose end shutdown waits for.
+type callbackServer struct {
+	srv  *http.Server
+	done chan struct{}
+}
+
 // startCallbackServer binds to 127.0.0.1:0 and starts an HTTP server with the
-// given mux. Returns the server, the port, and any error.
+// given mux. Returns the server, the port, and any error. A panic in the
+// serving goroutine is the login's failure, delivered as the callback result
+// a failed server delivers. A handler's panic, which net/http recovers per
+// connection, is logged through logger instead of the standard log package.
 func startCallbackServer(
 	ctx context.Context,
 	mux *http.ServeMux,
 	resultCh chan<- callbackResult,
 	logger *slog.Logger,
-) (*http.Server, int, error) {
+) (*callbackServer, int, error) {
 	lc := net.ListenConfig{}
 
 	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
@@ -100,18 +111,30 @@ func startCallbackServer(
 	port := tcpAddr.Port
 	logger.Info("callback server listening", slog.Int("port", port))
 
-	srv := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: callbackHeaderReadTimeout,
+	server := &callbackServer{
+		srv: &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: callbackHeaderReadTimeout,
+			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
+		},
+		done: make(chan struct{}),
 	}
 
 	go func() {
-		if serveErr := srv.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		defer close(server.done)
+		defer func() {
+			if r := recover(); r != nil {
+				deliverCallbackResult(resultCh, callbackResult{
+					err: fmt.Errorf("graph: callback server: %w", panicguard.Recovered(logger, "in the sign-in callback server", r)),
+				})
+			}
+		}()
+		if serveErr := server.srv.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			deliverCallbackResult(resultCh, callbackResult{err: fmt.Errorf("graph: callback server error: %w", serveErr)})
 		}
 	}()
 
-	return srv, port, nil
+	return server, port, nil
 }
 
 // deliverCallbackResult reports the first outcome of the OAuth callback and
@@ -175,17 +198,19 @@ func handleOAuthCallback(w http.ResponseWriter, r *http.Request, state string, r
 	deliverCallbackResult(resultCh, callbackResult{code: code})
 }
 
-// shutdownCallbackServer gracefully shuts down the callback HTTP server.
+// shutdown gracefully shuts down the callback HTTP server and waits for its
+// serving goroutine, which returns as soon as Shutdown closes the listener.
 // Accepts an explicit logger instead of using slog.Default() so the caller
 // controls logging configuration (B-146).
-func shutdownCallbackServer(ctx context.Context, srv *http.Server, logger *slog.Logger) {
+func (s *callbackServer) shutdown(ctx context.Context, logger *slog.Logger) {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), callbackShutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := s.srv.Shutdown(shutdownCtx); err != nil {
 		// Best-effort shutdown — log but don't propagate since we're in a defer.
 		logger.Debug("callback server shutdown error", slog.Any("error", err))
 	}
+	<-s.done
 }
 
 // launchBrowser attempts to open the auth URL. The openURL callback owns any

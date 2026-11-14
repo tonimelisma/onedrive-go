@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-2.8.12
@@ -80,7 +81,7 @@ type timedPauseWatch struct {
 	fire    chan time.Time
 	started chan struct{}
 	logger  *slog.Logger
-	capture *logCapture
+	capture *synctest.LogCapture
 	// armedMu guards armed: the loop arms the timer from its own goroutine.
 	armedMu gosync.Mutex
 	armed   []time.Duration
@@ -99,7 +100,7 @@ func newTimedPauseWatch(t *testing.T) *timedPauseWatch {
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", until.Format(time.RFC3339)))
 
-	capture, logger := newLogCapture()
+	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.Logger = logger
@@ -158,8 +159,8 @@ func (w *timedPauseWatch) armedDelays() []time.Duration {
 }
 
 func (w *timedPauseWatch) logged(message string) bool {
-	for _, record := range w.capture.atLeast(slog.LevelInfo) {
-		if record.message == message {
+	for _, record := range w.capture.AtLeast(slog.LevelInfo) {
+		if record.Message == message {
 			return true
 		}
 	}
