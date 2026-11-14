@@ -32,5 +32,5 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 
 	ctx := cmd.Context()
 
-	return runStatusCommand(ctx, mustCLIContext(ctx), false, showPerf)
+	return runStatusCommand(ctx, mustCLIContext(ctx), showPerf)
 }

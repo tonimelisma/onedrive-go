@@ -141,7 +141,7 @@ func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
 	assert.Nil(t, info.Conditions)
 
 	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, "    ", &info, false))
+	require.NoError(t, printSyncStateText(&buf, "    ", &info))
 	assert.Empty(t, buf.String())
 }
 
@@ -226,19 +226,19 @@ func TestProjectStoredConditionGroups_MergesScopeFamiliesAndDedupesPaths(t *test
 	assert.Equal(t, []string{"/bad:name.txt"}, groups[1].Paths)
 }
 
-func TestPrintConditionSection_NoActiveConditions(t *testing.T) {
+func TestPrintIssueSection_NoActiveConditions(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printConditionSection(&buf, "    ", "      ", nil))
+	require.NoError(t, printIssueSection(&buf, "    ", nil))
 	assert.Empty(t, buf.String())
 }
 
-func TestPrintConditionSection_RendersScopePathsAndNext(t *testing.T) {
+func TestPrintIssueSection_RendersScopePathsAndNext(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printConditionSection(&buf, "    ", "      ", []statusConditionJSON{
+	err := printIssueSection(&buf, "    ", []statusConditionJSON{
 		{
 			Title:  "Rate limited",
 			Reason: "OneDrive asked this remote location to slow down.",
@@ -268,7 +268,7 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printMountSyncSections(&buf, "    ", &syncStateInfo{
+	err := printDriveSyncSections(&buf, "    ", &syncStateInfo{
 		Conditions: []statusConditionJSON{
 			{
 				Title:  "Invalid filename",
@@ -278,7 +278,7 @@ func TestPrintDriveSyncSections_WritesHeadingAndConditions(t *testing.T) {
 				Paths:  []string{"/bad:name.txt"},
 			},
 		},
-	}, false)
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, ""+
@@ -297,18 +297,18 @@ func TestPrintDriveSyncSections_NoConditionsUsesEmptyStateMessage(t *testing.T) 
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printMountSyncSections(&buf, "    ", &syncStateInfo{}, true))
+	require.NoError(t, printDriveSyncSections(&buf, "    ", &syncStateInfo{}))
 	assert.Empty(t, buf.String())
 }
 
-func TestPrintConditionPaths_NoEllipsisAndNoPaths(t *testing.T) {
+func TestPrintIssuePaths_NoEllipsisAndNoPaths(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printConditionPaths(&buf, "      ", nil, 0))
+	require.NoError(t, printIssuePaths(&buf, "      ", nil, 0))
 	assert.Empty(t, buf.String())
 
-	require.NoError(t, printConditionPaths(&buf, "      ", []string{"a", "b"}, 2))
+	require.NoError(t, printIssuePaths(&buf, "      ", []string{"a", "b"}, 2))
 	assert.Equal(t, "\n      a\n      b\n", buf.String())
 }
 
@@ -316,14 +316,14 @@ func TestPrintAccountStatus_NilAndLeadingBlank(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printAccountStatus(&buf, nil, true, false))
+	require.NoError(t, printAccountStatus(&buf, nil, true))
 	assert.Empty(t, buf.String())
 
 	require.NoError(t, printAccountStatus(&buf, &statusAccount{
 		Email:     "blank@example.com",
 		DriveType: "personal",
 		AuthState: authStateReady,
-	}, true, false))
+	}, true))
 	assert.Equal(t, "\nAccount: blank@example.com\n", buf.String())
 }
 
@@ -379,7 +379,7 @@ func TestPrintSyncStateText_PerfOnlyOutput(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, printSyncStateText(&buf, "    ", &syncStateInfo{
 		PerfUnavailableReason: statusPerfUnavailableNoOwner,
-	}, false))
+	}))
 
 	assert.Equal(t, ""+
 		"\n"+
@@ -393,7 +393,7 @@ func TestPrintSyncStateText_NilIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printSyncStateText(&buf, "    ", nil, false))
+	require.NoError(t, printSyncStateText(&buf, "    ", nil))
 	assert.Empty(t, buf.String())
 }
 
@@ -435,7 +435,7 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 				},
 			},
 		},
-	}, false, false)
+	}, false)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -454,19 +454,11 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 	assert.NotContains(t, output, "Quota")
 }
 
-func TestPrintStatusNextLine_EmptyHintProducesNoOutput(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	require.NoError(t, printStatusNextLine(&buf, "      ", ""))
-	assert.Empty(t, buf.String())
-}
-
 func TestPrintStatusText_NoAccountsPrintsSummaryOnly(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, nil, false))
+	require.NoError(t, printStatusText(&buf, nil))
 	assert.Empty(t, buf.String())
 }
 
@@ -507,7 +499,7 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 				},
 			},
 		},
-	}, false))
+	}))
 
 	output := buf.String()
 	assert.Contains(t, output, "Status: 2 drives: 1 paused, 1 with issues, 1 account needs sign-in")
@@ -695,7 +687,7 @@ func TestBuildSyncStateInfo_ListsRetryingWork(t *testing.T) {
 	}, info.RetryingPaths)
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSyncSections(&buf, "    ", &info, false))
+	require.NoError(t, printDriveSyncSections(&buf, "    ", &info))
 	assert.Equal(t, "\n"+
 		"    Retrying:\n"+
 		"      Sync keeps retrying these; the sync log has each error.\n"+

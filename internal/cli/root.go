@@ -137,7 +137,10 @@ type cliSeams struct {
 	// ($NOTIFY_SOCKET, $WATCHDOG_USEC) of `sync --watch`.
 	notifyGetenv      func(string) string
 	statusLiveOverlay func(context.Context, *CLIContext, accountViewSnapshot) map[string]statusAccountLiveOverlay
-	cpAwaitCopy       func(context.Context, *CLIContext, *graph.Client, string) (string, error)
+	// statusLiveBudget replaces the live overlay's statusLiveBudget when
+	// non-zero, so a test of a OneDrive that never answers does not wait 10 s.
+	statusLiveBudget time.Duration
+	cpAwaitCopy      func(context.Context, *CLIContext, *graph.Client, string) (string, error)
 	// asideRestoreTimeout replaces restoreAsideTimeout when non-zero.
 	asideRestoreTimeout time.Duration
 	// effectiveUID replaces os.Geteuid for the sync root refusal.
