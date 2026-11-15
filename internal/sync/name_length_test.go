@@ -71,21 +71,21 @@ func TestConflictCopyPath_OrdinalAndLongExtensionStayWithinNameMax(t *testing.T)
 func TestExecutor_SecondSameSecondConflictCopyOfALongNameIsWritable(t *testing.T) {
 	t.Parallel()
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 30, 45, 0, time.UTC) })
-	e := newExecution(cfg, emptyBaseline())
-
+	e, syncRoot := newConflictCopyExecutor(t)
 	name := strings.Repeat("w", 251) + ".txt"
-	abs := filepath.Join(syncRoot, name)
 
-	first, firstRel, err := e.reserveUniqueConflictCopyPath(abs)
-	require.NoError(t, err)
-	second, secondRel, err := e.reserveUniqueConflictCopyPath(abs)
-	require.NoError(t, err, "a second copy in the same second used to exceed NAME_MAX")
+	writeExecTestFile(t, syncRoot, name, "first")
+	first := e.ExecuteConflictCopy(t.Context(), conflictCopyAction(name))
+	requireOutcomeSuccess(t, &first)
+	writeExecTestFile(t, syncRoot, name, "second")
+	second := e.ExecuteConflictCopy(t.Context(), conflictCopyAction(name))
+	requireOutcomeSuccess(t, &second)
 
-	assert.NotEqual(t, first, second)
-	assert.FileExists(t, filepath.Join(syncRoot, firstRel))
-	assert.FileExists(t, filepath.Join(syncRoot, secondRel))
+	assert.NotEqual(t, first.OldPath, second.OldPath)
+	assert.LessOrEqual(t, len(second.OldPath), maxLocalNameBytes, "the second same-second copy fits NAME_MAX")
+	assert.True(t, strings.HasSuffix(second.OldPath, ".conflict-20260115-123045-2.txt"), second.OldPath)
+	requireExecFileContent(t, syncRoot, first.OldPath, "first")
+	requireExecFileContent(t, syncRoot, second.OldPath, "second")
 }
 
 // Validates: R-2.11.11

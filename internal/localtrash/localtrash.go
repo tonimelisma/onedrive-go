@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Retention is how long a committed entry is kept before Purge removes it.
@@ -53,12 +54,19 @@ const (
 	stateDBSuffix = ".db"
 	trashDirName  = "trash"
 	entryTempGlob = ".entry-*"
-	// copyTempGlob names a cross-filesystem restore copy beside its target.
-	// IsRestoreArtifactName recognizes it so sync never observes or uploads
-	// one left behind by a crash.
-	copyTempGlob          = restoreArtifactPrefix + "*"
+	// restoreArtifactPrefix starts the name of a cross-filesystem restore
+	// copy beside its target. IsRestoreArtifactName recognizes it so sync
+	// never observes or uploads one left behind by a crash.
 	restoreArtifactPrefix = ".onedrive-go-restore-"
-	parentDirName         = ".."
+	// restoreCopyAttempts bounds the random names a restore copy tries; a
+	// taken name means a copy a crash left behind, or another writer, holds
+	// exactly that name.
+	restoreCopyAttempts    = 100
+	restoreCopyRandomBytes = 8
+	// restoreCopyPerm keeps a restore copy private until it takes the
+	// trashed file's mode.
+	restoreCopyPerm = 0o600
+	parentDirName   = ".."
 
 	// incompletePlacementGrace is how old a reservation without a file must
 	// be before Purge treats it as crash debris rather than a placement a
@@ -72,6 +80,18 @@ var ErrEntryNotFound = errors.New("no such trash entry")
 // ErrRestoreTargetExists reports that something already occupies the path a
 // trash entry would be restored to; restoring never overwrites.
 var ErrRestoreTargetExists = errors.New("a file already exists where the trash entry would be restored")
+
+// ErrRestoreLeftover reports a restore that finished but left its temporary
+// copy in the sync folder under a name sync never looks at: the file is
+// restored, the entry leaves the trash as for a clean restore, and the error
+// names the copy, which the user can delete.
+var ErrRestoreLeftover = errors.New("restored, but its temporary copy could not be removed; you can delete it")
+
+// ErrRestoreNotDurable reports a restore that placed the file but could not
+// make it durable: a power cut could still lose the restored name, so the
+// trash keeps its copy and the entry stays whole, and the error says where
+// the file is and which entry holds the copy.
+var ErrRestoreNotDurable = errors.New("restored, but the file could not be made durable")
 
 // Reason says why sync took a file out of the sync folder.
 type Reason string
@@ -113,15 +133,35 @@ type Entry struct {
 }
 
 // Trash is one drive's trash directory.
+//
+// The trash is a folder the client manages under its data directory, outside
+// every sync folder, so its own side is reached through localpath by path:
+// sync never observes it, no name in it comes from OneDrive or from the sync
+// folder (entry names are ones this package generates), and its folders are
+// created private to the user (entryDirPerm), so a symlink in it would have to
+// be planted by the user's own account. Everything a restore changes inside a
+// sync folder goes through that folder's rooted capability (synctree) instead.
 type Trash struct {
 	dir string
 	now func() time.Time
-	// renameNoReplace moves a file without replacing anything at the
-	// destination; a seam so tests can model a cross-filesystem restore.
-	renameNoReplace func(src, dst string) error
-	// syncDir flushes the folder a cross-filesystem restore renamed its
-	// copy into; a seam because an fsync has no observable effect to test.
-	syncDir func(dir string) error
+	// moveIn moves a trashed file into a sync folder without replacing
+	// anything at its destination; a seam so tests can model a
+	// cross-filesystem restore.
+	moveIn func(tree *synctree.Root, itemPath, rel string) error
+	// renameIn gives a cross-filesystem restore copy its name inside the
+	// sync folder without replacing anything or copying it a second time
+	// (synctree.Root.RenameNoReplace); a seam so tests can model a
+	// rename that put the copy in place but could not remove its temporary
+	// name.
+	renameIn func(tree *synctree.Root, srcRel, dstRel string) error
+	// syncDir flushes the folder of the sync tree a cross-filesystem
+	// restore renamed its copy into; a seam because an fsync has no
+	// observable effect to test.
+	syncDir func(tree *synctree.Root, rel string) error
+	// openTree opens the sync folder a restore puts an entry back into; a
+	// seam so tests can put an emulated filesystem under it
+	// (synctree.Root.Interpose).
+	openTree func(dir string) (*synctree.Root, error)
 }
 
 // IsRestoreArtifactName reports whether name is a temporary copy a restore
@@ -148,7 +188,14 @@ func Open(dir string, now func() time.Time) *Trash {
 	if now == nil {
 		now = time.Now
 	}
-	return &Trash{dir: dir, now: now, renameNoReplace: localpath.RenameNoReplace, syncDir: localpath.SyncDir}
+	return &Trash{
+		dir:      dir,
+		now:      now,
+		moveIn:   (*synctree.Root).MoveInNoReplace,
+		renameIn: (*synctree.Root).RenameNoReplace,
+		syncDir:  (*synctree.Root).SyncDir,
+		openTree: synctree.Open,
+	}
 }
 
 // Dir returns the trash directory.
@@ -199,7 +246,7 @@ func (t *Trash) Reserve(syncRoot string, rel string, reason Reason) (*Placement,
 	}
 	if err := placement.writeEntry(); err != nil {
 		if removeErr := localpath.RemoveAll(entryDir); removeErr != nil {
-			return nil, errors.Join(err, removeErr)
+			return nil, localpath.JoinOnOneLine(err, removeErr)
 		}
 		return nil, err
 	}
@@ -371,7 +418,20 @@ func (t *Trash) List() ([]Entry, error) {
 // trash. It never overwrites (ErrRestoreTargetExists), never writes through
 // a symbolic link inside the sync folder, never re-creates a sync folder that
 // is gone, and copies when the trash and the sync folder are on different
-// filesystems.
+// filesystems. Everything it changes in the sync folder goes through the
+// folder's rooted capability (putBack).
+//
+// A non-empty destination means the file is at that path, whatever the error
+// says, and the error says what else went wrong. Once the file is placed,
+// Restore ends the entry in this order, and each failure stops it there: the
+// restored file is made durable, then the trashed file is removed, then the
+// record and the entry's directory. A file that could not be made durable
+// has an error matching ErrRestoreNotDurable, and the trash keeps the entry
+// whole; a trashed file that could not be removed keeps its record too, so
+// the entry stays listed. Restoring such an entry again finds the file in
+// the way (ErrRestoreTargetExists). A restore that finished but could not
+// remove its temporary copy has an error matching ErrRestoreLeftover that
+// names the copy.
 func (t *Trash) Restore(id string) (string, error) {
 	if id == "" || strings.ContainsAny(id, `/\`) || id == "." || id == parentDirName {
 		return "", fmt.Errorf("%w: %q", ErrEntryNotFound, id)
@@ -389,29 +449,80 @@ func (t *Trash) Restore(id string) (string, error) {
 			"the original was left set aside in the sync folder", id, found.entry.ItemPath)
 	}
 
-	target, err := restoreTarget(&found.entry)
+	dest, err := restoreTarget(&found.entry)
 	if err != nil {
 		return "", err
 	}
 	if err := requireSyncFolder(&found.entry); err != nil {
 		return "", err
 	}
-	if err := refuseSymlinkedAncestors(found.entry.SyncRoot, target); err != nil {
+	if err := refuseSymlinkedAncestors(found.entry.SyncRoot, dest.abs); err != nil {
 		return "", err
 	}
-	// The missing parents are in the user's sync folder, not in the trash:
-	// they get the user-tree folder mode, not the trash's own.
-	if err := localpath.MkdirAll(filepath.Dir(target), localpath.UserTreeDirPerm); err != nil {
-		return "", fmt.Errorf("creating %s: %w", filepath.Dir(target), err)
+	tree, openErr := t.openTree(found.entry.SyncRoot)
+	if openErr != nil {
+		return "", fmt.Errorf("opening the sync folder of trash entry %s: %w", id, openErr)
 	}
-	if err := t.moveNoReplace(found.entry.ItemPath, target); err != nil {
-		return "", err
+	// A put-back that placed the file returns its path with any error that
+	// came after; only a durable file lets the entry go.
+	restored, putBackErr := t.putBack(tree, found.entry.ItemPath, dest)
+	switch {
+	case restored == "":
+		return "", putBackErr
+	case errors.Is(putBackErr, ErrRestoreNotDurable):
+		return restored, fmt.Errorf("%w; the trash keeps its copy as entry %s", putBackErr, id)
 	}
-	if err := localpath.RemoveAll(filepath.Join(t.dir, id)); err != nil {
-		return target, fmt.Errorf("removing restored trash entry %s: %w", id, err)
+	if err := t.removeRestoredEntry(id, found.entry.ItemPath, restored); err != nil {
+		return restored, localpath.JoinOnOneLine(putBackErr, err)
 	}
 
-	return target, nil
+	return restored, putBackErr
+}
+
+// removeRestoredEntry takes entry id out of the trash once its file is
+// durable at restored: the trashed file at itemPath first, then the record
+// and the entry's directory, so the record never goes while the trashed file
+// is there. A trashed file already gone, which the move took, is no failure;
+// one that cannot be removed stops the removal with the record kept, so the
+// entry stays listed and whole.
+func (t *Trash) removeRestoredEntry(id, itemPath, restored string) error {
+	if err := localpath.Remove(itemPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("restored %s, but its trashed copy could not be removed and stays in the trash as entry %s: %w",
+			restored, id, err)
+	}
+	if err := localpath.RemoveAll(filepath.Join(t.dir, id)); err != nil {
+		return fmt.Errorf("removing restored trash entry %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// restoreDest is where a trash entry goes back to: rel inside its sync
+// folder, which every change is made through, and abs, the same place as the
+// user is told it.
+type restoreDest struct {
+	rel string
+	abs string
+}
+
+// putBack moves the trashed file at itemPath to dest inside tree. Every change
+// in the sync folder goes through tree, the folder's rooted capability: the
+// missing parents are made through it without following a symbolic link,
+// even one that stays inside the sync folder, the move is its no-replace
+// rename, and across filesystems the copy is created, timed and named through
+// it. A folder on the way swapped after Restore's own check for a symbolic
+// link out of the root, or for anything that is not a folder, therefore fails
+// the restore instead of placing the file where the link leads. It returns
+// dest's path once the file is there, with any error that came after, and ""
+// while it is not.
+func (t *Trash) putBack(tree *synctree.Root, itemPath string, dest restoreDest) (string, error) {
+	// The missing parents are in the user's sync folder, not in the trash:
+	// the sync tree gives them the user-tree folder mode, not the trash's own.
+	if err := tree.MkdirAllNoFollow(filepath.Dir(dest.rel)); err != nil {
+		return "", fmt.Errorf("creating %s: %w", filepath.Dir(dest.abs), err)
+	}
+
+	return t.moveNoReplace(tree, itemPath, dest)
 }
 
 // findEntry returns the scanned entry id if it holds a file.
@@ -436,102 +547,177 @@ func (t *Trash) findEntry(id string) (*scannedEntry, error) {
 	return nil, fmt.Errorf("%w: %s", ErrEntryNotFound, id)
 }
 
-// moveNoReplace moves the trashed file to target without replacing anything
-// there, copying through a temporary sibling of target when the move would
-// cross filesystems.
-func (t *Trash) moveNoReplace(itemPath, target string) error {
-	err := t.renameNoReplace(itemPath, target)
+// moveNoReplace moves the trashed file to dest without replacing anything
+// there, copying through a temporary sibling of dest when the move would
+// cross filesystems. It returns dest's path once the file is there, as
+// putBack does.
+func (t *Trash) moveNoReplace(tree *synctree.Root, itemPath string, dest restoreDest) (string, error) {
+	err := t.moveIn(tree, itemPath, dest.rel)
 	switch {
-	case err == nil, errors.Is(err, localpath.ErrSourceNotRemoved):
-		// The file is at target; a source left in the entry goes with the
-		// entry directory.
-		return nil
-	case errors.Is(err, localpath.ErrTargetExists):
-		return fmt.Errorf("%w: %s", ErrRestoreTargetExists, target)
+	case err == nil, errors.Is(err, synctree.ErrSourceNotRemoved):
+		// The file is at dest; Restore removes a source left in the entry
+		// before the entry's record.
+		return dest.abs, nil
+	case errors.Is(err, synctree.ErrTargetExists):
+		return "", fmt.Errorf("%w: %s", ErrRestoreTargetExists, dest.abs)
 	case !errors.Is(err, syscall.EXDEV):
-		return fmt.Errorf("restoring %s: %w", target, err)
+		return "", fmt.Errorf("restoring %s: %w", dest.abs, err)
 	}
 
-	temp, err := copyToSibling(itemPath, target)
+	tempRel, err := copyIntoTree(tree, itemPath, filepath.Dir(dest.rel))
 	if err != nil {
-		return err
+		return "", err
 	}
-	if err := localpath.RenameNoReplace(temp, target); err != nil {
-		if errors.Is(err, localpath.ErrSourceNotRemoved) {
-			// In place; the temporary copy is a leftover, removed best effort.
-			_ = localpath.Remove(temp) //nolint:errcheck // the restore succeeded; a leftover copy is harmless
-			return t.finishCopiedRestore(itemPath, target)
+	if err := t.renameIn(tree, tempRel, dest.rel); err != nil {
+		if errors.Is(err, synctree.ErrSourceNotRemoved) {
+			return t.finishLeftoverRestore(tree, dest, tempRel)
 		}
-		removeErr := localpath.Remove(temp)
-		if errors.Is(err, localpath.ErrTargetExists) {
-			return errors.Join(fmt.Errorf("%w: %s", ErrRestoreTargetExists, target), removeErr)
+		removeErr := tree.Remove(tempRel)
+		if errors.Is(err, synctree.ErrTargetExists) {
+			return "", localpath.JoinOnOneLine(fmt.Errorf("%w: %s", ErrRestoreTargetExists, dest.abs), removeErr)
 		}
-		return errors.Join(fmt.Errorf("restoring %s: %w", target, err), removeErr)
+		return "", localpath.JoinOnOneLine(fmt.Errorf("restoring %s: %w", dest.abs, err), removeErr)
 	}
-	return t.finishCopiedRestore(itemPath, target)
+	return t.finishCopiedRestore(tree, dest)
 }
 
-// finishCopiedRestore makes a copied restore durable before the trashed
-// original goes: the rename that named the copy is a directory update, not
-// durable until the folder is synced, and removing the original first left a
-// power cut with neither. A folder the filesystem cannot sync is tolerated;
-// any other failure is reported with the file in place and the original
-// kept, so the restore can be repeated.
-func (t *Trash) finishCopiedRestore(itemPath, target string) error {
-	if err := t.syncDir(filepath.Dir(target)); err != nil && !localpath.IsDirSyncUnsupported(err) {
-		return fmt.Errorf("restored %s but could not make it durable: %w", target, err)
+// finishCopiedRestore makes a copied restore durable before Restore removes
+// the trashed file: the rename that named the copy is a directory update,
+// not durable until the folder is synced, and removing the trashed file
+// first would leave a power cut with neither. A folder the filesystem cannot
+// sync is tolerated. The file is at dest whatever happens here, so dest's
+// path is returned, with an error matching ErrRestoreNotDurable when the
+// folder could not be synced.
+func (t *Trash) finishCopiedRestore(tree *synctree.Root, dest restoreDest) (string, error) {
+	if err := t.syncDir(tree, filepath.Dir(dest.rel)); err != nil && !localpath.IsDirSyncUnsupported(err) {
+		return dest.abs, fmt.Errorf("%w: it is at %s: %w", ErrRestoreNotDurable, dest.abs, err)
 	}
-	if err := localpath.Remove(itemPath); err != nil {
-		return fmt.Errorf("removing the trashed copy after restoring %s: %w", target, err)
-	}
-	return nil
+	return dest.abs, nil
 }
 
-// copyToSibling copies src into a new temporary file beside target, synced
-// to disk, and returns its path.
-func copyToSibling(src, target string) (tempPath string, err error) {
+// finishLeftoverRestore is finishCopiedRestore for a copy that got its name
+// at dest while its temporary name tempRel could not be removed: the two
+// names are one file. tempRel is removed again, and one that still cannot be
+// is reported, since sync never sees a restore artifact. Once the restore is
+// otherwise complete the report matches ErrRestoreLeftover; when
+// finishCopiedRestore fails, its failure, still matching
+// ErrRestoreNotDurable, names the leftover beside its reason as text. Either
+// way the file is at dest, and dest's path is returned.
+func (t *Trash) finishLeftoverRestore(tree *synctree.Root, dest restoreDest, tempRel string) (string, error) {
+	var leftoverErr error
+	if err := tree.Remove(tempRel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		leftoverErr = fmt.Errorf("%s: %w", filepath.Join(filepath.Dir(dest.abs), filepath.Base(tempRel)), err)
+	}
+	restored, err := t.finishCopiedRestore(tree, dest)
+	switch {
+	case err != nil && leftoverErr != nil:
+		return restored, fmt.Errorf("%w; its temporary copy was left too: %s", err, leftoverErr.Error())
+	case err != nil:
+		return restored, err
+	case leftoverErr != nil:
+		return restored, fmt.Errorf("%w: %w", ErrRestoreLeftover, leftoverErr)
+	default:
+		return restored, nil
+	}
+}
+
+// copyIntoTree copies the trashed file src into a new temporary file in the
+// folder dirRel of tree, with the file's mode and modification time, synced
+// to disk, and returns the copy's name relative to tree. The copy is created
+// exclusively through the sync folder's rooted capability, and its times are
+// set through it too, on the copy's name (Chtimes resolves that name inside
+// the sync folder, to the nanosecond), so they go to whatever entry inside
+// the sync folder holds that name at that moment. A copy that fails is
+// removed.
+func copyIntoTree(tree *synctree.Root, src, dirRel string) (string, error) {
 	in, err := localpath.OpenRegular(src)
 	if err != nil {
 		return "", fmt.Errorf("opening trashed file: %w", err)
 	}
 	defer in.Close() //nolint:errcheck // read-only source
-
-	out, err := localpath.CreateTemp(filepath.Dir(target), copyTempGlob)
-	if err != nil {
-		return "", fmt.Errorf("creating restore copy: %w", err)
-	}
-	tempPath = out.Name()
-	defer func() {
-		if err != nil {
-			_ = out.Close()                //nolint:errcheck // error path; the copy error is reported
-			_ = localpath.Remove(tempPath) //nolint:errcheck // best-effort cleanup of a failed copy
-		}
-	}()
-	if _, err = io.Copy(out, in); err != nil {
-		return "", fmt.Errorf("copying trashed file: %w", err)
-	}
-	if err = out.Sync(); err != nil {
-		return "", fmt.Errorf("syncing restore copy: %w", err)
-	}
 	info, err := in.Stat()
 	if err != nil {
 		return "", fmt.Errorf("stating trashed file: %w", err)
 	}
-	if err = out.Chmod(info.Mode().Perm()); err != nil {
-		return "", fmt.Errorf("setting restore copy permissions: %w", err)
+
+	out, copyRel, err := createRestoreCopy(tree, dirRel)
+	if err != nil {
+		return "", err
 	}
-	if err = out.Close(); err != nil {
-		return "", fmt.Errorf("closing restore copy: %w", err)
+	if err := writeRestoreCopy(tree, out, copyRel, in, info); err != nil {
+		return "", discardRestoreCopy(tree, out, copyRel, err)
 	}
-	if err = localpath.Chtimes(tempPath, info.ModTime(), info.ModTime()); err != nil {
-		return "", fmt.Errorf("setting restore copy times: %w", err)
+
+	return copyRel, nil
+}
+
+// writeRestoreCopy fills out, the new restore copy copyRel, from in, gives it
+// the mode and modification time of info, syncs it and closes it.
+func writeRestoreCopy(tree *synctree.Root, out *os.File, copyRel string, in io.Reader, info os.FileInfo) error {
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copying trashed file: %w", err)
 	}
-	return tempPath, nil
+	if err := out.Chmod(info.Mode().Perm()); err != nil {
+		return fmt.Errorf("setting restore copy permissions: %w", err)
+	}
+	if err := tree.Chtimes(copyRel, info.ModTime(), info.ModTime()); err != nil {
+		return fmt.Errorf("setting restore copy times: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("syncing restore copy: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("closing restore copy: %w", err)
+	}
+
+	return nil
+}
+
+// discardRestoreCopy closes out, the partial restore copy copyRel that cause
+// ended, and removes it through tree. A copy left behind is a restore
+// artifact that sync never sees, so a close or removal that fails is joined
+// to cause for the user; a copy already closed, or already gone, is no
+// further failure.
+func discardRestoreCopy(tree *synctree.Root, out *os.File, copyRel string, cause error) error {
+	result := cause
+	if err := out.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		result = localpath.JoinOnOneLine(result, fmt.Errorf("closing the partial restore copy %s: %w", copyRel, err))
+	}
+	if err := tree.Remove(copyRel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		result = localpath.JoinOnOneLine(result, fmt.Errorf("removing the partial restore copy %s: %w", copyRel, err))
+	}
+
+	return result
+}
+
+// createRestoreCopy creates an empty restore copy in dirRel of tree under a
+// fresh random name. The create is exclusive, so a name another writer holds,
+// or a symlink planted at it, is left alone and another name tried.
+func createRestoreCopy(tree *synctree.Root, dirRel string) (*os.File, string, error) {
+	for range restoreCopyAttempts {
+		var random [restoreCopyRandomBytes]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", fmt.Errorf("naming restore copy: %w", err)
+		}
+		rel := filepath.Join(dirRel, restoreArtifactPrefix+hex.EncodeToString(random[:]))
+		out, err := tree.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, restoreCopyPerm)
+		if err == nil {
+			return out, rel, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, "", fmt.Errorf("creating restore copy: %w", err)
+		}
+	}
+
+	return nil, "", fmt.Errorf("creating restore copy: no free name in %s after %d attempts", dirRel, restoreCopyAttempts)
 }
 
 // refuseSymlinkedAncestors refuses a restore whose target folder, below the
 // sync folder, passes through a symbolic link: following one would put the
-// file outside the sync folder.
+// file outside the sync folder. It is an early refusal that names the link,
+// not the protection: a link swapped in after it is refused by the sync
+// folder's rooted capability that every change of the restore goes through,
+// with a less direct message.
 func refuseSymlinkedAncestors(syncRoot, target string) error {
 	rel, err := filepath.Rel(syncRoot, filepath.Dir(target))
 	if err != nil {
@@ -577,18 +763,18 @@ func requireSyncFolder(entry *Entry) error {
 	}
 }
 
-// restoreTarget is the absolute original path of entry, refusing a recorded
-// path that would leave its sync folder.
-func restoreTarget(entry *Entry) (string, error) {
+// restoreTarget is the original place of entry, refusing a recorded path that
+// would leave its sync folder.
+func restoreTarget(entry *Entry) (restoreDest, error) {
 	rel := filepath.FromSlash(entry.Path)
 	if entry.SyncRoot == "" || rel == "" || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("trash entry %s has no usable original path", entry.ID)
+		return restoreDest{}, fmt.Errorf("trash entry %s has no usable original path", entry.ID)
 	}
 	clean := filepath.Clean(rel)
 	if clean == "." || clean == parentDirName || strings.HasPrefix(clean, parentDirName+string(filepath.Separator)) {
-		return "", fmt.Errorf("trash entry %s points outside its sync folder", entry.ID)
+		return restoreDest{}, fmt.Errorf("trash entry %s points outside its sync folder", entry.ID)
 	}
-	return filepath.Join(entry.SyncRoot, clean), nil
+	return restoreDest{rel: clean, abs: filepath.Join(entry.SyncRoot, clean)}, nil
 }
 
 // Purge removes committed entries older than Retention and reservations whose
@@ -636,13 +822,13 @@ func (t *Trash) removeWhere(remove func(found scannedEntry) bool) (int, error) {
 	}
 
 	removed := 0
-	var errs []error
+	var errs error
 	for i := range scanned {
 		if !remove(scanned[i]) {
 			continue
 		}
 		if err := localpath.RemoveAll(filepath.Join(t.dir, scanned[i].entry.ID)); err != nil {
-			errs = append(errs, fmt.Errorf("removing trash entry %s: %w", scanned[i].entry.ID, err))
+			errs = localpath.JoinOnOneLine(errs, fmt.Errorf("removing trash entry %s: %w", scanned[i].entry.ID, err))
 			continue
 		}
 		if scanned[i].hasItem {
@@ -650,5 +836,5 @@ func (t *Trash) removeWhere(remove func(found scannedEntry) bool) (int, error) {
 		}
 	}
 
-	return removed, errors.Join(errs...)
+	return removed, errs
 }

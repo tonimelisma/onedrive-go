@@ -11,20 +11,15 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// conflictCopyReservationPerm is the mode of the placeholder that claims a
-// conflict-copy name. The rename replaces it immediately, so it only has to
-// be private while it exists.
-const conflictCopyReservationPerm = 0o600
-
-// ExecuteConflictCopy preserves the local canonical file by renaming it to a
-// unique conflict-copy path. It performs no baseline or remote mutation; the
-// current-state planner schedules any follow-up download/upload action
-// separately.
+// ExecuteConflictCopy preserves the local canonical file or folder by renaming
+// it to a unique conflict-copy path. It performs no baseline or remote
+// mutation; the current-state planner schedules any follow-up download/upload
+// action separately.
 func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) actionOutcome {
-	// The file is renamed from its spelling on disk; the copy is a new entry,
+	// The entry is renamed from its spelling on disk; the copy is a new entry,
 	// named from the stored name inside the parents' spellings on disk
 	// (R-2.13.2).
 	source := e.syncTree.Spelling(action.Path)
@@ -38,177 +33,72 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 		)
 	}
 
-	sourceAbs, err := e.syncTree.Abs(source)
-	if err != nil {
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionConflictCopy,
-			normalizeSyncTreePathError(err),
-			action.Path,
-			permissionCapabilityLocalWrite,
-		)
-	}
-	namingAbs, err := e.syncTree.Abs(e.syncTree.SpellingOfParent(action.Path))
-	if err != nil {
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionConflictCopy,
-			normalizeSyncTreePathError(err),
-			action.Path,
-			permissionCapabilityLocalWrite,
-		)
+	// A folder's copy keeps a dot in its name in the stem; a file's copy
+	// keeps its extension last. A source that is gone takes the file's
+	// naming, and its rename reports it gone; a source that cannot be checked
+	// is a failure, not a guess that it is a file.
+	candidateName := conflictCopyPathWithOrdinal
+	info, statErr := e.syncTree.Lstat(source)
+	switch {
+	case statErr == nil && info.IsDir():
+		candidateName = conflictCopyDirPathWithOrdinal
+	case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+		return e.failedOutcomeWithFailure(action, ActionConflictCopy,
+			fmt.Errorf("checking conflict copy source: %w", normalizeSyncTreePathError(statErr)),
+			action.Path, permissionCapabilityLocalWrite)
 	}
 
-	// A directory cannot take a placeholder file's name: the rename failed
-	// with ENOTDIR on every pass (D-059a).
-	sourceIsDir := false
-	if info, statErr := e.syncTree.Lstat(source); statErr == nil {
-		sourceIsDir = info.IsDir()
-	}
-
-	if sourceIsDir {
-		return e.executeDirectoryConflictCopy(action, sourceAbs, namingAbs)
-	}
-
-	conflictPath, conflictRel, err := e.reserveUniqueConflictCopyPath(namingAbs)
-	if err != nil {
-		return e.failedOutcomeWithFailure(action, ActionConflictCopy, err, action.Path, permissionCapabilityLocalWrite)
-	}
-
-	if err := e.syncTree.Rename(source, conflictRel); err != nil {
-		e.releaseConflictCopyReservation(conflictRel)
-
-		if errors.Is(err, os.ErrNotExist) {
-			outcome := actionOutcome{
-				Action:   ActionConflictCopy,
-				Success:  true,
-				Path:     action.Path,
-				DriveID:  e.resolveDriveID(action),
-				ItemID:   action.ItemID,
-				OldPath:  action.Path,
-				ParentID: e.resolvedParentIDForOutcome(action, nil),
-			}
-			return outcome
-		}
-
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionConflictCopy,
-			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(conflictPath), normalizeSyncTreePathError(err)),
-			action.Path,
-			permissionCapabilityLocalWrite,
-		)
-	}
-
-	e.logger.Debug("saved conflict copy",
-		slog.String("path", action.Path),
-		slog.String("conflict_copy", filepath.Base(conflictPath)),
-	)
-
-	outcome := actionOutcome{
-		Action:  ActionConflictCopy,
-		Success: true,
-		Path:    action.Path,
-		OldPath: conflictRel,
-		DriveID: e.resolveDriveID(action),
-		ItemID:  action.ItemID,
-	}
-	return outcome
+	return e.renameToConflictCopy(action, source, e.syncTree.SpellingOfParent(action.Path), candidateName)
 }
 
-// reserveUniqueConflictCopyPath claims a conflict-copy destination and
-// returns it as both an absolute and a sync-root-relative path.
-//
-// The name is claimed by creating it exclusively rather than by finding a path
-// that does not exist yet. Stat-then-rename is a check-then-act: rename
-// silently replaces whatever sits at the destination, so anything that
-// appeared in the gap -- a second conflict copy in the same second, another
-// mount over the same tree, the user -- was destroyed by the very operation
-// whose purpose is to preserve a file. An exclusive create makes the claim
-// atomic against every other creator of that name.
-//
-// The caller owns the reservation and must release it if the rename does not
-// happen.
-func (e *executor) reserveUniqueConflictCopyPath(absPath string) (string, string, error) {
-	now := e.nowFunc()
-
-	for ordinal := 1; ; ordinal++ {
-		candidate := conflictCopyPathWithOrdinal(absPath, now, ordinal)
-
-		rel, reserved, err := e.reserveConflictCopyPath(candidate)
-		if err != nil {
-			return "", "", err
-		}
-		if reserved {
-			return candidate, rel, nil
-		}
+// vanishedConflictCopySourceOutcome is the outcome of a conflict copy whose
+// source is gone before its rename, a file or a folder alike: nothing is left
+// to preserve, so the copy succeeds for the path it was asked about.
+func (e *executor) vanishedConflictCopySourceOutcome(action *Action) actionOutcome {
+	return actionOutcome{
+		Action:   ActionConflictCopy,
+		Success:  true,
+		Path:     action.Path,
+		DriveID:  e.resolveDriveID(action),
+		ItemID:   action.ItemID,
+		OldPath:  action.Path,
+		ParentID: e.resolvedParentIDForOutcome(action, nil),
 	}
 }
 
-// releaseConflictCopyReservation drops a claim that will not be used. The
-// reservation is an empty placeholder, so leaving one behind would look like a
-// truncated conflict copy to the user.
-func (e *executor) releaseConflictCopyReservation(rel string) {
-	if err := e.syncTree.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
-		e.logger.Warn("Could not remove the empty placeholder file "+rel+"; you can delete it",
-			slog.Any("error", err),
-		)
-	}
-}
-
-func (e *executor) reserveConflictCopyPath(absPath string) (string, bool, error) {
-	relPath, err := e.syncTree.Rel(absPath)
-	if err != nil {
-		return "", false, fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
-	}
-
-	f, err := e.syncTree.OpenFile(relPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, conflictCopyReservationPerm)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return relPath, false, nil
-		}
-
-		return "", false, fmt.Errorf("reserving conflict copy path %s: %w", filepath.Base(absPath), normalizeSyncTreePathError(err))
-	}
-
-	if closeErr := f.Close(); closeErr != nil {
-		e.releaseConflictCopyReservation(relPath)
-
-		return "", false, fmt.Errorf("closing conflict copy reservation %s: %w", filepath.Base(absPath), closeErr)
-	}
-
-	return relPath, true, nil
-}
-
-// conflictCopyPath generates a timestamped conflict copy path.
+// conflictCopyPath generates a timestamped conflict copy path beside path.
 // "file.txt" -> "file.conflict-20260101-120000.txt"
 // ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)
-func conflictCopyPath(absPath string, now time.Time) string {
-	return conflictCopyPathWithOrdinal(absPath, now, 1)
+func conflictCopyPath(path string, now time.Time) string {
+	return conflictCopyPathWithOrdinal(path, now, 1)
 }
 
 // conflictCopyPathWithOrdinal is conflictCopyPath for the ordinal-th copy of
 // the same second ("file.conflict-20260101-120000-2.txt" for ordinal 2). The
 // whole name, marker, ordinal and extension included, stays within
-// maxLocalNameBytes: the ordinal used to be appended after the stem had
-// already been trimmed to exactly 255 bytes, so a second same-second copy of
-// a long name was unwritable and blocked the download on every pass (D-030).
-// An extension too long to leave room for the marker is trimmed too.
-func conflictCopyPathWithOrdinal(absPath string, now time.Time, ordinal int) string {
-	stem, ext := ConflictStemExt(filepath.Base(absPath))
+// maxLocalNameBytes: the stem is trimmed to the room the marker and the
+// ordinal leave, so a second same-second copy of a long name is as writable
+// as the first (D-030). An extension too long to leave room for the marker is
+// trimmed too.
+func conflictCopyPathWithOrdinal(path string, now time.Time, ordinal int) string {
+	stem, ext := ConflictStemExt(filepath.Base(path))
 
-	return composeConflictCopyPath(filepath.Dir(absPath), stem, ext, now, ordinal)
+	return composeConflictCopyPath(filepath.Dir(path), stem, ext, now, ordinal)
 }
 
-// conflictCopyDirPathWithOrdinal names a directory's conflict copy. A
+// conflictCopyDirPathWithOrdinal names a directory's conflict copy beside
+// namingRel, the sync-folder-relative path the copy is named from. A
 // directory has no extension, so a dot in its name stays in the stem:
 // "photos.2024" -> "photos.2024.conflict-20260101-120000".
-func conflictCopyDirPathWithOrdinal(absPath string, now time.Time, ordinal int) string {
-	return composeConflictCopyPath(filepath.Dir(absPath), filepath.Base(absPath), "", now, ordinal)
+func conflictCopyDirPathWithOrdinal(namingRel string, now time.Time, ordinal int) string {
+	return composeConflictCopyPath(filepath.Dir(namingRel), filepath.Base(namingRel), "", now, ordinal)
 }
 
+// conflictCopyStampLayout is the second a conflict copy's name carries.
+const conflictCopyStampLayout = "20060102-150405"
+
 func composeConflictCopyPath(dir, stem, ext string, now time.Time, ordinal int) string {
-	suffix := ".conflict-" + now.Format("20060102-150405")
+	suffix := ".conflict-" + now.Format(conflictCopyStampLayout)
 	if ordinal > 1 {
 		suffix += fmt.Sprintf("-%d", ordinal)
 	}
@@ -272,54 +162,80 @@ func ConflictStemExt(name string) (string, string) {
 	return stem, ext
 }
 
-// conflictCopyDirAttempts bounds the same-second names tried for a directory's
-// conflict copy.
-const conflictCopyDirAttempts = 100
+// conflictCopyAttempts bounds the same-second names a conflict copy tries.
+const conflictCopyAttempts = 100
 
-// executeDirectoryConflictCopy renames a directory to a unique conflict-copy
-// name with a no-replace rename (renameat2 RENAME_NOREPLACE on Linux,
-// renamex_np RENAME_EXCL on macOS): an entry that already holds a candidate
-// name, an empty directory included, is never replaced, and the next ordinal
-// is tried. A plain rename(2) atomically replaces an empty directory at the
-// destination, and a placeholder cannot help: the directory cannot be renamed
-// onto a reserved name without replacing it. The source's ancestors were
-// checked for symlinks by ExecuteConflictCopy, and the candidate sits beside
-// the source. sourceAbs is the directory as spelled on disk; namingAbs is the
-// path its copy's name is derived from (the stored name, R-2.13.2).
-func (e *executor) executeDirectoryConflictCopy(action *Action, sourceAbs, namingAbs string) actionOutcome {
+// renameToConflictCopy renames source, a file or a folder as spelled on disk,
+// to the first free conflict-copy name with the sync tree's no-replace
+// rename: an entry that already holds a candidate name, an empty folder
+// included, is never replaced, and the next ordinal is tried. naming is the
+// sync-folder-relative path the copy's name is derived from (the stored
+// name, R-2.13.2), and candidateName builds the ordinal-th candidate beside
+// it. Nothing is created before the rename, so a copy that fails leaves no
+// name behind. The rename is made on descriptors of both parent folders
+// opened inside the sync folder, so a folder swapped for a symlink after
+// ExecuteConflictCopy checked the source's ancestors fails the rename instead
+// of carrying it outside, and it never copies the entry, so a file keeps its
+// identity and a program writing to it keeps writing to the copy.
+func (e *executor) renameToConflictCopy(
+	action *Action, source, naming string, candidateName func(string, time.Time, int) string,
+) actionOutcome {
 	now := e.nowFunc()
-	for ordinal := 1; ordinal <= conflictCopyDirAttempts; ordinal++ {
-		candidate := conflictCopyDirPathWithOrdinal(namingAbs, now, ordinal)
-		rel, err := e.syncTree.Rel(candidate)
-		if err != nil {
-			return e.failedOutcomeWithFailure(action, ActionConflictCopy,
-				fmt.Errorf("relativizing conflict copy path %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(err)),
-				action.Path, permissionCapabilityLocalWrite)
-		}
-		renameErr := localpath.RenameNoReplace(sourceAbs, candidate)
-		if renameErr == nil {
-			e.logger.Debug("saved conflict copy",
-				slog.String("path", action.Path),
-				slog.String("conflict_copy", filepath.Base(candidate)),
+	for ordinal := 1; ordinal <= conflictCopyAttempts; ordinal++ {
+		candidate := candidateName(naming, now, ordinal)
+		renameErr := e.syncTree.RenameNoReplace(source, candidate)
+		switch {
+		case renameErr == nil:
+		case errors.Is(renameErr, synctree.ErrSourceNotRemoved):
+			// The copy is at its name, which is what the conflict copy is
+			// for; the source's name may still name the same file.
+			e.logger.Warn("Saved the conflict copy "+candidate+", but could not remove the original name "+source,
+				slog.String("path", source),
+				slog.Any("error", renameErr),
 			)
-			return actionOutcome{
-				Action:  ActionConflictCopy,
-				Success: true,
-				Path:    action.Path,
-				OldPath: rel,
-				DriveID: e.resolveDriveID(action),
-				ItemID:  action.ItemID,
-			}
-		}
-		if errors.Is(renameErr, localpath.ErrTargetExists) {
+		case errors.Is(renameErr, synctree.ErrTargetExists):
 			continue
+		default:
+			return e.failedConflictCopyRename(action, source, candidate, renameErr)
 		}
 
-		return e.failedOutcomeWithFailure(action, ActionConflictCopy,
-			fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(candidate), renameErr),
-			action.Path, permissionCapabilityLocalWrite)
+		e.logger.Debug("saved conflict copy",
+			slog.String("path", action.Path),
+			slog.String("conflict_copy", filepath.Base(candidate)),
+		)
+		return actionOutcome{
+			Action:  ActionConflictCopy,
+			Success: true,
+			Path:    action.Path,
+			OldPath: candidate,
+			DriveID: e.resolveDriveID(action),
+			ItemID:  action.ItemID,
+		}
 	}
 
 	return e.failedOutcomeWithFailure(action, ActionConflictCopy,
-		fmt.Errorf("no free conflict copy name for %s", action.Path), action.Path, permissionCapabilityLocalWrite)
+		fmt.Errorf("no free conflict copy name for %s: all %d names stamped %s are taken",
+			action.Path, conflictCopyAttempts, now.Format(conflictCopyStampLayout)),
+		action.Path, permissionCapabilityLocalWrite)
+}
+
+// failedConflictCopyRename is the outcome of a conflict copy whose rename
+// failed with renameErr. The rename's ENOENT may name a missing parent as
+// well as the source, so only a source a lstat through the sync tree finds
+// absent is the vanished outcome; a lstat that fails another way is added to
+// the failure on the same line, so its reason is not lost.
+func (e *executor) failedConflictCopyRename(action *Action, source, candidate string, renameErr error) actionOutcome {
+	if errors.Is(renameErr, os.ErrNotExist) {
+		_, statErr := e.syncTree.Lstat(source)
+		switch {
+		case errors.Is(statErr, os.ErrNotExist):
+			return e.vanishedConflictCopySourceOutcome(action)
+		case statErr != nil:
+			renameErr = fmt.Errorf("%w; checking conflict copy source: %w", renameErr, statErr)
+		}
+	}
+
+	return e.failedOutcomeWithFailure(action, ActionConflictCopy,
+		fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(renameErr)),
+		action.Path, permissionCapabilityLocalWrite)
 }

@@ -582,7 +582,7 @@ The mutating commands' documents:
 | `drive reset-sync-state` | `drive`, `reset` |
 | `drive rebind-root` | `drive`, `rebound`, `synced_files`, `files_in_folder` |
 | `trash list` | `drive`, `entries[]` of `id`, `path`, `sync_root`, `reason` (`deleted`, `replaced`), `size`, `trashed_at`, `state` (`committed`, `pending`, `orphan`) |
-| `trash restore` | `drive`, `id`, `restored_to` |
+| `trash restore` | `drive`, `id`, `restored_to`, `warning` (what failed after the file was put back; the command then exits 1 although the file is at `restored_to`; omitted for a clean restore) |
 | `trash empty` | `drive`, `removed` |
 | `recycle-bin empty` | `deleted[]` and `failed[]` of `id`, `name` (and `error`) |
 
