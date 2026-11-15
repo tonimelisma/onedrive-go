@@ -230,7 +230,7 @@ func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
 		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", role, remotePath)
 
 		_, delStdout, delStderr, delErr := execCLI(cfgPath, nil, driveID, "rm", "-r", remotePath)
-		if delErr != nil && !isRemoteNotFoundCleanup(delStderr) {
+		if delErr != nil && !cliReportsRemoteItemMissing(delStderr) {
 			return fmt.Errorf("deleting %s during preflight scrub on %s: %w\nstdout: %s\nstderr: %s",
 				remotePath, role, delErr, suiteDriveRoles.Redact(delStdout), suiteDriveRoles.Redact(delStderr))
 		}
@@ -247,11 +247,6 @@ func isE2EArtifactName(name string) bool {
 	}
 
 	return false
-}
-
-func isRemoteNotFoundCleanup(stderr string) bool {
-	lower := strings.ToLower(stderr)
-	return strings.Contains(lower, "not found") || strings.Contains(lower, "could not be found")
 }
 
 // findModuleRoot walks up from the current dir to find go.mod.
@@ -456,6 +451,13 @@ const remoteWritePropagationTimeout = 2 * time.Minute
 // deletes. Live accounts can continue listing deleted entries briefly after
 // the delete command itself has succeeded.
 const remoteDeletePropagationTimeout = 2 * time.Minute
+
+// syncConvergeTimeout bounds a requireSyncEventuallyConverges loop whose passes
+// wait for OneDrive to show a change: delta carrying a put or a delete the
+// test made, which can trail the request by 60 to 120 seconds (ci_issues.md
+// §17), or a listing showing what the passes uploaded. The minute beyond the
+// longest lag keeps a pass that lands on that edge from failing the wait.
+const syncConvergeTimeout = 3 * time.Minute
 
 // remoteScopeTransitionTimeout covers sync-scope transitions that require a
 // follow-up reconcile pass before remote reads settle on the new state.

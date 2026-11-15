@@ -234,7 +234,7 @@ func (d *driveItemResponse) toItem(logger *slog.Logger) Item {
 	// Shared owner identity — see resolveSharedOwner for fallback chain.
 	item.SharedOwnerName, item.SharedOwnerEmail = d.resolveSharedOwner()
 
-	// Timestamps — validate and fallback to now if invalid.
+	// Timestamps: an empty or invalid one stays unknown, the zero time.
 	// Deleted items routinely have empty timestamps (known OneDrive API behavior),
 	// so we log at DEBUG instead of WARN to avoid noise.
 	item.CreatedAt = parseTimestamp(d.CreatedDateTime, "createdDateTime", d.ID, logger)

@@ -29,7 +29,8 @@ import (
 // untagged quick lane. It follows calls through the suite's own functions to
 // any depth, and stops at a wait helper, whose class answers for it. What it
 // cannot see is a predicate a test writes inline for a poller: the rule covers
-// the suite's named waits. It reads function bodies only, so a package-level
+// the suite's named waits (poll_predicate_rule_test.go holds the predicates to
+// another rule). It reads function bodies only, so a package-level
 // variable's initialiser is not scanned. An exception is keyed by test and
 // helper, not by call site, so it covers every call of that helper the test
 // reaches.
@@ -103,19 +104,12 @@ type daemonWaitException struct {
 	helper string
 }
 
-const (
-	readAfterDaemonExitReason = "reads the content again after the daemon exited, " +
-		"which waitForRemoteFileContent confirmed while it ran"
-	shortcutFixtureReason = "the shortcut fixture is made outside the suite; no daemon writes it"
-)
+const shortcutFixtureReason = "the shortcut fixture is made outside the suite; no daemon writes it"
 
 // daemonTestNameOnlyWaitExceptions are the calls of a name-only wait helper by
 // a test that starts a daemon which are safe, each with its reason.
 func daemonTestNameOnlyWaitExceptions() map[daemonWaitException]string {
 	return map[daemonWaitException]string{
-		{test: "TestE2E_SyncWatch_BasicRoundTrip", helper: "getRemoteFileForDrive"}:      readAfterDaemonExitReason,
-		{test: "TestE2E_SyncWatch_PauseResume", helper: "getRemoteFileForDrive"}:         readAfterDaemonExitReason,
-		{test: "TestE2E_SyncWatch_ControlSocketReload", helper: "getRemoteFileForDrive"}: readAfterDaemonExitReason,
 		{
 			test:   "TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget",
 			helper: "waitForShortcutRootPlaceholder",
@@ -324,6 +318,13 @@ func readPlantedSuiteSources(t *testing.T) *suiteSources {
 // plantedDaemonWaitSource is a suite in miniature: one test calls a name-only
 // wait directly beside a daemon and waits for a size too, one calls the
 // name-only wait through a helper inside a subtest, and one starts no daemon.
+// One more starts no daemon and passes predicates to waits: one that reports
+// (line 20), one that asserts itself (21), one that asserts through a helper
+// (22), that helper by name (23), two that are no predicate of a wait, an
+// action (24) and a call of a function that does not wait (25), one that
+// calls t.Fatalf (26), one that skips the test (27), one that asserts two
+// calls down and is given to a function that waits only through another
+// (28), and a function without a result passed by name, an action too (29).
 const plantedDaemonWaitSource = `package e2e
 
 func startPlanted(cmd plantedCmd) { _ = cmd.Start() }
@@ -339,6 +340,25 @@ func TestPlantedDirect(t *testing.T) { startPlanted(cmd); waitForPlantedSize(); 
 func TestPlantedThroughHelper(t *testing.T) { startPlanted(cmd); t.Run("x", func(t *testing.T) { readPlanted() }) }
 
 func TestPlantedNoDaemon(t *testing.T) { waitForPlantedName() }
+
+func requirePlantedState(t *testing.T) bool { require.True(t, true); return true }
+
+func TestPlantedPredicates(t *testing.T) {
+	pollRemoteUntil(func() bool { return assert.ObjectsAreEqual(1, 1) })
+	assert.Eventually(t, func() bool { require.NoError(t, nil); return true }, 0, 0)
+	waitForPlantedSize(func() bool { return requirePlantedState(t) })
+	waitForPlantedSize(requirePlantedState)
+	waitForPlantedSize(func() { require.True(t, true) })
+	requirePlantedState(func() bool { require.True(t, true); return true })
+	waitForPlantedSize(func() bool { t.Fatalf("planted"); return true })
+	waitForPlantedSize(func() bool { t.Skip(); return true })
+	readPlanted(func() bool { return plantedStateHolds(t) })
+	waitForPlantedSize(notePlantedState)
+}
+
+func plantedStateHolds(t *testing.T) bool { return requirePlantedState(t) }
+
+func notePlantedState(t *testing.T) { require.True(t, true) }
 `
 
 // suiteFunc is one function or method of the package's sources, keyed in
@@ -352,6 +372,32 @@ type suiteFunc struct {
 	polls bool
 	// startsProcess reports a call of a zero-argument Start, as exec.Cmd.Start.
 	startsProcess bool
+	// returnsValue reports a declared result.
+	returnsValue bool
+	// fails names the first call in its own body that can fail the test
+	// (failingCall), or is empty.
+	fails string
+	// passed are the functions its body passes as arguments to a poll
+	// primitive or to a suite function, in source order.
+	passed []passedFunc
+}
+
+// passedFunc is a function literal with a result, or a suite function named
+// as a value, passed as an argument: a predicate when the call it is passed to
+// waits.
+type passedFunc struct {
+	// at is the argument's file and line.
+	at string
+	// to is the poll primitive or the suite function it is passed to.
+	to string
+	// toPrimitive reports that to is a poll primitive.
+	toPrimitive bool
+	// named is the suite function passed by name, or empty for a literal.
+	named string
+	// fails names the first call in a literal's body that can fail the test.
+	fails string
+	// refs are the suite functions a literal calls, or the named function.
+	refs []string
 }
 
 // suiteSources is the call graph of the package's sources.
@@ -415,7 +461,10 @@ func readSuiteSources(dir string) (*suiteSources, error) {
 
 	src := &suiteSources{funcs: make(map[string]*suiteFunc, len(decls))}
 	for _, fn := range decls {
-		src.funcs[funcKey(fn)] = scanFuncBody(declFiles[fn], fn.Body, functions, methods)
+		scan := bodyScan{fset: fset, file: declFiles[fn], functions: functions, methods: methods}
+		scanned := scan.body(fn.Body)
+		scanned.returnsValue = hasResults(fn.Type)
+		src.funcs[funcKey(fn)] = scanned
 	}
 
 	return src, nil
@@ -438,17 +487,22 @@ func funcKey(fn *ast.FuncDecl) string {
 	return fn.Name.Name
 }
 
-// scanFuncBody records what one body calls: suite functions by name, suite
-// methods by their selector, function values passed as arguments, poll
-// primitives and zero-argument Start calls. Calls inside func literals count
-// for the enclosing function.
-func scanFuncBody(
-	file string,
-	body *ast.BlockStmt,
-	functions map[string]bool,
-	methods map[string][]string,
-) *suiteFunc {
-	fn := &suiteFunc{file: file}
+// bodyScan is what scanning one body needs from the whole package: the file
+// it is in, positions, and the names of the suite's functions and methods.
+type bodyScan struct {
+	fset      *token.FileSet
+	file      string
+	functions map[string]bool
+	methods   map[string][]string
+}
+
+// body records what one body calls: suite functions by name, suite methods by
+// their selector, function values passed as arguments, poll primitives,
+// zero-argument Start calls, calls that can fail the test, and the functions
+// it passes to a call. Calls inside func literals count for the enclosing
+// function.
+func (scan bodyScan) body(body *ast.BlockStmt) *suiteFunc {
+	fn := &suiteFunc{file: scan.file}
 	seen := map[string]bool{}
 	addRef := func(name string) {
 		if !seen[name] {
@@ -462,18 +516,13 @@ func scanFuncBody(
 		switch node := node.(type) {
 		case *ast.SelectorExpr:
 			selectorNames[node.Sel] = true
-			for _, method := range methods[node.Sel.Name] {
+			for _, method := range scan.methods[node.Sel.Name] {
 				addRef(method)
 			}
 		case *ast.CallExpr:
-			if _, ok := pollPrimitiveCall(node); ok {
-				fn.polls = true
-			}
-			if isZeroArgStart(node) {
-				fn.startsProcess = true
-			}
+			scan.recordCall(fn, node)
 		case *ast.Ident:
-			if functions[node.Name] && !selectorNames[node] {
+			if scan.functions[node.Name] && !selectorNames[node] {
 				addRef(node.Name)
 			}
 		}
@@ -482,6 +531,107 @@ func scanFuncBody(
 	})
 
 	return fn
+}
+
+// recordCall records what one call says about the body it is in.
+func (scan bodyScan) recordCall(fn *suiteFunc, call *ast.CallExpr) {
+	if _, ok := pollPrimitiveCall(call); ok {
+		fn.polls = true
+	}
+	if isZeroArgStart(call) {
+		fn.startsProcess = true
+	}
+	if fn.fails == "" {
+		fn.fails = failingCall(call)
+	}
+	fn.passed = append(fn.passed, scan.passedFuncs(call)...)
+}
+
+// passedFuncs lists what call passes when it calls a poll primitive or a
+// suite function: each function literal with a result, and each suite
+// function named as an argument.
+func (scan bodyScan) passedFuncs(call *ast.CallExpr) []passedFunc {
+	to, toPrimitive := pollPrimitiveCall(call)
+	if !toPrimitive {
+		ident, ok := call.Fun.(*ast.Ident)
+		if !ok || !scan.functions[ident.Name] {
+			return nil
+		}
+		to = ident.Name
+	}
+
+	var passed []passedFunc
+	for _, arg := range call.Args {
+		switch arg := arg.(type) {
+		case *ast.FuncLit:
+			if !hasResults(arg.Type) {
+				continue
+			}
+			literal := scan.body(arg.Body)
+			passed = append(passed, passedFunc{
+				at: scan.position(arg), to: to, toPrimitive: toPrimitive, fails: literal.fails, refs: literal.refs,
+			})
+		case *ast.Ident:
+			if scan.functions[arg.Name] {
+				passed = append(passed, passedFunc{
+					at: scan.position(arg), to: to, toPrimitive: toPrimitive, named: arg.Name, refs: []string{arg.Name},
+				})
+			}
+		}
+	}
+
+	return passed
+}
+
+func (scan bodyScan) position(node ast.Node) string {
+	return fmt.Sprintf("%s:%d", scan.file, scan.fset.Position(node.Pos()).Line)
+}
+
+func hasResults(funcType *ast.FuncType) bool {
+	return funcType.Results != nil && len(funcType.Results.List) > 0
+}
+
+// failingCall names call when it can fail or skip the test: a testify
+// assertion on t, or one of t's own methods that fail or skip
+// (testEndingMethods). The suite names its *testing.T t, as the repository's
+// test conventions do; a testify function given no t, such as
+// assert.ObjectsAreEqual, only compares.
+func failingCall(call *ast.CallExpr) string {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	receiver, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+
+	name := receiver.Name + "." + selector.Sel.Name
+	switch {
+	case isTestifyPackage(receiver.Name):
+		if len(call.Args) > 0 && isIdentNamed(call.Args[0], "t") {
+			return name
+		}
+	case receiver.Name == "t":
+		if slices.Contains(testEndingMethods(), selector.Sel.Name) {
+			return name
+		}
+	}
+
+	return ""
+}
+
+// testEndingMethods are the methods of *testing.T that fail the test or skip
+// it. A skip counts with the failures: a predicate that skips turns one
+// transient state into a test that did not run and reads as green.
+func testEndingMethods() []string {
+	return []string{"Fatal", "Fatalf", "Error", "Errorf", "Fail", "FailNow", "Skip", "Skipf", "SkipNow"}
+}
+
+func isIdentNamed(expr ast.Expr, name string) bool {
+	ident, ok := expr.(*ast.Ident)
+
+	return ok && ident.Name == name
 }
 
 // pollPrimitiveCall reports whether call is a poll primitive, and its name.
@@ -510,8 +660,13 @@ func pollPrimitiveCall(call *ast.CallExpr) (string, bool) {
 
 // isTestifyPoll reports a testify call that polls a condition.
 func isTestifyPoll(pkg, function string) bool {
-	return (pkg == "require" || pkg == "assert") &&
-		(strings.HasPrefix(function, "Eventually") || strings.HasPrefix(function, "Never"))
+	return isTestifyPackage(pkg) && (strings.HasPrefix(function, "Eventually") || strings.HasPrefix(function, "Never"))
+}
+
+// isTestifyPackage reports the name the suite imports a testify assertion
+// package under.
+func isTestifyPackage(pkg string) bool {
+	return pkg == "require" || pkg == "assert"
 }
 
 func isZeroArgStart(call *ast.CallExpr) bool {

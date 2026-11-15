@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -241,10 +239,10 @@ func waitForRemoteStatSize(
 	remotePath string,
 	size int64,
 	timeout time.Duration,
-) {
+) string {
 	t.Helper()
 
-	waitForRemoteStatSizeForDrive(t, cfgPath, env, "", remotePath, size, timeout)
+	return waitForRemoteStatSizeForDrive(t, cfgPath, env, "", remotePath, size, timeout)
 }
 
 // waitForRemoteStatSizeForDrive waits until `stat --json` reports remotePath
@@ -258,7 +256,9 @@ func waitForRemoteStatSize(
 // needs waitForRemoteFileContent instead.
 //
 // It reads the JSON document rather than the human "N bytes" text, so the wait
-// cannot break when stat's human formatting changes.
+// cannot break when stat's human formatting changes, and returns the document
+// that reported the size, so a test reads the rest of the item from the
+// answer it waited for.
 func waitForRemoteStatSizeForDrive(
 	t *testing.T,
 	cfgPath string,
@@ -267,10 +267,10 @@ func waitForRemoteStatSizeForDrive(
 	remotePath string,
 	size int64,
 	timeout time.Duration,
-) {
+) string {
 	t.Helper()
 
-	pollRemoteEventually(
+	stdout, _ := pollRemoteEventually(
 		t,
 		cfgPath,
 		env,
@@ -283,20 +283,8 @@ func waitForRemoteStatSizeForDrive(
 		},
 		"--json", "stat", remotePath,
 	)
-}
 
-// remoteStatSizeReady reports whether one `stat --json` attempt answered with
-// the item at exactly size bytes.
-func remoteStatSizeReady(stdout string, err error, size int64) bool {
-	if err != nil {
-		return false
-	}
-
-	var stat struct {
-		Size int64 `json:"size"`
-	}
-
-	return json.Unmarshal([]byte(stdout), &stat) == nil && stat.Size == size
+	return stdout
 }
 
 // waitForRemoteExactStatVisible is for tests whose contract is the exact path
@@ -346,33 +334,6 @@ func waitForRemoteParentListingContains(
 		remoteWritePropagationTimeout,
 		"ls", parentPath,
 	)
-}
-
-type fixtureSeedVisibilityOutcome uint8
-
-const (
-	fixtureSeedVisibilityKeepPolling fixtureSeedVisibilityOutcome = iota
-	fixtureSeedVisibilityExactSuccess
-	fixtureSeedVisibilitySoftenedByParentListing
-)
-
-// classifyFixtureSeedVisibilityAttempt keeps the fixture-readiness contract
-// pure: exact stat success wins immediately, otherwise a visible parent listing
-// softens the lag into the documented post-mutation destination recurrence.
-func classifyFixtureSeedVisibilityAttempt(
-	targetBase string,
-	statErr error,
-	parentListStdout string,
-	parentListErr error,
-) fixtureSeedVisibilityOutcome {
-	switch {
-	case statErr == nil:
-		return fixtureSeedVisibilityExactSuccess
-	case parentListErr == nil && strings.Contains(parentListStdout, targetBase):
-		return fixtureSeedVisibilitySoftenedByParentListing
-	default:
-		return fixtureSeedVisibilityKeepPolling
-	}
 }
 
 // waitForRemoteFixtureSeedVisible is the shared fixture-readiness contract for
@@ -445,17 +406,6 @@ func waitForRemoteFixtureSeedVisible(
 		},
 		"stat", cleanPath,
 	)
-}
-
-func deleteDisappearanceReady(stdout string, stderr string, err error, unexpected string) bool {
-	switch {
-	case err == nil:
-		return !strings.Contains(stdout, unexpected)
-	case isRemoteNotFoundCleanup(stderr):
-		return true
-	default:
-		return false
-	}
 }
 
 func waitForRemoteDeleteDisappearance(
@@ -605,56 +555,4 @@ func getRemoteFileForDrive(
 	data, readErr := os.ReadFile(localPath) //nolint:gosec // the file the CLI just downloaded into the test's own temp dir
 	require.NoError(t, readErr)
 	return string(data)
-}
-
-func TestClassifyFixtureSeedVisibilityAttempt(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, fixtureSeedVisibilityExactSuccess, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		nil,
-		"",
-		nil,
-	))
-	assert.Equal(t, fixtureSeedVisibilitySoftenedByParentListing, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		assert.AnError,
-		"test.txt\nother.txt\n",
-		nil,
-	))
-	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		assert.AnError,
-		"other.txt\n",
-		nil,
-	))
-	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
-		"test.txt",
-		assert.AnError,
-		"",
-		assert.AnError,
-	))
-}
-
-// The empty item a create leaves before its content is the case the size wait
-// exists to reject (LI-20261110-01).
-func TestRemoteStatSizeReady(t *testing.T) {
-	t.Parallel()
-
-	const contentSize = 21
-
-	assert.True(t, remoteStatSizeReady(`{"name":"a.txt","size":21}`, nil, contentSize))
-	assert.False(t, remoteStatSizeReady(`{"name":"a.txt","size":0}`, nil, contentSize), "the empty item before its content")
-	assert.False(t, remoteStatSizeReady(`{"name":"a.txt","size":21}`, assert.AnError, contentSize), "a failed stat")
-	assert.False(t, remoteStatSizeReady("Size: 21 B (21 bytes)\n", nil, contentSize), "human output instead of JSON")
-	assert.False(t, remoteStatSizeReady("", nil, contentSize), "no output")
-}
-
-func TestDeleteDisappearanceReady(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, deleteDisappearanceReady("other.txt\n", "", nil, "target.txt"))
-	assert.False(t, deleteDisappearanceReady("target.txt\n", "", nil, "target.txt"))
-	assert.True(t, deleteDisappearanceReady("", "The resource could not be found.", assert.AnError, "target.txt"))
-	assert.False(t, deleteDisappearanceReady("", "transport timeout", assert.AnError, "target.txt"))
 }

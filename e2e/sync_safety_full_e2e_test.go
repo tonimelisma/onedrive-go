@@ -43,13 +43,11 @@ func seedSafetySyncRoot(t *testing.T, cfgPath string, env map[string]string, syn
 }
 
 // remoteFileNames lists the file names `ls --json` reports under remotePath.
+// A failed listing fails the test: it says nothing about what is there.
 func remoteFileNames(t *testing.T, cfgPath string, env map[string]string, remotePath string) []string {
 	t.Helper()
 
-	stdout, _, err := runCLIWithConfigAllowError(t, cfgPath, env, "ls", remotePath, "--json")
-	if err != nil {
-		return nil
-	}
+	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", remotePath, "--json")
 	var items []struct {
 		Name string `json:"name"`
 	}
@@ -112,9 +110,10 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
 
 	runSyncThroughTransientFailures(t, cfgPath, env, "--confirm-deletes")
-	assert.Eventually(t, func() bool {
-		return len(remoteFileNames(t, cfgPath, env, "/"+folder)) == 0
-	}, pollTimeout, 2*time.Second, "the confirmed deletes are applied on OneDrive")
+	// The folder's own delete is confirmed with its files, so the listing ends
+	// empty or the folder is gone.
+	pollRemoteEventually(t, cfgPath, env, "", remoteDeletePropagationTimeout, timingKindRemoteDeleteDisappearance,
+		"the confirmed deletes are applied on OneDrive", remoteListingEmptyOrGone, "ls", "/"+folder, "--json")
 
 	// Single pass by design: the one pass after the confirmed deletes must
 	// hold nothing; it may leave work a transient failure causes.
