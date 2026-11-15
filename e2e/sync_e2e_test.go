@@ -596,7 +596,7 @@ Error: graph: setting mtime after simple upload: graph: OneDrive kept reporting 
 		Reason: liveProviderRecurrenceUnknown,
 		Retry:  false,
 	}, classifyFixturePutCommandFailure(
-		`Error: resolving "/e2e-fast-conflict": resolve delete target "e2e-fast-conflict" from parent "": graph: not found`,
+		`Error: resolving "/e2e-fast-conflict": resolve "e2e-fast-conflict" from the listing of parent "": graph: not found`,
 	))
 	assert.Equal(t, liveProviderRecurrenceDecision{
 		Reason: liveProviderRecurrenceUnknown,

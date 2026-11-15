@@ -109,54 +109,6 @@ func TestRunGet_FileReportedUnderAnUnsafeNameIsNotWritten(t *testing.T) {
 	assertFileHolds(t, filepath.Join(workDir, "report.txt"), "hello")
 }
 
-// Validates: R-1.2.4
-func TestGetJSONOutput_Serialization(t *testing.T) {
-	t.Parallel()
-
-	out := getJSONOutput{
-		Path:         "/tmp/test.txt",
-		Size:         1024,
-		HashVerified: true,
-	}
-
-	data, err := json.Marshal(out)
-	require.NoError(t, err)
-
-	var decoded getJSONOutput
-	require.NoError(t, json.Unmarshal(data, &decoded))
-
-	assert.Equal(t, "/tmp/test.txt", decoded.Path)
-	assert.Equal(t, int64(1024), decoded.Size)
-	assert.True(t, decoded.HashVerified)
-}
-
-// Validates: R-1.2.4
-func TestGetFolderJSONOutput_Serialization(t *testing.T) {
-	t.Parallel()
-
-	out := folderTransferJSONOutput[getJSONOutput]{
-		Files: []getJSONOutput{
-			{Path: "dir/a.txt", Size: 100, HashVerified: true},
-			{Path: "dir/b.txt", Size: 200, HashVerified: false},
-		},
-		FoldersCreated: 3,
-		TotalSize:      300,
-		Errors:         []string{"file c.txt: permission denied"},
-	}
-
-	data, err := json.Marshal(out)
-	require.NoError(t, err)
-
-	var decoded folderTransferJSONOutput[getJSONOutput]
-	require.NoError(t, json.Unmarshal(data, &decoded))
-
-	assert.Len(t, decoded.Files, 2)
-	assert.Equal(t, 3, decoded.FoldersCreated)
-	assert.Equal(t, int64(300), decoded.TotalSize)
-	assert.Len(t, decoded.Errors, 1)
-	assert.Contains(t, decoded.Errors[0], "permission denied")
-}
-
 // A folder download with no failures prints "errors": [], and one that
 // downloaded nothing prints "files": []: a list is never null.
 //
@@ -174,49 +126,6 @@ func TestGetFolderJSONOutput_EmptyErrors(t *testing.T) {
 	assert.Equal(t, []any{}, decoded["files"], "no files is [], not null")
 	assert.InDelta(t, 1, decoded["folders_created"], 0)
 	assert.InDelta(t, 0, decoded["total_size"], 0)
-}
-
-// Validates: R-1.2.4
-func TestGetJSONOutput(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	err := writeJSONDocument(&buf, getJSONOutput{
-		Path:         "report.pdf",
-		Size:         4096,
-		HashVerified: true,
-	})
-	require.NoError(t, err)
-
-	var decoded getJSONOutput
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
-	assert.Equal(t, "report.pdf", decoded.Path)
-	assert.Equal(t, int64(4096), decoded.Size)
-	assert.True(t, decoded.HashVerified)
-}
-
-// Validates: R-1.2.4
-func TestGetFolderJSONOutput(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	err := writeJSONDocument(&buf, folderTransferJSONOutput[getJSONOutput]{
-		Files: []getJSONOutput{
-			{Path: "dir/a.txt", Size: 100, HashVerified: true},
-			{Path: "dir/b.txt", Size: 200, HashVerified: false},
-		},
-		FoldersCreated: 2,
-		TotalSize:      300,
-		Errors:         []string{"dir/c.txt: access denied"},
-	}.withEmptyLists())
-	require.NoError(t, err)
-
-	var decoded folderTransferJSONOutput[getJSONOutput]
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
-	assert.Len(t, decoded.Files, 2)
-	assert.Equal(t, 2, decoded.FoldersCreated)
-	assert.Equal(t, int64(300), decoded.TotalSize)
-	assert.Len(t, decoded.Errors, 1)
 }
 
 // The folder form of get prints this document byte for byte: its field names
