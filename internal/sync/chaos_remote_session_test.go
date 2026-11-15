@@ -80,13 +80,13 @@ func (c *chaosGraph) createUploadSession(
 		return nil, chaosCreateFailure(name, answer, lostErr)
 	}
 
-	c.count(chaosCreateSessionTimedOut)
+	cc.fault(chaosCreateSessionTimedOut)
 	created, err := remote.getItem(session.ItemID)
 	if err != nil {
 		return nil, err
 	}
 	if c.churnPlaceholder != nil && cc.intN(2) == 0 {
-		c.count(chaosCreateSessionETagMoved)
+		cc.fault(chaosCreateSessionETagMoved)
 		c.churnPlaceholder(session.ItemID)
 	}
 
@@ -114,7 +114,7 @@ func (c *chaosGraph) createUploadSessionForItem(
 func (c *chaosGraph) fragmentFault(cc *chaosCall, op string, offset int64) error {
 	err := c.before(cc, op)
 	if err != nil && offset > 0 {
-		c.count(op + chaosPartSentSuffix)
+		cc.fault(op + chaosPartSentSuffix)
 	}
 
 	return err
@@ -186,7 +186,7 @@ func TestChaosGraph_SessionRouteDrawsFaults(t *testing.T) {
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	c := newChaosGraph(1)
 	c.churnPlaceholder = remote.churnETag
-	c.setStorm(true)
+	c.startStep(true)
 	client := c.wrapSessions(remote.sessionClient(t))
 
 	var seen chaosSessionOutcomes
@@ -203,7 +203,7 @@ func TestChaosGraph_SessionRouteDrawsFaults(t *testing.T) {
 		requireItemSessionAndCancelHoldUp(t, client, remote, itemID)
 	}
 
-	c.setStorm(false)
+	c.startStep(false)
 	for _, session := range seen.unfinished {
 		item, err := client.ResumeUpload(t.Context(), session, strings.NewReader(chaosSessionContent), int64(len(chaosSessionContent)), nil)
 		require.NoError(t, err, "a session left open resumes once the storm passes")
@@ -315,7 +315,7 @@ func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T
 	resumed := 0
 	for i := range attempts {
 		name := fmt.Sprintf("part-%d.bin", i)
-		c.setStorm(true)
+		c.startStep(true)
 		session, err := client.CreateUploadSession(t.Context(), remote.driveID, graphRootID, name, size, time.Time{})
 		if err != nil {
 			continue
@@ -326,7 +326,7 @@ func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T
 			continue // landed, or failed before the session held a byte
 		}
 		resumed++
-		c.setStorm(false)
+		c.startStep(false)
 		_, err = client.ResumeUpload(t.Context(), &graph.UploadSession{UploadURL: session.UploadURL}, strings.NewReader(content), size, nil)
 		require.NoError(t, err, "%s: the part-uploaded session resumes once the storm passes", name)
 		assert.Equal(t, content, remote.tree()[name], "%s: the resumed file is whole", name)
