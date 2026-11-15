@@ -339,7 +339,7 @@ func (rt *watchRuntime) watchMountRootRemote(
 		outage.recovered(ctx, rt.deps.logger, "Checking the shared folder for changes works again")
 		observationBatch.pollStartedAt = pollStartedAt
 		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
-			if mountRootWatchStopped(ctx, err) {
+			if runEnded(ctx, err) {
 				return nil
 			}
 			return err
@@ -395,7 +395,7 @@ func (rt *watchRuntime) handleMountRootPollError(
 	outage *pollOutageLog,
 	err error,
 ) (bool, error) {
-	if mountRootWatchStopped(ctx, err) {
+	if runEnded(ctx, err) {
 		return true, nil
 	}
 
@@ -431,17 +431,13 @@ func (rt *watchRuntime) sleepMountRootWatch(
 	delay time.Duration,
 	label string,
 ) (bool, error) {
-	sleepErr := timeSleep(ctx, delay)
+	sleepErr := rt.deps.clock.Sleep(ctx, delay)
 	if sleepErr == nil {
 		return false, nil
 	}
-	if mountRootWatchStopped(ctx, sleepErr) {
+	if runEnded(ctx, sleepErr) {
 		return true, nil
 	}
 
 	return false, fmt.Errorf("mount-root watch %s sleep: %w", label, sleepErr)
-}
-
-func mountRootWatchStopped(ctx context.Context, err error) bool {
-	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

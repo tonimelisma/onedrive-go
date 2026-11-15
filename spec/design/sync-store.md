@@ -448,7 +448,10 @@ checkpoint detached from the caller's cancellation (a close during shutdown
 still checkpoints) and bounded by `StoreCloseCheckpointTimeout` (10 s), so
 callers pass their context as it is and a disk that stopped answering cannot
 hold a close forever; the watch control plane's engine close bound is that
-bound plus 5 s.
+bound plus 5 s. A checkpoint that fails on close is said once at Warn, and
+the close goes on; a second close does nothing
+(`TestSyncStore_CloseSaysAFailedCheckpointAtWarn`,
+`TestSyncStore_SecondCloseDoesNothing`).
 
 The store does not own a mixed failure table, failure-role transitions,
 timer-time stale-row cleanup, or a store-owned grouped condition projection.

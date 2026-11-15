@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"path/filepath"
 	stdsync "sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -81,6 +82,9 @@ type SyncStore struct {
 	// contentDriveMu guards cachedContentDriveID only.
 	contentDriveMu       stdsync.RWMutex
 	cachedContentDriveID driveid.ID
+
+	// closed is set by the first Close; a later Close does nothing.
+	closed atomic.Bool
 }
 
 // NewSyncStore opens the SQLite database at dbPath, applies the canonical
@@ -187,8 +191,13 @@ const StoreCloseCheckpointTimeout = 10 * time.Second
 // Close checkpoints the WAL and closes the underlying database connection.
 // The explicit checkpoint ensures cross-process readers (for example `status`
 // after `sync`) see all committed data when they open a new connection to the
-// same database file.
+// same database file. A second Close does nothing, so an engine closed twice
+// checkpoints once.
 func (s *SyncStore) Close(ctx context.Context) error {
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	// Close usually runs during shutdown, when ctx is already canceled. The
 	// checkpoint is short local I/O that cross-process readers depend on, so
 	// it must not be skipped (or reported as a failure) just because the
@@ -197,7 +206,8 @@ func (s *SyncStore) Close(ctx context.Context) error {
 	checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), StoreCloseCheckpointTimeout)
 	defer cancel()
 	if err := s.Checkpoint(checkpointCtx); err != nil {
-		s.logger.Debug("checkpoint failed on close", slog.Any("error", err))
+		s.logger.Warn("Could not checkpoint the sync database while closing it; committed data is unaffected",
+			slog.Any("error", err))
 	}
 
 	if err := s.db.Close(); err != nil {

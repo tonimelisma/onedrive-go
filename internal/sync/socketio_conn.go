@@ -209,7 +209,7 @@ func (s *socketIOWakeSource) readPackets(
 // bounds, for the server's answer. A failure on a connection that already
 // broke, or during shutdown, changes nothing and is only noted.
 func (s *socketIOWakeSource) closeConnection(ctx context.Context, conn *socketIOConn) {
-	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !watchShouldStop(ctx, closeErr) {
+	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !runEnded(ctx, closeErr) {
 		s.logger.Debug("socket.io close failed",
 			slog.String("drive_id", s.driveID.String()),
 			slog.Any("error", closeErr),

@@ -32,10 +32,19 @@ func classifyResult(r *actionCompletion) resultDecision {
 		})
 	}
 
-	// Before the context check: a transfer the stall watchdog abandoned is
-	// retryable work, not a shutdown. Classified as a shutdown it was
-	// neither retried nor recorded, and its dependents were dropped.
-	if errors.Is(r.Err, graph.ErrTransferStalled) {
+	// Shutdown is a fact about the run, never the shape of an error: only an
+	// action whose run had ended is a shutdown, and then only for the
+	// cancellation's own error. A separate failure that landed during the stop
+	// is classified like any other.
+	if r.RunEnded && isCancellationEcho(r.Err) {
+		return withRuntimeSummary(&resultDecision{
+			Class:     resultShutdown,
+			TrialHint: trialHintShutdown,
+		})
+	}
+
+	// A request that timed out while the run goes on is retry work.
+	if isRequestTimeout(r.Err) {
 		return withRuntimeSummary(&resultDecision{
 			Class:         resultRequeue,
 			Persistence:   persistRetryWork,
@@ -57,10 +66,16 @@ func classifyResult(r *actionCompletion) resultDecision {
 		})
 	}
 
-	if errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded) {
+	// No cancel the engine makes reaches an action while its run goes on: the
+	// per-action cancel lands after the action returned, and the pool and pass
+	// cancels end the worker's run. A cancel that arrives anyway came from
+	// below the engine without a reason it names, so the action is tried again
+	// rather than dropped (and the engine says so, isLiveRunCancel).
+	if isLiveRunCancel(r) {
 		return withRuntimeSummary(&resultDecision{
-			Class:     resultShutdown,
-			TrialHint: trialHintShutdown,
+			Class:       resultRequeue,
+			Persistence: persistRetryWork,
+			TrialHint:   trialHintReclassify,
 		})
 	}
 
@@ -83,6 +98,22 @@ func classifyResult(r *actionCompletion) resultDecision {
 	}
 
 	return classifyLocalResult(r)
+}
+
+// isRequestTimeout reports a request that ran out of time. Every transport
+// timeout (a response-header, dial or whole-request timeout) and an expired
+// request deadline carry context.DeadlineExceeded; a transfer the stall
+// watchdog abandoned carries graph.ErrTransferStalled instead, because the
+// watchdog keeps its cancellation out of the chain. Asked only once
+// classifyResult has ruled the failure out as a shutdown.
+func isRequestTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, graph.ErrTransferStalled)
+}
+
+// isLiveRunCancel reports an action canceled while its run went on: something
+// narrower than the run canceled it.
+func isLiveRunCancel(r *actionCompletion) bool {
+	return !r.RunEnded && errors.Is(r.Err, context.Canceled)
 }
 
 func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {

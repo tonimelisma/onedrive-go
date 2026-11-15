@@ -3158,25 +3158,6 @@ func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	assert.Equal(t, expectedSize, capturedSize)
 }
 
-// Test timeSleep context cancellation (consolidated from timeSleepExec, B-106).
-func TestTimeSleep_ContextCanceled(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	err := timeSleep(ctx, 10*time.Second)
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
-// Test timeSleep completes normally (consolidated from timeSleepExec, B-106).
-func TestTimeSleep_Completes(t *testing.T) {
-	t.Parallel()
-
-	err := timeSleep(t.Context(), 1*time.Millisecond)
-	assert.NoError(t, err)
-}
-
 // ---------------------------------------------------------------------------
 // ItemType propagation tests (Fixes 3, 4, 5)
 // ---------------------------------------------------------------------------

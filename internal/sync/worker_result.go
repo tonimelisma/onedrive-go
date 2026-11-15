@@ -26,9 +26,15 @@ type actionCompletion struct {
 	Size      int64
 	SizeKnown bool
 
-	// Err is the full error for classification (context.Canceled, os.ErrPermission, etc.).
-	// The engine uses errors.Is to distinguish shutdown from genuine failures.
+	// Err is the full error for classification (os.ErrPermission, a Graph
+	// answer, a timed-out request and so on).
 	Err error
+
+	// RunEnded is whether the run the action ran under had ended when it
+	// returned (runEnded): the one fact that makes a failure a shutdown. Set
+	// by whoever ran the action, from the run's context; the classifier reads
+	// it and no context.
+	RunEnded bool
 
 	// RetryAfter is the server-mandated wait duration from the Retry-After
 	// header on 429/503 responses. Zero when absent. Used by block scopes

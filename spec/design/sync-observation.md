@@ -38,6 +38,22 @@ The observation stack has four main pieces:
 - `Scanner`: full local walk for one-shot bootstrap and rebuild cases
 - `dirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
 
+## A Timed-Out Request Is Not A Stop
+
+Every observer loop stops only when its run's context has ended (`runEnded`),
+never because an error has the shape of a cancellation: every transport
+timeout carries `context.DeadlineExceeded` while the run goes on. A delta page
+whose request timed out is retried by `fetchDeltaPageWithRetry` like any other
+transport failure, and a watch poll, a mount-root poll or a Socket.IO
+connection that timed out backs off on the run's clock and tries again. A
+failure to hand a poll's batch over ends the remote watch with that failure
+while the run goes on, whatever its shape, and is the stop once the run has
+ended (R-6.8.29; `TestFullDelta_RetriesATimedOutPageUpToItsPolicy`,
+`TestRemoteObserverWatch_BacksOffAfterATimedOutPollInsteadOfStopping`,
+`TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain`,
+`TestSocketIOWakeSource_ReconnectsAfterAConnectionThatTimedOut`,
+`TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded`).
+
 ## Observer Time Is Engine Clock Time
 
 `localObserver` and `remoteObserver` hold the engine's `syncClock` rather than

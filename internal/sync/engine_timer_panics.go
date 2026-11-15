@@ -28,7 +28,7 @@ func withTimerPanic(err, panicErr error) error {
 	switch {
 	case panicErr == nil:
 		return err
-	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case err == nil, isCancellationEcho(err):
 		return panicErr
 	default:
 		return errors.Join(panicErr, err)

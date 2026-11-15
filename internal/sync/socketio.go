@@ -230,9 +230,12 @@ func (s *socketIOWakeSource) runIteration(
 	bo.Reset()
 	runErr := s.runConnection(ctx, conn, endpoint.ID, refreshAt, wakes)
 
-	stop := ctx.Err() != nil || watchShouldStop(ctx, runErr)
-	if stop {
+	// Only the end of the wake source's run stops it: a connection that
+	// timed out while the run goes on reconnects after its backoff.
+	select {
+	case <-ctx.Done():
 		return true, nil
+	default:
 	}
 	if errors.Is(runErr, panicguard.ErrPanic) {
 		// The connection's reader panicked. A reconnect would repeat the bug,
@@ -302,8 +305,7 @@ func (s *socketIOWakeSource) sleepUntilRetry(ctx context.Context, delay time.Dur
 		return false, nil
 	}
 
-	stop := watchShouldStop(ctx, sleepErr)
-	if stop {
+	if runEnded(ctx, sleepErr) {
 		return true, nil
 	}
 

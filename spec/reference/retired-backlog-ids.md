@@ -33,7 +33,6 @@ and nothing in `spec/` resolves them.
 | `B-100` | `internal/sync/observer_local_create_test.go` |
 | `B-101` | `internal/sync/observer_local_handlers.go` |
 | `B-102` | `internal/sync/observer_local_create_test.go`, `internal/sync/observer_local_test.go`, `internal/sync/observer_local_write_test.go` |
-| `B-106` | `internal/sync/executor_test.go` |
 | `B-107` | `internal/sync/observer_local.go`, `internal/sync/observer_local_delete_test.go`, `internal/sync/observer_local_handlers.go`, +1 more |
 | `B-108` | `internal/sync/observer_local_handlers_test.go` |
 | `B-112` | `internal/sync/observer_local_delete_test.go`, `internal/sync/observer_local_handlers.go` |

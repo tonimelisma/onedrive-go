@@ -142,12 +142,14 @@ func isWatchObserverStartupStopped(ctx context.Context, err error) bool {
 	return ctx.Err() != nil && errors.Is(err, errWatchObserversDuringDrain)
 }
 
+// isWatchShutdownError reports whether a watch step failed with the stop the
+// caller asked for: the run's context has ended and err is the
+// cancellation's own echo. A separate failure that landed during the stop is
+// still the watch's error: the report of a loop that ended without draining
+// says so even when the context is done (runWatchLoop). A request that timed
+// out while the run goes on is never a stop.
 func isWatchShutdownError(ctx context.Context, err error) bool {
-	if err == nil || ctx.Err() == nil {
-		return false
-	}
-
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return runEnded(ctx, err) && isCancellationEcho(err)
 }
 
 // watchPipeline holds watch-loop dependencies that are not already runtime-owned.

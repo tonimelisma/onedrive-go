@@ -17,6 +17,15 @@ var (
 	errPublicationOnlyActionType = errors.New("sync: publication-only action routed to worker")
 )
 
+// The causes of the worker contexts' cancels. Neither reaches an action while
+// its run goes on: errActionReturned lands after the action returned, and
+// errWorkerPoolStopped ends the context the workers were started under, so an
+// action it interrupts completes with RunEnded set, as a shutdown.
+const (
+	errActionReturned    cancelCauseError = "sync: action returned"
+	errWorkerPoolStopped cancelCauseError = "sync: worker pool stopped"
+)
+
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
@@ -64,7 +73,7 @@ type workerPool struct {
 	// test's dispatch order is also the execution order (D-090).
 	serialize bool
 
-	cancel    context.CancelFunc
+	cancel    context.CancelCauseFunc
 	wg        stdsync.WaitGroup
 	closeOnce stdsync.Once
 }
@@ -106,7 +115,7 @@ func newWorkerPool(
 func (wp *workerPool) Start(ctx context.Context, total int) {
 	total = poolWorkerCount(total, wp.serialize)
 
-	ctx, wp.cancel = context.WithCancel(ctx)
+	ctx, wp.cancel = context.WithCancelCause(ctx)
 
 	for range total {
 		wp.wg.Add(1)
@@ -133,7 +142,7 @@ func (wp *workerPool) closeCompletionsWhenWorkersExit() {
 // the completions channel so the engine-owned completion loop can terminate.
 func (wp *workerPool) Stop() {
 	if wp.cancel != nil {
-		wp.cancel()
+		wp.cancel(errWorkerPoolStopped)
 	}
 
 	wp.wg.Wait()
@@ -189,8 +198,8 @@ func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) 
 func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	// actionCtx is canceled when executeAction returns, which stops what the
 	// action started under it.
-	actionCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	actionCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(errActionReturned)
 
 	if freshnessErr := wp.validateActionFreshness(actionCtx, ta); freshnessErr != nil {
 		wp.sendResult(ctx, ta, nil, freshnessErr)
@@ -328,13 +337,17 @@ func (wp *workerPool) Completions() <-chan actionCompletion {
 // sendResult reports a per-action outcome to the completions channel. Populates
 // the actionCompletion from the trackedAction and any error. When outcome is
 // non-nil, uses its Success/Error fields; otherwise treats as failure with
-// the provided error.
+// the provided error. ctx is the context the workers were started under,
+// which ends only with the run or once nothing is left to classify: whether
+// it has ended is the completion's RunEnded, the one place a worker's
+// completion learns it.
 //
 // If the context is canceled before the completion is sent (engine shutdown),
 // the ActionCompletion is silently dropped. The engine handles shutdown via
 // context cancellation on the result-processing loop (resultShutdown classification).
 func (wp *workerPool) sendResult(ctx context.Context, ta *trackedAction, outcome *actionOutcome, actionErr error) {
 	r := actionCompletionFromTrackedAction(ta, outcome, actionErr)
+	r.RunEnded = runEnded(ctx, r.Err)
 	wp.recordLivePreconditionSuperseded(&r, outcome)
 
 	select {

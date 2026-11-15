@@ -50,12 +50,13 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 		slog.Any("error", err),
 	}
 
-	// Cancellation is what a clean Ctrl-C does to in-flight bookkeeping, and
-	// a repeated sign-in failure is already the run's returned error. Neither
-	// is news to the user. Anything else means a finished transfer may not be
-	// recorded; the next sync rediscovers it from durable truth (R-2.5.3).
+	// Only a stopping run gets here. The cancellation's echo is what a clean
+	// Ctrl-C does to in-flight bookkeeping, and a repeated sign-in failure is
+	// already the run's returned error. Neither is news to the user. Anything
+	// else means a finished transfer may not be recorded; the next sync
+	// rediscovers it from durable truth (R-2.5.3).
 	var fatalErr *fatalCompletionError
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &fatalErr) {
+	if isCancellationEcho(err) || errors.As(err, &fatalErr) {
 		flow.deps.logger.Debug("suppressed action completion error during shutdown", fields...)
 		return
 	}
