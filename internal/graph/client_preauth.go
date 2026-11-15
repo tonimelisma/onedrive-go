@@ -12,12 +12,18 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
+// unreadableErrorBody is the message of the error of an answer whose body
+// could not be read.
+const unreadableErrorBody = "(failed to read response body)"
+
 // buildError reads the error response body, builds a *GraphError with the
 // appropriate sentinel, and logs the failure. Used by both authenticated and
 // pre-auth dispatch paths; path is what the log names the request by, never
-// a pre-authenticated URL.
+// a pre-authenticated URL. A body that cannot be read leaves its own record
+// and the placeholder message; the answer is still recorded, by the codes of
+// the bytes that did arrive, and returned as a *GraphError.
 func (c *Client) buildError(method, path string, resp *http.Response) *GraphError {
-	errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
 	if closeErr := resp.Body.Close(); closeErr != nil {
 		c.logger.Debug("failed to close error response body",
 			slog.String("method", method),
@@ -26,26 +32,78 @@ func (c *Client) buildError(method, path string, resp *http.Response) *GraphErro
 		)
 	}
 
+	errBody := body
 	if readErr != nil {
-		errBody = []byte("(failed to read response body)")
+		c.logBodyReadFailure(method, path, resp, readErr)
+		errBody = []byte(unreadableErrorBody)
 	}
 
-	reqID := resp.Header.Get("request-id")
-	retryAfter := retry.ResponseRetryAfter(resp, time.Now())
-	graphErr := buildGraphError(resp.StatusCode, reqID, retryAfter, errBody)
+	graphErr := graphErrorOfAnswer(resp, errBody)
+
+	// A whole error object can arrive before the read fails. The record then
+	// names its codes, sanitized like the error's; the error keeps the
+	// placeholder, so it is classified as when nothing arrived.
+	arrived := graphErr
+	if readErr != nil {
+		arrived = graphErrorOfAnswer(resp, body)
+	}
+
+	c.logFailedAnswer(method, path, resp, body, arrived)
+
+	return graphErr
+}
+
+// graphErrorOfAnswer builds the *GraphError of a failed answer from its
+// status, its headers and errBody.
+func graphErrorOfAnswer(resp *http.Response, errBody []byte) *GraphError {
+	graphErr := buildGraphError(resp.StatusCode, resp.Header.Get("request-id"),
+		retry.ResponseRetryAfter(resp, time.Now()), errBody)
 	graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
 
-	// Log at DEBUG — the HTTP layer lacks context to judge severity.
-	// Callers decide: e.g. DELETE 404 is success, GET 404 is an error.
+	return graphErr
+}
+
+// logBodyReadFailure records a body that could not be read: a failed
+// answer's error body, or the body of an upload fragment's unexpected 2xx
+// answer. The record names the answer's status and request ID, so it is
+// tied to its answer by more than the request beside it.
+func (c *Client) logBodyReadFailure(method, path string, resp *http.Response, readErr error) {
+	c.logger.Debug("failed to read response body",
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.Int("status", resp.StatusCode),
+		slog.String("request_id", resp.Header.Get("request-id")),
+		slog.Any("error", readErr),
+	)
+}
+
+// logFailedAnswer writes the one "request failed" record of a failed answer,
+// body being the bytes of its body that arrived and graphErr the error built
+// from them.
+//
+// Logged at DEBUG — the HTTP layer lacks context to judge severity.
+// Callers decide: e.g. DELETE 404 is success, GET 404 is an error.
+// The code chain, the content type and the size and kind of the body that
+// arrived are the answer's payload evidence; the body and the message
+// themselves are never logged.
+func (c *Client) logFailedAnswer(method, path string, resp *http.Response, body []byte, graphErr *GraphError) {
+	innerCodes := graphErr.InnerCodes
+	if innerCodes == nil {
+		innerCodes = []string{}
+	}
+
 	c.logger.Debug("request failed",
 		slog.String("method", method),
 		slog.String("path", path),
 		slog.Int("status", resp.StatusCode),
-		slog.String("request_id", reqID),
+		slog.String("request_id", graphErr.RequestID),
 		slog.String("ags_diagnostic", graphErr.AgsDiagnostic),
+		slog.String("code", graphErr.Code),
+		slog.Any("inner_codes", innerCodes),
+		slog.String("content_type", resp.Header.Get("Content-Type")),
+		slog.Int("body_bytes", len(body)),
+		slog.String("body_kind", errorBodyKind(body)),
 	)
-
-	return graphErr
 }
 
 // doPreAuth executes an HTTP request against a pre-authenticated URL. No
@@ -83,7 +141,7 @@ func (c *Client) doPreAuth(
 		}
 	}
 
-	logTarget := "preauth:" + desc
+	logTarget := preAuthLogTarget(desc)
 	req = retry.WithRequestLogTarget(req, logTarget)
 
 	resp, err := c.dispatchRequest(req)
@@ -115,6 +173,12 @@ func (c *Client) doPreAuth(
 	}
 
 	return nil, graphErr
+}
+
+// preAuthLogTarget is what the logs name the pre-authenticated request desc
+// by, never its URL, which carries a credential.
+func preAuthLogTarget(desc string) string {
+	return "preauth:" + desc
 }
 
 func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
@@ -207,16 +271,16 @@ func buildGraphError(statusCode int, requestID string, retryAfter time.Duration,
 		message = string(rawBody)
 	}
 
-	message = sanitizeGraphErrorText(message)
-	raw := sanitizeGraphErrorText(string(rawBody))
-
+	// Everything taken from the body is sanitized here, once, so whatever
+	// prints or logs the error (its text, the debug record, quirk retry
+	// evidence) only ever sees the sanitized copy.
 	graphErr := &GraphError{
 		StatusCode: statusCode,
 		RequestID:  requestID,
-		Code:       code,
-		InnerCodes: innerCodes,
-		Message:    message,
-		RawBody:    raw,
+		Code:       sanitizeGraphErrorText(code),
+		InnerCodes: sanitizeGraphErrorTexts(innerCodes),
+		Message:    sanitizeGraphErrorText(message),
+		RawBody:    sanitizeGraphErrorText(string(rawBody)),
 		Err:        classifyStatus(statusCode),
 		RetryAfter: retryAfter,
 	}

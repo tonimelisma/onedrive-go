@@ -174,11 +174,17 @@ func relabelTimestampRangeError(err error, sent time.Time) error {
 type GraphError struct {
 	StatusCode int
 	RequestID  string
+	// Code and InnerCodes are the answer's error code chain, outermost first.
+	// They come from the server like Message and RawBody, and like them are
+	// sanitized when the error is built.
 	Code       string
 	InnerCodes []string
-	Message    string
-	RawBody    string
-	Err        error // sentinel, for errors.Is()
+	// Message is the answer's error.message, or the whole body when the
+	// answer has none: a body without a Graph error object, or an error
+	// object without a message.
+	Message string
+	RawBody string
+	Err     error // sentinel, for errors.Is()
 	// RetryAfter is the server-mandated wait duration from the Retry-After
 	// header on 429/503 responses, read by retry.ResponseRetryAfter (seconds
 	// or HTTP-date). Zero when absent or unusable. The engine uses this for
@@ -278,12 +284,56 @@ func ExtractQuirkEvidence(err error) (QuirkEvidence, bool) {
 	}, true
 }
 
+// maxErrorTextCodeBytes bounds the code in an error's text. The code on the
+// error itself is not cut.
+const maxErrorTextCodeBytes = 128
+
+// Error is the answer in one line: the status, the most specific code when
+// the answer named one (as errorTextCode prints it), the request ID when it
+// carried one, and the message. buildGraphError uses the whole body as the
+// message when the answer has no error.message, so a text without a code does
+// not say whether the body was a Graph error object; the debug record of the
+// answer (logFailedAnswer) does.
 func (e *GraphError) Error() string {
-	if e.RequestID != "" {
-		return fmt.Sprintf("graph: HTTP %d (request-id: %s): %s", e.StatusCode, e.RequestID, e.Message)
+	head := fmt.Sprintf("graph: HTTP %d", e.StatusCode)
+	if code := e.MostSpecificCode(); code != "" {
+		head += " " + errorTextCode(code)
 	}
 
-	return fmt.Sprintf("graph: HTTP %d: %s", e.StatusCode, e.Message)
+	if e.RequestID != "" {
+		return fmt.Sprintf("%s (request-id: %s): %s", head, e.RequestID, e.Message)
+	}
+
+	return head + ": " + e.Message
+}
+
+// errorTextCode is code as an error's text prints it: cut to
+// maxErrorTextCodeBytes, then quoted (%q) when it holds any byte but an ASCII
+// letter, a digit, '_', '.' or '-', so a code the server sent can neither
+// break the line nor read as the text's own separators. Every code the client
+// compares is plain, and prints as it came.
+func errorTextCode(code string) string {
+	if len(code) > maxErrorTextCodeBytes {
+		code = code[:maxErrorTextCodeBytes]
+	}
+
+	for i := range len(code) {
+		if !isPlainCodeByte(code[i]) {
+			return fmt.Sprintf("%q", code)
+		}
+	}
+
+	return code
+}
+
+// isPlainCodeByte reports whether b may stand unquoted in an error's text.
+func isPlainCodeByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
+		return true
+	default:
+		return b == '_' || b == '.' || b == '-'
+	}
 }
 
 func (e *GraphError) Unwrap() error {
@@ -350,16 +400,14 @@ func IsProviderUnavailable(err error) bool {
 	return errors.Is(err, ErrProviderReadOnly)
 }
 
+// MostSpecificCode returns the innermost non-empty code of the answer's error
+// chain, or the outer code when no inner error names one.
 func (e *GraphError) MostSpecificCode() string {
-	for i := len(e.InnerCodes) - 1; i >= 0; i-- {
-		if e.InnerCodes[i] != "" {
-			return e.InnerCodes[i]
-		}
-	}
-
-	return e.Code
+	return mostSpecificCode(e.Code, e.InnerCodes)
 }
 
+// HasCode reports whether the outer code or any inner code is code, ignoring
+// case.
 func (e *GraphError) HasCode(code string) bool {
 	if strings.EqualFold(e.Code, code) {
 		return true
@@ -386,12 +434,18 @@ type graphErrorNode struct {
 }
 
 // MostSpecificErrorCode returns the innermost Graph error code in a raw error
-// response body, falling back to the outer code. Callers outside the client --
-// live test preflights in particular -- need the same view of a response the
-// client has, and the distinction matters: a backend read-only window is an
-// outer accessDenied whose inner code is the only thing that identifies it.
+// response body, falling back to the outer code, sanitized like the code on a
+// GraphError. Callers outside the client -- live test preflights in
+// particular -- need the same view of a response the client has, and the
+// distinction matters: a backend read-only window is an outer accessDenied
+// whose inner code is the only thing that identifies it.
 func MostSpecificErrorCode(body []byte) string {
 	code, _, innerCodes := parseGraphErrorBody(body)
+
+	return sanitizeGraphErrorText(mostSpecificCode(code, innerCodes))
+}
+
+func mostSpecificCode(code string, innerCodes []string) string {
 	for i := len(innerCodes) - 1; i >= 0; i-- {
 		if innerCodes[i] != "" {
 			return innerCodes[i]
@@ -407,6 +461,8 @@ func IsProviderReadOnlyCode(code string) bool {
 	return strings.EqualFold(code, graphCodeServiceReadOnly)
 }
 
+// parseGraphErrorBody reads the error member of an answer's body. It returns
+// empty values for a body that is not JSON or has no such member.
 func parseGraphErrorBody(body []byte) (code, message string, innerCodes []string) {
 	var envelope graphErrorEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -420,11 +476,35 @@ func parseGraphErrorBody(body []byte) (code, message string, innerCodes []string
 		envelope.Error.InnerErrorLower,
 	))
 
-	if code == "" && message == "" && len(innerCodes) == 0 {
-		return "", "", nil
+	return code, message, innerCodes
+}
+
+// What the body of a failed answer held, as the debug record of the failure
+// names it.
+const (
+	// errorBodyGraphError is a Graph error object: an error member that names
+	// a code, a message or an inner code.
+	errorBodyGraphError = "graph_error"
+	// errorBodyOther is any other body: plain text, HTML, other JSON.
+	errorBodyOther = "other"
+	// errorBodyEmpty is an answer with no body at all.
+	errorBodyEmpty = "empty"
+)
+
+// errorBodyKind says which of errorBodyGraphError, errorBodyOther and
+// errorBodyEmpty body is, so that an answer without a code reads as a fact of
+// the answer and not as a gap in the log.
+func errorBodyKind(body []byte) string {
+	if len(body) == 0 {
+		return errorBodyEmpty
 	}
 
-	return code, message, innerCodes
+	code, message, innerCodes := parseGraphErrorBody(body)
+	if code != "" || message != "" || len(innerCodes) > 0 {
+		return errorBodyGraphError
+	}
+
+	return errorBodyOther
 }
 
 func parseInnerErrorCodes(raw json.RawMessage) []string {

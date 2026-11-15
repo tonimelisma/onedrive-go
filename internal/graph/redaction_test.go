@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-6.8.17
 func TestBuildGraphError_RedactsStructuredSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -45,6 +46,7 @@ func TestBuildGraphError_RedactsStructuredSecrets(t *testing.T) {
 	assert.Contains(t, err.RawBody, `"uploadUrl":"[REDACTED]"`)
 }
 
+// Validates: R-6.8.17
 func TestBuildGraphError_RedactsPlainTextSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -62,6 +64,36 @@ func TestBuildGraphError_RedactsPlainTextSecrets(t *testing.T) {
 	assert.NotContains(t, err.Error(), "top-secret-token")
 	assert.NotContains(t, err.Error(), "y4msecret-token-here")
 	assert.Equal(t, err.Message, err.RawBody)
+}
+
+// Validates: R-6.8.17, R-2.10.72
+//
+// A code comes from the server like the message does, so a code or an inner
+// code that echoes a bearer token or a pre-authenticated URL is redacted on
+// the error, in its text and in the debug record of the answer.
+func TestBuildGraphError_RedactsSecretsInCodes(t *testing.T) {
+	t.Parallel()
+
+	const body = `{"error":{"code":"Bearer top-secret-code-token","message":"Invalid request",` +
+		`"innerError":{"code":"https://my.microsoftpersonalcontent.com/personal/upload/secret-inner-code?sig=abc"}}}`
+
+	err := buildGraphError(http.StatusBadRequest, "req-123", 0, []byte(body))
+
+	assert.Equal(t, "Bearer [REDACTED]", err.Code)
+	assert.Equal(t, []string{"[REDACTED_URL]"}, err.InnerCodes)
+	assert.Equal(t, `graph: HTTP 400 "[REDACTED_URL]" (request-id: req-123): Invalid request`, err.Error(),
+		"the redaction mark holds brackets, so the text quotes it")
+	assert.Equal(t, "[REDACTED_URL]", MostSpecificErrorCode([]byte(body)))
+
+	// The record names the codes redacted alike when the body fails to read
+	// after the whole error object arrived.
+	for _, readErr := range []error{nil, errors.New(evidenceReadCause)} {
+		answer := answerBadRequest(t, evidenceJSON, body, readErr)
+		assert.NotContains(t, answer.line, "top-secret-code-token", "read error: %v", readErr)
+		assert.NotContains(t, answer.line, "secret-inner-code", "read error: %v", readErr)
+		assert.Equal(t, "Bearer [REDACTED]", answer.record.Code, "read error: %v", readErr)
+		assert.Equal(t, []string{"[REDACTED_URL]"}, answer.record.InnerCodes, "read error: %v", readErr)
+	}
 }
 
 type failingRoundTripper struct{ err error }
