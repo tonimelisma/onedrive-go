@@ -436,9 +436,10 @@ func fileJSONContractCases() map[string]jsonContractCase {
 				t.Helper()
 				cc, _ := jsonContractFileContext(t)
 				local := filepath.Join(t.TempDir(), "upload.txt")
-				// Zero bytes: every non-empty upload goes through an upload
-				// session, whose pre-authenticated URL must be an https Microsoft
-				// host the local fake cannot serve. The JSON contract is the same.
+				// Zero bytes: an empty file is a create and a modification-time
+				// update, which the fake drive serves; a file with content goes
+				// through an upload session, which it does not. The JSON
+				// contract is the same.
 				require.NoError(t, os.WriteFile(local, nil, 0o600))
 				return runDetachedLeaf(t, leaf, cc, local, "/upload.txt")
 			},

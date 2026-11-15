@@ -1156,41 +1156,54 @@ func TestEnsureFolder_Created(t *testing.T) {
 	assert.Equal(t, "docs", item.Name)
 }
 
-func TestEnsureFolder_Conflict(t *testing.T) {
-	t.Parallel()
+// conflictingFolderSession is a session whose every folder create answers
+// 409 and whose listing of the parent answers children, a JSON array.
+func conflictingFolderSession(t *testing.T, children string) *Session {
+	t.Helper()
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// CreateFolder = POST, ListChildren = GET — both hit /children
+	return newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// CreateFolder is a POST and ListChildren a GET, both on /children.
 		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusConflict)
 			writeTestResponsef(t, w, `{"error":{"code":"nameAlreadyExists"}}`)
 
 			return
 		}
-		// GET /children → returns matching folder
-		writeTestResponsef(t, w, `{"value":[{"id":"existing-id","name":"docs","folder":{}}]}`)
+		writeTestResponsef(t, w, `{"value":%s}`, children)
 	}))
+}
+
+func TestEnsureFolder_Conflict(t *testing.T) {
+	t.Parallel()
+
+	s := conflictingFolderSession(t, `[{"id":"existing-id","name":"docs","folder":{}}]`)
 
 	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
 	require.NoError(t, err)
 	assert.Equal(t, "existing-id", item.ID)
 }
 
+// A folder OneDrive already holds under a name that differs only in letter
+// case is the folder the 409 meant, found and used: OneDrive treats the two
+// names as one.
+//
+// Validates: R-1.3.1, R-1.5.3
+func TestEnsureFolder_ConflictFindsTheFolderInAnotherCase(t *testing.T) {
+	t.Parallel()
+
+	s := conflictingFolderSession(t, `[{"id":"existing-id","name":"Docs","folder":{}}]`)
+
+	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
+	require.NoError(t, err)
+	assert.Equal(t, "existing-id", item.ID)
+	assert.Equal(t, "Docs", item.Name)
+}
+
 func TestEnsureFolder_ConflictNotFound(t *testing.T) {
 	t.Parallel()
 
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			w.WriteHeader(http.StatusConflict)
-			writeTestResponsef(t, w, `{"error":{"code":"nameAlreadyExists"}}`)
-
-			return
-		}
-		// GET /children → no matching folder
-		writeTestResponsef(t, w, `{"value":[{"id":"other-id","name":"other","folder":{}}]}`)
-	}))
+	s := conflictingFolderSession(t, `[{"id":"other-id","name":"other","folder":{}}]`)
 
 	_, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found in parent")
+	require.ErrorContains(t, err, "not found in parent")
 }

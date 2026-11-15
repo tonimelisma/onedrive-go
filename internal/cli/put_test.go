@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +18,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
+// Validates: R-1.3.4
 func TestPutJSONOutput_Serialization(t *testing.T) {
+	t.Parallel()
+
 	out := putJSONOutput{
 		Path: "/remote/test.txt",
 		ID:   "item-123",
@@ -34,7 +39,10 @@ func TestPutJSONOutput_Serialization(t *testing.T) {
 	assert.Equal(t, int64(2048), decoded.Size)
 }
 
+// Validates: R-1.3.4
 func TestPutFolderJSONOutput_Serialization(t *testing.T) {
+	t.Parallel()
+
 	out := folderTransferJSONOutput[putJSONOutput]{
 		Files: []putJSONOutput{
 			{Path: "dir/a.txt", ID: "id-1", Size: 100},
@@ -119,78 +127,138 @@ func TestPutFolderJSONOutput_Golden(t *testing.T) {
 	assertGoldenFile(t, "put_folder_json.golden", buf.Bytes())
 }
 
-func TestCountUploadFiles_NestedTree(t *testing.T) {
-	t.Parallel()
+// putCommand is the command path of put, for runFileCommand.
+const putCommand = "onedrive-go put"
 
-	root := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(root, "docs"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "alpha.txt"), []byte("a"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "beta.txt"), []byte("bb"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "gamma.txt"), []byte("ccc"), 0o600))
+// writeEmptyLocalFiles writes each of files, a "/"-separated path below root,
+// as an empty file, creating its folders. Empty: a file with content uploads
+// through an upload session, which the fake drive does not serve.
+func writeEmptyLocalFiles(t *testing.T, root string, files ...string) {
+	t.Helper()
 
-	state := &uploadWalkState{}
-	require.NoError(t, countUploadFiles(root, state))
-	assert.Equal(t, 3, state.total)
-	assert.Empty(t, state.result.Errors)
+	for _, file := range files {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+	}
 }
 
-func TestWalkUploadTree_MissingRootReturnsError(t *testing.T) {
-	t.Parallel()
+// A folder put whose local folder cannot be opened creates nothing on
+// OneDrive: the local folder is opened before the remote one is made, and the
+// error names the local folder.
+//
+// Validates: R-1.3.1
+func TestRunPut_FolderThatCannotBeOpenedCreatesNothing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	local := filepath.Join(t.TempDir(), "Backup")
+	writeEmptyLocalFiles(t, local, "a.txt")
+	require.NoError(t, os.Chmod(local, 0o000))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(local, 0o700)) }) //nolint:gosec // restores the private test folder
 
-	err := walkUploadTree(filepath.Join(t.TempDir(), "missing"), func(string, os.DirEntry) error {
-		return nil
-	}, func(string, error) {})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reading upload root")
+	run := runFileCommand(t, putCommand, cc, false, local, "/Backup")
+
+	require.ErrorIs(t, run.err, os.ErrPermission)
+	require.ErrorContains(t, run.err, "opening "+local+":")
+	assert.Empty(t, fakeItemID(fake, "Backup"), "nothing is created on OneDrive")
 }
 
-func TestWalkUploadTreeEntry_MissingChildDirectoryRecorded(t *testing.T) {
-	t.Parallel()
+// A canceled folder put prints its summary, every file it had handed over and
+// did not upload, and the folder it stopped in before that folder was
+// finished, then ends with the cancellation, which exits 130 when the user
+// asked the run to stop.
+//
+// Validates: R-6.3.6, R-1.3.1
+func TestRunPut_CanceledFolderReportsThenEndsWithTheCancellation(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	local := filepath.Join(t.TempDir(), "Backup")
+	writeEmptyLocalFiles(t, local, "a.txt", "b.txt")
+	ctx, cancel := context.WithTimeout(t.Context(), fakeGraphTimeout)
+	defer cancel()
+	// The first file created stops the run and waits until its client gives
+	// up.
+	fake.onFileWrite = func(r *http.Request) {
+		cancel()
+		<-r.Context().Done()
+	}
 
-	root := t.TempDir()
-	blockedDir := filepath.Join(root, "blocked")
-	require.NoError(t, os.Mkdir(blockedDir, 0o700))
+	run := runLeafIn(ctx, t, findLeaf(t, putCommand), cc, false, local, "/Backup")
 
-	entries, err := os.ReadDir(root)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.True(t, entries[0].IsDir())
-
-	require.NoError(t, os.Remove(blockedDir))
-
-	var visited []string
-	var recordedPath string
-	var recordedErr error
-
-	err = walkUploadTreeEntry(blockedDir, entries[0], func(path string, _ os.DirEntry) error {
-		visited = append(visited, path)
-		return nil
-	}, func(path string, callbackErr error) {
-		recordedPath = path
-		recordedErr = callbackErr
+	require.ErrorIs(t, run.err, context.Canceled, run.stderr)
+	assert.Equal(t, exitInterrupted, commandExitCode(run.err, true), "a stop the user asked for exits as one")
+	lines := strings.Split(strings.TrimSuffix(run.stderr, "\n"), "\n")
+	require.NotEmpty(t, lines, run.stderr)
+	assert.Equal(t, "Uploaded 0 files, 1 folder (0 B)", lines[0])
+	// A stop that lands between the two files also reports the folder as cut
+	// short; one that lands after both were handed over does not.
+	cutShort := "Failed: " + local + ": stopped before the folder was finished: "
+	failed := slices.DeleteFunc(slices.Clone(lines[1:]), func(line string) bool {
+		return strings.HasPrefix(line, cutShort)
 	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{blockedDir}, visited)
-	assert.Equal(t, blockedDir, recordedPath)
-	require.Error(t, recordedErr)
-	assert.ErrorIs(t, recordedErr, os.ErrNotExist)
+	assert.LessOrEqual(t, len(lines)-1-len(failed), 1, run.stderr)
+	require.Len(t, failed, 2, run.stderr)
+	slices.Sort(failed)
+	for i, name := range []string{"a.txt", "b.txt"} {
+		assert.True(t, strings.HasPrefix(failed[i], "Failed: "+filepath.Join(local, name)+": "), failed[i])
+		assert.Contains(t, failed[i], context.Canceled.Error())
+	}
 }
 
-func TestAppendUploadWalkError_AppendsPathAndMessage(t *testing.T) {
-	t.Parallel()
+// A folder put in which one file fails uploads the others, names the failed
+// file and fails the command.
+//
+// Validates: R-1.3.1
+func TestRunPut_FolderWithAFailingFileUploadsTheOthers(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	local := filepath.Join(t.TempDir(), "Backup")
+	writeEmptyLocalFiles(t, local, "kept.txt", "locked.txt")
+	locked := filepath.Join(local, "locked.txt")
+	require.NoError(t, os.Chmod(locked, 0o000))
 
-	state := &uploadWalkState{}
-	appendUploadWalkError(state, "/tmp/example.txt", errors.New("boom"))
-	require.Len(t, state.result.Errors, 1)
-	assert.Equal(t, "/tmp/example.txt: boom", state.result.Errors[0])
+	run := runFileCommand(t, putCommand, cc, false, local, "/Backup")
+
+	require.EqualError(t, run.err, "1 item failed to upload")
+	assert.True(t, strings.HasPrefix(run.stderr, "Uploaded 1 file, 1 folder (0 B)\nFailed: "+locked+": "), run.stderr)
+	assert.Contains(t, run.stderr, "permission denied")
+	assert.Equal(t, 2, strings.Count(run.stderr, "\n"), "the summary and the one failure")
+	assert.NotEmpty(t, fakeItemID(fake, "Backup/kept.txt"))
+	assert.Empty(t, fakeItemID(fake, "Backup/locked.txt"))
 }
 
-func TestIsFatalUploadWalkError(t *testing.T) {
-	t.Parallel()
+// A folder put follows a symbolic link the user names as the folder to
+// upload. Inside the tree it reads a link as a file: a link to a regular file
+// uploads that file under the link's name, and a link to a folder is one
+// failed file, since the walk does not follow it.
+//
+// Validates: R-1.3.1
+func TestRunPut_SymbolicLinksInAFolder(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	tree := filepath.Join(t.TempDir(), "tree")
+	writeEmptyLocalFiles(t, tree, "a.txt", "sub/b.txt")
+	require.NoError(t, os.Symlink(filepath.Join(tree, "a.txt"), filepath.Join(tree, "link.txt")))
+	require.NoError(t, os.Symlink(filepath.Join(tree, "sub"), filepath.Join(tree, "linked")))
+	local := filepath.Join(t.TempDir(), "Backup")
+	require.NoError(t, os.Symlink(tree, local))
 
-	assert.True(t, isFatalUploadWalkError(context.Canceled))
-	assert.True(t, isFatalUploadWalkError(context.DeadlineExceeded))
-	assert.False(t, isFatalUploadWalkError(errors.New("boom")))
+	run := runFileCommand(t, putCommand, cc, false, local, "/Backup")
+
+	require.EqualError(t, run.err, "1 item failed to upload")
+	failure := "Failed: " + filepath.Join(local, "linked") + ": "
+	assert.True(t, strings.HasPrefix(run.stderr, "Uploaded 3 files, 2 folders (0 B)\n"+failure), run.stderr)
+	assert.Contains(t, run.stderr, "not a regular file")
+	assert.Equal(t, 2, strings.Count(run.stderr, "\n"), "the summary and the one failure")
+	assert.NotEmpty(t, fakeItemID(fake, "Backup/link.txt"))
+	assert.NotEmpty(t, fakeItemID(fake, "Backup/sub/b.txt"))
+	assert.Empty(t, fakeItemID(fake, "Backup/linked"))
 }
 
 type fakeUploadParentResolver struct {

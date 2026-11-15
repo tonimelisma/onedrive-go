@@ -979,7 +979,8 @@ func SplitParentAndName(path string) (string, string) {
 	return clean[:idx], clean[idx+1:]
 }
 
-// EnsureFolder creates a folder, returning the existing folder on 409 conflict.
+// EnsureFolder creates a folder, returning the existing folder on 409 conflict:
+// the folder of that name, or of a name OneDrive treats as the same.
 func (s *Session) EnsureFolder(ctx context.Context, parentID, name string) (*graph.Item, error) {
 	item, err := s.CreateFolder(ctx, parentID, name)
 	if err != nil {
@@ -990,7 +991,7 @@ func (s *Session) EnsureFolder(ctx context.Context, parentID, name string) (*gra
 			}
 
 			for i := range children {
-				if children[i].IsFolder && children[i].Name == name {
+				if children[i].IsFolder && namekey.Equal(children[i].Name, name) {
 					return &children[i], nil
 				}
 			}

@@ -380,7 +380,7 @@ organized by file families.
 | `root.go`, `doc.go`, `format.go`, `signal.go`, `cleanup.go`, `failure_class.go` | CLI bootstrap, process wiring, shared output boundaries, signal handling, error classification |
 | `auth*.go`, `account_view.go`, `account_view_snapshot.go`, `email_reconcile.go` | Login/logout, account view projection, auth-health, email reconciliation |
 | `drive.go`, `drive_add.go`, `drive_catalog.go`, `drive_cleanup.go`, `drive_list.go`, `drive_list_render.go`, `drive_remove.go`, `drive_search.go` | Drive add/list/search/remove, catalog projection, and drive selection flows |
-| `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put |
+| `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `folder_transfer.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put; `folder_transfer.go` renders a folder get or put from the events of `driveops.DownloadTree`/`UploadTree` |
 | `shared.go`, `shared_discovery.go`, `shared_target.go` | Shared item discovery, selection, and shared-target bootstrap |
 | `sync.go`, `sync_flow.go`, `sync_runtime.go`, `sync_render.go`, `sync_cli_format.go`, `sync_debug_events.go`, `sync_pause_resume.go`, `control_client.go` | Sync command wiring, daemon/control-socket interaction, and sync lifecycle |
 | `status.go`, `status_snapshot.go`, `status_sync_state.go`, `status_condition_descriptors.go`, `status_render.go`, `status_render_sections.go`, `status_perf.go` | Read-only status snapshot assembly and final condition rendering |

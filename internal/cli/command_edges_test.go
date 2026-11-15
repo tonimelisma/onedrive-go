@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -50,14 +51,48 @@ func TestLocalFileTarget_DownloadsIntoDirectories(t *testing.T) {
 
 	dir := t.TempDir()
 	sep := string(filepath.Separator)
-	assert.Equal(t, filepath.Join(dir, "one.txt"), localFileTarget(dir, "one.txt"))
-	assert.Equal(t, filepath.Join(dir, "one.txt"), localFileTarget(dir+sep, "one.txt"))
-	assert.Equal(t, "one.txt", localFileTarget("."+sep, "one.txt"))
-	assert.Equal(t, filepath.Join(dir, "renamed.txt"), localFileTarget(filepath.Join(dir, "renamed.txt"), "one.txt"))
-
 	file := filepath.Join(dir, "existing.txt")
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
-	assert.Equal(t, file, localFileTarget(file, "one.txt"), "an existing file is overwritten, not entered")
+	for _, tt := range []struct{ local, want string }{
+		{local: dir, want: filepath.Join(dir, "one.txt")},
+		{local: dir + sep, want: filepath.Join(dir, "one.txt")},
+		{local: "." + sep, want: "one.txt"},
+		{local: filepath.Join(dir, "renamed.txt"), want: filepath.Join(dir, "renamed.txt")},
+		{local: file, want: file}, // an existing file is overwritten, not entered
+	} {
+		got, err := localFileTarget([]string{"/one.txt", tt.local}, "one.txt")
+		require.NoError(t, err, tt.local)
+		assert.Equal(t, tt.want, got, tt.local)
+	}
+
+	got, err := localFileTarget([]string{"/one.txt"}, "one.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "one.txt", got, "no local path: the remote name in the working directory")
+}
+
+// Wherever a file get takes the remote name as the local file's name, with no
+// local path or into a local folder, a name that is not one plain local name
+// is refused; a local file the user names is not checked.
+//
+// Validates: R-1.2.7, R-1.2.6
+func TestLocalFileTarget_RefusesAnUnsafeRemoteName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"", ".", ".."} {
+		for _, args := range [][]string{{"/x"}, {"/x", dir}, {"/x", "into" + string(filepath.Separator)}} {
+			_, err := localFileTarget(args, name)
+			var refused *driveops.RefusedNameError
+			require.ErrorAs(t, err, &refused, "%q into %q", name, args)
+			assert.Equal(t, name, refused.Name)
+			require.ErrorContains(t, err, "name the local file to download to")
+		}
+
+		named := filepath.Join(dir, "chosen.txt")
+		got, err := localFileTarget([]string{"/x", named}, name)
+		require.NoError(t, err)
+		assert.Equal(t, named, got)
+	}
 }
 
 // Validates: R-1.7.3

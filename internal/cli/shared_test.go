@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
@@ -406,10 +408,9 @@ func TestRunPut_SharedFolderTargetRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "run 'onedrive-go drive add shared:user@example.com:b!drive1234567890:source-item-folder' first")
 }
 
-// A shared folder downloads through the walk every folder download uses, by
-// item ID: the whole tree exists when the command returns, and
-// folders_created counts the folders it made. Its own walk spawned a
-// goroutine per subfolder.
+// A shared folder downloads through the tree download every folder get uses,
+// listed by item ID: the whole tree exists when the command returns, and
+// folders_created counts the folders it made.
 //
 // Validates: R-1.2.5
 func TestRunGet_SharedFolderDownloadsItsTree(t *testing.T) {
@@ -455,6 +456,148 @@ func TestRunGet_SharedFolderDownloadsItsTree(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &parsed))
 	assert.Equal(t, 2, parsed.FoldersCreated)
 	assert.Empty(t, parsed.Errors)
+}
+
+// A shared folder whose remote name is not one plain local name is not
+// downloaded under that name: the command refuses before it lists anything,
+// and asks for a local folder instead.
+//
+// Validates: R-1.2.7, R-1.2.5
+func TestRunGet_SharedFolderWithAnUnsafeNameIsRefused(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	const selector = "shared:user@example.com:b!drive1234567890:source-item-folder"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != testSharedFolderGetItemPath {
+			assert.Fail(t, "unexpected request", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{"id": "source-item-folder", "name": "a/b", "folder": {"childCount": 1},
+			"parentReference": {"id": "parent", "driveId": "b!drive1234567890"}}`)
+	}))
+	defer srv.Close()
+
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+	}
+
+	cmd := newGetCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+	err := runGet(cmd, []string{selector})
+
+	var refused *driveops.RefusedNameError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, "a/b", refused.Name)
+	assert.Contains(t, err.Error(), "name the local folder to download into")
+	entries, readErr := os.ReadDir(workDir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries, "nothing is written under the refused name")
+}
+
+// A shared file downloads under its remote name into the folder it is given,
+// through the downloader every get uses: the item's metadata, then the bytes
+// its download URL serves. The fake is a loopback Graph, whose own
+// pre-authenticated URLs the client follows; a client of a Graph host follows
+// only Microsoft hosts (R-6.8.22).
+//
+// Validates: R-1.2.5, R-1.2.6
+func TestRunGet_SharedFileDownloadsIntoTheGivenFolder(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	const selector = "shared:user@example.com:b!drive1234567891:source-item-file"
+	const content = "shared bytes"
+	const contentPath = "/content/report"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testSharedFileGetItemPath:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponsef(t, w, `{"id": "source-item-file", "name": "report.txt", "size": %d, "eTag": "etag-1",
+				"file": {"mimeType": "text/plain"}, "parentReference": {"id": "parent", "driveId": "b!drive1234567891"},
+				"@microsoft.graph.downloadUrl": %q}`, len(content), "http://"+r.Host+contentPath)
+		case contentPath:
+			w.Header().Set("Content-Type", "application/octet-stream")
+			writeTestResponse(t, w, content)
+		default:
+			assert.Fail(t, "unexpected request", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	var out, status bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: &out,
+		StatusWriter: &status,
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+	}
+	dir := t.TempDir()
+
+	cmd := newGetCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+	require.NoError(t, runGet(cmd, []string{selector, dir}))
+
+	target := filepath.Join(dir, "report.txt")
+	data, err := os.ReadFile(filepath.Clean(target))
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+	assert.Equal(t, "Downloaded "+target+" (12 B)\n", status.String())
+	assert.Empty(t, out.String())
+}
+
+// A shared file whose remote name is not one plain local name is not
+// downloaded under that name: with no local path the command refuses before
+// it downloads anything, and asks for a local file instead.
+//
+// Validates: R-1.2.7, R-1.2.5
+func TestRunGet_SharedFileWithAnUnsafeNameIsRefused(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	const selector = "shared:user@example.com:b!drive1234567891:source-item-file"
+	for _, name := range []string{"", ".", ".."} {
+		workDir := t.TempDir()
+		t.Chdir(workDir)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != testSharedFileGetItemPath {
+				assert.Fail(t, "unexpected request", r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponsef(t, w, `{"id": "source-item-file", "name": %q, "size": 1, "file": {"mimeType": "text/plain"},
+				"parentReference": {"id": "parent", "driveId": "b!drive1234567891"}}`, name)
+		}))
+
+		cc := &CLIContext{
+			Logger:       slog.New(slog.DiscardHandler),
+			OutputWriter: &bytes.Buffer{},
+			StatusWriter: &bytes.Buffer{},
+			CfgPath:      config.DefaultConfigPath(),
+			GraphBaseURL: srv.URL,
+			SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+		}
+		cmd := newGetCmd()
+		cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+		err := runGet(cmd, []string{selector})
+		srv.Close()
+
+		assertRefusedName(t, err, name, "name the local file to download to")
+		assertLocalDirHolds(t, workDir)
+	}
 }
 
 func createTempFile(t *testing.T, name, content string) string {

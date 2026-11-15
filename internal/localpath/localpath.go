@@ -274,6 +274,56 @@ func ReadDir(path string) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
+// DirReader reads the entries of one open directory a batch at a time, so a
+// walk holds a directory of any size a batch at a time instead of as one
+// slice. It is not safe for concurrent use; Close releases it.
+type DirReader struct {
+	file *os.File
+	path string
+}
+
+// OpenDir opens the directory at path for reading with Next, with
+// openDirFlags: on a unix system a path that is not a directory, a FIFO
+// among them, is refused at the open with ENOTDIR and the open never blocks.
+func OpenDir(path string) (*DirReader, error) {
+	file, err := OpenFile(path, openDirFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DirReader{file: file, path: path}, nil
+}
+
+// Next returns up to n further entries of the directory, in the order the
+// filesystem keeps them, not sorted. At the end of the directory it returns
+// no entries and io.EOF; any other failure names the path. n must be at
+// least one: os.File.ReadDir would read the whole directory for less, which
+// is what a batch reader exists to avoid, so a smaller n is refused.
+func (d *DirReader) Next(n int) ([]os.DirEntry, error) {
+	if n < 1 {
+		return nil, fmt.Errorf("reading directory %s: a batch of %d entries is below one", d.path, n)
+	}
+
+	entries, err := d.file.ReadDir(n)
+	switch {
+	case err == nil:
+		return entries, nil
+	case errors.Is(err, io.EOF):
+		return entries, io.EOF
+	default:
+		return entries, fmt.Errorf("reading directory %s: %w", d.path, err)
+	}
+}
+
+// Close releases the directory.
+func (d *DirReader) Close() error {
+	if err := d.file.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", d.path, err)
+	}
+
+	return nil
+}
+
 // EvalSymlinks returns path as an absolute path with every symlink in it
 // resolved.
 func EvalSymlinks(path string) (string, error) {
