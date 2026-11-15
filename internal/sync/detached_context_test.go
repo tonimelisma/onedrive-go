@@ -21,9 +21,10 @@ func detachedContextPackages() []string {
 }
 
 // unboundedDetachedContexts returns the context.WithoutCancel calls in file
-// that are not the first argument of a context.WithTimeout or
-// context.WithDeadline call: the one form that detaches from cancellation and
-// bounds the result in the same expression.
+// that are not the first argument of a context.WithTimeout,
+// context.WithTimeoutCause, context.WithDeadline or context.WithDeadlineCause
+// call: the one form that detaches from cancellation and bounds the result in
+// the same expression.
 func unboundedDetachedContexts(file *ast.File) []token.Pos {
 	bounded := make(map[*ast.CallExpr]bool)
 	var detached []*ast.CallExpr
@@ -32,7 +33,7 @@ func unboundedDetachedContexts(file *ast.File) []token.Pos {
 		if !ok {
 			return true
 		}
-		if (isContextCall(call, "WithTimeout") || isContextCall(call, "WithDeadline")) && len(call.Args) > 0 {
+		if isBoundingContextCall(call) && len(call.Args) > 0 {
 			if inner, isCall := call.Args[0].(*ast.CallExpr); isCall && isContextCall(inner, "WithoutCancel") {
 				bounded[inner] = true
 			}
@@ -50,6 +51,18 @@ func unboundedDetachedContexts(file *ast.File) []token.Pos {
 		}
 	}
 	return unbounded
+}
+
+// isBoundingContextCall reports a call that gives its first argument a
+// deadline.
+func isBoundingContextCall(call *ast.CallExpr) bool {
+	for _, name := range []string{"WithTimeout", "WithTimeoutCause", "WithDeadline", "WithDeadlineCause"} {
+		if isContextCall(call, name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isContextCall(call *ast.CallExpr, name string) bool {
@@ -110,6 +123,9 @@ func f(ctx context.Context) {
 	byDeadline, stop := context.WithDeadline(context.WithoutCancel(ctx), time.Now())
 	defer stop()
 	_ = byDeadline
+	withCause, end := context.WithTimeoutCause(context.WithoutCancel(ctx), time.Second, errFixture)
+	defer end()
+	_ = withCause
 	unbounded := context.WithoutCancel(ctx)
 	_ = unbounded
 }
@@ -121,5 +137,5 @@ func f(ctx context.Context) {
 	unbounded := unboundedDetachedContexts(file)
 
 	require.Len(t, unbounded, 1)
-	assert.Equal(t, 15, fset.Position(unbounded[0]).Line)
+	assert.Equal(t, 18, fset.Position(unbounded[0]).Line)
 }

@@ -68,6 +68,11 @@ type executorConfig struct {
 	// content is sent (R-5.6.15). Nil in executor-only tests.
 	pendingCreates pendingCreateStore
 
+	// storeAccessTimeout bounds every store access the executor runs detached
+	// from its action's context. Zero means OutcomeCommitTimeout; tests
+	// shorten it.
+	storeAccessTimeout time.Duration
+
 	// parentChecks remembers the remote parents already read live for the
 	// plan being executed, so sibling creates do not read them again.
 	parentChecks *remoteParentChecks
@@ -351,12 +356,12 @@ func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) 
 // same folder): adopt it, as observing it would have. A sibling spelled
 // differently that OneDrive treats as the same name is a durable name
 // collision; anything else under the name (a file, or nothing listed yet) is
-// a stale precondition for the planner to resolve. The 409 used to be retried
-// as is, forever.
+// a stale precondition for the planner to resolve. Retried as it is, the
+// create would meet the same 409 every time.
 //
 // A listing that fails is the listing's failure, classified by its own
 // answer: it proves nothing about the name. Joined to the 409, an outage or a
-// throttle was recorded under the 409's status as a per-item refusal.
+// throttle would be recorded under the 409's status as a per-item refusal.
 func (e *executor) adoptExistingRemoteFolder(
 	ctx context.Context, driveID driveid.ID, parentID, name string, conflictErr error,
 ) (*graph.Item, error) {
@@ -752,9 +757,9 @@ func (e *executor) ExecuteRemoteMove(ctx context.Context, action *Action) action
 // normalizeSyncTreePathError adds the sync-domain escape sentinel to a
 // containment failure from the sync tree.
 //
-// This used to match on the message text. That is fragile across a package
-// boundary -- rewording the sync tree's error silently stops the mapping --
-// and it could only ever recognize the two phrasings it knew about.
+// It matches the sync tree's sentinel, not its message: a match on text
+// would stop silently when the sync tree rewords its error, and would know
+// only the phrasings it was written for.
 func normalizeSyncTreePathError(err error) error {
 	if err == nil {
 		return nil

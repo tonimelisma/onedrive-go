@@ -54,9 +54,13 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 	// Ctrl-C does to in-flight bookkeeping, and a repeated sign-in failure is
 	// already the run's returned error. Neither is news to the user. Anything
 	// else means a finished transfer may not be recorded; the next sync
-	// rediscovers it from durable truth (R-2.5.3).
+	// rediscovers it from durable truth (R-2.5.3). A completion whose own
+	// store access outlasted its bound is such a record already lost, so the
+	// stop's echo, which only says its own write failed too, is no reason to
+	// keep that loss at Debug.
 	var fatalErr *fatalCompletionError
-	if isCancellationEcho(err) || errors.As(err, &fatalErr) {
+	lostToTheStore := errors.Is(completion.Err, errStoreAccessTimedOut)
+	if (isCancellationEcho(err) && !lostToTheStore) || errors.As(err, &fatalErr) {
 		flow.deps.logger.Debug("suppressed action completion error during shutdown", fields...)
 		return
 	}

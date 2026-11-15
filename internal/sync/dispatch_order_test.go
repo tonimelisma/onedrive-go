@@ -342,6 +342,9 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth,
 		TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord,
 		TestRunOnce_AdoptedHashlessPlaceholderRenamedOnlineIsFinishedWithoutAConflict,
+		TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope,
+		TestRunOnce_OneTimedOutRequestOpensNoOutageScope,
+		TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile,
 	}
 }
 

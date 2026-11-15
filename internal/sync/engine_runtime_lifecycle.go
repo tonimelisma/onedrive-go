@@ -260,9 +260,10 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeK
 // detectScope feeds an action completion into scope detection's sliding
 // windows and reports whether it calls for a block scope. The caller
 // persists the completion's work blocked under that scope before activating
-// it (persistFailureWithScopeEffects).
+// it (persistFailureWithScopeEffects). A completion with no status is fed
+// too: a request OneDrive never answered is outage evidence.
 func (flow *engineFlow) detectScope(r *actionCompletion) scopeUpdateResult {
-	if flow.scopes.state == nil || r.HTTPStatus == 0 {
+	if flow.scopes.state == nil {
 		return scopeUpdateResult{}
 	}
 

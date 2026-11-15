@@ -1,8 +1,12 @@
 package sync
 
 import (
+	"context"
 	"errors"
+	"io/fs"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -50,7 +54,9 @@ func extractRetryAfter(err error) time.Duration {
 // detection, result classification and issue naming all read it, so a quota
 // answer or a refusal is recognized identically everywhere. The most specific
 // evidence wins: a Graph code or a known message is checked before the bare
-// status, because OneDrive reports one condition under several statuses.
+// status, because OneDrive reports one condition under several statuses. A
+// request OneDrive never answered (isRequestTimeout) means what a 5xx means:
+// the service is not answering.
 type serverAnswer int
 
 const (
@@ -66,7 +72,8 @@ const (
 	// serverAnswerUnsupported is OneDrive refusing an operation it does not
 	// implement (501, 505, or a notSupported code under any status). It is a
 	// stable answer about one request, not an outage, so it must never count
-	// toward the service scope: five refusals used to block every drive.
+	// toward the service scope: counted, five refusals would block every
+	// drive.
 	serverAnswerUnsupported
 	serverAnswerPathTooLong
 	serverAnswerRequestTimeout
@@ -81,9 +88,9 @@ const (
 	// Only that file's transfer is affected; it is retried with a new URL.
 	serverAnswerTransferURLRejected
 	// serverAnswerMalware is content OneDrive flagged as malware
-	// (graph.ErrMalwareDetected). It is a permanent per-file issue: before,
-	// the download 403 was probed as a permission problem, labeled
-	// read-denied and retried forever.
+	// (graph.ErrMalwareDetected). It is a permanent per-file issue: probed as
+	// a permission problem, the download's 403 would be labeled read-denied
+	// and retried forever.
 	serverAnswerMalware
 	serverAnswerOther
 )
@@ -106,7 +113,7 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 		return serverAnswerMalware
 	}
 	if status == 0 {
-		return serverAnswerNone
+		return unansweredServerAnswer(err)
 	}
 
 	var graphErr *graph.GraphError
@@ -136,13 +143,84 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 		(strings.Contains(message, graphMessageNameTooLong) || strings.Contains(message, graphMessagePathLimit)):
 		// OneDrive counts more than the drive-relative path toward its 400
 		// limit (a 364-character path was accepted and 365 refused), so the
-		// scanner cannot catch every case and the bare 400 retried forever.
+		// scanner cannot catch every case, and a bare 400 would retry forever.
 		return serverAnswerPathTooLong
 	case status == http.StatusConflict && hasGraphErr && graphErr.HasCode(graphCodeResourceModified):
 		return serverAnswerTransientConflict
 	}
 
 	return classifyServerStatus(status)
+}
+
+// unansweredServerAnswer is the meaning of a failure that carries no status:
+// a request that ran out of time waiting for OneDrive is the service's
+// silence, the outage a 5xx says out loud; any other carries no answer.
+func unansweredServerAnswer(err error) serverAnswer {
+	if isRequestTimeout(err) {
+		return serverAnswerServiceOutage
+	}
+
+	return serverAnswerNone
+}
+
+// isRequestTimeout reports a request that ran out of time waiting for
+// OneDrive, or for the Microsoft sign-in its token comes from. The dial,
+// response-header and whole-request timeouts and an expired request deadline
+// carry context.DeadlineExceeded; a transfer the stall watchdog abandoned
+// carries graph.ErrTransferStalled instead, because the watchdog keeps its
+// cancellation out of the chain; a TLS handshake timeout, a read whose
+// connection's keepalive found the server gone and a request on an HTTP/2
+// connection closed for an unanswered ping carry neither (isNetworkTimeout).
+// An outcome commit or created-item record that outlasted its bound carries
+// context.DeadlineExceeded too, but it is no request: errStoreAccessTimedOut
+// marks it. Whether the run had ended is not asked here: classifyResult asks.
+func isRequestTimeout(err error) bool {
+	if errors.Is(err, errStoreAccessTimedOut) {
+		return false
+	}
+
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, graph.ErrTransferStalled) ||
+		isNetworkTimeout(err)
+}
+
+// http2ConnectionLostText is the text of the error net/http's HTTP/2 client
+// fails every request on a connection with once the connection's health-check
+// ping went unanswered (closeForLostPing in the bundled HTTP/2 transport). The
+// library makes it with errors.New and gives it no type, no Timeout and no
+// Is, so its text is all there is to know it by.
+const http2ConnectionLostText = "http2: client connection lost"
+
+// isNetworkTimeout reports a failure the HTTP client or a connection says
+// timed out, or a request on an HTTP/2 connection closed for an unanswered
+// ping: net/http wraps every transport failure in *url.Error, and a read on a
+// connection fails as *net.OpError, and both answer Timeout() for what they
+// wrap. A chain that holds a local file error is never one: an upload's body
+// is read from the local file, and a reader that returned a timed-out read of
+// it unwrapped would make the request's *url.Error say it timed out.
+func isNetworkTimeout(err error) bool {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return false
+	}
+
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && (urlErr.Timeout() || isLostHTTP2Connection(urlErr)) {
+		return true
+	}
+	var opErr *net.OpError
+
+	return errors.As(err, &opErr) && opErr.Timeout()
+}
+
+// isLostHTTP2Connection reports a transport error whose innermost error is
+// the HTTP/2 client's lost connection (http2ConnectionLostText).
+func isLostHTTP2Connection(urlErr *url.Error) bool {
+	inner := urlErr.Err
+	for next := errors.Unwrap(inner); next != nil; next = errors.Unwrap(inner) {
+		inner = next
+	}
+
+	return inner != nil && inner.Error() == http2ConnectionLostText
 }
 
 func classifyServerStatus(status int) serverAnswer {
