@@ -22,6 +22,14 @@ import (
 // whatever is at the path now is left there.
 var ErrDetachRaced = errors.New("the file changed while it was being removed")
 
+// ErrDestinationFailed reports that the place outside the tree a file was
+// being taken or copied out to failed: its folder could not be opened, or the
+// move or copy into it failed. The file stays in the tree. The cause is named
+// as text, not wrapped, so a destination whose folder is gone never reads as
+// a file that is gone (os.ErrNotExist), and a destination that is full or
+// refused never reads as the state of the sync folder.
+var ErrDestinationFailed = errors.New("the destination outside the sync folder failed")
+
 // detachTempPrefix and detachTempSuffix name a file set aside while it is
 // being removed. Local observation ignores the name (IsDetachArtifactName),
 // and unlike a .partial download it is never cleaned up automatically: if a
@@ -90,17 +98,24 @@ func unchangedBeforeMove(file *os.File, verified fileStamp) error {
 type VerifyFunc func(f *os.File, info os.FileInfo) error
 
 // DetachRegularFile moves the regular file at rel out of the sync tree to
-// dest (an absolute path outside it), but only the inode verify approved.
+// dest (an absolute path outside it), but only the inode verify approved. A
+// dest inside the tree, or the tree's folder itself, is refused
+// (ErrUnsafePath) before anything moves; a dest that fails, its folder
+// missing or the move or copy into it refused, fails with
+// ErrDestinationFailed and the file stays in the tree.
 //
-// The old shape, hash by path and then remove by path, unlinked whatever was
-// at the path by then: an editor's atomic save during a long hash lost the
-// new content (D-010). Here the file is opened once without following links,
+// Hashing by path and then removing by path would unlink whatever is at the
+// path by then: an editor's atomic save during a long hash would lose the new
+// content (D-010). So the file is opened once without following links,
 // verified through that descriptor, renamed to a temporary sibling inside the
 // tree, and the sibling's identity is compared with the descriptor's. Only a
 // match leaves the tree; a mismatch is put back and reported as
 // ErrDetachRaced. dest lands by rename on the same filesystem and by copy
 // through the verified descriptor across filesystems.
 func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) error {
+	if err := r.refuseDestinationInside(dest); err != nil {
+		return err
+	}
 	v, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
@@ -146,11 +161,18 @@ func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
 	})
 }
 
-// PreserveRegularFile copies the verified regular file at rel to dest without
-// taking it out of the tree: a hard link on the same filesystem, a copy
-// through the verified descriptor across filesystems. A download that then
-// replaces rel by rename leaves the preserved inode untouched.
+// PreserveRegularFile copies the verified regular file at rel to dest, a path
+// outside the tree, without taking it out of the tree: a hard link where one
+// can be made, a copy through the verified descriptor across filesystems or
+// where the filesystem cannot make the link (localpath.IsLinkUnsupported). A
+// download that then replaces rel by rename leaves the preserved inode
+// untouched. A dest inside the tree is refused as DetachRegularFile refuses
+// it, and a dest whose folder cannot be opened, or a copy into it that fails,
+// is ErrDestinationFailed.
 func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) error {
+	if err := r.refuseDestinationInside(dest); err != nil {
+		return err
+	}
 	v, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
@@ -161,7 +183,7 @@ func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) e
 	if err := unchangedBeforeMove(file, stamp); err != nil {
 		return fmt.Errorf("preserving %s: %w", rel, err)
 	}
-	linkErr := linkatOut(parent, name, dest)
+	linkErr := r.ops.linkOut(parent, name, dest)
 	switch {
 	case linkErr == nil:
 		// The link is by name; prove it names the verified inode, still
@@ -171,14 +193,21 @@ func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) e
 			return nil
 		}
 		if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return fmt.Errorf("discarding stale copy of %s: %w", rel, removeErr)
+			return destinationFailed(fmt.Errorf("discarding stale copy of %s: %w", rel, removeErr))
 		}
 		return fmt.Errorf("preserving %s: %w", rel, ErrDetachRaced)
-	case errors.Is(linkErr, unix.EXDEV), errors.Is(linkErr, unix.EPERM), errors.Is(linkErr, unix.EMLINK):
+	case errors.Is(linkErr, unix.EXDEV), localpath.IsLinkUnsupported(linkErr):
 		return copyVerified(file, stamp, dest, r.ops.syncDir)
 	default:
+		// The link's own errno does not tell which side refused it.
 		return fmt.Errorf("preserving %s: %w", rel, linkErr)
 	}
+}
+
+// destinationFailed is err, a failure of the destination side of a take-out
+// or copy-out, as ErrDestinationFailed with its cause named as text.
+func destinationFailed(err error) error {
+	return fmt.Errorf("%w: %s", ErrDestinationFailed, err.Error())
 }
 
 // verifiedFile is a regular file opened and approved by a VerifyFunc, with
@@ -196,6 +225,31 @@ func (v *verifiedFile) close() {
 	_ = v.parent.Close() //nolint:errcheck // read-only directory descriptor
 }
 
+// refuseDestinationInside refuses dest, where a file taken or copied out of
+// the tree goes, when it is the root or lies inside it: the move would rename
+// the file within the tree, or link it beside itself, instead of taking it
+// out. The answer comes from what the folders are, not from dest's text
+// (refuseFolderWithinRoot): dest itself when it opens as a folder, else the
+// folder that holds it, opened as the path resolves. So a dest whose text
+// lies in the tree but that a link places outside it is taken, and one that
+// a link outside places inside it is refused.
+func (r *Root) refuseDestinationInside(dest string) error {
+	folder, err := localpath.OpenFile(dest, parentFolderFlags, 0)
+	if err != nil {
+		// Not a folder, or not there yet: the folder that would hold it decides.
+		folder, err = localpath.OpenFile(filepath.Dir(dest), parentFolderFlags, 0)
+	}
+	if err != nil {
+		return destinationFailed(fmt.Errorf("checking whether %s is inside the sync folder: %w", dest, err))
+	}
+	defer closeDirectory(folder)
+
+	return r.refuseFolderWithinRoot(folder, dest, "not a place to take a file out to")
+}
+
+// openVerifiedRegular opens the regular file at rel through its parent
+// folder, opened through the root as a folder that never blocks on a FIFO
+// swapped in for it (openParentFolder), and runs verify on it.
 func (r *Root) openVerifiedRegular(rel string, verify VerifyFunc) (*verifiedFile, error) {
 	clean, err := cleanRelative(rel)
 	if err != nil {
@@ -208,7 +262,7 @@ func (r *Root) openVerifiedRegular(rel string, verify VerifyFunc) (*verifiedFile
 		return nil, ancestorErr
 	}
 
-	parent, err := r.Open(filepath.Dir(clean))
+	parent, err := r.openParentFolder(clean)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +418,9 @@ func linkatOut(dir *os.File, name string, dest string) error {
 // another filesystem. The source is unlinked only once the copy is durable
 // (its bytes and the directory entry that names them): unlinking before that
 // left, after a power cut, a trash entry with only a `.copy-*` file and no
-// original anywhere.
+// original anywhere. A rename that fails is the destination's failure
+// (ErrDestinationFailed): the set-aside sibling was just found in place, in a
+// folder the set-aside rename could write.
 func moveDetachedOut(
 	parent *os.File, tempName string, file *os.File, stamp fileStamp, dest string, syncDir func(path string) error,
 ) error {
@@ -375,7 +431,7 @@ func moveDetachedOut(
 		return nil
 	}
 	if !errors.Is(err, unix.EXDEV) {
-		return fmt.Errorf("moving out of the sync folder: %w", err)
+		return destinationFailed(fmt.Errorf("moving out of the sync folder: %w", err))
 	}
 
 	if err := copyVerified(file, stamp, dest, syncDir); err != nil {
@@ -391,14 +447,16 @@ func moveDetachedOut(
 
 // copyVerified copies through the verified descriptor and then re-checks it:
 // a write that landed while the copy ran means the copy may be torn, so it is
-// discarded and the move reported as raced.
+// discarded and the move reported as raced. A copy that fails is the
+// destination's failure (ErrDestinationFailed); a discard that fails is named
+// as text, so the result matches the race only.
 func copyVerified(file *os.File, stamp fileStamp, dest string, syncDir func(path string) error) error {
 	if err := copyThroughDescriptor(file, dest, syncDir); err != nil {
-		return err
+		return destinationFailed(err)
 	}
 	if err := unchangedSince(file, stamp); err != nil {
 		if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return fmt.Errorf("%w; discarding the copy: %w", err, removeErr)
+			return fmt.Errorf("%w; discarding the copy: %s", err, removeErr.Error())
 		}
 		return err
 	}

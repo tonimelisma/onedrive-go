@@ -14,6 +14,11 @@ const (
 	// crashPointLocalMoveDone: the local rename happened; the outcome is not
 	// committed.
 	crashPointLocalMoveDone = "exec.local_move_done"
+	// crashPointLocalMoveDestinationTrashed: a local move that replaces its
+	// destination took the destination's file out of the sync folder into
+	// the local trash, whose entry is still pending; the rename has not
+	// happened and neither the trash entry nor the outcome is committed.
+	crashPointLocalMoveDestinationTrashed = "exec.local_move_destination_trashed"
 	// crashPointUploadCreatedUnrecorded: OneDrive holds the new file's empty
 	// item; the pending-create record naming it is not written (the creating
 	// request was in flight when the process died). Only the intent row,

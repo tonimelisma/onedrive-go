@@ -235,7 +235,9 @@ func (f errnoFS) Open(name string) (fs.File, error) {
 // case variant of an existing file is that file (the same inode, as a hard
 // link to it would be), creating a variant opens the existing entry, and a
 // rename to a variant of the source's own name changes its spelling. Entries
-// keep the spelling they were created with.
+// keep the spelling they were created with. Renames that refuse to replace
+// (synctree.Root.RenameNoReplace and MoveInNoReplace) rename on folder
+// descriptors, so they meet the volume beneath, not the shim.
 func CaseInsensitive(h synctree.Handle) synctree.Handle {
 	return &caseInsensitiveHandle{Handle: h}
 }

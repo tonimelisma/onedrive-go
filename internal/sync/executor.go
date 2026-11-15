@@ -56,8 +56,9 @@ type executorConfig struct {
 	nowFunc  func() time.Time
 	hashFunc func(ctx context.Context, filePath string) (string, error)
 	// hashReader hashes an open descriptor; destructive actions verify the
-	// exact inode they then remove or replace through it (D-010).
-	hashReader      func(r io.Reader) (string, error)
+	// exact inode they then remove or replace through it (D-010). It stops
+	// when the action's context ends.
+	hashReader      func(ctx context.Context, r io.Reader) (string, error)
 	pathConvergence driveops.PathConvergence
 
 	// trash keeps what local deletes remove and what downloads replace
@@ -112,7 +113,7 @@ func newExecutorConfig(
 		logger:          logger,
 		nowFunc:         time.Now,
 		hashFunc:        driveops.ComputeQuickXorHashContext,
-		hashReader:      driveops.ComputeQuickXorHashFromReader,
+		hashReader:      driveops.ComputeQuickXorHashFromReaderContext,
 		pathConvergence: pathConvergence,
 		parentChecks:    newRemoteParentChecks(),
 	}
@@ -481,14 +482,14 @@ func (e *executor) ExecuteMove(ctx context.Context, action *Action) actionOutcom
 func (e *executor) ExecuteLocalMove(ctx context.Context, action *Action) actionOutcome {
 	// Both endpoints are addressed by their spelling on disk (R-2.13.2): the
 	// source and the destination's existing parents, and an existing
-	// destination the move replaces. A destination that does not exist yet
-	// keeps the stored name.
+	// destination the move takes out of the way. A destination that does not
+	// exist yet keeps the stored name.
 	source := e.syncTree.Spelling(action.OldPath)
 	dest := e.syncTree.Spelling(action.Path)
 
 	// Both endpoints matter: an unchecked destination would still create
-	// parent directories outside the sync root, and rename replaces whatever
-	// sits at the destination.
+	// parent directories outside the sync root, and a replacing move takes
+	// the file at the destination out of the folder.
 	for _, endpoint := range []string{source, dest} {
 		if err := e.validateNoSymlinkBoundary(endpoint, "move"); err != nil {
 			return e.failedOutcomeWithFailure(
@@ -536,13 +537,16 @@ func (e *executor) ExecuteLocalMove(ctx context.Context, action *Action) actionO
 	}
 
 	if err := e.renameLocal(source, dest, isLocalSpellingOnlyMove(action.OldPath, action.Path)); err != nil {
-		return e.failedOutcomeWithFailure(
-			action,
-			ActionLocalMove,
+		if errors.Is(err, errActionPreconditionChanged) {
+			// The rename found the destination taken: an entry took it after
+			// the precondition checked it, or took the name a replacing move
+			// had just freed. It is kept, and the move is replanned from what
+			// is there now.
+			return e.failedOutcomeWithFailure(action, ActionLocalMove, err, action.Path, permissionCapabilityLocalWrite)
+		}
+		return e.failedOutcomeWithFailure(action, ActionLocalMove,
 			fmt.Errorf("renaming %s -> %s: %w", action.OldPath, action.Path, normalizeSyncTreePathError(err)),
-			action.OldPath,
-			permissionCapabilityLocalWrite,
-		)
+			action.OldPath, permissionCapabilityLocalWrite)
 	}
 
 	if err := e.reachCrashPoint(crashPointLocalMoveDone); err != nil {
@@ -594,22 +598,72 @@ func (e *executor) observeMovedLocalChangeTime(o *actionOutcome, dest string) {
 }
 
 // renameLocal renames within the sync tree, between rooted paths spelled as
-// on disk. A spelling-only rename (spellingOnly: the stored paths differ only
-// under OneDrive's name equivalence) is tried directly first: Linux
-// filesystems and APFS store the new spelling that way. Only when the stored
-// spelling did not change (a case-insensitive volume that treats the rename
-// as a no-op) does it go through a temporary sibling, named so that local
-// observation always excludes it (isSpellingRenameArtifactName): a crash
-// between the two renames must not leave a file that syncs under the
-// temporary name.
+// on disk, and never replaces an entry at newPath: every move starts with
+// RenameNoReplace. A file moves without a window wherever the system has the
+// no-replace flag or hard links, and a folder wherever it has the flag;
+// elsewhere the entry takes a check of newPath and then a plain rename. A
+// rename that finds newPath taken leaves the entry there, and its error
+// matches errActionPreconditionChanged as well as synctree.ErrTargetExists.
+// A rename that placed the entry but could not remove its old name
+// (synctree.ErrSourceNotRemoved) is a move that happened and is logged.
+//
+// A spelling-only rename (spellingOnly: the stored paths differ only under
+// OneDrive's name equivalence) whose no-replace rename finds newPath taken by
+// the source itself, as on a volume that folds case, where both spellings
+// name one entry, is then a plain rename. On a volume that tells the
+// spellings apart, two hard links of one file named in the two spellings
+// pass that check too, and the plain rename leaves both names. After a
+// spelling-only rename, respellLocal makes sure the folder holds the new
+// spelling.
 func (e *executor) renameLocal(oldPath, newPath string, spellingOnly bool) error {
-	if err := e.syncTree.Rename(oldPath, newPath); err != nil {
-		return err //nolint:wrapcheck // synctree names both paths
+	err := e.syncTree.RenameNoReplace(oldPath, newPath)
+	if spellingOnly && errors.Is(err, synctree.ErrTargetExists) && e.namesOneLocalEntry(oldPath, newPath) {
+		err = e.syncTree.Rename(oldPath, newPath)
 	}
-	if !spellingOnly {
+
+	switch {
+	case errors.Is(err, synctree.ErrSourceNotRemoved):
+		e.logger.Warn("Moved "+newPath+", but could not remove the name it was moved from",
+			slog.String("path", newPath), slog.Any("error", err))
+		return nil
+	case errors.Is(err, synctree.ErrTargetExists):
+		return fmt.Errorf("%w: local move destination %s was taken before the move: %w", errActionPreconditionChanged, newPath, err)
+	case err != nil:
+		return err //nolint:wrapcheck // synctree names both paths
+	case !spellingOnly:
 		return nil
 	}
 
+	return e.respellLocal(newPath)
+}
+
+// namesOneLocalEntry reports whether oldPath and newPath name one entry, as
+// two spellings of a name do on a volume that folds case. A name that cannot
+// be read names no entry, so the move is replanned instead.
+func (e *executor) namesOneLocalEntry(oldPath, newPath string) bool {
+	oldInfo, err := e.syncTree.Lstat(oldPath)
+	if err != nil {
+		return false
+	}
+	newInfo, err := e.syncTree.Lstat(newPath)
+	if err != nil {
+		return false
+	}
+
+	return synctree.SameFile(oldInfo, newInfo)
+}
+
+// respellLocal gives the entry at newPath the spelling newPath when its
+// folder still holds it under another one (a case-insensitive volume that
+// takes a spelling-only rename as a no-op; Linux filesystems and APFS store
+// the new spelling). It renames through a temporary sibling, both of whose
+// steps never replace, named so that local observation always excludes it
+// (isSpellingRenameArtifactName): a crash between the two renames must not
+// leave a file that syncs under the temporary name. A failure of either step
+// is the rename's own failure, even when the second finds newPath taken: the
+// entry is then put back, or kept under the temporary name where it cannot
+// be, and the failure says which.
+func (e *executor) respellLocal(newPath string) error {
 	stored, err := e.storedNameSpelling(newPath)
 	if err != nil || stored == filepath.Base(newPath) {
 		return err

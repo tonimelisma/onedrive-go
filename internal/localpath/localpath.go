@@ -456,13 +456,15 @@ func IsDirSyncUnsupported(err error) bool {
 }
 
 // IsLinkUnsupported reports the errnos of a hard link the filesystem cannot
-// make: no hard links at all (EPERM, ENOTSUP, EOPNOTSUPP), a folder (EPERM),
-// or a file with too many links already (EMLINK). It is the one answer to
+// make: no hard links at all (EPERM, ENOTSUP, EOPNOTSUPP, and ENOSYS, which a
+// FUSE filesystem without a link operation can answer), a folder (EPERM), or
+// a file with too many links already (EMLINK). It is the one answer to
 // whether an entry can be linked, for the no-replace rename that falls back
 // from a link and for the tests that need one.
 func IsLinkUnsupported(err error) bool {
 	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOTSUP) ||
-		errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EMLINK)
+		errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOSYS) ||
+		errors.Is(err, syscall.EMLINK)
 }
 
 // JoinOnOneLine returns first and second as one error, either alone when the

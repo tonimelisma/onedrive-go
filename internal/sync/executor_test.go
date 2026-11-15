@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
@@ -3763,7 +3764,11 @@ func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *te
 //
 // A local move that replaces its destination (OneDrive moved an item over a
 // file it deleted) replaces only the version the plan saw; a destination that
-// changed since planning is stale and stays untouched.
+// changed since planning is stale and stays untouched. The version replaced
+// leaves the sync folder once, by the local delete rule: into the trash when
+// the drive has one, where it is the destination's own file and is there
+// exactly once, and removed otherwise. The rename then replaces nothing: the
+// destination name holds the moved file itself.
 func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 	t.Parallel()
 
@@ -3771,24 +3776,29 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 		name        string
 		destination string
 		wantReplace bool
+		withTrash   bool
 	}{
 		{name: "unchanged destination is replaced", destination: "bravo\n", wantReplace: true},
 		{name: "changed destination is stale", destination: "edited after planning\n", wantReplace: false},
+		{name: "unchanged destination goes to the trash", destination: "bravo\n", wantReplace: true, withTrash: true},
+		{name: "changed destination is stale with a trash", destination: "edited after planning\n", withTrash: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+			trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
+			if tc.withTrash {
+				cfg.SetTrash(trash)
+			}
 			e := newExecution(cfg, emptyBaseline())
 			writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 			writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
-			plannedHash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, "b.txt"))
-			require.NoError(t, err)
-			info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
-			require.NoError(t, err)
+			planned := plannedDestination(t, e, syncRoot, "b.txt")
 			if tc.destination != "bravo\n" {
 				writeExecTestFile(t, syncRoot, "b.txt", tc.destination)
 			}
+			moved, displaced := entryIdentity(t, filepath.Join(syncRoot, "a.txt")), entryIdentity(t, filepath.Join(syncRoot, "b.txt"))
 
 			action := &Action{
 				Type:               ActionLocalMove,
@@ -3797,7 +3807,7 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 				ReplaceLocalTarget: true,
 				View: &pathView{
 					Path:     "b.txt",
-					Local:    &localState{ItemType: ItemTypeFile, Hash: plannedHash, Size: info.Size()},
+					Local:    planned,
 					Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
 				},
 			}
@@ -3805,16 +3815,25 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 			o := e.ExecuteMove(t.Context(), action)
 			data, readErr := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
 			require.NoError(t, readErr)
-			if tc.wantReplace {
-				requireOutcomeSuccess(t, &o)
-				assert.Equal(t, "alpha\n", string(data))
-				assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
+			if !tc.wantReplace {
+				requireOutcomeFailure(t, &o)
+				require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+				assert.Equal(t, tc.destination, string(data), "a changed destination is never replaced")
+				assert.FileExists(t, filepath.Join(syncRoot, "a.txt"))
+				entries, err := trash.List()
+				require.NoError(t, err)
+				assert.Empty(t, entries, "a destination that is not replaced does not go to the trash")
 				return
 			}
-			requireOutcomeFailure(t, &o)
-			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
-			assert.Equal(t, tc.destination, string(data), "a changed destination is never replaced")
-			assert.FileExists(t, filepath.Join(syncRoot, "a.txt"))
+			requireOutcomeSuccess(t, &o)
+			assert.Equal(t, "alpha\n", string(data))
+			assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
+			assert.Equal(t, moved, entryIdentity(t, filepath.Join(syncRoot, "b.txt")), "b.txt is the moved file itself")
+			assert.Equal(t, []string{"b.txt"}, localNames(t, syncRoot), "nothing is left beside it")
+			if tc.withTrash {
+				kept := requireTrashHoldsOnce(t, trash, "b.txt", "bravo\n")
+				assert.Equal(t, displaced, entryIdentity(t, kept.ItemPath), "the trash holds the destination's own file, not a copy")
+			}
 		})
 	}
 }
