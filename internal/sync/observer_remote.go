@@ -422,7 +422,7 @@ func (o *remoteObserver) handleWatchBatch(
 		var handleErr error
 		batch, handleErr = handleBatch(ctx, polledEvents, newToken, topology)
 		if handleErr != nil {
-			if watchShouldStop(ctx, handleErr) {
+			if runEnded(ctx, handleErr) {
 				return watchStepResult{stop: true}
 			}
 			return watchStepResult{err: handleErr}
@@ -431,7 +431,7 @@ func (o *remoteObserver) handleWatchBatch(
 	batch.pollStartedAt = pollStartedAt
 
 	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
-		if watchShouldStop(ctx, emitErr) {
+		if runEnded(ctx, emitErr) {
 			return watchStepResult{stop: true}
 		}
 		return watchStepResult{err: emitErr}
@@ -506,7 +506,7 @@ func (o *remoteObserver) recoverExpiredDeltaInWatch(
 	// time it began.
 	batch.pollStartedAt = *lastRecovery
 	if emitErr := o.emitWatchBatch(ctx, batches, &batch); emitErr != nil {
-		if watchShouldStop(ctx, emitErr) {
+		if runEnded(ctx, emitErr) {
 			return watchStepResult{stop: true}
 		}
 		return watchStepResult{err: emitErr}
@@ -529,7 +529,7 @@ func (o *remoteObserver) backOffAfterFailedRecovery(
 	err error,
 	wakeCh <-chan struct{},
 ) watchStepResult {
-	if watchShouldStop(ctx, err) {
+	if runEnded(ctx, err) {
 		return watchStepResult{stop: true}
 	}
 
@@ -554,7 +554,7 @@ func (o *remoteObserver) handleWatchPollError(
 	err error,
 	wakeCh <-chan struct{},
 ) watchStepResult {
-	if watchShouldStop(ctx, err) {
+	if runEnded(ctx, err) {
 		return watchStepResult{stop: true}
 	}
 
@@ -603,7 +603,7 @@ func (o *remoteObserver) handleZeroEventPoll(
 	if emitErr := o.emitWatchBatch(ctx, batches, &remoteObservationBatch{
 		source: remoteObservationBatchPrimaryWatch, pollStartedAt: pollStartedAt, pollOnly: true,
 	}); emitErr != nil {
-		if watchShouldStop(ctx, emitErr) {
+		if runEnded(ctx, emitErr) {
 			return watchStepResult{stop: true}
 		}
 		return watchStepResult{err: emitErr}
@@ -641,13 +641,17 @@ func (o *remoteObserver) sleepWatch(
 		return o.sleepForWatch(ctx, delay, phase)
 	}
 
-	timer := time.NewTimer(delay)
+	// The wait is armed on the run's clock, like the wait without a wake
+	// channel: a backoff measured on wall time would not move with the clock
+	// that paces everything else the run does.
+	due := make(chan struct{})
+	timer := o.clock.AfterFunc(delay, func() { close(due) })
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return watchStepResult{stop: true}
-	case <-timer.C:
+	case <-due:
 		return watchStepResult{}
 	case <-wakeCh:
 		o.logger.Debug("remote watch awakened",
@@ -660,7 +664,7 @@ func (o *remoteObserver) sleepWatch(
 
 func (o *remoteObserver) sleepForWatch(ctx context.Context, delay time.Duration, phase string) watchStepResult {
 	if sleepErr := o.clock.Sleep(ctx, delay); sleepErr != nil {
-		if watchShouldStop(ctx, sleepErr) {
+		if runEnded(ctx, sleepErr) {
 			return watchStepResult{stop: true}
 		}
 
@@ -693,18 +697,6 @@ func (o *remoteObserver) drainWakeSignals(wakeCh <-chan struct{}) {
 			return
 		}
 	}
-}
-
-func watchShouldStop(ctx context.Context, err error) bool {
-	if ctx.Err() != nil {
-		return true
-	}
-
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-
-	return false
 }
 
 // CurrentDeltaToken returns the latest delta token observed by Watch().
@@ -749,21 +741,6 @@ func (o *remoteObserver) setDeltaToken(token string) {
 	defer o.mu.Unlock()
 
 	o.deltaToken = token
-}
-
-// timeSleep waits for the given duration or until the context is canceled.
-// Shared by RemoteObserver, LocalObserver, and ExecutorConfig as the default
-// sleep implementation. Each injects it via their sleepFunc field for testability.
-func timeSleep(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("remote watch sleep: %w", ctx.Err())
-	case <-timer.C:
-		return nil
-	}
 }
 
 // fetchPageRetryingRejection fetches one page and retries it once when
@@ -1013,7 +990,7 @@ func (o *remoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token stri
 			return dp, nil
 		}
 		wait, retryable := deltaPageRetryDelay(err, policy, attempt)
-		if !retryable || ctx.Err() != nil {
+		if !retryable || runEnded(ctx, err) {
 			return nil, fmt.Errorf("delta page %d: %w", page, err)
 		}
 		o.logger.Info("OneDrive did not answer a page of the change list; retrying",
@@ -1032,10 +1009,11 @@ func (o *remoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token stri
 // deltaPageRetryDelay says whether a page fetch error is worth another try
 // and how long to wait first: a 429 waits its Retry-After when that is within
 // deltaPageRetryAfterLimit, a 5xx or a transport failure waits the policy's
-// backoff. A 4xx other than 429, an expired cursor and a canceled context are
-// not retried.
+// backoff. A 4xx other than 429 and an expired cursor are not retried. A
+// request that timed out is a transport failure like any other: whether the
+// run is ending is the caller's question (runEnded), never the error's.
 func deltaPageRetryDelay(err error, policy retry.Policy, attempt int) (time.Duration, bool) {
-	if attempt+1 >= policy.MaxAttempts || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if attempt+1 >= policy.MaxAttempts {
 		return 0, false
 	}
 	var graphErr *graph.GraphError

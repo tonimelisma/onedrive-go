@@ -39,22 +39,16 @@ const (
 // RunOnceResult.Stuck, and the command exits 1.
 var ErrSyncStuck = errors.New("a drive's sync did not stop when told to")
 
-// closeEngine closes one drive's engine. Cancellation is the normal shutdown
-// path and stays at DEBUG; any other close failure means the drive's sync
-// state may not have been written cleanly, which is worth one warning.
+// closeEngine closes one drive's engine. It runs on a context detached from
+// the run's cancellation (closeEngineWithin), so no close failure is the
+// run's stop: each one means the drive's sync state may not have been
+// written cleanly, which is worth one warning.
 func (o *Orchestrator) closeEngine(ctx context.Context, mount *mountSpec, engine engineRunner) {
 	if engine == nil {
 		return
 	}
 	closeErr := engine.Close(ctx)
 	if closeErr == nil {
-		return
-	}
-	if errors.Is(closeErr, context.Canceled) || errors.Is(closeErr, context.DeadlineExceeded) {
-		o.logger.Debug("close sync engine during shutdown",
-			slog.String("mount_id", mount.id().String()),
-			slog.Any("error", closeErr),
-		)
 		return
 	}
 	o.logger.Warn(fmt.Sprintf("Couldn't close the sync state for %s cleanly", mount.label()),

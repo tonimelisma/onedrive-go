@@ -70,7 +70,7 @@ func (rt *watchRuntime) runDrainStep(
 	case _, ok := <-rt.resources.refreshResults:
 		return rt.handleDrainingRefreshResult(ctx, p, ok)
 	case obsErr, ok := <-rt.resources.observerErrs:
-		return rt.handleDrainingObserverError(p, obsErr, ok)
+		return rt.handleDrainingObserverError(ctx, p, obsErr, ok)
 	}
 }
 
@@ -118,6 +118,7 @@ func (rt *watchRuntime) handleDrainingRefreshResult(
 }
 
 func (rt *watchRuntime) handleDrainingObserverError(
+	ctx context.Context,
 	p *watchPipeline,
 	obsErr error,
 	ok bool,
@@ -127,7 +128,7 @@ func (rt *watchRuntime) handleDrainingObserverError(
 		return rt.drainLoopDone(p), nil
 	}
 
-	rt.logObserverError(obsErr)
+	rt.logObserverError(ctx, obsErr)
 	if err := rt.handleObserverExit(p, true); err != nil {
 		return false, err
 	}

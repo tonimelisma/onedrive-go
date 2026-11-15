@@ -102,10 +102,12 @@ type watchResources struct {
 	skippedItems        <-chan []skippedItem
 	activeObservers     int
 
-	// lastObserverErr is the most recent non-cancellation error an observer
-	// exited with. When the last observer exits it becomes the cause of the
-	// returned watch error, so the user reads why watching stopped. Owned
-	// by the watch loop goroutine.
+	// lastObserverErr is the most recent error an observer exited with while
+	// the run went on, whatever its shape: a request that timed out, or a
+	// cancel from below the engine, is kept like any other failure, and an
+	// exit once the run has ended, the stop, is not kept. When the last
+	// observer exits it becomes the cause of the returned watch error, so the
+	// user reads why watching stopped. Owned by the watch loop goroutine.
 	lastObserverErr error
 
 	// Observer references — set in startObservers, nil'd on shutdown.

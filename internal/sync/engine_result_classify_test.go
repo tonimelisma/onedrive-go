@@ -193,11 +193,33 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 		},
 		{
 			name: "shutdown",
-			in:   &actionCompletion{Err: context.Canceled},
+			in:   &actionCompletion{Err: context.Canceled, RunEnded: true},
 			want: resultDecision{
 				Class:        resultShutdown,
 				ConditionKey: "",
 				TrialHint:    trialHintShutdown,
+			},
+		},
+		{
+			// Validates: R-6.8.29
+			name: "a cancel while the run goes on is retried",
+			in:   &actionCompletion{Err: context.Canceled},
+			want: resultDecision{
+				Class:        resultRequeue,
+				ConditionKey: ConditionUnexpectedCondition,
+				Persistence:  persistRetryWork,
+				TrialHint:    trialHintReclassify,
+			},
+		},
+		{
+			// Validates: R-6.8.29
+			name: "a separate failure after the run ended keeps its class",
+			in:   &actionCompletion{Err: errors.New("disk I/O error"), RunEnded: true},
+			want: resultDecision{
+				Class:        resultSkip,
+				ConditionKey: ConditionUnexpectedCondition,
+				Persistence:  persistRetryWork,
+				TrialHint:    trialHintReclassify,
 			},
 		},
 	})

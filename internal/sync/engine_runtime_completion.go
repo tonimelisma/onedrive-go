@@ -31,6 +31,13 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 	}
 
 	decision := classifyResult(r)
+	if isLiveRunCancel(r) {
+		flow.deps.logger.Warn("Syncing "+r.Path+" was canceled while the sync went on; it will be tried again",
+			slog.String("path", r.Path),
+			slog.String("action_type", r.ActionType.String()),
+			slog.Any("error", r.Err),
+		)
+	}
 	current := flow.sched.trackedActionForCompletion(r)
 	flow.engine.emitActivity(r, decision.Class)
 	if decision.Class != errclass.ClassSuperseded {
@@ -520,6 +527,9 @@ func (flow *engineFlow) failPublicationDrainAction(
 	cause error,
 ) ([]*trackedAction, error) {
 	completion := actionCompletionFromTrackedAction(current, nil, cause)
+	// The engine runs publication-only actions itself, under the run's
+	// context, so it is the one to say whether that run had ended.
+	completion.RunEnded = runEnded(ctx, cause)
 	return flow.applyRuntimeCompletionStage(ctx, &completion, bl)
 }
 

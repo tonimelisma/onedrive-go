@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -504,18 +503,19 @@ func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) 
 // logObserverError reports one observer's exit while the other keeps
 // running. Watch then no longer sees changes on that side until it is
 // restarted, so this is a Warn naming the side (observer errors are wrapped
-// by observerExitError). Cancellation is shutdown, not news.
-func (rt *watchRuntime) logObserverError(obsErr error) {
-	if obsErr == nil || errors.Is(obsErr, context.Canceled) || errors.Is(obsErr, context.DeadlineExceeded) {
+// by observerExitError). An exit once the run has ended is shutdown, not news
+// (a drain begins only then); an observer whose request timed out while the
+// run goes on has stopped watching like after any other failure.
+func (rt *watchRuntime) logObserverError(ctx context.Context, obsErr error) {
+	if obsErr == nil {
 		return
 	}
-
-	rt.resources.lastObserverErr = obsErr
-	if rt.isDraining() {
+	if runEnded(ctx, obsErr) {
 		rt.deps.logger.Debug("observer error during shutdown", slog.Any("error", obsErr))
 		return
 	}
 
+	rt.resources.lastObserverErr = obsErr
 	rt.deps.logger.Warn("Stopped " + obsErr.Error() + "; those changes will not sync until onedrive-go is restarted")
 }
 
@@ -630,7 +630,7 @@ func (rt *watchRuntime) handleWatchObserverError(
 		return observerErr
 	}
 
-	rt.logObserverError(observerErr)
+	rt.logObserverError(ctx, observerErr)
 	rt.beginWatchDrainIfCanceled(ctx, p)
 	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 		return err

@@ -1074,10 +1074,10 @@ func (o *localObserver) cancelPendingTimers() {
 	}
 }
 
-func isFatalWatchSetupError(err error) bool {
-	return errors.Is(err, errLocalWatchUnavailable) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded)
+// isFatalWatchSetupError reports a watch setup that cannot go on: watching is
+// unavailable, or the watch's run is ending.
+func isFatalWatchSetupError(ctx context.Context, err error) bool {
+	return errors.Is(err, errLocalWatchUnavailable) || runEnded(ctx, err)
 }
 
 func (o *localObserver) rollbackAddedWatches(watcher fsWatcher, session *watchAddSession) {
@@ -1105,7 +1105,7 @@ func (o *localObserver) AddWatchesRecursive(ctx context.Context, watcher fsWatch
 	counts := &watchSetupCounts{}
 	session := newWatchAddSession()
 	err := o.addObservedDirWatches(ctx, watcher, syncRoot, ".", counts, make(map[string]struct{}), session)
-	if err != nil && isFatalWatchSetupError(err) {
+	if isFatalWatchSetupError(ctx, err) {
 		o.rollbackAddedWatches(watcher, session)
 	}
 

@@ -15,6 +15,15 @@ import (
 // settles from looping; whatever is left is the next sync's work.
 const oneShotMaxPasses = 4
 
+// The causes of a one-shot pass context's cancel: a completion that failed
+// the pass (which RunOnce then returns), or the pass's end.
+//
+//nolint:gosec // G101 reads "Pass" in the names as a password; these are cancel causes, not credentials
+const (
+	errOneShotPassFailed cancelCauseError = "sync: one-shot pass failed"
+	errOneShotPassEnded  cancelCauseError = "sync: one-shot pass ended"
+)
+
 // RunOnce executes a one-shot sync: a pass, and further passes while the
 // previous one left work for the next (R-2.1.7). Each pass:
 //  1. Load baseline
@@ -457,14 +466,17 @@ func (r *oneShotRunner) executePreparedPlan(
 	pool := newWorkerPool(r.engine.execCfg, r.sched.dispatchCh, r.deps.store, r.deps.logger, len(plan.Actions))
 	pool.perfCollector = r.engine.collector()
 	pool.serialize = r.engine.serializeWorkers
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// The pass's context is the workers' run: a fatal completion ends it, and
+	// with it the run, so what it interrupts completes as a shutdown.
+	runCtx, cancelPass := context.WithCancelCause(ctx)
+	defer cancelPass(errOneShotPassEnded)
 	pool.Start(runCtx, r.engine.transferWorkers)
 
 	// Process completions until the engine-owned runtime settles. Held retry/scope
 	// actions intentionally keep graph nodes unresolved, so the dependency graph
 	// tracks only dependency satisfaction, not runtime completion.
-	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, cancel, bl, pool.Completions(), initialOutbox)
+	failPass := func() { cancelPass(errOneShotPassFailed) }
+	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, failPass, bl, pool.Completions(), initialOutbox)
 	pool.Stop()
 	if drainErr != nil {
 		r.recordPassCounts(report, len(plan.Actions))

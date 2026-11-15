@@ -64,10 +64,11 @@ func (c realClock) recoverTimerPanic() {
 // timerPanics carries a timer callback's panic to the run it ends. A real
 // clock reports to one (recoverTimerPanic); whoever owns the clock binds each
 // run to it. While a run is bound, the first panic is kept for the run's error
-// and the run's context is canceled plainly, without a cause: the actions in
-// flight then fail as canceled, which reads as a shutdown, so none is recorded
-// as a failure and the next run redoes them. Later panics of the same run are
-// only logged, and a panic while no run is bound is only logged.
+// and the run's context is canceled plainly, without a cause: the run has
+// ended, so the actions in flight, which fail as canceled, end as a shutdown.
+// None is recorded as a failure and the next run redoes them. Later panics of
+// the same run are only logged, and a panic while no run is bound is only
+// logged.
 type timerPanics struct {
 	// mu guards cancel and err. Every holder releases it with defer: record
 	// runs inside a recover block.
