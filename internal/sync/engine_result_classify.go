@@ -7,7 +7,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 const (
@@ -35,22 +34,33 @@ func classifyResult(r *actionCompletion) resultDecision {
 	// Shutdown is a fact about the run, never the shape of an error: only an
 	// action whose run had ended is a shutdown, and then only for the
 	// cancellation's own error. A separate failure that landed during the stop
-	// is classified like any other.
-	if r.RunEnded && isCancellationEcho(r.Err) {
+	// is classified like any other, and so is a store access that outlasted
+	// its own bound: its deadline is the engine's limit on its database, which
+	// the stop does not set, and the record it failed to write is lost.
+	if r.RunEnded && isCancellationEcho(r.Err) && !errors.Is(r.Err, errStoreAccessTimedOut) {
 		return withRuntimeSummary(&resultDecision{
 			Class:     resultShutdown,
 			TrialHint: trialHintShutdown,
 		})
 	}
 
-	// A request that timed out while the run goes on is retry work.
+	// A request that timed out while the run goes on is the service's silence:
+	// retry work and the outage evidence an answered 5xx is, by the scope its
+	// server answer names (serverAnswerServiceOutage). Its issue names the
+	// timeout. One that lands once the run has ended is retry work but no
+	// evidence, whatever its shape: a stop is never read as the service's
+	// silence.
 	if isRequestTimeout(r.Err) {
-		return withRuntimeSummary(&resultDecision{
-			Class:         resultRequeue,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: issueRequestTimeout,
-		})
+		if r.RunEnded {
+			return withRuntimeSummary(&resultDecision{
+				Class:         resultRequeue,
+				Persistence:   persistRetryWork,
+				TrialHint:     trialHintReclassify,
+				ConditionType: issueRequestTimeout,
+			})
+		}
+
+		return retryWithScopeEvidence(deriveScopeKey(r), issueRequestTimeout)
 	}
 
 	// A create refused because OneDrive holds a differently spelled sibling
@@ -82,9 +92,9 @@ func classifyResult(r *actionCompletion) resultDecision {
 	// Before any server answer: a stale precondition is the executor's verdict
 	// that the plan no longer holds, and the Graph error it may wrap (a
 	// create's 409, a conditional overwrite's 412) is the evidence it read,
-	// not a failure to retry. Classified by that status first, a stale 409 was
-	// held as actionable retry work and a stale 412 as transient_conflict,
-	// instead of being replanned at once.
+	// not a failure to retry. Classified by that status first, a stale 409
+	// would be held as actionable retry work and a stale 412 as
+	// transient_conflict, instead of being replanned at once.
 	if errors.Is(r.Err, errActionPreconditionChanged) {
 		return withRuntimeSummary(&resultDecision{
 			Class:       resultSuperseded,
@@ -98,16 +108,6 @@ func classifyResult(r *actionCompletion) resultDecision {
 	}
 
 	return classifyLocalResult(r)
-}
-
-// isRequestTimeout reports a request that ran out of time. Every transport
-// timeout (a response-header, dial or whole-request timeout) and an expired
-// request deadline carry context.DeadlineExceeded; a transfer the stall
-// watchdog abandoned carries graph.ErrTransferStalled instead, because the
-// watchdog keeps its cancellation out of the chain. Asked only once
-// classifyResult has ruled the failure out as a shutdown.
-func isRequestTimeout(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, graph.ErrTransferStalled)
 }
 
 // isLiveRunCancel reports an action canceled while its run went on: something
@@ -147,14 +147,7 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 		serverAnswerTransientNotFound,
 		serverAnswerLocked,
 		serverAnswerTransferURLRejected:
-		return withRuntimeSummary(&resultDecision{
-			Class:             resultRequeue,
-			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistRetryWork,
-			RunScopeDetection: true,
-			TrialHint:         trialHintExtendOnMatchingScope,
-			ConditionType:     conditionType,
-		}), true
+		return retryWithScopeEvidence(scopeEvidence, conditionType), true
 	case serverAnswerForbidden,
 		serverAnswerUnsupported,
 		serverAnswerPathTooLong,
@@ -171,6 +164,20 @@ func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
 	}
 
 	return resultDecision{}, false
+}
+
+// retryWithScopeEvidence is the decision for a transient failure that is
+// timed retry work and the evidence of scopeEvidence (zero for none): scope
+// detection counts it, and a trial that fails with it keeps that scope.
+func retryWithScopeEvidence(scopeEvidence ScopeKey, conditionType IssueType) resultDecision {
+	return withRuntimeSummary(&resultDecision{
+		Class:             resultRequeue,
+		ScopeEvidence:     scopeEvidence,
+		Persistence:       persistRetryWork,
+		RunScopeDetection: true,
+		TrialHint:         trialHintExtendOnMatchingScope,
+		ConditionType:     conditionType,
+	})
 }
 
 func classifyLocalResult(r *actionCompletion) resultDecision {
@@ -321,7 +328,7 @@ func issueTypeForFilesystemResult(r *actionCompletion) (IssueType, bool) {
 	case driveops.LocalErrorNameTooLong:
 		// OneDrive accepts names longer than the 255 bytes a Linux or
 		// macOS filesystem can store; without a named issue each download
-		// retried forever as an "unexpected" failure.
+		// would retry forever as an "unexpected" failure.
 		return issueLocalNameTooLong, true
 	case driveops.LocalErrorOther:
 	}

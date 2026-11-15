@@ -73,6 +73,10 @@ type workerPool struct {
 	// test's dispatch order is also the execution order (D-090).
 	serialize bool
 
+	// outcomeCommitTimeout bounds the detached commit of a completed action's
+	// outcome: OutcomeCommitTimeout, which tests shorten.
+	outcomeCommitTimeout time.Duration
+
 	cancel    context.CancelCauseFunc
 	wg        stdsync.WaitGroup
 	closeOnce stdsync.Once
@@ -105,7 +109,8 @@ func newWorkerPool(
 		// the number of actions, so workers never block). Watch mode passes
 		// watchCompletionBuf with a drain goroutine reading completions
 		// concurrently, so blocking is unlikely under normal load.
-		completions: make(chan actionCompletion, planSize),
+		completions:          make(chan actionCompletion, planSize),
+		outcomeCommitTimeout: OutcomeCommitTimeout,
 	}
 }
 
@@ -248,14 +253,32 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	// NO depGraph.Complete() — engine owns completion decisions.
 }
 
-// commitOutcome persists a completed action's baseline mutation on a context
-// that keeps the caller's values but not its cancellation, bounded by
-// OutcomeCommitTimeout.
+// commitOutcome persists a completed action's baseline mutation detached
+// from the caller's cancellation, bounded by the pool's outcomeCommitTimeout.
 func (wp *workerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
-	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	return runDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
+		return wp.baseline.CommitMutation(commitCtx, mutation)
+	})
+}
+
+// runDetachedStoreAccess runs access on a context that keeps ctx's values but
+// not its cancellation, bounded by bound: a shutdown cannot drop the record of
+// work that already happened, and a store that stopped answering cannot hold
+// the shutdown. A failure the bound ended carries errStoreAccessTimedOut beside
+// the store's own error, because database/sql returns the context's error and
+// not its cause. The sentinel is joined last: the sync console prints the
+// innermost error of the last error a chain joins, so a user reads that the
+// sync database did not answer, not the deadline the store gave up at.
+func runDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
+	accessCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), bound, errStoreAccessTimedOut)
 	defer cancel()
 
-	return wp.baseline.CommitMutation(commitCtx, mutation)
+	err := access(accessCtx)
+	if err != nil && errors.Is(context.Cause(accessCtx), errStoreAccessTimedOut) {
+		return fmt.Errorf("%w: %w", err, errStoreAccessTimedOut)
+	}
+
+	return err
 }
 
 func (wp *workerPool) validateActionFreshness(ctx context.Context, ta *trackedAction) error {

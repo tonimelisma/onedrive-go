@@ -287,11 +287,11 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 // syncDownloadTarget is the driveops.TargetFS sync downloads write through:
 // every operation is rooted in the sync tree, so a parent swapped for a
 // symlink after planning cannot redirect the write outside the root, and a
-// parent is never created. Downloads used to MkdirAll the parent and write
-// through absolute paths, so a local rename between planning and dispatch
-// re-created the old folder holding the download (D-043). Sync's rule: no
-// executor side effect creates namespace state the plan did not observe; a
-// missing parent is a stale plan, and the engine replans.
+// parent is never created. A download that created its parent, or wrote
+// through an absolute path, would re-create the old folder holding the
+// download after a local rename between planning and dispatch (D-043).
+// Sync's rule: no executor side effect creates namespace state the plan did
+// not observe; a missing parent is a stale plan, and the engine replans.
 type syncDownloadTarget struct {
 	tree *synctree.Root
 }
@@ -614,9 +614,10 @@ func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action
 // The item exists on OneDrive from the moment the create answers, whatever
 // happens to the action after, so the record is written on a context that
 // keeps the action's values but not its cancellation, bounded by
-// OutcomeCommitTimeout like a finished action's outcome commit. On the
-// action's own context a shutdown landing right after the create failed the
-// write, and only the intent was left (live, e2e
+// detachedStoreBound like a finished action's outcome commit
+// (runDetachedStoreAccess, so an expired bound is a store failure and never a
+// request that timed out). On the action's own context, a shutdown landing
+// right after the create would fail the write and leave only the intent (e2e
 // TestE2E_SyncWatch_PauseResume).
 func (e *executor) recordPendingCreate(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID string, created *bool,
@@ -633,11 +634,21 @@ func (e *executor) recordPendingCreate(
 		pending := pendingCreateOf(action, driveID, parentID)
 		pending.ItemID, pending.CreatedETag = itemID, createdETag
 
-		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
-		defer cancel()
-
-		return e.pendingCreates.RecordPendingCreate(recordCtx, pending)
+		return runDetachedStoreAccess(ctx, e.detachedStoreBound(), func(recordCtx context.Context) error {
+			return e.pendingCreates.RecordPendingCreate(recordCtx, pending)
+		})
 	}
+}
+
+// detachedStoreBound is the bound of every store access the executor runs
+// detached from its action's context: OutcomeCommitTimeout unless a test
+// shortened it.
+func (cfg *executorConfig) detachedStoreBound() time.Duration {
+	if cfg.storeAccessTimeout > 0 {
+		return cfg.storeAccessTimeout
+	}
+
+	return OutcomeCommitTimeout
 }
 
 // clearPendingCreateIntent forgets the intent of an attempt that is known to
@@ -667,7 +678,7 @@ func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action,
 		return
 	}
 
-	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.detachedStoreBound())
 	defer cancel()
 	if err := e.pendingCreates.ClearPendingCreateIntent(clearCtx, action.Path); err != nil {
 		e.logger.Warn("Could not clear a pending create intent", slog.String("path", action.Path), slog.Any("error", err))
@@ -686,7 +697,7 @@ func (e *executor) forgetRemovedPlaceholder(ctx context.Context, action *Action,
 		return
 	}
 
-	forgetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	forgetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.detachedStoreBound())
 	defer cancel()
 	if err := e.pendingCreates.ForgetRemovedPlaceholder(forgetCtx, action.Path, itemID); err != nil {
 		e.logger.Warn("Could not forget the record of a removed placeholder",
@@ -701,7 +712,7 @@ func (e *executor) forgetRemovedPlaceholder(ctx context.Context, action *Action,
 //     create at this path whose item is still empty): upload the content
 //     into it by ID, conditional on the eTag just read (not the creation
 //     eTag, which a canceled upload session moves; store_pending_creates.go).
-//     Going stale instead replanned the same create every pass.
+//     Read as stale, the same create would be replanned every pass.
 //   - The empty file of an earlier attempt whose create ended without an
 //     answer (priorIntent: this path had an intent without an item ID, within
 //     its TTL, before this attempt): the same spelling, live, a file, empty.
