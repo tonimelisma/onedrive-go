@@ -384,11 +384,11 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 //   - a move onto the path another move of the same side vacates waits for it;
 //   - a move waits for the work under its source that does not follow it to
 //     its destination (children leave first, and writes addressed at the old
-//     path land before the folder moves away).
-//
-// Before, only remote moves ordered anything, local moves fabricated their
-// missing parents with MkdirAll, and a child moved into a folder renamed in
-// the same plan created a stray copy of the folder.
+//     path land before the folder moves away), except a same-side move into
+//     or below a folder the plan creates at the path the move vacates: it
+//     lands in the new folder, so it waits for the create through its parent
+//     folders (addParentFolderDep), and the create waits for the vacating
+//     move (createsAtVacatedSource); it leaves after the move, not first.
 //
 // The partners of these rules are the moves at or above a's path and source,
 // the moves vacating a's path, and, for a move, the work below its source
@@ -399,13 +399,31 @@ func addMoveDeps(deps []int, idx int, a *Action, actions []Action, index *depend
 	slices.Sort(candidates)
 	candidates = slices.Compact(candidates)
 
+	sourceRecreated := isMoveAction(a) && slices.ContainsFunc(index.actionsByPath[a.OldPath], func(otherIdx int) bool {
+		return recreatesMoveSource(&actions[otherIdx], a)
+	})
 	for _, otherIdx := range candidates {
-		if otherIdx != idx && moveOrderDependency(a, &actions[otherIdx]) {
+		if otherIdx != idx && moveOrderDependency(a, &actions[otherIdx], sourceRecreated) {
 			deps = append(deps, otherIdx)
 		}
 	}
 
 	return deps
+}
+
+// recreatesMoveSource reports whether create is a folder create at the path
+// move vacates, on the side move vacates it: a create that waits for the move
+// (createsAtVacatedSource).
+func recreatesMoveSource(create, move *Action) bool {
+	return create.Type == ActionFolderCreate && move.OldPath != "" && create.Path == move.OldPath &&
+		createsAtVacatedSource(create, move)
+}
+
+// movesIntoRecreatedSource reports whether other is a move to a path in or
+// below the folder created at the path move vacates, whose creation
+// sourceRecreated reports (recreatesMoveSource).
+func movesIntoRecreatedSource(other, move *Action, sourceRecreated bool) bool {
+	return sourceRecreated && isMoveAction(other) && strings.HasPrefix(other.Path, move.OldPath+"/")
 }
 
 // moveDepCandidates lists every action that can satisfy moveOrderDependency
@@ -437,16 +455,19 @@ func moveDepCandidates(idx int, a *Action, index *dependencyIndex) []int {
 
 // moveOrderDependency reports whether a must wait for other under the move
 // rules: other is a move that precedes a; a is a move and other is work
-// under its source that does not follow it to the destination; or a is a
-// move and other removes the old occupant of its destination.
-func moveOrderDependency(a, other *Action) bool {
+// under its source that does not follow it to the destination, unless other
+// moves into or below a folder the plan creates at a's vacated source
+// (sourceRecreated, movesIntoRecreatedSource); or a is a move and other
+// removes the old occupant of its destination.
+func moveOrderDependency(a, other *Action, sourceRecreated bool) bool {
 	if isMoveAction(other) && movePrecedes(other, a) {
 		return true
 	}
 	if !isMoveAction(a) {
 		return false
 	}
-	if underMoveSource(other, a) && !underMoveDestination(other, a) {
+	if underMoveSource(other, a) && !underMoveDestination(other, a) &&
+		!movesIntoRecreatedSource(other, a, sourceRecreated) {
 		return true
 	}
 
