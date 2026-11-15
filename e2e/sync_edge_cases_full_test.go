@@ -18,6 +18,10 @@ import (
 // Sync edge case E2E tests (slow — run only with -tags=e2e,e2e_full)
 // ---------------------------------------------------------------------------
 
+// transferWorkerFileCount is how many files the transfer_workers test uploads,
+// more than its four workers.
+const transferWorkerFileCount = 5
+
 // TestE2E_Sync_EmptyDirectory validates that empty local folders are created
 // remotely and that remote folder deletion propagates locally.
 func TestE2E_Sync_EmptyDirectory(t *testing.T) {
@@ -52,12 +56,11 @@ func TestE2E_Sync_EmptyDirectory(t *testing.T) {
 	// Incremental delta (with saved token) is required because a fresh delta
 	// only lists existing items, so the deletion would be invisible.
 	// Delete safety protection won't trigger (< 10 baseline items).
-	// Delta endpoint may lag 60-120s behind REST; use 180s to avoid flakes.
 	requireSyncEventuallyConverges(
 		t,
 		cfgPath,
 		env,
-		180*time.Second,
+		syncConvergeTimeout,
 		"empty folder should be deleted locally after remote delete",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -88,27 +91,23 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "mid.txt"), []byte("mid level"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(localDir, "a", "b", "c", "deep.txt"), []byte("deep level"), 0o600))
 
-	requireSyncEventuallyConverges(
+	// A pass that left work exits 1 (R-6.6.28) and a pass a Graph gateway
+	// failed are run again; any other pass ends the wait, and the test judges
+	// it after.
+	setup := requireSyncEventuallyConverges(
 		t,
 		cfgPath,
 		env,
 		transientGraphRetryTimeout,
 		"nested deletion setup should upload local tree despite transient Graph gateway failures",
 		func(result syncAttemptResult) bool {
-			if result.Err == nil {
-				return true
-			}
-			if syncLeftWorkPattern.MatchString(result.Stdout) {
-				// A pass that left work exits 1 (R-6.6.28); the next one
-				// finishes it.
-				return false
-			}
-			require.Truef(t, isRetryableGraphGatewayFailure(result.Stderr),
-				"unexpected sync setup failure\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-			return false
+			return result.Err == nil ||
+				(!syncLeftWorkPattern.MatchString(result.Stdout) && !isRetryableGraphGatewayFailure(result.Stderr))
 		},
 		"--upload-only",
 	)
+	require.NoErrorf(t, setup.Err, "unexpected sync setup failure\nstdout: %s\nstderr: %s",
+		suiteDriveRoles.Redact(setup.Stdout), suiteDriveRoles.Redact(setup.Stderr))
 
 	// Verify deep file exists remotely.
 	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
@@ -131,7 +130,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"a/ directory should be deleted locally after remote delete",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -240,11 +239,11 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 
 	testFolder := fmt.Sprintf("e2e-sync-workers-%d", time.Now().UnixNano())
 
-	// Create 5 files.
+	// Create more files than there are workers.
 	localDir := filepath.Join(syncDir, testFolder)
 	require.NoError(t, os.MkdirAll(localDir, 0o700))
 
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= transferWorkerFileCount; i++ {
 		name := fmt.Sprintf("worker-file-%d.txt", i)
 		require.NoError(t, os.WriteFile(
 			filepath.Join(localDir, name),
@@ -257,15 +256,19 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"upload-only should eventually publish all worker test files with non-default transfer_workers",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
 				return false
 			}
 
-			stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
-			for i := 1; i <= 5; i++ {
+			// A listing that fails or lags is waited through.
+			stdout, _, lsErr := runCLIWithConfigAllowError(t, cfgPath, env, "ls", "/"+testFolder)
+			if lsErr != nil {
+				return false
+			}
+			for i := 1; i <= transferWorkerFileCount; i++ {
 				if !strings.Contains(stdout, fmt.Sprintf("worker-file-%d.txt", i)) {
 					return false
 				}
