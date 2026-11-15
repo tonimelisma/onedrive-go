@@ -152,10 +152,10 @@ func profileGoTestDeadlines(t *testing.T, runner *fakeRunner, profile VerifyProf
 		RepoRoot:     repoRoot,
 		Profile:      profile,
 		CoverageFile: coverFile,
-		// The CI runners have at least the reference core count.
-		UnitTimeout:        unitTestTimeoutForCores(unitTestReferenceCores),
-		ShortUnitTimeout:   shortUnitTestTimeoutForCores(unitTestReferenceCores),
-		RaceTimeout:        raceSyncTimeoutForCores(unitTestReferenceCores),
+		// The CI runners have at least the reference core count, so every
+		// deadline that scales with the cores is derived for it, whatever
+		// host runs this test.
+		Cores:              unitTestReferenceCores,
 		E2ELogDir:          filepath.Join(t.TempDir(), "e2e-logs"),
 		SummaryJSONPath:    summaryPath,
 		ClassifyLiveQuirks: classify,

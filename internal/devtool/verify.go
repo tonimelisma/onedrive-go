@@ -71,13 +71,14 @@ const (
 
 // Go test deadlines of the live and stress profiles; the race and seeds
 // profiles keep theirs beside their steps (verify_race.go, verify_seeds.go),
-// and the unit tiers', the race profile's and the linter's scale with the
-// cores (deadlineForCores). Every go test a profile starts names its own, and
-// the deadlines one CI job's profile can start, classified reruns included,
-// sum with the job's setup to no more than that job's timeout-minutes
-// (TestCIJobTimeoutsCoverEveryGoTestDeadline). A hung test then ends at go
-// test's deadline, with a goroutine dump that names it and a verify summary,
-// not at the job's, which leaves neither.
+// the stress lane's race runs of the sync tree take the race profile's once
+// per run (stressSyncRaceTimeout), and the unit tiers', the race profile's
+// and the linter's scale with the cores (deadlineForCores). Every go test a
+// profile starts names its own, and the deadlines one CI job's profile can
+// start, classified reruns included, sum with the job's setup to no more than
+// that job's timeout-minutes (TestCIJobTimeoutsCoverEveryGoTestDeadline). A
+// hung test then ends at go test's deadline, with a goroutine dump that names
+// it and a verify summary, not at the job's, which leaves neither.
 const (
 	// e2ePreflightTimeout bounds each preflight. The auth preflight's own
 	// budget is 90 seconds per endpoint per drive.
@@ -93,10 +94,13 @@ const (
 	classifiedRerunTimeout = "10m"
 	// integrationTimeout bounds the integration tier, whose runs take about
 	// two minutes.
-	integrationTimeout           = "5m"
-	stressMultisyncTimeout       = "20m"
-	stressSyncConcurrencyTimeout = "40m"
-	stressSyncTimeout            = "40m"
+	integrationTimeout     = "5m"
+	stressMultisyncTimeout = "20m"
+	// stressSyncConcurrencyTimeout bounds the fifty repetitions of the sync
+	// tree's concurrency tests. The step took 11.5, 24.0 and 39.4 minutes on
+	// the scheduled runs of 2026-11-13 to 2026-11-15, the last 37 seconds
+	// short of the 40 minutes it had then; this is twice that night.
+	stressSyncConcurrencyTimeout = "80m"
 )
 
 type VerifyOptions struct {
@@ -108,14 +112,20 @@ type VerifyOptions struct {
 	CoverageFile      string
 	Shard             string
 	// UnitTimeout is go test's per-package deadline in the full race tier.
-	// Zero derives it from the cores this process may use.
+	// Zero derives it from Cores.
 	UnitTimeout time.Duration
 	// ShortUnitTimeout is go test's per-package deadline in the short unit
-	// tier. Zero derives it from the cores this process may use.
+	// tier. Zero derives it from Cores.
 	ShortUnitTimeout time.Duration
 	// RaceTimeout is go test's deadline in the race profile. Zero derives it
-	// from the cores this process may use.
-	RaceTimeout        time.Duration
+	// from Cores.
+	RaceTimeout time.Duration
+	// Cores is the core count the go test deadlines that scale with the cores
+	// are derived for: the unit tiers', the race profile's and the stress
+	// lane's race runs of the sync tree. Zero or less is the cores this
+	// process may use; a test sets it to derive a CI runner's go test
+	// deadlines on any host.
+	Cores              int
 	E2ELogDir          string
 	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
@@ -329,7 +339,7 @@ func runVerifyProfileWithEnv(
 		stderr,
 		coverageFile,
 		coverageThreshold,
-		resolveUnitTestTimeout(opts.UnitTimeout, runtime.GOMAXPROCS(0)),
+		resolveUnitTestTimeout(opts.UnitTimeout, verifyCores(opts)),
 		plan,
 	); err != nil {
 		return err
@@ -344,7 +354,7 @@ func runVerifyProfileWithEnv(
 		stderr,
 		plan,
 		shard,
-		resolveShortUnitTestTimeout(opts.ShortUnitTimeout, runtime.GOMAXPROCS(0)),
+		resolveShortUnitTestTimeout(opts.ShortUnitTimeout, verifyCores(opts)),
 	); err != nil {
 		return err
 	}
@@ -542,12 +552,12 @@ func runOptionalVerification(
 		}
 	}
 	if plan.runStress {
-		if err := runStress(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr); err != nil {
+		if err := runStress(ctx, runner, opts.RepoRoot, env, verifyCores(opts), collector, stdout, stderr); err != nil {
 			return err
 		}
 	}
 	if plan.runRace {
-		raceTimeout := resolveRaceSyncTimeout(opts.RaceTimeout, runtime.GOMAXPROCS(0))
+		raceTimeout := resolveRaceSyncTimeout(opts.RaceTimeout, verifyCores(opts))
 		if err := runRaceVerification(ctx, runner, opts.RepoRoot, env, raceTimeout, collector, stdout, stderr); err != nil {
 			return err
 		}
@@ -857,6 +867,17 @@ func deadlineForCores(cores int, base, smallHostCoreBudget time.Duration) time.D
 	}
 
 	return smallHostCoreBudget / time.Duration(cores)
+}
+
+// verifyCores is the core count a run's core-scaled go test deadlines are
+// derived for: opts.Cores when it is above zero, else the cores this process
+// may use.
+func verifyCores(opts *VerifyOptions) int {
+	if opts.Cores > 0 {
+		return opts.Cores
+	}
+
+	return runtime.GOMAXPROCS(0)
 }
 
 // unitTestTimeoutForCores is the full race tier's go test deadline for the
