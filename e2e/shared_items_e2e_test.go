@@ -16,17 +16,8 @@ import (
 
 // Validates: R-3.6.6, R-3.6.7, R-1.6.2, R-1.2.5, R-1.3.5
 func TestE2E_Shared_FileDiscoveryAndSelectorRoundTrip(t *testing.T) {
-	rawLink := requireSharedFileLink(t)
-	registerLogDump(t)
-
-	fixture := resolveSharedFileFixture(t, rawLink)
-	cfgPath, env := writeSyncConfigForDriveID(t, fixture.RecipientDriveID, t.TempDir())
-
-	assertSharedFileFixtureConsistent(t, &fixture)
-
-	selectorStat := statSharedTargetJSON(t, cfgPath, env, fixture.FileItem.Selector)
-	assertStatNamesSharedItem(t, &fixture.FileItem, &selectorStat)
-	assert.Equal(t, fixture.RawStat.Name, selectorStat.Name)
+	shared := discoverSharedFile(t)
+	rawLink, fixture, cfgPath, env := shared.rawLink, shared.fixture, shared.cfgPath, shared.env
 
 	originalContent := getSharedTargetContent(t, cfgPath, env, fixture.FileItem.Selector)
 	restoreFile := writeTempContentFile(t, originalContent)

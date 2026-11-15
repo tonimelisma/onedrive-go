@@ -368,7 +368,7 @@ func TestE2E_Sync_EditDeleteConflict(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"sync should eventually recreate the remote item from the local edit",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -463,7 +463,7 @@ func TestE2E_Sync_DeletePropagation(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"remote-only deletions should propagate locally after sync",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -608,7 +608,7 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"download-only should apply remote-only drift without uploading local-only changes",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -676,7 +676,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"upload-only should apply local-only drift without downloading remote-only changes",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -704,7 +704,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 		t,
 		cfgPath,
 		env,
-		120*time.Second,
+		syncConvergeTimeout,
 		"download-only should later converge deferred remote-only changes",
 		func(result syncAttemptResult) bool {
 			if result.Err != nil {
@@ -819,7 +819,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 				cfgPath,
 				env,
 				mode,
-				120*time.Second,
+				syncConvergeTimeout,
 				"directional mode should preserve local content across edit-delete conflict",
 				func(result syncAttemptResult) bool {
 					if result.Err != nil {
@@ -837,8 +837,11 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 
 					stdout, stderr, err := runCLIWithConfigAllowError(t, cfgPath, env, "stat", "/"+testFolder+"/fragile.txt")
 					if mode.flag == flagDownloadOnly {
-						if err == nil {
-							t.Logf("waiting for remote delete to stay visible via stat disappearance\nstdout: %s\nstderr: %s",
+						// Only the CLI saying the item is missing shows the
+						// remote delete holding: any other stat failure says
+						// nothing about the file.
+						if err == nil || !cliReportsRemoteItemMissing(stderr) {
+							t.Logf("waiting for stat to report the remotely deleted file missing\nstdout: %s\nstderr: %s",
 								suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
 							return false
 						}
@@ -869,8 +872,9 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 				return
 			}
 
-			waitForRemoteReadContains(t, cfgPath, env, "", "fragile.txt", pollTimeout, "ls", "/"+testFolder)
-			assert.Equal(t, preciousLocalContent, getRemoteFile(t, cfgPath, env, "/"+testFolder+"/fragile.txt"))
+			// fragile.txt had this name before its remote delete, so the name
+			// proves nothing: wait for the content the recreate uploaded.
+			waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/fragile.txt", preciousLocalContent)
 			assert.Empty(t, conflictCopiesForPath(t, fragileFile), "edit-delete recreate upload should not create a conflict copy")
 		})
 	}

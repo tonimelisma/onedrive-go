@@ -530,7 +530,9 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 const (
 	// watchLocalDebounce is the quiet time a watch daemon waits after the
 	// last local change before it plans a pass for it: the engine's default
-	// debounce (internal/sync/engine_watch.go), which no e2e config changes.
+	// debounce (defaultDebounce in internal/sync/engine_watch.go), which no
+	// e2e config changes. TestWatchLocalDebounceMatchesEngineDefault holds
+	// the copy equal to it.
 	watchLocalDebounce = 5 * time.Second
 	// pausedFileUploadAllowance is what a daemon that ignored the pause needs
 	// after the debounce to put the test's small file on OneDrive where stat
@@ -548,6 +550,11 @@ const (
 	pauseOutlastsWindowMargin = 15 * time.Second
 	// timedPauseDuration is the pause the test sets and then lets expire.
 	timedPauseDuration = pausedUploadWindow + pauseOutlastsWindowMargin
+	// remoteClockAllowance is how far OneDrive's clock may run behind this
+	// host's: the file's created_at is OneDrive's time, and the pause's end
+	// is the time the pause command stored from this host's clock. It covers
+	// that difference alone.
+	remoteClockAllowance = 2 * time.Second
 )
 
 // requireNotUploadedDuringPause stats remotePath for pausedUploadWindow and
@@ -578,7 +585,7 @@ func requireNotUploadedDuringPause(
 		require.Truef(t, time.Now().Before(pauseEnds),
 			"a stat in the window answered after the pause could have ended, so it cannot say what the pause held back: lengthen pauseOutlastsWindowMargin")
 		require.Error(t, statErr, "the file reached OneDrive while the drive was paused")
-		require.Truef(t, isRemoteNotFoundCleanup(statStderr),
+		require.Truef(t, cliReportsRemoteItemMissing(statStderr),
 			"stat failed for a reason other than a missing item, so it cannot say whether the file uploaded\nstderr: %s",
 			suiteDriveRoles.Redact(statStderr))
 		sleepForLiveTestPropagation(1 * time.Second)
@@ -587,9 +594,16 @@ func requireNotUploadedDuringPause(
 
 // TestE2E_SyncWatch_TimedPauseExpiry starts a daemon, pauses the drive for
 // timedPauseDuration, verifies nothing uploads during pausedUploadWindow
-// while status reports it paused, waits until status no longer does, asks
-// the daemon to reload through the control socket, and verifies the file
-// written during the pause uploads.
+// while status reports it paused, waits until status no longer does, and
+// verifies the file written during the pause uploads. After the reload that
+// applies the pause, nothing that could end it reaches the daemon: no further
+// reload, no resume and no config change, only status reads. So the upload
+// proves the daemon's own wake when the pause runs out. OneDrive must date
+// the file's creation no earlier than the end the pause command stored, less
+// remoteClockAllowance for the two clocks, so an upload between the window's
+// end and the pause's end fails the test too.
+//
+// Validates: R-2.8.12
 func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	registerLogDump(t)
 
@@ -604,10 +618,11 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	cmd := h.Cmd
 
 	// Pause for a while; the synchronous reload answer proves the daemon
-	// applied it. The pause ends no earlier than pauseEnds: the command adds
-	// the duration to its own, later clock reading and stores whole seconds.
-	pauseEnds := time.Now().Add(timedPauseDuration).Truncate(time.Second)
-	runCLIWithConfig(t, cfgPath, env, "pause", timedPauseDuration.String())
+	// applied it. pauseEnds is the end the command stored, read from its own
+	// answer: the time the daemon resumes at, not this test's estimate of it.
+	pauseStdout, _ := runCLIWithConfig(t, cfgPath, env, "pause", "--json", timedPauseDuration.String())
+	pauseEnds, err := pauseCommandEnd(pauseStdout)
+	require.NoError(t, err)
 	reloadDaemonConfig(t, env)
 
 	// Create local file while paused.
@@ -628,14 +643,21 @@ func TestE2E_SyncWatch_TimedPauseExpiry(t *testing.T) {
 	require.Equal(t, statusDriveStatePaused, readStatusDriveState(t, cfgPath, env),
 		"the pause ended before the window did: lengthen pauseOutlastsWindowMargin")
 
-	// Wait until the pause has expired, then use the control socket to
-	// trigger clearExpiredPauses.
+	// Wait until status no longer reports the drive paused. Nothing tells the
+	// daemon: it wakes by itself when the pause runs out, so the upload that
+	// follows proves that wake, not a reload's.
 	waitForStatusDriveUnpaused(t, cfgPath, env)
-	reloadDaemonConfig(t, env)
 
-	// Poll until the file has its full size remotely, not only its name
-	// (daemon should now be unpaused).
-	waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(pausedContent)), daemonPollTimeout)
+	// Poll until the file has its full size remotely, not only its name.
+	statJSON := waitForRemoteStatSize(t, cfgPath, env, remotePath, int64(len(pausedContent)), daemonPollTimeout)
+
+	// OneDrive dates the item from the create request that starts its
+	// upload, so an upload made before the pause ended shows here.
+	createdAt, err := remoteStatCreatedAt(statJSON)
+	require.NoError(t, err)
+	assert.Falsef(t, createdAt.Before(pauseEnds.Add(-remoteClockAllowance)),
+		"OneDrive created the file at %s, before the pause ended at %s: the daemon uploaded while the drive was paused",
+		createdAt.Format(time.RFC3339), pauseEnds.Format(time.RFC3339))
 
 	// Graceful shutdown.
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))

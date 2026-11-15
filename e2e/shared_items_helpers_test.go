@@ -546,6 +546,37 @@ func assertStatNamesSharedItem(t *testing.T, item *sharedItemE2E, stat *sharedSt
 	assertSameIdentity(t, "the stat's shared selector", item.Selector, stat.SharedSelector)
 }
 
+// discoveredSharedFile is the shared-file fixture found from its raw link,
+// with the config of its recipient's drive that reads it.
+type discoveredSharedFile struct {
+	rawLink string
+	fixture resolvedSharedFileFixture
+	cfgPath string
+	env     map[string]string
+}
+
+// discoverSharedFile is the discovery the shared-file tests start from: it
+// resolves the fixture from its raw link, writes a config for the
+// recipient's drive, and checks that the fixture is consistent and that stat
+// through its selector names the same item as the raw link.
+func discoverSharedFile(t *testing.T) discoveredSharedFile {
+	t.Helper()
+
+	rawLink := requireSharedFileLink(t)
+	registerLogDump(t)
+
+	fixture := resolveSharedFileFixture(t, rawLink)
+	cfgPath, env := writeSyncConfigForDriveID(t, fixture.RecipientDriveID, t.TempDir())
+
+	assertSharedFileFixtureConsistent(t, &fixture)
+
+	selectorStat := statSharedTargetJSON(t, cfgPath, env, fixture.FileItem.Selector)
+	assertStatNamesSharedItem(t, &fixture.FileItem, &selectorStat)
+	assert.Equal(t, fixture.RawStat.Name, selectorStat.Name)
+
+	return discoveredSharedFile{rawLink: rawLink, fixture: fixture, cfgPath: cfgPath, env: env}
+}
+
 // findActiveShortcutChild returns the parent drive's child mount record at
 // relativeLocalPath, if there is one, and whether it is active with no state
 // reason. It asserts nothing, so a poll predicate can call it: a record in

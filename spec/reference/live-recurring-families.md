@@ -167,9 +167,8 @@ Current repo policy:
 - `TestE2EDaemonTestsUseNoNameOnlyWait` holds this in the quick lane, from the
   sources: a test that starts a process reaches no name-only wait helper,
   directly or through the suite's helpers; every wait helper is classified as
-  name-only or as a size, content or state wait, and a safe call (a read after
-  the daemon exited, a fixture no test writes) is a declared exception with its
-  reason
+  name-only or as a size, content or state wait, and a safe call (a fixture no
+  test writes) is a declared exception with its reason
 - a poll predicate asserts nothing, so one transient state (a child mount not
   yet active, a tree not yet synced down) is waited through, not failed on
 

@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,8 +17,8 @@ import (
 
 // This file has no build tags, so its tests run in the untagged quick lane
 // without an account. It decides what a live remote read does with one
-// attempt, and what a timed-out poll prints; the live reads in
-// remote_read_helpers_test.go run these decisions.
+// attempt, which attempts the suite's waits accept, and what a timed-out poll
+// prints; the live reads in remote_read_helpers_test.go run these decisions.
 
 type remoteReadRecoveryAction uint8
 
@@ -230,4 +231,284 @@ func TestRemotePollTimeoutMessageNamesDrivesByRole(t *testing.T) {
 	assert.Contains(t, message, "users/drive-1-account/drive")
 	assert.Contains(t, message, "state_drive-1.db")
 	assert.Contains(t, message, "via [--drive drive-1 stat /a.txt]")
+}
+
+// The sentence the CLI prints for an item OneDrive does not have
+// (remoteFailureText in internal/cli/error_presentation.go): "Error: <path>
+// was not found on OneDrive." and, for a path with a parent, a hint to list
+// the parent.
+const (
+	cliErrorPrefix            = "Error: "
+	remoteItemMissingSentence = " was not found on OneDrive."
+	listParentHintPrefix      = " Run 'onedrive-go ls "
+	listParentHintSuffix      = "' to see what is there."
+)
+
+// cliReportsRemoteItemMissing reports whether a failed command's stderr holds
+// the CLI's own sentence for an item OneDrive does not have, on the line it
+// prints as its error. Under --debug, stderr also holds the debug log, whose
+// lines can say "not found" of a request the command retried or recovered
+// from before it failed for another reason.
+func cliReportsRemoteItemMissing(stderr string) bool {
+	for line := range strings.Lines(stderr) {
+		message, isError := strings.CutPrefix(strings.TrimRight(line, "\r\n"), cliErrorPrefix)
+		if !isError {
+			continue
+		}
+
+		_, rest, isMissing := strings.Cut(message, remoteItemMissingSentence)
+		if isMissing && (rest == "" ||
+			strings.HasPrefix(rest, listParentHintPrefix) && strings.HasSuffix(rest, listParentHintSuffix)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// The CLI's sentences for a missing item, as `rm`, `stat` and `ls` print them
+// under --debug: the debug log, the error, then its details.
+const (
+	missingFolderStderr = `time=2026-11-14T10:00:00Z level=DEBUG msg="graph response" status=404` + "\n" +
+		`Error: /e2e-folder was not found on OneDrive. Run 'onedrive-go ls /' to see what is there.` + "\n" +
+		`Details: resolving "/e2e-folder": resolve item path "e2e-folder": graph: HTTP 404: itemNotFound` + "\n"
+	missingFileStderr = `Error: /e2e-folder/a.txt was not found on OneDrive. ` +
+		`Run 'onedrive-go ls /e2e-folder' to see what is there.` + "\n"
+)
+
+// Validates: R-6.10.17
+func TestCLIReportsRemoteItemMissing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{name: "a folder rm -r or ls did not find", stderr: missingFolderStderr, want: true},
+		{name: "a file stat did not find", stderr: missingFileStderr, want: true},
+		{name: "the drive root, which has no parent to list", stderr: "Error: / was not found on OneDrive.\n", want: true},
+		{name: "a failure that recorded no path", stderr: "Error: the item was not found on OneDrive.", want: true},
+		{
+			name: "a debug line that holds the words, before another failure",
+			stderr: `time=2026-11-14T10:00:00Z level=DEBUG msg="retrying" body="itemNotFound: The resource could not be found."` + "\n" +
+				`time=2026-11-14T10:00:01Z level=DEBUG msg="lookup" error="parent not found"` + "\n" +
+				"Error: OneDrive had a temporary server problem. Try again in a few minutes.\n",
+			want: false,
+		},
+		{
+			name:   "the sentence in a debug line, not as the error",
+			stderr: `level=DEBUG msg="/a.txt was not found on OneDrive."` + "\nError: OneDrive denied access to /a.txt. Check that this account can open it.\n",
+			want:   false,
+		},
+		{name: "an error that goes on after the sentence", stderr: "Error: /a.txt was not found on OneDrive. And more.\n", want: false},
+		{name: "no output", stderr: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, cliReportsRemoteItemMissing(tt.stderr))
+		})
+	}
+}
+
+type fixtureSeedVisibilityOutcome uint8
+
+const (
+	fixtureSeedVisibilityKeepPolling fixtureSeedVisibilityOutcome = iota
+	fixtureSeedVisibilityExactSuccess
+	fixtureSeedVisibilitySoftenedByParentListing
+)
+
+// classifyFixtureSeedVisibilityAttempt keeps the fixture-readiness contract
+// pure: exact stat success wins immediately, otherwise a visible parent listing
+// softens the lag into the documented post-mutation destination recurrence.
+func classifyFixtureSeedVisibilityAttempt(
+	targetBase string,
+	statErr error,
+	parentListStdout string,
+	parentListErr error,
+) fixtureSeedVisibilityOutcome {
+	switch {
+	case statErr == nil:
+		return fixtureSeedVisibilityExactSuccess
+	case parentListErr == nil && strings.Contains(parentListStdout, targetBase):
+		return fixtureSeedVisibilitySoftenedByParentListing
+	default:
+		return fixtureSeedVisibilityKeepPolling
+	}
+}
+
+func TestClassifyFixtureSeedVisibilityAttempt(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, fixtureSeedVisibilityExactSuccess, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		nil,
+		"",
+		nil,
+	))
+	assert.Equal(t, fixtureSeedVisibilitySoftenedByParentListing, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		assert.AnError,
+		"test.txt\nother.txt\n",
+		nil,
+	))
+	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		assert.AnError,
+		"other.txt\n",
+		nil,
+	))
+	assert.Equal(t, fixtureSeedVisibilityKeepPolling, classifyFixtureSeedVisibilityAttempt(
+		"test.txt",
+		assert.AnError,
+		"",
+		assert.AnError,
+	))
+}
+
+// remoteStatSizeReady reports whether one `stat --json` attempt answered with
+// the item at exactly size bytes.
+func remoteStatSizeReady(stdout string, err error, size int64) bool {
+	if err != nil {
+		return false
+	}
+
+	var stat struct {
+		Size int64 `json:"size"`
+	}
+
+	return json.Unmarshal([]byte(stdout), &stat) == nil && stat.Size == size
+}
+
+// The empty item a create leaves before its content is the case the size wait
+// exists to reject (LI-20261110-01).
+func TestRemoteStatSizeReady(t *testing.T) {
+	t.Parallel()
+
+	const contentSize = 21
+
+	assert.True(t, remoteStatSizeReady(`{"name":"a.txt","size":21}`, nil, contentSize))
+	assert.False(t, remoteStatSizeReady(`{"name":"a.txt","size":0}`, nil, contentSize), "the empty item before its content")
+	assert.False(t, remoteStatSizeReady(`{"name":"a.txt","size":21}`, assert.AnError, contentSize), "a failed stat")
+	assert.False(t, remoteStatSizeReady("Size: 21 B (21 bytes)\n", nil, contentSize), "human output instead of JSON")
+	assert.False(t, remoteStatSizeReady("", nil, contentSize), "no output")
+}
+
+// remoteStatCreatedAt reads created_at from one `stat --json` answer: when
+// OneDrive created the item (createdDateTime), a time no upload sends.
+func remoteStatCreatedAt(stdout string) (time.Time, error) {
+	var stat struct {
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &stat); err != nil {
+		return time.Time{}, fmt.Errorf("decode stat --json: %w", err)
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, stat.CreatedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse created_at %q: %w", stat.CreatedAt, err)
+	}
+
+	return createdAt, nil
+}
+
+// Validates: R-2.8.12
+func TestRemoteStatCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	createdAt, err := remoteStatCreatedAt(`{"name":"a.txt","size":21,"created_at":"2026-11-14T10:00:05Z"}`)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, time.November, 14, 10, 0, 5, 0, time.UTC), createdAt)
+
+	_, err = remoteStatCreatedAt(`{"name":"a.txt","size":21}`)
+	require.ErrorContains(t, err, "parse created_at", "an answer without created_at")
+
+	_, err = remoteStatCreatedAt("Created:  2026-11-14 10:00:05\n")
+	require.ErrorContains(t, err, "decode stat --json", "human output instead of JSON")
+}
+
+// pauseCommandEnd reads paused_until from one `pause --json` answer: the end
+// the command stored for the pause, which is the time the daemon resumes at.
+func pauseCommandEnd(stdout string) (time.Time, error) {
+	var pause struct {
+		PausedUntil string `json:"paused_until"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &pause); err != nil {
+		return time.Time{}, fmt.Errorf("decode pause --json: %w", err)
+	}
+
+	pausedUntil, err := time.Parse(time.RFC3339, pause.PausedUntil)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse paused_until %q: %w", pause.PausedUntil, err)
+	}
+
+	return pausedUntil, nil
+}
+
+// Validates: R-2.8.12
+func TestPauseCommandEnd(t *testing.T) {
+	t.Parallel()
+
+	pausedUntil, err := pauseCommandEnd(`{"drive":"personal:someone@example.com","paused":true,"paused_until":"2026-11-14T10:00:30Z"}`)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, time.November, 14, 10, 0, 30, 0, time.UTC), pausedUntil)
+
+	_, err = pauseCommandEnd(`{"drive":"personal:someone@example.com","paused":true}`)
+	require.ErrorContains(t, err, "parse paused_until", "a pause without an end")
+
+	_, err = pauseCommandEnd("Paused the drive until Sat Nov 14 10:00.\n")
+	require.ErrorContains(t, err, "decode pause --json", "human output instead of JSON")
+}
+
+// deleteDisappearanceReady reports whether one listing attempt shows the
+// unexpected name gone: a listing without it, or the CLI saying the listed
+// folder itself is missing.
+func deleteDisappearanceReady(stdout string, stderr string, err error, unexpected string) bool {
+	switch {
+	case err == nil:
+		return !strings.Contains(stdout, unexpected)
+	case cliReportsRemoteItemMissing(stderr):
+		return true
+	default:
+		return false
+	}
+}
+
+func TestDeleteDisappearanceReady(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, deleteDisappearanceReady("other.txt\n", "", nil, "target.txt"))
+	assert.False(t, deleteDisappearanceReady("target.txt\n", "", nil, "target.txt"))
+	assert.True(t, deleteDisappearanceReady("", missingFolderStderr, assert.AnError, "target.txt"), "the folder is gone")
+	assert.False(t, deleteDisappearanceReady("", "transport timeout", assert.AnError, "target.txt"))
+	assert.False(t, deleteDisappearanceReady("", `level=DEBUG body="The resource could not be found."`+
+		"\nError: OneDrive had a temporary server problem.", assert.AnError, "target.txt"), "a failure whose debug log holds a 404")
+}
+
+// remoteListingEmptyOrGone reports whether one `ls --json` attempt shows
+// nothing left under the folder it lists: an empty listing, or the CLI saying
+// the folder itself is missing.
+func remoteListingEmptyOrGone(stdout, stderr string, err error) bool {
+	if err != nil {
+		return cliReportsRemoteItemMissing(stderr)
+	}
+
+	var items []json.RawMessage
+
+	return json.Unmarshal([]byte(stdout), &items) == nil && len(items) == 0
+}
+
+// Validates: R-6.10.17
+func TestRemoteListingEmptyOrGone(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, remoteListingEmptyOrGone("[]\n", "", nil), "an empty listing")
+	assert.True(t, remoteListingEmptyOrGone("", missingFolderStderr, assert.AnError), "the folder is gone")
+	assert.False(t, remoteListingEmptyOrGone(`[{"name":"f00.txt"}]`, "", nil), "a file is left")
+	assert.False(t, remoteListingEmptyOrGone("", "", nil), "no output")
+	assert.False(t, remoteListingEmptyOrGone("", "Error: OneDrive had a temporary server problem.", assert.AnError),
+		"a failed listing says nothing about what is there")
 }

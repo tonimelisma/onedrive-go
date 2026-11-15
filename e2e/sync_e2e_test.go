@@ -878,10 +878,15 @@ func copyTokenFileForDrive(t *testing.T, srcDir, dstDir, driveID string) {
 	testutil.CopyCatalogFile(srcDir, dstDir)
 }
 
+// cleanupRemoteFolderAttempts is how many times a teardown runs its delete
+// before it logs the failure and gives up.
+const cleanupRemoteFolderAttempts = 4
+
 // cleanupRemoteFolderForDrive is like cleanupRemoteFolder but for a specific
 // drive. Cleanup is best-effort: the suite preflight already scrubs old E2E
 // artifacts, so teardown should not fail a passing test because Graph lies
-// during a late cleanup read.
+// during a late cleanup read. A folder the CLI says is missing is already
+// cleaned up.
 func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 	t.Helper()
 
@@ -891,9 +896,9 @@ func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 		lastErr    error
 	)
 
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := range cleanupRemoteFolderAttempts {
 		stdout, stderr, err := runCLICore(t, "", nil, driveID, "rm", "-r", "/"+folder)
-		if err == nil || isRemoteNotFoundCleanup(stderr) {
+		if err == nil || cliReportsRemoteItemMissing(stderr) {
 			return
 		}
 

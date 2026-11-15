@@ -79,7 +79,9 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 
 	content := mustReadFile(t, conflictFile)
 	assert.Equal(t, "remote edit", string(content))
-	assert.Equal(t, "remote edit", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/conflict.txt"))
+	// conflict.txt existed before the put replaced it, so its name proves
+	// nothing: wait for the content the put wrote.
+	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/conflict.txt", "remote edit")
 	assertConflictCopyContains(t, localDir, "conflict", "local edit")
 	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync")
