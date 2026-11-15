@@ -282,6 +282,15 @@ type modelOptions struct {
 	batches int
 }
 
+// batchCount is how many batches a run under o makes.
+func (o modelOptions) batchCount() int {
+	if o.batches > 0 {
+		return o.batches
+	}
+
+	return modelBatches
+}
+
 // runModelScenarioWith runs one seed under opts.
 func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRun {
 	t.Helper()
@@ -294,8 +303,14 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	if opts.chaos {
 		chaos = newChaosGraph(seed)
 		client = chaos.wrap(client)
-		// A cleanup, so a failing seed prints what the storm did too.
-		t.Cleanup(func() { t.Logf("seed %d chaos faults: %s", seed, chaos.faultSummary()) })
+		// A cleanup, so a failing seed prints what the storm did too, and the
+		// one line that reruns it.
+		t.Cleanup(func() {
+			t.Logf("seed %d chaos faults: %s", seed, chaos.faultSummary())
+			if t.Failed() {
+				t.Log(chaosRerunLine(t.Name(), seed))
+			}
+		})
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
 	run := &modelRun{
@@ -317,11 +332,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	initial := run.requireConverged("initial")
 	run.requireWrittenContentSurvives("initial", initialEdits, initial)
 
-	batches := modelBatches
-	if opts.batches > 0 {
-		batches = opts.batches
-	}
-	for batch := 1; batch <= batches; batch++ {
+	for batch := 1; batch <= opts.batchCount(); batch++ {
 		label := fmt.Sprintf("batch %d", batch)
 		before := run.localTree()
 		h.beginRound(t)
@@ -425,9 +436,16 @@ func (r *modelRun) logf(format string, args ...any) {
 	r.log = append(r.log, fmt.Sprintf(format, args...))
 }
 
+// failureContext names the seed and the operations of the run. A run without
+// the chaos layer is rerun by its seed alone; a chaos run logs its own rerun
+// line when it fails (chaosRerunLine), so its context carries no second one.
 func (r *modelRun) failureContext() string {
-	return fmt.Sprintf("seed %d (rerun with %s=%d); operations:\n  %s",
-		r.seed, modelSeedEnv, r.seed, strings.Join(r.log, "\n  "))
+	seed := fmt.Sprintf("seed %d (rerun with %s=%d)", r.seed, modelSeedEnv, r.seed)
+	if r.chaos != nil {
+		seed = fmt.Sprintf("seed %d", r.seed)
+	}
+
+	return seed + "; operations:\n  " + strings.Join(r.log, "\n  ")
 }
 
 func (r *modelRun) nextContent(side string) string {
@@ -524,7 +542,7 @@ func (r *modelRun) startPass(pass, stormPasses int) bool {
 	}
 	storm := pass <= stormPasses
 	if r.chaos != nil {
-		r.chaos.setStorm(storm)
+		r.chaos.startStep(storm)
 	}
 
 	return storm
