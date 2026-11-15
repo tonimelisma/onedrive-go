@@ -553,7 +553,25 @@ The canonical local verification entrypoint is:
 go run ./cmd/devtool verify default
 ```
 
-Other profiles exist for public, e2e, e2e-full, integration, and stress work.
+Every profile, as `go run ./cmd/devtool verify --help` lists them:
+
+- `default`: the full local tier, `public` plus the fast live suite
+- `public`: format, lint, build, the repository rules, the full unit tier
+  under `-race` with the coverage gate and every exhaustive test; no live
+  tests
+- `pr`: `lint`, then `quick`, the per-PR lane in one local run
+- `quick`: format, build, the tagged vets, the repository rules and the short
+  unit tier (`go test -short`), shardable with `--shard`
+- `lint`: the linter and the workflow lint
+- `platform`: the host build and the short unit tier
+- `e2e`: the fast live suite, the per-PR smoke lane
+- `e2e-full`: the full live suite
+- `integration`: the Graph integration tier
+- `stress`: race repetition of the concurrent packages
+- `race`: the `./internal/sync/...` tree under `-race`, which CI runs on
+  every push to `main`
+- `seeds`: the nightly search of new seeds of the seeded model tests
+- `failed-test`: reruns the last failed test of a CI log (`--failed-log`)
 
 If you are new here, it is worth opening `internal/devtool/verify.go`,
 `verify_e2e.go`, `verify_stress.go`, and `verify_summary.go`. Those files
@@ -585,6 +603,11 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | File family | Role |
 | --- | --- |
 | `verify.go`, `verify_e2e.go`, `verify_stress.go`, `verify_coverage.go`, `verify_summary.go` | Verification profile orchestration, E2E orchestration, stress profiles, the coverage gate (its number is read from R-6.10.4), summaries |
+| `verify_quick.go`, `verify_test_match.go` | The per-PR lane (the quick, lint, platform and pr profiles and test sharding); the empty-run guard every go test step goes through |
+| `verify_race.go`, `verify_seeds.go`, `seed_replay.go` | The race profile; the seeds profile, its nightly start seed and the seeded families' table; the reading of the model tests' `seed-replay:` lines |
+| `verify_failed.go`, `go_test_log.go` | The failed-test profile; the one reader of go test logs, raw or `-json` |
+| `nightly.go`, `nightly_verdict.go`, `nightly_report.go`, `nightly_seed_issues.go` | The nightly claims and check; the verdict rule of a scheduled run; the nightly's commit status and issue; the failing seeds' issues |
+| `verify_dod.go`, `verify_dod_ci_wait.go` | The DoD stages and their CI waits |
 | `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
 | `cleanup_audit.go` | Read-only git cleanup classification |

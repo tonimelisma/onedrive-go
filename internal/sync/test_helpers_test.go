@@ -8,8 +8,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	stdsync "sync"
 	"syscall"
 	"testing"
@@ -379,4 +382,158 @@ func skipInShort(tb testing.TB) {
 	if testing.Short() {
 		tb.Skip("exhaustive: runs in the full verify profiles and nightly CI")
 	}
+}
+
+// seedVars names the environment variables of one seeded model family: one
+// seed, which wins over the other two, or a run of count consecutive seeds
+// from start.
+type seedVars struct {
+	single string
+	count  string
+	start  string
+}
+
+// setIn reports whether getenv holds any of the family's variables.
+func (v seedVars) setIn(getenv func(string) string) bool {
+	return getenv(v.single) != "" || getenv(v.count) != "" || getenv(v.start) != ""
+}
+
+// seedsFromEnv returns the seeds of one run of a seeded model family: the one
+// seed its single variable names, else count consecutive seeds from start,
+// defaultCount and 1 where the variables are unset. A count below 1, or a
+// value that does not parse, fails the test with one sentence that names the
+// variable and its value.
+func seedsFromEnv(tb testing.TB, vars seedVars, defaultCount int) []uint64 {
+	tb.Helper()
+
+	seeds, err := seedRun(os.Getenv, vars, defaultCount)
+	require.NoError(tb, err)
+
+	return seeds
+}
+
+// seedRun is the rule of seedsFromEnv over getenv.
+func seedRun(getenv func(string) string, vars seedVars, defaultCount int) ([]uint64, error) {
+	if raw := getenv(vars.single); raw != "" {
+		seed, err := parseSeedVar(vars.single, raw)
+		if err != nil {
+			return nil, err
+		}
+
+		return []uint64{seed}, nil
+	}
+	count := defaultCount
+	if raw := getenv(vars.count); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s=%q is not a whole number of seeds", vars.count, raw)
+		}
+		count = parsed
+	}
+	if count < 1 {
+		return nil, fmt.Errorf("%s=%d is below 1, and a seeded run takes at least one seed", vars.count, count)
+	}
+	start := uint64(1)
+	if raw := getenv(vars.start); raw != "" {
+		parsed, err := parseSeedVar(vars.start, raw)
+		if err != nil {
+			return nil, err
+		}
+		start = parsed
+	}
+	if start > math.MaxUint64-uint64(count-1) {
+		return nil, fmt.Errorf("%s=%d with %d seeds runs past the largest seed", vars.start, start, count)
+	}
+	seeds := make([]uint64, count)
+	for i := range seeds {
+		seeds[i] = start + uint64(i)
+	}
+
+	return seeds, nil
+}
+
+func parseSeedVar(name string, raw string) (uint64, error) {
+	seed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q is not a seed, which is a whole number from 0", name, raw)
+	}
+
+	return seed, nil
+}
+
+// seedReplayPrefix starts the line a failed seed logs. devtool reads the
+// command after it from a go test log, raw or -json, for the nightly report's
+// issue, the nightly check's key and `verify failed-test`.
+const seedReplayPrefix = "seed-replay: "
+
+// seedReplayPackage is the package a replay runs, from the module root.
+const seedReplayPackage = "./internal/sync"
+
+// seedReplayTB is what logSeedReplayOnFailure needs of a test.
+type seedReplayTB interface {
+	Helper()
+	Name() string
+	Failed() bool
+	Cleanup(cleanup func())
+	Logf(format string, args ...any)
+}
+
+// seedAssignment is one environment assignment in front of a replay command.
+type seedAssignment struct {
+	name  string
+	value string
+}
+
+// logSeedReplayOnFailure registers a cleanup that, when the seed's test
+// failed, logs the one command that reruns it:
+//
+//	seed-replay: <ENV>=<seed> [ONEDRIVE_GO_DISPATCH_ORDER=<order>] go test [-race] -run '^<TopLevelTest>$' ./internal/sync
+//
+// with -race when this test binary was built with the race detector, under
+// which some families do other work for one seed, and the dispatch order when
+// the run had one, which replaces the seed's own shuffle (seedReplayInputs).
+// Call it first in the seed's subtest: cleanups run last-registered first, so
+// the line ends what the subtest logs. A test that go test's deadline ends
+// runs no cleanup and prints no line; devtool then builds the replay from the
+// subtest's name, seed=<seed>.
+func logSeedReplayOnFailure(t seedReplayTB, envName string, seed uint64) {
+	t.Helper()
+
+	assignments := seedReplayInputs(os.Getenv, envName, seed)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		test, _, _ := strings.Cut(t.Name(), "/")
+		t.Logf("%s", seedReplayLine(test, raceDetectorEnabled, assignments))
+	})
+}
+
+// seedReplayInputs are the assignments of a seed's replay line, read through
+// getenv: the seed in envName, then every other input that changes what the
+// seed does and was set, which is the dispatch order alone.
+func seedReplayInputs(getenv func(string) string, envName string, seed uint64) []seedAssignment {
+	assignments := []seedAssignment{{name: envName, value: strconv.FormatUint(seed, 10)}}
+	if order := getenv(dispatchOrderEnv); order != "" {
+		assignments = append(assignments, seedAssignment{name: dispatchOrderEnv, value: order})
+	}
+
+	return assignments
+}
+
+// seedReplayLine is the replay line of a seed of test: the assignments, then
+// go test of exactly that top-level test in this package.
+func seedReplayLine(test string, race bool, assignments []seedAssignment) string {
+	var b strings.Builder
+	b.WriteString(seedReplayPrefix)
+	for _, assignment := range assignments {
+		b.WriteString(assignment.name + "=" + assignment.value + " ")
+	}
+	b.WriteString("go test ")
+	if race {
+		b.WriteString("-race ")
+	}
+	b.WriteString("-run '^" + test + "$' " + seedReplayPackage)
+
+	return b.String()
 }

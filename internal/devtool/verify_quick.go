@@ -9,8 +9,13 @@ import (
 	"time"
 )
 
-// verifyProfileUsage lists every verify profile for the usage line.
-const verifyProfileUsage = "default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test"
+// VerifyProfileUsage lists every verify profile, the one list of their
+// names: the usage line and devtool's command line show it,
+// TestVerifyProfileUsageNamesExactlyTheProfiles holds it to the VerifyProfile
+// constants and to the plans they resolve to, and
+// TestDeveloperOnboardingListsEveryVerifyProfile holds the onboarding guide
+// to it.
+const VerifyProfileUsage = "default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|race|seeds|failed-test"
 
 // verifyShard is one slice of the short unit tier, `--shard index/count`.
 // A zero value means the whole tier.
@@ -86,9 +91,10 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 //     one local command, and what the DoD pre-pr stage runs by default: a host
 //     too small for the race tier can still finish it.
 //
-// The race detector, the coverage gate, the compile guard and the exhaustive
-// tests stay in default and public, which nightly CI runs and which remain
-// selectable locally.
+// The race detector runs in the race profile, the sync tree alone, which CI
+// runs on every push to main, and in default and public beside the coverage
+// gate, the compile guard and the exhaustive tests, which nightly CI runs and
+// which remain selectable locally.
 func runPRLaneVerification(
 	ctx context.Context,
 	runner commandRunner,
