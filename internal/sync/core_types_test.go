@@ -94,6 +94,7 @@ func TestActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 	upload := func(p string) *Action { return &Action{Type: ActionUpload, Path: p} }
 	completion := &actionCompletion{ActionType: unlisted, Path: "docs/a.txt"}
 	movedLocally := &moveComposition{moves: []composedMove{{key: "item-a", side: moveCoordLocal}}}
+	mode := SyncBidirectional
 
 	decisions := map[string]func(){
 		"actionAllowedInMode":                 func() { actionAllowedInMode(outside(), SyncBidirectional) },
@@ -111,7 +112,7 @@ func TestActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 		"createsAtVacatedSource":              func() { createsAtVacatedSource(upload("docs"), outside()) },
 		"pathsVacatedByPlan":                  func() { pathsVacatedByPlan([]Action{*outside()}) },
 		"createSide":                          func() { createSide(outside()) },
-		"dropReconciliationOfComposedMoves":   func() { dropReconciliationOfComposedMoves([]Action{*outside()}, movedLocally) },
+		"dropReconciliationOfComposedMoves":   func() { dropReconciliationOfComposedMoves([]Action{*outside()}, movedLocally, mode) },
 		"DeferredCounts.AddAction":            func() { (&DeferredCounts{}).AddAction(outside()) },
 		"evaluateMoveEndpointFreshness":       func() { evaluateMoveEndpointFreshness(outside(), actionFreshnessInputs{}) },
 		"movePeerPath":                        func() { movePeerPath(outside()) },

@@ -384,11 +384,14 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 //   - a move onto the path another move of the same side vacates waits for it;
 //   - a move waits for the work under its source that does not follow it to
 //     its destination (children leave first, and writes addressed at the old
-//     path land before the folder moves away), except a same-side move into
-//     or below a folder the plan creates at the path the move vacates: it
-//     lands in the new folder, so it waits for the create through its parent
-//     folders (addParentFolderDep), and the create waits for the vacating
-//     move (createsAtVacatedSource); it leaves after the move, not first.
+//     path land before the folder moves away), except a same-side move from
+//     its source into or below a folder the plan creates at the path it
+//     vacates (movesIntoRecreatedSource): that move waits for the create
+//     through its parent folders (addParentFolderDep), and the create for
+//     this move (createsAtVacatedSource), so it runs after this move, from a
+//     source this move took away, and the next pass moves it. Move
+//     composition names such a source only for a move it neither rebases
+//     through the folder's move nor holds for the next pass (vacatingFolder).
 //
 // The partners of these rules are the moves at or above a's path and source,
 // the moves vacating a's path, and, for a move, the work below its source
