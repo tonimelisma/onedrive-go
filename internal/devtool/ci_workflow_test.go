@@ -74,8 +74,11 @@ func TestCIStallWindow_PostMergeUsesOnlyPushJobs(t *testing.T) {
 	require.NoError(t, err)
 	pullRequest, err := newCIWaitConfig(&VerifyOptions{}, repoRootForTest(t), ciEventPullRequest, io.Discard)
 	require.NoError(t, err)
-	assert.Greater(t, push.stallWindow, ciStallMargin)
-	assert.Less(t, push.stallWindow, pullRequest.stallWindow, "the live jobs never run on a push to main")
+	workflow, err := os.ReadFile(filepath.Join(repoRootForTest(t), ciWorkflowPath))
+	require.NoError(t, err)
+	assert.Equal(t, ciJobTimeout(t, string(workflow), ciRaceJob, ciEventPush)+ciStallMargin, push.stallWindow,
+		"the race job is the longest job a push runs")
+	assert.LessOrEqual(t, push.stallWindow, pullRequest.stallWindow, "the live jobs never run on a push to main")
 }
 
 // Validates: R-6.10.16
@@ -210,6 +213,83 @@ func TestCIWorkflowJobNeedsReadsEveryForm(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want[job.name], needs, "job %s", job.name)
 	}
+}
+
+// Validates: R-6.10.22
+//
+// The race job runs on every push to main and on nothing else, and the
+// aggregate verify job, the required check, waits for it and fails on any
+// result of it but success or skipped, as it does for every job it needs: a
+// need whose result the check does not read would let a red job pass.
+func TestCIRaceJobRunsOnEveryPushInsideTheAggregate(t *testing.T) {
+	t.Parallel()
+
+	jobs, err := readCIWorkflowJobs(repoRootFromDevtoolPackage(t))
+	require.NoError(t, err)
+	byName := map[string]ciWorkflowJob{}
+	for _, job := range jobs {
+		byName[job.name] = job
+	}
+	race, ok := byName[ciRaceJob]
+	require.True(t, ok, "ci.yml has no %s job", ciRaceJob)
+	for event, want := range map[string]bool{
+		ciEventPush: true, ciEventPullRequest: false, ciEventSchedule: false, ciEventWorkflowDispatch: false,
+	} {
+		runs, runsErr := race.runsOn(event)
+		require.NoError(t, runsErr)
+		assert.Equal(t, want, runs, "%s on %s", ciRaceJob, event)
+	}
+	assert.True(t, slices.ContainsFunc(race.lines, func(line string) bool {
+		return strings.HasSuffix(strings.TrimSpace(line), "go run ./cmd/devtool verify "+string(VerifyRace))
+	}), "the job runs the race profile")
+
+	aggregate := byName[nightlyAggregateJob]
+	needs, err := aggregate.needs()
+	require.NoError(t, err)
+	require.Contains(t, needs, ciRaceJob)
+	loop := ""
+	for _, line := range aggregate.lines {
+		if strings.Contains(line, "for result in") {
+			loop = line
+		}
+	}
+	for _, need := range needs {
+		variable := ""
+		for _, line := range aggregate.lines {
+			name, value, found := strings.Cut(strings.TrimSpace(line), ": ")
+			if found && value == "${{ needs."+need+".result }}" {
+				variable = name
+			}
+		}
+		require.NotEmpty(t, variable, "the aggregate reads no result of %s", need)
+		assert.Contains(t, loop, `"${`+variable+`}"`, "the aggregate's check ignores %s", need)
+	}
+}
+
+// Validates: R-6.10.25
+//
+// The seeds job runs the night's rotated seeds on the schedule and on a
+// dispatch, and on no pull request and no push: a seed the night drew that
+// fails is a finding for an issue, not a red check on a change that did not
+// cause it.
+func TestCISeedsJobRunsOnTheScheduleAndOnDispatchOnly(t *testing.T) {
+	t.Parallel()
+
+	jobs, err := readCIWorkflowJobs(repoRootFromDevtoolPackage(t))
+	require.NoError(t, err)
+	index := slices.IndexFunc(jobs, func(job ciWorkflowJob) bool { return job.name == nightlySeedsJob })
+	require.GreaterOrEqual(t, index, 0, "ci.yml has no %s job", nightlySeedsJob)
+	seeds := jobs[index]
+	for event, want := range map[string]bool{
+		ciEventPush: false, ciEventPullRequest: false, ciEventSchedule: true, ciEventWorkflowDispatch: true,
+	} {
+		runs, runsErr := seeds.runsOn(event)
+		require.NoError(t, runsErr)
+		assert.Equal(t, want, runs, "%s on %s", nightlySeedsJob, event)
+	}
+	assert.True(t, slices.ContainsFunc(seeds.lines, func(line string) bool {
+		return strings.Contains(line, "go run ./cmd/devtool verify "+string(VerifySeeds)+" ")
+	}), "the job runs the seeds profile")
 }
 
 // ciTestMasksFile is the file, under the runner's temp directory, in which

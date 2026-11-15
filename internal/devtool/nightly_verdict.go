@@ -22,6 +22,12 @@ const (
 	// nightlyAggregateJob fails whenever a verify job it waits for did not
 	// succeed, so its failure repeats theirs.
 	nightlyAggregateJob = "verify"
+	// nightlySeedsJob runs the seeds profile, the night's search of new model
+	// seeds.
+	nightlySeedsJob = "model-seeds"
+	// ciRaceJob runs the race profile on every push to main; the aggregate
+	// waits for it, and the schedule skips it.
+	ciRaceJob           = "verify-race"
 	nightlyWorkflowFile = "ci.yml"
 	nightlyRunListLimit = "10"
 	// nightlyStaleAfter ends a nightly verdict's life: the schedule is daily,
@@ -29,9 +35,11 @@ const (
 	nightlyStaleAfter = 36 * time.Hour
 
 	// A failed test's key is its package as go test names it, relative to the
-	// module, a dot and its top-level name; a job whose log names no failed
-	// test is keyed by the job. A test's name holds no dot, so the last dot
-	// of a test key ends its package, and a job key holds none.
+	// module, a dot and its top-level name; a failing model seed's adds `/`,
+	// its variable, `=` and the seed (seedReplay.key); a job whose log names no
+	// failed test is keyed by the job. A test's name and a seed's assignment
+	// hold no dot, so the last dot of a test or seed key ends its package, and
+	// a job key holds none.
 	nightlyJobKeyPrefix = "job-"
 	nightlyKeySeparator = "."
 	// nightlyUnknownPackage and nightlyRootPackage stand for a log that never
@@ -50,7 +58,7 @@ const (
 // failures it repeats. TestNightlyRequiredJobsExistInWorkflow holds the list
 // to its needs: in ci.yml.
 func nightlyAggregateNeeds() []string {
-	return []string{"verify-lint", "verify-unit", "verify-full"}
+	return []string{"verify-lint", "verify-unit", ciRaceJob, "verify-full"}
 }
 
 // nightlyRequiredJobs are the jobs of ci.yml every scheduled run must pass,
@@ -58,7 +66,7 @@ func nightlyAggregateNeeds() []string {
 // parentheses. TestNightlyRequiredJobsExistInWorkflow holds the list to the
 // workflow's scheduled jobs and to the report job's needs.
 func nightlyRequiredJobs() []string {
-	return []string{"verify-full", nightlyAggregateJob, prCheckStress, prCheckIntegration, prCheckE2E}
+	return []string{"verify-full", nightlyAggregateJob, prCheckStress, nightlySeedsJob, prCheckIntegration, prCheckE2E}
 }
 
 // nightlyJobResult is how one job of a scheduled run ended, in the words the
@@ -121,8 +129,11 @@ type nightlyJobReport struct {
 	// id is the job's id, zero for a required job the run does not list.
 	id     int64
 	result nightlyJobResult
-	// tests are the keys of the failed tests its log names.
+	// tests are the keys of the failed tests its log names, a failing seed
+	// keyed by its replay line in place of its test.
 	tests []string
+	// seeds are the replay lines of the failing seeds its log names.
+	seeds []seedReplay
 	// packageFailed records that its log names a package that failed without
 	// naming a test: a build or setup failure, a TestMain exit, a package
 	// timeout with no test running.
@@ -197,10 +208,12 @@ func nightlyAggregateRepeats(reports []nightlyJobReport, i int) bool {
 
 // attributeNightlyFailures reads the log of every job that failed the night
 // and has one, and records the failed tests it names and whether a package
-// failed without naming one. The aggregate job's log is not read while a job
-// it waits for failed. A log that cannot be read, after the client's
-// retries, is recorded as such and the next job's log is read: a job's
-// verdict never depends on its log. Only a canceled context ends the reads.
+// failed without naming one. A failed test whose seeds the log names in
+// replay lines is recorded as those seeds, each keyed by its replay, instead
+// of as the test. The aggregate job's log is not read while a job it waits
+// for failed. A log that cannot be read, after the client's retries, is
+// recorded as such and the next job's log is read: a job's verdict never
+// depends on its log. Only a canceled context ends the reads.
 func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string, reports []nightlyJobReport) error {
 	for i := range reports {
 		if !reports[i].hasLog() || nightlyAggregateRepeats(reports, i) {
@@ -220,13 +233,37 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 			continue
 		}
 		parsed := parseGoTestLog(string(log))
-		for _, failure := range parsed.failedTopLevelTestsByPackage() {
-			reports[i].tests = append(reports[i].tests, nightlyFailedTestKey(failure))
-		}
+		reports[i].tests, reports[i].seeds = nightlyFailureNames(parsed, seedReplaysFromLog(string(log)))
 		reports[i].packageFailed = parsed.failedPackageWithoutTest()
 	}
 
 	return nil
+}
+
+// nightlyFailureNames keys a log's failed top-level tests: a test whose
+// failing seeds the log names, in replay lines or in the names of failing
+// subtests that printed none, by the key of each seed, once; any other test
+// by its test key. A seeded family's failing subtest whose name holds no seed
+// keeps its test's key beside the seeds, so the failure stays claimable.
+func nightlyFailureNames(log goTestLog, replays []seedReplay) ([]string, []seedReplay) {
+	keys := []string{}
+	seeds := []seedReplay{}
+	seen := map[string]bool{}
+	for _, failure := range log.failedTopLevelTestsByPackage() {
+		failing, complete := failingSeedsOf(failure, log.failures, replays)
+		for _, seed := range failing {
+			if key := seed.key(); !seen[key] {
+				seen[key] = true
+				keys = append(keys, key)
+				seeds = append(seeds, seed)
+			}
+		}
+		if len(failing) == 0 || !complete {
+			keys = append(keys, nightlyFailedTestKey(failure))
+		}
+	}
+
+	return keys, seeds
 }
 
 // nightlyFailureKeys names what failed in a run, each key with the ci.yml

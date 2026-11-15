@@ -45,8 +45,10 @@ func TestCIJobTimeoutsCoverEveryGoTestDeadline(t *testing.T) {
 		deadlines time.Duration
 	}{
 		{job: "verify-unit", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyQuick, false)},
+		{job: ciRaceJob, event: ciEventPush, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyRace, false)},
 		{job: "verify-full", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyPublic, false)},
 		{job: "stress", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyStress, false)},
+		{job: nightlySeedsJob, event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifySeeds, false)},
 		{job: "integration", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyIntegration, false)},
 		{job: "e2e", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyE2E, false)},
 		{job: "e2e", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, worstCaseE2EFullRunner(), VerifyE2EFull, true)},
@@ -153,6 +155,7 @@ func profileGoTestDeadlines(t *testing.T, runner *fakeRunner, profile VerifyProf
 		// The CI runners have at least the reference core count.
 		UnitTimeout:        unitTestTimeoutForCores(unitTestReferenceCores),
 		ShortUnitTimeout:   shortUnitTestTimeoutForCores(unitTestReferenceCores),
+		RaceTimeout:        raceSyncTimeoutForCores(unitTestReferenceCores),
 		E2ELogDir:          filepath.Join(t.TempDir(), "e2e-logs"),
 		SummaryJSONPath:    summaryPath,
 		ClassifyLiveQuirks: classify,

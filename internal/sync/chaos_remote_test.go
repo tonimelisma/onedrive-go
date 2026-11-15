@@ -87,8 +87,8 @@ import (
 //     releases retry work by elapsed time.
 //
 // So two runs of one seed can send different requests and meet different
-// faults. The line a failing chaos run logs (chaosRerunLine) reruns the seed,
-// not the run.
+// faults. The `seed-replay:` line a failing chaos run logs
+// (logSeedReplayOnFailure) reruns the seed, not the run.
 
 const (
 	chaosFaultOdds         = 4 // one call in chaosFaultOdds fails while a storm is on
@@ -98,6 +98,7 @@ const (
 	chaosPageTokenPrefix   = "chaos-page-"
 	chaosOpDeltaNextPage   = "delta-next-page"
 	chaosSeedEnv           = "ONEDRIVE_GO_CHAOS_SEEDS"
+	chaosSeedStartEnv      = "ONEDRIVE_GO_CHAOS_SEED_START"
 	chaosDefaultSeeds      = 2
 )
 
@@ -790,8 +791,8 @@ func chaosRaceSeedFaults() []string {
 // sessions, truncated downloads, odd delta windows and concurrent writers;
 // once it passes, sync converges with every model check and invariant
 // holding. Each seed logs its fault summary when it ends, failing or not, and
-// a failing seed the line that reruns it (chaosRerunLine).
-// ONEDRIVE_GO_CHAOS_SEEDS widens the search (or name one seed with
+// a failing one its `seed-replay:` line. ONEDRIVE_GO_CHAOS_SEEDS widens the
+// search, from ONEDRIVE_GO_CHAOS_SEED_START (or name one seed with
 // ONEDRIVE_GO_MODEL_SEED).
 func TestModel_ChaosGraphConverges(t *testing.T) {
 	skipInShort(t)
@@ -800,6 +801,7 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 	for _, seed := range chaosSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
+			logSeedReplayOnFailure(t, modelSeedEnv, seed)
 			run := runModelScenarioWith(t, seed, chaosRunOptions())
 			require.Positive(t, run.chaos.faultCount(), "the storm injected no fault")
 			if seed != chaosRaceSeed {
@@ -830,30 +832,26 @@ func chaosBatches(race bool) int {
 	return modelBatches
 }
 
-// chaosSeeds is the chaos run's seeds: one named seed, a count from the
-// environment, or chaosDefaultSeeds (chaosRaceSeed alone under -race).
+// chaosSeedVars are the chaos run's variables; its one named seed is the
+// engine run's variable.
+func chaosSeedVars() seedVars {
+	return seedVars{single: modelSeedEnv, count: chaosSeedEnv, start: chaosSeedStartEnv}
+}
+
+// chaosSeeds is the chaos run's seeds: the ones the environment names, else
+// the first chaosDefaultSeeds (chaosRaceSeed alone under -race).
 func chaosSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
-	if os.Getenv(modelSeedEnv) != "" {
-		return modelSeeds(t)
-	}
-	raw := os.Getenv(chaosSeedEnv)
-	if raceDetectorEnabled && raw == "" {
+	if raceDetectorEnabled && !chaosSeedVars().setIn(os.Getenv) {
 		return []uint64{chaosRaceSeed}
 	}
 	count := chaosDefaultSeeds
-	if raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		require.NoError(t, err, chaosSeedEnv)
-		count = parsed
-	}
-	seeds := make([]uint64, count)
-	for i := range seeds {
-		seeds[i] = uint64(i + 1)
+	if raceDetectorEnabled {
+		count = 1
 	}
 
-	return seeds
+	return seedsFromEnv(t, chaosSeedVars(), count)
 }
 
 // Validates: R-5.6.15

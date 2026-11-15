@@ -261,6 +261,10 @@ func checkNightly(
 		return fmt.Errorf("nightly: run %d (%s) concluded %s, but no job of it failed, so the failure has no key to claim",
 			run.DatabaseID, run.URL, run.Conclusion)
 	}
+	seeds, err := addOpenSeedIssues(ctx, gh, repoRoot, failures)
+	if err != nil {
+		return err
+	}
 	if fetchErr := runner.Run(
 		ctx, repoRoot, os.Environ(), io.Discard, io.Discard, "git", "fetch", "--quiet", "origin", mainBranchName,
 	); fetchErr != nil {
@@ -280,9 +284,33 @@ func checkNightly(
 		return err
 	}
 
-	if err := writeStatus(stdout, formatNightlyCheck(run, verdict.reports, results, stale)); err != nil {
+	if err := writeStatus(stdout, formatNightlyCheck(run, verdict.reports, results, stale, seeds)); err != nil {
 		return err
 	}
+
+	return unclaimedNightlyFailures(results)
+}
+
+// addOpenSeedIssues adds the key of every open seed issue to failures, with
+// no job, and returns the issues. A seed fails until the change that fixes it
+// closes its issue, whatever later nights did: each night runs other seeds.
+func addOpenSeedIssues(ctx context.Context, gh ghClient, repoRoot string, failures map[string][]string) (seedIssues, error) {
+	seeds, err := findSeedIssues(ctx, gh, repoRoot, nil)
+	if err != nil {
+		return seedIssues{}, err
+	}
+	for key := range seeds.open {
+		if _, failing := failures[key]; !failing {
+			failures[key] = nil
+		}
+	}
+
+	return seeds, nil
+}
+
+// unclaimedNightlyFailures fails the check when a failure is left without an
+// owner.
+func unclaimedNightlyFailures(results []nightlyKeyResult) error {
 	unclaimed := []string{}
 	for _, result := range results {
 		if result.Disposition == nightlyUnclaimed {
@@ -296,6 +324,7 @@ func checkNightly(
 			strings.Join(unclaimed, ", "),
 		)
 	}
+
 	return nil
 }
 
@@ -308,9 +337,12 @@ func sortedFailureKeys(failures map[string][]string) []string {
 	return keys
 }
 
-func formatNightlyCheck(run *githubRun, reports []nightlyJobReport, results []nightlyKeyResult, stale []string) string {
+func formatNightlyCheck(
+	run *githubRun, reports []nightlyJobReport, results []nightlyKeyResult, stale []string, seeds seedIssues,
+) string {
 	var b strings.Builder
 	writeNightlyRunVerdict(&b, run, reports)
+	replays := nightlySeedReplayLines(reports, seeds)
 	for _, result := range results {
 		switch result.Disposition {
 		case nightlyMine:
@@ -322,6 +354,15 @@ func formatNightlyCheck(run *githubRun, reports []nightlyJobReport, results []ni
 		case nightlyUnclaimed:
 			fmt.Fprintf(&b, "  %s: UNCLAIMED\n", result.Key)
 		}
+		if replay, isSeed := replays[result.Key]; isSeed {
+			fmt.Fprintf(&b, "      replay: %s\n", replay)
+		}
+		if issue, open := seeds.open[result.Key]; open && result.Disposition == nightlyMine {
+			fmt.Fprintf(&b, "      %s\n", seedIssueCloseLine(issue.number))
+		}
+	}
+	for _, issue := range seeds.unclaimable {
+		fmt.Fprintf(&b, "  seed issue #%d: its title names no seed key, or one an earlier issue names; nobody can claim it\n", issue)
 	}
 	for _, key := range stale {
 		fmt.Fprintf(&b,
@@ -371,13 +412,19 @@ func resolveNightlyKey(
 		if !take {
 			return result, nil
 		}
+		// A key only an open seed issue names did not fail in this run, so
+		// the claim keeps the jobs it failed in when it was claimed.
+		failedIn := jobs
+		if len(failedIn) == 0 && held != nil && !held.isStale() {
+			failedIn = held.Claim.Jobs
+		}
 		next := nightlyClaim{
 			State:   nightlyStateClaimed,
 			Key:     key,
 			Format:  nightlyClaimFormat,
 			Owner:   owner,
 			Host:    hostName(),
-			Jobs:    jobs,
+			Jobs:    failedIn,
 			RunID:   run.DatabaseID,
 			RunHead: run.HeadSHA,
 			At:      now().UTC().Format(time.RFC3339),
@@ -623,8 +670,11 @@ func renewNightlyClaims(ctx context.Context, runner commandRunner, repoRoot stri
 }
 
 // requireNightlyClaimsInPR is the pre-merge gate: an increment may not merge
-// while it holds a nightly claim its pull request does not account for. It
-// returns the pull request's branch, the owner of its claims.
+// while it holds a nightly claim its pull request does not account for. A
+// claimed seed whose issue is open stays failing until the issue closes, so
+// the pull request must also close that issue (`Closes #N`); the gate reads
+// the open seed issues as the check does, and only when it holds a seed key.
+// It returns the pull request's branch, the owner of its claims.
 func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghClient, repoRoot string, prNumber int) (string, error) {
 	out, err := gh.output(
 		ctx, repoRoot, fmt.Sprintf("nightly gh pr view %d", prNumber),
@@ -645,9 +695,13 @@ func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghCl
 		return "", err
 	}
 	missing := []string{}
+	seedKeys := []string{}
 	for _, key := range sortedClaimKeys(held) {
 		if !nightlyBodyNamesKey(pr.Body, key) {
 			missing = append(missing, key)
+		}
+		if isSeedKey(key) {
+			seedKeys = append(seedKeys, key)
 		}
 	}
 	if len(missing) > 0 {
@@ -660,6 +714,23 @@ func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghCl
 			pr.HeadRefName,
 		)
 	}
+	if len(seedKeys) == 0 {
+		return pr.HeadRefName, nil
+	}
+	issues, err := findSeedIssues(ctx, gh, repoRoot, nil)
+	if err != nil {
+		return "", err
+	}
+	if unclosed := seedIssueCloseMissing(seedKeys, issues, pr.Body); len(unclosed) > 0 {
+		return "", fmt.Errorf(
+			"dod pre-merge: %s holds seed claims whose open issues the PR body does not close (%s); "+
+				"a seed fails for as long as its issue is open, so add the issue's `%s #N` line to the body",
+			pr.HeadRefName,
+			strings.Join(unclosed, ", "),
+			seedIssueCloseKeyword,
+		)
+	}
+
 	return pr.HeadRefName, nil
 }
 

@@ -191,15 +191,17 @@ type verifyFlags struct {
 	dodCIMaxReruns     int
 	unitTimeout        time.Duration
 	shortUnitTimeout   time.Duration
+	raceTimeout        time.Duration
 	failedTestLog      string
 	checkFormat        bool
+	seedStart          uint64
 }
 
 func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 	flags := &verifyFlags{}
 
 	cmd := &cobra.Command{
-		Use:   "verify [default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]",
+		Use:   "verify [" + devtool.VerifyProfileUsage + "]",
 		Short: "Run repository verification profiles",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -235,6 +237,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		Shard:              f.shard,
 		UnitTimeout:        f.unitTimeout,
 		ShortUnitTimeout:   f.shortUnitTimeout,
+		RaceTimeout:        f.raceTimeout,
 		E2ELogDir:          f.e2eLogDir,
 		SummaryJSONPath:    f.summaryJSONPath,
 		ClassifyLiveQuirks: f.classifyLiveQuirks,
@@ -249,6 +252,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		DODCIMaxReruns:     f.dodCIMaxReruns,
 		FailedTestLog:      f.failedTestLog,
 		CheckFormat:        f.checkFormat,
+		SeedStart:          f.seedStart,
 		Stdout:             cmd.OutOrStdout(),
 		Stderr:             cmd.ErrOrStderr(),
 	}
@@ -283,9 +287,21 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 		0,
 		"go test deadline of the short unit tier; default 10m, longer on hosts with fewer cores than the CI runners",
 	)
+	cmd.Flags().DurationVar(
+		&f.raceTimeout,
+		"race-timeout",
+		0,
+		"go test deadline of the race profile; default 30m, longer on hosts with fewer cores than the CI runners",
+	)
 	cmd.Flags().StringVar(&f.e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&f.summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
 	cmd.Flags().StringVar(&f.failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
+	cmd.Flags().Uint64Var(
+		&f.seedStart,
+		"seed-start",
+		0,
+		"first seed of the seeds profile, to rerun a night; 0 derives it from today's UTC date",
+	)
 	cmd.Flags().BoolVar(
 		&f.checkFormat,
 		"check-format",

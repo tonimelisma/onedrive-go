@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math/rand/v2"
-	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -26,8 +25,11 @@ import (
 //
 // It is the planner's half of the engine model test
 // (engine_model_based_test.go): thousands of seeds per minute instead of a
-// handful, at the price of trusting the model's executor. Rerun a seed with
-// ONEDRIVE_GO_PLANNER_SEED=<seed>; widen with ONEDRIVE_GO_PLANNER_SEEDS.
+// handful, at the price of trusting the model's executor. A failing seed logs
+// its `seed-replay:` line, the command that reruns it with
+// ONEDRIVE_GO_PLANNER_SEED=<seed>; widen the search with
+// ONEDRIVE_GO_PLANNER_SEEDS=<count> from ONEDRIVE_GO_PLANNER_SEED_START=<seed>
+// (default 1).
 
 const (
 	plannerModelDefaultSeeds = 8
@@ -35,6 +37,7 @@ const (
 	plannerModelEditsPerSide = 3
 	plannerModelSeedEnv      = "ONEDRIVE_GO_PLANNER_SEED"
 	plannerModelSeedsEnv     = "ONEDRIVE_GO_PLANNER_SEEDS"
+	plannerModelSeedStartEnv = "ONEDRIVE_GO_PLANNER_SEED_START"
 	plannerModelFileNames    = "a.txt b.txt c.txt"
 	plannerModelFolderNames  = "d e"
 	plannerModelLocalDevice  = 1
@@ -638,31 +641,24 @@ func (e pmSideEdit) replace(p string) {
 	e.record(modelOpReplace, p, "", content)
 }
 
+// plannerSeedVars are the planner model's variables.
+func plannerSeedVars() seedVars {
+	return seedVars{single: plannerModelSeedEnv, count: plannerModelSeedsEnv, start: plannerModelSeedStartEnv}
+}
+
+// plannerModelSeeds is the planner model's seeds: the ones the environment
+// names, else the first plannerModelDefaultSeeds (one under -race).
 func plannerModelSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
-	if raw := os.Getenv(plannerModelSeedEnv); raw != "" {
-		seed, err := strconv.ParseUint(raw, 10, 64)
-		require.NoError(t, err, plannerModelSeedEnv)
-		return []uint64{seed}
-	}
 	count := plannerModelDefaultSeeds
 	if raceDetectorEnabled {
 		// The planner model is single-goroutine apart from the store; one
 		// seed covers what the race detector can find (see modelRaceSeeds).
 		count = 1
 	}
-	if raw := os.Getenv(plannerModelSeedsEnv); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		require.NoError(t, err, plannerModelSeedsEnv)
-		count = parsed
-	}
-	seeds := make([]uint64, count)
-	for i := range seeds {
-		seeds[i] = uint64(i + 1)
-	}
 
-	return seeds
+	return seedsFromEnv(t, plannerSeedVars(), count)
 }
 
 // Validates: R-2.3.1, R-2.17.1, R-2.17.2
@@ -673,9 +669,17 @@ func TestPlannerModel_RandomTriplesConverge(t *testing.T) {
 	for _, seed := range plannerModelSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
+			logSeedReplayOnFailure(t, plannerModelSeedEnv, seed)
 			runPlannerModel(t, seed)
 		})
 	}
+}
+
+// failureContext names the seed and the operations of the run. The
+// `seed-replay:` line a failing seed logs (logSeedReplayOnFailure) is the one
+// command that reruns it, so the context carries no second one.
+func (r *pmRun) failureContext() string {
+	return fmt.Sprintf("seed %d:\n  %s", r.seed, strings.Join(r.log, "\n  "))
 }
 
 func runPlannerModel(t *testing.T, seed uint64) {
@@ -688,7 +692,7 @@ func runPlannerModel(t *testing.T, seed uint64) {
 	}
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("planner model seed %d (rerun with %s=%d):\n  %s", seed, plannerModelSeedEnv, seed, strings.Join(r.log, "\n  "))
+			t.Logf("planner model %s", r.failureContext())
 		}
 	})
 	r.addSynced("d", true, "")
@@ -703,9 +707,7 @@ func runPlannerModel(t *testing.T, seed uint64) {
 	}
 	r.mustSurvive = pmWrittenStillHeld(r.written, r.local, r.remote)
 
-	failure := func() string {
-		return fmt.Sprintf("seed %d (rerun with %s=%d):\n  %s", seed, plannerModelSeedEnv, seed, strings.Join(r.log, "\n  "))
-	}
+	failure := r.failureContext
 	quiet := false
 	for round := 1; round <= plannerModelMaxRounds && !quiet; round++ {
 		plan := r.plan()

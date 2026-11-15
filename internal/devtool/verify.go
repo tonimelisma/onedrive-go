@@ -64,15 +64,20 @@ const (
 	VerifyE2EFull     VerifyProfile = "e2e-full"
 	VerifyIntegration VerifyProfile = "integration"
 	VerifyStress      VerifyProfile = "stress"
+	VerifyRace        VerifyProfile = "race"
+	VerifySeeds       VerifyProfile = "seeds"
 	VerifyFailedTest  VerifyProfile = "failed-test"
 )
 
-// Go test deadlines of the live and stress profiles. Every go test those
-// profiles start names its own, and the deadlines one CI job's profile can
-// start, classified reruns included, sum with the job's setup to no more than
-// that job's timeout-minutes (TestCIJobTimeoutsCoverEveryGoTestDeadline). A
-// hung test then ends at go test's deadline, with a goroutine dump that names
-// it and a verify summary, not at the job's, which leaves neither.
+// Go test deadlines of the live and stress profiles; the race and seeds
+// profiles keep theirs beside their steps (verify_race.go, verify_seeds.go),
+// and the unit tiers', the race profile's and the linter's scale with the
+// cores (deadlineForCores). Every go test a profile starts names its own, and
+// the deadlines one CI job's profile can start, classified reruns included,
+// sum with the job's setup to no more than that job's timeout-minutes
+// (TestCIJobTimeoutsCoverEveryGoTestDeadline). A hung test then ends at go
+// test's deadline, with a goroutine dump that names it and a verify summary,
+// not at the job's, which leaves neither.
 const (
 	// e2ePreflightTimeout bounds each preflight. The auth preflight's own
 	// budget is 90 seconds per endpoint per drive.
@@ -107,7 +112,10 @@ type VerifyOptions struct {
 	UnitTimeout time.Duration
 	// ShortUnitTimeout is go test's per-package deadline in the short unit
 	// tier. Zero derives it from the cores this process may use.
-	ShortUnitTimeout   time.Duration
+	ShortUnitTimeout time.Duration
+	// RaceTimeout is go test's deadline in the race profile. Zero derives it
+	// from the cores this process may use.
+	RaceTimeout        time.Duration
 	E2ELogDir          string
 	SummaryJSONPath    string
 	ClassifyLiveQuirks bool
@@ -128,8 +136,13 @@ type VerifyOptions struct {
 	// CheckFormat makes the format step list the files the formatters would
 	// change and fail when there are any, instead of rewriting them.
 	CheckFormat bool
-	Stdout      io.Writer
-	Stderr      io.Writer
+	// SeedStart is the seeds profile's first seed (`--seed-start`). Zero
+	// derives it from the UTC date of Now.
+	SeedStart uint64
+	// Now is the clock of the seeds profile's date; nil is the real clock.
+	Now    func() time.Time
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 type VerifySummary struct {
@@ -216,6 +229,8 @@ type verifyPlan struct {
 	runE2EFull        bool
 	runIntegration    bool
 	runStress         bool
+	runRace           bool
+	runSeeds          bool
 	runFailedTest     bool
 	// checkFormat makes the format step list instead of rewrite (--check-format).
 	checkFormat bool
@@ -267,11 +282,7 @@ func runVerifyProfileWithEnv(
 	if err != nil {
 		return err
 	}
-	shard, err := resolveVerifyShard(plan, opts.Shard)
-	if err != nil {
-		return err
-	}
-	err = plan.setCheckFormat(opts.CheckFormat)
+	shard, err := applyVerifyFlags(&plan, opts)
 	if err != nil {
 		return err
 	}
@@ -343,6 +354,20 @@ func runVerifyProfileWithEnv(
 	return runErr
 }
 
+// applyVerifyFlags checks the flags that only some profiles take against the
+// plan and applies them: --shard, --seed-start and --check-format.
+func applyVerifyFlags(plan *verifyPlan, opts *VerifyOptions) (verifyShard, error) {
+	shard, err := resolveVerifyShard(*plan, opts.Shard)
+	if err != nil {
+		return verifyShard{}, err
+	}
+	if opts.SeedStart != 0 && !plan.runSeeds {
+		return verifyShard{}, fmt.Errorf("--seed-start applies to the seeds profile only")
+	}
+
+	return shard, plan.setCheckFormat(opts.CheckFormat)
+}
+
 func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 	switch profile {
 	case VerifyDefault:
@@ -388,12 +413,20 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 		return verifyPlan{
 			runStress: true,
 		}, nil
+	case VerifyRace:
+		return verifyPlan{
+			runRace: true,
+		}, nil
+	case VerifySeeds:
+		return verifyPlan{
+			runSeeds: true,
+		}, nil
 	case VerifyFailedTest:
 		return verifyPlan{
 			runFailedTest: true,
 		}, nil
 	default:
-		return verifyPlan{}, fmt.Errorf("usage: devtool verify [%s]", verifyProfileUsage)
+		return verifyPlan{}, fmt.Errorf("usage: devtool verify [%s]", VerifyProfileUsage)
 	}
 }
 
@@ -510,6 +543,17 @@ func runOptionalVerification(
 	}
 	if plan.runStress {
 		if err := runStress(ctx, runner, opts.RepoRoot, env, collector, stdout, stderr); err != nil {
+			return err
+		}
+	}
+	if plan.runRace {
+		raceTimeout := resolveRaceSyncTimeout(opts.RaceTimeout, runtime.GOMAXPROCS(0))
+		if err := runRaceVerification(ctx, runner, opts.RepoRoot, env, raceTimeout, collector, stdout, stderr); err != nil {
+			return err
+		}
+	}
+	if plan.runSeeds {
+		if err := runSeedsVerification(ctx, runner, opts.RepoRoot, env, opts, collector, stdout, stderr); err != nil {
 			return err
 		}
 	}
@@ -798,12 +842,12 @@ const (
 )
 
 // deadlineForCores is the deadline of a CPU-bound verify step (a unit tier's
-// go test, the linter) for the cores the run may use. A deadline that fits a
-// CI runner fails a healthy run on a 2-core host, so a host below the
-// reference gets the step's small-host budget divided by its cores. A host at
-// the reference or above keeps the base deadline: more cores do not shorten
-// the deadline a real hang is measured against, and the CI job timeouts are
-// set above it.
+// go test, the race profile's, the linter) for the cores the run may use. A
+// deadline that fits a CI runner fails a healthy run on a 2-core host, so a
+// host below the reference gets the step's small-host budget divided by its
+// cores. A host at the reference or above keeps the base deadline: more cores
+// do not shorten the deadline a real hang is measured against, and the CI job
+// timeouts are set above it.
 func deadlineForCores(cores int, base, smallHostCoreBudget time.Duration) time.Duration {
 	if cores < 1 {
 		cores = 1

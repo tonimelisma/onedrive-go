@@ -158,7 +158,7 @@ func TestNightlyReportPostsCommitStatus(t *testing.T) {
 		description string
 	}{
 		{name: "green", remote: greenNightlyRemote, state: "success", description: "every nightly job passed"},
-		{name: "red", remote: redNightlyRemote, state: "failure", description: "1 of 6 nightly jobs failed"},
+		{name: "red", remote: redNightlyRemote, state: "failure", description: "1 of 7 nightly jobs failed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -642,7 +642,7 @@ func TestNightlyReportNamesAJobThatDidNotRun(t *testing.T) {
 		nightlyQueuedJob(prCheckIntegration), nightlyReportJobEntry())
 	runNightlyReport(t, both, false)
 	require.Len(t, both.statuses, 1)
-	assert.Equal(t, "1 of 6 nightly jobs failed; did not run: integration", both.statuses[0].description)
+	assert.Equal(t, "1 of 7 nightly jobs failed; did not run: integration", both.statuses[0].description)
 
 	const legs = 12
 	many := nightlyRunReport{}
