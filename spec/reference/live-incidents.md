@@ -42,6 +42,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
+| LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
 | LI-20261112-01 | Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts | closed | provider incident | 2026-11-13 | no |
 | LI-20261111-01 | Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261110-01 | A failed upload's cleanup was refused with 412 and left an empty file on OneDrive | fixed | product bug | 2026-11-10 | yes |
@@ -139,6 +140,60 @@ specific code after the status when the answer has one, and the client's
 object, something else or empty. A full-tier failure of this shape is rerun
 and recorded here as a recurrence.
 Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("A Write Can Be Refused With A Bare 400"), [live-recurring-families.md](live-recurring-families.md#bare-400-invalid-request-on-an-ordinary-write), [graph-client.md](../design/graph-client.md) (Error Handling)
+
+## LI-20261115-02: The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline
+
+First seen: 2026-11-15
+Last seen: 2026-11-15
+Area: scheduled stress verifier, `.github/workflows/ci.yml` `stress` job
+Suite / test: scheduled CI run `43739908483` of 2026-11-15 at main
+`341d9820`, job `stress`, step `sync race x3`:
+`go test -json -race -count=3 -shuffle=on -timeout=40m ./internal/sync/...`
+Classification: test harness
+Status: fixed
+Recurring: yes
+Summary: The step ended at go test's 40-minute alarm, and the night named the
+tests running at that moment as its failures. They had been running for 3
+and 4 seconds, so nothing hung: three race runs of the tree no longer fit
+the deadline. That deadline was a literal `40m` beside a count of 3, chosen
+when three runs took 31 minutes, and nothing tied it to the race profile's
+own deadline for one run of the same tree. Why one run of the tree grew was
+not measured. The step before it, `sync concurrency race x50`, passed the
+same night 37 seconds short of its own fixed 40-minute deadline. A stress
+step outgrew a fixed deadline before:
+[LI-20260412-04](#li-20260412-04-internalsync-stress-verification-outgrew-the-old-20-minute-race-budget).
+
+Evidence:
+- Scheduled run `43739908483` of 2026-11-15 (main `341d9820`): the step ended
+  at the 40-minute alarm; the tests running then were 3 and 4 seconds old.
+  The slow-test summary held tests that had finished three times and one
+  that had finished twice: two runs of the tree were done and the third was
+  underway.
+- The same step took 31.3 minutes in scheduled run `43615207680` of
+  2026-11-14 (main `2b1c5afa`) and 26.3 minutes in `43473280688` of
+  2026-11-13 (main `27e76cc3`).
+- The `verify-race` job, one race run of the tree plus the job's setup, took
+  12.2 minutes on `04983d12` and 15.8 minutes on `341d9820`.
+- `sync concurrency race x50` took 11.5, 24.0 and 39.4 minutes in the same
+  three scheduled runs, against a fixed 40-minute deadline. Its `-run`
+  pattern selected 214 top-level tests at the first of those commits and
+  244 at the last. Why the step took 3.4 times as long is not known.
+- Everything in the `stress` job outside its verify step took 9 seconds in
+  run `43739908483`.
+
+Fix: the number of race runs of the tree is one constant,
+`stressSyncRaceRuns` (3), and the step's `-count`, name, status line and
+deadline come from it. The deadline is that many times the race profile's
+deadline for the host's cores (`raceSyncTimeoutForCores`): 90 minutes on a
+CI runner, 360 on a 2-core host
+(`TestRunVerifyStressSyncRaceStepTakesTheRaceDeadlineOncePerRun`). The
+`sync concurrency race x50` step's deadline is 80 minutes, twice its
+slowest night; it is a measured number, not a derived one, because the
+step still selects its tests by a name pattern and has no budget of its
+own. The `stress` job's `timeout-minutes` is 200, the three steps'
+deadlines on a runner (20 + 80 + 90 minutes) plus setup
+(`TestCIJobTimeoutsCoverEveryGoTestDeadline`).
+Promoted docs: [system.md](../design/system.md)
 
 ## LI-20261112-01: Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts
 

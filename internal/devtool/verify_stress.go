@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const millisecondsPerSecond = 1000
@@ -22,6 +24,40 @@ const syncTestTree = "./internal/sync/..."
 // store and graph tests. Over the tree, a package with none of them is
 // expected; the step fails only when no package has one.
 const stressSyncConcurrencyPattern = "TestRunWatch|TestWatch|TestOneShot|TestWorkerPool|Shutdown|Drain|Concurren|Cancel"
+
+// stressSyncRaceRuns is how many race runs of the whole sync tree the stress
+// lane makes, as the -count of one go test. The step's name, its status line
+// and its deadline all follow from it, the deadline as this many times the
+// race profile's deadline for one run on the same cores, so a run of the tree
+// that grows moves the two lanes' budgets together.
+const stressSyncRaceRuns = 3
+
+// stressSyncRaceTimeout is go test's deadline for the stress lane's race runs
+// of the sync tree on a host with the given cores.
+func stressSyncRaceTimeout(cores int) time.Duration {
+	return stressSyncRaceRuns * raceSyncTimeoutForCores(cores)
+}
+
+// stressSyncRaceStepName names the stress lane's race runs of the sync tree
+// in the summary, by their number.
+func stressSyncRaceStepName() string {
+	return fmt.Sprintf("sync race x%d", stressSyncRaceRuns)
+}
+
+// stressSyncRaceCommand is the stress lane's step of race runs of the whole
+// sync tree for the given cores. It runs through `go test -json`, so the
+// slowest tests can be read from its output.
+func stressSyncRaceCommand(cores int) stressCommandSpec {
+	count := "-count=" + strconv.Itoa(stressSyncRaceRuns)
+	deadline := "-timeout=" + stressSyncRaceTimeout(cores).String()
+
+	return stressCommandSpec{
+		stepName:         stressSyncRaceStepName(),
+		statusLine:       fmt.Sprintf("==> go test -json -race %s -shuffle=on %s %s\n", count, deadline, syncTestTree),
+		args:             []string{"test", "-json", "-race", count, "-shuffle=on", deadline, syncTestTree},
+		collectSlowTests: true,
+	}
+}
 
 type stressCommandSpec struct {
 	stepName         string
@@ -48,16 +84,20 @@ func runStress(
 	runner commandRunner,
 	repoRoot string,
 	env []string,
+	cores int,
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
-	// Repetition goes where the concurrency is. One race iteration of the
-	// whole sync tree takes about ten minutes on a CI runner (three took 31
-	// minutes in November 2026), so fifty no longer fit any budget; its
-	// watch, runtime, shutdown and worker tests (where the 1-in-50 flakes
-	// have come from) take well under a minute and still run fifty times.
-	// Every step shuffles test order, so each repetition also varies what
-	// runs beside what.
+	// Repetition goes where the concurrency is. One race run of the whole
+	// sync tree, with the job's setup, took 12.2 and 15.8 minutes in CI's
+	// verify-race job on 2026-11-15; three took 31.3 minutes in this lane on
+	// 2026-11-14 and had not finished at a fixed 40-minute deadline on
+	// 2026-11-15. So fifty no longer fit any budget, and the few runs of the
+	// tree take the race profile's deadline once per run. The tree's watch,
+	// runtime, shutdown and worker tests (where the 1-in-50 flakes have come
+	// from) still run fifty times: one pass of them took about 47 seconds on
+	// 2026-11-15, 39.4 minutes for the fifty. Every step shuffles test order,
+	// so each repetition also varies what runs beside what.
 	stressCommands := []stressCommandSpec{
 		{
 			stepName: "multisync race x50",
@@ -90,23 +130,7 @@ func runStress(
 				syncTestTree,
 			},
 		},
-		{
-			stepName: "sync race x3",
-			statusLine: fmt.Sprintf(
-				"==> go test -json -race -count=3 -shuffle=on -timeout=%s %s\n",
-				stressSyncTimeout, syncTestTree,
-			),
-			args: []string{
-				"test",
-				"-json",
-				"-race",
-				"-count=3",
-				"-shuffle=on",
-				"-timeout=" + stressSyncTimeout,
-				syncTestTree,
-			},
-			collectSlowTests: true,
-		},
+		stressSyncRaceCommand(cores),
 	}
 
 	// Every step runs whatever an earlier one returned: a multisync flake says

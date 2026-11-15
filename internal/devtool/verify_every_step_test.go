@@ -204,5 +204,5 @@ func TestRunVerifyStressRunsEveryStepAfterOneFails(t *testing.T) {
 		Stderr:   &bytes.Buffer{},
 	})
 	require.ErrorContains(t, err, "stress tests")
-	require.Len(t, runner.runCommands, 3, "the sync x50 and x3 steps still run")
+	require.Len(t, runner.runCommands, 3, "both sync steps still run")
 }
