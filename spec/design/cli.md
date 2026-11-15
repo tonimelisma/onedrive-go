@@ -561,8 +561,15 @@ list nil. A construction site does not fill a list the step fills again. The
 folder forms of `get` and `put` print one generic document type,
 `folderTransferJSONOutput`, with one `withEmptyLists`; its two golden files
 pin both documents byte for byte (`TestGetFolderJSONOutput_Golden`,
-`TestPutFolderJSONOutput_Golden`). A list tagged `omitempty` is still left
-out when empty, and a map or pointer absent by meaning keeps its `omitempty`.
+`TestPutFolderJSONOutput_Golden`). A `put` to a drive path prints a remote
+path in one form, `putJSONPath`: the cleaned path (`CleanRemotePath`, which
+trims leading and trailing slashes only, so `a//b` stays as it is) with one
+leading slash (`/Backup/a.txt`), whatever form it was typed in (`Backup`,
+`/Backup/`), for a single file and for each file of a folder alike (R-1.3.4,
+`TestPut_JSONPrintsEachPathWithOneLeadingSlash`,
+`TestRunPut_FolderReportsEveryFileAsTextAndJSON`); a `put` to a shared
+target prints the target's selector as `path`. A list tagged
+`omitempty` is still left out when empty, and a map or pointer absent by meaning keeps its `omitempty`.
 `accounts_requiring_auth` is always present, as a list, in every document
 that carries it (`shared`, `drive list`, `drive search`).
 `TestJSONOutputCalls_PrintDeclaredTypesWithTheirListsFilled` finds every value

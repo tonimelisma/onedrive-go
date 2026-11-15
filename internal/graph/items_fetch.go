@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -122,6 +123,73 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 	return item, nil
 }
 
+// driveRootAlias is the item ID Graph takes for a drive's root folder. It
+// names no item: an answer carries the root's own ID as its parent.
+const driveRootAlias = "root"
+
+// ErrNameNotPathAddressable reports a name a path-addressed request cannot
+// carry: one whose escaped form is longer than maxPathAddressedLength, or one
+// holding ':', which ends the path in a path route and which url.PathEscape
+// leaves as it is. A caller that must still find such a name lists its
+// folder.
+var ErrNameNotPathAddressable = errors.New("graph: name cannot be carried in a path-addressed request")
+
+// GetChildByName reads the item OneDrive holds under name directly in the
+// folder parentID, with one request (items/{parentID}:/{name}:) instead of a
+// listing of the folder. OneDrive resolves the name under its own name
+// equivalence, so the answer may carry another spelling of it (letter case,
+// Unicode form), and a path query can resolve elsewhere: the answer is the
+// item only when it sits directly in parentID and its name equals name by
+// namekey.Equal, and is ErrNotFound otherwise. A name the route cannot carry
+// is ErrNameNotPathAddressable and an empty name is ErrInvalidPath, both
+// before any request.
+func (c *Client) GetChildByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
+	if name == "" {
+		return nil, ErrInvalidPath
+	}
+	encoded := url.PathEscape(name)
+	if len(encoded) > maxPathAddressedLength || strings.Contains(name, ":") {
+		return nil, fmt.Errorf("graph: reading %q: %w", name, ErrNameNotPathAddressable)
+	}
+
+	c.logger.Debug("getting child by name",
+		slog.String("drive_id", driveID.String()),
+		slog.String("parent_id", parentID),
+		slog.String("name", name),
+	)
+
+	item, err := c.fetchItem(ctx, childPathRoute(driveID, parentID, encoded))
+	if err != nil {
+		return nil, err
+	}
+	if !itemSitsIn(item, driveID, parentID) || !namekey.Equal(item.Name, name) {
+		return nil, fmt.Errorf("graph: %q in folder %s resolved to %q in folder %s: %w",
+			name, parentID, item.Name, item.ParentID, ErrNotFound)
+	}
+
+	return item, nil
+}
+
+// itemSitsIn reports whether item's parent is the folder parentID of driveID.
+// Item IDs carry a drive ID prefix, which OneDrive answers in either letter
+// case, so the parent ID is compared without case. For the drive root's
+// alias, which no answer carries, the parent path says so: the top of the
+// drive, of this drive when the answer names one.
+func itemSitsIn(item *Item, driveID driveid.ID, parentID string) bool {
+	if strings.EqualFold(item.ParentID, parentID) {
+		return true
+	}
+
+	return parentID == driveRootAlias && item.ParentPathKnown && item.ParentPath == "" &&
+		(item.ParentDriveID.IsZero() || item.ParentDriveID.Equal(driveID))
+}
+
+// childPathRoute is the route of the item at encodedPath, a path of escaped
+// segments, below the item parentID.
+func childPathRoute(driveID driveid.ID, parentID, encodedPath string) string {
+	return fmt.Sprintf("/drives/%s/items/%s:/%s:", driveID, url.PathEscape(parentID), encodedPath)
+}
+
 // maxPathAddressedLength bounds the encoded path one path-addressed request
 // carries. Graph rejects longer URLs with 400 "The length of the URL for this
 // request exceeds the configured maxUrlLength value" (measured on a Personal
@@ -141,7 +209,7 @@ func (c *Client) fetchItemByPathChunks(ctx context.Context, driveID driveid.ID, 
 		return nil, err
 	}
 	for _, chunk := range chunks[1:] {
-		item, err = c.fetchItem(ctx, fmt.Sprintf("/drives/%s/items/%s:/%s:", driveID, url.PathEscape(item.ID), chunk))
+		item, err = c.fetchItem(ctx, childPathRoute(driveID, item.ID, chunk))
 		if err != nil {
 			return nil, err
 		}

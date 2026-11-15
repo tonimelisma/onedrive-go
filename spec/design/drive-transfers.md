@@ -125,10 +125,24 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   file under the link's name, and a link to a folder is one failed file
   (`not a regular file`). After a 409, `EnsureFolder` takes
   the folder OneDrive holds under a name it treats as the same
-  (`namekey.Equal`), as `putFile` does for a file. Every file goes through
-  the caller's `PutFile`, which is `putFile`: a file already there is
-  overwritten by ID, conditionally, as a single `put` overwrites it
-  (R-1.3.8).
+  (`namekey.Equal`), as `putFile` does for a file, and says so when a file
+  holds the name. Both find that item through `FindExistingChild`
+  (`session.go`): one read of the name under its parent
+  (`graph.GetChildByName`, `items/{parent}:/{name}:`), whose answer counts
+  only when it sits in that parent under an equal name. It lists the
+  parent, once, only when the read cannot settle the name: a name the path
+  route cannot carry (escaped longer than `maxPathAddressedLength`, or
+  holding `:`), a read answered 400 (`graph.ErrBadRequest`; measured for a
+  child named `$value`, see `graph-api-quirks.md`), or a read that finds
+  nothing equal although the create said the name exists. Any other failed
+  read is the error. If the listing finds nothing either, the 409 stands for
+  a file; a folder reports that it was not found in its parent. A listed
+  item of the name that carries no ID is an error. A second
+  upload of a tree of n files in f folders therefore costs n + f one-item
+  reads and no listing, apart from such names. Every
+  file goes through the caller's `PutFile`, which is `putFile`: a file
+  already there is overwritten by ID, conditionally, as a single `put`
+  overwrites it (R-1.3.8).
 - **Failures and the returned error.** The failure of one file or folder is
   an event, counted, and the walk goes on with its siblings; its error text
   names the path. The returned error is a `TreeRootError` when the root
@@ -162,7 +176,11 @@ Evidence: `TestDownloadTree_RefusesUnsafeRemoteNames`,
 `TestUploadTree_TransferFailureIsReportedAndOthersContinue`,
 `TestUploadTree_UnopenableRootCreatesNothingOnOneDrive`,
 `TestUploadTree_RootThatCannotBeCreatedIsTheReturnedError`,
-`TestEnsureFolder_ConflictFindsTheFolderInAnotherCase`,
+`TestEnsureFolder_Conflict`, `TestEnsureFolder_ConflictFindsTheFolderInAnotherCase`,
+`TestEnsureFolder_ConflictListsOnceWhenTheReadCannotFindTheName`,
+`TestEnsureFolder_ConflictNotFound`, `TestEnsureFolder_AReadThatFailsIsTheError`,
+`TestEnsureFolder_AFileHoldingTheNameIsSaidSo`,
+`TestRunPut_FolderUploadedAgainListsNoFolder`,
 `TestOpenDir_ReadsInBatches`, `TestOpenDir_RefusesAFIFOWithoutBlocking`,
 `TestRunGet_FolderReportsEveryFileAsTextAndJSON`,
 `TestRunGet_FolderRefusesAnUnsafeRemoteName`,
@@ -501,8 +519,11 @@ sent, and looking the name up to check it against the content failed the
 empty file as a bad upload and dropped the mark. A zero-byte create never runs
 the hook either: the created item is the whole file.
 CLI `put` onto an existing name overwrites that file by ID with If-Match on
-the eTag just listed, and refuses an existing folder (R-1.3.8,
-`TestPutFile_ExistingFileIsOverwrittenByIDConditionally`).
+the eTag just read, the file found by one read of its name
+(`FindExistingChild`, under "Folder downloads and uploads"), and refuses an
+existing folder (R-1.3.8,
+`TestPutFile_ExistingFileIsOverwrittenByIDConditionally`,
+`TestPutFile_ExistingFolderIsAnError`).
 
 ## SessionStore
 

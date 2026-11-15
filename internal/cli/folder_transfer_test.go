@@ -113,9 +113,10 @@ func TestRunGet_FolderReportsEveryFileAsTextAndJSON(t *testing.T) {
 }
 
 // A remote name that is not one plain local name is one failure that names
-// the reason; its siblings download and the command fails.
+// the reason; its siblings download and the command fails. In --json the
+// failure is the one entry of errors, and the command fails the same way.
 //
-// Validates: R-1.2.7
+// Validates: R-1.2.7, R-6.6.33
 func TestRunGet_FolderRefusesAnUnsafeRemoteName(t *testing.T) {
 	setTestDriveHome(t)
 	cc, fake := jsonContractFileContext(t)
@@ -132,6 +133,16 @@ func TestRunGet_FolderRefusesAnUnsafeRemoteName(t *testing.T) {
 		"Failed: "+target+`: refused the remote name "a/b": it holds a path separator`+"\n", run.stderr)
 	assertFileHolds(t, filepath.Join(target, "ok.txt"), "ok")
 	assert.NoDirExists(t, filepath.Join(target, "a"), "nothing is written for a refused name")
+
+	jsonTarget := filepath.Join(t.TempDir(), "Docs")
+	asJSON := runFileCommand(t, getCommand, cc, true, "/Docs", jsonTarget)
+
+	require.EqualError(t, asJSON.err, "1 item failed to download")
+	var doc folderTransferJSONOutput[getJSONOutput]
+	require.NoError(t, json.Unmarshal([]byte(asJSON.stdout), &doc), asJSON.stdout)
+	assert.Equal(t, []getJSONOutput{{Path: filepath.Join(jsonTarget, "ok.txt"), Size: 2}}, doc.Files)
+	assert.Equal(t, []string{jsonTarget + `: refused the remote name "a/b": it holds a path separator`}, doc.Errors)
+	assert.NoDirExists(t, filepath.Join(jsonTarget, "a"))
 }
 
 // A folder put uploads the whole tree and says so in one summary line, or
@@ -164,11 +175,54 @@ func TestRunPut_FolderReportsEveryFileAsTextAndJSON(t *testing.T) {
 	var doc folderTransferJSONOutput[putJSONOutput]
 	require.NoError(t, json.Unmarshal([]byte(asJSON.stdout), &doc))
 	assert.ElementsMatch(t, []putJSONOutput{
-		{Path: "Copy/a.txt", ID: fakeItemID(fake, "Copy/a.txt")},
-		{Path: "Copy/Sub/b.txt", ID: fakeItemID(fake, "Copy/Sub/b.txt")},
+		{Path: "/Copy/a.txt", ID: fakeItemID(fake, "Copy/a.txt")},
+		{Path: "/Copy/Sub/b.txt", ID: fakeItemID(fake, "Copy/Sub/b.txt")},
 	}, doc.Files)
 	assert.Equal(t, 2, doc.FoldersCreated)
 	assert.Equal(t, []string{}, doc.Errors)
+}
+
+// A folder put of a tree that is already on OneDrive finds each folder and
+// each file that holds a name by one read of that name, never by a listing of
+// its folder, so a second upload of n files in f folders costs n + f reads
+// and no listing. Each file is overwritten by ID and printed under the same
+// path as before.
+//
+// Validates: R-1.3.1, R-1.3.4, R-1.3.8
+func TestRunPut_FolderUploadedAgainListsNoFolder(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	cc.Logger = slog.New(slog.DiscardHandler)
+	local := filepath.Join(t.TempDir(), "Backup")
+	files := []string{"a.txt", "b.txt", "Sub/c.txt"}
+	folders := []string{"Backup", "Backup/Sub"}
+	writeEmptyLocalFiles(t, local, files...)
+	first := runFileCommand(t, putCommand, cc, true, local, "Backup")
+	require.NoError(t, first.err, first.stderr)
+	want := make([]putJSONOutput, 0, len(files))
+	for _, file := range files {
+		want = append(want, putJSONOutput{Path: "/Backup/" + file, ID: fakeItemID(fake, "Backup/"+file)})
+	}
+	listingsBefore, readsBefore := fakeRequestCounts(fake)
+
+	again := runFileCommand(t, putCommand, cc, true, local, "Backup")
+
+	require.NoError(t, again.err, again.stderr)
+	listings, reads := fakeRequestCounts(fake)
+	assert.Zero(t, listings-listingsBefore, "an upload onto names that exist lists no folder")
+	assert.Equal(t, len(files)+len(folders), reads-readsBefore, "one read per file and per folder")
+	var doc folderTransferJSONOutput[putJSONOutput]
+	require.NoError(t, json.Unmarshal([]byte(again.stdout), &doc))
+	assert.ElementsMatch(t, want, doc.Files, "the same items, under the same paths")
+	assert.Equal(t, []string{}, doc.Errors)
+}
+
+// fakeRequestCounts is how many listings and reads of one name fake answered.
+func fakeRequestCounts(fake *fakeGraphDrive) (listings, nameReads int) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	return fake.listings, fake.nameReads
 }
 
 // assertFileHolds holds the local file at path to content.

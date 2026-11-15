@@ -2,11 +2,13 @@ package driveops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -793,6 +795,29 @@ func TestMountSession_ResolveDeleteTarget_FallsBackToParentListingAfterPathNotFo
 	assert.Equal(t, []string{testDeleteTargetPath, testDeleteParentPath}, *gotPaths)
 }
 
+// A parent listing that fails after the read by path found nothing is the
+// error, and it names the path once and its folder once.
+//
+// Validates: R-6.7.14
+func TestMountSession_ResolveDeleteTarget_AFailedParentListingNamesThePathOnce(t *testing.T) {
+	t.Parallel()
+
+	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/children") {
+			w.WriteHeader(http.StatusForbidden)
+			writeTestResponsef(t, w, `{"error":{"code":"accessDenied","message":"denied"}}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"not found"}}`)
+	}))
+
+	_, err := s.ResolveDeleteTarget(t.Context(), "Documents/file.txt")
+	require.ErrorIs(t, err, graph.ErrForbidden)
+	require.EqualError(t, err, `resolve "Documents/file.txt" from the listing of its parent: `+
+		`list children for "Documents": graph: HTTP 403 accessDenied: denied`)
+}
+
 func TestMountSession_ResolveDeleteTarget_RecoversWhenParentPathListingLags(t *testing.T) {
 	t.Parallel()
 
@@ -1156,54 +1181,267 @@ func TestEnsureFolder_Created(t *testing.T) {
 	assert.Equal(t, "docs", item.Name)
 }
 
-// conflictingFolderSession is a session whose every folder create answers
-// 409 and whose listing of the parent answers children, a JSON array.
-func conflictingFolderSession(t *testing.T, children string) *Session {
+// ensureFolderParent is the folder the EnsureFolder tests create in.
+const ensureFolderParent = "parent-id"
+
+// nameLongerThanAPathRoute is the length of a name OneDrive takes (up to 400
+// characters) that is longer than the 240 escaped characters a path-addressed
+// read takes.
+const nameLongerThanAPathRoute = 300
+
+// folderConflictChild is one item the folder of a folderConflict holds.
+type folderConflictChild struct {
+	id, name string
+	isFolder bool
+}
+
+// answer is the child as Graph answers it, in ensureFolderParent.
+func (c folderConflictChild) answer() map[string]any {
+	item := map[string]any{"id": c.id, "name": c.name, "parentReference": map[string]any{"id": ensureFolderParent}}
+	if c.isFolder {
+		item["folder"] = map[string]any{}
+	} else {
+		item["file"] = map[string]any{}
+	}
+
+	return item
+}
+
+// folderConflict is a Graph fake of the folder ensureFolderParent, where every
+// folder create answers 409. A read of one name answers the child that holds
+// it, letter case aside, or 404; always 404 when readMisses, and always
+// readStatus with the error code readCode when readStatus is set. A listing
+// answers every child. It counts both.
+type folderConflict struct {
+	children   []folderConflictChild
+	readMisses bool
+	readStatus int
+	readCode   string
+	reads      atomic.Int32
+	listings   atomic.Int32
+}
+
+func (f *folderConflict) session(t *testing.T) *Session {
 	t.Helper()
 
 	return newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// CreateFolder is a POST and ListChildren a GET, both on /children.
-		if r.Method == http.MethodPost {
+		switch {
+		case r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusConflict)
 			writeTestResponsef(t, w, `{"error":{"code":"nameAlreadyExists"}}`)
-
-			return
+		case strings.HasSuffix(r.URL.Path, "/children"):
+			f.listings.Add(1)
+			values := make([]map[string]any, 0, len(f.children))
+			for _, child := range f.children {
+				values = append(values, child.answer())
+			}
+			writeFolderConflictJSON(t, w, map[string]any{"value": values})
+		default:
+			f.reads.Add(1)
+			f.serveRead(t, w, r)
 		}
-		writeTestResponsef(t, w, `{"value":%s}`, children)
 	}))
 }
 
+// serveRead answers a read of one name, items/{parent}:/{name}:.
+func (f *folderConflict) serveRead(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+
+	_, route, _ := strings.Cut(r.URL.Path, ":/")
+	name := strings.TrimSuffix(route, ":")
+	if f.readStatus != 0 {
+		w.WriteHeader(f.readStatus)
+		writeTestResponsef(t, w, `{"error":{"code":%q}}`, f.readCode)
+		return
+	}
+	for _, child := range f.children {
+		if !f.readMisses && strings.EqualFold(child.name, name) {
+			writeFolderConflictJSON(t, w, child.answer())
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
+	writeTestResponsef(t, w, `{"error":{"code":"itemNotFound"}}`)
+}
+
+func writeFolderConflictJSON(t *testing.T, w http.ResponseWriter, v any) {
+	t.Helper()
+
+	data, err := json.Marshal(v)
+	require.NoError(t, err)
+	_, err = w.Write(data)
+	require.NoError(t, err)
+}
+
+// A folder that exists is found by one read of its name: its parent is never
+// listed, so a second upload of a tree costs no listing per folder.
+//
+// Validates: R-1.3.1
 func TestEnsureFolder_Conflict(t *testing.T) {
 	t.Parallel()
 
-	s := conflictingFolderSession(t, `[{"id":"existing-id","name":"docs","folder":{}}]`)
+	fake := &folderConflict{children: []folderConflictChild{{id: "existing-id", name: "docs", isFolder: true}}}
 
-	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
+	item, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
 	require.NoError(t, err)
 	assert.Equal(t, "existing-id", item.ID)
+	assert.Equal(t, int32(1), fake.reads.Load())
+	assert.Zero(t, fake.listings.Load(), "a folder that exists costs no listing of its parent")
 }
 
 // A folder OneDrive already holds under a name that differs only in letter
 // case is the folder the 409 meant, found and used: OneDrive treats the two
-// names as one.
+// names as one, and the read answers its stored spelling.
 //
 // Validates: R-1.3.1, R-1.5.3
 func TestEnsureFolder_ConflictFindsTheFolderInAnotherCase(t *testing.T) {
 	t.Parallel()
 
-	s := conflictingFolderSession(t, `[{"id":"existing-id","name":"Docs","folder":{}}]`)
+	fake := &folderConflict{children: []folderConflictChild{{id: "existing-id", name: "Docs", isFolder: true}}}
 
-	item, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
+	item, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
 	require.NoError(t, err)
 	assert.Equal(t, "existing-id", item.ID)
 	assert.Equal(t, "Docs", item.Name)
+	assert.Zero(t, fake.listings.Load())
 }
 
+// The folder is listed, once, only when the read cannot settle the name: a
+// name the path route cannot carry, a read answered 400 (measured on a
+// Personal drive for a folder named $value that its parent's listing holds),
+// or a read that finds nothing equal although the create said the name
+// exists.
+//
+// Validates: R-1.3.1
+func TestEnsureFolder_ConflictListsOnceWhenTheReadCannotFindTheName(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		label, name string
+		readMisses  bool
+		readStatus  int
+		readCode    string
+		wantReads   int32
+	}{
+		{label: "a name longer than a path route carries", name: strings.Repeat("a", nameLongerThanAPathRoute)},
+		{label: "a name holding a colon", name: "a:b"},
+		{label: "a read that finds nothing equal", name: "docs", readMisses: true, wantReads: 1},
+		{
+			label: "a read answered 400", name: "$value",
+			readStatus: http.StatusBadRequest, readCode: "invalidRequest", wantReads: 1,
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &folderConflict{
+				children:   []folderConflictChild{{id: "existing-id", name: tc.name, isFolder: true}},
+				readMisses: tc.readMisses,
+				readStatus: tc.readStatus,
+				readCode:   tc.readCode,
+			}
+
+			item, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, tc.name)
+			require.NoError(t, err)
+			assert.Equal(t, "existing-id", item.ID)
+			assert.Equal(t, tc.wantReads, fake.reads.Load())
+			assert.Equal(t, int32(1), fake.listings.Load())
+		})
+	}
+}
+
+// A read that fails, other than by finding nothing or by a 400, is the error:
+// a listing would not answer what the read could not.
+//
+// Validates: R-1.3.1
+func TestEnsureFolder_AReadThatFailsIsTheError(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		status int
+		code   string
+		want   error
+	}{
+		{status: http.StatusForbidden, code: "accessDenied", want: graph.ErrForbidden},
+		{status: http.StatusInternalServerError, code: "generalException", want: graph.ErrServerError},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &folderConflict{
+				children:   []folderConflictChild{{id: "existing-id", name: "docs", isFolder: true}},
+				readStatus: tc.status,
+				readCode:   tc.code,
+			}
+
+			_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
+			require.ErrorIs(t, err, tc.want)
+			assert.Zero(t, fake.listings.Load())
+		})
+	}
+}
+
+// A 409 for a name neither the read nor the listing finds is an error, the
+// same after a read answered 400 as after one that found nothing.
+//
+// Validates: R-1.3.1
 func TestEnsureFolder_ConflictNotFound(t *testing.T) {
 	t.Parallel()
 
-	s := conflictingFolderSession(t, `[{"id":"other-id","name":"other","folder":{}}]`)
+	for _, tc := range []struct {
+		label      string
+		readStatus int
+		readCode   string
+	}{
+		{label: "a read that finds nothing"},
+		{label: "a read answered 400", readStatus: http.StatusBadRequest, readCode: "invalidRequest"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := s.EnsureFolder(t.Context(), "parent-id", "docs")
-	require.ErrorContains(t, err, "not found in parent")
+			fake := &folderConflict{
+				children:   []folderConflictChild{{id: "other-id", name: "other", isFolder: true}},
+				readStatus: tc.readStatus,
+				readCode:   tc.readCode,
+			}
+
+			_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
+			require.EqualError(t, err, `folder "docs" reported as existing but not found in parent`)
+			assert.Equal(t, int32(1), fake.reads.Load())
+			assert.Equal(t, int32(1), fake.listings.Load())
+		})
+	}
+}
+
+// A listing that holds the name without an item ID is an error that says so:
+// nothing can be made in an item no request can name, and "not found" would
+// hide what OneDrive answered.
+//
+// Validates: R-1.3.1
+func TestEnsureFolder_AListedFolderWithoutAnIDIsAnError(t *testing.T) {
+	t.Parallel()
+
+	fake := &folderConflict{
+		children:   []folderConflictChild{{name: "docs", isFolder: true}},
+		readMisses: true,
+	}
+
+	_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
+	require.EqualError(t, err,
+		`resolving existing folder "docs": the listing of the destination folder holds "docs" without an item ID`)
+	assert.Equal(t, int32(1), fake.listings.Load())
+}
+
+// A file that holds the folder's name is said to be a file: the folder cannot
+// be made, and nothing is uploaded into the file.
+//
+// Validates: R-1.3.1
+func TestEnsureFolder_AFileHoldingTheNameIsSaidSo(t *testing.T) {
+	t.Parallel()
+
+	fake := &folderConflict{children: []folderConflictChild{{id: "file-id", name: "docs"}}}
+
+	_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
+	require.EqualError(t, err, `"docs" is a file on OneDrive`)
+	assert.Zero(t, fake.listings.Load())
 }

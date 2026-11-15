@@ -23,6 +23,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
@@ -3035,6 +3036,37 @@ func TestUploadFileToItem_PassesTheCallersIfMatchToTheSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{`"live"`}, ul.ifMatches,
 		"an overwrite must be conditional on the eTag the caller's preflight saw")
+}
+
+// An overwrite by ID is counted in the command's performance record as a
+// create is, and sets the local file's own modification time when the caller
+// gives none.
+//
+// Validates: R-6.6.14, R-5.6.2
+func TestUploadFileToItem_CountsInThePerfRecordAndKeepsTheFilesMtime(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	localPath, data, hash := sessionTestFile(t, dir)
+	info, err := os.Stat(localPath)
+	require.NoError(t, err)
+	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		uploadFromSessionFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: int64(len(data)), QuickXorHash: hash}, nil
+		},
+	}}
+	collector := perf.NewCollector(nil)
+
+	result, err := newTestTM(&tmSimpleDownloader{}, ul, NewSessionStore(dir, slog.Default())).
+		UploadFileToItem(perf.WithCollector(t.Context(), collector), driveid.New("d1"), "item-1", localPath, UploadOpts{})
+
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().Equal(result.Mtime), "the file's own modification time")
+	snapshot := collector.Snapshot()
+	assert.Equal(t, 1, snapshot.UploadCount)
+	assert.Equal(t, int64(len(data)), snapshot.UploadBytes)
+	assert.Equal(t, 1, snapshot.CommandItems)
+	assert.Equal(t, int64(len(data)), snapshot.CommandBytes)
 }
 
 // Validates: R-6.3.6

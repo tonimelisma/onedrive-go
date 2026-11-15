@@ -19,8 +19,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-// putOverwriteServer is a Graph fake whose folder already holds name: the
-// create answers 409, and the overwrite by ID must carry If-Match.
+// putOverwriteServer is a Graph fake whose folder "parent" already holds the
+// item existing: the create answers 409, a read of the one name answers the
+// item under its stored spelling, a listing of the folder fails the test, and
+// the overwrite by ID must carry If-Match.
 func putOverwriteServer(t *testing.T, existing string, isFolder bool) (*httptest.Server, *[]string) {
 	t.Helper()
 
@@ -39,11 +41,15 @@ func putOverwriteServer(t *testing.T, existing string, isFolder bool) (*httptest
 			w.WriteHeader(http.StatusConflict)
 			writePutTestBody(t, w, []byte(`{"error":{"code":"nameAlreadyExists","message":"Name already exists"}}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/children"):
+			assert.Fail(t, "the folder was listed after a 409", "one read of the name finds the item")
+			w.WriteHeader(http.StatusTeapot)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/drives/000000000000000d/items/parent:/"):
 			facet := `"file":{}`
 			if isFolder {
 				facet = `"folder":{"childCount":0}`
 			}
-			writePutTestBody(t, w, []byte(`{"value":[{"id":"existing","name":"`+existing+`","eTag":"\"e,3\"",`+facet+`}]}`))
+			writePutTestBody(t, w, []byte(`{"id":"existing","name":"`+existing+`","eTag":"\"e,3\"",`+facet+
+				`,"parentReference":{"id":"parent"}}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/items/existing/createUploadSession"):
 			// Someone edited it after the listing: the conditional
 			// overwrite must refuse rather than replace that edit.
@@ -69,7 +75,8 @@ func TestPutFile_ExistingFileIsOverwrittenByIDConditionally(t *testing.T) {
 	t.Parallel()
 
 	// A create never replaces, so put's "upload over an existing file"
-	// semantics must go by the existing item's ID, conditionally.
+	// semantics must go by the existing item's ID, conditionally. The item is
+	// found by one read of its name, under the spelling OneDrive stores.
 	srv, log := putOverwriteServer(t, "STRASSE.txt", false)
 	client := newTestGraphClient(t, srv.URL)
 	tm := driveops.NewTransferManager(client, client, nil, slog.Default())
@@ -80,7 +87,7 @@ func TestPutFile_ExistingFileIsOverwrittenByIDConditionally(t *testing.T) {
 	_, err := putFile(t.Context(), client, tm, driveid.New("d"), "parent", "stra\u00dfe.txt", local, driveops.UploadOpts{})
 	require.ErrorIs(t, err, graph.ErrPreconditionFailed)
 	assert.Contains(t, *log, `POST /drives/000000000000000d/items/existing/createUploadSession if-match="e,3"`,
-		"the overwrite goes to the existing item, conditional on the eTag just listed")
+		"the overwrite goes to the existing item, conditional on the eTag just read")
 }
 
 // Validates: R-1.3.8

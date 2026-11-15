@@ -14,7 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 func newPutCmd() *cobra.Command {
@@ -26,11 +25,19 @@ func newPutCmd() *cobra.Command {
 	}
 }
 
-// putJSONOutput is the JSON output schema for uploading a single file.
+// putJSONOutput is the JSON output of one uploaded file: the document of a
+// single put, and each entry of a folder put's files.
 type putJSONOutput struct {
 	Path string `json:"path"`
 	ID   string `json:"id"`
 	Size int64  `json:"size"`
+}
+
+// putJSONPath is the one form in which put prints a remote path under
+// --json, for a single file and for each file of a folder: the cleaned path
+// with one leading slash, whatever form it was typed in.
+func putJSONPath(remotePath string) string {
+	return "/" + driveops.CleanRemotePath(remotePath)
 }
 
 type uploadParentResolver interface {
@@ -68,8 +75,9 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	logger := cc.Logger
 
+	// Default remote path is root + local name.
+	remotePath := "/" + filepath.Base(localPath)
 	if fi.IsDir() {
-		remotePath := "/" + filepath.Base(localPath)
 		if len(args) > 1 {
 			remotePath = args[1]
 		}
@@ -77,8 +85,6 @@ func runPut(cmd *cobra.Command, args []string) error {
 		return uploadFolder(ctx, cc, session, localPath, remotePath)
 	}
 
-	// Default remote path is root + local filename.
-	remotePath := "/" + filepath.Base(localPath)
 	if len(args) > 1 {
 		remotePath, err = resolvePutFileTarget(ctx, session, args[1], filepath.Base(localPath))
 		if err != nil {
@@ -119,7 +125,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	if cc.Flags.JSON {
 		return writeJSONDocument(cc.Output(), putJSONOutput{
-			Path: remotePath,
+			Path: putJSONPath(remotePath),
 			ID:   visibleItem.ID,
 			Size: fi.Size(),
 		})
@@ -182,7 +188,7 @@ func uploadFolder(
 	remoteRoot := driveops.CleanRemotePath(remotePath)
 	var doc folderTransferJSONOutput[putJSONOutput]
 	report := &folderTransferReport{cc: cc, verb: "Uploaded", noun: "upload", keepFile: func(file *driveops.TreeEvent) {
-		doc.Files = append(doc.Files, putJSONOutput{Path: remoteRoot + "/" + file.RelPath, ID: file.ItemID, Size: file.Size})
+		doc.Files = append(doc.Files, putJSONOutput{Path: putJSONPath(remoteRoot + "/" + file.RelPath), ID: file.ItemID, Size: file.Size})
 	}}
 	summary, err := driveops.UploadTree(ctx, driveops.TreeUpload{
 		Folders: session,
@@ -209,20 +215,16 @@ func uploadFolder(
 	})
 }
 
-// putChildLister lists a folder's children; satisfied by *graph.Client.
-type putChildLister interface {
-	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
-}
-
 // putFile uploads localPath as name under parentID with put's semantics: a
 // new name is created (never replacing, R-5.6.14), and an existing file of
 // that name, or of a name OneDrive treats as the same, is overwritten by ID,
 // conditional on the eTag just read, so a concurrent edit answers 412 instead
-// of being replaced blindly. An existing folder is an error. An interrupted
-// put left an empty placeholder under the name; the retry overwrites it the
-// same way (or resumes its recorded session).
+// of being replaced blindly. The existing item is found by
+// driveops.FindExistingChild, one read of the name. An existing folder is an
+// error. An interrupted put left an empty placeholder under the name; the
+// retry overwrites it the same way (or resumes its recorded session).
 func putFile(
-	ctx context.Context, lister putChildLister, tm *driveops.TransferManager,
+	ctx context.Context, lookup driveops.ChildLookup, tm *driveops.TransferManager,
 	driveID driveid.ID, parentID, name, localPath string, opts driveops.UploadOpts,
 ) (*driveops.UploadResult, error) {
 	result, err := tm.UploadFile(ctx, driveID, parentID, name, localPath, opts)
@@ -230,21 +232,16 @@ func putFile(
 		return result, err //nolint:wrapcheck // driveops names the file
 	}
 
-	children, listErr := lister.ListChildren(ctx, driveID, parentID)
-	if listErr != nil {
-		return nil, errors.Join(err, fmt.Errorf("listing the destination folder: %w", listErr))
-	}
-	for i := range children {
-		if children[i].ID == "" || !namekey.Equal(children[i].Name, name) {
-			continue
-		}
-		if children[i].IsFolder {
-			return nil, fmt.Errorf("%q is a folder on OneDrive", children[i].Name)
-		}
-
-		opts.IfMatch = children[i].ETag
-		return tm.UploadFileToItem(ctx, driveID, children[i].ID, localPath, opts) //nolint:wrapcheck // driveops names the file
+	existing, found, findErr := driveops.FindExistingChild(ctx, lookup, driveID, parentID, name)
+	switch {
+	case findErr != nil:
+		return nil, errors.Join(err, findErr)
+	case !found:
+		return nil, err //nolint:wrapcheck // the 409 itself: nothing visible holds the name yet
+	case existing.IsFolder:
+		return nil, fmt.Errorf("%q is a folder on OneDrive", existing.Name)
 	}
 
-	return nil, err //nolint:wrapcheck // the 409 itself: nothing visible holds the name yet
+	opts.IfMatch = existing.ETag
+	return tm.UploadFileToItem(ctx, driveID, existing.ID, localPath, opts) //nolint:wrapcheck // driveops names the file
 }
