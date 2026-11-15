@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // fakeGraphDrive is a tiny in-memory OneDrive for command-level tests that
@@ -40,6 +42,9 @@ type fakeGraphDrive struct {
 	// onFileWrite, when set, runs before the drive creates a file or takes
 	// its content, with the drive locked.
 	onFileWrite func(r *http.Request)
+	// listings counts the folder listings the drive answered, and nameReads
+	// the reads of one name below a folder (items/{id}:/{name}:).
+	listings, nameReads int
 }
 
 type fakeGraphItem struct {
@@ -51,6 +56,9 @@ type fakeGraphItem struct {
 	// Modified is the item's fileSystemInfo.lastModifiedDateTime; empty
 	// means the fixed fixture time.
 	Modified string
+	// QuickXorHash is the file's quickXorHash as Graph answers it; empty
+	// means the file facet carries no hashes.
+	QuickXorHash string
 }
 
 // fakeGraphRenameTime is the modification time a rename without
@@ -142,9 +150,11 @@ func (f *fakeGraphDrive) addLocked(parentID, name string, folder bool, content [
 	return item
 }
 
+// childNamed is the child of parentID that holds name under OneDrive's name
+// equivalence, or nil.
 func (f *fakeGraphDrive) childNamed(parentID, name string) *fakeGraphItem {
 	for _, item := range f.items {
-		if item.ParentID == parentID && strings.EqualFold(item.Name, name) && item.ID != fakeGraphRootID {
+		if item.ParentID == parentID && namekey.Equal(item.Name, name) && item.ID != fakeGraphRootID {
 			return item
 		}
 	}
@@ -193,7 +203,11 @@ func (f *fakeGraphDrive) itemJSON(item *fakeGraphItem) map[string]any {
 	if item.Folder {
 		out["folder"] = map[string]any{"childCount": len(f.childrenOf(item.ID))}
 	} else {
-		out["file"] = map[string]any{"mimeType": "text/plain"}
+		file := map[string]any{"mimeType": "text/plain"}
+		if item.QuickXorHash != "" {
+			file["hashes"] = map[string]any{"quickXorHash": item.QuickXorHash}
+		}
+		out["file"] = file
 		out["@microsoft.graph.downloadUrl"] = f.baseURL + "/download/" + item.ID
 	}
 
@@ -242,8 +256,9 @@ func (f *fakeGraphDrive) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeGraphDrive) serveByPath(w http.ResponseWriter, r *http.Request, rest string) {
-	rest = strings.TrimPrefix(strings.TrimPrefix(rest, "/items"), "/root:")
-	escapedPath, suffix, _ := strings.Cut(rest, ":")
+	// items/root:/{name}: reads one name in the root by its alias.
+	relative, byRootAlias := strings.CutPrefix(rest, "/items")
+	escapedPath, suffix, _ := strings.Cut(strings.TrimPrefix(relative, "/root:"), ":")
 	itemPath, err := url.PathUnescape(escapedPath)
 	if err != nil {
 		f.unexpected(w, r)
@@ -252,6 +267,9 @@ func (f *fakeGraphDrive) serveByPath(w http.ResponseWriter, r *http.Request, res
 
 	switch {
 	case r.Method == http.MethodGet && suffix == "":
+		if byRootAlias {
+			f.nameReads++
+		}
 		item := f.byPath(itemPath)
 		if item == nil {
 			f.notFound(w)
@@ -273,14 +291,8 @@ func (f *fakeGraphDrive) serveByPath(w http.ResponseWriter, r *http.Request, res
 }
 
 func (f *fakeGraphDrive) serveByID(w http.ResponseWriter, r *http.Request, rest string) {
-	if id, uploadPath, isUpload := strings.Cut(rest, ":/"); isUpload {
-		name, _, _ := strings.Cut(uploadPath, ":")
-		name, err := url.PathUnescape(name)
-		if err != nil || r.Method != http.MethodPut {
-			f.unexpected(w, r)
-			return
-		}
-		f.upload(w, r, id, name)
+	if id, childPath, isChildPath := strings.Cut(rest, ":/"); isChildPath {
+		f.serveChildByName(w, r, id, childPath)
 		return
 	}
 
@@ -304,6 +316,8 @@ func (f *fakeGraphDrive) serveByID(w http.ResponseWriter, r *http.Request, rest 
 		f.serveItemPost(req)
 	case http.MethodPatch:
 		f.serveMove(req)
+	case http.MethodPut:
+		f.overwrite(req)
 	case http.MethodDelete:
 		if f.deleteRefused {
 			f.writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"code": "accessDenied", "message": "no"}})
@@ -317,11 +331,54 @@ func (f *fakeGraphDrive) serveByID(w http.ResponseWriter, r *http.Request, rest 
 	}
 }
 
+// overwrite takes the content of an existing file by ID (items/{id}/content).
+func (f *fakeGraphDrive) overwrite(req fakeGraphRequest) {
+	if req.action != fakeGraphActionContent || req.item.Folder {
+		f.unexpected(req.w, req.r)
+		return
+	}
+	if f.beforeFileWrite(req.r) {
+		return
+	}
+
+	content, err := io.ReadAll(req.r.Body)
+	if err != nil {
+		f.unexpected(req.w, req.r)
+		return
+	}
+	req.item.Content = content
+	f.writeJSON(req.w, http.StatusOK, f.itemJSON(req.item))
+}
+
+// serveChildByName serves the route of one name below the folder parentID:
+// items/{parentID}:/{name}: reads it, and a PUT uploads it.
+func (f *fakeGraphDrive) serveChildByName(w http.ResponseWriter, r *http.Request, parentID, childPath string) {
+	escapedName, suffix, _ := strings.Cut(childPath, ":")
+	name, err := url.PathUnescape(escapedName)
+	switch {
+	case err != nil:
+		f.unexpected(w, r)
+	case r.Method == http.MethodPut:
+		f.upload(w, r, parentID, name)
+	case r.Method == http.MethodGet && suffix == "":
+		f.nameReads++
+		child := f.childNamed(parentID, name)
+		if child == nil {
+			f.notFound(w)
+			return
+		}
+		f.writeJSON(w, http.StatusOK, f.itemJSON(child))
+	default:
+		f.unexpected(w, r)
+	}
+}
+
 func (f *fakeGraphDrive) serveItemGet(req fakeGraphRequest) {
 	switch req.action {
 	case "":
 		f.writeJSON(req.w, http.StatusOK, f.itemJSON(req.item))
 	case fakeGraphActionChildren:
+		f.listings++
 		if !req.item.Folder {
 			// What OneDrive answers when asked for a file's children.
 			f.writeJSON(req.w, http.StatusUnprocessableEntity, map[string]any{"error": map[string]any{

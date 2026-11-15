@@ -659,3 +659,79 @@ func lsLeaf(t *testing.T) *cobra.Command {
 
 	return leaf
 }
+
+// A single get prints the file it wrote: its local path, its size, and
+// whether its bytes matched the hash OneDrive holds for it, which is false
+// for a file OneDrive answers without one.
+//
+// Validates: R-1.2.4
+func TestGet_JSONPrintsTheFileItWrote(t *testing.T) {
+	setTestDriveHome(t)
+	const content = "hello"
+	hash, err := driveops.ComputeQuickXorHashFromReader(strings.NewReader(content))
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		label, hash      string
+		wantHashVerified bool
+	}{
+		{label: "with a hash", hash: hash, wantHashVerified: true},
+		{label: "without a hash"},
+	} {
+		cc, fake := jsonContractFileContext(t)
+		id := addFakeItem(fake, fakeGraphRootID, "notes.txt", false, content)
+		fake.mu.Lock()
+		fake.items[id].QuickXorHash = tc.hash
+		fake.mu.Unlock()
+		target := filepath.Join(t.TempDir(), "notes.txt")
+
+		run := runFileCommand(t, getCommand, cc, true, "/notes.txt", target)
+
+		require.NoError(t, run.err, run.stderr)
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal([]byte(run.stdout), &doc), run.stdout)
+		assert.Equal(t, map[string]any{
+			"path": target, "size": float64(len(content)), "hash_verified": tc.wantHashVerified,
+		}, doc, tc.label)
+		assertFileHolds(t, target, content)
+	}
+}
+
+// put prints every remote path in one form, a single file's and a folder's
+// files alike: the cleaned path with one leading slash, whatever form it was
+// typed in.
+//
+// Validates: R-1.3.4
+func TestPut_JSONPrintsEachPathWithOneLeadingSlash(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	addFakeItem(fake, fakeGraphRootID, "Docs", true, "")
+	local := t.TempDir()
+	writeEmptyLocalFiles(t, local, "one.txt", "Backup/a.txt")
+	file := filepath.Join(local, "one.txt")
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{file}, want: "/one.txt"},
+		{args: []string{file, "two.txt"}, want: "/two.txt"},
+		{args: []string{file, "/three.txt"}, want: "/three.txt"},
+		{args: []string{file, "Docs/"}, want: "/Docs/one.txt"},
+	} {
+		run := runFileCommand(t, putCommand, cc, true, tc.args...)
+		require.NoError(t, run.err, run.stderr)
+		var doc putJSONOutput
+		require.NoError(t, json.Unmarshal([]byte(run.stdout), &doc), run.stdout)
+		assert.Equal(t, tc.want, doc.Path, strings.Join(tc.args[1:], " "))
+	}
+
+	for _, remote := range []string{"Backup", "/Copy/"} {
+		run := runFileCommand(t, putCommand, cc, true, filepath.Join(local, "Backup"), remote)
+		require.NoError(t, run.err, run.stderr)
+		var doc folderTransferJSONOutput[putJSONOutput]
+		require.NoError(t, json.Unmarshal([]byte(run.stdout), &doc), run.stdout)
+		require.Len(t, doc.Files, 1)
+		assert.Equal(t, "/"+strings.Trim(remote, "/")+"/a.txt", doc.Files[0].Path, remote)
+	}
+}

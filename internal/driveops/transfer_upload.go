@@ -105,6 +105,8 @@ func validateUploadToItemParams(itemID, localPath string) error {
 	return nil
 }
 
+// uploadMtime is the modification time an upload, a create or an overwrite,
+// sets on OneDrive: the caller's, or else the local file's own.
 func uploadMtime(info os.FileInfo, opts UploadOpts) time.Time {
 	if opts.Mtime.IsZero() {
 		return info.ModTime()
@@ -209,6 +211,8 @@ func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Ite
 	return nil, fmt.Errorf("uploading %s: %w", localPath, err)
 }
 
+// recordUploadPerf counts one finished upload, a create or an overwrite, of
+// size bytes in the command's performance collector, when ctx carries one.
 func recordUploadPerf(ctx context.Context, size int64, startedAt time.Time) {
 	collector := perf.FromContext(ctx)
 	if collector == nil {
@@ -220,24 +224,21 @@ func recordUploadPerf(ctx context.Context, size int64, startedAt time.Time) {
 	collector.AddCommandBytes(size)
 }
 
-// UploadFile uploads a local file to OneDrive. For large files when a
-// SessionStore and SessionUploader are available, the upload session is
-// persisted for cross-crash resume.
-func (tm *TransferManager) UploadFile(
-	ctx context.Context, driveID driveid.ID, parentID, name, localPath string, opts UploadOpts,
-) (*UploadResult, error) {
-	startedAt := time.Now()
+// uploadSource is a local file checked, hashed and opened for one upload.
+type uploadSource struct {
+	file  *os.File
+	size  int64
+	hash  string
+	mtime time.Time
+}
 
-	if err := validateUploadParams(parentID, name, localPath); err != nil {
-		return nil, err
-	}
-
-	tm.logger.Debug("UploadFile",
-		slog.String("drive_id", driveID.String()),
-		slog.String("path", localPath),
-		slog.String("name", name),
-	)
-
+// prepareUploadSource stats localPath, checks the source and the size limit,
+// hashes the file, checks the expected hash and the source again, and opens
+// the file for the upload, in that order. A create and an overwrite share it.
+// The caller closes the returned file.
+func (tm *TransferManager) prepareUploadSource(
+	ctx context.Context, localPath string, opts UploadOpts,
+) (*uploadSource, error) {
 	info, err := localpath.Stat(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", localPath, err)
@@ -273,28 +274,52 @@ func (tm *TransferManager) UploadFile(
 	if err != nil {
 		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
 	}
-	defer f.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
-	progress := opts.Progress
+	return &uploadSource{file: f, size: size, hash: localHash, mtime: mtime}, nil
+}
+
+// UploadFile uploads a local file to OneDrive. For large files when a
+// SessionStore and SessionUploader are available, the upload session is
+// persisted for cross-crash resume.
+func (tm *TransferManager) UploadFile(
+	ctx context.Context, driveID driveid.ID, parentID, name, localPath string, opts UploadOpts,
+) (*UploadResult, error) {
+	startedAt := time.Now()
+
+	if err := validateUploadParams(parentID, name, localPath); err != nil {
+		return nil, err
+	}
+
+	tm.logger.Debug("UploadFile",
+		slog.String("drive_id", driveID.String()),
+		slog.String("path", localPath),
+		slog.String("name", name),
+	)
+
+	src, err := tm.prepareUploadSource(ctx, localPath, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer src.file.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
 	// For large files with session store + SessionUploader, use session-based upload.
 	su, hasSU := tm.uploads.(SessionUploader)
 	sent := uploadedContent{
-		size: size, quickXorHash: localHash, name: name, mtime: mtime, planETag: opts.PlannedRemoteETag,
+		size: src.size, quickXorHash: src.hash, name: name, mtime: src.mtime, planETag: opts.PlannedRemoteETag,
 	}
 	item, err := tm.uploadGraphItem(
 		ctx,
 		su,
 		hasSU,
-		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
+		validatingReaderAt{ReaderAt: src.file, Validate: opts.ValidateSourceBeforeRead},
 		driveID,
 		parentID,
 		name,
 		localPath,
-		localHash,
-		size,
-		mtime,
-		progress,
+		src.hash,
+		src.size,
+		src.mtime,
+		opts.Progress,
 		opts.OnCreated,
 		sent,
 	)
@@ -309,11 +334,11 @@ func (tm *TransferManager) UploadFile(
 	tm.logger.Debug("upload complete",
 		slog.String("path", localPath),
 		slog.String("item_id", item.ID),
-		slog.Int64("size", size),
+		slog.Int64("size", src.size),
 	)
-	recordUploadPerf(ctx, size, startedAt)
+	recordUploadPerf(ctx, src.size, startedAt)
 
-	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
+	return &UploadResult{Item: item, LocalHash: src.hash, Size: src.size, Mtime: src.mtime}, nil
 }
 
 // UploadFileToItem overwrites an existing remote file identified by item ID.
@@ -334,53 +359,24 @@ func (tm *TransferManager) UploadFileToItem(
 		slog.String("item_id", itemID),
 	)
 
-	info, err := localpath.Stat(localPath)
-	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", localPath, err)
-	}
-	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
-		return nil, validationErr
-	}
-
-	size := info.Size()
-	if size > MaxOneDriveFileSize {
-		return nil, fileTooLargeForOneDriveError(localPath, size)
-	}
-
-	localHash, err := tm.hashFunc(ctx, localPath)
+	src, err := tm.prepareUploadSource(ctx, localPath, opts)
 	if err != nil {
 		return nil, err
 	}
-	if validationErr := validateUploadExpectedHash(opts, localPath, localHash); validationErr != nil {
-		return nil, validationErr
-	}
-	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
-		return nil, validationErr
-	}
-
-	mtime := opts.Mtime
-	if mtime.IsZero() {
-		mtime = info.ModTime()
-	}
-
-	f, err := localpath.OpenRegular(localPath)
-	if err != nil {
-		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
-	}
-	defer f.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
+	defer src.file.Close() //nolint:errcheck // the file is opened read-only for upload; there is nothing buffered to flush
 
 	sent := uploadedContent{
-		size: size, quickXorHash: localHash, name: filepath.Base(localPath), mtime: mtime, planETag: opts.PlannedRemoteETag,
+		size: src.size, quickXorHash: src.hash, name: filepath.Base(localPath), mtime: src.mtime, planETag: opts.PlannedRemoteETag,
 	}
 	item, err := tm.uploadExistingItem(
 		ctx,
-		validatingReaderAt{ReaderAt: f, Validate: opts.ValidateSourceBeforeRead},
+		validatingReaderAt{ReaderAt: src.file, Validate: opts.ValidateSourceBeforeRead},
 		driveID,
 		itemID,
 		localPath,
-		localHash,
-		size,
-		mtime,
+		src.hash,
+		src.size,
+		src.mtime,
 		opts.Progress,
 		opts.IfMatch,
 		sent,
@@ -396,15 +392,11 @@ func (tm *TransferManager) UploadFileToItem(
 	tm.logger.Debug("upload complete",
 		slog.String("path", localPath),
 		slog.String("item_id", item.ID),
-		slog.Int64("size", size),
+		slog.Int64("size", src.size),
 	)
-	if collector := perf.FromContext(ctx); collector != nil {
-		collector.RecordTransfer(perf.TransferKindUpload, size, time.Since(startedAt))
-		collector.AddCommandItems(1)
-		collector.AddCommandBytes(size)
-	}
+	recordUploadPerf(ctx, src.size, startedAt)
 
-	return &UploadResult{Item: item, LocalHash: localHash, Size: size, Mtime: mtime}, nil
+	return &UploadResult{Item: item, LocalHash: src.hash, Size: src.size, Mtime: src.mtime}, nil
 }
 
 func (tm *TransferManager) uploadExistingItem(
