@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -78,13 +79,13 @@ func TestE2E_Status_NoDrives(t *testing.T) {
 
 	// May succeed or fail depending on implementation — either way,
 	// the output should guide the user to add a drive.
-	combined := stdout
+	combinedOutput := stdout
 	if err != nil {
 		// Status may fail when no drives are configured.
-		combined = stdout
+		combinedOutput = stdout
 	}
 
-	assert.Contains(t, combined, "login",
+	assertOutputContains(t, combinedOutput, "login",
 		"status with no drives should suggest 'login' or 'drive add'")
 }
 
@@ -159,5 +160,5 @@ func TestE2E_Sync_MultiDriveReport(t *testing.T) {
 	out, _ := runSyncPassAllDrives(t, cfgPath, env, "--upload-only")
 
 	// Multi-drive output names the drive on each summary line.
-	assert.Regexp(t, `(?m)^.+: (Done in|Up to date)`, out, "multi-drive summaries should be prefixed with the drive name")
+	assertOutputMatches(t, regexp.MustCompile(`(?m)^.+: (Done in|Up to date)`), out, "multi-drive summaries should be prefixed with the drive name")
 }

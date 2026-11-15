@@ -41,7 +41,7 @@ func remoteItemID(t *testing.T, cfgPath string, env map[string]string, remotePat
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "stat", "--json", remotePath)
 	var stat statIDJSON
-	require.NoError(t, json.Unmarshal([]byte(stdout), &stat), "stat %s: %s", remotePath, stdout)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &stat), "stat %s: %s", remotePath, printable(stdout))
 	require.NotEmpty(t, stat.ID, "stat %s has no item ID", remotePath)
 
 	return stat.ID
@@ -52,7 +52,7 @@ func remoteNames(t *testing.T, cfgPath string, env map[string]string, remotePath
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", "--json", remotePath)
 	var items []remoteListJSONItem
-	require.NoError(t, json.Unmarshal([]byte(stdout), &items), "ls %s: %s", remotePath, stdout)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items), "ls %s: %s", remotePath, printable(stdout))
 	names := make([]string, 0, len(items))
 	for _, item := range items {
 		names = append(names, item.Name)
@@ -152,7 +152,8 @@ func TestE2E_Sync_FolderMovesBothWays(t *testing.T) {
 	require.NoError(t, os.Rename(filepath.Join(syncDir, "proj"), filepath.Join(syncDir, "proj-local")))
 	runSyncThroughTransientFailures(t, cfgPath, env)
 	waitForRemoteReadContains(t, cfgPath, env, "", "b.txt", pollTimeout, "ls", "/proj-local/sub")
-	assert.Equal(t, folderID, remoteItemID(t, cfgPath, env, "/proj-local"), "a local folder rename is a remote move of the same item")
+	assertSameIdentity(t, "the item ID of /proj-local (a local folder rename is a remote move of the same item)",
+		folderID, remoteItemID(t, cfgPath, env, "/proj-local"))
 	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "proj")
 	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
@@ -167,7 +168,7 @@ func TestE2E_Sync_FolderMovesBothWays(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"proj-online": "/", "proj-online/a.txt": "file a", "proj-online/sub": "/", "proj-online/sub/b.txt": "file b",
 	}, contentTree(t, syncDir))
-	assert.Equal(t, folderID, remoteItemID(t, cfgPath, env, "/proj-online"))
+	assertSameIdentity(t, "the item ID of /proj-online", folderID, remoteItemID(t, cfgPath, env, "/proj-online"))
 	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 }

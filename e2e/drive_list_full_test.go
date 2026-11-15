@@ -32,23 +32,23 @@ func TestE2E_DriveList_AllFlag(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	// Text mode: both default and --all should succeed and show configured drives.
-	textDefault, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.NoError(t, err, "drive list (text) should succeed\nstdout: %s", textDefault)
-	assert.Contains(t, textDefault, "Configured drives:",
+	defaultListOutput, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
+	require.NoError(t, err, "drive list (text) should succeed\nstdout: %s", printable(defaultListOutput))
+	assertOutputContains(t, defaultListOutput, "Configured drives:",
 		"text default should show configured drives header")
 
-	textAll, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--all")
-	require.NoError(t, err, "drive list --all (text) should succeed\nstdout: %s", textAll)
-	assert.Contains(t, textAll, "Configured drives:",
+	allDrivesOutput, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--all")
+	require.NoError(t, err, "drive list --all (text) should succeed\nstdout: %s", printable(allDrivesOutput))
+	assertOutputContains(t, allDrivesOutput, "Configured drives:",
 		"text --all should show configured drives header")
 
 	// Default listing (capped SharePoint discovery).
 	defaultOut, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
-	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", defaultOut)
+	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", printable(defaultOut))
 
 	var defaultResult driveListE2EOutput
 	require.NoError(t, json.Unmarshal([]byte(defaultOut), &defaultResult),
-		"default JSON should parse, got: %s", defaultOut)
+		"default JSON should parse, got: %s", printable(defaultOut))
 
 	expectedAvailable := make([]string, 0, len(defaultResult.Available))
 	for i := range defaultResult.Available {
@@ -61,20 +61,20 @@ func TestE2E_DriveList_AllFlag(t *testing.T) {
 
 	deadline := time.Now().Add(pollTimeout)
 	var lastOut string
-	var lastErr string
+	var lastStderr string
 
 	for attempt := 0; ; attempt++ {
 		allOut, stderr, err := runCLIWithConfigAllDrivesAllowError(t, cfgPath, env, "drive", "list", "--json", "--all")
 		lastOut = allOut
-		lastErr = stderr
+		lastStderr = stderr
 		if err != nil {
 			if !isRetryableGraphGatewayFailure(stderr) {
-				require.NoError(t, err, "drive list --json --all should succeed\nstdout: %s\nstderr: %s", allOut, stderr)
+				require.NoError(t, err, "drive list --json --all should succeed\nstdout: %s\nstderr: %s", printable(allOut), printable(stderr))
 			}
 		} else {
 			var allResult driveListE2EOutput
 			require.NoError(t, json.Unmarshal([]byte(allOut), &allResult),
-				"--all JSON should parse, got: %s", allOut)
+				"--all JSON should parse, got: %s", printable(allOut))
 
 			containsAll := true
 			for _, canonicalID := range expectedAvailable {
@@ -93,8 +93,8 @@ func TestE2E_DriveList_AllFlag(t *testing.T) {
 				"live drive list --json --all did not expose the default-visible available drives within %v; Graph search omitted them on this run\nexpected canonical ids: %v\nlast stdout: %s\nlast stderr: %s",
 				pollTimeout,
 				suiteDriveRoles.Redact(fmt.Sprint(expectedAvailable)),
-				lastOut,
-				lastErr,
+				printable(lastOut),
+				printable(lastStderr),
 			)
 		}
 
@@ -132,22 +132,22 @@ func TestE2E_DriveList_StaleStateDB(t *testing.T) {
 	// Step 2: Remove the drive from config (preserves state DB on disk).
 	stdout, _, err := runCLICore(t, cfgPath, env, drive, "drive", "remove")
 	require.NoError(t, err,
-		"drive remove should succeed\nstdout: %s", stdout)
+		"drive remove should succeed\nstdout: %s", printable(stdout))
 
 	// Step 3: Verify text output shows [has sync data] for the now-available drive.
 	stdout, _, err = runCLICore(t, cfgPath, env, "", "drive", "list")
 	require.NoError(t, err,
-		"drive list should succeed after drive remove\nstdout: %s", stdout)
+		"drive list should succeed after drive remove\nstdout: %s", printable(stdout))
 
-	assert.Contains(t, stdout, "Available drives",
+	assertOutputContains(t, stdout, "Available drives",
 		"removed drive should appear in available drives section")
-	assert.Contains(t, stdout, "[has sync data]",
+	assertOutputContains(t, stdout, "[has sync data]",
 		"removed drive with state DB should show [has sync data] marker")
 
 	// Step 4: Verify JSON output includes has_state_db: true.
 	jsonOut, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
 	require.NoError(t, err,
-		"drive list --json should succeed\nstdout: %s", jsonOut)
+		"drive list --json should succeed\nstdout: %s", printable(jsonOut))
 
 	var result struct {
 		Available []struct {
@@ -157,7 +157,7 @@ func TestE2E_DriveList_StaleStateDB(t *testing.T) {
 	}
 
 	require.NoError(t, json.Unmarshal([]byte(jsonOut), &result),
-		"JSON should parse, got: %s", jsonOut)
+		"JSON should parse, got: %s", printable(jsonOut))
 
 	// Find the drive we just removed — it should have has_state_db: true.
 	found := false

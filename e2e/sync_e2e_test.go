@@ -415,7 +415,7 @@ func mkdirRemoteFolderForDrive(
 		decision := classifyFixtureMkdirCommandFailure(stderr)
 		if attempt >= remoteFixtureMkdirMaxAttempts-1 || !decision.Retry {
 			require.NoErrorf(t, mkdirErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
-				[]string{"mkdir", remotePath}, stdout, stderr)
+				[]string{"mkdir", remotePath}, printable(stdout), printable(stderr))
 		}
 		recordLiveProviderRecurrenceEvent(
 			t,
@@ -479,7 +479,7 @@ func putRemoteFileForDrive(
 		decision := classifyFixturePutCommandFailure(stderr)
 		if attempt >= remoteFixturePutMaxAttempts-1 || !decision.Retry {
 			require.NoErrorf(t, putErr, "CLI command %v failed\nstdout: %s\nstderr: %s",
-				[]string{"put", tmpFile.Name(), remotePath}, stdout, stderr)
+				[]string{"put", tmpFile.Name(), remotePath}, printable(stdout), printable(stderr))
 		}
 		recordLiveProviderRecurrenceEvent(
 			t,
@@ -670,8 +670,8 @@ func TestE2E_Sync_UploadOnly(t *testing.T) {
 	// Single pass by design: this one pass must name each file it uploads; it
 	// may leave work a transient failure causes.
 	out, _ := runSyncPass(t, cfgPath, env, "--upload-only")
-	assert.Contains(t, out, "(upload only)")
-	assert.Contains(t, out, "Uploaded "+testFolder+"/upload-test.txt", "each uploaded file is named")
+	assertOutputContains(t, out, "(upload only)")
+	assertOutputContains(t, out, "Uploaded "+testFolder+"/upload-test.txt", "each uploaded file is named")
 
 	// Upload-only success is persisted in the durable baseline immediately even
 	// when follow-on remote path reads still lag Graph visibility convergence.
@@ -732,7 +732,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assert.Contains(t, attempt.Stdout, "(download only)")
+	assertOutputContains(t, attempt.Stdout, "(download only)")
 	assert.Equal(t, content, downloaded)
 }
 
@@ -913,8 +913,8 @@ func cleanupRemoteFolderForDrive(t *testing.T, driveID, folder string) {
 		"warning: cleanup remote folder failed after retries for drive=%s folder=%s\nstdout: %s\nstderr: %s\nerr: %v",
 		suiteDriveRoles.Role(driveID),
 		folder,
-		lastStdout,
-		lastStderr,
+		printable(lastStdout),
+		printable(lastStderr),
 		lastErr,
 	)
 }
@@ -927,7 +927,9 @@ func openDriveStateDBForSyncTest(t *testing.T, env map[string]string) *sql.DB {
 
 	sanitizedDrive := strings.ReplaceAll(resolveDriveSelection(env, ""), ":", "_")
 	dbPath := filepath.Join(dataHome, "onedrive-go", "state_"+sanitizedDrive+".db")
-	require.FileExists(t, dbPath)
+	if !assertLocalPath(t, dbPath, localFile) {
+		t.FailNow()
+	}
 
 	db, err := sql.Open("sqlite", synctest.SQLiteFileURI(dbPath, nil))
 	require.NoError(t, err)

@@ -112,8 +112,9 @@ func remotePollAccepts(ready func(stdout, stderr string, err error) bool, stdout
 
 // remotePollTimeoutMessage is the failure message of a remote poll that timed
 // out: what it waited for, through which command, and the last attempt's
-// output, with every configured drive and its account named by role, because
-// the repository's CI logs are public.
+// output masked and bounded (printableWith), every account, drive and item
+// of the test accounts named by role, because the repository's CI logs are
+// public.
 func remotePollTimeoutMessage(
 	roles testutil.DriveRoles,
 	timeout time.Duration,
@@ -122,10 +123,11 @@ func remotePollTimeoutMessage(
 	stdout string,
 	stderr string,
 ) string {
-	return roles.Redact(fmt.Sprintf(
-		"after %v waiting for %s via %v\nlast stdout: %s\nlast stderr: %s",
-		timeout, description, args, stdout, stderr,
-	))
+	return fmt.Sprintf(
+		"after %v waiting for %s via %s\nlast stdout: %s\nlast stderr: %s",
+		timeout, roles.Redact(description), roles.Redact(fmt.Sprint(args)),
+		printableWith(roles, stdout), printableWith(roles, stderr),
+	)
 }
 
 // sharedRootRoute404 is the error of a read on a shared drive whose mount

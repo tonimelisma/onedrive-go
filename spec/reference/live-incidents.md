@@ -43,6 +43,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | --- | --- | --- | --- | --- | --- |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
+| LI-20261115-03 | Nightly incremental-delta E2E read only the last converge pass for a download an earlier pass made | fixed | test bug | 2026-11-15 | no |
 | LI-20261112-01 | Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts | closed | provider incident | 2026-11-13 | no |
 | LI-20261111-01 | Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261110-01 | A failed upload's cleanup was refused with 412 and left an empty file on OneDrive | fixed | product bug | 2026-11-10 | yes |
@@ -194,6 +195,42 @@ own. The `stress` job's `timeout-minutes` is 200, the three steps'
 deadlines on a runner (20 + 80 + 90 minutes) plus setup
 (`TestCIJobTimeoutsCoverEveryGoTestDeadline`).
 Promoted docs: [system.md](../design/system.md)
+
+## LI-20261115-03: Nightly incremental-delta E2E read only the last converge pass for a download an earlier pass made
+
+First seen: 2026-11-15
+Last seen: 2026-11-15
+Area: scheduled `e2e_full`, the suite's converge loop around a one-shot sync
+Suite / test: scheduled CI run `43739908483`, job `e2e`,
+`TestE2E_Sync_IncrementalDeltaToken`
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: The test uploads a new file with `put`, repeats a download-only
+sync until a pass exits clean and the file is on disk with its content, and
+then asserted that the output of that last pass named the download. In this
+run the first pass downloaded the file and printed its `Downloaded` line, but
+exited 1: a file in the folder of another test, which ran at the same time on
+the same account, failed its download check ("the downloaded file doesn't
+match OneDrive's copy"). The loop ran a second pass. It had nothing of this
+test left to download and counted as clean, since it left only what the
+account held before the suite started. The assertion read that pass's output
+and failed. The product did what it should in both passes.
+
+Evidence (no account, drive, item or request IDs recorded):
+- The failed assertion's message was "incremental download should name the
+  new file once delta catches up", and the output it printed was the second
+  pass's, which named folders and files of other tests only.
+- The test's debug log dump holds both passes: the first with the
+  `Downloaded` line of the test's own file, one `Failed to download` line for
+  a file in another test's folder and exit 1; the second, about 15 seconds
+  later, with no line for the test's folder.
+- The suite's timing record of the wait said `outcome=success attempts=2`.
+
+Resolution / mitigation: the test reads every pass's output for the
+`Downloaded` line and fails only when no pass printed it. The product is
+unchanged.
+Promoted docs: none
 
 ## LI-20261112-01: Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts
 

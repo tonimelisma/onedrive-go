@@ -608,12 +608,16 @@ jobs:
           fi
           go run ./cmd/devtool verify "$profile" --e2e-log-dir /tmp/e2e-debug-logs "${extra_args[@]}"
 
-      # Masking covers the log, not the artifacts. The e2e recorders write
-      # drive roles instead of drive identifiers; as a second layer every
-      # spelling the masking script listed is replaced by *** in the debug
-      # log directory before it is uploaded. Every artifact this job uploads
-      # comes from that directory; a test failure message that quotes the
-      # CLI's own output reaches only the job log, which the masks cover.
+      # Masking covers the log, not the artifacts. The e2e suite names the
+      # test accounts' drives, items and fixtures by role, and masks any
+      # other identifier where the product's output puts one and any item ID
+      # or Business drive ID by its shape wherever it stands (a bare Personal
+      # drive ID outside those positions stays readable, and, outside them
+      # too, so does a Personal item ID whose drive part has lost more than
+      # four leading zeros), in its debug logs, summaries and failure
+      # messages alike; as a second layer every spelling the masking script
+      # listed is replaced by *** in the debug log directory before it is
+      # uploaded. Every artifact this job uploads comes from that directory.
       - name: Redact the test drives and accounts in the E2E artifacts
         if: always()
         run: |

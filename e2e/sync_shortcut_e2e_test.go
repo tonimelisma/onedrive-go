@@ -21,18 +21,18 @@ func TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount(t *testing.T) {
 	cfgPath, env := writeSyncConfigForDriveID(t, fixture.ParentDrive, syncDir)
 
 	record, attempt := syncShortcutDownloadUntilProjected(t, cfgPath, env, fixture, syncDir, fixture.ShortcutName)
-	assert.Contains(t, attempt.Stdout, "(download only)")
+	assertOutputContains(t, attempt.Stdout, "(download only)")
 
 	childRoot := filepath.Join(syncDir, fixture.ShortcutName)
-	assert.DirExists(t, childRoot)
-	assert.FileExists(t, filepath.Join(childRoot, filepath.FromSlash(fixture.SentinelPath)))
+	assertLocalPath(t, childRoot, localFolder)
+	assertLocalPath(t, filepath.Join(childRoot, filepath.FromSlash(fixture.SentinelPath)), localFile)
 
 	status := readStatusAllDrives(t, cfgPath, env)
 	requireStatusDrive(t, status, record.MountID)
 
 	stdout, _ := runCLIWithoutDrive(t, cfgPath, env, "drive", "list", "--json")
 	var drives driveListE2EOutput
-	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &drives), "drive list --json output should be valid JSON, got: %s", stdout)
+	require.NoErrorf(t, json.Unmarshal([]byte(stdout), &drives), "drive list --json output should be valid JSON, got: %s", printable(stdout))
 	for i := range drives.Configured {
 		assert.False(t, strings.HasPrefix(drives.Configured[i].CanonicalID, "shared:"),
 			"automatic shortcut child mounts must not create explicit shared drive config")

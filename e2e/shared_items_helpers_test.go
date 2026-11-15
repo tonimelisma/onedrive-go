@@ -412,14 +412,18 @@ func waitForShortcutSharedItem(
 		}
 
 		if time.Now().After(deadline) {
+			// The sharer is named by its variable: an address no configured
+			// drive has would reach the public log.
 			message := fmt.Sprintf(
-				"shortcut fixture %q did not appear in shared --json for %s with shared_by_email=%s within %v; last_items=%d last_err=%v",
-				fixture.ShortcutName,
-				suiteDriveRoles.Redact(fixture.ParentEmail),
-				suiteDriveRoles.Redact(fixture.SharerEmail),
+				"%s shortcut fixture %q did not appear in shared --json for %s shared by its "+
+					"ONEDRIVE_TEST_SHORTCUT_%s_SHARER_EMAIL within %v; last_items=%d last_err=%s",
+				fixture.Kind,
+				suiteDriveRoles.Redact(fixture.ShortcutName),
+				suiteDriveRoles.Role(fixture.ParentDrive),
+				shortcutFixtureEnvStem(fixture.Kind),
 				shortcutFixturePropagationTimeout,
 				len(lastListing.Items),
-				lastErr,
+				printable(fmt.Sprint(lastErr)),
 			)
 			if required {
 				require.FailNow(t, message)
@@ -471,7 +475,7 @@ func shortcutSentinelReachable(
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "get", fixture.SharedItem.Selector, downloadRoot)
 	if err != nil {
 		return fmt.Errorf("download shortcut shared target: %w\nstdout: %s\nstderr: %s",
-			err, suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
+			err, printable(stdout), printable(stderr))
 	}
 
 	sentinelPath := filepath.Join(downloadRoot, filepath.FromSlash(strings.TrimPrefix(path.Clean(fixture.SentinelPath), "/")))
@@ -499,7 +503,7 @@ func requireActiveShortcutChild(
 		"active shortcut child mount missing",
 		"parent=%s shortcut=%q remote=fixture.SharedItem state=%q reason=%q",
 		suiteDriveRoles.Role(fixture.ParentDrive),
-		fixture.ShortcutName,
+		suiteDriveRoles.Redact(fixture.ShortcutName),
 		record.State,
 		record.StateReason,
 	)
@@ -643,13 +647,14 @@ func syncShortcutDownloadUntilProjected(
 				t.Logf("waiting for the shortcut child mounts to be readable: %s", suiteDriveRoles.Redact(readErr.Error()))
 				return false
 			case !isActive:
-				t.Logf("waiting for an active shortcut child mount at %q (state %q, reason %q)",
-					relativeLocalPath, found.State, found.StateReason)
+				t.Logf("waiting for an active shortcut child mount at %s (state %q, reason %q)",
+					suiteDriveRoles.Redact(relativeLocalPath), found.State, found.StateReason)
 				return false
 			}
 
 			if _, err := os.Stat(sentinelPath); err != nil {
-				t.Logf("shortcut child mount is active at %q but its sentinel is not projected yet", relativeLocalPath)
+				t.Logf("shortcut child mount is active at %s but its sentinel is not projected yet",
+					suiteDriveRoles.Redact(relativeLocalPath))
 				return false
 			}
 
@@ -800,9 +805,9 @@ func waitForShortcutRootPlaceholder(
 					"root placeholder omission is not skippable because the root listing did not end in a decoded success or the shared target was not resolved; root_listing_decoded=%t shared_target_resolved=%t root_names=%v last_err=%v last_stdout=%s",
 					pollState.RootListingDecoded,
 					fixture.SharedItem.Selector != "",
-					pollState.RootNames,
+					suiteDriveRoles.Redact(fmt.Sprint(pollState.RootNames)),
 					suiteDriveRoles.Redact(fmt.Sprint(pollState.LastErr)),
-					suiteDriveRoles.Redact(pollState.LastStdout),
+					printable(pollState.LastStdout),
 				)
 			}
 			lastSentinelErr = shortcutSentinelReachable(t, cfgPath, env, fixture)
@@ -859,12 +864,12 @@ func skipShortcutRootPlaceholderOmission(
 		"%s: provider_skip=%s live Graph did not expose Add-to-OneDrive shortcut placeholder %q in root of %s within %v; root_names=%v last_err=%v last_stdout=%s",
 		failureTitle,
 		decision.Reason,
-		fixture.ShortcutName,
+		suiteDriveRoles.Redact(fixture.ShortcutName),
 		suiteDriveRoles.Role(fixture.ParentDrive),
 		elapsed,
-		pollState.RootNames,
+		suiteDriveRoles.Redact(fmt.Sprint(pollState.RootNames)),
 		suiteDriveRoles.Redact(fmt.Sprint(pollState.LastErr)),
-		suiteDriveRoles.Redact(pollState.LastStdout),
+		printable(pollState.LastStdout),
 	)
 }
 
@@ -1253,19 +1258,23 @@ func copyFixtureMetadataFiles(srcDir, dstDir string) error {
 	return nil
 }
 
+// copyFixtureFile copies src to dst. A token file's name spells its account,
+// so an error names both paths through Redact and carries the os error's
+// text, which quotes them, redacted instead of wrapped.
 func copyFixtureFile(src, dst string, perm os.FileMode) error {
 	data, err := os.ReadFile(src) //nolint:gosec // fixture metadata from the suite's own isolated data dir
 	if err != nil {
-		return fmt.Errorf("read fixture file %s: %w", src, err)
+		return fmt.Errorf("read fixture file %s: %s", suiteDriveRoles.Redact(src), suiteDriveRoles.Redact(err.Error()))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return fmt.Errorf("mkdir fixture destination for %s: %w", dst, err)
+		return fmt.Errorf("mkdir fixture destination for %s: %s",
+			suiteDriveRoles.Redact(dst), suiteDriveRoles.Redact(err.Error()))
 	}
 
 	//nolint:gosec // destination is inside a temp dir this helper created
 	if err := os.WriteFile(dst, data, perm); err != nil {
-		return fmt.Errorf("write fixture file %s: %w", dst, err)
+		return fmt.Errorf("write fixture file %s: %s", suiteDriveRoles.Redact(dst), suiteDriveRoles.Redact(err.Error()))
 	}
 
 	return nil
@@ -1275,7 +1284,7 @@ func sharedListForRecipientRaw(cfgPath string, env map[string]string, recipientE
 	_, stdout, stderr, err := execCLI(cfgPath, env, "", "--account", recipientEmail, "shared", "--json")
 	if err != nil {
 		return sharedListE2EOutput{}, fmt.Errorf("shared --json for %s: %w (%s)",
-			suiteDriveRoles.Redact(recipientEmail), err, suiteDriveRoles.Redact(strings.TrimSpace(stderr)))
+			suiteDriveRoles.Redact(recipientEmail), err, printable(strings.TrimSpace(stderr)))
 	}
 
 	var parsed sharedListE2EOutput
@@ -1323,7 +1332,7 @@ func waitForDriveListSharedSelectorVisible(
 
 		if err != nil {
 			if !isRetryableGraphGatewayFailure(stderr) {
-				require.NoErrorf(t, err, "drive list --json should succeed\nstderr: %s", suiteDriveRoles.Redact(stderr))
+				require.NoErrorf(t, err, "drive list --json should succeed\nstderr: %s", printable(stderr))
 			}
 		} else {
 			var parsed driveListE2EOutput
@@ -1341,7 +1350,7 @@ func waitForDriveListSharedSelectorVisible(
 				liveProviderSkipDriveListSharedOmitted,
 				pollTimeout,
 				lastListing,
-				suiteDriveRoles.Redact(lastStderr),
+				printable(lastStderr),
 			)
 		}
 
@@ -1392,19 +1401,19 @@ func waitForSharedFolderNameDriveAdd(
 				require.Truef(t, isRetryableGraphGatewayFailure(lastSharedStderr),
 					"shared --json preflight should succeed when classifying drive add <shared-folder-name> no-match\nshared err: %s\nshared stderr: %s",
 					suiteDriveRoles.Redact(lastSharedErr.Error()),
-					suiteDriveRoles.Redact(lastSharedStderr),
+					printable(lastSharedStderr),
 				)
 			} else if lastSharedVisible {
 				require.NoErrorf(t, err,
 					"drive add <shared-folder-name> missed fixture that shared --json exposed by exact name and remote identity\nstderr: %s\nshared --json: %s",
-					suiteDriveRoles.Redact(stderr),
-					lastSharedListing,
+					printable(stderr),
+					printable(lastSharedListing),
 				)
 			}
 		} else if !isRetryableGraphGatewayFailure(stderr) {
 			require.NoErrorf(t, err,
 				"drive add <shared-folder-name> should succeed or expose known provider discovery failure\nstderr: %s",
-				suiteDriveRoles.Redact(stderr),
+				printable(stderr),
 			)
 		}
 
@@ -1450,9 +1459,8 @@ func endSharedFolderNameDriveAddWait(
 	account := suiteDriveRoles.Redact(fixture.RecipientEmail)
 	if decision := classifySharedFolderNameProviderSkip(last.stderr, last.sharedVisible, last.sharedErr, last.sharedStderr); decision.Skippable {
 		t.Skipf(
-			"provider_skip=%s live shared discovery omitted folder name %q for account %s within %v; independent shared --json did not confirm the known fixture on this run\n%s",
+			"provider_skip=%s live shared discovery omitted the shared folder fixture's name for account %s within %v; independent shared --json did not confirm the known fixture on this run\n%s",
 			decision.Reason,
-			fixture.FolderItem.Name,
 			account,
 			pollTimeout,
 			last.redactedSummary(),
@@ -1460,11 +1468,10 @@ func endSharedFolderNameDriveAddWait(
 	}
 	if isRetryableGraphGatewayFailure(last.stderr) {
 		t.Skipf(
-			"live shared discovery could not add folder name %q for account %s within %v because Graph kept returning retryable gateway failures\nlast stderr: %s",
-			fixture.FolderItem.Name,
+			"live shared discovery could not add the shared folder fixture by name for account %s within %v because Graph kept returning retryable gateway failures\nlast stderr: %s",
 			account,
 			pollTimeout,
-			suiteDriveRoles.Redact(last.stderr),
+			printable(last.stderr),
 		)
 	}
 
@@ -1476,13 +1483,14 @@ func endSharedFolderNameDriveAddWait(
 }
 
 // redactedSummary is the attempt for a message: drive add's stderr, what
-// shared --json listed and how it failed, with every configured drive and
-// its account named by role.
+// shared --json listed and how it failed, each masked and bounded
+// (printable).
 func (last *sharedFolderNameDriveAddAttempt) redactedSummary() string {
-	return suiteDriveRoles.Redact(fmt.Sprintf(
-		"last stderr: %s\nlast shared --json: %s\nlast shared err: %v\nlast shared stderr: %s",
-		last.stderr, last.sharedListing, last.sharedErr, last.sharedStderr,
-	))
+	return fmt.Sprintf(
+		"last stderr: %s\nlast shared --json: %s\nlast shared err: %s\nlast shared stderr: %s",
+		printable(last.stderr), printable(last.sharedListing), printable(fmt.Sprint(last.sharedErr)),
+		printable(last.sharedStderr),
+	)
 }
 
 func classifySharedFolderNameProviderSkip(

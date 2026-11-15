@@ -47,6 +47,8 @@ var (
 // validateTestData checks that .testdata/ has the expected structure before
 // tests start. Catches bootstrap failures with actionable error messages.
 // E2E tests can't import internal packages, so validation uses stdlib JSON.
+// The token file's name spells its account, so a message prints its path,
+// and an error that quotes it, through Redact.
 func validateTestData(credDir, driveID string) {
 	testutil.EnsureTestCredentialBundle(credDir, []string{driveID})
 
@@ -55,20 +57,21 @@ func validateTestData(credDir, driveID string) {
 
 	data, err := os.ReadFile(tokenPath) //nolint:gosec // token file inside the repo's own .testdata credential bundle
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot read token file %s: %v\n", tokenPath, err)
+		fmt.Fprintf(os.Stderr, "FATAL: cannot read token file %s: %s\n",
+			suiteDriveRoles.Redact(tokenPath), suiteDriveRoles.Redact(err.Error()))
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
 	}
 
 	var parsed map[string]json.RawMessage
 	if jsonErr := json.Unmarshal(data, &parsed); jsonErr != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: token file %s is not valid JSON: %v\n", tokenPath, jsonErr)
+		fmt.Fprintf(os.Stderr, "FATAL: token file %s is not valid JSON: %v\n", suiteDriveRoles.Redact(tokenPath), jsonErr)
 		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
 		os.Exit(1)
 	}
 
 	if _, ok := parsed["token"]; !ok {
-		fmt.Fprintf(os.Stderr, "FATAL: token file %s missing \"token\" key\n", tokenPath)
+		fmt.Fprintf(os.Stderr, "FATAL: token file %s missing \"token\" key\n", suiteDriveRoles.Redact(tokenPath))
 		fmt.Fprintln(os.Stderr, "Re-run scripts/bootstrap-test-credentials.sh.")
 		os.Exit(1)
 	}
@@ -311,8 +314,11 @@ func TestIsolation_TokenInTempDir(t *testing.T) {
 	tokenName := testutil.TokenFileName(drive)
 	tokenPath := filepath.Join(testDataDir, tokenName)
 
+	// The token file's name and os.Stat's error spell the account: print the
+	// drive's role.
 	_, err := os.Stat(tokenPath)
-	assert.NoError(t, err, "token file should exist at %s", tokenPath)
+	tokenExists := err == nil
+	assert.Truef(t, tokenExists, "the token file of %s should exist in the test data dir", suiteDriveRoles.Role(drive))
 }
 
 func TestIsolation_GoModuleCachePreserved(t *testing.T) {
@@ -364,15 +370,15 @@ func TestIsolation_BinaryResolvesTemp(t *testing.T) {
 
 	// The real home directory must not appear anywhere in the output.
 	// This proves the binary resolved paths using the temp env overrides.
-	assert.NotContains(t, stdout, realHomeDir,
+	assertOutputNotContains(t, stdout, realHomeDir,
 		"binary stdout should not contain real home dir")
-	assert.NotContains(t, stderr, realHomeDir,
+	assertOutputNotContains(t, stderr, realHomeDir,
 		"binary stderr should not contain real home dir")
 
 	// The binary should have found the account and drive (proves data dir
 	// resolution went to temp, not production).
-	assert.Contains(t, stdout, "Account:", "status should show account info")
-	assert.Contains(t, stdout, "Folder:", "status should show configured drive info")
-	assert.NotContains(t, stdout, "No accounts configured",
+	assertOutputContains(t, stdout, "Account:", "status should show account info")
+	assertOutputContains(t, stdout, "Folder:", "status should show configured drive info")
+	assertOutputNotContains(t, stdout, "No accounts configured",
 		"binary should find the test account via isolated config")
 }

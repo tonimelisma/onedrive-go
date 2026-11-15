@@ -110,7 +110,8 @@ func waitForControlSocketMount(t *testing.T, env map[string]string, mount string
 	}
 
 	require.Failf(t, "daemon is not running the mount",
-		"after %v waiting for %q; control socket reports mounts %v", timeout, mount, status.Mounts)
+		"after %v waiting for %s; control socket reports mounts %s", timeout,
+		suiteDriveRoles.Role(mount), suiteDriveRoles.Redact(fmt.Sprint(status.Mounts)))
 }
 
 func getControlSocketStatus(t *testing.T, env map[string]string) synccontrol.StatusResponse {

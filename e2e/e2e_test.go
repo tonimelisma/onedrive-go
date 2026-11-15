@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -50,6 +51,7 @@ func TestMain(m *testing.M) {
 	liveConfig = cfg
 	drive = cfg.PrimaryDrive
 	drive2 = cfg.SecondaryDrive
+	// The drives' roles until the catalog is read (learnSuiteRoles).
 	suiteDriveRoles = testutil.NewDriveRoles(drive, drive2)
 
 	testutil.ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
@@ -64,6 +66,7 @@ func TestMain(m *testing.M) {
 
 	// Set up directory isolation (must be after drive is set, before binary build).
 	cleanupIsolation := setupIsolation()
+	learnSuiteRoles(cleanupIsolation, &cfg)
 
 	// Build binary to temp dir.
 	tmpDir, err := os.MkdirTemp("", "onedrive-e2e-*")
@@ -109,6 +112,27 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// learnSuiteRoles names by role, from here on, what the suite holds about its
+// accounts and fixtures besides the drives: the fixtures of its environment
+// and the catalog the isolated data dir got from the test credentials
+// (newSuiteDriveRoles), and writes to stderr what it did not learn, by role
+// and variable. Reading the catalog takes no request to OneDrive. It exits
+// the process when the catalog cannot be read.
+func learnSuiteRoles(cleanupIsolation func(), cfg *testutil.LiveTestConfig) {
+	catalog, err := config.LoadCatalogForDataDir(testDataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: reading the test credentials' catalog: %s\n", suiteDriveRoles.Redact(err.Error()))
+		cleanupIsolation()
+		os.Exit(1)
+	}
+
+	var notes []string
+	suiteDriveRoles, notes = newSuiteDriveRoles(cfg, catalog)
+	for _, note := range notes {
+		fmt.Fprintln(os.Stderr, note)
+	}
+}
+
 // buildSuiteBinary builds the CLI under test into path, exiting the process
 // on failure.
 func buildSuiteBinary(path string) {
@@ -126,8 +150,8 @@ func buildSuiteBinary(path string) {
 
 // abortSuitef reports a TestMain setup failure, undoes the isolation and temp
 // dir set up so far, and exits. It never returns.
-func abortSuitef(cleanupIsolation func(), tmpDir, format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+func abortSuitef(cleanupIsolation func(), tmpDir, format string, values ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", values...)
 	cleanupIsolation()
 	removeSuiteTempDir(tmpDir)
 	os.Exit(1)
@@ -213,12 +237,12 @@ func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
 	_, stdout, stderr, err := execCLI(cfgPath, nil, driveID, "ls", "--json", "/")
 	if err != nil {
 		return fmt.Errorf("listing root for preflight scrub on %s: %w\nstdout: %s\nstderr: %s",
-			role, err, suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
+			role, err, printable(stdout), printable(stderr))
 	}
 
 	var items []remoteListJSONItem
 	if err := json.Unmarshal([]byte(stdout), &items); err != nil {
-		return fmt.Errorf("decoding root listing for preflight scrub on %s: %w\nstdout: %s", role, err, suiteDriveRoles.Redact(stdout))
+		return fmt.Errorf("decoding root listing for preflight scrub on %s: %w\nstdout: %s", role, err, printable(stdout))
 	}
 
 	for _, item := range items {
@@ -227,12 +251,12 @@ func scrubRemoteDriveArtifacts(cfgPath string, driveID string) error {
 		}
 
 		remotePath := "/" + item.Name
-		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", role, remotePath)
+		fmt.Fprintf(os.Stderr, "E2E preflight scrub: drive=%s deleting %s\n", role, printable(remotePath))
 
 		_, delStdout, delStderr, delErr := execCLI(cfgPath, nil, driveID, "rm", "-r", remotePath)
 		if delErr != nil && !cliReportsRemoteItemMissing(delStderr) {
 			return fmt.Errorf("deleting %s during preflight scrub on %s: %w\nstdout: %s\nstderr: %s",
-				remotePath, role, delErr, suiteDriveRoles.Redact(delStdout), suiteDriveRoles.Redact(delStderr))
+				printable(remotePath), role, delErr, printable(delStdout), printable(delStderr))
 		}
 	}
 
@@ -293,7 +317,9 @@ func cliExecutionLogEntry(args []string, stdout, stderr string) string {
 	)
 }
 
-// registerLogDump registers a cleanup that dumps the debug log on test failure.
+// registerLogDump registers a cleanup that prints, when the test failed, the
+// last part of its debug log and the file that holds the whole of it
+// (debugLogDump), and else the file's name.
 func registerLogDump(t *testing.T) {
 	t.Helper()
 
@@ -306,7 +332,7 @@ func registerLogDump(t *testing.T) {
 				return
 			}
 
-			t.Logf("=== DEBUG LOG DUMP (%s) ===\n%s", logPath, string(data))
+			t.Log(debugLogDump(suiteDriveRoles, logPath, string(data)))
 		} else {
 			t.Logf("debug log: %s", logPath)
 		}
@@ -324,9 +350,11 @@ func debugLogFileName(testName string) string {
 	return sanitizeTestName(suiteDriveRoles.Redact(testName)) + ".log"
 }
 
-// appendDebugLogChunk appends content to a per-test debug log, with every
-// configured drive named by role: the logs are uploaded as CI artifacts of a
-// public repository, where log masking does not reach.
+// appendDebugLogChunk appends content to a per-test debug log through
+// suiteDriveRoles.Redact, the command line, shared --json and drive list
+// --json included: every account, drive, item and fixture of the suite named
+// by role and any other identifier masked, because the logs are uploaded as
+// CI artifacts of a public repository, where log masking does not reach.
 func appendDebugLogChunk(path string, content string) (err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the per-test debug log under the suite's own log dir
 	if err != nil {
@@ -509,13 +537,13 @@ func pollCLIWithConfigRetryingTransientGraphFailures(
 
 		if !isRetryableGraphGatewayFailure(stderr) {
 			require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
-				args, stdout, stderr)
+				printable(fmt.Sprint(args)), printable(stdout), printable(stderr))
 		}
 
 		if time.Now().After(deadline) {
 			require.Failf(t, "pollCLIWithConfigRetryingTransientGraphFailures: timed out",
 				"after %v waiting for success of %v through transient Graph failures\nlast stdout: %s\nlast stderr: %s",
-				timeout, args, stdout, stderr)
+				timeout, printable(fmt.Sprint(args)), printable(stdout), printable(stderr))
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
@@ -648,8 +676,8 @@ func requireSyncEventuallyConvergesWith(
 				suiteDriveRoles.Redact(description),
 				timeout,
 				last.Err,
-				suiteDriveRoles.Redact(last.Stdout),
-				suiteDriveRoles.Redact(last.Stderr),
+				printable(last.Stdout),
+				printable(last.Stderr),
 			)
 		}
 
@@ -686,7 +714,7 @@ func requireLeftWorkExitsNonZero(t *testing.T, result syncAttemptResult) {
 
 	if syncLeftWorkPattern.MatchString(result.Stdout) {
 		require.Errorf(t, result.Err, "a one-shot sync whose summary says it left work must exit non-zero\nstdout: %s\nstderr: %s",
-			result.Stdout, result.Stderr)
+			printable(result.Stdout), printable(result.Stderr))
 	}
 }
 
@@ -720,7 +748,7 @@ func runSyncUntilOnlyConditionsRemain(t *testing.T, cfgPath string, env map[stri
 		if time.Now().After(deadline) {
 			require.Failf(t, "runSyncUntilOnlyConditionsRemain: timed out",
 				"%v still left retryable work after %v and %d passes\nlast stdout: %s\nlast stderr: %s",
-				syncArgs, transientGraphRetryTimeout, attempt+1, stdout, stderr)
+				printable(fmt.Sprint(syncArgs)), transientGraphRetryTimeout, attempt+1, printable(stdout), printable(stderr))
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))
@@ -742,10 +770,13 @@ func requireSyncExitMatchesSummary(
 
 	// --quiet drops the summary; the command error still says it.
 	leftWork := syncLeftWorkPattern.MatchString(stdout) || syncLeftWorkErrorPattern.MatchString(stderr)
-	require.Equalf(t, leftWork, err != nil,
-		"CLI command %s (drive=%s): a one-shot sync exits non-zero exactly when its summary says it left work\n"+
-			"err: %v\nstdout: %s\nstderr: %s",
-		suiteDriveRoles.Redact(fmt.Sprint(syncArgs)), suiteDriveRoles.Role(runner.driveID), err, stdout, stderr)
+	// The output is masked only for a failure: a sync's --debug log is long.
+	if leftWork != (err != nil) {
+		require.Failf(t, "a one-shot sync exits non-zero exactly when its summary says it left work",
+			"CLI command %s (drive=%s): left work %v, err: %v\nstdout: %s\nstderr: %s",
+			printable(fmt.Sprint(syncArgs)), suiteDriveRoles.Role(runner.driveID), leftWork, err,
+			printable(stdout), printable(stderr))
+	}
 
 	return leftWork
 }
@@ -798,10 +829,10 @@ func requireSyncLeftWork(t *testing.T, stdout, stderr string, err error) {
 	t.Helper()
 
 	var exitErr *exec.ExitError
-	require.ErrorAsf(t, err, &exitErr, "a sync that left work must exit non-zero\nstdout: %s\nstderr: %s", stdout, stderr)
-	require.Equalf(t, syncExitLeftWork, exitErr.ExitCode(), "stderr: %s", stderr)
-	require.Regexp(t, syncLeftWorkPattern, stdout)
-	require.Contains(t, stderr, "unsynced", "the command error says the run left files unsynced")
+	require.ErrorAsf(t, err, &exitErr, "a sync that left work must exit non-zero\nstdout: %s\nstderr: %s", printable(stdout), printable(stderr))
+	require.Equalf(t, syncExitLeftWork, exitErr.ExitCode(), "stderr: %s", printable(stderr))
+	requireOutputMatches(t, syncLeftWorkPattern, stdout)
+	requireOutputContains(t, stderr, "unsynced", "the command error says the run left files unsynced")
 }
 
 // runSyncThroughTransientFailures runs a one-shot sync on the default drive
@@ -883,7 +914,7 @@ func runSyncThroughTransientFailuresWith(t *testing.T, runner syncRunner, args .
 				transientGraphRetryTimeout, time.Since(startedAt), attempt+1, timingOutcomeTimeout)
 			require.Failf(t, "runSyncThroughTransientFailures: timed out",
 				"%v still left work after %v and %d passes\nlast stdout: %s\nlast stderr: %s",
-				syncArgs, transientGraphRetryTimeout, attempt+1, stdout, stderr)
+				printable(fmt.Sprint(syncArgs)), transientGraphRetryTimeout, attempt+1, printable(stdout), printable(stderr))
 		}
 
 		sleepForLiveTestPropagation(pollBackoff(attempt))

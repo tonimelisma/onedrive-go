@@ -39,6 +39,18 @@ const (
 	ReadOnlyShortcutParentDriveEnvVar = "ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE"
 )
 
+// The fixture variables applyShortcutFixtureDefaults fills when a run leaves
+// them unset.
+const (
+	writableShortcutNameEnvVar         = "ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME"
+	writableShortcutSharerEmailEnvVar  = "ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL"
+	writableShortcutSentinelPathEnvVar = "ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH"
+	readOnlyShortcutNameEnvVar         = "ONEDRIVE_TEST_SHORTCUT_READONLY_NAME"
+	readOnlyShortcutSharerEmailEnvVar  = "ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL"
+	readOnlyShortcutSentinelPathEnvVar = "ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH"
+	standaloneSharedFolderNameEnvVar   = "ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME"
+)
+
 // LiveFixtures captures durable live Graph fixtures loaded from the test
 // environment. The values stay as strings so testutil's exported API does not
 // leak internal package types.
@@ -64,6 +76,9 @@ type LiveTestConfig struct {
 	PrimaryDrive   string
 	SecondaryDrive string
 	Fixtures       LiveFixtures
+	// DefaultedFixtureVariables names, in a fixed order, each fixture
+	// variable the run left unset and whose default applied.
+	DefaultedFixtureVariables []string
 }
 
 // LoadDotEnvFile reads KEY=VALUE pairs from a .env file at the given path
@@ -142,14 +157,14 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 			WritableSharedFolderSelector: os.Getenv("ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER"),
 			ReadOnlySharedFolderSelector: os.Getenv("ONEDRIVE_TEST_READONLY_SHARED_FOLDER"),
 			WritableShortcutParentDrive:  os.Getenv(WritableShortcutParentDriveEnvVar),
-			WritableShortcutName:         os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME"),
-			WritableShortcutSharerEmail:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL"),
-			WritableShortcutSentinelPath: os.Getenv("ONEDRIVE_TEST_SHORTCUT_WRITABLE_SENTINEL_PATH"),
+			WritableShortcutName:         os.Getenv(writableShortcutNameEnvVar),
+			WritableShortcutSharerEmail:  os.Getenv(writableShortcutSharerEmailEnvVar),
+			WritableShortcutSentinelPath: os.Getenv(writableShortcutSentinelPathEnvVar),
 			ReadOnlyShortcutParentDrive:  os.Getenv(ReadOnlyShortcutParentDriveEnvVar),
-			ReadOnlyShortcutName:         os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_NAME"),
-			ReadOnlyShortcutSharerEmail:  os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_SHARER_EMAIL"),
-			ReadOnlyShortcutSentinelPath: os.Getenv("ONEDRIVE_TEST_SHORTCUT_READONLY_SENTINEL_PATH"),
-			StandaloneSharedFolderName:   os.Getenv("ONEDRIVE_TEST_STANDALONE_SHARED_FOLDER_NAME"),
+			ReadOnlyShortcutName:         os.Getenv(readOnlyShortcutNameEnvVar),
+			ReadOnlyShortcutSharerEmail:  os.Getenv(readOnlyShortcutSharerEmailEnvVar),
+			ReadOnlyShortcutSentinelPath: os.Getenv(readOnlyShortcutSentinelPathEnvVar),
+			StandaloneSharedFolderName:   os.Getenv(standaloneSharedFolderNameEnvVar),
 		},
 	}
 
@@ -176,8 +191,11 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 			continue
 		}
 
+		// The parse error quotes the whole selector, its address and IDs, and
+		// TestMain prints this error before any role exists: name the
+		// variable only.
 		if _, err := sharedref.Parse(selector.value); err != nil {
-			return LiveTestConfig{}, fmt.Errorf("load live test config: parse %s: %w", selector.name, err)
+			return LiveTestConfig{}, fmt.Errorf("load live test config: %s is not a shared folder selector", selector.name)
 		}
 	}
 
@@ -185,30 +203,44 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 }
 
 // applyShortcutFixtureDefaults fills the shortcut fixture names a run leaves
-// unset. The parent drives have no default: they come only from their
-// variables. Each sharer is the other fixture's parent account.
+// unset, and names each variable whose default applied in
+// DefaultedFixtureVariables. The parent drives have no default: they come
+// only from their variables. Each sharer is the other fixture's parent
+// account, when that is set.
 func applyShortcutFixtureDefaults(cfg *LiveTestConfig) {
-	if cfg.Fixtures.WritableShortcutName == "" {
-		cfg.Fixtures.WritableShortcutName = defaultWritableShortcutName
-	}
-	if cfg.Fixtures.ReadOnlyShortcutName == "" {
-		cfg.Fixtures.ReadOnlyShortcutName = defaultReadOnlyShortcutName
-	}
-	if cfg.Fixtures.WritableShortcutSentinelPath == "" {
-		cfg.Fixtures.WritableShortcutSentinelPath = defaultShortcutSentinelPath
-	}
-	if cfg.Fixtures.ReadOnlyShortcutSentinelPath == "" {
-		cfg.Fixtures.ReadOnlyShortcutSentinelPath = defaultShortcutSentinelPath
-	}
-	if cfg.Fixtures.StandaloneSharedFolderName == "" {
-		cfg.Fixtures.StandaloneSharedFolderName = defaultStandaloneSharedFolderName
-	}
-
-	if cfg.Fixtures.WritableShortcutSharerEmail == "" {
-		cfg.Fixtures.WritableShortcutSharerEmail = driveEmailFromCanonicalID(cfg.Fixtures.ReadOnlyShortcutParentDrive)
-	}
-	if cfg.Fixtures.ReadOnlyShortcutSharerEmail == "" {
-		cfg.Fixtures.ReadOnlyShortcutSharerEmail = driveEmailFromCanonicalID(cfg.Fixtures.WritableShortcutParentDrive)
+	fixtures := &cfg.Fixtures
+	for _, fixture := range []struct {
+		variable string
+		value    *string
+		fallback string
+	}{
+		{variable: writableShortcutNameEnvVar, value: &fixtures.WritableShortcutName, fallback: defaultWritableShortcutName},
+		{variable: readOnlyShortcutNameEnvVar, value: &fixtures.ReadOnlyShortcutName, fallback: defaultReadOnlyShortcutName},
+		{
+			variable: writableShortcutSentinelPathEnvVar, value: &fixtures.WritableShortcutSentinelPath,
+			fallback: defaultShortcutSentinelPath,
+		},
+		{
+			variable: readOnlyShortcutSentinelPathEnvVar, value: &fixtures.ReadOnlyShortcutSentinelPath,
+			fallback: defaultShortcutSentinelPath,
+		},
+		{
+			variable: standaloneSharedFolderNameEnvVar, value: &fixtures.StandaloneSharedFolderName,
+			fallback: defaultStandaloneSharedFolderName,
+		},
+		{
+			variable: writableShortcutSharerEmailEnvVar, value: &fixtures.WritableShortcutSharerEmail,
+			fallback: driveEmailFromCanonicalID(fixtures.ReadOnlyShortcutParentDrive),
+		},
+		{
+			variable: readOnlyShortcutSharerEmailEnvVar, value: &fixtures.ReadOnlyShortcutSharerEmail,
+			fallback: driveEmailFromCanonicalID(fixtures.WritableShortcutParentDrive),
+		},
+	} {
+		if *fixture.value == "" && fixture.fallback != "" {
+			*fixture.value = fixture.fallback
+			cfg.DefaultedFixtureVariables = append(cfg.DefaultedFixtureVariables, fixture.variable)
+		}
 	}
 }
 

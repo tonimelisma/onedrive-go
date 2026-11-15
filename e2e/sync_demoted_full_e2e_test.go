@@ -26,11 +26,11 @@ func TestE2E_Sync_DryRun(t *testing.T) {
 
 	// Single pass by design: a dry run changes nothing, so its own plan is what the test reads.
 	out, _ := runCLIWithConfig(t, cfgPath, env, "sync", "--upload-only", "--dry-run")
-	assert.Contains(t, out, "Dry run, nothing was changed.")
-	assert.Contains(t, out, "Would upload "+testFolder+"/dryrun.txt", "a dry run names each planned action")
+	assertOutputContains(t, out, "Dry run, nothing was changed.")
+	assertOutputContains(t, out, "Would upload "+testFolder+"/dryrun.txt", "a dry run names each planned action")
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "ls", "/"+testFolder)
-	assert.Contains(t, output, testFolder)
+	assertOutputContains(t, output, testFolder)
 }
 
 func TestE2E_Sync_InternalBaselineVerification(t *testing.T) {
@@ -75,7 +75,7 @@ func TestE2E_Sync_Conflicts(t *testing.T) {
 	// it resolved; a conflict copy is not work left, and the pass may leave
 	// work a transient failure causes.
 	out, _ := runSyncPass(t, cfgPath, env)
-	assert.Contains(t, out, "Conflict, kept both versions of")
+	assertOutputContains(t, out, "Conflict, kept both versions of")
 
 	content := mustReadFile(t, conflictFile)
 	assert.Equal(t, "remote edit", string(content))
@@ -126,7 +126,7 @@ sync_dir = %q
 
 	cfgPath := writeConfig(t)
 	out, _ := runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
-	assert.Contains(t, out, "(upload only)")
+	assertOutputContains(t, out, "(upload only)")
 
 	firstRelPath := filepath.ToSlash(filepath.Join(testFolder, "file1.txt"))
 	requireBaselinePathPresent(t, env, firstRelPath)
@@ -140,7 +140,7 @@ sync_dir = %q
 		filepath.Join(localDir, "file2.txt"), []byte("second file\n"), 0o600))
 
 	out, _ = runSyncThroughTransientFailures(t, cfgPath2, env, "--upload-only")
-	assert.Contains(t, out, "(upload only)")
+	assertOutputContains(t, out, "(upload only)")
 
 	secondRelPath := filepath.ToSlash(filepath.Join(testFolder, "file2.txt"))
 	requireBaselinePathPresent(t, env, firstRelPath)

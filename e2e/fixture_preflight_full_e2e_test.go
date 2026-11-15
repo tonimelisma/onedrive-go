@@ -22,13 +22,14 @@ func TestE2E_FixturePreflight_Full(t *testing.T) {
 		assert.NotEmpty(t, fixture.RecipientDriveID)
 	}
 	if liveConfig.Fixtures.StandaloneSharedFolderName != "" && fixtures[0].FolderItem.Name != "" {
-		assert.Equal(t, liveConfig.Fixtures.StandaloneSharedFolderName, fixtures[0].FolderItem.Name)
+		assertSameIdentity(t, "the standalone shared folder's name",
+			liveConfig.Fixtures.StandaloneSharedFolderName, fixtures[0].FolderItem.Name)
 	}
 
 	writableShortcut := requireShortcutFixtureWithCatalog(t, shortcutFixtureWritable)
 	readOnlyShortcut := requireShortcutFixtureWithCatalog(t, shortcutFixtureReadOnly)
-	assert.Equal(t, liveConfig.Fixtures.WritableShortcutName, writableShortcut.ShortcutName)
-	assert.Equal(t, liveConfig.Fixtures.ReadOnlyShortcutName, readOnlyShortcut.ShortcutName)
+	assertSameIdentity(t, "the writable shortcut's name", liveConfig.Fixtures.WritableShortcutName, writableShortcut.ShortcutName)
+	assertSameIdentity(t, "the read-only shortcut's name", liveConfig.Fixtures.ReadOnlyShortcutName, readOnlyShortcut.ShortcutName)
 
 	shortcutFixtures := []*resolvedShortcutFixture{writableShortcut, readOnlyShortcut}
 	for _, fixture := range shortcutFixtures {
