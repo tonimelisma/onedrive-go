@@ -40,12 +40,12 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | A remote move whose item already sits at the destination succeeds without a Graph call. | `TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving` |
 | Folder eTag churn from descendant changes neither supersedes a folder move nor conditions it, while a file's eTag mismatch still supersedes. | `TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede`, `TestExecutor_RemoteMove_FileETagMismatchStillSupersedes`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
 | Move outcomes publish observed or proven local facts, keep a pending remote edit visible, and folder creates record local filesystem identity. | `TestExecutor_LocalMove_PublishesSourceBaselineLocalHalf`, `TestExecutor_LocalMove_RemoteEditKeepsBaselineRemoteContent`, `TestExecutor_RemoteMove_PublishesObservedDestinationLocalTruth`, `TestExecutor_CreateLocalFolder_RecordsFilesystemIdentity`, `TestExecutor_CreateRemoteFolder_RecordsObservedLocalIdentity` |
-| Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal` |
-| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_ConflictCopy_ReservationGivesEachCopyItsOwnDestination`, `TestExecutor_ConflictCopy_ReleasedReservationLeavesNoPlaceholder`, `TestExecutor_ConflictCopy_LeavesExactlyOneCopyHoldingTheOriginal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent`, `TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes`, `TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
+| Edit/edit and create/create conflicts are handled immediately by preserving both versions with a local conflict copy and downloading the canonical remote version. | `TestExecutor_Conflict_EditEdit_KeepBoth`, `TestExecutor_Conflict_EditEdit_KeepBoth_ConflictCopyCollisionGetsSuffix`, `TestExecutor_ConflictDownloadFails_LeavesConflictCopy`, `TestConflictCopyPath_Normal`, `TestExecutor_DirectoryConflictCopy_VanishedSourceIsTheVanishedFileOutcome` |
+| Planner-generated edit/delete uploads remain concrete execution work, while stale local deletes return a superseded precondition outcome so the engine replans instead of inventing new sync intent inside the executor. | `TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal`, `TestExecutor_ConflictCopy_SameSecondCopiesTakeTheirOwnNames`, `TestExecutor_ConflictCopy_FailedRenameLeavesNoConflictCopyName`, `TestExecutor_ConflictCopy_LeavesExactlyOneCopyHoldingTheOriginal`, `TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition`, `TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent`, `TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes`, `TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess` |
 | Worker-start validation rejects already-submitted stale actions before executor side effects, while suspect local truth disables local-state-based rejection. Dependent uploads after planned remote moves tolerate move-produced eTag churn but still reject proven remote content drift, and executable actions without planner truth fail closed. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState`, `TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange`, `TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange`, `TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction` |
 | Local mutation is refused beneath a symlinked ancestor, at every mutating action, with the target content outside the sync root left byte-identical. | `TestExecutor_Download_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked`, `TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked`, `TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked`, `TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition`, `TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink`, `TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds` |
 | Uploads read through a followed alias: a file beneath a directory symlink whose target is outside the sync root uploads with the target content, its followed facts are still checked against the plan, the same path still refuses a download, and a path that lexically leaves the root is refused. | `TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot`, `TestExecutor_Upload_UnderFollowedDirectoryAliasSucceeds`, `TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget`, `TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused`, `TestExecutor_Upload_PathLeavingSyncRootIsRefused`, `TestExecutor_Upload_SymlinkAliasSourceUsesFollowedTargetPrecondition` |
-| Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash`, `TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept`, `TestCopyVerified_WriteDuringCopyDiscardsTheCopy`, `TestTrash_CrashBetweenMoveAndCommitIsRecoverable`, `TestTrash_FailedCommitLeavesARecoverablePendingEntry`, `TestTrash_OrphanItemIsListedAndKept`, `TestTrash_RestoreAcrossFilesystemsCopies`, `TestTrash_RestoreRefusesSymlinkedAncestor`, `TestRefuseSymlinkedAncestors_RefusesATargetItCannotPlaceInTheSyncFolder`, `TestTrash_RestoreRefusesAMissingSyncFolder`, `TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask`, `TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted`, `TestTrash_CrossFilesystemRestoreKeepsModeAndTime`, `TestTrash_UncheckableItemIsNeverPurged`, `TestLinkOrCopyNoReplace_FilesystemWithoutHardLinksCopies`, `TestLinkOrCopyNoReplace_SourceThatCannotBeRemovedIsReportedAfterSuccess` |
+| Local deletes and download overwrites act only on the inode they verified, keep a file replaced mid-check, and put what they remove or replace in the drive's local trash. | `TestDeleteLocalFile_MovesTheFileToTheTrash`, `TestDeleteLocalFile_FileReplacedMidHashSurvives`, `TestDetachRegularFile_FileReplacedDuringVerifyIsKept`, `TestRunOnce_RemoteDeleteMovesLocalFileToTrash`, `TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash`, `TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept`, `TestCopyVerified_WriteDuringCopyDiscardsTheCopy`, `TestTrash_CrashBetweenMoveAndCommitIsRecoverable`, `TestTrash_FailedCommitLeavesARecoverablePendingEntry`, `TestTrash_OrphanItemIsListedAndKept`, `TestTrash_RestoreAcrossFilesystemsCopies`, `TestTrash_RestoreRefusesSymlinkedAncestor`, `TestRefuseSymlinkedAncestors_RefusesATargetItCannotPlaceInTheSyncFolder`, `TestTrash_RestoreRefusesAMissingSyncFolder`, `TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask`, `TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted`, `TestTrash_CrossFilesystemRestoreKeepsModeAndTime`, `TestTrash_UncheckableItemIsNeverPurged`, `TestTrash_RestoreThroughASwappedFolderStaysInside`, `TestTrash_CrossFilesystemRestoreThroughASwappedFolderStaysInside`, `TestTrash_PutBackMakesNoFolderThroughASwappedFolder`, `TestRoot_MoveInNoReplace_CopyKeepsModeAndTime`, `TestRoot_RenameNoReplace_SourceThatCannotBeRemovedIsReportedAfterSuccess`, `TestTrash_RestoreThatLeavesItsTemporaryCopyFinishesAndNamesIt`, `TestTrash_RestoreThatLeavesItsTemporaryCopyAndThenFailsNamesBoth`, `TestTrash_RestoreThatFailsAfterPlacingTheFileReturnsWhereItIs` |
 | A cross-filesystem trash placement or restore is durable before the source goes: the destination folder is fsynced after the rename, a sync failure discards the copy, and an entry left with only an interrupted `.copy-*` file is listed, never purged, and not restored as the file. | `TestCopyVerified_SyncsTheDestinationFolder`, `TestCopyVerified_DirectorySyncFailureLeavesNothingAtTheDestination`, `TestCopyVerified_ToleratesUnsupportedDirectorySync`, `TestTrash_CrossFilesystemRestoreSyncsTheTargetFolder`, `TestTrash_IncompleteCrossFilesystemCopyIsNeverPurged` |
 | A recursive remote folder delete refuses to take descendants sync never saw or that changed online; a remote delete re-checks local absence and the sync folder identity; a local folder delete over only ignored children converges and the folder stays deleted online until it holds something sync sees. | `TestExecuteRemoteDelete_FolderWithUnobservedChildIsStale`, `TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns`, `TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale`, `TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale`, `TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation`, `TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded`, `TestDeleteLocalFolder_OnlyIgnoredChildrenConverges`, `TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges`, `TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline` |
 | Through the engine, a folder whose live listing exceeds the cap is left on OneDrive, its delete recorded as a backed-off durable issue that the next pass neither relists nor retries; a child edited online after observation stops the folder delete and the edit comes back down; a folder back locally before its delete runs stays on both sides; and local absence still holds below a regular file and across a type change, so those remote deletes run. | `TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEveryPass`, `TestRunOnce_RemoteFolderDeleteRefusesAChildEditedOnlineAfterObservation`, `TestRunOnce_RemoteFolderDeleteRefusedWhenTheFolderIsBackLocally`, `TestExecuteRemoteDelete_LocalAbsenceHoldsBelowAFileAndAcrossATypeChange` |
@@ -282,11 +282,16 @@ through a temporary sibling named `.onedrive-go.spelling.<name>`, which local
 observation always excludes and cleanup never deletes, so a crash between the
 two renames leaves nothing that syncs (R-2.12.4,
 `TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded`,
-`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Refusing it
-left a remote case-only rename stale on every pass on macOS.
+`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Accepting it
+is what lets a remote case-only rename apply on macOS's case-insensitive volume.
+A name left behind once the entry has its new spelling is a rename that
+happened, logged with that name
+(`TestExecutor_RenameLocal_SpellingRenameThatLeavesItsTemporaryNameIsDone`).
 
-Local move checks that its destination is absent and then renames, which is
-the same check-then-act shape the conflict copy no longer uses. The asymmetry
+Local move checks that its destination is absent and then renames, a
+check-then-act shape the conflict copy takes only where the system offers
+neither the no-replace flag nor a hard link for the entry (a folder never
+has one). The asymmetry
 is deliberate, and worth stating so it does not read as an oversight.
 
 A conflict-copy collision is reachable by design: the destination name carries
@@ -299,32 +304,48 @@ outside this program can fill.
 
 Closing that window atomically needs `RENAME_NOREPLACE` on Linux and
 `RENAME_EXCL` on macOS, with no equivalent on FreeBSD, which the build
-supports. The exclusive-create reservation used for conflict copies does not
-substitute here, because a local move can move a directory and a rename cannot
-replace a placeholder file with one. Rather than carry a three-way platform
-split and a type-dependent code path for a race the planner already narrows,
-the check stands and the residual risk is recorded here.
+supports. The sync tree's no-replace rename
+(`synctree.Root.RenameNoReplace`, which the conflict copy uses) carries that
+platform split: where the flag is refused it links and unlinks, and for an
+entry that cannot be linked (a folder, a filesystem without hard links) it
+checks and then renames, so on such a system it has the same window; for a
+race the planner already narrows, the local move's check stands and the
+residual risk is recorded here.
 
-A conflict copy claims its destination instead of finding a free one. The
-readable part of the name is the timestamp, but uniqueness cannot come from
-statting candidates and then renaming onto the winner: rename silently
-replaces whatever occupies the destination, so anything that appeared between
-the check and the act was destroyed by the operation whose entire purpose is
-to preserve a file. Two conflict copies resolved within the same second are
-the reachable case, and mounts sharing a tree or the user creating the name
-are others.
+A conflict copy takes its destination with that rename instead of finding a
+free name first. The readable part of the name is the timestamp, but
+uniqueness cannot come from statting candidates and then renaming onto the
+winner: rename silently replaces whatever occupies the destination, so
+anything that appeared between the check and the act would be destroyed by
+the operation whose entire purpose is to preserve a file. Two conflict copies
+resolved within the same second are the reachable case, and mounts sharing a
+tree or the user creating the name are others.
 
-The executor therefore creates each candidate exclusively and treats an
-existing name as taken, walking the ordinal suffixes until a create succeeds.
-That makes the claim atomic against every other creator of the name. The
-placeholder is empty, so a claim that ends up unused is released rather than
-left behind, where it would read as a truncated conflict copy. Every
-candidate, ordinal and extension included, is built to fit the 255-byte name
-limit (R-2.11.11, `TestExecutor_SecondSameSecondConflictCopyOfALongNameIsWritable`);
-the ordinal used to be appended after the stem was already trimmed to the
-limit, so the second same-second copy of a long name was unwritable.
+The executor therefore renames the file or folder onto each candidate with
+`RenameNoReplace` and treats `ErrTargetExists` as a taken name, walking the
+ordinal suffixes (at most 100, and a copy that finds all of them taken says
+so with the count and the second they share,
+`TestExecutor_ConflictCopy_EveryNameTakenSaysHowManyAndWhichSecond`) until a
+rename succeeds; a file's candidate
+keeps its extension last, a folder's keeps a dot in its name in the stem.
+Nothing is created before the rename, so a copy that fails leaves no name
+behind, and the entry itself moves, never a copy of it, so a program writing
+to the file keeps writing to the conflict copy. A rename that placed the entry
+but could not remove the source (`ErrSourceNotRemoved`) is the success it is,
+logged with the name left behind
+(`TestExecutor_ConflictCopy_OriginalNameThatCannotBeRemovedIsASavedCopy`). A
+rename that fails as missing is a vanished
+source only when a lstat through the sync tree finds the source absent; the
+missing name can be the copy's folder, and a lstat that fails another way is
+joined to the failure (`TestExecutor_ConflictCopy_TakenNameMovesOnToTheNextOrdinal`,
+`TestExecutor_ConflictCopy_WithoutTheFlagOrLinksRenamesTheEntryItself`,
+`TestExecutor_ConflictCopy_MissingDestinationFolderIsNotAVanishedSource`,
+`TestExecutor_ConflictCopy_UncheckableSourceAfterAMissingRenameKeepsBothReasons`).
+Every candidate, ordinal and extension included, is built to fit the 255-byte
+name limit (R-2.11.11, `TestExecutor_SecondSameSecondConflictCopyOfALongNameIsWritable`),
+so the second same-second copy of a long name is as writable as the first.
 
-The dependency graph is dependency-only. It no longer defines runtime
+The dependency graph is dependency-only: it does not define runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
 so the engine decides when the current runtime is quiescent based on outbox,
 running work, and due held entries. `depGraph` therefore does not expose a
@@ -679,19 +700,42 @@ days and only removes reservations whose directory holds no file at all; it
 never deletes an uncommitted file. The crash point `delete.local_trashed`
 sits exactly between the move and the commit, and `delete.remote_done` right
 after a Graph DELETE succeeds (D-091, `spec/design/sync-engine.md`). Restore
-never overwrites (renameat2 `RENAME_NOREPLACE` on Linux, `renamex_np
-RENAME_EXCL` on macOS, link and unlink elsewhere, and on filesystems without
-hard links an `O_EXCL` create plus copy, which is not atomic but never
-replaces), refuses a symbolic link between the sync folder and the target,
-refuses a sync folder that is gone (making it again would give the drive a
-new folder its sync refuses as not the one its state belongs to), creates the
-file's missing folders as folders in the user's tree
-(`localpath.UserTreeDirPerm`, 0777 minus the umask, R-5.10.2; they got the
-trash's own 0700), and copies, keeping mode
-and mtime, through a `.onedrive-go-restore-*` sibling when the trash is on
-another filesystem, and fsyncs the target's folder after the final rename
-before the trashed original is removed (`finishCopiedRestore`, through the
-trash's `syncDir` seam); observation never sees such a sibling. A file that
+changes the sync folder only through its rooted capability (`putBack`,
+R-6.4.8): the trash lives under the data directory, outside every sync
+folder, and is reached by path, while the target's missing folders, the move
+and any copy go through `synctree`. It never overwrites (the sync tree's
+no-replace rename, `spec/design/system.md`: renameat2 `RENAME_NOREPLACE` on
+Linux, `renameatx_np RENAME_EXCL` on macOS, link and unlink elsewhere, and on
+filesystems without hard links an `O_EXCL` create plus copy, which is not
+atomic but never replaces, all on folder descriptors: the target's folder
+opened through the root, the trash entry's folder, outside every sync folder,
+by path; a copy's final rename where the sync folder offers neither the flag
+nor hard links is R-6.4.8's one exception), refuses a symbolic link between
+the sync folder and the target up
+front with a message that names it (a link swapped in after that check fails
+the rooted move instead of redirecting it), refuses a sync folder that is
+gone (making it again would give the drive a new folder its sync refuses as
+not the one its state belongs to), creates the file's missing folders without
+following a symbolic link, even one that stays inside the sync folder
+(`MkdirAllNoFollow`), as folders in the user's tree
+(`localpath.UserTreeDirPerm`, 0777 minus the umask, R-5.10.2), and copies,
+keeping mode and mtime, through a `.onedrive-go-restore-*` sibling created
+exclusively through the root when the trash is on another filesystem, with
+the times set through the root on the copy's name (`Chtimes`, to the
+nanosecond) and the final name taken by the no-replace rename; observation
+never sees such a sibling. Once the file is at its target, `Restore` returns
+the target with whatever fails after, and ends the entry in one order, each
+failure stopping it there: a copy's folder is fsynced after the rename that
+named the copy (`finishCopiedRestore`, through the trash's `syncDir` seam),
+then the trashed file is removed, then the entry's record and directory. A
+folder that cannot be synced keeps the entry whole (`ErrRestoreNotDurable`),
+and a trashed file that cannot be removed keeps its record, so the entry
+stays listed; restoring either again finds the file in the way
+(`ErrRestoreTargetExists`). A sibling that cannot be removed is named
+(`ErrRestoreLeftover`). `trash restore` prints a restore that put the file
+back and then failed as restored, with what failed on stderr and in the
+`warning` field of its `--json` document, and exits 1
+(`reportTrashRestore`). A file that
 cannot be checked in the trash is never purged as empty. A
 `.detach` sibling left by an interrupted run is never cleaned up: every full
 scan reports it as `local_interrupted_removal`, and the first full scan that

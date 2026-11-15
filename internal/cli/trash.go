@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 )
 
@@ -191,6 +192,9 @@ type trashRestoreJSONOutput struct {
 	Drive      string `json:"drive"`
 	ID         string `json:"id"`
 	RestoredTo string `json:"restored_to"`
+	// Warning is what went wrong after the file was put back. The command
+	// exits 1 when it is set, although the file is at RestoredTo.
+	Warning string `json:"warning,omitempty"`
 }
 
 func runTrashRestore(_ context.Context, cc *CLIContext, id string) error {
@@ -198,16 +202,35 @@ func runTrashRestore(_ context.Context, cc *CLIContext, id string) error {
 	if err != nil {
 		return err
 	}
-	target, err := trash.Restore(id)
-	if err != nil {
-		return fmt.Errorf("restore from trash: %w", err)
+	target, restoreErr := trash.Restore(id)
+
+	return reportTrashRestore(cc, drive, id, target, restoreErr)
+}
+
+// reportTrashRestore prints what a restore did and returns its failure. A
+// restore that put the file back and then failed is printed as restored, with
+// what went wrong, and still fails the command: the file is at target
+// whatever the error says, so the user is never told only that it failed.
+func reportTrashRestore(cc *CLIContext, drive, id, target string, restoreErr error) error {
+	if target == "" {
+		return fmt.Errorf("restore from trash: %w", restoreErr)
 	}
 
+	result := trashRestoreJSONOutput{Drive: drive, ID: id, RestoredTo: target}
+	if restoreErr != nil {
+		result.Warning = restoreErr.Error()
+	}
+	var printErr error
 	if cc.Flags.JSON {
-		return writeJSONDocument(cc.Output(), trashRestoreJSONOutput{Drive: drive, ID: id, RestoredTo: target})
+		printErr = writeJSONDocument(cc.Output(), result)
+	} else {
+		printErr = writef(cc.Output(), "Restored %s. The next sync uploads it again.\n", target)
+	}
+	if restoreErr != nil {
+		return fmt.Errorf("restore from trash: %w", localpath.JoinOnOneLine(restoreErr, printErr))
 	}
 
-	return writef(cc.Output(), "Restored %s. The next sync uploads it again.\n", target)
+	return printErr
 }
 
 type trashEmptyJSONOutput struct {

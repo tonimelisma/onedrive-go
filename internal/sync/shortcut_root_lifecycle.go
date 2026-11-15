@@ -544,12 +544,18 @@ func (e *Engine) moveShortcutRootProjectionOntoExistingTarget(
 	if !same {
 		return false, nil
 	}
-	if err := e.syncTree.RenameWithTemporarySibling(
+	err := e.syncTree.RenameWithTemporarySibling(
 		fromRelativePath,
 		toRelativePath,
 		shortcutRootCaseRenameTempInfix,
 		shortcutRootCaseRenameAttempts,
-	); err != nil {
+	)
+	switch {
+	case errors.Is(err, synctree.ErrSourceNotRemoved):
+		// Reached only by a file, which validateShortcutRootProjectionMove refuses; a folder is never linked.
+		e.logger.Warn("Moved shortcut alias projection "+toRelativePath+", but could not remove a name it was moved from",
+			slog.String("path", toRelativePath), slog.Any("error", err))
+	case err != nil:
 		return false, fmt.Errorf("moving case-only shortcut alias projection: %w", err)
 	}
 	return true, nil

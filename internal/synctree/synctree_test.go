@@ -580,7 +580,6 @@ func TestRoot_ReadDir_FailureInjection(t *testing.T) {
 	require.NoError(t, err)
 
 	readDirErr := errors.New("readdir failed")
-	root.ops.lstatAbs = nonNormalizingLstat
 	root.ops.openRoot = func(dir string) (rootHandle, error) {
 		return &fakeRootHandle{fsys: errorFS{err: readDirErr}}, nil
 	}
@@ -619,10 +618,6 @@ func TestRoot_Remove_FailureInjection(t *testing.T) {
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
 
-	// The target must exist: a genuinely absent path normalizes to
-	// os.ErrNotExist, which callers branch on for already-deleted entries.
-	require.NoError(t, os.WriteFile(filepath.Join(root.Path(), "file.txt"), []byte("data"), 0o600))
-
 	removeErr := errors.New("remove failed")
 	root.ops.remove = func(_ rootHandle, _ string) error {
 		return removeErr
@@ -640,10 +635,6 @@ func TestRoot_Rename_FailureInjection(t *testing.T) {
 
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
-
-	// The source must exist: a genuinely absent source normalizes to
-	// os.ErrNotExist, which is the contract ExecuteConflictCopy relies on.
-	require.NoError(t, os.WriteFile(filepath.Join(root.Path(), "old.txt"), []byte("data"), 0o600))
 
 	renameErr := errors.New("rename failed")
 	root.ops.rename = func(_ rootHandle, _, _ string) error {
@@ -785,10 +776,6 @@ type errorFS struct {
 
 var errUnexpectedFakeRootCall = errors.New("unexpected fake root success path")
 
-func nonNormalizingLstat(path string) (os.FileInfo, error) {
-	return nil, errors.New("non-normalizing stat")
-}
-
 func runRootHandleErrorCase(
 	t *testing.T,
 	configure func(root *Root, targetErr error),
@@ -801,7 +788,6 @@ func runRootHandleErrorCase(
 	root, err := Open(t.TempDir())
 	require.NoError(t, err)
 
-	root.ops.lstatAbs = nonNormalizingLstat
 	configure(root, targetErr)
 
 	err = run(root)

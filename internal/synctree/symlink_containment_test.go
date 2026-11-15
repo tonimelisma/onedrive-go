@@ -76,6 +76,45 @@ func TestRoot_Rename_ThroughSymlinkedAncestorFailsAndPreservesTarget(t *testing.
 	f.requireOutsideContent(t, "src.txt", "SOURCE")
 }
 
+// Validates: R-2.4.6, R-6.4.8
+//
+// A no-replace rename opens both parent folders through the root, so a
+// folder on either path that is a symlink out of the root fails the move as
+// an unsafe path: nothing outside is moved away, replaced or created.
+func TestRoot_RenameNoReplace_ThroughSymlinkedAncestorFailsAndPreservesTarget(t *testing.T) {
+	t.Parallel()
+
+	f := newEscapeFixture(t)
+	f.writeOutside(t, "src.txt", "SOURCE")
+	require.NoError(t, os.WriteFile(filepath.Join(f.rootDir, "inside.txt"), []byte("INSIDE"), 0o600))
+
+	require.ErrorIs(t, f.root.RenameNoReplace("alias/src.txt", "moved.txt"), ErrUnsafePath)
+	f.requireOutsideContent(t, "src.txt", "SOURCE")
+	assert.NoFileExists(t, filepath.Join(f.rootDir, "moved.txt"))
+
+	require.ErrorIs(t, f.root.RenameNoReplace("inside.txt", "alias/inside.txt"), ErrUnsafePath)
+	assert.NoFileExists(t, filepath.Join(f.outside, "inside.txt"))
+	assert.FileExists(t, filepath.Join(f.rootDir, "inside.txt"))
+}
+
+// Validates: R-2.4.6, R-6.4.8, R-6.4.9
+//
+// A file moved into the sync folder from outside it (a restore from the
+// trash) reaches its destination folder through the root: a folder swapped
+// for a symlink out of the root fails the move as an unsafe path and the
+// file stays where it was.
+func TestRoot_MoveInNoReplace_ThroughSymlinkedAncestorFails(t *testing.T) {
+	t.Parallel()
+
+	f := newEscapeFixture(t)
+	src := filepath.Join(t.TempDir(), "item")
+	require.NoError(t, os.WriteFile(src, []byte("from trash"), 0o600))
+
+	require.ErrorIs(t, f.root.MoveInNoReplace(src, "alias/item"), ErrUnsafePath)
+	assert.NoFileExists(t, filepath.Join(f.outside, "item"))
+	assert.FileExists(t, src)
+}
+
 // Validates: R-2.4.6, R-6.2
 func TestRoot_MkdirAll_ThroughSymlinkedAncestorFails(t *testing.T) {
 	t.Parallel()

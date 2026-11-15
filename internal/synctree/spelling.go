@@ -1,13 +1,13 @@
 package synctree
 
 import (
-	"errors"
 	"io/fs"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // Spelling returns rel as the filesystem spells it: each component that
@@ -49,18 +49,14 @@ func (r *Root) Spelling(rel string) string {
 		_ = root.Close() //nolint:errcheck // see above
 	}()
 
-	if _, statErr := root.Lstat(clean); !isMissing(statErr) {
+	// Only an lstat answer that the name, as spelled, is not there starts the
+	// walk (localpath.IsMissingName). Any other answer (present, or an error
+	// such as EACCES) leaves the spelling alone.
+	if _, statErr := root.Lstat(clean); !localpath.IsMissingName(statErr) {
 		return clean
 	}
 
 	return spellingWalk(root, clean)
-}
-
-// isMissing reports an lstat answer that means the name, as spelled, is not
-// there. Any other answer (present, or an error such as EACCES) leaves the
-// spelling alone.
-func isMissing(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 func spellingWalk(root rootHandle, clean string) string {
@@ -73,7 +69,7 @@ func spellingWalk(root rootHandle, clean string) string {
 			resolved = candidate
 			continue
 		}
-		if !isMissing(statErr) {
+		if !localpath.IsMissingName(statErr) {
 			return filepath.Join(append([]string{resolved}, components[i:]...)...)
 		}
 

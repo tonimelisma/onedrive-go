@@ -255,7 +255,7 @@ func (r *Root) withRootFor(target rootTarget, op func(root rootHandle) error) er
 	closeErr := root.Close()
 	if opErr != nil {
 		if closeErr != nil {
-			return errors.Join(opErr, fmt.Errorf("closing root %s: %w", r.dir, closeErr))
+			return localpath.JoinOnOneLine(opErr, fmt.Errorf("closing root %s: %w", r.dir, closeErr))
 		}
 
 		return opErr
@@ -325,7 +325,7 @@ func (r *Root) openWithRoot(
 		// The open succeeded but the root failed to close, so the caller gets
 		// no file and this one is released here.
 		if closeErr := file.Close(); closeErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("closing %s: %w", clean, closeErr))
+			return nil, localpath.JoinOnOneLine(err, fmt.Errorf("closing %s: %w", clean, closeErr))
 		}
 
 		return nil, err
@@ -363,7 +363,7 @@ func (r *Root) ReadFile(name string) ([]byte, error) {
 	if readErr != nil {
 		readErr = fmt.Errorf("reading %s: %w", name, readErr)
 		if closeErr != nil {
-			return nil, errors.Join(readErr, fmt.Errorf("closing %s: %w", name, closeErr))
+			return nil, localpath.JoinOnOneLine(readErr, fmt.Errorf("closing %s: %w", name, closeErr))
 		}
 
 		return nil, readErr
@@ -642,7 +642,7 @@ func cleanupTempOnError(root rootHandle, tempName string, currentErr error) erro
 		return currentErr
 	}
 
-	return errors.Join(currentErr, fmt.Errorf("removing temp file %s: %w", tempName, removeErr))
+	return localpath.JoinOnOneLine(currentErr, fmt.Errorf("removing temp file %s: %w", tempName, removeErr))
 }
 
 func writeTempFile(temp tempFile, data []byte, filePerm os.FileMode) error {
@@ -668,10 +668,11 @@ func writeTempFile(temp tempFile, data []byte, filePerm os.FileMode) error {
 // normalizeNotExist reports a failed operation on name as os.ErrNotExist when
 // name is absent, and returns every other failure as it is.
 //
-// Two answers have to agree. The failure itself must say something is not
-// there (isMissingName): a create always targets a missing name, so a denied
-// folder, a full disk or a read-only mount would otherwise read as "does not
-// exist", which hides each from the handling it needs. Then a rooted lstat on
+// Two answers have to agree. The failure itself must carry the errno of a
+// missing name (localpath.IsMissingName): a create always targets a missing
+// name, so a denied folder, a full disk or a read-only mount would otherwise
+// read as "does not exist", which hides each from the handling it needs, and
+// a failure without an errno says nothing about absence. Then a rooted lstat on
 // the same handle must find name absent too, because ENOTDIR also answers an
 // operation that wanted a directory and found a file, and that name is there.
 // The lstat resolves through the root, so for a name beneath a symlink that
@@ -679,29 +680,22 @@ func writeTempFile(temp tempFile, data []byte, filePerm os.FileMode) error {
 // location outside: a containment failure is never turned into "nothing is
 // here", which callers read as permission to create.
 func normalizeNotExist(root rootHandle, name string, original error) error {
-	if !isMissingName(original) {
+	if !localpath.IsMissingName(original) {
 		return original
 	}
 
-	if _, statErr := root.Lstat(name); isMissingName(statErr) {
+	if _, statErr := root.Lstat(name); localpath.IsMissingName(statErr) {
 		return os.ErrNotExist
 	}
 
 	return original
 }
 
-// isMissingName reports whether err says a name, or a directory on the way to
-// it, is not there: not-exist, or not-a-directory for a component that is a
-// file, below which nothing can exist.
-func isMissingName(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
-}
-
 func closeWithContext(temp tempFile, action string, cause error) error {
 	closeErr := temp.Close()
 	baseErr := fmt.Errorf("%s: %w", action, cause)
 	if closeErr != nil {
-		return errors.Join(baseErr, fmt.Errorf("closing temp file: %w", closeErr))
+		return localpath.JoinOnOneLine(baseErr, fmt.Errorf("closing temp file: %w", closeErr))
 	}
 
 	return baseErr

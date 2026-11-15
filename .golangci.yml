@@ -182,7 +182,7 @@ linters:
             - github.com/tonimelisma/onedrive-go/internal/localpath$
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
-              desc: fsroot imports no internal package but localpath, for its directory-sync errno test
+              desc: fsroot imports no internal package but localpath, for its directory-sync errno test and its one-line join of two failures
 
     forbidigo:
       analyze-types: true
@@ -198,6 +198,9 @@ linters:
         - pattern: ^json\.(NewEncoder|Marshal|MarshalIndent)$
           pkg: ^encoding/json$
           msg: encode command output only through writeJSONDocument or writeJSONLine in internal/cli/json_output.go
+        - pattern: ^synctree\.Root\.(WithoutNoReplaceFlagOrHardLinks|WithoutNoReplaceFlagAndUnremovableName)$
+          pkg: ^github\.com/tonimelisma/onedrive-go/internal/synctree$
+          msg: this synctree.Root models another system and is for tests only
 
     gocyclo:
       min-complexity: 15
@@ -302,7 +305,9 @@ linters:
 
     wrapcheck:
       # The defaults, plus panicguard.Recovered: like errors.New it makes the
-      # error (the account of a recovered panic), so there is nothing to wrap.
+      # error (the account of a recovered panic), so there is nothing to wrap;
+      # and localpath.JoinOnOneLine: like errors.Join it joins two errors its
+      # caller has already wrapped.
       ignore-sigs:
         - .Errorf(
         - errors.New(
@@ -314,6 +319,7 @@ linters:
         - .WithMessagef(
         - .WithStack(
         - panicguard.Recovered(
+        - localpath.JoinOnOneLine(
 
     whitespace:
       multi-if: false
@@ -360,6 +366,10 @@ linters:
         linters:
           - forbidigo
         text: use explicit test synchronization instead of wall-clock sleep
+      - path: _test\.go
+        linters:
+          - forbidigo
+        text: models another system and is for tests only
       - path: internal/(fsroot|synctree|localpath)/
         linters:
           - forbidigo

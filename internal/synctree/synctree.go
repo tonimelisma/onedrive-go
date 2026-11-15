@@ -14,8 +14,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -127,10 +128,10 @@ func (h *osRootHandle) Close() error {
 }
 
 // rootOps is the injection seam for failure testing. Every mutating hook
-// receives an open rootHandle plus a rooted-relative name rather than an
-// absolute path: an absolute path carries no containment, so accepting one
-// here would let a future call site reintroduce the escape this boundary
-// exists to prevent.
+// receives an open rootHandle plus a rooted-relative name, or folders opened
+// through the root plus a base name, rather than an absolute path: an
+// absolute path carries no containment, so accepting one here would let a
+// future call site reintroduce the escape this boundary exists to prevent.
 //
 // lstatAbs is the single deliberate exception. It answers questions about the
 // sync root directory itself, which by definition sits outside any root
@@ -143,7 +144,21 @@ type rootOps struct {
 	removeAll func(root rootHandle, name string) error
 	rename    func(root rootHandle, oldname, newname string) error
 	chtimes   func(root rootHandle, name string, atime time.Time, mtime time.Time) error
-	lstatAbs  func(path string) (os.FileInfo, error)
+	// renameExclusive, link, unlink and renameAt are the descriptor calls of
+	// a no-replace rename and its fallbacks (rename_noreplace_unix.go); seams
+	// so tests can model a system without the no-replace flag, a filesystem
+	// without hard links, a source that cannot be removed, or a destination
+	// taken between the check and the plain rename. renameExclusive reports
+	// refused when the flag is not offered.
+	renameExclusive func(fromDir *os.File, from string, toDir *os.File, to string) (refused bool, err error)
+	link            func(fromDir *os.File, from string, toDir *os.File, to string) error
+	unlink          func(dir *os.File, name string) error
+	renameAt        func(fromDir *os.File, from string, toDir *os.File, to string) error
+	// lstatEntry stats a name in a folder already open, without following
+	// it: the identity check a no-replace rename's fallback makes before it
+	// unlinks the source; a seam so tests can make that check fail.
+	lstatEntry func(dir *os.File, name string) (unix.Stat_t, error)
+	lstatAbs   func(path string) (os.FileInfo, error)
 	// getRootMark and setRootMark read and write the sync folder's bind
 	// token (root_identity_unix.go); a seam so tests can model filesystems
 	// without extended attributes.
@@ -153,6 +168,10 @@ type rootOps struct {
 	// detached file is copied into (detach_unix.go); a seam because an fsync
 	// has no observable effect to test.
 	syncDir func(path string) error
+	// syncDirFile flushes a folder already open, the destination folder of
+	// MoveInNoReplace's exclusive copy (rename_noreplace_unix.go); a seam
+	// for the same reason as syncDir.
+	syncDirFile func(dir *os.File) error
 }
 
 func defaultRootOps() rootOps {
@@ -186,10 +205,16 @@ func defaultRootOps() rootOps {
 		chtimes: func(root rootHandle, name string, atime time.Time, mtime time.Time) error {
 			return root.Chtimes(name, atime, mtime)
 		},
-		lstatAbs:    os.Lstat,
-		getRootMark: getRootMarkXattr,
-		setRootMark: setRootMarkXattr,
-		syncDir:     syncDirectory,
+		renameExclusive: renameExclusiveDescriptors,
+		link:            linkDescriptors,
+		unlink:          unlinkDescriptor,
+		renameAt:        renameat,
+		lstatEntry:      lstatEntryAt,
+		lstatAbs:        os.Lstat,
+		getRootMark:     getRootMarkXattr,
+		setRootMark:     setRootMarkXattr,
+		syncDir:         syncDirectory,
+		syncDirFile:     (*os.File).Sync,
 	}
 }
 
@@ -224,7 +249,7 @@ type Root struct {
 // it to emulate other filesystems beneath the sync tree: a case-insensitive
 // volume, injected errno (internal/synctest). Operations that reach the
 // filesystem by descriptor after opening a parent through the handle (rmdir,
-// detach) see the wrapper only for that open.
+// detach, the no-replace rename) see the wrapper only for that open.
 func (r *Root) Interpose(wrap func(Handle) Handle) *Root {
 	ops := r.ops
 	open := ops.openRoot
@@ -392,22 +417,23 @@ func (r *Root) openWithRoot(
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 
 	file, openErr := opener(root, clean)
+	openErr = r.normalizeNotExist(root, clean, openErr)
 	closeErr := root.Close()
 	if openErr != nil {
 		if closeErr != nil {
-			return nil, errors.Join(openErr, closeErr)
+			return nil, localpath.JoinOnOneLine(openErr, closeErr)
 		}
 
-		return nil, fmt.Errorf("opening %s: %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), openErr))
+		return nil, fmt.Errorf("opening %s: %w", r.nameForMessage(clean), openErr)
 	}
 
 	if closeErr != nil {
 		if fileCloseErr := file.Close(); fileCloseErr != nil {
-			return nil, errors.Join(closeErr, fileCloseErr)
+			return nil, localpath.JoinOnOneLine(closeErr, fileCloseErr)
 		}
 
 		return nil, fmt.Errorf("closing sync folder %s: %w", r.dir, closeErr)
@@ -465,17 +491,18 @@ func (r *Root) statWithRoot(
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 
 	info, statErr := stat(root, clean)
+	statErr = r.normalizeNotExist(root, clean, statErr)
 	closeErr := root.Close()
 	if statErr != nil {
 		if closeErr != nil {
-			return nil, errors.Join(statErr, closeErr)
+			return nil, localpath.JoinOnOneLine(statErr, closeErr)
 		}
 
-		return nil, fmt.Errorf(errorFormat+": %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), statErr))
+		return nil, fmt.Errorf(errorFormat+": %w", r.nameForMessage(clean), statErr)
 	}
 
 	if closeErr != nil {
@@ -501,17 +528,18 @@ func (r *Root) mutateWithRoot(
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 
 	mutateErr := mutate(root, clean)
+	mutateErr = r.normalizeNotExist(root, clean, mutateErr)
 	closeErr := root.Close()
 	if mutateErr != nil {
 		if closeErr != nil {
-			return errors.Join(mutateErr, closeErr)
+			return localpath.JoinOnOneLine(mutateErr, closeErr)
 		}
 
-		return fmt.Errorf(errorFormat+": %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), mutateErr))
+		return fmt.Errorf(errorFormat+": %w", r.nameForMessage(clean), mutateErr)
 	}
 
 	if closeErr != nil {
@@ -519,17 +547,6 @@ func (r *Root) mutateWithRoot(
 	}
 
 	return nil
-}
-
-// absForCheck renders a rooted-relative name as an absolute path for the
-// not-exist/unsafe-path re-check in normalizeNotExist. It never performs
-// filesystem work itself.
-func (r *Root) absForCheck(clean string) string {
-	if clean == "." {
-		return r.dir
-	}
-
-	return filepath.Join(r.dir, clean)
 }
 
 // nameForMessage is how error text names a rooted-relative path: relative to
@@ -584,17 +601,18 @@ func (r *Root) ReadDir(rel string) ([]os.DirEntry, error) {
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 
 	entries, readErr := fs.ReadDir(root.FS(), clean)
+	readErr = r.normalizeNotExist(root, clean, readErr)
 	closeErr := root.Close()
 	if readErr != nil {
 		if closeErr != nil {
-			return nil, errors.Join(readErr, closeErr)
+			return nil, localpath.JoinOnOneLine(readErr, closeErr)
 		}
 
-		return nil, fmt.Errorf("reading directory %s: %w", r.nameForMessage(clean), r.normalizeNotExist(r.absForCheck(clean), readErr))
+		return nil, fmt.Errorf("reading directory %s: %w", r.nameForMessage(clean), readErr)
 	}
 
 	if closeErr != nil {
@@ -967,22 +985,18 @@ func (r *Root) Rename(srcRel, dstRel string) error {
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 
 	renameErr := r.ops.rename(root, srcClean, dstClean)
+	renameErr = r.normalizeNotExist(root, srcClean, renameErr)
 	closeErr := root.Close()
 	if renameErr != nil {
 		if closeErr != nil {
-			return errors.Join(renameErr, closeErr)
+			return localpath.JoinOnOneLine(renameErr, closeErr)
 		}
 
-		return fmt.Errorf(
-			"renaming %s to %s: %w",
-			r.nameForMessage(srcClean),
-			r.nameForMessage(dstClean),
-			r.normalizeNotExist(r.absForCheck(srcClean), renameErr),
-		)
+		return fmt.Errorf("renaming %s to %s: %w", r.nameForMessage(srcClean), r.nameForMessage(dstClean), renameErr)
 	}
 
 	if closeErr != nil {
@@ -1006,6 +1020,27 @@ func (r *Root) SameFile(srcRel, dstRel string) (bool, error) {
 	return SameFile(srcInfo, dstInfo), nil
 }
 
+// RenameWithTemporarySibling renames srcRel to dstRel through a temporary
+// sibling of dstRel (tempStem, then tempStem-1 and so on, attempts names),
+// for a rename the filesystem would take as a no-op: a spelling-only rename
+// on a case-insensitive volume, where dstRel names the source itself until
+// the first step moves it away. Both steps are RenameNoReplace, so neither
+// replaces or copies anything. The first moves on to the next temporary name
+// when one is taken. When the second fails, the entry is put back under
+// srcRel and the failure is returned, matching ErrTargetExists when dstRel
+// was taken. On a volume that folds case srcRel and dstRel are one name, so
+// whatever took dstRel holds srcRel too and the put-back fails: the entry
+// then stays under the temporary name, and the error says it is kept there
+// and names its path, for the user to rename it. When a lstat through the
+// root does not find the temporary name either, the error says the entry
+// was found under neither name instead.
+//
+// A step whose fallback put the entry at its destination but could not
+// remove the name it came from (ErrSourceNotRemoved) has moved the entry, so
+// the sequence goes on from there. When the entry reaches dstRel, a name
+// left behind makes the result match ErrSourceNotRemoved, naming each on one
+// line: the rename happened. A name left behind on the way to a failure is
+// named in the failure, which then does not match ErrSourceNotRemoved.
 func (r *Root) RenameWithTemporarySibling(srcRel, dstRel, tempStem string, attempts int) error {
 	if attempts <= 0 {
 		attempts = 1
@@ -1018,36 +1053,76 @@ func (r *Root) RenameWithTemporarySibling(srcRel, dstRel, tempStem string, attem
 	if err != nil {
 		return err
 	}
-	parent := filepath.Dir(dstClean)
-	tempRel := ""
-	for i := 0; i < attempts; i++ {
+	tempRel, firstErr := r.renameToTemporarySibling(srcRel, filepath.Dir(dstClean), tempStem, attempts)
+	if firstErr != nil && !errors.Is(firstErr, ErrSourceNotRemoved) {
+		return firstErr
+	}
+
+	secondErr := r.RenameNoReplace(tempRel, dstRel)
+	if secondErr != nil && !errors.Is(secondErr, ErrSourceNotRemoved) {
+		return r.putBackFromTemporarySibling(tempRel, srcRel, secondErr, firstErr)
+	}
+
+	return localpath.JoinOnOneLine(firstErr, secondErr)
+}
+
+// putBackFromTemporarySibling moves the entry at tempRel back to srcRel after
+// the second step of RenameWithTemporarySibling failed with stepErr, and
+// returns stepErr with what became of the entry. firstLeft, when set, is the
+// first step's ErrSourceNotRemoved; it and a put-back that left tempRel are
+// named as text, so the result matches stepErr only. A put-back that failed
+// says the entry is under neither name only when a lstat through the root
+// finds tempRel missing; otherwise it says the entry is kept as tempRel, with
+// the lstat's reason when the lstat failed. The put-back's own failure names
+// srcRel, so the text around it does not.
+func (r *Root) putBackFromTemporarySibling(tempRel, srcRel string, stepErr, firstLeft error) error {
+	result := stepErr
+	if firstLeft != nil {
+		result = fmt.Errorf("%w; %s was left too: %s", result, srcRel, firstLeft.Error())
+	}
+
+	putBackErr := r.RenameNoReplace(tempRel, srcRel)
+	switch {
+	case putBackErr == nil:
+		return result
+	case errors.Is(putBackErr, ErrSourceNotRemoved):
+		return fmt.Errorf("%w; it is back as %s, and %s was left: %s", result, srcRel, tempRel, putBackErr.Error())
+	}
+
+	kept := filepath.Join(r.dir, tempRel)
+	_, lstatErr := r.Lstat(tempRel)
+	switch {
+	case lstatErr == nil:
+		return fmt.Errorf("%w; it is kept as %s, because putting it back failed: %s", result, kept, putBackErr.Error())
+	case errors.Is(lstatErr, os.ErrNotExist):
+		return fmt.Errorf("%w; it was found under neither name: putting it back failed: %s, and %s",
+			result, putBackErr.Error(), lstatErr.Error())
+	default:
+		return fmt.Errorf("%w; it is kept as %s, because putting it back failed: %s, and %s",
+			result, kept, putBackErr.Error(), lstatErr.Error())
+	}
+}
+
+// renameToTemporarySibling moves srcRel to the first free temporary name in
+// parent and returns that name, with an error matching ErrSourceNotRemoved
+// when the entry is there but srcRel could not be removed.
+func (r *Root) renameToTemporarySibling(srcRel, parent, tempStem string, attempts int) (string, error) {
+	for i := range attempts {
 		name := tempStem
 		if i > 0 {
 			name = fmt.Sprintf("%s-%d", tempStem, i)
 		}
 		candidate := filepath.Join(parent, name)
-		if _, err := r.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
-			tempRel = candidate
-			break
-		} else if err != nil {
-			return fmt.Errorf("checking temporary rename path %s: %w", candidate, err)
+		err := r.RenameNoReplace(srcRel, candidate)
+		if err == nil || errors.Is(err, ErrSourceNotRemoved) {
+			return candidate, err
+		}
+		if !errors.Is(err, ErrTargetExists) {
+			return "", err
 		}
 	}
-	if tempRel == "" {
-		return fmt.Errorf("temporary rename path already exists under %s", parent)
-	}
 
-	if err := r.Rename(srcRel, tempRel); err != nil {
-		return err
-	}
-	if err := r.Rename(tempRel, dstRel); err != nil {
-		if rollbackErr := r.Rename(tempRel, srcRel); rollbackErr != nil {
-			return errors.Join(err, fmt.Errorf("rolling back temporary rename: %w", rollbackErr))
-		}
-		return err
-	}
-
-	return nil
+	return "", fmt.Errorf("temporary rename path already exists under %s", parent)
 }
 
 // Chtimes sets access and modification times inside the sync root. See the
@@ -1084,7 +1159,7 @@ func (r *Root) SyncDir(rel string) error {
 func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 	defer root.Close() //nolint:errcheck // rooted handle release; mutation errors are reported by the operation itself
 
@@ -1102,47 +1177,70 @@ func (r *Root) WalkDir(fn fs.WalkDirFunc) error {
 	return nil
 }
 
-func (r *Root) normalizeNotExist(path string, original error) error {
+// normalizeNotExist reports original, the failure of an operation on clean
+// through root, as os.ErrNotExist when clean is absent, and returns every
+// other failure as it is. root must still be open.
+//
+// A symlinked or non-folder ancestor comes first: a positive ErrUnsafePath
+// from ValidateNoSymlinkAncestors replaces the failure, because "parent folder
+// alias is a symbolic link" says what a bare path-escape error does not. An
+// ancestor walk that fails for another reason does not mask the caller's
+// error.
+//
+// Then two answers have to agree. The failure itself must carry the errno of
+// a missing name (localpath.IsMissingName): a create always targets a missing
+// name, so a full disk (ENOSPC), a read-only mount (EROFS), a denied folder
+// (EACCES) or a path escape would otherwise read as "does not exist", which
+// hides each from the handling it needs. And an lstat of clean through the
+// same rooted handle must find it missing too, because ENOTDIR also answers
+// an operation that wanted a folder and found a file, and that name is there.
+// The lstat resolves through the root, so beneath a link out of the root it
+// fails with the escape instead of answering about the place outside: a
+// containment failure never turns into "nothing is here", which callers read
+// as permission to create.
+func (r *Root) normalizeNotExist(root rootHandle, clean string, original error) error {
 	if original == nil {
 		return nil
 	}
 
-	// Only a positive ErrUnsafePath determination overrides the original
-	// error. If the ancestor walk itself fails for an unrelated reason, the
-	// caller's error is the more useful one and must not be masked.
-	if path != r.dir {
-		if rel, relErr := r.relativeFromAbs(path); relErr == nil {
-			if ancestorErr := r.ValidateNoSymlinkAncestors(rel); errors.Is(ancestorErr, ErrUnsafePath) {
-				return ancestorErr
-			}
+	if clean != "." {
+		if ancestorErr := r.ValidateNoSymlinkAncestors(clean); errors.Is(ancestorErr, ErrUnsafePath) {
+			return ancestorErr
 		}
 	}
 
-	// An errno that says why the operation failed outlives the target's
-	// absence: a create always targets a missing name, and a full disk
-	// (ENOSPC), a read-only mount (EROFS) or a denied directory (EACCES)
-	// reported as "does not exist" is invisible to the handling each needs.
-	if errno, ok := errors.AsType[syscall.Errno](original); ok && !missingPathErrno(errno) {
+	if !localpath.IsMissingName(original) {
 		return original
 	}
-
-	if _, statErr := r.ops.lstatAbs(path); errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := root.Lstat(clean); localpath.IsMissingName(statErr) {
 		return os.ErrNotExist
 	}
 
 	return original
 }
 
-// missingPathErrno reports whether errno only says the path, or a component
-// of it, is not there as named.
-func missingPathErrno(errno syscall.Errno) bool {
-	return errno == syscall.ENOENT || errno == syscall.ENOTDIR
+// normalizeRootNotExist is normalizeNotExist for the sync folder itself,
+// which no rooted handle contains: the second answer is an lstat of its path
+// (lstatAbs), the one name this package resolves by path.
+func (r *Root) normalizeRootNotExist(original error) error {
+	if !localpath.IsMissingName(original) {
+		return original
+	}
+	if _, statErr := r.ops.lstatAbs(r.dir); localpath.IsMissingName(statErr) {
+		return os.ErrNotExist
+	}
+
+	return original
 }
 
 func (r *Root) validateRootDirectoryNoFollow() error {
+	// The lstat is itself the second answer normalizeRootNotExist asks for.
 	info, err := r.ops.lstatAbs(r.dir)
+	if localpath.IsMissingName(err) {
+		return fmt.Errorf("checking sync folder %s: %w", r.dir, os.ErrNotExist)
+	}
 	if err != nil {
-		return fmt.Errorf("checking sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return fmt.Errorf("checking sync folder %s: %w", r.dir, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return unsafePathf("sync folder %s is not a folder", r.dir)
@@ -1158,7 +1256,7 @@ func (r *Root) openRootNoFollow() (rootHandle, error) {
 
 	root, err := r.ops.openRoot(r.dir)
 	if err != nil {
-		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeNotExist(r.dir, err))
+		return nil, fmt.Errorf("opening sync folder %s: %w", r.dir, r.normalizeRootNotExist(err))
 	}
 
 	return root, nil
