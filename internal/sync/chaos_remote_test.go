@@ -52,6 +52,43 @@ import (
 // item, a repeated item's last occurrence is its current state, and every
 // fault is transient, so once the storm passes sync must converge with every
 // invariant holding (assertSyncInvariants).
+//
+// A stream is one operation on one key: get-item on an item ID, upload on a
+// parent ID and a name, delta on a saved token, delta-next-page on a nextLink
+// the layer made, and so on, as each caller of chaosGraph.call names it. A
+// call's number is how many calls of its stream the layer saw earlier. A step
+// is what startStep begins, one pass in the model: the storm is on or off for
+// the whole step, and the first modelChaosPasses passes of every loop the
+// model syncs to quiet in (the initial one, each batch's, and the one after a
+// crash) are storm steps, the rest calm. Each call draws from a generator of
+// its own, seeded from the seed, its stream and its call number, and draws
+// only in a storm; a split window's nextLinks name the call that split it
+// (chaosCall.pageTokenBase). The fault log (chaosDraw, drawLog) records each
+// call's opening, every value it drew and every fault it got, under the
+// call's stream, call number, step and storm flag.
+//
+// A seed fixes the values a call draws, in their order, for a given stream,
+// call number and storm state, however the calls of different streams
+// interleave (TestChaosGraph_StreamDrawsIgnoreHowStreamsInterleave). It fixes
+// no more than that:
+//   - how many values a call draws depends on what the call meets in the
+//     fake, which the calls of other streams change: a split draws by the
+//     size of its page, and the roll for a lost answer is drawn only when the
+//     inner call succeeded;
+//   - the range a value is drawn from, and what it picks, can depend on the
+//     fake too: another client's write draws among the files the tree holds at
+//     that moment, and draws nothing when it holds none;
+//   - which stream a request falls in depends on the order of the fake's
+//     mutations wherever the key is a name the fake handed out: it counts
+//     item IDs, upload URLs and delta tokens in the order they arrive;
+//   - two calls of one stream that are in flight together take their numbers
+//     in the order they reach the layer;
+//   - which requests the client sends in which step is the client's own: it
+//     releases retry work by elapsed time.
+//
+// So two runs of one seed can send different requests and meet different
+// faults. The line a failing chaos run logs (chaosRerunLine) reruns the seed,
+// not the run.
 
 const (
 	chaosFaultOdds         = 4 // one call in chaosFaultOdds fails while a storm is on
@@ -59,6 +96,7 @@ const (
 	chaosMaxRetryAfter     = 30 * time.Second
 	chaosPageSplitMinItems = 3
 	chaosPageTokenPrefix   = "chaos-page-"
+	chaosOpDeltaNextPage   = "delta-next-page"
 	chaosSeedEnv           = "ONEDRIVE_GO_CHAOS_SEEDS"
 	chaosDefaultSeeds      = 2
 )
@@ -66,20 +104,23 @@ const (
 type chaosGraph struct {
 	seed uint64
 
-	mu    stdsync.Mutex // guards storm, calls, pages, pageSeq and faults
+	mu    stdsync.Mutex // guards step, storm, calls, pages, faults and draws
 	storm bool
-	// calls numbers the calls per operation and key, so each call's faults
-	// come from its own seeded stream: the same seed injects the same faults
-	// into the same calls whatever order concurrent callers reach the layer.
+	// step counts the steps begun (startStep); the fault log names the step
+	// each call opened in.
+	step int
+	// calls numbers the calls per operation and key, so each call's draws
+	// come from its own seeded generator: the same seed, in the same storm
+	// state, draws the same for the same call whatever order callers of
+	// different streams reach the layer in.
 	calls map[string]uint64
-	// pages holds the rest of a split delta window by its synthetic
-	// nextLink: each entry is the remaining pages and the real deltaLink.
-	pages   map[string]chaosPendingWindow
-	pageSeq int
+	// pages holds the rest of a split delta window by its synthetic nextLink
+	// (chaosPendingWindow.token).
+	pages map[string]chaosPendingWindow
 	// concurrentWrite, when set, is another client's edit on OneDrive; the
 	// layer runs it before a call now and then during a storm, with that
 	// call's stream to choose what to write.
-	concurrentWrite func(rng *rand.Rand)
+	concurrentWrite func(cc *chaosCall)
 	// churnPlaceholder, when set, moves an item's eTag on OneDrive without
 	// touching its content (moveScenarioRemote.churnETag). The layer runs it
 	// for some of the creates whose session times out after the empty item
@@ -90,9 +131,39 @@ type chaosGraph struct {
 	// faults counts injected faults by kind, for the test to show the storm
 	// really happened.
 	faults map[string]int
+	// draws is the fault log (chaosDraw): every call's opening, every value
+	// it drew and every fault it got, in the order they happened.
+	draws []chaosDraw
 }
 
+// chaosDraw is one entry of the fault log: the call it belongs to (its
+// stream, an operation on a key, and its call number in that stream), the
+// step it opened in and whether that step was a storm, and the outcome: the
+// call opening, one value it drew, or one fault it got.
+type chaosDraw struct {
+	op      string
+	key     string
+	call    uint64
+	step    int
+	storm   bool
+	outcome string
+}
+
+// stream names the stream the entry belongs to: its operation and key.
+func (d chaosDraw) stream() string { return d.op + " " + strconv.Quote(d.key) }
+
+// String is the entry within its stream: everything but the stream's name.
+func (d chaosDraw) String() string {
+	return fmt.Sprintf("call %d step %d storm=%t %s", d.call, d.step, d.storm, d.outcome)
+}
+
+// chaosPendingWindow is what remains of a split delta window: the pages not
+// yet served, the first of them at index within the window, the real
+// deltaLink, and splitBy, the start of the window's nextLinks, which names
+// the call that split it (chaosCall.pageTokenBase).
 type chaosPendingWindow struct {
+	splitBy   string
+	index     int
 	pages     [][]graph.Item
 	deltaLink string
 }
@@ -106,10 +177,14 @@ func newChaosGraph(seed uint64) *chaosGraph {
 	}
 }
 
-func (c *chaosGraph) setStorm(on bool) {
+// startStep begins the next step, in a storm or calm: every call opened from
+// now until the next startStep is drawn under this step's number and storm
+// flag.
+func (c *chaosGraph) startStep(storm bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.storm = on
+	c.step++
+	c.storm = storm
 }
 
 func (c *chaosGraph) faultCount() int {
@@ -135,9 +210,14 @@ func (c *chaosGraph) faultSummary() string {
 	return strings.Join(parts, " ")
 }
 
-// chaosCall is one call's fault stream. Outside a storm it never draws a
-// fault.
+// chaosCall is one call's fault stream. Every draw and fault of the call goes
+// into the layer's fault log. Outside a storm it never draws a fault.
 type chaosCall struct {
+	layer *chaosGraph
+	op    string
+	key   string
+	n     uint64
+	step  int
 	rng   *rand.Rand
 	storm bool
 }
@@ -153,25 +233,62 @@ func (c *chaosGraph) call(op, key string) *chaosCall {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(id))
 
-	return &chaosCall{
+	cc := &chaosCall{
+		layer: c, op: op, key: key, n: n, step: c.step,
 		rng:   rand.New(rand.NewPCG(c.seed^h.Sum64(), n)), //nolint:gosec // deterministic test RNG
 		storm: c.storm,
 	}
+	c.draws = append(c.draws, cc.logEntry("open"))
+
+	return cc
+}
+
+// logEntry is the fault log entry of the call with outcome.
+func (cc *chaosCall) logEntry(outcome string) chaosDraw {
+	return chaosDraw{op: cc.op, key: cc.key, call: cc.n, step: cc.step, storm: cc.storm, outcome: outcome}
 }
 
 // roll reports, during a storm, whether this call gets a fault.
 func (cc *chaosCall) roll(odds int) bool {
-	return cc.storm && cc.rng.IntN(odds) == 0
+	if !cc.storm {
+		return false
+	}
+	drawn := cc.rng.IntN(odds)
+	cc.record("roll/" + strconv.Itoa(odds) + "=" + strconv.Itoa(drawn))
+
+	return drawn == 0
 }
 
 func (cc *chaosCall) intN(n int) int {
-	return cc.rng.IntN(n)
+	drawn := cc.rng.IntN(n)
+	cc.record("intN/" + strconv.Itoa(n) + "=" + strconv.Itoa(drawn))
+
+	return drawn
 }
 
-func (c *chaosGraph) count(kind string) {
+// fault counts a fault of kind and logs it against the call.
+func (cc *chaosCall) fault(kind string) {
+	c := cc.layer
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.faults[kind]++
+	c.draws = append(c.draws, cc.logEntry("fault "+kind))
+}
+
+// record appends outcome to the fault log under the call's identity.
+func (cc *chaosCall) record(outcome string) {
+	c := cc.layer
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.draws = append(c.draws, cc.logEntry(outcome))
+}
+
+// drawLog is a copy of the fault log.
+func (c *chaosGraph) drawLog() []chaosDraw {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return append([]chaosDraw(nil), c.draws...)
 }
 
 // maybeConcurrentWrite lets another client change OneDrive before a call.
@@ -179,8 +296,8 @@ func (c *chaosGraph) maybeConcurrentWrite(cc *chaosCall) {
 	if c.concurrentWrite == nil || !cc.roll(chaosConcurrentOdds) {
 		return
 	}
-	c.count("concurrent-write")
-	c.concurrentWrite(cc.rng)
+	cc.fault("concurrent-write")
+	c.concurrentWrite(cc)
 }
 
 // chaosAnswer is one way a call fails in the storm: an answer Graph gives, no
@@ -274,7 +391,7 @@ var errChaosNotSent = errors.New("chaos: the token source failed")
 func (c *chaosGraph) transientError(cc *chaosCall, op string, answers []chaosAnswer) (chaosAnswer, error) {
 	retryAfter := time.Duration(1+cc.intN(int(chaosMaxRetryAfter/time.Second))) * time.Second
 	answer := answers[cc.intN(len(answers))]
-	c.count(op + ":" + answer.kind())
+	cc.fault(op + ":" + answer.kind())
 
 	return answer, answer.failure(op, "", retryAfter)
 }
@@ -292,7 +409,7 @@ const (
 // lostResponseError is what the client sees when the request took effect but
 // the answer never arrived.
 func (c *chaosGraph) lostResponseError(cc *chaosCall, op string) (chaosAnswer, error) {
-	c.count(op + chaosResponseLostSuffix)
+	cc.fault(op + chaosResponseLostSuffix)
 	lost := chaosLostAnswers()
 	answer := lost[cc.intN(len(lost))]
 
@@ -440,7 +557,7 @@ func (c *chaosGraph) uploadCreating(
 		return c.createResponseLost(ctx, cc, parentID, name, content, size, inner)
 	}
 
-	c.count(chaosSessionTimedOut)
+	cc.fault(chaosSessionTimedOut)
 	timeout := &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
 	churn := c.churnPlaceholder != nil && cc.intN(2) == 0
 
@@ -451,7 +568,7 @@ func (c *chaosGraph) uploadCreating(
 			}
 		}
 		if churn {
-			c.count(chaosPlaceholderChurned)
+			cc.fault(chaosPlaceholderChurned)
 			c.churnPlaceholder(created.ID)
 		}
 		return timeout
@@ -514,7 +631,7 @@ func (c *chaosGraph) download(
 		return inner(ctx, driveID, itemID, w)
 	}
 
-	c.count("download:truncated")
+	cc.fault("download:truncated")
 	var full strings.Builder
 	if _, err := inner(ctx, driveID, itemID, &full); err != nil {
 		return 0, err
@@ -535,7 +652,7 @@ func (c *chaosGraph) delta(
 	inner func(context.Context, driveid.ID, string) (*graph.DeltaPage, error),
 ) (*graph.DeltaPage, error) {
 	if strings.HasPrefix(token, chaosPageTokenPrefix) {
-		if err := c.before(c.call("delta-next-page", token), "delta-next-page"); err != nil {
+		if err := c.before(c.call(chaosOpDeltaNextPage, token), chaosOpDeltaNextPage); err != nil {
 			return nil, err
 		}
 		return c.nextPage(token)
@@ -545,7 +662,7 @@ func (c *chaosGraph) delta(
 		return nil, err
 	}
 	if token != "" && cc.roll(chaosFaultOdds) {
-		c.count("delta:410")
+		cc.fault("delta:410")
 		return nil, &graph.GraphError{StatusCode: http.StatusGone, Code: "resyncRequired", Err: graph.ErrGone}
 	}
 
@@ -575,24 +692,41 @@ func (c *chaosGraph) split(cc *chaosCall, page *graph.DeltaPage) *graph.DeltaPag
 			pages[earlier] = append(pages[earlier], pages[p][i])
 		}
 	}
-	c.count(fmt.Sprintf("delta:split-%d", pageCount))
+	cc.fault(fmt.Sprintf("delta:split-%d", pageCount))
 
-	return c.servePages(pages, page.DeltaLink)
+	return c.servePages(chaosPendingWindow{splitBy: cc.pageTokenBase(), pages: pages, deltaLink: page.DeltaLink})
 }
 
-func (c *chaosGraph) servePages(pages [][]graph.Item, deltaLink string) *graph.DeltaPage {
-	if len(pages) == 1 {
-		return &graph.DeltaPage{Items: pages[0], DeltaLink: deltaLink}
+// pageTokenBase starts the nextLinks of a window this call split. It names the
+// call, by its stream and call number, so a follow-up page's token, and the
+// fault stream that token keys, depend on this call alone and on no other
+// stream's traffic.
+func (cc *chaosCall) pageTokenBase() string {
+	return chaosPageTokenPrefix + cc.op + "/" + cc.key + "/call-" + strconv.FormatUint(cc.n, 10)
+}
+
+// token is the nextLink that serves the window's first remaining page.
+func (w chaosPendingWindow) token() string {
+	return w.splitBy + "/page-" + strconv.Itoa(w.index)
+}
+
+// servePages serves the window's first remaining page and keeps the rest under
+// the next page's token.
+func (c *chaosGraph) servePages(window chaosPendingWindow) *graph.DeltaPage {
+	if len(window.pages) == 1 {
+		return &graph.DeltaPage{Items: window.pages[0], DeltaLink: window.deltaLink}
 	}
+	rest := chaosPendingWindow{splitBy: window.splitBy, index: window.index + 1, pages: window.pages[1:], deltaLink: window.deltaLink}
+	next := rest.token()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.pageSeq++
-	next := chaosPageTokenPrefix + strconv.Itoa(c.pageSeq)
-	c.pages[next] = chaosPendingWindow{pages: pages[1:], deltaLink: deltaLink}
+	c.pages[next] = rest
 
-	return &graph.DeltaPage{Items: pages[0], NextLink: next}
+	return &graph.DeltaPage{Items: window.pages[0], NextLink: next}
 }
 
+// nextPage serves the page a nextLink of servePages names. Serving one token
+// again serves the same page and the same next token.
 func (c *chaosGraph) nextPage(token string) (*graph.DeltaPage, error) {
 	c.mu.Lock()
 	window, ok := c.pages[token]
@@ -601,18 +735,22 @@ func (c *chaosGraph) nextPage(token string) (*graph.DeltaPage, error) {
 		return nil, &graph.GraphError{StatusCode: http.StatusBadRequest, Code: "invalidRequest", Err: graph.ErrBadRequest}
 	}
 
-	return c.servePages(window.pages, window.deltaLink), nil
+	return c.servePages(window), nil
 }
 
 // concurrentRemoteWrite is another client overwriting a file on OneDrive
 // while the engine is mid-pass: between the observation that planned an
-// action and the call that carries it out.
-func (r *modelRun) concurrentRemoteWrite(rng *rand.Rand) {
+// action and the call that carries it out. The call draws the file among the
+// files the tree holds at that moment, and draws nothing when it holds none:
+// whether it draws, the range it draws from and the file the value picks all
+// follow what earlier calls left in the fake. The fault log names the file.
+func (r *modelRun) concurrentRemoteWrite(cc *chaosCall) {
 	files := modelEntriesOf(r.remote.tree(), false)
 	if len(files) == 0 {
 		return
 	}
-	p := files[rng.IntN(len(files))]
+	p := files[cc.intN(len(files))]
+	cc.record("concurrent-write " + p)
 	content := r.nextContent("concurrent")
 	r.remote.putFileAt(r.t, p, content)
 
@@ -651,7 +789,8 @@ func chaosRaceSeedFaults() []string {
 // run in a storm of seeded transient faults, lost responses, interrupted
 // sessions, truncated downloads, odd delta windows and concurrent writers;
 // once it passes, sync converges with every model check and invariant
-// holding. Each seed logs its fault summary when it ends, failing or not.
+// holding. Each seed logs its fault summary when it ends, failing or not, and
+// a failing seed the line that reruns it (chaosRerunLine).
 // ONEDRIVE_GO_CHAOS_SEEDS widens the search (or name one seed with
 // ONEDRIVE_GO_MODEL_SEED).
 func TestModel_ChaosGraphConverges(t *testing.T) {
@@ -661,11 +800,7 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 	for _, seed := range chaosSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			opts := modelOptions{chaos: true}
-			if raceDetectorEnabled {
-				opts.batches = modelRaceBatches
-			}
-			run := runModelScenarioWith(t, seed, opts)
+			run := runModelScenarioWith(t, seed, chaosRunOptions())
 			require.Positive(t, run.chaos.faultCount(), "the storm injected no fault")
 			if seed != chaosRaceSeed {
 				return
@@ -677,6 +812,22 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// chaosRunOptions are the options of every chaos model run: the chaos layer,
+// over chaosBatches batches.
+func chaosRunOptions() modelOptions {
+	return modelOptions{chaos: true, batches: chaosBatches(raceDetectorEnabled)}
+}
+
+// chaosBatches is the batch count of a chaos run: modelRaceBatches under the
+// race detector, modelBatches without it.
+func chaosBatches(race bool) int {
+	if race {
+		return modelRaceBatches
+	}
+
+	return modelBatches
 }
 
 // chaosSeeds is the chaos run's seeds: one named seed, a count from the
@@ -720,7 +871,7 @@ func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.
 	)
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	c := newChaosGraph(1)
-	c.setStorm(true)
+	c.startStep(true)
 	client := c.wrap(remote.client(t))
 
 	lost := 0
@@ -765,7 +916,7 @@ func TestChaosGraph_TimeoutAfterCreateCanMoveThePlaceholderETag(t *testing.T) {
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 	c := newChaosGraph(1)
 	c.churnPlaceholder = remote.churnETag
-	c.setStorm(true)
+	c.startStep(true)
 	client := c.wrap(remote.client(t))
 
 	moved, kept := 0, 0
@@ -808,7 +959,7 @@ func TestChaosGraph_SplitKeepsLastOccurrence(t *testing.T) {
 
 	for seed := uint64(1); seed <= 20; seed++ {
 		c := newChaosGraph(seed)
-		c.setStorm(true)
+		c.startStep(true)
 		items := []graph.Item{{ID: "root", IsRoot: true}}
 		for i := range 9 {
 			items = append(items, graph.Item{ID: fmt.Sprintf("item-%d", i), Name: fmt.Sprintf("n%d", i)})
