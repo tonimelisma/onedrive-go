@@ -27,7 +27,6 @@ and nothing in `spec/` resolves them.
 | `B-074` | `internal/sync/engine.go` |
 | `B-076` | `internal/sync/executor_test.go` |
 | `B-081` | `internal/sync/executor_test.go` |
-| `B-085` | `internal/driveops/interfaces.go`, `internal/graph/download.go` |
 | `B-090` | `internal/sync/worker_test.go` |
 | `B-099` | `internal/sync/observer_local.go` |
 | `B-100` | `internal/sync/observer_local_create_test.go` |

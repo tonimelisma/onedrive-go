@@ -114,7 +114,7 @@ func (c *Client) Download(ctx context.Context, driveID driveid.ID, itemID string
 }
 
 // DownloadRange streams the content of a drive item starting from a byte offset.
-// Used to resume interrupted downloads from existing .partial files (B-085).
+// Used to resume interrupted downloads from existing .partial files.
 // version is what the partial holds: when the item is no longer that version,
 // or the server answers with anything but a 206 whose Content-Range starts at
 // offset and spans the item's size, nothing is written and the error wraps

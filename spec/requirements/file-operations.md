@@ -14,18 +14,19 @@ When the user runs `ls [path]`, the system shall display remote file and folder 
 
 When the user runs `get <remote> [local]`, the system shall download the specified file or folder.
 
-- R-1.2.1: When the remote path is a folder, the system shall download recursively. [verified]
+- R-1.2.1: When the remote path is a folder, the system shall download recursively, four files at a time whatever the size of the tree. [verified]
 - R-1.2.2: When the download is interrupted, the system shall resume via `.partial` files on retry. [verified]
 - R-1.2.3: When download completes, the system shall verify hash and size against API metadata. [verified]
 - R-1.2.4: When `--json` is passed, the system shall output structured JSON with path, size, and hash_verified; for folders, with files array, folders_created (the folders the download made; a folder that was already there is not counted), total_size, and errors. [verified]
 - R-1.2.5: When the user runs `get <shared-target> [local]`, where `<shared-target>` is either a raw OneDrive share URL or a `shared:<recipientEmail>:<remoteDriveID>:<remoteItemID>` selector, the system shall resolve the underlying shared item and download it without requiring `drive add` first. Shared folder targets shall download recursively by item identity. [verified]
 - R-1.2.6: When the local destination of a file `get` ends in a path separator or names an existing directory, the system shall download into that directory under the remote name. When a download fails and keeps a partial file, it shall name that partial file. [verified]
+- R-1.2.7: A folder `get` shall refuse a remote item whose name is empty, `.` or `..`, holds `/` or `\`, or is not a local name: it is reported as a failed file or folder that names the reason, nothing is written for it, nothing below a refused folder is listed, and its siblings are downloaded. A `get` shall refuse such a name, before anything is written, wherever it would take a remote name as a local one: the folder's own remote name taken as the local folder of a folder `get` given no local path, and the file's remote name taken as the local file of a single-file `get` given no local path or a local folder to download into. A local path the user names is the user's choice and is not checked. [verified]
 
 ## R-1.3 Upload (`put`) [verified]
 
 When the user runs `put <local> [remote]`, the system shall upload the specified file or directory.
 
-- R-1.3.1: When the local path is a directory, the system shall upload recursively. [verified]
+- R-1.3.1: When the local path is a directory, the system shall upload recursively, four files at a time whatever the size of the tree. [verified]
 - R-1.3.2: When the file exceeds 4 MiB, the system shall use a resumable upload session. [verified]
 - R-1.3.3: When upload completes, the system shall verify the server-reported hash matches the local file. [verified]
 - R-1.3.4: When `--json` is passed, the system shall output structured JSON with path, id, and size; for directories, with files array, folders_created, total_size, and errors. [verified]

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // fakeGraphDrive is a tiny in-memory OneDrive for command-level tests that
@@ -32,6 +34,12 @@ type fakeGraphDrive struct {
 	// hangRenameTo makes a PATCH renaming an item to this name hang until
 	// the client gives up.
 	hangRenameTo string
+	// reportedNames, by item ID, is the name the drive reports for an item
+	// in place of the one a path finds it by, as a server could.
+	reportedNames map[string]string
+	// onFileWrite, when set, runs before the drive creates a file or takes
+	// its content, with the drive locked.
+	onFileWrite func(r *http.Request)
 }
 
 type fakeGraphItem struct {
@@ -96,7 +104,8 @@ func newFakeGraphDrive(t *testing.T, driveID string) *fakeGraphDrive {
 		items: map[string]*fakeGraphItem{
 			fakeGraphRootID: {ID: fakeGraphRootID, Name: "root", Folder: true},
 		},
-		recycle: map[string]*fakeGraphItem{},
+		recycle:       map[string]*fakeGraphItem{},
+		reportedNames: map[string]string{},
 	}
 }
 
@@ -167,6 +176,9 @@ func (f *fakeGraphDrive) itemJSON(item *fakeGraphItem) map[string]any {
 		"cTag":                 "ctag-" + item.ID,
 		"createdDateTime":      "2026-04-03T00:00:00Z",
 		"lastModifiedDateTime": "2026-04-03T00:00:00Z",
+	}
+	if name, reported := f.reportedNames[item.ID]; reported {
+		out["name"] = name
 	}
 	if item.Modified != "" {
 		out["lastModifiedDateTime"] = item.Modified
@@ -330,14 +342,19 @@ func (f *fakeGraphDrive) serveItemPost(req fakeGraphRequest) {
 	switch req.action {
 	case fakeGraphActionChildren:
 		var body struct {
-			Name string `json:"name"`
+			Name string    `json:"name"`
+			File *struct{} `json:"file"`
 		}
 		f.decode(req.r, &body)
+		if body.File != nil && f.beforeFileWrite(req.r) {
+			return
+		}
 		if f.childNamed(req.id, body.Name) != nil {
 			f.writeJSON(req.w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "nameAlreadyExists", "message": "exists"}})
 			return
 		}
-		f.writeJSON(req.w, http.StatusCreated, f.itemJSON(f.addLocked(req.id, body.Name, true, nil)))
+		// A body with a file facet creates an empty file, any other a folder.
+		f.writeJSON(req.w, http.StatusCreated, f.itemJSON(f.addLocked(req.id, body.Name, body.File == nil, nil)))
 	case fakeGraphActionCopy:
 		var body fakeGraphMoveBody
 		f.decode(req.r, &body)
@@ -411,11 +428,29 @@ func (f *fakeGraphDrive) serveContent(w http.ResponseWriter, r *http.Request, it
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(item.Content); err != nil {
-		f.t.Errorf("fake graph: write content: %v", err)
+		assert.Fail(f.t, "fake graph: write content", "%v", err)
 	}
 }
 
+// beforeFileWrite runs onFileWrite, when set, and reports whether the client
+// has gone meanwhile, which leaves no one to answer. It runs before the
+// request body is read, and the server notices a client that has gone only
+// once the body is read: a hook that waits for r.Context() to end returns for
+// an empty upload and waits forever for one that carries bytes.
+func (f *fakeGraphDrive) beforeFileWrite(r *http.Request) bool {
+	if f.onFileWrite == nil {
+		return false
+	}
+	f.onFileWrite(r)
+
+	return r.Context().Err() != nil
+}
+
 func (f *fakeGraphDrive) upload(w http.ResponseWriter, r *http.Request, parentID, name string) {
+	if f.beforeFileWrite(r) {
+		return
+	}
+
 	content, err := io.ReadAll(r.Body)
 	if err != nil {
 		f.unexpected(w, r)
@@ -443,7 +478,7 @@ func (f *fakeGraphDrive) upload(w http.ResponseWriter, r *http.Request, parentID
 
 func (f *fakeGraphDrive) decode(r *http.Request, v any) {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		f.t.Errorf("fake graph: decode %s %s: %v", r.Method, r.URL.Path, err)
+		assert.Fail(f.t, "fake graph: decode", "%s %s: %v", r.Method, r.URL.Path, err)
 	}
 }
 
@@ -455,11 +490,11 @@ func (f *fakeGraphDrive) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		f.t.Errorf("fake graph: encode response: %v", err)
+		assert.Fail(f.t, "fake graph: encode response", "%v", err)
 	}
 }
 
 func (f *fakeGraphDrive) unexpected(w http.ResponseWriter, r *http.Request) {
-	f.t.Errorf("fake graph: unexpected request %s %s", r.Method, r.URL.String())
+	assert.Fail(f.t, "fake graph: unexpected request", "%s %s", r.Method, r.URL.String())
 	http.Error(w, "unexpected request", http.StatusNotImplemented)
 }

@@ -51,8 +51,8 @@ func belowTheSyncTreeImports() []string {
 func localpathReadingFunctions() []string {
 	return []string{
 		"EvalSymlinks", "IsDirSyncUnsupported", "IsLinkUnsupported", "IsMissingName",
-		"JoinOnOneLine", "Lstat", "Open", "OpenRegular", "ReadDir", "ReadFile", "Stat",
-		"SyncDir",
+		"JoinOnOneLine", "Lstat", "Open", "OpenDir", "OpenRegular", "ReadDir", "ReadFile",
+		"Stat", "SyncDir",
 	}
 }
 

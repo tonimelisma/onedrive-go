@@ -269,11 +269,7 @@ func bulkTransferError(w io.Writer, noun string, failures []string) error {
 
 // countItems renders "1 item" or "N items".
 func countItems(n int) string {
-	if n == 1 {
-		return "1 item"
-	}
-
-	return fmt.Sprintf("%d items", n)
+	return countOf(n, "item")
 }
 
 // formatAPITimeForHumans renders a formatAPITime string the way formatTime
