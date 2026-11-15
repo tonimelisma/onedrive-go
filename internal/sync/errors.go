@@ -145,7 +145,7 @@ var errSyncRootMissing = errors.New("sync folder does not exist")
 
 // errFileChangedDuringHash is returned when a file's metadata changes between
 // pre-hash stat and post-hash stat, indicating active writing (B-119).
-var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
+var errFileChangedDuringHash = errors.New("file changed while it was being hashed")
 
 // ---------------------------------------------------------------------------
 // Planner errors
@@ -154,7 +154,18 @@ var errFileChangedDuringHash = errors.New("sync: file changed during hashing")
 // errDependencyCycle indicates that the action plan contains a dependency
 // cycle, making topological ordering impossible. This is a planner bug —
 // well-formed sync actions should always form a DAG (B-313).
-var errDependencyCycle = errors.New("sync: dependency cycle detected in action plan")
+var errDependencyCycle = errors.New("dependency cycle in the action plan")
+
+// ---------------------------------------------------------------------------
+// Store errors
+// ---------------------------------------------------------------------------
+
+// errStoreAccessTimedOut is the cause a detached store access's bound expires
+// with (runDetachedStoreAccess), joined after the access's own error. The
+// expired bound carries context.DeadlineExceeded as a request that timed out
+// does, but it is the engine's own limit on its database: a store failure,
+// never a request OneDrive left unanswered.
+var errStoreAccessTimedOut = errors.New("the sync database did not answer in time")
 
 // ---------------------------------------------------------------------------
 // The end of a run

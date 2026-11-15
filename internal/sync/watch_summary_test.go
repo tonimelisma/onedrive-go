@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Validates: R-2.10.47
+// Validates: R-6.6.30
 func TestWatchConditionCountTotal_SumsRawCounts(t *testing.T) {
 	t.Parallel()
 
@@ -18,7 +18,7 @@ func TestWatchConditionCountTotal_SumsRawCounts(t *testing.T) {
 	}))
 }
 
-// Validates: R-2.10.47
+// Validates: R-6.6.30
 func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 	t.Parallel()
 
@@ -34,7 +34,7 @@ func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 	}))
 }
 
-// Validates: R-2.10.47
+// Validates: R-6.6.30
 func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	t.Parallel()
 
@@ -78,7 +78,7 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	}, summary.RemoteBlocked)
 }
 
-// Validates: R-2.10.47
+// Validates: R-6.6.30
 func TestBuildWatchConditionSummary_RemoteBlockedGroupsOnlyTrackActiveScopes(t *testing.T) {
 	t.Parallel()
 

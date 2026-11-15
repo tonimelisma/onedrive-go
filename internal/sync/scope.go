@@ -6,7 +6,8 @@
 //
 // Detection thresholds for shared blocker activation:
 //   - throttle:target:* (429) — immediate, single response
-//   - service (5xx, 503+Retry-After) — 5 unique paths in 30s
+//   - service (5xx, or a request OneDrive never answered) — 5 unique paths
+//     in 30s; a 503 with Retry-After — immediate
 //   - quota:own (507) — 3 unique paths in 10s
 //
 // Trial interval computation is centralized in scope lifecycle policy helpers,
@@ -31,7 +32,7 @@ const (
 	quotaWindowDuration  = 10 * time.Second
 
 	// serviceWindowThreshold is the number of unique paths that must fail
-	// with 5xx within serviceWindowDuration to
+	// with a 5xx, or without an answer, within serviceWindowDuration to
 	// trigger a service block scope.
 	serviceWindowThreshold = 5
 	serviceWindowDuration  = 30 * time.Second
@@ -64,8 +65,9 @@ func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
 //   - 503 with Retry-After → immediate service block (server signal)
 //   - quota (507, or a quota code/message under any status) → sliding
 //     window quota:own (3 unique paths / 10s)
-//   - outage 5xx (no Retry-After) → sliding window service (5 unique paths /
-//     30s); 501/505 refusals are excluded
+//   - outage 5xx (no Retry-After), or a request OneDrive never answered (its
+//     server answer is the outage's) → sliding window service (5 unique
+//     paths / 30s); 501/505 refusals are excluded
 func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
 	answer := r.serverAnswer()
 	switch {
