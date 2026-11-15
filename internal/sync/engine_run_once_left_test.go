@@ -302,6 +302,42 @@ func TestPassWithoutActions_KeepsThePlansFollowUp(t *testing.T) {
 	assert.Equal(t, 2, pass.followUp.leftWhenTheRunEnds(false))
 }
 
+// Validates: R-6.6.28, R-2.1.7
+//
+// Actions the planner drops as a dependency cycle are work the one-shot run
+// leaves. A plan built by hand from two local moves onto each other's path
+// keeps neither; the pass that ran it executes nothing, and the run that ends
+// on it counts both as work for the next sync, so it exits 1 instead of
+// reporting success. The drop is logged at Error.
+func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testing.T) {
+	t.Parallel()
+
+	logs := &syncLockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	cycle := []Action{
+		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
+		{Type: ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
+	}
+	require.Error(t, detectDependencyCycle(buildDependencies(cycle)), "the fixture must contain a cycle")
+
+	plan, err := newPlanner(logger).planBuiltActions(
+		cycle, nil, &moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
+	require.NoError(t, err)
+	require.Empty(t, plan.Actions, "both moves are dropped")
+
+	pass := eng.passWithoutActions(eng.nowFunc(), SyncBidirectional, RunOptions{}, &runtimePlan{
+		Plan:   plan,
+		Report: &Report{},
+	})
+	require.NoError(t, eng.reportWhatTheRunLeft(t.Context(), pass.report, pass, false))
+
+	assert.Equal(t, LeftWork{WillRetry: len(cycle)}, pass.report.LeftWork())
+	assert.True(t, pass.report.LeftWork().Any(), "the run fails")
+	assert.Contains(t, logs.String(), "dependency cycle")
+}
+
 // Validates: R-6.6.28
 //
 // The follow-up a run ends on counts its unfinished deferred and dropped

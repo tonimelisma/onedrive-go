@@ -295,6 +295,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RemoteTwinOfASyncedFileKeepsTheLocalFile,
 		TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing,
 		TestRunOnce_RenameAndRecreateMovesThenCreates,
+		TestRunOnce_MoveIntoAFolderRecreatedAtAMovedFoldersPathConverges,
 		TestRunOnce_RenumberedDeviceTransfersNothing,
 		TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit,
 		TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward,

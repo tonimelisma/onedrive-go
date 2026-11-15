@@ -381,6 +381,7 @@ func oracleAddRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Ac
 }
 
 func oracleAddMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
+	sourceRecreated := oracleRecreatesMoveSource(a, actions)
 	for otherIdx := range actions {
 		if otherIdx == idx {
 			continue
@@ -390,7 +391,8 @@ func oracleAddMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
 			deps = append(deps, otherIdx)
 			continue
 		}
-		if isMoveAction(a) && underMoveSource(other, a) && !underMoveDestination(other, a) {
+		if isMoveAction(a) && underMoveSource(other, a) && !underMoveDestination(other, a) &&
+			!movesIntoRecreatedSource(other, a, sourceRecreated) {
 			deps = append(deps, otherIdx)
 			continue
 		}
@@ -400,6 +402,21 @@ func oracleAddMoveDeps(deps []int, idx int, a *Action, actions []Action) []int {
 	}
 
 	return deps
+}
+
+// oracleRecreatesMoveSource scans the whole plan for a folder create at the
+// path move vacates (recreatesMoveSource).
+func oracleRecreatesMoveSource(move *Action, actions []Action) bool {
+	if !isMoveAction(move) {
+		return false
+	}
+	for i := range actions {
+		if recreatesMoveSource(&actions[i], move) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Validates: R-2.17.6
