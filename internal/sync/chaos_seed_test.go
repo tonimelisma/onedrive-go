@@ -2,14 +2,9 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,8 +25,8 @@ import (
 // the fake, which stream a request on a name the fake handed out falls in,
 // and which calls a client makes in a step are not the seed's, so the seed
 // does not fix the faults a whole run meets (the header of
-// chaos_remote_test.go lists each). A failing chaos run logs the command that
-// reruns its seed (chaosRerunLine).
+// chaos_remote_test.go lists each). A failing chaos run logs the
+// `seed-replay:` line that reruns its seed (logSeedReplayOnFailure).
 
 const (
 	// chaosOrderSeed is the interleaving test's seed. Its storm step splits
@@ -329,153 +324,22 @@ func chaosEntryAt(entries []string, i int) string {
 	return entries[i]
 }
 
-// chaosRerunPrefix starts the line a failing chaos run logs, so a search of a
-// test log finds it.
-const chaosRerunPrefix = "seed-replay: "
-
-// chaosRerunPackage is the package path a rerun line names, from the module
-// root, and chaosRerunTimeout its go test deadline: a chaos seed alone takes
-// minutes on a loaded host.
-const (
-	chaosRerunPackage = "./internal/sync/"
-	chaosRerunTimeout = "30m"
-)
-
-// chaosRerunLine is the one command, run from the module root, that reruns the
-// chaos seed of test (a test's full name, subtests included): the top-level
-// test with the seed named in modelSeedEnv, under the race detector when this
-// run had it, which gives the rerun this run's batch count (chaosBatches). It
-// reruns the seed, not the run: which requests the client sends in each step
-// depends on elapsed time, so the rerun can meet other faults.
-func chaosRerunLine(test string, seed uint64) string {
-	top, _, _ := strings.Cut(test, "/")
-	race := ""
-	if raceDetectorEnabled {
-		race = " -race"
-	}
-
-	return fmt.Sprintf("%s%s=%d go test%s -count=1 -timeout %s -run '^%s$' %s",
-		chaosRerunPrefix, modelSeedEnv, seed, race, chaosRerunTimeout, top, chaosRerunPackage)
-}
-
-// chaosRerun is what a rerun line names.
-type chaosRerun struct {
-	test    string
-	seed    uint64
-	batches int
-}
-
-// parseChaosRerunLine reads back a line chaosRerunLine wrote: a go test of
-// chaosRerunPackage with the seed in modelSeedEnv.
-func parseChaosRerunLine(line string) (chaosRerun, error) {
-	command, ok := strings.CutPrefix(line, chaosRerunPrefix)
-	if !ok {
-		return chaosRerun{}, fmt.Errorf("parse rerun line %q: no %q prefix", line, chaosRerunPrefix)
-	}
-	fields := strings.Fields(command)
-	const leading = 3 // the seed's variable, "go" and "test"
-	if len(fields) <= leading || fields[1] != "go" || fields[2] != "test" || fields[len(fields)-1] != chaosRerunPackage {
-		return chaosRerun{}, fmt.Errorf("parse rerun line %q: not a go test of %s", line, chaosRerunPackage)
-	}
-	value, ok := strings.CutPrefix(fields[0], modelSeedEnv+"=")
-	if !ok {
-		return chaosRerun{}, fmt.Errorf("parse rerun line %q: the seed is not named in %s", line, modelSeedEnv)
-	}
-	seed, err := strconv.ParseUint(value, 10, 64)
-	if err != nil {
-		return chaosRerun{}, fmt.Errorf("parse rerun line %q: seed: %w", line, err)
-	}
-	test, race, err := parseChaosRerunFlags(fields[leading : len(fields)-1])
-	if err != nil {
-		return chaosRerun{}, fmt.Errorf("parse rerun line %q: %w", line, err)
-	}
-
-	return chaosRerun{test: test, seed: seed, batches: chaosBatches(race)}, nil
-}
-
-// errChaosRerunNoTest is a rerun line whose flags name no test.
-var errChaosRerunNoTest = errors.New("no test named")
-
-// chaosRerunTestFlag is the go test flag that names a rerun line's test.
-const chaosRerunTestFlag = "-run"
-
-// parseChaosRerunFlags reads the go test flags of a rerun line: the test -run
-// names, and whether the line runs the race detector.
-func parseChaosRerunFlags(flags []string) (test string, race bool, err error) {
-	for i := 0; i < len(flags); i++ {
-		switch flag := flags[i]; flag {
-		case "-race":
-			race = true
-		case "-count=1":
-		case "-timeout", chaosRerunTestFlag:
-			if i+1 == len(flags) {
-				return "", false, fmt.Errorf("%s without a value", flag)
-			}
-			i++
-			if flag == chaosRerunTestFlag {
-				test = strings.TrimSuffix(strings.TrimPrefix(flags[i], "'^"), "$'")
-			}
-		default:
-			return "", false, fmt.Errorf("unexpected flag %q", flag)
-		}
-	}
-	if test == "" {
-		return "", false, errChaosRerunNoTest
-	}
-
-	return test, race, nil
-}
-
-// The line a failing chaos run logs is one go test command that reruns its
-// seed: parsed back, it names a test this package declares, the run's seed,
-// and the run's batch count.
-func TestChaosRerunLine_NamesTheTestTheSeedAndTheBatchCount(t *testing.T) {
+// Validates: R-6.10.25
+//
+// A failing seed shows one command that reruns it, its `seed-replay:` line:
+// the failure context of a model run, with the chaos layer or without it, and
+// of a planner model run names the seed and carries no second rerun hint.
+func TestModelRun_FailureContextCarriesNoSecondRerunHint(t *testing.T) {
 	t.Parallel()
 
-	const seed = 35
-	name := testFuncName(TestModel_ChaosGraphConverges)
-	line := chaosRerunLine(name+"/seed="+strconv.Itoa(seed), seed)
-
-	rerun, err := parseChaosRerunLine(line)
-	require.NoError(t, err)
-	assert.Equal(t, name, rerun.test, line)
-	assert.True(t, declaredTestFuncs(t)[rerun.test], "%s: the package declares no test %s", line, rerun.test)
-	assert.Equal(t, uint64(seed), rerun.seed, line)
-	assert.Equal(t, chaosRunOptions().batchCount(), rerun.batches, line)
-}
-
-// A failing chaos run shows one command that reruns it: its failure context
-// names the seed and carries no second hint, while a run without the chaos
-// layer, which logs no rerun line, keeps the hint.
-func TestModelRun_ChaosFailureContextCarriesNoSecondRerunHint(t *testing.T) {
-	t.Parallel()
-
-	plain := (&modelRun{seed: 7}).failureContext()
-	chaos := (&modelRun{seed: 7, chaos: newChaosGraph(7)}).failureContext()
-
-	assert.Contains(t, plain, modelSeedEnv+"=7")
-	assert.NotContains(t, chaos, modelSeedEnv)
-	assert.Contains(t, chaos, "seed 7")
-}
-
-// declaredTestFuncs is the set of top-level test functions the package's test
-// files declare.
-func declaredTestFuncs(t *testing.T) map[string]bool {
-	t.Helper()
-
-	files, err := filepath.Glob("*_test.go")
-	require.NoError(t, err)
-	fset := token.NewFileSet()
-	declared := map[string]bool{}
-	for _, file := range files {
-		parsed, parseErr := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
-		require.NoError(t, parseErr, file)
-		for _, decl := range parsed.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") {
-				declared[fn.Name.Name] = true
-			}
-		}
+	contexts := map[string]string{
+		"plain":   (&modelRun{seed: 7}).failureContext(),
+		"chaos":   (&modelRun{seed: 7, chaos: newChaosGraph(7)}).failureContext(),
+		"planner": (&pmRun{pmState: &pmState{}, seed: 7}).failureContext(),
 	}
-
-	return declared
+	for name, context := range contexts {
+		assert.Contains(t, context, "seed 7", name)
+		assert.NotContains(t, context, "rerun", name)
+		assert.NotContains(t, context, "_SEED=", name)
+	}
 }

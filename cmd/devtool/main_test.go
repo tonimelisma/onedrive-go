@@ -54,6 +54,7 @@ func TestNewVerifyCmdLeavesTheProfileToTheVerifierByDefault(t *testing.T) {
 	assert.Equal(t, devtool.DefaultDODCIMaxReruns, got.DODCIMaxReruns)
 	assert.Zero(t, got.UnitTimeout, "no deadline given: the verifier scales it with the host's cores")
 	assert.Zero(t, got.ShortUnitTimeout, "no deadline given: the verifier scales it with the host's cores")
+	assert.Zero(t, got.RaceTimeout, "no deadline given: the verifier scales it with the host's cores")
 }
 
 // Validates: R-6.10.1
@@ -91,6 +92,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--ci-max-reruns", "1",
 		"--unit-timeout", "50m",
 		"--short-unit-timeout", "25m",
+		"--race-timeout", "70m",
 		"--failed-log", "/tmp/ci.log",
 		"--check-format",
 	})
@@ -114,6 +116,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 1, got.DODCIMaxReruns)
 	assert.Equal(t, 50*time.Minute, got.UnitTimeout)
 	assert.Equal(t, 25*time.Minute, got.ShortUnitTimeout)
+	assert.Equal(t, 70*time.Minute, got.RaceTimeout)
 	assert.Equal(t, "/tmp/ci.log", got.FailedTestLog)
 	assert.True(t, got.CheckFormat)
 }
@@ -489,7 +492,45 @@ func TestDevtoolBinary_VerifyRejectsUnknownProfile(t *testing.T) {
 
 	_, stderr, err := runBinary(t, t.TempDir(), binPath, "verify", "weird")
 	require.Error(t, err)
-	assert.Contains(t, stderr, "usage: devtool verify [default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test]")
+	assert.Contains(t, stderr,
+		"usage: devtool verify [default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|race|seeds|failed-test]")
+}
+
+// Validates: R-6.10.22, R-6.10.25
+//
+// The race and seeds profiles are profiles the command passes on to the
+// verifier, and --seed-start reaches the seeds profile; without it the start
+// is left to the verifier, which derives it from the date.
+func TestNewVerifyCmdAcceptsTheRaceAndSeedsProfiles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		args      []string
+		profile   devtool.VerifyProfile
+		seedStart uint64
+	}{
+		{args: []string{"race"}, profile: devtool.VerifyRace},
+		{args: []string{"seeds"}, profile: devtool.VerifySeeds},
+		{args: []string{"seeds", "--seed-start", "318001"}, profile: devtool.VerifySeeds, seedStart: 318001},
+	}
+	for _, tc := range cases {
+		var got devtool.VerifyOptions
+		cmd := newVerifyCmd(
+			func() (string, error) { return testRepoRoot, nil },
+			func(_ context.Context, opts *devtool.VerifyOptions) error {
+				got = *opts
+				return nil
+			},
+		)
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		cmd.SetArgs(tc.args)
+
+		require.NoError(t, cmd.Execute(), tc.args)
+		assert.Equal(t, tc.profile, got.Profile, tc.args)
+		assert.Equal(t, tc.seedStart, got.SeedStart, tc.args)
+		assert.Contains(t, cmd.Use, "|"+string(tc.profile)+"|", "the usage line names the profile")
+	}
 }
 
 // Validates: R-6.10.21

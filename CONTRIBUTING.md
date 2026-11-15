@@ -61,10 +61,19 @@ the builds and `go test -short`, split into shards with `--shard k/n`) on
 Linux plus `verify platform` (host build and the same short tier) on macOS. `-short` skips the tests marked exhaustive (randomized
 model runs, replays, the reverse-dispatch re-run of every scenario, the
 reconcile matrix); the race detector and the coverage gate do not run there.
-The full tier (`verify public` on both platforms, `stress` over
-`./internal/multisync` and the `./internal/sync/...` tree, and the full live
-suite) runs nightly and on manual dispatch, so a data race or a coverage
-drop can reach `main` and be caught by the next nightly run. Before a PR,
+Every push to `main` also runs `verify race`, the `./internal/sync/...` tree
+under the race detector and unshortened, so a data race in the sync packages
+fails the push that brought it. The full tier (`verify public` on both
+platforms, `stress` over `./internal/multisync` and the `./internal/sync/...`
+tree, `verify seeds`, and the full live suite) runs nightly and on manual
+dispatch, so a data race elsewhere or a coverage drop can reach `main` and be
+caught by the next nightly run. `verify seeds` runs the seeded model tests
+without the race detector on a seed range that advances every day; a failing
+seed prints a `seed-replay:` line whose command reruns it (run it at the
+commit the night tested), and gets a `seed-failure` issue that stays open
+until the fix closes it (`Closes #N` in its pull request). A rerun on the same
+UTC day runs the same seeds; a later rerun of a night passes `--seed-start
+<n>` with the start that night printed. Before a PR,
 `go run ./cmd/devtool verify pr` (lint, then quick) is the local gate, and it
 is what the `pre-pr` stage below runs; `verify default` still runs
 everything, and takes more than an hour on a 2-core host (its race-tier

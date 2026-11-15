@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -698,6 +700,51 @@ func TestFastE2EExecutionManifestKeepsOnlySmokeLiveTests(t *testing.T) {
 	assert.NotContains(t, fastTests, "TestE2E_QuietFlag")
 }
 
+// Validates: R-6.10.22
+//
+// The usage line names the verifier's profiles and nothing else: every name
+// on it resolves to a plan, and every VerifyProfile constant the package
+// declares is on it. A profile added without its name on the line, or a name
+// left on the line after its profile went, fails here.
+func TestVerifyProfileUsageNamesExactlyTheProfiles(t *testing.T) {
+	t.Parallel()
+
+	usage := strings.Split(VerifyProfileUsage, "|")
+	for _, name := range usage {
+		_, err := resolveVerifyPlan(VerifyProfile(name))
+		require.NoError(t, err, "the usage line names %s, which resolves to no plan", name)
+	}
+
+	dir := filepath.Join(repoRootFromDevtoolPackage(t), "internal", "devtool")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	declared := []string{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		require.NoError(t, parseErr)
+		ast.Inspect(file, func(node ast.Node) bool {
+			spec, isSpec := node.(*ast.ValueSpec)
+			if !isSpec || !isIdent(spec.Type, "VerifyProfile") {
+				return true
+			}
+			for _, value := range spec.Values {
+				lit, isLit := value.(*ast.BasicLit)
+				require.True(t, isLit, "%s declares a VerifyProfile that is no string literal", entry.Name())
+				name, unquoteErr := strconv.Unquote(lit.Value)
+				require.NoError(t, unquoteErr)
+				declared = append(declared, name)
+			}
+
+			return true
+		})
+	}
+	assert.ElementsMatch(t, usage, declared, "the usage line and the VerifyProfile constants")
+}
+
 // discoverTaggedE2ETests lists, in name order, the top-level Test functions
 // of the e2e test files whose build constraint is exactly buildExpression.
 func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
@@ -887,6 +934,94 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 		"-timeout=40m",
 		"./internal/sync/...",
 	}, runner.runCommands[2].args)
+}
+
+// Validates: R-6.10.22
+//
+// The race profile is one go test of the whole sync tree under the race
+// detector: unshortened, so the exhaustive tests run too, never from go
+// test's cache, with the deadline of the cores this process may use unless
+// --race-timeout names one, streamed, and recorded as one step of the
+// summary.
+func TestRunVerifyRaceRunsExpectedSteps(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		explicit time.Duration
+		deadline time.Duration
+	}{
+		"the deadline of the cores": {deadline: raceSyncTimeoutForCores(runtime.GOMAXPROCS(0))},
+		"--race-timeout":            {explicit: 75 * time.Minute, deadline: 75 * time.Minute},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{}
+			summaryPath := filepath.Join(t.TempDir(), "race-summary.json")
+			err := RunVerify(context.Background(), runner, &VerifyOptions{
+				RepoRoot:        t.TempDir(),
+				Profile:         VerifyRace,
+				RaceTimeout:     tc.explicit,
+				SummaryJSONPath: summaryPath,
+				Stdout:          &bytes.Buffer{},
+				Stderr:          &bytes.Buffer{},
+			})
+			require.NoError(t, err)
+
+			require.Len(t, runner.runCommands, 1)
+			assert.Empty(t, runner.combinedCommands)
+			assert.Equal(t, "go", runner.runCommands[0].name)
+			assert.Equal(t, []string{"test", "-race", "-count=1", "-timeout=" + tc.deadline.String(), "./internal/sync/..."},
+				runner.runCommands[0].args)
+
+			var summary VerifySummary
+			readVerifySummaryFile(t, summaryPath, &summary)
+			assert.Equal(t, string(VerifyRace), summary.Profile)
+			assert.Equal(t, verifySummaryStatusPass, requireVerifySummaryStep(t, summary, raceStepName).Status)
+		})
+	}
+}
+
+// The race run of the sync tree took about 10.4 minutes on a CI runner, so at
+// the runners' core count and above its deadline is 30 minutes. Below it the
+// deadline is 240 core-minutes divided by the cores: one run took 87.1
+// minutes on a shared, loaded 2-core host. A host that reports no cores
+// counts as one.
+//
+// Validates: R-6.10.22
+func TestRaceSyncTimeoutForCoresGivesSmallHostsACoreBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, cores := range []int{3, 4, 8} {
+		assert.Equal(t, 30*time.Minute, raceSyncTimeoutForCores(cores), "cores %d", cores)
+	}
+
+	assert.Equal(t, 120*time.Minute, raceSyncTimeoutForCores(2))
+	assert.Equal(t, 240*time.Minute, raceSyncTimeoutForCores(1))
+	assert.Equal(t, 240*time.Minute, raceSyncTimeoutForCores(0))
+	assert.Equal(t, 50*time.Minute, resolveRaceSyncTimeout(50*time.Minute, 2), "an explicit deadline wins")
+	assert.Equal(t, 120*time.Minute, resolveRaceSyncTimeout(0, 2))
+	assert.Equal(t, 30*time.Minute, resolveRaceSyncTimeout(0, 8))
+}
+
+// Validates: R-6.10.22, R-6.10.26
+//
+// A sync tree that lost its tests verifies nothing under the race detector
+// either: the race step fails instead of passing on `[no test files]`.
+func TestRunVerifyRaceFailsWhenNoPackageRanATest(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{runStdoutFunc: func([]string) string {
+		return "?   \tgithub.com/tonimelisma/onedrive-go/internal/sync\t[no test files]\n"
+	}}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: t.TempDir(),
+		Profile:  VerifyRace,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.ErrorContains(t, err, raceStepName+" matched no tests")
 }
 
 // Validates: R-6.10.8, R-6.10.26
@@ -1083,7 +1218,7 @@ func TestRunVerifyStressStreamsTheRepeatStep(t *testing.T) {
 	runner := &streamCheckRunner{
 		fakeRunner: &fakeRunner{},
 		stepArgs: []string{
-			"test", "-json", "-race", "-count=3", "-shuffle=on", "-timeout=" + stressSyncTimeout, stressSyncTree,
+			"test", "-json", "-race", "-count=3", "-shuffle=on", "-timeout=" + stressSyncTimeout, syncTestTree,
 		},
 		printed: make(chan struct{}),
 		seen:    make(chan struct{}),
@@ -1153,7 +1288,7 @@ func TestRunVerifyFailedTestRerunsLastJSONFailureOnly(t *testing.T) {
 		`{"Action":"fail","Package":"github.com/tonimelisma/onedrive-go/e2e"}`,
 	}, "\n")), 0o600))
 
-	runner := &fakeRunner{}
+	runner := &fakeRunner{runStdoutFunc: goTestReportsPass("TestE2E_Status_JSONShape")}
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:      repoRoot,
 		Profile:       VerifyFailedTest,
@@ -1189,7 +1324,7 @@ func TestRunVerifyFailedTestRerunsLastRawPackageAndSubtest(t *testing.T) {
 			"FAIL\tgithub.com/tonimelisma/onedrive-go/internal/sync\t0.123s",
 	), 0o600))
 
-	runner := &fakeRunner{}
+	runner := &fakeRunner{runStdoutFunc: goTestReportsPass("TestWatchLoop/closed_scheduler")}
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:      repoRoot,
 		Profile:       VerifyFailedTest,
@@ -1254,7 +1389,7 @@ func TestRunVerifyFailedTestKeepsRaceAndTheShuffleSeed(t *testing.T) {
 			logPath := filepath.Join(repoRoot, "ci.log")
 			require.NoError(t, os.WriteFile(logPath, []byte(tc.log), 0o600))
 
-			runner := &fakeRunner{}
+			runner := &fakeRunner{runStdoutFunc: goTestReportsPass("TestWatchLoop")}
 			require.NoError(t, RunVerify(context.Background(), runner, &VerifyOptions{
 				RepoRoot:      repoRoot,
 				Profile:       VerifyFailedTest,
@@ -1273,6 +1408,82 @@ func TestRunVerifyFailedTestKeepsRaceAndTheShuffleSeed(t *testing.T) {
 				"-v",
 				"./internal/sync",
 			}, runner.runCommands[0].args)
+		})
+	}
+}
+
+// Validates: R-6.10.25, R-6.10.26
+//
+// A failing seed is rerun as its replay line says: with the seed's variable
+// set and the race detector exactly when the failing run had it, since
+// without it some families do other work for the same seed. Of two failing
+// seeds, the rerun takes the one of the failure the log settled last. The
+// rerun runs under the dispatch order the line names and under none when it
+// names none, whatever the caller's environment holds, and under a deadline
+// of its own.
+func TestRunVerifyFailedTestRerunsAFailingSeedAsItsReplayLineSays(t *testing.T) {
+	t.Parallel()
+
+	const chaosTest = "TestModel_ChaosGraphConverges"
+	cases := map[string]struct {
+		replays []string
+		order   string
+		want    []string
+	}{
+		"without the race detector": {
+			replays: []string{
+				"ONEDRIVE_GO_MODEL_SEED=7001 go test -run '^" + chaosTest + "$' ./internal/sync",
+				"ONEDRIVE_GO_MODEL_SEED=9 go test -run '^" + chaosTest + "$' ./internal/sync",
+			},
+			want: []string{"test", "-run=^" + chaosTest + "$", "-count=1", "-v", "-timeout=30m", "./internal/sync"},
+		},
+		"with the race detector": {
+			replays: []string{"ONEDRIVE_GO_MODEL_SEED=7001 go test -race -run '^" + chaosTest + "$' ./internal/sync"},
+			want:    []string{"test", "-race", "-run=^" + chaosTest + "$", "-count=1", "-v", "-timeout=30m", "./internal/sync"},
+		},
+		"with a dispatch order": {
+			replays: []string{
+				"ONEDRIVE_GO_MODEL_SEED=7001 ONEDRIVE_GO_DISPATCH_ORDER=reverse go test -race -run '^" + chaosTest + "$' ./internal/sync",
+			},
+			order: "reverse",
+			want:  []string{"test", "-race", "-run=^" + chaosTest + "$", "-count=1", "-v", "-timeout=30m", "./internal/sync"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := []string{}
+			for _, replay := range tc.replays {
+				lines = append(lines, "        test_helpers_test.go:480: "+seedReplayPrefix+replay)
+			}
+			lines = append(lines,
+				"    --- FAIL: "+chaosTest+"/seed=9 (4.00s)",
+				"    --- FAIL: "+chaosTest+"/seed=7001 (4.00s)",
+				"FAIL\t"+repoModulePath+"/internal/sync\t9.0s")
+			repoRoot := t.TempDir()
+			logPath := filepath.Join(repoRoot, "ci.log")
+			require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(lines, "\n")), 0o600))
+
+			runner := &fakeRunner{runStdoutFunc: goTestReportsPass(chaosTest + "/seed=7001")}
+			var stdout bytes.Buffer
+			require.NoError(t, RunVerify(context.Background(), runner, &VerifyOptions{
+				RepoRoot:      repoRoot,
+				Profile:       VerifyFailedTest,
+				FailedTestLog: logPath,
+				Stdout:        &stdout,
+				Stderr:        &bytes.Buffer{},
+			}))
+
+			require.Len(t, runner.runCommands, 1)
+			assert.Equal(t, tc.want, runner.runCommands[0].args)
+			assertCommandHasEnvVar(t, runner.runCommands[0], "ONEDRIVE_GO_MODEL_SEED=7001")
+			assertCommandHasEnvVar(t, runner.runCommands[0], seedsDispatchOrderEnv+"="+tc.order)
+			if tc.order != "" {
+				assertCommandLacksEnvVar(t, runner.runCommands[0], seedsDispatchOrderEnv+"=")
+			}
+			assert.Contains(t, stdout.String(),
+				"==> ONEDRIVE_GO_MODEL_SEED=7001 "+seedsDispatchOrderEnv+"="+tc.order+" go test")
 		})
 	}
 }

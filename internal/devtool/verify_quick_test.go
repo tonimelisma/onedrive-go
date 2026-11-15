@@ -3,6 +3,7 @@ package devtool
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -381,4 +382,22 @@ func TestVerifyShardSingleSliceRunsTheWholeTier(t *testing.T) {
 	shard, err := parseVerifyShard("1/1")
 	require.NoError(t, err)
 	assert.False(t, shard.enabled())
+}
+
+// Validates: R-6.10.22
+//
+// The onboarding guide's section on the verifier lists every profile the
+// usage line names, so a profile cannot be added without the guide saying
+// what it is for.
+func TestDeveloperOnboardingListsEveryVerifyProfile(t *testing.T) {
+	t.Parallel()
+
+	data, err := readFile(filepath.Join(repoRootFromDevtoolPackage(t), "spec", "reference", "developer-onboarding.md"))
+	require.NoError(t, err)
+	_, section, found := strings.Cut(string(data), "### 10.3 Verifier-owned workflow\n")
+	require.True(t, found, "the guide has its verifier section")
+	section, _, _ = strings.Cut(section, "\n### ")
+	for _, profile := range strings.Split(VerifyProfileUsage, "|") {
+		assert.Contains(t, section, "- `"+profile+"`", "the verifier section lists no profile %s", profile)
+	}
 }

@@ -11,10 +11,10 @@ import (
 
 const millisecondsPerSecond = 1000
 
-// stressSyncTree is the stress lane's sync target: the whole tree, not the one
-// directory, so a package split out of internal/sync stays under stress
-// instead of silently leaving the lane.
-const stressSyncTree = "./internal/sync/..."
+// syncTestTree is the sync target of the stress, race and seeds profiles: the
+// whole tree, not the one directory, so a package split out of internal/sync
+// stays under them instead of silently leaving their lanes.
+const syncTestTree = "./internal/sync/..."
 
 // stressSyncConcurrencyPattern selects the sync tests that exercise
 // goroutines, timers, cancellation and shutdown: the watch runtime and
@@ -52,11 +52,12 @@ func runStress(
 	stdout, stderr io.Writer,
 ) error {
 	// Repetition goes where the concurrency is. One race iteration of the
-	// whole sync tree takes about six minutes on a CI runner, so fifty no
-	// longer fit any budget; its watch, runtime, shutdown and worker tests
-	// (where the 1-in-50 flakes have come from) take well under a minute and
-	// still run fifty times. Every step shuffles test order, so each
-	// repetition also varies what runs beside what.
+	// whole sync tree takes about ten minutes on a CI runner (three took 31
+	// minutes in November 2026), so fifty no longer fit any budget; its
+	// watch, runtime, shutdown and worker tests (where the 1-in-50 flakes
+	// have come from) take well under a minute and still run fifty times.
+	// Every step shuffles test order, so each repetition also varies what
+	// runs beside what.
 	stressCommands := []stressCommandSpec{
 		{
 			stepName: "multisync race x50",
@@ -77,7 +78,7 @@ func runStress(
 			stepName: "sync concurrency race x50",
 			statusLine: fmt.Sprintf(
 				"==> go test -race -count=50 -shuffle=on -timeout=%s -run %s %s\n",
-				stressSyncConcurrencyTimeout, stressSyncConcurrencyPattern, stressSyncTree,
+				stressSyncConcurrencyTimeout, stressSyncConcurrencyPattern, syncTestTree,
 			),
 			args: []string{
 				"test",
@@ -86,14 +87,14 @@ func runStress(
 				"-shuffle=on",
 				"-timeout=" + stressSyncConcurrencyTimeout,
 				"-run", stressSyncConcurrencyPattern,
-				stressSyncTree,
+				syncTestTree,
 			},
 		},
 		{
 			stepName: "sync race x3",
 			statusLine: fmt.Sprintf(
 				"==> go test -json -race -count=3 -shuffle=on -timeout=%s %s\n",
-				stressSyncTimeout, stressSyncTree,
+				stressSyncTimeout, syncTestTree,
 			),
 			args: []string{
 				"test",
@@ -102,7 +103,7 @@ func runStress(
 				"-count=3",
 				"-shuffle=on",
 				"-timeout=" + stressSyncTimeout,
-				stressSyncTree,
+				syncTestTree,
 			},
 			collectSlowTests: true,
 		},

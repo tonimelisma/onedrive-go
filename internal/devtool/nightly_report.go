@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 // The nightly report makes a run's verdict visible on GitHub: a commit
 // status on the commit it ran on and, for a scheduled run of main, one issue
-// that is open exactly while the nightly is red. The workflow's
+// that is open exactly while the nightly is red, and an issue of its own for
+// each failing model seed (nightly_seed_issues.go). The workflow's
 // nightly-report job runs it after every other job of the run.
 const (
 	nightlyStatusContext = "nightly"
@@ -290,11 +293,14 @@ func (p *nightlyReportPlan) describe(verb string) string {
 // reportNightly reports one run: it reads the run, its jobs and the failing
 // jobs' logs and posts the commit status, which depends on the run alone;
 // then, for a scheduled run of main, it reads which one is the newest and,
-// for the newest, the nightly issue, decides what happens to the issue and
-// writes it. With dryRun it makes the same reads and prints each write
-// instead. A read of the run fails the report before any write; a read of
-// the newest run or the issue fails it with the status posted and the issue
-// as it is.
+// for the newest, the nightly issue and the open issues of the run's failing
+// seeds, decides what happens to each and writes it. With dryRun it makes the
+// same reads and prints each write instead. A read of the run fails the
+// report before any write; a read of the newest run or the nightly issue
+// fails it with the status posted and the issues as they are. A read of the
+// seed issues that fails leaves them as they are and fails the report too,
+// but only after the night's verdict is written: the status and the nightly
+// issue follow a plan of their own, which the seed issues never hold up.
 func reportNightly(ctx context.Context, gh ghClient, repoRoot string, runID int64, dryRun bool, stdout io.Writer) error {
 	run, err := loadNightlyRun(ctx, gh, repoRoot, runID)
 	if err != nil {
@@ -326,14 +332,49 @@ func reportNightly(ctx context.Context, gh ghClient, repoRoot string, runID int6
 		}
 	}
 	plan := planNightlyReport(report, &run, newest, issue)
+	seedPlan, seedErr := planNightlySeedIssues(ctx, gh, repoRoot, report, &plan)
+	if seedErr != nil {
+		seedErr = fmt.Errorf("nightly report: read the seed issues, so none is written: %w", seedErr)
+	}
 
 	if dryRun {
-		return writeStatus(stdout, plan.describe("would "))
+		return errors.Join(writeStatus(stdout, plan.describe("would ")+seedPlan.describe("would ")), seedErr)
 	}
-	if err := writeStatus(stdout, "nightly report: about to\n"+plan.describe("")); err != nil {
-		return err
+	if err := writeStatus(stdout, "nightly report: about to\n"+plan.describe("")+seedPlan.describe("")); err != nil {
+		return errors.Join(err, seedErr)
 	}
-	return applyNightlyReport(ctx, gh, repoRoot, &plan, stdout)
+
+	return errors.Join(
+		applyNightlyReport(ctx, gh, repoRoot, &plan, stdout),
+		applySeedIssues(ctx, gh, repoRoot, &seedPlan, stdout),
+		seedErr,
+	)
+}
+
+// planNightlySeedIssues decides the writes to the run's failing seeds'
+// issues. A run that writes no nightly issue writes no seed issue either and
+// says so; for the newest scheduled run of main it reads the open seed issues
+// before any write, and a read that fails plans no write.
+func planNightlySeedIssues(
+	ctx context.Context, gh ghClient, repoRoot string, report nightlyRunReport, plan *nightlyReportPlan,
+) (seedIssuePlan, error) {
+	seeds := report.failingSeeds()
+	if len(seeds) == 0 {
+		return seedIssuePlan{}, nil
+	}
+	if plan.action == nightlyIssueNotTheNightly || plan.action == nightlyIssueNotTheNewest {
+		return seedIssuePlan{skipped: plan.run, unwritten: len(seeds)}, nil
+	}
+	keys := make([]string, 0, len(seeds))
+	for _, seed := range seeds {
+		keys = append(keys, seed.replay.key())
+	}
+	issues, err := findSeedIssues(ctx, gh, repoRoot, keys)
+	if err != nil {
+		return seedIssuePlan{}, err
+	}
+
+	return planSeedIssues(seeds, report.runURL, issues), nil
 }
 
 // postNightlyStatus posts the run's commit status. Posting it again is safe,
@@ -375,24 +416,16 @@ func newestNightlyRun(ctx context.Context, gh ghClient, repoRoot string) (int64,
 // findNightlyIssue reads whether the label exists, without which no issue
 // can carry it, and the open nightly issue with its body and comments.
 func findNightlyIssue(ctx context.Context, gh ghClient, repoRoot string) (nightlyIssueState, error) {
-	out, err := gh.output(ctx, repoRoot, "nightly label list (GET repos/{owner}/{repo}/labels)",
-		"label", "list", "--search", nightlyIssueLabel, "--json", "name", "--limit", nightlyLabelListLimit)
+	exists, err := githubLabelExists(ctx, gh, repoRoot, "nightly", nightlyIssueLabel)
 	if err != nil {
 		return nightlyIssueState{}, err
 	}
-	var labels []struct{ Name string }
-	if decodeErr := decodeGHList("nightly label list", out, &labels); decodeErr != nil {
-		return nightlyIssueState{}, decodeErr
-	}
-	state := nightlyIssueState{}
-	for _, label := range labels {
-		state.labelExists = state.labelExists || label.Name == nightlyIssueLabel
-	}
+	state := nightlyIssueState{labelExists: exists}
 	if !state.labelExists {
 		return state, nil
 	}
 
-	out, err = gh.output(ctx, repoRoot, "nightly issue list (GET repos/{owner}/{repo}/issues)",
+	out, err := gh.output(ctx, repoRoot, "nightly issue list (GET repos/{owner}/{repo}/issues)",
 		"issue", "list", "--label", nightlyIssueLabel, "--state", "open", "--json", "number", "--limit", "1")
 	if err != nil {
 		return nightlyIssueState{}, err
@@ -405,26 +438,51 @@ func findNightlyIssue(ctx context.Context, gh ghClient, repoRoot string) (nightl
 		return state, nil
 	}
 	state.open = issues[0].Number
+	if state.texts, err = githubIssueTexts(ctx, gh, repoRoot, "nightly", state.open); err != nil {
+		return nightlyIssueState{}, err
+	}
 
-	number := strconv.Itoa(state.open)
-	out, err = gh.output(ctx, repoRoot, "nightly issue view (GET repos/{owner}/{repo}/issues/"+number+")",
+	return state, nil
+}
+
+// githubLabelExists reads whether the repository has the label; what names
+// the read in the request's description.
+func githubLabelExists(ctx context.Context, gh ghClient, repoRoot string, what string, label string) (bool, error) {
+	out, err := gh.output(ctx, repoRoot, what+" label list (GET repos/{owner}/{repo}/labels)",
+		"label", "list", "--search", label, "--json", "name", "--limit", nightlyLabelListLimit)
+	if err != nil {
+		return false, err
+	}
+	var labels []struct{ Name string }
+	if decodeErr := decodeGHList(what+" label list", out, &labels); decodeErr != nil {
+		return false, decodeErr
+	}
+
+	return slices.ContainsFunc(labels, func(listed struct{ Name string }) bool { return listed.Name == label }), nil
+}
+
+// githubIssueTexts reads an issue's body and comments, the body first; what
+// names the read in the request's description.
+func githubIssueTexts(ctx context.Context, gh ghClient, repoRoot string, what string, issue int) ([]string, error) {
+	number := strconv.Itoa(issue)
+	out, err := gh.output(ctx, repoRoot, what+" issue view (GET repos/{owner}/{repo}/issues/"+number+")",
 		"issue", "view", number, "--json", "body,comments")
 	if err != nil {
-		return nightlyIssueState{}, err
+		return nil, err
 	}
 	var view struct {
 		Body     string
 		Comments []struct{ Body string }
 	}
 	if decodeErr := json.Unmarshal(out, &view); decodeErr != nil {
-		return nightlyIssueState{}, fmt.Errorf("decode nightly issue view %s: %w", number, decodeErr)
+		return nil, fmt.Errorf("decode %s issue view %s: %w", what, number, decodeErr)
 	}
-	state.texts = append(state.texts, view.Body)
+	texts := []string{view.Body}
 	for _, comment := range view.Comments {
-		state.texts = append(state.texts, comment.Body)
+		texts = append(texts, comment.Body)
 	}
 
-	return state, nil
+	return texts, nil
 }
 
 // decodeGHList decodes a gh list printed as JSON. A list command whose
@@ -466,13 +524,13 @@ func applyNightlyReport(ctx context.Context, gh ghClient, repoRoot string, plan 
 		}
 		return writeStatus(stdout, "nightly report: opened "+strings.TrimSpace(string(out))+"\n")
 	case nightlyIssueComment:
-		if err := commentOnNightlyIssue(ctx, gh, repoRoot, issue, plan.text); err != nil {
+		if err := commentOnIssue(ctx, gh, repoRoot, "nightly", issue, plan.text); err != nil {
 			return err
 		}
 		return writeStatus(stdout, "nightly report: commented on issue #"+issue+"\n")
 	case nightlyIssueClose:
 		if !plan.reported {
-			if err := commentOnNightlyIssue(ctx, gh, repoRoot, issue, plan.text); err != nil {
+			if err := commentOnIssue(ctx, gh, repoRoot, "nightly", issue, plan.text); err != nil {
 				return err
 			}
 		}
@@ -486,8 +544,10 @@ func applyNightlyReport(ctx context.Context, gh ghClient, repoRoot string, plan 
 	return nil
 }
 
-func commentOnNightlyIssue(ctx context.Context, gh ghClient, repoRoot string, issue string, text string) error {
-	_, err := gh.outputOnce(ctx, repoRoot, "nightly issue comment (POST repos/{owner}/{repo}/issues/"+issue+"/comments)",
+// commentOnIssue posts one comment on an issue, once; what names the write in
+// the request's description.
+func commentOnIssue(ctx context.Context, gh ghClient, repoRoot string, what string, issue string, text string) error {
+	_, err := gh.outputOnce(ctx, repoRoot, what+" issue comment (POST repos/{owner}/{repo}/issues/"+issue+"/comments)",
 		"issue", "comment", issue, "--body", text)
 
 	return err

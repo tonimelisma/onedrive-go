@@ -42,6 +42,7 @@ func nightlyTestJobIDs() map[string]int64 {
 		"verify":                      12,
 		"stress":                      13,
 		"integration":                 14,
+		nightlySeedsJob:               15,
 		nightlyTestE2EJob:             1,
 	}
 }
@@ -204,11 +205,15 @@ type claimRemote struct {
 	// jobLogErrs are the failures the job-log fetch of a job id answers
 	// with, in order, before it returns the log; jobLogCalls counts the
 	// fetches. runListErrs does the same for the run list, and labelListErrs
-	// for the label list, the report's first read of the issue.
-	jobLogErrs    map[string][]error
-	jobLogCalls   map[string]int
-	runListErrs   []error
-	labelListErrs []error
+	// for the label list, the report's first read of the issue;
+	// labelSearchErrs and issueListErrs do it for the label list and the open
+	// issue list of one label.
+	jobLogErrs      map[string][]error
+	jobLogCalls     map[string]int
+	runListErrs     []error
+	labelListErrs   []error
+	labelSearchErrs map[string][]error
+	issueListErrs   map[string][]error
 	// runListArgs are the arguments of every run list the fake answered.
 	runListArgs [][]string
 	// sleeps records the backoffs the check waited out.
@@ -384,14 +389,31 @@ func (r *claimRemote) github(joined string, args []string) ([]byte, error) {
 			r.labelListErrs = r.labelListErrs[1:]
 			return nil, failure
 		}
+		if failure := popRemoteErr(r.labelSearchErrs, ghFields(args)["--search"]); failure != nil {
+			return nil, failure
+		}
 		return r.labelList()
 	case strings.HasPrefix(joined, "gh issue list"):
-		return r.openIssueList()
+		if failure := popRemoteErr(r.issueListErrs, ghFields(args)["--label"]); failure != nil {
+			return nil, failure
+		}
+		return r.openIssueList(ghFields(args)["--label"])
 	case strings.HasPrefix(joined, "gh issue view "):
 		return r.issueView(args[2])
 	}
 	r.writes = append(r.writes, joined)
 	return r.githubWrite(joined, args)
+}
+
+// popRemoteErr takes the next failure errs holds for key, nil for none.
+func popRemoteErr(errs map[string][]error, key string) error {
+	failures := errs[key]
+	if len(failures) == 0 {
+		return nil
+	}
+	errs[key] = failures[1:]
+
+	return failures[0]
 }
 
 // githubWrite carries out the gh commands of the nightly report that change
@@ -473,11 +495,13 @@ func (r *claimRemote) issueView(number string) ([]byte, error) {
 	return out, nil
 }
 
-func (r *claimRemote) openIssueList() ([]byte, error) {
-	open := []map[string]int{}
+// openIssueList answers `gh issue list --label <label> --state open`, the
+// newest issue first, with each issue's number, title and body.
+func (r *claimRemote) openIssueList(label string) ([]byte, error) {
+	open := []map[string]any{}
 	for i := len(r.issues) - 1; i >= 0; i-- {
-		if r.issues[i].open && slices.Contains(r.issues[i].labels, nightlyIssueLabel) {
-			open = append(open, map[string]int{"number": r.issues[i].number})
+		if r.issues[i].open && slices.Contains(r.issues[i].labels, label) {
+			open = append(open, map[string]any{"number": r.issues[i].number, "title": r.issues[i].title, "body": r.issues[i].body})
 		}
 	}
 	out, err := json.Marshal(open)
@@ -996,7 +1020,7 @@ func TestNightlyJobOutcomeNamesEveryResult(t *testing.T) {
 			missing = append(missing, report.name)
 		}
 	}
-	assert.Equal(t, []string{"verify-full", "verify", "integration", "e2e"}, missing,
+	assert.Equal(t, []string{"verify-full", "verify", nightlySeedsJob, "integration", "e2e"}, missing,
 		"a required job the run does not list did not run")
 }
 

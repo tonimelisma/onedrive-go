@@ -43,19 +43,24 @@ permissions:
 # check. Push to main is not skipped for squash merges any more: branch
 # protection no longer requires a PR branch to be up to date, so a merge of
 # a stale branch can break main, and the push run is what catches it within
-# minutes.
+# minutes. A push also runs `verify-race`, the ./internal/sync/... tree under
+# the race detector, inside the aggregate, so a data race in the sync
+# packages fails the push that brought it.
 #
 # The full tier runs nightly and on manual dispatch: `verify public` on both
 # platforms (race detector, the coverage gate at the number R-6.10.4 states,
 # every exhaustive test), `stress` (race repetition of ./internal/multisync
-# and the ./internal/sync/... tree), and the live `e2e-full` profile. A data
-# race or a coverage drop can therefore reach main and be caught by the next
-# nightly run; that is the trade-off for a three-minute PR lane. The
+# and the ./internal/sync/... tree), `model-seeds` (the seeded model tests
+# without the race detector, on a seed range that advances every day), and
+# the live `e2e-full` profile. A data race outside the sync tree or a
+# coverage drop can therefore reach main and be caught by the next nightly
+# run; that is the trade-off for a three-minute PR lane. The
 # `nightly-report` job makes that run's verdict visible: the commit status
-# `nightly` on the commit it ran on, and one issue labelled `nightly-failure`
-# open while the nightly is red. Locally, the DoD pre-pr stage runs the `pr`
-# profile (lint, then quick), and `verify default` still runs the full unit
-# tier.
+# `nightly` on the commit it ran on, one issue labelled `nightly-failure`
+# open while the nightly is red, and one issue labelled `seed-failure` per
+# failing model seed, open until the change that fixes the seed closes it.
+# Locally, the DoD pre-pr stage runs the `pr` profile (lint, then quick), and
+# `verify default` still runs the full unit tier.
 #
 # The live jobs (`integration`, `e2e`) run on pull requests, dispatch and the
 # schedule, never on push to main: their shared test accounts serialize runs,
@@ -150,6 +155,32 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: go run ./cmd/devtool verify platform --shard "${VERIFY_SHARD}"
 
+  # The race detector over the sync tree on every push to main, unshortened, so
+  # a data race in the sync packages fails the push that brought it and the
+  # post-merge stage of that increment, which waits for this run, sees it. A
+  # pull request skips it, and the aggregate takes the skip as it takes the
+  # full tier's.
+  verify-race:
+    runs-on: ubuntu-latest
+    # The race profile's go test deadline on a runner, 30 minutes (it scales
+    # up on hosts with fewer cores), plus the 10 minutes of setup every job's
+    # timeout allows (TestCIJobTimeoutsCoverEveryGoTestDeadline), so the test
+    # deadline, not the job, ends a hang. A healthy run here takes about ten
+    # minutes. As the longest job of a push, it sets the post-merge stage's
+    # stall window: this number plus 10 minutes.
+    timeout-minutes: 40
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify race (the sync tree under the race detector)
+        run: go run ./cmd/devtool verify race
+
   # Nightly and on-demand full tier: the public profile with the race detector,
   # the coverage gate and every exhaustive test, on both platforms.
   verify-full:
@@ -225,26 +256,28 @@ jobs:
   # 1/3)" and so on, so the required name never appears and every PR stays
   # blocked forever. This aggregate keeps the required name stable and
   # independent of how many jobs and shards the lane grows. It waits on every
-  # verify tier, not on `stress` or the live jobs: on a PR or a push the full
-  # tier is skipped by its own condition, on the schedule the PR lane is, and
-  # a skipped job is not a failure. A run in which nothing at all ran is. The
-  # nightly's verdict over all of its jobs is the `nightly-report` job's.
+  # verify tier, not on `stress` or the live jobs: on a PR the race job and the
+  # full tier are skipped by their own conditions, on a push the full tier, on
+  # the schedule the PR lane and the race job, and a skipped job is not a
+  # failure. A run in which nothing at all ran is. The nightly's verdict over
+  # all of its jobs is the `nightly-report` job's.
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [verify-lint, verify-unit, verify-full]
+    needs: [verify-lint, verify-unit, verify-race, verify-full]
     if: always()
     steps:
       - name: Require every verify job that ran to succeed
         env:
           LINT_RESULT: ${{ needs.verify-lint.result }}
           UNIT_RESULT: ${{ needs.verify-unit.result }}
+          RACE_RESULT: ${{ needs.verify-race.result }}
           FULL_RESULT: ${{ needs.verify-full.result }}
         run: |
           set -euo pipefail
-          echo "verify-lint: ${LINT_RESULT}; verify-unit: ${UNIT_RESULT}; verify-full: ${FULL_RESULT}"
+          echo "verify-lint: ${LINT_RESULT}; verify-unit: ${UNIT_RESULT}; verify-race: ${RACE_RESULT}; verify-full: ${FULL_RESULT}"
           ran=0
-          for result in "${LINT_RESULT}" "${UNIT_RESULT}" "${FULL_RESULT}"; do
+          for result in "${LINT_RESULT}" "${UNIT_RESULT}" "${RACE_RESULT}" "${FULL_RESULT}"; do
             case "${result}" in
               success) ran=1 ;;
               skipped) ;;
@@ -282,6 +315,40 @@ jobs:
         with:
           name: stress-summaries
           path: ${{ runner.temp }}/stress-verify-summary.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # The nightly search of new model seeds: the four seeded model families of
+  # ./internal/sync without the race detector, from a start seed derived from
+  # the UTC date, so every night runs seeds no earlier night ran and a rerun
+  # on the same UTC day runs the same ones; a later rerun of a night passes
+  # `--seed-start` with the start that night printed. A failing seed fails
+  # the night, prints the command that replays it, and gets a `seed-failure`
+  # issue of its own from the `nightly-report` job, which stays open until
+  # the change that fixes it closes it (R-6.10.25).
+  model-seeds:
+    runs-on: ubuntu-latest
+    # Above the seeds profile's go test deadline plus setup
+    # (TestCIJobTimeoutsCoverEveryGoTestDeadline).
+    timeout-minutes: 40
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify seeds
+        run: go run ./cmd/devtool verify seeds --summary-json "${RUNNER_TEMP}/seeds-verify-summary.json"
+
+      - name: Upload seeds summary
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: seeds-summary
+          path: ${{ runner.temp }}/seeds-verify-summary.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -617,9 +684,10 @@ jobs:
   # The verdict of a full-tier run, where a person sees it (R-6.10.24): the
   # commit status `nightly` on the run's head commit and, for a scheduled run
   # of main, one issue labelled `nightly-failure`, opened or commented on by a
-  # red night and closed by a green one. It runs after every job the night
-  # requires, whatever they concluded; which jobs those are, the verdict and
-  # the issue text are `devtool nightly report`'s, and
+  # red night and closed by a green one, and one issue labelled `seed-failure`
+  # per failing model seed, which no report closes (R-6.10.25). It runs after
+  # every job the night requires, whatever they concluded; which jobs those
+  # are, the verdict and the issue text are `devtool nightly report`'s, and
   # TestNightlyRequiredJobsExistInWorkflow holds this job's needs to them. A
   # manual dispatch only prints what it would write unless its dry_run input
   # is turned off, and never writes the issue. One report runs at a time, so
@@ -631,7 +699,7 @@ jobs:
   nightly-report:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [verify-full, verify, stress, integration, e2e]
+    needs: [verify-full, verify, stress, model-seeds, integration, e2e]
     if: always() && github.event_name == 'schedule' || always() && github.event_name == 'workflow_dispatch'
     concurrency:
       group: nightly-report

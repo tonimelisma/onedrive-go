@@ -33,13 +33,17 @@ import (
 //     ancestors neither side moved or deleted, keeps its path and content.
 //  4. Quiescence: once converged, the next plan is empty.
 //
-// Failures print the seed; rerun one with ONEDRIVE_GO_MODEL_SEED=<seed> and
-// widen the search with ONEDRIVE_GO_MODEL_SEEDS=<count>, starting at
-// ONEDRIVE_GO_MODEL_SEED_START=<seed> (default 1). The default run is
-// modelDefaultSeeds, cheap enough for every CI run; a nightly or local search
-// sets the count. Each seed that found a bug is kept as a named scenario test
-// (engine_move_scenario_test.go), because adding operations renumbers what a
-// seed does.
+// A failing seed logs its operations and, last, a `seed-replay:` line: the
+// command that reruns it, ONEDRIVE_GO_MODEL_SEED=<seed> go test ... (see
+// logSeedReplayOnFailure). Widen the search with
+// ONEDRIVE_GO_MODEL_SEEDS=<count>, starting at
+// ONEDRIVE_GO_MODEL_SEED_START=<seed> (default 1); the crash run reads the
+// same variables. A plain run takes the first modelDefaultSeeds; the nightly
+// `verify seeds` profile takes a range that starts at a seed derived from the
+// date, so every night searches seeds no earlier night ran. A replay holds at
+// the commit that failed: each seed that found a bug is kept as a named
+// scenario test (engine_move_scenario_test.go), because adding operations
+// renumbers what a seed does.
 //
 // A seed replays exactly (D-090): the engine dispatches each ready frontier in
 // an order shuffled by the seed on one worker, and the fake OneDrive shuffles
@@ -97,6 +101,7 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 	for _, seed := range modelSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
+			logSeedReplayOnFailure(t, modelSeedEnv, seed)
 			runModelScenario(t, seed)
 		})
 	}
@@ -146,9 +151,15 @@ func TestModel_CrashAtSeededPointsRecovers(t *testing.T) {
 	for _, seed := range modelCrashSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
+			logSeedReplayOnFailure(t, modelSeedEnv, seed)
 			runModelScenarioWith(t, seed, modelOptions{crashes: true})
 		})
 	}
+}
+
+// modelSeedVars are the variables of the engine and crash runs.
+func modelSeedVars() seedVars {
+	return seedVars{single: modelSeedEnv, count: modelSeedCountEnv, start: modelSeedStartEnv}
 }
 
 // modelCrashSeeds is the crash run's seeds: the ones the environment names,
@@ -156,49 +167,27 @@ func TestModel_CrashAtSeededPointsRecovers(t *testing.T) {
 func modelCrashSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
-	seeds := modelSeeds(t)
-	if os.Getenv(modelSeedEnv) != "" || os.Getenv(modelSeedCountEnv) != "" {
-		return seeds
-	}
-	limit := modelCrashSeedCount
+	count := modelCrashSeedCount
 	if raceDetectorEnabled {
 		// The race run is for data races, which one seed exercises; see
 		// modelRaceSeeds.
-		limit = 1
+		count = 1
 	}
 
-	return seeds[:min(limit, len(seeds))]
+	return seedsFromEnv(t, modelSeedVars(), count)
 }
 
+// modelSeeds is the engine run's seeds: the ones the environment names, else
+// the first modelDefaultSeeds (modelRaceSeeds under -race).
 func modelSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
-	if raw := os.Getenv(modelSeedEnv); raw != "" {
-		seed, err := strconv.ParseUint(raw, 10, 64)
-		require.NoError(t, err, modelSeedEnv)
-		return []uint64{seed}
-	}
 	count := modelDefaultSeeds
 	if raceDetectorEnabled {
 		count = modelRaceSeeds
 	}
-	if raw := os.Getenv(modelSeedCountEnv); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		require.NoError(t, err, modelSeedCountEnv)
-		count = parsed
-	}
-	start := uint64(1)
-	if raw := os.Getenv(modelSeedStartEnv); raw != "" {
-		parsed, err := strconv.ParseUint(raw, 10, 64)
-		require.NoError(t, err, modelSeedStartEnv)
-		start = parsed
-	}
-	seeds := make([]uint64, count)
-	for i := range seeds {
-		seeds[i] = start + uint64(i)
-	}
 
-	return seeds
+	return seedsFromEnv(t, modelSeedVars(), count)
 }
 
 // modelEdit is one operation a side applied, recorded for the invariants.
@@ -303,13 +292,9 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	if opts.chaos {
 		chaos = newChaosGraph(seed)
 		client = chaos.wrap(client)
-		// A cleanup, so a failing seed prints what the storm did too, and the
-		// one line that reruns it.
+		// A cleanup, so a failing seed prints what the storm did too.
 		t.Cleanup(func() {
 			t.Logf("seed %d chaos faults: %s", seed, chaos.faultSummary())
-			if t.Failed() {
-				t.Log(chaosRerunLine(t.Name(), seed))
-			}
 		})
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
@@ -436,16 +421,11 @@ func (r *modelRun) logf(format string, args ...any) {
 	r.log = append(r.log, fmt.Sprintf(format, args...))
 }
 
-// failureContext names the seed and the operations of the run. A run without
-// the chaos layer is rerun by its seed alone; a chaos run logs its own rerun
-// line when it fails (chaosRerunLine), so its context carries no second one.
+// failureContext names the seed and the operations of the run. The
+// `seed-replay:` line a failing seed logs (logSeedReplayOnFailure) is the one
+// command that reruns it, so the context carries no second one.
 func (r *modelRun) failureContext() string {
-	seed := fmt.Sprintf("seed %d (rerun with %s=%d)", r.seed, modelSeedEnv, r.seed)
-	if r.chaos != nil {
-		seed = fmt.Sprintf("seed %d", r.seed)
-	}
-
-	return seed + "; operations:\n  " + strings.Join(r.log, "\n  ")
+	return fmt.Sprintf("seed %d; operations:\n  %s", r.seed, strings.Join(r.log, "\n  "))
 }
 
 func (r *modelRun) nextContent(side string) string {
