@@ -165,9 +165,9 @@ jobs:
     # The race profile's go test deadline on a runner, 30 minutes (it scales
     # up on hosts with fewer cores), plus the 10 minutes of setup every job's
     # timeout allows (TestCIJobTimeoutsCoverEveryGoTestDeadline), so the test
-    # deadline, not the job, ends a hang. A healthy run here takes about ten
-    # minutes. As the longest job of a push, it sets the post-merge stage's
-    # stall window: this number plus 10 minutes.
+    # deadline, not the job, ends a hang. Healthy runs here took 12.2 and 15.8
+    # minutes on 2026-11-15. As the longest job of a push, it sets the
+    # post-merge stage's stall window: this number plus 10 minutes.
     timeout-minutes: 40
     if: github.event_name == 'push'
     steps:
@@ -291,10 +291,13 @@ jobs:
 
   stress:
     runs-on: ubuntu-latest
-    # Above the sum of the stress steps' go test deadlines (20m + 40m + 40m)
-    # plus setup, so a hung test ends at its own deadline, with a goroutine
-    # dump and a summary, not at the job's (TestCIJobTimeoutsCoverEveryGoTestDeadline).
-    timeout-minutes: 120
+    # The sum of the stress steps' go test deadlines on a runner (20m + 80m +
+    # 90m, the last the race profile's 30 minutes once per race run of the
+    # sync tree) plus 10 minutes of setup, so a hung test ends at its own
+    # deadline, with a goroutine dump and a summary, not at the job's
+    # (TestCIJobTimeoutsCoverEveryGoTestDeadline). Everything outside the
+    # verify step took 9 seconds on 2026-11-15.
+    timeout-minutes: 200
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7.0.1

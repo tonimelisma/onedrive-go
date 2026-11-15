@@ -111,7 +111,8 @@ func TestAssertTestsMatched_RejectsATreeWithNoTestFiles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			require.ErrorContains(t, assertTestsMatched(tc.output, "sync race x3"), "sync race x3 matched no tests")
+			require.ErrorContains(t, assertTestsMatched(tc.output, stressSyncRaceStepName()),
+				stressSyncRaceStepName()+" matched no tests")
 		})
 	}
 }
