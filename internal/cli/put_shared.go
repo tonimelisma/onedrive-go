@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -15,7 +16,7 @@ func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileI
 	ctx := cmd.Context()
 
 	if fi.IsDir() {
-		return fmt.Errorf("shared file targets accept one local file, not a directory")
+		return errors.New("shared file targets accept one local file, not a directory")
 	}
 
 	item, clients, err := cc.resolveSharedItem(ctx)

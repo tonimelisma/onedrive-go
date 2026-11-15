@@ -1,8 +1,8 @@
 # Drive Transfers
 
-GOVERNS: internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_session.go, internal/driveops/transfer_target.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, pkg/quickxorhash/quickxorhash.go
+GOVERNS: internal/cli/folder_transfer.go, internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_session.go, internal/driveops/transfer_target.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, internal/driveops/tree.go, internal/driveops/tree_download.go, internal/driveops/tree_upload.go, pkg/quickxorhash/quickxorhash.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-5.10 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.2.7 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-5.10 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
 
 ## TransferManager
 
@@ -66,29 +66,115 @@ the final rename. The callback owns sync stale-work policy; `driveops` only
 propagates the error and preserves the partial file like any other pre-rename
 failure.
 
-### Folder downloads (`get`)
+### Folder downloads and uploads (`get`, `put`)
 
-A folder `get` (`internal/cli/get.go`) counts first: it lists the whole tree
-and caches each listing under its folder's item ID, so a drive path (listed
-by path) and a shared folder (listed by item ID, `get_shared.go`) differ only
-in that pass. One walk, `downloadTree`, then creates each folder and starts
-the folder's file downloads. Every folder it creates is a folder in the
-user's tree: it asks for `localpath.UserTreeDirPerm`, 0777 minus the umask,
-like the files in it (R-5.10.2); it was 0755 whatever the umask, so under a
-umask of 002 the files were group-writable and their folders were not. A
-folder that is already there is used as it is, keeps its mode and is not
-counted in `folders_created` (R-1.2.4). Descent runs inline, on the caller's
-goroutine, and only file downloads run concurrently, under one semaphore of
-`defaultDownloadConcurrency` for the whole tree; the shared folder walk used
-to start a goroutine per subfolder and to drop a file it gave up on at
-cancellation without a word. Both flavors read `min_free_space` through
-`configuredMinFreeSpace`, which reports a value it cannot read instead of
-turning the disk-space check off. Evidence:
+A folder `get` or `put` is one call of a tree engine in `driveops`:
+`DownloadTree` (`tree_download.go`) or `UploadTree` (`tree_upload.go`), on
+the pool in `tree.go` that "Recursive Transfer Concurrency" below describes.
+The engine reports every outcome as a `TreeEvent` (a folder created, a file
+done, a file or folder failed) and returns a `TreeSummary` of them;
+`internal/cli` renders the events (`folder_transfer.go`) and keeps target
+resolution, the transfer manager it builds, and put's overwrite rule.
+
+- **Download.** A drive path (`get.go`) and a shared folder (`get_shared.go`)
+  download the same way: every folder, the root included, is listed by item
+  ID through a `ChildLister` (`*graph.Client`), and every file goes to a
+  `FileDownloader` (the `TransferManager`, built by `newDownloadManager`,
+  the one place every `get` reads `min_free_space`, reporting a value it
+  cannot read instead of turning the disk-space check off). The walk lists
+  a folder, then creates it: a folder that cannot be listed is reported and
+  not created, in one line that names the remote folder by its path below
+  `TreeDownload.RemoteRoot` (the drive path or shared selector the user
+  gave), the local folder it would have filled, and the cause. Every folder
+  it creates is a folder in the user's tree: it asks for
+  `localpath.UserTreeDirPerm`, 0777 minus the umask, like the files in it
+  (R-5.10.2). A folder that is already there is used as it is, keeps its
+  mode and is not counted in `folders_created` (R-1.2.4).
+- **Refused names.** A remote child whose name is empty, `.` or `..`, holds
+  `/` or `\`, or fails `filepath.IsLocal` is refused before any local path is
+  built from it: a failed event whose error is a `RefusedNameError` naming
+  the reason, reported in the folder it would have gone into, nothing
+  written, a refused folder not listed, its siblings downloaded (R-1.2.7).
+  OneDrive refuses `/` and `\` in names and Linux cannot hold `.` or `..`, so
+  no name OneDrive serves and Linux can hold is refused (`RefuseRemoteName`).
+  A `get` that takes a remote name as a local one refuses it the same way
+  before anything is written: a folder `get` given no local path, whose
+  local folder would take the name OneDrive reports (a shared folder, a
+  drive's root, which for a mounted folder is the name its owner gave it),
+  asks for a local folder (`localFolderTarget`); a single-file `get` given
+  no local path or a local folder to download into (R-1.2.6) asks for a
+  local file (`localFileTarget`). A local file the user names is the user's
+  choice and is not checked. For a drive path the file's name is OneDrive's
+  spelling of the path's last element: the path lookup
+  (`graph.GetItemByPath`), and the walk from a mount root, refuse any other
+  name. A shared file's name is its owner's choice.
+- **Upload.** `put` resolves the remote parent and hands `UploadTree` its ID
+  and the root's name. `UploadTree` opens the local root first and only then
+  makes sure of the remote root through a `FolderEnsurer` (`*Session`), the
+  run's first event, so a local folder that cannot be opened, missing or not
+  a folder, creates nothing on OneDrive. The walk reads each local folder a
+  batch of `uploadDirBatch` entries at a time through `localpath.OpenDir`,
+  so a folder of 100,000 entries is never one slice, and opens each
+  subfolder before it makes sure of it on OneDrive and reads it: a folder
+  that cannot be opened is reported and not created there, and a remote
+  folder exists before anything is uploaded into it. A read that fails
+  partway through a folder is one failure of that folder; what was read
+  before it uploads, and the walk goes on. A symbolic link the user names
+  as the folder to upload is followed. Inside the tree the walk does not
+  follow one and queues it as a file: a link to a regular file uploads that
+  file under the link's name, and a link to a folder is one failed file
+  (`not a regular file`). After a 409, `EnsureFolder` takes
+  the folder OneDrive holds under a name it treats as the same
+  (`namekey.Equal`), as `putFile` does for a file. Every file goes through
+  the caller's `PutFile`, which is `putFile`: a file already there is
+  overwritten by ID, conditionally, as a single `put` overwrites it
+  (R-1.3.8).
+- **Failures and the returned error.** The failure of one file or folder is
+  an event, counted, and the walk goes on with its siblings; its error text
+  names the path. The returned error is a `TreeRootError` when the root
+  cannot be listed (download), or opened or made on OneDrive (upload),
+  before anything is reported, which the command returns as one error that
+  names the remote path (`listing "<remote>": …` for `get`,
+  `uploading "<remote>": …` for `put`); the end of the context, once the run
+  reported every
+  file it queued and did not finish as failed with the context's error and
+  every folder whose walk it cut short (one event for what the walk had not
+  reached in it); or a panic of the walk or of an event's report, which
+  fails the command. A panic in one file's transfer is that file's failure
+  (R-6.3.10).
+
+Evidence: `TestDownloadTree_RefusesUnsafeRemoteNames`,
+`TestDownloadTree_ListFailureIsReportedAndSiblingsContinue`,
+`TestDownloadTree_TransferFailureIsReportedAndOthersContinue`,
+`TestDownloadTree_UnlistableRootIsTheReturnedError`,
+`TestDownloadTree_FolderExistsBeforeItsFilesDownload`,
 `TestDownloadTree_CreatedFolderFollowsTheUmask`,
 `TestDownloadTree_CountsOnlyTheFoldersItCreates`,
 `TestDownloadTree_FileWhereAFolderBelongsIsReported`,
-`TestDownloadTree_DirectoryDescentDoesNotFanOutGoroutines`,
-`TestDownloadTree_RespectsContextCancellation`,
+`TestDownloadTree_APanickingTransferFailsOnlyThatFile`,
+`TestDownloadTree_APanickingReportFailsTheRun`,
+`TestDownloadTree_APanickingWalkFailsTheRun`,
+`TestUploadTree_CreatesParentBeforeChildren`,
+`TestUploadTree_UploadsAFolderLargerThanOneBatch`,
+`TestUploadTree_ReadDirFailureReported`,
+`TestUploadTree_ReadFailurePartwayThroughAFolderIsReported`,
+`TestUploadTree_FolderThatCannotBeCreatedIsReported`,
+`TestUploadTree_TransferFailureIsReportedAndOthersContinue`,
+`TestUploadTree_UnopenableRootCreatesNothingOnOneDrive`,
+`TestUploadTree_RootThatCannotBeCreatedIsTheReturnedError`,
+`TestEnsureFolder_ConflictFindsTheFolderInAnotherCase`,
+`TestOpenDir_ReadsInBatches`, `TestOpenDir_RefusesAFIFOWithoutBlocking`,
+`TestRunGet_FolderReportsEveryFileAsTextAndJSON`,
+`TestRunGet_FolderRefusesAnUnsafeRemoteName`,
+`TestRunGet_DriveRootWithNoLocalPathTakesTheRootsName`,
+`TestRunGet_SharedFolderWithAnUnsafeNameIsRefused`,
+`TestRunGet_SharedFileWithAnUnsafeNameIsRefused`,
+`TestRunGet_FileReportedUnderAnUnsafeNameIsNotWritten`,
+`TestLocalFileTarget_RefusesAnUnsafeRemoteName`,
+`TestRunPut_FolderReportsEveryFileAsTextAndJSON`,
+`TestRunPut_FolderThatCannotBeOpenedCreatesNothing`,
+`TestRunPut_FolderWithAFailingFileUploadsTheOthers`,
+`TestRunPut_SymbolicLinksInAFolder`,
 `TestRunGet_SharedFolderDownloadsItsTree`, `TestConfiguredMinFreeSpace`.
 
 ### Upload
@@ -432,7 +518,9 @@ rename stay under one root capability. On resume, local file hash is recomputed
 
 ## Transfer Interfaces
 
-Two required interfaces (`Downloader`, `Uploader`) and two optional interfaces (`RangeDownloader`, `SessionUploader`) type-asserted at runtime. This allows the graph client to support resume without requiring all implementations to.
+Two required interfaces (`Downloader`, `Uploader`) and optional ones type-asserted at runtime (`RangeDownloader` on the downloader; `ItemUploader`, `SessionUploader`, `ItemSessionUploader`, `CreatingUploader`, `PlaceholderRemover`, `ItemReader` and `SessionCanceler` on the uploader). This allows the graph client to support resume without requiring all implementations to.
+
+The tree engines take their collaborators as narrow interfaces instead: `ChildLister` (a folder's children by item ID; `*graph.Client`), `FileDownloader` (one file to a local path; `*TransferManager`) and `FolderEnsurer` (a remote folder made sure of; `*Session`), plus the caller's `PutFile` function. Each is what the engine calls and nothing more, which is also what lets the engine's tests run a tree of 10,000 files without writing one.
 
 Shared-item CLI flows still use the same downloader/uploader capabilities. The
 only difference is how the target item identity is resolved before the transfer
@@ -568,27 +656,48 @@ same thing whichever call (download, mkdir, rename, conflict copy) hit it
 `EACCES`/`EPERM` are deliberately not in the table: `os.ErrPermission` already
 names them and the sync permission probe owns their boundary decision.
 
-## Recursive Download Concurrency
+## Recursive Transfer Concurrency
 
-`get -r` bounds concurrency at exactly one place: a shared semaphore over file
-transfers, sized for the whole tree rather than per directory.
+A recursive `get` or `put` is bounded in one place, the pool of `tree.go` in
+`driveops`, whatever the size of the tree, in both directions:
 
-Directory descent is deliberately not concurrent. Spawning a goroutine per
-subdirectory made the goroutine count scale with the number of directories in
-the tree -- the unbounded fan-out the semaphore exists to prevent, on the one
-path the semaphore never covered. A 200-directory tree left 202 goroutines
-live.
+- **One walker.** The caller's goroutine walks the tree depth first, a folder
+  at a time, and is the only goroutine that lists or reads folders or creates
+  them. It creates a folder (locally for a download, on OneDrive for an
+  upload) before it queues a file into it.
+- **A fixed pool.** `TreeWorkers` (4, the number R-1.2.1 and R-1.3.1 state)
+  workers take files from a channel of capacity `TreeWorkers`. A walk that
+  finds every worker busy and the queue full waits on that channel: at most
+  `2×TreeWorkers` files are in flight or
+  queued, transfers start while the tree is still being walked, and no file
+  waits on a goroutine of its own. `put` runs as parallel as `get`.
+- **No whole-tree state.** Nothing counts or lists the tree first, nothing
+  caches its listings, and no map of folder IDs exists: a folder's ID
+  travels down the walk's own stack. The walk holds one listing per level of
+  depth for a download (a listing is the folder's children, every page), and
+  one open folder and one batch of entries per level for an upload.
+- **One collector.** A single goroutine counts every event and hands it to
+  the caller's `OnEvent`, in the order the events happen, so the CLI's
+  rendering needs no lock. A panic in `OnEvent` stops the delivery, not the
+  counting or the draining, and fails the run.
+- **Owned goroutines.** The engine starts the workers and the collector,
+  each behind a `panicguard` boundary, and has waited for every one of them
+  when it returns. On cancellation the walk stops at its next step, every
+  queued file a worker had not started is failed with the context's error,
+  and every folder on the walk's stack is reported as cut short.
 
-Walking directories inline costs nothing here. The counting pass has already
-fetched every listing into `childCache`, so descent performs no network I/O at
-all -- only `MkdirAll` and a map lookup. Transfers still begin as soon as each
-directory is reached and still overlap with one another, so the concurrency
-that matters is unchanged; only the bookkeeping that was never bounded is
-removed.
-
-This also removes the last concurrent reader of `childCache`: the counting
-pass fills it before any download starts, and the inline walk reads it from a
-single goroutine.
+Progress is therefore a running count, not a total: a total needs the whole
+tree listed before the first byte moves. Evidence:
+`TestDownloadTree_InFlightNeverExceedsWorkers` (10,000 files in one folder,
+generated in memory, peak transfers equal `TreeWorkers`),
+`TestDownloadTree_WalkBlocksWhileWorkersAreBusy`,
+`TestDownloadTree_GoroutinesDoNotScaleWithFilesOrFolders`,
+`TestDownloadTree_CancellationReportsEveryUnstartedFile`,
+`TestUploadTree_InFlightNeverExceedsWorkers`,
+`TestUploadTree_CancellationReportsEveryUnstartedFile`,
+`TestTreeWorkers_FourFilesTransferAtOnce`,
+`TestRunPut_CanceledFolderReportsThenEndsWithTheCancellation`,
+`TestFolderTransferReport_ACanceledRunReportsThenEndsWithTheCancellation`.
 
 ## Design Constraints
 

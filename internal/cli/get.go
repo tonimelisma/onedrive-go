@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -16,12 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
-
-// defaultDownloadConcurrency is the maximum number of concurrent file downloads
-// across the entire directory tree (shared semaphore).
-const defaultDownloadConcurrency = 4
 
 func newGetCmd() *cobra.Command {
 	return &cobra.Command{
@@ -63,31 +56,29 @@ func runGet(cmd *cobra.Command, args []string) error {
 	}
 
 	if item.IsFolder {
+		// Without a local path, the folder's name in the path the user gave,
+		// unless that path is the drive's root, whose name only OneDrive
+		// knows (a mounted folder's root has the name its owner gave it).
 		localPath := filepath.Base(driveops.CleanRemotePath(remotePath))
-		if item.IsRoot {
-			localPath = item.Name
+		if item.IsRoot || len(args) > 1 {
+			var targetErr error
+			if localPath, targetErr = localFolderTarget(args, item.Name); targetErr != nil {
+				return targetErr
+			}
 		}
 
-		if len(args) > 1 {
-			localPath = args[1]
-		}
-
-		return downloadFolder(ctx, cc, session, item.ID, remotePath, localPath)
+		return downloadFolder(ctx, cc, session.Meta, session.Transfer, session.DriveID, item.ID, remotePath, localPath)
 	}
 
-	localPath := item.Name
-	if len(args) > 1 {
-		localPath = localFileTarget(args[1], item.Name)
-	}
-
-	minFree, err := configuredMinFreeSpace(cc)
+	localPath, err := localFileTarget(args, item.Name)
 	if err != nil {
 		return err
 	}
 
-	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, logger,
-		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
-	)
+	tm, err := newDownloadManager(cc, session.Transfer)
+	if err != nil {
+		return err
+	}
 
 	return downloadOneFile(ctx, cc, tm, session.DriveID, item.ID, item, localPath)
 }
@@ -149,280 +140,113 @@ func configuredMinFreeSpace(cc *CLIContext) (int64, error) {
 	return minFree, nil
 }
 
-// localFileTarget treats a destination that ends in a path separator or
-// names an existing directory as "into that directory", like cp. Otherwise a
-// download onto "./" would fail at the final rename and leave a nameless
-// ".onedrive-go...partial" file behind.
-func localFileTarget(target, remoteName string) string {
+// localFolderTarget is the local folder a folder get downloads into: the one
+// args names, or else remoteName, the folder's name as OneDrive reports it,
+// which must then be one plain local name (R-1.2.7). A shared folder's name
+// is its owner's choice, so taken as it is it could name a folder outside
+// the working directory.
+func localFolderTarget(args []string, remoteName string) (string, error) {
+	if len(args) > 1 {
+		return args[1], nil
+	}
+
+	if err := driveops.RefuseRemoteName(remoteName); err != nil {
+		return "", fmt.Errorf("%w: name the local folder to download into", err)
+	}
+
+	return remoteName, nil
+}
+
+// localFileTarget is the local file a single-file get downloads to. A local
+// path in args that ends in a path separator or names an existing directory
+// means "into that directory" under remoteName, like cp; otherwise a download
+// onto "./" would fail at the final rename and leave a nameless
+// ".onedrive-go...partial" file behind (R-1.2.6). Any other local path is the
+// file the user chose. With no local path the file is remoteName in the
+// working directory. Wherever remoteName becomes the file's name it must be
+// one plain local name (R-1.2.7): a shared file's name is its owner's choice,
+// and joined as it is, an empty name, . or .. would name the folder itself or
+// its parent.
+func localFileTarget(args []string, remoteName string) (string, error) {
+	if len(args) > 1 && !namesLocalFolder(args[1]) {
+		return args[1], nil
+	}
+
+	if err := driveops.RefuseRemoteName(remoteName); err != nil {
+		return "", fmt.Errorf("%w: name the local file to download to", err)
+	}
+	if len(args) > 1 {
+		return filepath.Join(args[1], remoteName), nil
+	}
+
+	return remoteName, nil
+}
+
+// namesLocalFolder reports whether a get's local path means a folder to
+// download into: it ends in a path separator or names an existing directory.
+func namesLocalFolder(target string) bool {
 	if strings.HasSuffix(target, string(filepath.Separator)) {
-		return filepath.Join(target, remoteName)
+		return true
 	}
-	if info, err := localpath.Stat(target); err == nil && info.IsDir() {
-		return filepath.Join(target, remoteName)
-	}
+	info, err := localpath.Stat(target)
 
-	return target
+	return err == nil && info.IsDir()
 }
 
-// downloadState holds mutable state shared across the recursive download.
-type downloadState struct {
-	// mu guards result, done, total, and countErrors against the concurrent
-	// file-download goroutines. Every holder releases it with defer: a file
-	// goroutine's panic boundary records its error through mu, and would wait
-	// forever on a lock a panic left held. childCache needs no lock: the
-	// counting pass fills it before any download starts, and the directory
-	// walk that reads it runs inline on a single goroutine.
-	mu          sync.Mutex
-	wg          sync.WaitGroup
-	sem         chan struct{} // shared semaphore bounding total concurrency
-	result      folderTransferJSONOutput[getJSONOutput]
-	done        int
-	total       int
-	childCache  map[string][]graph.Item // keyed by folder item ID
-	countErrors []string                // non-fatal errors from counting pass
-}
-
-func newDownloadState() *downloadState {
-	return &downloadState{
-		childCache: make(map[string][]graph.Item),
-		sem:        make(chan struct{}, defaultDownloadConcurrency),
-	}
-}
-
-// recordError adds one failure to the result.
-func (state *downloadState) recordError(failure string) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	state.result.Errors = append(state.result.Errors, failure)
-}
-
-// recordFolderCreated counts one local folder the download created.
-func (state *downloadState) recordFolderCreated() {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	state.result.FoldersCreated++
-}
-
-// downloadFolder downloads the folder folderID at remotePath into localPath.
+// downloadFolder downloads the remote folder folderID on driveID, and
+// everything below it, into localPath through driveops.DownloadTree, listing
+// each folder through lister and downloading through transfer, and reports
+// the result. target names the folder for the user when its listing, or a
+// subfolder's below it, fails.
 func downloadFolder(
 	ctx context.Context,
 	cc *CLIContext,
-	session *driveops.MountSession,
-	folderID, remotePath, localPath string,
+	lister driveops.ChildLister,
+	transfer *graph.Client,
+	driveID driveid.ID,
+	folderID, target, localPath string,
 ) error {
-	state := newDownloadState()
-
-	// Pass 1: count files and cache directory listings.
-	if err := countRemoteFiles(ctx, session, remotePath, folderID, state); err != nil {
+	tm, err := newDownloadManager(cc, transfer)
+	if err != nil {
 		return err
 	}
 
+	var doc folderTransferJSONOutput[getJSONOutput]
+	report := &folderTransferReport{cc: cc, verb: "Downloaded", noun: "download", keepFile: func(file *driveops.TreeEvent) {
+		doc.Files = append(doc.Files, getJSONOutput{Path: file.LocalPath, Size: file.Size, HashVerified: file.HashVerified})
+	}}
+	summary, err := driveops.DownloadTree(ctx, driveops.TreeDownload{
+		Lister:     lister,
+		Files:      tm,
+		DriveID:    driveID,
+		FolderID:   folderID,
+		RemoteRoot: target,
+		LocalRoot:  localPath,
+		Logger:     cc.Logger,
+		OnEvent:    report.add,
+	})
+
+	var rootErr *driveops.TreeRootError
+	if errors.As(err, &rootErr) {
+		return newRemoteOpError("listing", target, rootErr.Err)
+	}
+
+	return report.finish(summary, err, func(foldersCreated int, failures []string) error {
+		doc.FoldersCreated, doc.TotalSize, doc.Errors = foldersCreated, summary.Bytes, failures
+		return writeJSONDocument(cc.Output(), doc.withEmptyLists())
+	})
+}
+
+// newDownloadManager is the transfer manager of a get: downloads through
+// client, checking first that the disk keeps the drive's min_free_space
+// (R-6.2.6).
+func newDownloadManager(cc *CLIContext, client *graph.Client) (*driveops.TransferManager, error) {
 	minFree, err := configuredMinFreeSpace(cc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	store := driveops.NewSessionStore(config.DefaultDataDir(), cc.Logger)
-	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, cc.Logger,
+	return driveops.NewTransferManager(client, client, nil, cc.Logger,
 		driveops.WithDiskCheck(minFree, driveops.DiskAvailable),
-	)
-
-	// Pass 2: download. File downloads are bounded by the shared semaphore.
-	return finishFolderDownload(ctx, cc, tm, state, session.DriveID, folderID, localPath)
-}
-
-// finishFolderDownload runs the download pass over the listings the counting
-// pass cached, waits for every file, and reports the result.
-func finishFolderDownload(
-	ctx context.Context,
-	cc *CLIContext,
-	tm *driveops.TransferManager,
-	state *downloadState,
-	driveID driveid.ID,
-	folderID, localPath string,
-) error {
-	// Propagate non-fatal counting errors to the result.
-	state.result.Errors = append(state.result.Errors, state.countErrors...)
-
-	downloadTree(ctx, cc, tm, state, driveID, folderID, localPath)
-	state.wg.Wait()
-
-	if cc.Flags.JSON {
-		if err := writeJSONDocument(cc.Output(), state.result.withEmptyLists()); err != nil {
-			return err
-		}
-
-		return bulkTransferError(nil, "download", state.result.Errors)
-	}
-
-	cc.Statusf("Downloaded %d files, %d folders (%s)\n",
-		len(state.result.Files), state.result.FoldersCreated, formatSize(state.result.TotalSize))
-
-	return bulkTransferError(cc.Status(), "download", state.result.Errors)
-}
-
-// countRemoteFiles lists the folder folderID at remotePath and every folder
-// below it, caching each listing under its folder's item ID and counting the
-// files.
-func countRemoteFiles(ctx context.Context, session *driveops.MountSession, remotePath, folderID string, state *downloadState) error {
-	children, err := session.ListChildren(ctx, remotePath)
-	if err != nil {
-		return newRemoteOpError("listing", remotePath, err)
-	}
-
-	for i := range children {
-		if children[i].IsFolder {
-			childRemote := joinRemotePath(remotePath, children[i].Name)
-			if subErr := countRemoteFiles(ctx, session, childRemote, children[i].ID, state); subErr != nil {
-				// Record subdirectory errors but continue counting accessible parts.
-				state.countErrors = append(state.countErrors, subErr.Error())
-			}
-		} else {
-			state.total++
-		}
-	}
-
-	state.childCache[folderID] = children
-
-	return nil
-}
-
-// downloadTree creates localPath, as a folder in the user's tree (R-5.10.2),
-// downloads into it the files of the folder whose listing the counting pass
-// cached under folderID, and walks its subfolders the same way. A drive path
-// and a shared folder download through this one walk; only their counting
-// passes list differently.
-//
-// File downloads run concurrently under a shared semaphore that bounds total
-// in-flight transfers across the whole tree. Directory descent is
-// deliberately not concurrent: a goroutine per subdirectory makes the
-// goroutine count scale with the number of directories in the tree, which is
-// exactly the unbounded fan-out the semaphore exists to prevent, and the
-// semaphore never covered it. Nothing is lost by walking inline: the
-// listings are cached, so descent performs no network I/O, only a folder
-// creation and a map lookup, and transfers still start as soon as each
-// folder is reached.
-func downloadTree(
-	ctx context.Context,
-	cc *CLIContext,
-	tm *driveops.TransferManager,
-	state *downloadState,
-	driveID driveid.ID,
-	folderID, localPath string,
-) {
-	created, err := createDownloadFolder(localPath)
-	if err != nil {
-		state.recordError(err.Error())
-
-		return
-	}
-
-	if created {
-		state.recordFolderCreated()
-	}
-
-	children := state.childCache[folderID]
-	for i := range children {
-		child := &children[i]
-		childLocal := filepath.Join(localPath, child.Name)
-
-		if child.IsFolder {
-			downloadTree(ctx, cc, tm, state, driveID, child.ID, childLocal)
-
-			continue
-		}
-
-		state.wg.Add(1)
-
-		go func() {
-			defer state.wg.Done()
-			// A panic is this file's failure, listed with the others, while
-			// the rest of the tree downloads (R-6.3.10).
-			defer func() {
-				if r := recover(); r != nil {
-					panicErr := panicguard.Recovered(cc.Logger, "while downloading "+childLocal, r)
-					state.recordError(fmt.Sprintf("%s: %v", childLocal, panicErr))
-				}
-			}()
-
-			downloadTreeFile(ctx, cc, tm, state, driveID, child, childLocal)
-		}()
-	}
-}
-
-// createDownloadFolder creates a folder a folder download needs and reports
-// whether this call created it: an existing folder is used as it is, keeps
-// its mode, and is not counted as created. Every error names the path once.
-func createDownloadFolder(localPath string) (bool, error) {
-	info, err := localpath.Stat(localPath)
-	switch {
-	case err == nil && info.IsDir():
-		return false, nil
-	case err == nil:
-		return false, fmt.Errorf("creating directory %s: it is not a folder", localPath)
-	case !errors.Is(err, os.ErrNotExist):
-		return false, err //nolint:wrapcheck // localpath already names the path
-	}
-
-	if mkdirErr := localpath.MkdirAll(localPath, localpath.UserTreeDirPerm); mkdirErr != nil {
-		return false, mkdirErr //nolint:wrapcheck // localpath already names the path
-	}
-
-	return true, nil
-}
-
-// downloadTreeFile downloads one file of a folder download once the shared
-// semaphore admits it, and records the outcome.
-func downloadTreeFile(
-	ctx context.Context,
-	cc *CLIContext,
-	tm *driveops.TransferManager,
-	state *downloadState,
-	driveID driveid.ID,
-	child *graph.Item,
-	childLocal string,
-) {
-	// Respect cancellation while waiting, so a canceled download never
-	// blocks on the semaphore.
-	select {
-	case state.sem <- struct{}{}:
-	case <-ctx.Done():
-		state.recordError(fmt.Sprintf("%s: %v", childLocal, ctx.Err()))
-
-		return
-	}
-
-	defer func() { <-state.sem }()
-
-	result, err := tm.DownloadToFile(ctx, driveID, child.ID, childLocal, driveops.DownloadOptsForItem(child))
-
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	if err != nil {
-		state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", childLocal, err))
-
-		return
-	}
-
-	state.result.Files = append(state.result.Files, getJSONOutput{
-		Path:         childLocal,
-		Size:         result.Size,
-		HashVerified: result.HashVerified,
-	})
-	state.result.TotalSize += result.Size
-	state.done++
-	cc.Progressf("Downloaded %d/%d files", state.done, state.total)
-}
-
-// joinRemotePath joins a parent and child remote path segment.
-func joinRemotePath(parent, child string) string {
-	clean := driveops.CleanRemotePath(parent)
-	if clean == "" {
-		return child
-	}
-
-	return clean + "/" + child
+	), nil
 }

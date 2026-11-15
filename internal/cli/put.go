@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -75,7 +74,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 			remotePath = args[1]
 		}
 
-		return uploadFolder(cmd, cc, session, localPath, remotePath)
+		return uploadFolder(ctx, cc, session, localPath, remotePath)
 	}
 
 	// Default remote path is root + local filename.
@@ -155,26 +154,21 @@ func resolvePutFileTarget(ctx context.Context, session putTargetResolver, target
 	}
 }
 
-// uploadWalkState holds mutable state for the upload walk callback.
-type uploadWalkState struct {
-	result folderTransferJSONOutput[putJSONOutput]
-	dirIDs map[string]string
-	done   int
-	total  int
-}
-
+// uploadFolder uploads the local folder localPath as the remote folder
+// remotePath through driveops.UploadTree, which opens localPath before it
+// makes sure of remotePath, and reports the result. Every file goes through
+// putFile, so a file already there is overwritten the way a single put
+// overwrites it (R-1.3.8).
 func uploadFolder(
-	cmd *cobra.Command,
+	ctx context.Context,
 	cc *CLIContext,
 	session *driveops.MountSession,
 	localPath, remotePath string,
 ) error {
-	ctx := cmd.Context()
 	logger := cc.Logger
 
 	logger.Debug("put folder", "local_path", localPath, "remote_path", remotePath)
 
-	// Resolve or create the root remote folder.
 	parentPath, name := driveops.SplitParentAndName(remotePath)
 
 	parentItem, err := resolveUploadParent(ctx, session, parentPath)
@@ -182,206 +176,37 @@ func uploadFolder(
 		return err
 	}
 
-	rootFolder, err := session.EnsureFolder(ctx, parentItem.ID, name)
-	if err != nil {
-		return newRemoteOpError("creating remote folder", remotePath, err)
-	}
-
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
 	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, store, logger)
 
-	state := &uploadWalkState{
-		dirIDs: map[string]string{localPath: rootFolder.ID},
-	}
-	state.result.FoldersCreated = 1
-
-	// Count total files for progress using the same partial-failure traversal
-	// policy as the upload pass.
-	walkErr := countUploadFiles(localPath, state)
-	if walkErr != nil {
-		return walkErr
-	}
-
-	walkErr = walkUploadTree(localPath, func(path string, d os.DirEntry) error {
-		return uploadWalkEntry(ctx, cc, session, tm, state, localPath, remotePath, path, d)
-	}, func(path string, err error) {
-		appendUploadWalkError(state, path, err)
+	remoteRoot := driveops.CleanRemotePath(remotePath)
+	var doc folderTransferJSONOutput[putJSONOutput]
+	report := &folderTransferReport{cc: cc, verb: "Uploaded", noun: "upload", keepFile: func(file *driveops.TreeEvent) {
+		doc.Files = append(doc.Files, putJSONOutput{Path: remoteRoot + "/" + file.RelPath, ID: file.ItemID, Size: file.Size})
+	}}
+	summary, err := driveops.UploadTree(ctx, driveops.TreeUpload{
+		Folders: session,
+		// Zero UploadOpts: the transfer reads each file's own modification
+		// time, and four files at once leave no line for byte progress.
+		PutFile: func(ctx context.Context, parentID, fileName, filePath string) (*driveops.UploadResult, error) {
+			return putFile(ctx, session.Meta, tm, session.DriveID, parentID, fileName, filePath, driveops.UploadOpts{})
+		},
+		LocalRoot: localPath,
+		ParentID:  parentItem.ID,
+		Name:      name,
+		Logger:    logger,
+		OnEvent:   report.add,
 	})
-	if walkErr != nil {
-		return walkErr
+
+	var rootErr *driveops.TreeRootError
+	if errors.As(err, &rootErr) {
+		return newRemoteOpError("uploading", remotePath, rootErr.Err)
 	}
 
-	if cc.Flags.JSON {
-		if err := writeJSONDocument(cc.Output(), state.result.withEmptyLists()); err != nil {
-			return err
-		}
-
-		return bulkTransferError(nil, "upload", state.result.Errors)
-	}
-
-	cc.Statusf("Uploaded %d files, %d folders (%s)\n",
-		len(state.result.Files), state.result.FoldersCreated, formatSize(state.result.TotalSize))
-
-	return bulkTransferError(cc.Status(), "upload", state.result.Errors)
-}
-
-func countUploadFiles(localRoot string, state *uploadWalkState) error {
-	return walkUploadTree(localRoot, func(_ string, d os.DirEntry) error {
-		if !d.IsDir() {
-			state.total++
-		}
-
-		return nil
-	}, func(path string, err error) {
-		appendUploadWalkError(state, path, err)
+	return report.finish(summary, err, func(foldersCreated int, failures []string) error {
+		doc.FoldersCreated, doc.TotalSize, doc.Errors = foldersCreated, summary.Bytes, failures
+		return writeJSONDocument(cc.Output(), doc.withEmptyLists())
 	})
-}
-
-func walkUploadTree(root string, visit func(path string, d os.DirEntry) error, onError func(path string, err error)) error {
-	entries, err := localpath.ReadDir(root)
-	if err != nil {
-		return fmt.Errorf("reading upload root %s: %w", root, err)
-	}
-
-	for i := range entries {
-		entryPath := filepath.Join(root, entries[i].Name())
-		if err := walkUploadTreeEntry(entryPath, entries[i], visit, onError); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func walkUploadTreeEntry(
-	path string,
-	d os.DirEntry,
-	visit func(path string, d os.DirEntry) error,
-	onError func(path string, err error),
-) error {
-	if err := visit(path, d); err != nil {
-		return err
-	}
-
-	if !d.IsDir() {
-		return nil
-	}
-
-	children, err := localpath.ReadDir(path)
-	if err != nil {
-		onError(path, err)
-		return nil
-	}
-
-	for i := range children {
-		childPath := filepath.Join(path, children[i].Name())
-		if err := walkUploadTreeEntry(childPath, children[i], visit, onError); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func appendUploadWalkError(state *uploadWalkState, path string, err error) {
-	state.result.Errors = append(state.result.Errors, fmt.Sprintf("%s: %v", path, err))
-}
-
-func isFatalUploadWalkError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-func uploadWalkEntry(
-	ctx context.Context,
-	cc *CLIContext,
-	session *driveops.MountSession,
-	tm *driveops.TransferManager,
-	state *uploadWalkState,
-	localRoot, remotePath, path string,
-	d os.DirEntry,
-) error {
-	parentDir := filepath.Dir(path)
-	parentID, ok := state.dirIDs[parentDir]
-
-	if !ok {
-		appendUploadWalkError(state, path, errors.New("parent folder ID not found"))
-
-		return nil
-	}
-
-	if d.IsDir() {
-		folder, folderErr := session.EnsureFolder(ctx, parentID, d.Name())
-		if folderErr != nil {
-			if isFatalUploadWalkError(folderErr) {
-				return fmt.Errorf("ensure folder %q: %w", d.Name(), folderErr)
-			}
-
-			appendUploadWalkError(state, path, folderErr)
-
-			return nil
-		}
-
-		state.dirIDs[path] = folder.ID
-		state.result.FoldersCreated++
-
-		return nil
-	}
-
-	return uploadFileEntry(ctx, cc, session, tm, state, localRoot, remotePath, path, d, parentID)
-}
-
-func uploadFileEntry(
-	ctx context.Context,
-	cc *CLIContext,
-	session *driveops.MountSession,
-	tm *driveops.TransferManager,
-	state *uploadWalkState,
-	localRoot, remotePath, path string,
-	d os.DirEntry,
-	parentID string,
-) error {
-	fi, statErr := d.Info()
-	if statErr != nil {
-		appendUploadWalkError(state, path, statErr)
-
-		return nil
-	}
-
-	progress := func(uploaded, totalBytes int64) {
-		cc.Statusf("Uploading %s: %s / %s\n", d.Name(), formatSize(uploaded), formatSize(totalBytes))
-	}
-
-	uploadResult, uploadErr := putFile(ctx, session.Meta, tm, session.DriveID, parentID, d.Name(), path, driveops.UploadOpts{
-		Mtime:    fi.ModTime(),
-		Progress: progress,
-	})
-	if uploadErr != nil {
-		if isFatalUploadWalkError(uploadErr) {
-			return fmt.Errorf("upload file %q: %w", path, uploadErr)
-		}
-
-		appendUploadWalkError(state, path, uploadErr)
-
-		return nil
-	}
-
-	rel, relErr := filepath.Rel(localRoot, path)
-	if relErr != nil {
-		rel = d.Name()
-	}
-
-	remoteFilePath := driveops.CleanRemotePath(remotePath) + "/" + filepath.ToSlash(rel)
-
-	state.result.Files = append(state.result.Files, putJSONOutput{
-		Path: remoteFilePath,
-		ID:   uploadResult.Item.ID,
-		Size: fi.Size(),
-	})
-	state.result.TotalSize += fi.Size()
-	state.done++
-	cc.Progressf("Uploaded %d/%d files", state.done, state.total)
-
-	return nil
 }
 
 // putChildLister lists a folder's children; satisfied by *graph.Client.

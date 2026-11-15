@@ -88,7 +88,7 @@ type ItemSessionUploader interface {
 
 // RangeDownloader downloads a file starting from a byte offset, bound to the
 // remote version the partial holds. Satisfied by *graph.Client. Type-asserted
-// at runtime to avoid breaking the Downloader interface (B-085).
+// at runtime, so a Downloader that cannot resume still satisfies Downloader.
 type RangeDownloader interface {
 	DownloadRange(
 		ctx context.Context, driveID driveid.ID, itemID string,

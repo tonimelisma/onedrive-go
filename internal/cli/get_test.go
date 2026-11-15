@@ -2,10 +2,7 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,130 +11,108 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
-// Validates: R-1.2.1
-func TestJoinRemotePath(t *testing.T) {
-	tests := []struct {
-		name   string
-		parent string
-		child  string
-		want   string
-	}{
-		{name: "root parent", parent: "", child: "docs", want: "docs"},
-		{name: "slash parent", parent: "/", child: "docs", want: "docs"},
-		{name: "nested parent", parent: "foo/bar", child: "baz", want: "foo/bar/baz"},
-	}
+// getCommand is the command path of get, for runFileCommand.
+const getCommand = "onedrive-go get"
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, joinRemotePath(tt.parent, tt.child))
-		})
-	}
+// reportFakeName makes fake report name for the item id, which a path still
+// finds by its own name.
+func reportFakeName(fake *fakeGraphDrive, id, name string) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+
+	fake.reportedNames[id] = name
 }
 
-// Validates: R-1.2.1
-func TestCountRemoteFiles_PopulatesCache(t *testing.T) {
-	t.Parallel()
+// assertLocalDirHolds holds the local folder dir to exactly names.
+func assertLocalDirHolds(t *testing.T, dir string, names ...string) {
+	t.Helper()
 
-	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Root listing: two files, no folders.
-		writeTestResponsef(t, w, `{"value":[
-			{"id":"f1","name":"a.txt"},
-			{"id":"f2","name":"b.txt"}
-		]}`)
-	}))
-
-	state := newDownloadState()
-
-	err := countRemoteFiles(t.Context(), session, "", "root-id", state)
+	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	assert.Equal(t, 2, state.total, "should count both files")
-	assert.Len(t, state.childCache["root-id"], 2, "should cache the listing under the folder's item ID")
-	assert.Equal(t, "a.txt", state.childCache["root-id"][0].Name)
-	assert.Empty(t, state.countErrors)
+	held := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		held = append(held, entry.Name())
+	}
+	assert.ElementsMatch(t, names, held, "the entries of %s", dir)
 }
 
-// Validates: R-1.2.1
-func TestCountRemoteFiles_SurvivesSubdirError(t *testing.T) {
-	// countRemoteFiles should record errors for inaccessible subdirs
-	// but continue counting accessible parts of the tree.
-	t.Parallel()
+// assertRefusedName holds err to the refusal of the remote name name, which
+// tells the user what to name instead.
+func assertRefusedName(t *testing.T, err error, name, instead string) {
+	t.Helper()
 
-	callCount := 0
-	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		if callCount == 1 {
-			// Root listing: one file + one folder
-			writeTestResponsef(t, w, `{"value":[
-				{"id":"f1","name":"a.txt"},
-				{"id":"d1","name":"subdir","folder":{}}
-			]}`)
-
-			return
-		}
-		// Subdir listing fails
-		w.WriteHeader(http.StatusForbidden)
-		writeTestResponsef(t, w, `{"error":{"code":"accessDenied"}}`)
-	}))
-
-	state := newDownloadState()
-
-	err := countRemoteFiles(t.Context(), session, "", "root-id", state)
-	require.NoError(t, err, "counting should not fail on subdirectory errors")
-	assert.Equal(t, 1, state.total, "should count the accessible file")
-	assert.NotEmpty(t, state.countErrors, "should record the subdirectory error")
+	var refused *driveops.RefusedNameError
+	require.ErrorAs(t, err, &refused, "the remote name %q", name)
+	assert.Equal(t, name, refused.Name)
+	assert.Contains(t, err.Error(), instead)
 }
 
-// Validates: R-6.3.6
-func TestDownloadTree_RespectsContextCancellation(t *testing.T) {
-	// When the context is canceled, goroutines waiting for the semaphore
-	// should not block forever — they should bail out promptly, and say so.
-	// The shared folder walk used to return without a word.
-	t.Parallel()
+// A get of the drive root with no local path takes the root's remote name,
+// which another account chose for a mounted folder, as the local folder: a
+// plain local name becomes the folder, and any other is refused before
+// anything is listed or written.
+//
+// Validates: R-1.2.7, R-1.2.1
+func TestRunGet_DriveRootWithNoLocalPathTakesTheRootsName(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	addFakeItem(fake, fakeGraphRootID, "a.txt", false, "hello")
+	workDir := t.TempDir()
+	t.Chdir(workDir)
 
-	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// This handler should never be called because the context is canceled
-		// before any download starts.
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
+	reportFakeName(fake, fakeGraphRootID, "..")
+	refused := runFileCommand(t, getCommand, cc, false, "/")
 
-	state := &downloadState{
-		childCache: make(map[string][]graph.Item),
-		sem:        make(chan struct{}, 1), // capacity 1
+	assertRefusedName(t, refused.err, "..", "name the local folder to download into")
+	assertLocalDirHolds(t, workDir)
+
+	reportFakeName(fake, fakeGraphRootID, "Drive Root")
+	named := runFileCommand(t, getCommand, cc, false, "/")
+
+	require.NoError(t, named.err)
+	assertFileHolds(t, filepath.Join(workDir, "Drive Root", "a.txt"), "hello")
+	assertLocalDirHolds(t, workDir, "Drive Root")
+}
+
+// A single-file get of a drive path takes no remote name but the path's own
+// last element as the local file: a name OneDrive could report in its place
+// that is not one plain local name (empty, . or ..) fails the path lookup,
+// with no local path or with a local folder to download into, and nothing is
+// written. The path's own name is the default.
+//
+// Validates: R-1.2.7, R-1.2.6
+func TestRunGet_FileReportedUnderAnUnsafeNameIsNotWritten(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	id := addFakeItem(fake, fakeGraphRootID, "report.txt", false, "hello")
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+	into := "into" + string(filepath.Separator)
+
+	for _, name := range []string{"", ".", ".."} {
+		reportFakeName(fake, id, name)
+
+		bare := runFileCommand(t, getCommand, cc, false, "/report.txt")
+		require.ErrorIs(t, bare.err, graph.ErrNotFound, "the remote name %q", name)
+		inFolder := runFileCommand(t, getCommand, cc, false, "/report.txt", into)
+		require.ErrorIs(t, inFolder.err, graph.ErrNotFound, "the remote name %q", name)
 	}
+	assertLocalDirHolds(t, workDir)
 
-	// Fill the semaphore so the download goroutine must wait.
-	state.sem <- struct{}{}
-
-	// Cache a single file child.
-	state.childCache["testdir"] = []graph.Item{
-		{Name: "blocked.txt", ID: "f1"},
-	}
-
-	// Cancel the context immediately.
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
-
-	tm := driveops.NewTransferManager(session.Transfer, session.Transfer, nil, cc.Logger)
-	downloadTree(ctx, cc, tm, state, session.DriveID, "testdir", t.TempDir())
-	state.wg.Wait()
-
-	// The goroutine should have recorded a context error, not hung forever.
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	require.NotEmpty(t, state.result.Errors, "should record context cancellation error")
-	assert.Contains(t, state.result.Errors[0], "context canceled")
+	reportFakeName(fake, id, "report.txt")
+	named := runFileCommand(t, getCommand, cc, false, "/report.txt")
+	require.NoError(t, named.err)
+	assertFileHolds(t, filepath.Join(workDir, "report.txt"), "hello")
 }
 
 // Validates: R-1.2.4
 func TestGetJSONOutput_Serialization(t *testing.T) {
+	t.Parallel()
+
 	out := getJSONOutput{
 		Path:         "/tmp/test.txt",
 		Size:         1024,
@@ -157,6 +132,8 @@ func TestGetJSONOutput_Serialization(t *testing.T) {
 
 // Validates: R-1.2.4
 func TestGetFolderJSONOutput_Serialization(t *testing.T) {
+	t.Parallel()
+
 	out := folderTransferJSONOutput[getJSONOutput]{
 		Files: []getJSONOutput{
 			{Path: "dir/a.txt", Size: 100, HashVerified: true},
@@ -263,163 +240,10 @@ func TestGetFolderJSONOutput_Golden(t *testing.T) {
 	assertGoldenFile(t, "get_folder_json.golden", buf.Bytes())
 }
 
-// buildFolderOnlyTree fills the child cache with a wide, shallow folder tree
-// containing no files, so a recursive download performs directory descent and
-// nothing else. Listings are cached under their folder's item ID, as both
-// counting passes cache them.
-func buildFolderOnlyTree(state *downloadState, rootID string, folders int) {
-	children := make([]graph.Item, 0, folders)
-	for i := range folders {
-		id := fmt.Sprintf("dir-%d", i)
-		children = append(children, graph.Item{Name: id, ID: id, IsFolder: true})
-		state.childCache[id] = nil
-	}
-
-	state.childCache[rootID] = children
-}
-
-// folderOnlyDownload is what downloadTree needs for a tree without files: a
-// file download would fail, so the walk is all it does.
-type folderOnlyDownload struct {
-	cc      *CLIContext
-	tm      *driveops.TransferManager
-	state   *downloadState
-	driveID driveid.ID
-}
-
-func newFolderOnlyDownload(t *testing.T, folders int) folderOnlyDownload {
-	t.Helper()
-
-	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	state := newDownloadState()
-	buildFolderOnlyTree(state, "testdir", folders)
-	cc := &CLIContext{Flags: CLIFlags{Quiet: true}}
-
-	return folderOnlyDownload{
-		cc:      cc,
-		tm:      driveops.NewTransferManager(session.Transfer, session.Transfer, nil, cc.Logger),
-		state:   state,
-		driveID: session.DriveID,
-	}
-}
-
-func (d folderOnlyDownload) walk(t *testing.T, localPath string) {
-	t.Helper()
-
-	downloadTree(t.Context(), d.cc, d.tm, d.state, d.driveID, "testdir", localPath)
-}
-
-// Directory descent is inline, for a drive path and a shared folder alike: a
-// goroutine per subdirectory would make the goroutine count follow the number
-// of directories in the tree, and the shared semaphore bounds only file
-// transfers. The observable consequence is that the whole walk has finished
-// when downloadTree returns, without anyone waiting on the WaitGroup: every
-// directory is counted and every local directory exists. Spawned descent
-// cannot offer that, because its work would still be queued when the call
-// returns.
-//
-// This deliberately does not sample runtime.NumGoroutine. That counter is
-// process-global, so parallel tests move it between two samples and the
-// assertion fails for reasons that have nothing to do with this code.
-//
-// Validates: R-1.2.1
-func TestDownloadTree_DirectoryDescentDoesNotFanOutGoroutines(t *testing.T) {
-	t.Parallel()
-
-	const folders = 200
-
-	download := newFolderOnlyDownload(t, folders)
-	localRoot := filepath.Join(t.TempDir(), "testdir")
-
-	download.walk(t, localRoot)
-
-	download.state.mu.Lock()
-	created := download.state.result.FoldersCreated
-	errs := download.state.result.Errors
-	download.state.mu.Unlock()
-
-	assert.Empty(t, errs)
-	assert.Equal(t, folders+1, created,
-		"the directory walk must be complete when downloadTree returns")
-
-	for i := range folders {
-		dir := filepath.Join(localRoot, fmt.Sprintf("dir-%d", i))
-		info, statErr := os.Stat(dir)
-		require.NoError(t, statErr, "every directory must exist before downloadTree returns")
-		assert.True(t, info.IsDir())
-	}
-}
-
-// folders_created counted every folder walked, so a download into an
-// existing tree claimed to have created folders that were already there.
-// An existing folder is used as it is and keeps its mode.
-//
-// Validates: R-1.2.4
-func TestDownloadTree_CountsOnlyTheFoldersItCreates(t *testing.T) {
-	t.Parallel()
-
-	download := newFolderOnlyDownload(t, 2)
-	localRoot := t.TempDir()
-	existing := filepath.Join(localRoot, "dir-0")
-	require.NoError(t, os.Mkdir(existing, 0o700))
-
-	download.walk(t, localRoot)
-
-	assert.Empty(t, download.state.result.Errors)
-	assert.Equal(t, 1, download.state.result.FoldersCreated, "only dir-1 is new")
-	assert.DirExists(t, filepath.Join(localRoot, "dir-1"))
-	info, err := os.Stat(existing)
-	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), "an existing folder keeps its mode")
-}
-
-// A file where the download needs a folder is reported once, naming the
-// path, and nothing is walked below it.
-//
-// Validates: R-1.2.1
-func TestDownloadTree_FileWhereAFolderBelongsIsReported(t *testing.T) {
-	t.Parallel()
-
-	download := newFolderOnlyDownload(t, 1)
-	target := filepath.Join(t.TempDir(), "testdir")
-	require.NoError(t, os.WriteFile(target, []byte("x"), 0o600))
-
-	download.walk(t, target)
-
-	require.Len(t, download.state.result.Errors, 1)
-	assert.Equal(t, "creating directory "+target+": it is not a folder", download.state.result.Errors[0])
-	assert.Zero(t, download.state.result.FoldersCreated)
-}
-
-// A folder `get` creates for a folder download is asked for 0777 and gets the
-// umask, like the files downloaded into it. It used to be 0755 whatever the
-// umask, so under 002 the files were group-writable and their folder was not.
-//
-// Validates: R-5.10.2, R-1.2.1
-func TestDownloadTree_CreatedFolderFollowsTheUmask(t *testing.T) {
-	t.Parallel()
-	if !synctest.RunUnderUmask(t, synctest.GroupWritableUmask) {
-		return
-	}
-
-	download := newFolderOnlyDownload(t, 1)
-	target := filepath.Join(t.TempDir(), "testdir")
-
-	download.walk(t, target)
-
-	assert.Empty(t, download.state.result.Errors)
-	for _, dir := range []string{target, filepath.Join(target, "dir-0")} {
-		info, err := os.Stat(dir)
-		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o775), info.Mode().Perm(), "%s is 0777 minus the umask", dir)
-	}
-}
-
-// A configured min_free_space the disk-space check cannot read was taken as
-// 0, which turns the check off without a word; both get flavors read it in
-// one place now and report it.
+// A configured min_free_space the disk-space check cannot read is reported,
+// never taken as 0, which would turn the check off without a word. Every get,
+// of a file or a folder, a drive path or a shared item, builds its transfer
+// manager through newDownloadManager, which reads it here.
 //
 // Validates: R-6.4.7
 func TestConfiguredMinFreeSpace(t *testing.T) {
@@ -435,8 +259,11 @@ func TestConfiguredMinFreeSpace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2048), minFree)
 
-	_, err = configuredMinFreeSpace(&CLIContext{Cfg: &config.ResolvedDrive{
+	unreadable := &CLIContext{Cfg: &config.ResolvedDrive{
 		SafetyConfig: config.SafetyConfig{MinFreeSpace: "not-a-size"},
-	}})
+	}}
+	_, err = configuredMinFreeSpace(unreadable)
+	require.ErrorContains(t, err, "min_free_space")
+	_, err = newDownloadManager(unreadable, nil)
 	require.ErrorContains(t, err, "min_free_space")
 }

@@ -78,6 +78,125 @@ func TestReadDir(t *testing.T) {
 	require.Len(t, entries, 2)
 }
 
+// A folder upload reads each directory a batch at a time: no batch holds
+// more than it asked for, every entry comes once, and the end is io.EOF.
+//
+// Validates: R-1.3.1
+func TestOpenDir_ReadsInBatches(t *testing.T) {
+	t.Parallel()
+
+	const batch = 2
+	base := t.TempDir()
+	want := []string{"a", "b", "c", "d", "e"}
+	for _, name := range want {
+		require.NoError(t, os.WriteFile(filepath.Join(base, name), nil, 0o600))
+	}
+
+	dir, err := OpenDir(base)
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, dir.Close()) }()
+
+	var got []string
+	reachedEnd := false
+	for range len(want) + 1 {
+		entries, nextErr := dir.Next(batch)
+		assert.LessOrEqual(t, len(entries), batch)
+		for _, entry := range entries {
+			got = append(got, entry.Name())
+		}
+		if errors.Is(nextErr, io.EOF) {
+			reachedEnd = true
+			break
+		}
+		require.NoError(t, nextErr)
+	}
+
+	assert.True(t, reachedEnd, "the last read says io.EOF")
+	assert.ElementsMatch(t, want, got)
+}
+
+// Opening a directory names the path in its failures, and a regular file is
+// refused at the open, not at the first read.
+//
+// Validates: R-1.3.1
+func TestOpenDir_NamesThePathInItsFailures(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	_, err := OpenDir(missing)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Contains(t, err.Error(), "opening "+missing+":")
+
+	file := filepath.Join(t.TempDir(), "file.txt")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	_, err = OpenDir(file)
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+	assert.Contains(t, err.Error(), "opening "+file+":")
+}
+
+// fifoOpenDeadline is how long a test waits for an open that must not block.
+const fifoOpenDeadline = 5 * time.Second
+
+// A FIFO where a directory is expected is refused at once, naming the path: a
+// plain open of a FIFO waits for a writer for ever.
+//
+// Validates: R-1.3.1
+func TestOpenDir_RefusesAFIFOWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+
+	opened := make(chan error, 1)
+	go func() {
+		dir, err := OpenDir(fifo)
+		if err == nil {
+			assert.NoError(t, dir.Close())
+		}
+		opened <- err
+	}()
+
+	select {
+	case err := <-opened:
+		require.ErrorIs(t, err, syscall.ENOTDIR)
+		assert.Contains(t, err.Error(), "opening "+fifo+":")
+	case <-time.After(fifoOpenDeadline):
+		// A writer ends the blocked open, so its goroutine ends with the test.
+		writer, err := os.OpenFile(filepath.Clean(fifo), os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
+		<-opened
+		require.FailNow(t, "OpenDir blocked on a FIFO")
+	}
+}
+
+// Next reads a batch of at least one entry: a count below one, which
+// os.File.ReadDir would take as the whole directory, is refused and reads
+// nothing.
+//
+// Validates: R-1.3.1
+func TestOpenDir_NextRefusesACountBelowOne(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(base, "a"), nil, 0o600))
+	dir, err := OpenDir(base)
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, dir.Close()) }()
+
+	for _, count := range []int{0, -1} {
+		entries, nextErr := dir.Next(count)
+		require.Error(t, nextErr)
+		require.NotErrorIs(t, nextErr, io.EOF)
+		assert.Contains(t, nextErr.Error(), "reading directory "+base+":")
+		assert.Empty(t, entries)
+	}
+
+	entries, err := dir.Next(1)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "a refused count read nothing")
+}
+
 func TestCreateTempAndChtimes(t *testing.T) {
 	t.Parallel()
 
