@@ -41,8 +41,9 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261112-01 | Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts | closed | provider incident | 2026-11-13 | no |
-| LI-20261111-01 | Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight | mitigated | graph quirk | 2026-11-11 | no |
+| LI-20261111-01 | Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261110-01 | A failed upload's cleanup was refused with 412 and left an empty file on OneDrive | fixed | product bug | 2026-11-10 | yes |
 | LI-20261029-01 | NFD-named local file was never uploaded on Linux while sync reported success | fixed | product bug | 2026-10-29 | no |
 | LI-20261024-01 | Overlapping live E2E runs against one test account failed each other | fixed | CI configuration | 2026-10-24 | no |
@@ -60,7 +61,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260422-02 | Shared-root full-sync commands widened or destabilized the configured subtree after nightly harness repair | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-03 | Shared-drive sync startup still aborted when `sync_dir` did not exist yet | fixed | product bug | 2026-04-22 | no |
 | LI-20260422-04 | Shared-folder `drive list` exact-selector check assumed one-pass search visibility | fixed | test harness | 2026-04-30 | yes |
-| LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-11-09 | yes |
+| LI-20260422-05 | Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work | fixed | test harness | 2026-11-11 | yes |
 | LI-20260417-01 | Nightly `e2e_full` preflight duplicated `TestE2E_Status_ConfigTolerance` and stopped before live full-suite coverage | fixed | test bug | 2026-04-22 | yes |
 | LI-20260420-01 | Fast E2E smoke `get` exhausted the documented download-metadata `404` quirk budget | mitigated | graph quirk | 2026-04-28 | yes |
 | LI-20260416-01 | Fast E2E suite preflight assumed local `.testdata` always carried `drive_*.json` | fixed | test harness | 2026-04-16 | no |
@@ -88,6 +89,56 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261115-01: Graph answered an ordinary folder move with 400 `Invalid request`
+
+First seen: 2026-11-15
+Last seen: 2026-11-15
+Area: Graph item move (`PATCH /drives/{d}/items/{item}` with a new parent),
+the CLI's `mv`
+Suite / test: a hand-started run of the full e2e tier, run `43687851252`,
+job `e2e`, `TestE2E_Mv_Folder` (`e2e_full`)
+Classification: graph quirk
+Status: mitigated
+Recurring: yes
+Summary: The test creates `source-dir` in a new test folder with one
+`mkdir`, which creates both, uploads `inner.txt` into `source-dir` with
+`put`, creates `dest-parent` beside it with `mkdir`, and waits until a
+listing of the test folder shows `source-dir`. It then runs one `mv` of
+`source-dir` to `dest-parent/moved-dir`. In that command the lookup of the
+destination path answered 404, as it should, the lookup of the new parent
+answered 200, and the move itself, the `PATCH` of the item with its new
+parent, answered HTTP 400 with the message `Invalid request`. The command
+failed, and with it the test. The cause is unknown. It is the second bare 400
+on an ordinary write in four days; the first was a folder create
+(LI-20261111-01).
+
+Evidence (no account, drive, item or request IDs recorded):
+- The run was started by hand on a branch whose change touched neither the
+  test nor the move code. No other test of that job failed.
+- The log holds no error code, and it does not show whether the answer's body
+  was a Graph error object at all: the client uses the raw body as the
+  message when the answer has no `error.message`, so a plain-text body and
+  a parsed `error.message` printed the same.
+- The same test passed alone from a developer host, against another Personal
+  test account, about an hour later.
+- The move was sent once. By the code, the CLI's retrying transport resends
+  only the statuses of `isRetryable` (`internal/retry/transport.go`: 408,
+  429, 500, 502, 503, 504 and 509), so a 400 is returned at once; and it
+  resends a `PATCH` under no status, because only GET, HEAD, OPTIONS, TRACE,
+  PUT and DELETE, and a create marked replay-safe, are resent
+  (`retryableRequest`, R-6.8.21). `mv` itself does not retry.
+
+Resolution / mitigation: no runtime special case and no change to the test.
+Two occurrences without a recorded code are still not the payload evidence a
+quirk rule needs (`spec/design/graph-client.md`, Design Constraints). Since
+2026-11-15 a failed answer leaves that evidence: the error text names the most
+specific code after the status when the answer has one, and the client's
+`request failed` debug record names the code, the inner codes, the answer's
+`Content-Type`, the body's length and whether the body was a Graph error
+object, something else or empty. A full-tier failure of this shape is rerun
+and recorded here as a recurrence.
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("A Write Can Be Refused With A Bare 400"), [live-recurring-families.md](live-recurring-families.md#bare-400-invalid-request-on-an-ordinary-write), [graph-client.md](../design/graph-client.md) (Error Handling)
 
 ## LI-20261112-01: Graph answered `GET /me` with 502/504 and every upload-session URL with 401 for the Personal test accounts
 
@@ -154,14 +205,14 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("An Upload Session Mo
 ## LI-20261111-01: Graph answered an ordinary folder create with 400 `Invalid request` while sibling creates were in flight
 
 First seen: 2026-11-11
-Last seen: 2026-11-11
+Last seen: 2026-11-15
 Area: Graph folder create (`POST /drives/{d}/items/{parent}/children`),
 sync per-item retry work
 Suite / test: nightly run `43070648626` on `472e50ba`, job `e2e`,
 `TestE2E_Sync_IdempotentReSync` (`e2e_full`)
 Classification: graph quirk
 Status: mitigated
-Recurring: no
+Recurring: yes
 Summary: A bidirectional sync of a configured shared-folder root on Personal
 created a new folder, three files in it and a subfolder `sub`. The three file
 creates were answered 201; the create of `sub`, sent while they were in
@@ -204,7 +255,14 @@ Design Constraints). A bare 400 lands in sync's catch-all server answer
 about a wider scope, so the next pass that is due sends the create again.
 The test now converges instead of trusting one pass (LI-20260422-05,
 recurrence 2026-11-11).
-Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("A Folder Create Can Be Refused With A Bare 400")
+
+Recurrence 2026-11-15 (run `43687851252` of the full tier): a folder move,
+not a create, was answered the same way, HTTP 400 `Invalid request` with no
+code on record; it has its own entry, LI-20261115-01. Since 2026-11-15 the
+error text and the client's `request failed` debug record name the code
+chain and what the body held, so the next occurrence records the code this
+entry lacks.
+Promoted docs: [graph-api-quirks.md](graph-api-quirks.md) ("A Write Can Be Refused With A Bare 400"), [live-recurring-families.md](live-recurring-families.md#bare-400-invalid-request-on-an-ordinary-write)
 
 ## LI-20261110-01: A failed upload's cleanup was refused with 412 and left an empty file on OneDrive
 
@@ -1157,7 +1215,7 @@ Promoted docs: [system.md](../design/system.md), [graph-api-quirks.md](graph-api
 ## LI-20260422-05: Transfer-worker E2E assumed one upload-only pass could not leave retryable transient work
 
 First seen: 2026-04-22
-Last seen: 2026-11-09
+Last seen: 2026-11-11
 Area: nightly/manual `e2e_full`, concurrent upload coverage, retry-work contract
 Suite / test: `go run ./cmd/devtool verify e2e-full --classify-live-quirks`;
 `full-parallel-misc`; `TestE2E_Sync_TransferWorkersConfig`
@@ -1675,9 +1733,9 @@ Evidence:
   `/onedrive-go-e2e-1775667044557991000/perm-test.txt` successfully via
   simple upload during `TestE2E_RoundTrip/rm_permanent` setup.
 - The upload response returned item ID
-  `BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`.
+  `A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`.
 - The immediate follow-on
-  `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`
+  `PATCH /drives/a1b2c3d4e5f60718/items/A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`
   still returned HTTP 404 `itemNotFound` with request ID
   `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`.
 - The later `rm_permanent` failure in that same fast-suite run was secondary:

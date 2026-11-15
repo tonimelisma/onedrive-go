@@ -26,6 +26,12 @@ const (
 	socketIONotificationWebsocketPath = "/socket.io"
 )
 
+// sanitizeGraphErrorText redacts the credentials a Graph answer can echo
+// back. In a text that is a JSON document it replaces the values of sensitive
+// keys and, in every string, bearer tokens and sensitive URLs; in any other
+// text, bearer tokens, quoted token pairs and sensitive URLs. Every text an
+// error answer brings (its codes, message and body) passes through it before
+// anything prints or logs it.
 func sanitizeGraphErrorText(raw string) string {
 	if raw == "" {
 		return ""
@@ -39,6 +45,21 @@ func sanitizeGraphErrorText(raw string) string {
 	redacted = jsonTokenPattern.ReplaceAllString(redacted, `${1}[REDACTED]${3}`)
 
 	return redactSensitiveURLs(redacted)
+}
+
+// sanitizeGraphErrorTexts sanitizes each text of a list, keeping its order;
+// nil stays nil.
+func sanitizeGraphErrorTexts(raw []string) []string {
+	if raw == nil {
+		return nil
+	}
+
+	sanitized := make([]string, len(raw))
+	for i := range raw {
+		sanitized[i] = sanitizeGraphErrorText(raw[i])
+	}
+
+	return sanitized
 }
 
 func sanitizeGraphErrorJSON(raw string) (string, bool) {
