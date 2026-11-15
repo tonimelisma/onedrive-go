@@ -180,3 +180,28 @@ Promoted docs:
 Matching ledger incidents:
 
 - [LI-20261110-01](live-incidents.md#li-20261110-01-a-failed-uploads-cleanup-was-refused-with-412-and-left-an-empty-file-on-onedrive)
+
+## Bare 400 `Invalid request` On An Ordinary Write
+
+Current repo policy:
+
+- OneDrive has answered an ordinary write (a folder create, a folder move)
+  with HTTP 400 `Invalid request` and no code on record; the cause is unknown
+- no retry rule until an occurrence with a recorded code: the error text and
+  the client's `request failed` debug record name the code chain and what the
+  body held, so the next occurrence leaves the payload evidence a rule needs,
+  and the rule is decided from it
+- until then sync keeps a bare 400 as per-item retry work, and a one-shot
+  command that fails this way is rerun by its user
+- a full-tier e2e failure of this shape is rerun (`devtool verify failed-test`)
+  and recorded as a recurrence in the ledger, not worked around in the test
+
+Promoted docs:
+
+- [graph-api-quirks.md#a-write-can-be-refused-with-a-bare-400](graph-api-quirks.md#a-write-can-be-refused-with-a-bare-400)
+- [graph-client.md](../design/graph-client.md)
+
+Matching ledger incidents:
+
+- [LI-20261111-01](live-incidents.md#li-20261111-01-graph-answered-an-ordinary-folder-create-with-400-invalid-request-while-sibling-creates-were-in-flight)
+- [LI-20261115-01](live-incidents.md#li-20261115-01-graph-answered-an-ordinary-folder-move-with-400-invalid-request)

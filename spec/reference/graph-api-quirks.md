@@ -324,8 +324,8 @@ upload response already returned that item ID.
 Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify default`:
 
 - `put /onedrive-go-e2e-1775667044557991000/perm-test.txt` used simple upload
-  and received item ID `BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`
-- the immediate follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s0db1ece8e28d4085845e623128c01e29`
+  and received item ID `A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`
+- the immediate follow-on `PATCH /drives/a1b2c3d4e5f60718/items/A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`
   returned HTTP 404 `itemNotFound` with request ID
   `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`
 - the cascading fast-suite failure later surfaced in
@@ -711,22 +711,47 @@ Personal-account pre-auth URLs can use `*.microsoftpersonalcontent.com` rather t
 
 One multi-hour Microsoft-side backend incident was observed returning HTTP 400 with message text such as `"ObjectHandle is Invalid"` across Graph API calls. The repository no longer has recoverable CI payload evidence for the exact body shape, so the runtime does **not** implement a special classifier for this incident. If the behavior reappears and CI captures the payload, targeted handling can be reconsidered. Observed: one 3.5-hour incident.
 
-### A Folder Create Can Be Refused With A Bare 400
+### A Write Can Be Refused With A Bare 400
 
-Nightly run 43070648626 (Personal, 2026-11-11, LI-20261111-01): an ordinary
-folder create, `POST /drives/{d}/items/{parent}/children` with the name in a
-JSON body, `"folder": {}` and `conflictBehavior=fail`, was answered HTTP 400
-with the message `Invalid request` and no logged code. The parent had been
-created three seconds earlier and was taking three file creates by the same
-route, each answered 201 within the same second. The answer named nothing
-about the request: neither the 400 messages that report a real length limit
-(`name is too long`, `400 characters or less`) nor a code. It is classed as a
-transient answer of the service, and the client has no rule for it: sync
-keeps a bare 400 as per-item retry work with backoff (its catch-all server
-answer, which implies no wider scope), so a later pass sends the create
-again. One occurrence without a code is not the payload evidence a runtime
-quirk rule needs; if it recurs with a code or a pattern, it can be
-reconsidered.
+Twice in four days on Personal, OneDrive answered an ordinary write with HTTP
+400 and the message `Invalid request`:
+
+- Nightly run 43070648626, 2026-11-11 (LI-20261111-01): a folder create,
+  `POST /drives/{d}/items/{parent}/children` with the name in a JSON body,
+  `"folder": {}` and `conflictBehavior=fail`. The parent had been created
+  three seconds earlier and was taking three file creates by the same route,
+  each answered 201 within the same second.
+- Full-tier run 43687851252, 2026-11-15 (LI-20261115-01): a folder move by
+  `mv`, the `PATCH /drives/{d}/items/{item}` that gives the folder a new
+  parent and name, sent right after the destination path answered 404 and the
+  new parent 200. The same test passed alone about an hour later.
+
+Neither answer named anything about the request: neither the 400 messages
+that report a real length limit (`name is too long`, `400 characters or
+less`) nor a code. Neither log could show more than that. The error text and
+the debug record of a failed answer carried no code, and the client uses the
+raw body as the message when the answer has no `error.message`, so a
+plain-text body and a parsed `error.message` printed the same: whether
+either answer had a code, or a Graph error object at all, is not known.
+
+Both are classed as transient answers of the service, and the client has no
+rule for them. Sync keeps a bare 400 as per-item retry work with backoff (its
+catch-all server answer, which implies no wider scope), so a later pass sends
+the write again. The CLI's retrying transport resends no 400, and no `PATCH`
+at all, so a one-shot command that fails this way is rerun by its user. Two
+occurrences without a code are not the payload evidence a runtime quirk rule
+needs ([graph-client.md](../design/graph-client.md), Design Constraints).
+
+Since 2026-11-15 a failed answer records that evidence. The error text names
+the most specific code after the status when the answer has one
+(`graph: HTTP 400 <code> (request-id: <id>): <message>`), and the client's
+`request failed` debug record names the outer `code`, the `inner_codes` in
+order, the answer's `content_type`, `body_bytes`, and `body_kind`:
+`graph_error`, `other` or `empty`, which tells a Graph error object without a
+code from a body that is not one. A retry rule is decided from the first
+occurrence whose code is on record; until then a full-tier e2e failure of
+this shape is rerun and recorded as a recurrence
+([live-recurring-families.md](live-recurring-families.md#bare-400-invalid-request-on-an-ordinary-write)).
 
 ### HTTP 507 Wraps ErrServerError
 

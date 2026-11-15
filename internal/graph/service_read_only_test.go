@@ -23,8 +23,6 @@ func forbiddenGraphError(innerCodes ...string) error {
 	}
 }
 
-// Validates: R-6.6.17
-//
 // Graph reports a backend read-only window as an outer accessDenied with an
 // inner serviceReadOnly. The token-propagation retry family keys on
 // accessDenied, so without an explicit exclusion it burns its whole budget on
@@ -37,7 +35,7 @@ func TestIsTransientDrivesDiscoveryError_ServiceReadOnlyIsNotTokenPropagation(t 
 	assert.False(t, retryable, "a provider read-only window must not be retried as token propagation")
 }
 
-// Validates: R-6.6.17
+// Validates: R-6.7.13
 func TestIsTransientDrivesDiscoveryError_PlainAccessDeniedStillRetries(t *testing.T) {
 	t.Parallel()
 
@@ -46,8 +44,6 @@ func TestIsTransientDrivesDiscoveryError_PlainAccessDeniedStillRetries(t *testin
 	require.NotNil(t, graphErr)
 }
 
-// Validates: R-6.6.17
-//
 // Callers need to tell "the provider is unavailable" apart from "this account
 // cannot do that", so the read-only window carries its own sentinel.
 func TestServiceReadOnly_IsClassifiedAsProviderUnavailable(t *testing.T) {
@@ -59,7 +55,6 @@ func TestServiceReadOnly_IsClassifiedAsProviderUnavailable(t *testing.T) {
 	assert.True(t, IsProviderUnavailable(err))
 }
 
-// Validates: R-6.6.17
 func TestServiceReadOnly_OrdinaryForbiddenIsNotProviderUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +62,7 @@ func TestServiceReadOnly_OrdinaryForbiddenIsNotProviderUnavailable(t *testing.T)
 	assert.False(t, IsProviderUnavailable(errors.New("unrelated")))
 }
 
-// Validates: R-6.6.17
+// Validates: R-2.10.72
 func TestMostSpecificErrorCode_PrefersInnerCode(t *testing.T) {
 	t.Parallel()
 
@@ -78,7 +73,7 @@ func TestMostSpecificErrorCode_PrefersInnerCode(t *testing.T) {
 	assert.True(t, IsProviderReadOnlyCode(code))
 }
 
-// Validates: R-6.6.17
+// Validates: R-2.10.72
 func TestMostSpecificErrorCode_FallsBackToOuterCode(t *testing.T) {
 	t.Parallel()
 
@@ -87,7 +82,7 @@ func TestMostSpecificErrorCode_FallsBackToOuterCode(t *testing.T) {
 	assert.False(t, IsProviderReadOnlyCode(code))
 }
 
-// Validates: R-6.6.17
+// Validates: R-2.10.72
 func TestMostSpecificErrorCode_HandlesUnparseableBody(t *testing.T) {
 	t.Parallel()
 

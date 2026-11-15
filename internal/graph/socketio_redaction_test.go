@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validates: R-6.8.17
 func TestBuildGraphError_RedactsNotificationURL(t *testing.T) {
 	t.Parallel()
 

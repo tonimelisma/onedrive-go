@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // SimpleUploadToItem overwrites an existing file by item ID using a single PUT
@@ -42,6 +41,9 @@ func (c *Client) SimpleUploadToItem(
 	})
 }
 
+// uploadChunkDesc names an upload fragment's request in errors and logs.
+const uploadChunkDesc = "upload chunk"
+
 // UploadChunk uploads a chunk of data to an upload session.
 // Returns the completed Item plus complete=true on the final chunk (201/200).
 // For intermediate chunks (202), it returns complete=false with a nil item.
@@ -66,7 +68,7 @@ func (c *Client) UploadChunk(
 	ctx, watchdog := c.watchTransfer(ctx)
 	defer watchdog.stop()
 
-	resp, err := c.doPreAuth(ctx, "upload chunk", func() (*http.Request, error) {
+	resp, err := c.doPreAuth(ctx, uploadChunkDesc, func() (*http.Request, error) {
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
 		reader := watchdog.reader(io.NewSectionReader(chunk, 0, length))
@@ -133,16 +135,25 @@ func (c *Client) handleChunkResponse(resp *http.Response) (*Item, bool, error) {
 
 	default:
 		// Unexpected 2xx status (e.g., 204, 206). doPreAuth filters non-2xx.
+		// The body is read up to maxErrBodySize; only a body within that
+		// bound lets the connection be reused.
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
 		if readErr != nil {
+			c.logBodyReadFailure(http.MethodPut, preAuthLogTarget(uploadChunkDesc), resp, readErr)
+
 			return nil, false, fmt.Errorf("graph: reading unexpected chunk response body: %w", readErr)
 		}
 
-		// The raw body stays at Debug: it is server output, not something the
-		// returned error should carry to the user.
+		// The record names the request, the answer's request ID and the
+		// body's size and kind, never the body: it is server output, which
+		// neither the log nor the returned error carries.
 		c.logger.Debug("chunk upload returned unexpected 2xx status",
+			slog.String("method", http.MethodPut),
+			slog.String("path", preAuthLogTarget(uploadChunkDesc)),
 			slog.Int("status", resp.StatusCode),
-			slog.String("body", string(body)),
+			slog.String("request_id", resp.Header.Get("request-id")),
+			slog.Int("body_bytes", len(body)),
+			slog.String("body_kind", errorBodyKind(body)),
 		)
 
 		return nil, false, fmt.Errorf("graph: chunk upload unexpected status %d", resp.StatusCode)
@@ -209,36 +220,44 @@ func (c *Client) doRawUpload(
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
-		if readErr != nil {
-			if closeErr := resp.Body.Close(); closeErr != nil {
-				c.logger.Debug("failed to close upload error response body after read failure",
-					slog.String("path", path),
-					slog.Any("error", closeErr),
-				)
-			}
-			return nil, fmt.Errorf("graph: reading upload error body: %w", readErr)
-		}
+		return nil, c.rawUploadError(method, path, resp)
+	}
 
+	return resp, nil
+}
+
+// rawUploadError reads and closes the body of a failed raw upload's answer
+// and returns its error: a *GraphError, recorded like every failed answer
+// (logFailedAnswer). An error body that cannot be read leaves its own record
+// and a plain error, not a *GraphError: unlike buildError, no placeholder
+// answer is built from it.
+func (c *Client) rawUploadError(method, path string, resp *http.Response) error {
+	errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrBodySize))
+	if readErr != nil {
+		c.logBodyReadFailure(method, path, resp, readErr)
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			c.logger.Debug("failed to close upload error response body",
+			c.logger.Debug("failed to close upload error response body after read failure",
+				slog.String("method", method),
 				slog.String("path", path),
 				slog.Any("error", closeErr),
 			)
 		}
 
-		graphErr := buildGraphError(
-			resp.StatusCode,
-			resp.Header.Get("request-id"),
-			retry.ResponseRetryAfter(resp, time.Now()),
-			errBody,
-		)
-		graphErr.AgsDiagnostic = resp.Header.Get(headerAgsDiagnostic)
-
-		return nil, graphErr
+		return fmt.Errorf("graph: reading upload error body: %w", readErr)
 	}
 
-	return resp, nil
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		c.logger.Debug("failed to close upload error response body",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Any("error", closeErr),
+		)
+	}
+
+	graphErr := graphErrorOfAnswer(resp, errBody)
+	c.logFailedAnswer(method, path, resp, errBody, graphErr)
+
+	return graphErr
 }
 
 // replayableUploadBody returns a reader over exactly size bytes of content.

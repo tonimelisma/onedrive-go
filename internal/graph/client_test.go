@@ -607,27 +607,93 @@ func TestDo_TokenError(t *testing.T) {
 	assert.Contains(t, err.Error(), "token error")
 }
 
+// Validates: R-2.10.72
 func TestGraphError_ErrorString(t *testing.T) {
-	t.Run("with request ID", func(t *testing.T) {
-		graphErr := &GraphError{
-			StatusCode: http.StatusNotFound,
-			RequestID:  "req-123",
-			Message:    "not found",
-			Err:        ErrNotFound,
-		}
-		assert.Contains(t, graphErr.Error(), "404")
-		assert.Contains(t, graphErr.Error(), "req-123")
-	})
+	t.Parallel()
 
-	t.Run("without request ID", func(t *testing.T) {
-		graphErr := &GraphError{
-			StatusCode: http.StatusNotFound,
-			Message:    "not found",
-			Err:        ErrNotFound,
-		}
-		assert.Contains(t, graphErr.Error(), "404")
-		assert.NotContains(t, graphErr.Error(), "request-id")
-	})
+	// longCodeBytes is more than the text prints of a code; its byte past
+	// the cut is a space, which the text never sees.
+	const longCodeBytes = 300
+	cutCode := strings.Repeat("a", maxErrorTextCodeBytes)
+	longCode := cutCode + " " + strings.Repeat("b", longCodeBytes-maxErrorTextCodeBytes-1)
+
+	tests := []struct {
+		name string
+		err  *GraphError
+		want string
+	}{
+		{
+			name: "a code chain and a request ID name the most specific code",
+			err: &GraphError{
+				StatusCode: http.StatusBadRequest, RequestID: "req-123", Code: "invalidRequest",
+				InnerCodes: []string{"exampleInner", "exampleInnermost"}, Message: "Invalid request", Err: ErrBadRequest,
+			},
+			want: "graph: HTTP 400 exampleInnermost (request-id: req-123): Invalid request",
+		},
+		{
+			name: "an outer code without a request ID",
+			err:  &GraphError{StatusCode: http.StatusNotFound, Code: "itemNotFound", Message: "not found", Err: ErrNotFound},
+			want: "graph: HTTP 404 itemNotFound: not found",
+		},
+		{
+			name: "empty inner codes fall back to the outer code",
+			err: &GraphError{
+				StatusCode: http.StatusForbidden, Code: "accessDenied", InnerCodes: []string{""},
+				Message: "denied", Err: ErrForbidden,
+			},
+			want: "graph: HTTP 403 accessDenied: denied",
+		},
+		{
+			name: "no code, with a request ID",
+			err:  &GraphError{StatusCode: http.StatusNotFound, RequestID: "req-123", Message: "not found", Err: ErrNotFound},
+			want: "graph: HTTP 404 (request-id: req-123): not found",
+		},
+		{
+			name: "no code and no request ID",
+			err:  &GraphError{StatusCode: http.StatusNotFound, Message: "not found", Err: ErrNotFound},
+			want: "graph: HTTP 404: not found",
+		},
+		{
+			name: "a code with a space and a colon is quoted",
+			err: &GraphError{
+				StatusCode: http.StatusBadRequest, RequestID: "req-123", Code: "bad code: here",
+				Message: "Invalid request", Err: ErrBadRequest,
+			},
+			want: `graph: HTTP 400 "bad code: here" (request-id: req-123): Invalid request`,
+		},
+		{
+			name: "a code with a newline is quoted, so it cannot break the line",
+			err:  &GraphError{StatusCode: http.StatusBadRequest, Code: "first\nsecond", Message: "Invalid request", Err: ErrBadRequest},
+			want: `graph: HTTP 400 "first\nsecond": Invalid request`,
+		},
+		{
+			name: "a code over the bound is cut first, and what is left is checked",
+			err:  &GraphError{StatusCode: http.StatusBadRequest, Code: longCode, Message: "Invalid request", Err: ErrBadRequest},
+			want: "graph: HTTP 400 " + cutCode + ": Invalid request",
+		},
+		// The codes the client compares are ASCII letters, so their text
+		// is as it came; two of them:
+		{
+			name: "resourceModified prints as it came",
+			err:  &GraphError{StatusCode: http.StatusConflict, Code: "resourceModified", Message: "changed", Err: ErrConflict},
+			want: "graph: HTTP 409 resourceModified: changed",
+		},
+		{
+			name: "serviceReadOnly prints as it came",
+			err: &GraphError{
+				StatusCode: http.StatusForbidden, Code: "accessDenied", InnerCodes: []string{"serviceReadOnly"},
+				Message: "read only", Err: ErrForbidden,
+			},
+			want: "graph: HTTP 403 serviceReadOnly: read only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.err.Error())
+		})
+	}
 }
 
 func TestClassifyStatus(t *testing.T) {
