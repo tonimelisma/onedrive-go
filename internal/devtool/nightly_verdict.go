@@ -36,12 +36,14 @@ const (
 
 	// A failed test's key is its package as go test names it, relative to the
 	// module, a dot and its top-level name; a failing model seed's adds `/`,
-	// its variable, `=` and the seed (seedReplay.key); a job whose log names no
-	// failed test is keyed by the job. A test's name and a seed's assignment
-	// hold no dot, so the last dot of a test or seed key ends its package, and
-	// a job key holds none.
-	nightlyJobKeyPrefix = "job-"
-	nightlyKeySeparator = "."
+	// its variable, `=` and the seed (seedReplay.key); a failure of a job that
+	// no failed test names is keyed by each failed step the job's log names
+	// (nightlyStepKey), or by the job when the log names none. A test's name
+	// and a seed's assignment hold no dot, so the last dot of a test or seed
+	// key ends its package, and a step or job key holds none.
+	nightlyJobKeyPrefix  = "job-"
+	nightlyStepKeyPrefix = "step-"
+	nightlyKeySeparator  = "."
 	// nightlyUnknownPackage and nightlyRootPackage stand for a log that never
 	// named the package and for the module's root package. A Go import path
 	// holds no parenthesis, so neither is the key of a real package.
@@ -134,6 +136,11 @@ type nightlyJobReport struct {
 	tests []string
 	// seeds are the replay lines of the failing seeds its log names.
 	seeds []seedReplay
+	// steps are the keys of the failed steps its log's marker lines name,
+	// each once and in log order: every step that runs no go test, and a go
+	// test step only when a failure of the job is one no failed test names
+	// (failsWithoutTest).
+	steps []string
 	// packageFailed records that its log names a package that failed without
 	// naming a test: a build or setup failure, a TestMain exit, a package
 	// timeout with no test running.
@@ -145,6 +152,14 @@ type nightlyJobReport struct {
 // workflowJob is the ci.yml job the report's job is a run of.
 func (r nightlyJobReport) workflowJob() string {
 	return ciCheckJob(r.name)
+}
+
+// failsWithoutTest reports whether a failure of the job is one no failed test
+// names: its log names no failed test, or names a package that failed without
+// naming one. Such a failure is keyed by the job's failed steps, or by the
+// job when its log names no failed step.
+func (r nightlyJobReport) failsWithoutTest() bool {
+	return len(r.tests) == 0 || r.packageFailed
 }
 
 // hasLog reports whether the job ran far enough to leave a log that can name
@@ -207,13 +222,16 @@ func nightlyAggregateRepeats(reports []nightlyJobReport, i int) bool {
 }
 
 // attributeNightlyFailures reads the log of every job that failed the night
-// and has one, and records the failed tests it names and whether a package
-// failed without naming one. A failed test whose seeds the log names in
-// replay lines is recorded as those seeds, each keyed by its replay, instead
-// of as the test. The aggregate job's log is not read while a job it waits
-// for failed. A log that cannot be read, after the client's retries, is
-// recorded as such and the next job's log is read: a job's verdict never
-// depends on its log. Only a canceled context ends the reads.
+// and has one, and records the failed tests it names, whether a package
+// failed without naming one, and the failed steps its marker lines name:
+// each step that runs no go test, and each go test step too when a failure
+// of the job is one no failed test names. A failed test whose
+// seeds the log names in replay lines is recorded as those seeds, each keyed
+// by its replay, instead of as the test. The aggregate job's log is not read
+// while a job it waits for failed. A log that cannot be read, after the
+// client's retries, is recorded as such and the next job's log is read: a
+// job's verdict never depends on its log. Only a canceled context ends the
+// reads.
 func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string, reports []nightlyJobReport) error {
 	for i := range reports {
 		if !reports[i].hasLog() || nightlyAggregateRepeats(reports, i) {
@@ -235,6 +253,7 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 		parsed := parseGoTestLog(string(log))
 		reports[i].tests, reports[i].seeds = nightlyFailureNames(parsed, seedReplaysFromLog(string(log)))
 		reports[i].packageFailed = parsed.failedPackageWithoutTest()
+		reports[i].steps = nightlyFailedStepKeys(reports[i].name, string(log), reports[i].failsWithoutTest())
 	}
 
 	return nil
@@ -267,10 +286,11 @@ func nightlyFailureNames(log goTestLog, replays []seedReplay) ([]string, []seedR
 }
 
 // nightlyFailureKeys names what failed in a run, each key with the ci.yml
-// jobs it failed in: every failed test, and the job itself when its log
-// names no test or names a package that failed without naming one. A job
-// that did not run yields no key, and the aggregate none while a job it
-// waits for failed.
+// jobs it failed in: every failed test, every failed step that runs no go
+// test, and, for a job whose log names no test or names a package that
+// failed without naming one, every failed go test step its log names too,
+// or the job itself when it names no failed step. A job that did not run
+// yields no key, and the aggregate none while a job it waits for failed.
 func nightlyFailureKeys(reports []nightlyJobReport) map[string][]string {
 	jobsByKey := map[string]map[string]bool{}
 	add := func(key string, job string) {
@@ -283,8 +303,11 @@ func nightlyFailureKeys(reports []nightlyJobReport) map[string][]string {
 		if !report.result.failsTheNight() || report.result == nightlyJobNotRun || nightlyAggregateRepeats(reports, i) {
 			continue
 		}
-		if len(report.tests) == 0 || report.packageFailed {
+		if report.failsWithoutTest() && len(report.steps) == 0 {
 			add(nightlyJobKeyPrefix+sanitizeNightlyKey(report.name), report.workflowJob())
+		}
+		for _, step := range report.steps {
+			add(step, report.workflowJob())
 		}
 		for _, test := range report.tests {
 			add(test, report.workflowJob())
@@ -340,9 +363,10 @@ func nightlyFailedTestKey(failure goTestFailure) string {
 	return qualifier + nightlyKeySeparator + failure.test
 }
 
-// sanitizeNightlyKey maps a job's name, a matrix leg's values included, onto
-// letters, digits, '_' and '-', so a job key needs no quoting on a command
-// line: `verify-full (macos-latest)` is keyed job-verify-full--macos-latest.
+// sanitizeNightlyKey maps a job's name, a matrix leg's values included, or a
+// step's name onto letters, digits, '_' and '-', so a job or step key needs no
+// quoting on a command line: `verify-full (macos-latest)` is keyed
+// job-verify-full--macos-latest.
 func sanitizeNightlyKey(name string) string {
 	var b strings.Builder
 	for _, r := range name {
@@ -354,6 +378,43 @@ func sanitizeNightlyKey(name string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
+}
+
+// nightlyStepKey is the claim key of a failed step of a job: step-, the job
+// and the step, each through sanitizeNightlyKey, so the key of the lint step
+// of `verify-full (macos-latest)` is step-verify-full--macos-latest-lint. It
+// is its own claim ref name (TestNightlyCheckClaimsAFailedStepUnderItsOwnKey).
+func nightlyStepKey(job string, step verifyStepName) string {
+	return nightlyStepKeyPrefix + sanitizeNightlyKey(job) + "-" + sanitizeNightlyKey(string(step))
+}
+
+// nightlyFailedStepKeys keys the failed steps the marker lines of a job's log
+// name, each once and in log order: every step that runs no go test, whose
+// failure no failed test can name, and a go test step only withGoTestSteps,
+// when a failure of the job is one no failed test names. Nothing depends on
+// where a marker lands among the tests' lines, which reach the log on
+// another pipe. A line is read the way go test lines are,
+// after the byte-order mark and the timestamp CI adds, and a -json event is
+// never a marker, since a step prints its marker outside go test's output.
+func nightlyFailedStepKeys(job string, log string, withGoTestSteps bool) []string {
+	keys := []string{}
+	seen := map[string]bool{}
+	for line := range strings.Lines(log) {
+		text, _, isEvent := decodeGoTestLogLine(line)
+		if isEvent {
+			continue
+		}
+		step, isMarker := readFailedStepMarker(text)
+		if !isMarker || (step.runsGoTest() && !withGoTestSteps) {
+			continue
+		}
+		if key := nightlyStepKey(job, step); !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+
+	return keys
 }
 
 func sortedSetKeys(set map[string]bool) []string {

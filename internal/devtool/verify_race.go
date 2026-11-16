@@ -67,12 +67,12 @@ func runRaceVerification(
 			return fmt.Errorf("write status: %w", err)
 		}
 
-		_, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, raceStepName,
+		_, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, string(raceStepName),
 			"test", "-race", "-count=1", deadline, syncTestTree)
 
 		return err
 	})
 }
 
-// raceStepName names the race profile's one step in its summary.
-const raceStepName = "sync race"
+// raceStepName names the race profile's one step.
+const raceStepName verifyStepName = "sync-race"

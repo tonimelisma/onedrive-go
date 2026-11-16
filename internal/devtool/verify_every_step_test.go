@@ -111,10 +111,10 @@ func TestRunVerifyPublicRunsUnitTestsAfterLintFails(t *testing.T) {
 
 	var summary VerifySummary
 	readVerifySummaryFile(t, summaryPath, &summary)
-	assert.Equal(t, verifySummaryStatusFail, requireVerifySummaryStep(t, summary, "lint").Status)
-	assertVerifySummaryHasStep(t, summary, "build")
-	assertVerifySummaryHasStep(t, summary, "unit tests")
-	assertVerifySummaryHasStep(t, summary, "coverage")
+	assert.Equal(t, verifySummaryStatusFail, requireVerifySummaryStep(t, summary, lintStepName).Status)
+	assertVerifySummaryHasStep(t, summary, buildStepName)
+	assertVerifySummaryHasStep(t, summary, unitTestsStepName)
+	assertVerifySummaryHasStep(t, summary, coverageStepName)
 	assertVerifySummaryHasStep(t, summary, fullE2ECompileStepName)
 }
 
@@ -151,7 +151,7 @@ func TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail(t *testing.T)
 
 	var summary VerifySummary
 	readVerifySummaryFile(t, summaryPath, &summary)
-	assert.Equal(t, verifySummaryStatusNotRun, requireVerifySummaryStep(t, summary, "coverage").Status)
+	assert.Equal(t, verifySummaryStatusNotRun, requireVerifySummaryStep(t, summary, coverageStepName).Status)
 	assertVerifySummaryHasStep(t, summary, fullE2ECompileStepName)
 }
 

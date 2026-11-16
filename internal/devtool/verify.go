@@ -17,7 +17,6 @@ type VerifyProfile string
 
 const (
 	defaultCoveragePattern           = "onedrive-go-cover.*"
-	fullE2ECompileStepName           = "e2e-full compile"
 	fullE2ECompileArtifactName       = "onedrive-go-e2e-full.test"
 	authPreflightTestName            = "TestE2E_AuthPreflight_Fast"
 	authE2EPreflightPattern          = "^" + authPreflightTestName + "$"
@@ -207,8 +206,10 @@ type StressSlowTestSummary struct {
 }
 
 type verifySummaryCollector struct {
-	summary         VerifySummary
-	stdout          io.Writer
+	summary VerifySummary
+	stdout  io.Writer
+	// stderr takes the marker line of every step that fails.
+	stderr          io.Writer
 	summaryJSONPath string
 	e2eLogDir       string
 	startedAt       time.Time
@@ -223,7 +224,7 @@ const (
 )
 
 type fullE2EBucketSpec struct {
-	Name      string
+	Name      verifyStepName
 	Kind      fullE2EBucketKind
 	TestNames []string
 	Parallel  int
@@ -304,7 +305,7 @@ func runVerifyProfileWithEnv(
 
 	stdout, stderr := resolveVerifyWriters(opts)
 	effectiveE2ELogDir := resolvedE2ELogDir(opts.E2ELogDir, plan)
-	collector := newVerifySummaryCollector(profile, stdout, opts.SummaryJSONPath, effectiveE2ELogDir)
+	collector := newVerifySummaryCollector(profile, stdout, stderr, opts.SummaryJSONPath, effectiveE2ELogDir)
 	defer func() {
 		if finalizeErr := collector.finalize(runErr); finalizeErr != nil {
 			if runErr == nil {
@@ -497,24 +498,24 @@ func runPublicVerification(
 	// The full tier runs every step and reports every failure. A lint or rule
 	// failure says nothing about the tests, and on the nightly, the one run of
 	// this tier, stopping there would hide the tests' state for a day.
-	publicSteps := []verifyStep{{"format", formatStep(plan.checkFormat)}}
+	publicSteps := []verifyStep{{name: formatStepName, run: formatStep(plan.checkFormat)}}
 	publicSteps = append(publicSteps, lintSteps()...)
 	publicSteps = append(publicSteps, repoRuleSteps()...)
-	publicSteps = append(publicSteps, verifyStep{"build", runBuild})
+	publicSteps = append(publicSteps, verifyStep{name: buildStepName, run: runBuild})
 	stepsErr := runEveryVerifyStep(ctx, runner, repoRoot, env, collector, stdout, stderr, publicSteps)
 
-	unitErr := collector.runStep("unit tests", func() error {
+	unitErr := collector.runStep(unitTestsStepName, func() error {
 		return runUnitTests(ctx, runner, repoRoot, env, coverageFile, unitTimeout, stdout, stderr)
 	})
 	var coverageErr error
 	if unitErr == nil {
-		coverageErr = collector.runStep("coverage", func() error {
+		coverageErr = collector.runStep(coverageStepName, func() error {
 			return runCoverageGate(ctx, runner, repoRoot, env, coverageFile, coverageThreshold, stdout)
 		})
 	} else {
 		// A failed run leaves a partial coverage profile, and gating it would
 		// add a second failure that is only the first one's shadow.
-		collector.recordStepNotRun("coverage", "unit tests failed")
+		collector.recordStepNotRun(coverageStepName, "unit tests failed")
 	}
 	compileErr := collector.runStep(fullE2ECompileStepName, func() error {
 		return runE2EFullCompileCheck(ctx, runner, repoRoot, env, stdout, stderr)
@@ -640,6 +641,9 @@ func (f formatterCommand) argsWithMode(mode string) []string {
 	return append(append([]string{}, f.args...), mode, ".")
 }
 
+// formatStepName names the format step.
+const formatStepName verifyStepName = "format"
+
 // formatStep is the format step of a profile: rewrite the tree, or, with
 // --check-format, only check it.
 func formatStep(checkOnly bool) func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error {
@@ -730,6 +734,10 @@ func supportedPlatforms() [supportedPlatformCount]string {
 	return [supportedPlatformCount]string{"linux", "darwin", "freebsd"}
 }
 
+// buildStepName names the build step: the host build, then the build for
+// every supported platform.
+const buildStepName verifyStepName = "build"
+
 func runBuild(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
 	if err := writeStatus(stdout, "==> go build\n"); err != nil {
 		return fmt.Errorf("write status: %w", err)
@@ -761,6 +769,9 @@ func runCrossPlatformBuild(
 
 	return nil
 }
+
+// unitTestsStepName names the full unit tier's step.
+const unitTestsStepName verifyStepName = "unit-tests"
 
 func runUnitTests(
 	ctx context.Context,
@@ -919,18 +930,114 @@ func resolveShortUnitTestTimeout(explicit time.Duration, cores int) time.Duratio
 	return shortUnitTestTimeoutForCores(cores)
 }
 
+// verifyStepName is the stable name of a step a verify profile runs, a
+// bucket of the full live suite included: lower-case words joined by
+// hyphens, a constant declared beside its step, never built from a path, a
+// package list, a count or a command line. The summary records a step under
+// it, a failed step's marker line names it, and the nightly reader keys a
+// failed job by it, so a step's name is part of a nightly key.
+type verifyStepName string
+
+// verifyStepNames is the closed set of step names: every constant of type
+// verifyStepName, each once. TestVerifyProfilesNameEveryStepOnceFromTheClosedSet
+// holds it to the constants the package declares and, both ways, to the
+// steps the profiles run; the nightly reader takes a marker line only for a
+// name in it.
+func verifyStepNames() []verifyStepName {
+	return []verifyStepName{
+		formatStepName,
+		lintStepName,
+		workflowLintStepName,
+		outputBoundariesStepName,
+		testConventionsStepName,
+		readmeStatusStepName,
+		specGovernsStepName,
+		layeringStepName,
+		retiredBacklogIDsStepName,
+		mutexOwnershipDocsStepName,
+		requirementTraceabilityStepName,
+		buildStepName,
+		hostBuildStepName,
+		taggedVetStepName,
+		unitTestsStepName,
+		coverageStepName,
+		fullE2ECompileStepName,
+		shortUnitTestsStepName,
+		authPreflightStepName,
+		fastFixturePreflightStepName,
+		fastE2EStepName,
+		fullFixturePreflightStepName,
+		fullE2EParallelMiscBucketName,
+		fullE2ESerialSyncBucketName,
+		fullE2ESerialWatchSharedBucketName,
+		integrationStepName,
+		stressMultisyncRaceStepName,
+		stressSyncConcurrencyRaceStepName,
+		stressSyncRaceStepName,
+		raceStepName,
+		seedsStepName,
+		failedTestRerunStepName,
+	}
+}
+
+// runsGoTest reports whether the step runs go test, whose failed tests name
+// the step's failure in its log. A step that runs no go test (the format,
+// lint and rule checks, the builds, the tagged vet, the coverage gate and
+// the compile of the full live suite) fails in a way no test names, so the
+// nightly reader keys its marker whenever a log holds it. The switch names
+// every step of the set, so a new step must say which it is
+// (TestVerifyStepNamesSayWhetherTheyRunGoTest); a name outside the set runs
+// none.
+func (name verifyStepName) runsGoTest() bool {
+	switch name {
+	case unitTestsStepName, shortUnitTestsStepName, authPreflightStepName, fastFixturePreflightStepName,
+		fastE2EStepName, fullFixturePreflightStepName, fullE2EParallelMiscBucketName, fullE2ESerialSyncBucketName,
+		fullE2ESerialWatchSharedBucketName, integrationStepName, stressMultisyncRaceStepName,
+		stressSyncConcurrencyRaceStepName, stressSyncRaceStepName, raceStepName, seedsStepName, failedTestRerunStepName:
+		return true
+	case formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
+		readmeStatusStepName, specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
+		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
+		taggedVetStepName, coverageStepName, fullE2ECompileStepName:
+		return false
+	}
+
+	return false
+}
+
 // verifyStep is one named step of a verify profile, recorded in the summary
 // under its name.
 type verifyStep struct {
-	name string
+	name verifyStepName
 	run  func(context.Context, commandRunner, string, []string, io.Writer, io.Writer) error
 }
+
+// The lint profile's steps.
+const (
+	lintStepName         verifyStepName = "lint"
+	workflowLintStepName verifyStepName = "workflow-lint"
+)
 
 // lintSteps are the lint profile's steps, which every profile that lints runs:
 // golangci-lint over the Go code, then actionlint over the workflow files.
 func lintSteps() []verifyStep {
-	return []verifyStep{{"lint", runLint}, {"workflow lint", runWorkflowLint}}
+	return []verifyStep{
+		{name: lintStepName, run: runLint},
+		{name: workflowLintStepName, run: runWorkflowLint},
+	}
 }
+
+// The repository rules' steps.
+const (
+	outputBoundariesStepName        verifyStepName = "output-boundaries"
+	testConventionsStepName         verifyStepName = "test-conventions"
+	readmeStatusStepName            verifyStepName = "readme-status"
+	specGovernsStepName             verifyStepName = "spec-governs"
+	layeringStepName                verifyStepName = "layering"
+	retiredBacklogIDsStepName       verifyStepName = "retired-backlog-ids"
+	mutexOwnershipDocsStepName      verifyStepName = "mutex-ownership-docs"
+	requirementTraceabilityStepName verifyStepName = "requirement-traceability"
+)
 
 // repoRuleSteps are the repository's static rules: the output-boundary,
 // test-convention, README, spec-ownership, layering, backlog-id, mutex-doc
@@ -938,14 +1045,14 @@ func lintSteps() []verifyStep {
 // the tree runs them.
 func repoRuleSteps() []verifyStep {
 	return []verifyStep{
-		{"output boundaries", runOutputBoundaries},
-		{"test conventions", runTestConventions},
-		{"README status", runReadmeStatus},
-		{"spec governs", runSpecGoverns},
-		{"layering", runLayering},
-		{"retired backlog ids", runRetiredBacklogIDs},
-		{"mutex ownership docs", runMutexDocs},
-		{"requirement traceability", runRequirementTraceability},
+		{name: outputBoundariesStepName, run: runOutputBoundaries},
+		{name: testConventionsStepName, run: runTestConventions},
+		{name: readmeStatusStepName, run: runReadmeStatus},
+		{name: specGovernsStepName, run: runSpecGoverns},
+		{name: layeringStepName, run: runLayering},
+		{name: retiredBacklogIDsStepName, run: runRetiredBacklogIDs},
+		{name: mutexOwnershipDocsStepName, run: runMutexDocs},
+		{name: requirementTraceabilityStepName, run: runRequirementTraceability},
 	}
 }
 
@@ -1009,6 +1116,9 @@ const (
 	integrationTestPrefix = "TestIntegration_"
 )
 
+// integrationStepName names the integration tier's one step.
+const integrationStepName verifyStepName = "integration"
+
 func runIntegration(
 	ctx context.Context,
 	runner commandRunner,
@@ -1017,7 +1127,7 @@ func runIntegration(
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 ) error {
-	return collector.runStep("integration", func() error {
+	return collector.runStep(integrationStepName, func() error {
 		if err := writeStatus(stdout, "==> go test -tags=integration\n"); err != nil {
 			return fmt.Errorf("write status: %w", err)
 		}

@@ -13,9 +13,16 @@ import (
 	"time"
 )
 
+// The full live suite's buckets, each a step of the e2e-full profile.
+const (
+	fullE2EParallelMiscBucketName      verifyStepName = "full-parallel-misc"
+	fullE2ESerialSyncBucketName        verifyStepName = "full-serial-sync"
+	fullE2ESerialWatchSharedBucketName verifyStepName = "full-serial-watch-shared"
+)
+
 func fullE2EParallelMiscBucket() fullE2EBucketSpec {
 	return fullE2EBucketSpec{
-		Name:      "full-parallel-misc",
+		Name:      fullE2EParallelMiscBucketName,
 		Kind:      fullE2EBucketKindParallelMisc,
 		TestNames: fullE2EParallelMiscTestNames(),
 		Parallel:  fullE2EParallelMiscParallel,
@@ -25,7 +32,7 @@ func fullE2EParallelMiscBucket() fullE2EBucketSpec {
 
 func fullE2ESerialSyncBucket() fullE2EBucketSpec {
 	return fullE2EBucketSpec{
-		Name:      "full-serial-sync",
+		Name:      fullE2ESerialSyncBucketName,
 		Kind:      fullE2EBucketKindSerialSync,
 		TestNames: fullE2ESerialSyncTestNames(),
 		Parallel:  fullE2ESerialParallel,
@@ -35,7 +42,7 @@ func fullE2ESerialSyncBucket() fullE2EBucketSpec {
 
 func fullE2ESerialWatchSharedBucket() fullE2EBucketSpec {
 	return fullE2EBucketSpec{
-		Name:      "full-serial-watch-shared",
+		Name:      fullE2ESerialWatchSharedBucketName,
 		Kind:      fullE2EBucketKindSerialWatchShared,
 		TestNames: fullE2ESerialWatchSharedTestNames(),
 		Parallel:  fullE2ESerialParallel,
@@ -269,6 +276,10 @@ func readE2EQuirkEventCount(logDir string) (int, error) {
 	return len(summary.Events), nil
 }
 
+// fullE2ECompileStepName names the step that compiles the full live suite and
+// vets the tagged source sets.
+const fullE2ECompileStepName verifyStepName = "e2e-full-compile"
+
 // runE2EFullCompileCheck compiles the full-tagged E2E package without running
 // it. The live suite owns a TestMain, so `go test -run=^$` would still execute
 // side effects instead of acting as a pure compile guard.
@@ -342,6 +353,9 @@ func taggedVetTargets() [taggedVetTargetCount][2]string {
 	}
 }
 
+// taggedVetStepName names the quick profile's vet of the tagged source sets.
+const taggedVetStepName verifyStepName = "tagged-vet"
+
 func runTaggedVet(
 	ctx context.Context,
 	runner commandRunner,
@@ -397,6 +411,13 @@ func fullE2EPreflightArgs() []string {
 	}
 }
 
+// The fast live lane's steps, in the order they run.
+const (
+	authPreflightStepName        verifyStepName = "auth-preflight"
+	fastFixturePreflightStepName verifyStepName = "fast-fixture-preflight"
+	fastE2EStepName              verifyStepName = "fast-e2e"
+)
+
 func runE2E(
 	ctx context.Context,
 	runner commandRunner,
@@ -446,7 +467,7 @@ func runFastE2ESuite(
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
 ) error {
-	return collector.runStepWithOutcome("fast e2e", func() (stepOutcome, error) {
+	return collector.runStepWithOutcome(fastE2EStepName, func() (stepOutcome, error) {
 		var output string
 		var err error
 		if classifyLiveQuirks {
@@ -498,7 +519,7 @@ func runFastE2ESuiteWithClassification(
 	// The first attempt's output names what failed; the rerun covers one test.
 	_, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
 		incidentID: incidentID,
-		phase:      "fast e2e",
+		phase:      fastE2EStepName,
 		trigger:    fastDownloadTestName,
 		args:       rerunArgs,
 		firstErr:   err,
@@ -510,9 +531,10 @@ func runFastE2ESuiteWithClassification(
 // classifiedQuirkRerun is one rerun of a documented live-provider quirk.
 type classifiedQuirkRerun struct {
 	incidentID string
-	phase      string
-	trigger    string
-	args       []string
+	// phase is the step the rerun runs inside, recorded under its name.
+	phase   verifyStepName
+	trigger string
+	args    []string
 	// firstErr is the failure the rerun answers.
 	firstErr error
 }
@@ -536,7 +558,7 @@ func rerunClassifiedQuirk(
 	}
 
 	startedAt := time.Now()
-	step := rerun.phase + " rerun of " + rerun.incidentID
+	step := string(rerun.phase) + " rerun of " + rerun.incidentID
 	output, rerunErr := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, step, rerun.args...)
 	if skipped := skippedTopLevelTests(output); rerunErr == nil && len(skipped) > 0 {
 		rerunErr = fmt.Errorf("%s skipped %s, so it verified nothing", step, strings.Join(skipped, ", "))
@@ -545,7 +567,7 @@ func rerunClassifiedQuirk(
 	if rerunErr != nil {
 		status = verifySummaryStatusFail
 	}
-	collector.recordClassifiedRerun(rerun.incidentID, rerun.phase, rerun.trigger, rerun.args, time.Since(startedAt), status)
+	collector.recordClassifiedRerun(rerun.incidentID, string(rerun.phase), rerun.trigger, rerun.args, time.Since(startedAt), status)
 	if rerunErr != nil {
 		return output, fmt.Errorf("%w (first attempt: %w)", rerunErr, rerun.firstErr)
 	}
@@ -572,7 +594,7 @@ func runE2EPreflightAuth(
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
 ) error {
-	return collector.runStepWithOutcome("auth preflight", func() (stepOutcome, error) {
+	return collector.runStepWithOutcome(authPreflightStepName, func() (stepOutcome, error) {
 		if err := writeStatus(stdout, "==> go test -tags=e2e auth preflight\n"); err != nil {
 			return stepOutcome{}, fmt.Errorf("write status: %w", err)
 		}
@@ -588,7 +610,7 @@ func runE2EPreflightAuth(
 			// failed test: the step then names the one the first attempt failed.
 			output, err = rerunClassifiedQuirk(ctx, runner, repoRoot, env, collector, stdout, stderr, classifiedQuirkRerun{
 				incidentID: authPreflightIncidentID,
-				phase:      "auth preflight",
+				phase:      authPreflightStepName,
 				trigger:    authE2EPreflightPattern,
 				args:       args,
 				firstErr:   err,
@@ -678,7 +700,7 @@ func runE2EPreflightFast(
 	stdout, stderr io.Writer,
 ) error {
 	return runE2EPreflight(ctx, runner, repoRoot, env, collector, stdout, stderr, e2ePreflightSpec{
-		stepName:    "fast fixture preflight",
+		stepName:    fastFixturePreflightStepName,
 		status:      "==> go test -tags=e2e fixture preflight\n",
 		description: "fast e2e fixture preflight",
 		args:        fastE2EPreflightArgs(),
@@ -687,7 +709,7 @@ func runE2EPreflightFast(
 
 // e2ePreflightSpec is one fixture preflight step.
 type e2ePreflightSpec struct {
-	stepName    string
+	stepName    verifyStepName
 	status      string
 	description string
 	args        []string
@@ -894,6 +916,9 @@ func runFullE2EBucketWithClassification(
 	return failedTests, err
 }
 
+// fullFixturePreflightStepName names the full live suite's fixture preflight.
+const fullFixturePreflightStepName verifyStepName = "full-fixture-preflight"
+
 func runE2EPreflightFull(
 	ctx context.Context,
 	runner commandRunner,
@@ -903,7 +928,7 @@ func runE2EPreflightFull(
 	stdout, stderr io.Writer,
 ) error {
 	return runE2EPreflight(ctx, runner, repoRoot, env, collector, stdout, stderr, e2ePreflightSpec{
-		stepName:    "full fixture preflight",
+		stepName:    fullFixturePreflightStepName,
 		status:      "==> go test -tags='e2e e2e_full' fixture preflight\n",
 		description: "full e2e fixture preflight",
 		args:        fullE2EPreflightArgs(),

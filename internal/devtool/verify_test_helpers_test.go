@@ -38,13 +38,15 @@ type fakeRunner struct {
 	// so a test can show a step the output go test would have printed. When
 	// it is nil, a go command prints what passingGoTestOutput says.
 	runStdoutFunc func(args []string) string
+	// runStderrFunc, when set, returns what a Run call writes to its stderr.
+	runStderrFunc func(args []string) string
 }
 
 func (f *fakeRunner) Run(
 	_ context.Context,
 	cwd string,
 	env []string,
-	stdout, _ io.Writer,
+	stdout, stderr io.Writer,
 	name string,
 	args ...string,
 ) error {
@@ -64,6 +66,11 @@ func (f *fakeRunner) Run(
 	}
 	if _, err := io.WriteString(stdout, printed); err != nil {
 		return fmt.Errorf("write fake stdout: %w", err)
+	}
+	if f.runStderrFunc != nil {
+		if _, err := io.WriteString(stderr, f.runStderrFunc(args)); err != nil {
+			return fmt.Errorf("write fake stderr: %w", err)
+		}
 	}
 
 	if err, ok := f.runErrByKey[name+" "+strings.Join(args, " ")]; ok {
@@ -141,11 +148,11 @@ func readVerifySummaryFile(t *testing.T, path string, summary *VerifySummary) {
 	require.NoError(t, json.Unmarshal(data, summary))
 }
 
-func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string) {
+func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name verifyStepName) {
 	t.Helper()
 
 	for _, step := range summary.Steps {
-		if step.Name != name {
+		if step.Name != string(name) {
 			continue
 		}
 
@@ -156,11 +163,11 @@ func assertVerifySummaryHasStep(t *testing.T, summary VerifySummary, name string
 	require.Failf(t, "missing summary step", "step %q not found", name)
 }
 
-func requireVerifySummaryStep(t *testing.T, summary VerifySummary, name string) VerifyStepSummary {
+func requireVerifySummaryStep(t *testing.T, summary VerifySummary, name verifyStepName) VerifyStepSummary {
 	t.Helper()
 
 	for _, step := range summary.Steps {
-		if step.Name == name {
+		if step.Name == string(name) {
 			return step
 		}
 	}
@@ -169,11 +176,11 @@ func requireVerifySummaryStep(t *testing.T, summary VerifySummary, name string) 
 	return VerifyStepSummary{}
 }
 
-func assertVerifyBucketSummary(t *testing.T, summary VerifySummary, name string, status string) {
+func assertVerifyBucketSummary(t *testing.T, summary VerifySummary, name verifyStepName, status string) {
 	t.Helper()
 
 	for i := range summary.E2EFullBuckets {
-		if summary.E2EFullBuckets[i].Name != name {
+		if summary.E2EFullBuckets[i].Name != string(name) {
 			continue
 		}
 
