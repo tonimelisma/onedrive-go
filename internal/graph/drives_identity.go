@@ -69,18 +69,19 @@ func (c *Client) drivesList(ctx context.Context) ([]Drive, error) {
 	return drives, nil
 }
 
-// fetchAllDrives follows @odata.nextLink to the end of a drive listing.
+// fetchAllDrives follows @odata.nextLink to the end of a drive listing, its
+// pages counted by askedPages.
 //
-// Dropping the continuation here is invisible rather than loud: the caller
-// receives a short list that looks complete, so a drive simply does not exist
-// as far as the rest of the program is concerned. The response type did not
-// even carry the field, so nothing could have noticed.
+// Dropping the continuation here would be invisible rather than loud: the
+// caller would receive a short list that looks complete, so a drive would
+// simply not exist as far as the rest of the program is concerned.
 func (c *Client) fetchAllDrives(ctx context.Context, apiPath string, subject string) ([]Drive, error) {
 	var drives []Drive
 
-	for page := 1; apiPath != ""; page++ {
-		if page > c.maxListPages {
-			return nil, fmt.Errorf("graph: listing %s exceeded %d pages", subject, c.maxListPages)
+	pages := newAskedPages("listing "+subject, c.maxListPages)
+	for apiPath != "" {
+		if _, err := pages.ask(apiPath); err != nil {
+			return nil, err
 		}
 
 		dlr, err := c.fetchDrivesPage(ctx, apiPath, subject)

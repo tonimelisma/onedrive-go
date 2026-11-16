@@ -46,11 +46,10 @@ type ChildrenPageFunc func(page []Item) (keepListing bool)
 // transport and, for a page asked for at the drive root's children
 // collection (the first page, and a later one whose link keeps that form),
 // by the documented quirk retry, never from the first page; the pages before
-// it have been handed on. The loop is bounded by maxListPages pages asked
-// for, and a next link back to a page it already asked for fails the listing
-// before that page is asked for again: a circular continuation would hand
-// the caller the same children over and over, and a caller that walks them
-// would do its work for them again each time.
+// it have been handed on. Its pages are counted by askedPages, as every
+// non-delta listing's are: a circular continuation would hand the caller the
+// same children over and over, and a caller that walks them would do its
+// work for them again each time.
 func (c *Client) visitChildPages(
 	ctx context.Context,
 	apiPath string,
@@ -63,17 +62,12 @@ func (c *Client) visitChildPages(
 	c.logger.Debug(entryMsg, args...)
 
 	handed := 0
-	// askedPages holds the page number of each path asked for, at most
-	// maxListPages of them.
-	askedPages := make(map[string]int)
-	for page := 1; apiPath != ""; page++ {
-		if page > c.maxListPages {
-			return fmt.Errorf("graph: %s exceeded %d pages", entryMsg, c.maxListPages)
+	pages := newAskedPages(entryMsg, c.maxListPages)
+	for apiPath != "" {
+		page, err := pages.ask(apiPath)
+		if err != nil {
+			return err
 		}
-		if earlier, asked := askedPages[apiPath]; asked {
-			return fmt.Errorf("graph: %s looped back from page %d to page %d", entryMsg, page-1, earlier)
-		}
-		askedPages[apiPath] = page
 
 		pageItems, nextPath, err := c.listChildrenPage(ctx, apiPath, page)
 		if err != nil {
@@ -470,4 +464,39 @@ func (c *Client) stripBaseURL(fullURL string) (string, error) {
 	}
 
 	return fullURL[len(c.baseURL):], nil
+}
+
+// askedPages counts the pages one non-delta paged listing asks for. Every
+// such loop asks it before each request, with the path it is about to ask
+// for: a page past maxPages fails the listing, and so does a next link back
+// to a page the listing already asked for, before that page is asked for
+// again. A circular continuation would otherwise be followed until the cap,
+// each page's results handed on or gathered again every time.
+type askedPages struct {
+	listing  string
+	maxPages int
+	// pageOf holds the page number of each path asked for, at most maxPages
+	// of them.
+	pageOf map[string]int
+}
+
+func newAskedPages(listing string, maxPages int) askedPages {
+	return askedPages{listing: listing, maxPages: maxPages, pageOf: make(map[string]int)}
+}
+
+// ask records apiPath as the listing's next page and returns that page's
+// number, or the error that ends the listing without asking for it.
+func (p *askedPages) ask(apiPath string) (int, error) {
+	page := len(p.pageOf) + 1
+	if page > p.maxPages {
+		return 0, fmt.Errorf("graph: %s exceeded %d pages", p.listing, p.maxPages)
+	}
+
+	if earlier, asked := p.pageOf[apiPath]; asked {
+		return 0, fmt.Errorf("graph: %s looped back from page %d to page %d", p.listing, page-1, earlier)
+	}
+
+	p.pageOf[apiPath] = page
+
+	return page, nil
 }
