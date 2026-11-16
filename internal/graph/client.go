@@ -54,7 +54,8 @@ const (
 	defaultMaxListPages = 10000
 
 	// defaultMaxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
-	// A buggy API or circular NextLinks could loop forever without this guard.
+	// A chain of ever new NextLinks would loop forever without this guard; a
+	// circular one fails at its first repeat (askedPages).
 	defaultMaxDeltaPages = 10000
 
 	// maxRecursionDepth is the upper bound on folder nesting depth for
