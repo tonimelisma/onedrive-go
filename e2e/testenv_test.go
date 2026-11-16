@@ -190,7 +190,8 @@ func captureGoToolchainCaches() {
 
 // copyRotatedTokenBack copies a token the CLI may have rotated during the run
 // from the isolated data dir back into .testdata/, so the next run starts
-// from the newest refresh token.
+// from the newest refresh token. The token file's name spells its account, so
+// a warning prints the paths and the os error masked.
 func copyRotatedTokenBack(appDataDir, tokenName string) {
 	rotatedPath := filepath.Join(appDataDir, tokenName)
 	if _, statErr := os.Stat(rotatedPath); statErr != nil {
@@ -200,13 +201,15 @@ func copyRotatedTokenBack(appDataDir, tokenName string) {
 	origPath := filepath.Join(testCredentialDir, tokenName)
 	data, readErr := os.ReadFile(rotatedPath) //nolint:gosec // token file inside the suite's own isolation temp dir
 	if readErr != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %v\n", rotatedPath, readErr)
+		fmt.Fprintf(os.Stderr, "WARNING: cannot read rotated token %s: %s\n",
+			suiteDriveRoles.Redact(rotatedPath), suiteDriveRoles.Redact(readErr.Error()))
 		return
 	}
 
 	//nolint:gosec // writes back into the repo's own .testdata credential bundle
 	if writeErr := os.WriteFile(origPath, data, 0o600); writeErr != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %v\n", origPath, writeErr)
+		fmt.Fprintf(os.Stderr, "WARNING: cannot write rotated token back to %s: %s\n",
+			suiteDriveRoles.Redact(origPath), suiteDriveRoles.Redact(writeErr.Error()))
 	}
 }
 

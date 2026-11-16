@@ -1,13 +1,74 @@
-//go:build e2e
-
 package e2e
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type sharedFileCandidate struct {
+	fixture        resolvedSharedFileFixture
+	listingMatched bool
+}
+
+func selectSharedFileFixture(candidates []sharedFileCandidate) (resolvedSharedFileFixture, error) {
+	if len(candidates) == 0 {
+		return resolvedSharedFileFixture{}, fmt.Errorf(
+			"shared-file fixture did not resolve for any configured recipient account",
+		)
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0].fixture, nil
+	}
+
+	var listingMatched []sharedFileCandidate
+	for i := range candidates {
+		if candidates[i].listingMatched {
+			listingMatched = append(listingMatched, candidates[i])
+		}
+	}
+
+	if len(listingMatched) == 1 {
+		return listingMatched[0].fixture, nil
+	}
+
+	if !sharedFileCandidatesShareRemoteIdentity(candidates) {
+		return resolvedSharedFileFixture{}, fmt.Errorf(
+			"shared-file fixture resolved to multiple distinct configured recipient accounts (%d matches)",
+			len(candidates),
+		)
+	}
+
+	if len(listingMatched) > 0 {
+		return listingMatched[0].fixture, nil
+	}
+
+	return candidates[0].fixture, nil
+}
+
+func sharedFileCandidatesShareRemoteIdentity(candidates []sharedFileCandidate) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+
+	expectedDriveID := candidates[0].fixture.RawStat.RemoteDriveID
+	expectedItemID := candidates[0].fixture.RawStat.RemoteItemID
+	if expectedDriveID == "" || expectedItemID == "" {
+		return false
+	}
+
+	for i := 1; i < len(candidates); i++ {
+		if candidates[i].fixture.RawStat.RemoteDriveID != expectedDriveID ||
+			candidates[i].fixture.RawStat.RemoteItemID != expectedItemID {
+			return false
+		}
+	}
+
+	return true
+}
 
 func TestSelectSharedFileFixture_PrefersUniqueListingMatch(t *testing.T) {
 	t.Parallel()

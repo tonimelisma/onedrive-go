@@ -464,12 +464,6 @@ const pollTimeout = 30 * time.Second
 // placeholder.
 const shortcutFixturePropagationTimeout = 2 * time.Minute
 
-// shortcutFixtureProviderOmissionProofDelay is the shorter window after which a
-// decoded parent-root listing plus independently reachable shared target is
-// enough evidence to classify a missing shortcut placeholder as provider
-// omission instead of spending the full fixture propagation budget.
-const shortcutFixtureProviderOmissionProofDelay = 30 * time.Second
-
 // remoteWritePropagationTimeout covers slower live-account propagation after
 // successful writes. GitHub-hosted CI has observed newly created folders/files
 // take longer than pollTimeout to become readable via list/stat.
@@ -510,12 +504,6 @@ func pollBackoff(attempt int) time.Duration {
 	}
 
 	return d
-}
-
-func isRetryableGraphGatewayFailure(stderr string) bool {
-	return strings.Contains(stderr, "graph: HTTP 502") ||
-		strings.Contains(stderr, "graph: HTTP 503") ||
-		strings.Contains(stderr, "graph: HTTP 504")
 }
 
 // pollCLIWithConfigRetryingTransientGraphFailures retries only when a live CLI

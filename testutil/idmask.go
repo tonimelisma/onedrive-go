@@ -576,7 +576,7 @@ func logValueEnd(text string, start int) int {
 // ID is the suite's own, so both stay readable.
 func isIdentifierKey(key string) bool {
 	switch key {
-	case "id", "email", "etag", "ctag", "remote_drive",
+	case "id", "email", "etag", "remote_drive",
 		"owner_name", "shared_by_name", "shared_owner_name", "org_name", "site_name", "library_name":
 		return true
 	case "run_id":

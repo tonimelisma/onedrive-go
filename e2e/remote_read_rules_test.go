@@ -409,9 +409,11 @@ func remoteStatCreatedAt(stdout string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("decode stat --json: %w", err)
 	}
 
+	// The text is the command's output, which time.Parse's error quotes, so
+	// neither is printed.
 	createdAt, err := time.Parse(time.RFC3339, stat.CreatedAt)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse created_at %q: %w", stat.CreatedAt, err)
+		return time.Time{}, fmt.Errorf("parse created_at: its %d bytes are no RFC 3339 time", len(stat.CreatedAt))
 	}
 
 	return createdAt, nil
@@ -442,9 +444,11 @@ func pauseCommandEnd(stdout string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("decode pause --json: %w", err)
 	}
 
+	// The text is the command's output, which time.Parse's error quotes, so
+	// neither is printed.
 	pausedUntil, err := time.Parse(time.RFC3339, pause.PausedUntil)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse paused_until %q: %w", pause.PausedUntil, err)
+		return time.Time{}, fmt.Errorf("parse paused_until: its %d bytes are no RFC 3339 time", len(pause.PausedUntil))
 	}
 
 	return pausedUntil, nil
@@ -463,6 +467,24 @@ func TestPauseCommandEnd(t *testing.T) {
 
 	_, err = pauseCommandEnd("Paused the drive until Sat Nov 14 10:00.\n")
 	require.ErrorContains(t, err, "decode pause --json", "human output instead of JSON")
+}
+
+// A time field that holds no time is the command's output, so the error of
+// a reader of one names its length and none of its text.
+//
+// Validates: R-6.10.27
+func TestTimeFieldReadersPrintNoOutput(t *testing.T) {
+	t.Parallel()
+
+	const planted = "planted words"
+	for field, read := range map[string]func(string) (time.Time, error){
+		"created_at":   remoteStatCreatedAt,
+		"paused_until": pauseCommandEnd,
+	} {
+		_, err := read(`{"` + field + `":"` + planted + `"}`)
+		require.ErrorContainsf(t, err, "parse "+field, "a %s that is no time", field)
+		assert.NotContainsf(t, err.Error(), planted, "the error of a %s that is no time prints it", field)
+	}
 }
 
 // deleteDisappearanceReady reports whether one listing attempt shows the
