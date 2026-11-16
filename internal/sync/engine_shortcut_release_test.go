@@ -891,11 +891,11 @@ func TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete(t *testing.T) {
 		{point: crashPointLocalDeleteTrashed, occurrence: 1},
 		{point: crashPointLocalDeleteTrashed, occurrence: 2},
 	} {
-		for _, powerLoss := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/%d", crashCaseName(tc.point, powerLoss), tc.occurrence), func(t *testing.T) {
+		for _, lostWAL := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%d", crashCaseName(tc.point, lostWAL), tc.occurrence), func(t *testing.T) {
 				t.Parallel()
 
-				capture, recovered := crashDuringRelease(t, tc.point, tc.occurrence, powerLoss)
+				capture, recovered := crashDuringRelease(t, tc.point, tc.occurrence, lostWAL)
 
 				assert.Empty(t, capture.remote.deletes, "the crashed release deleted nothing on OneDrive")
 				report := runReleaseDrain(t, recovered.eng)
@@ -915,7 +915,7 @@ func TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete(t *testing.T) {
 // crashDuringRelease syncs the release scenario, then runs its final drain
 // with a capture at the occurrence-th time the release reaches point, and
 // reopens the snapshot.
-func crashDuringRelease(t *testing.T, point string, occurrence int, powerLoss bool) (*crashCapture, *syncHarness) {
+func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool) (*crashCapture, *syncHarness) {
 	t.Helper()
 
 	remote := newReleaseRemote(t)
@@ -925,7 +925,7 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, powerLoss bo
 	require.NoError(t, err)
 
 	capture := &crashCapture{
-		point: point, powerLoss: powerLoss,
+		point: point, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	var seen atomic.Int32

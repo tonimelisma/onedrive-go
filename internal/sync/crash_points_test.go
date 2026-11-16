@@ -27,10 +27,17 @@ import (
 // converge with every invariant holding (assertSyncInvariants), no content
 // lost.
 //
-// The power-loss variant keeps only the main database file: whatever was
+// The lost-WAL variant keeps only the main database file: whatever was
 // committed to the write-ahead log since the last checkpoint is gone, as
 // after a disk that never honored the fsyncs, or a restore from a copy taken
-// without the WAL. The state is then older than both trees.
+// without the WAL. The state is then older than both trees, and it has lost
+// the one record no tree gives back: the intent a create commits before its
+// request (R-5.6.15). After a lost WAL at upload.created_unrecorded the
+// create's empty item is a OneDrive file like any other, so the restart keeps
+// it beside the local file and downloads it; reopen names such items
+// (syncHarness.placeholdersWithoutIntent). A power loss on a disk that honors
+// the fsyncs leaves no such state: the store commits with synchronous(FULL),
+// so the WAL keeps every commit.
 //
 // The snapshot is a copy, so every entry has a new inode. The copy records
 // which new identity stands for which old one, and the copied database is
@@ -42,11 +49,11 @@ const crashTestDBName = "test.db"
 // crashCapture snapshots the running test engine's state the first time its
 // point is reached.
 type crashCapture struct {
-	point     string
-	powerLoss bool
-	srcDir    string
-	dstDir    string
-	remote    *moveScenarioRemote
+	point   string
+	lostWAL bool
+	srcDir  string
+	dstDir  string
+	remote  *moveScenarioRemote
 
 	once       stdsync.Once
 	err        error
@@ -80,11 +87,11 @@ func (c *crashCapture) capture() error {
 
 // captureDatabase keeps what was committed: VACUUM INTO reads the last
 // committed state from its own connection, so the transaction open at a
-// store crash point is not in it. The power-loss copy is the main file alone.
+// store crash point is not in it. The lost-WAL copy is the main file alone.
 func (c *crashCapture) captureDatabase() error {
 	src := filepath.Join(c.srcDir, crashTestDBName)
 	dst := filepath.Join(c.dstDir, crashTestDBName)
-	if c.powerLoss {
+	if c.lostWAL {
 		return copyFileContent(src, dst)
 	}
 
@@ -239,8 +246,9 @@ func copyFileContent(src, dst string) (err error) {
 	return nil
 }
 
-// reopen rewrites the snapshot's recorded identities to the copy's, rebinds
-// its sync folder, and opens a fresh engine on it.
+// reopen rewrites the snapshot's recorded identities to the copy's, names
+// the items a lost WAL left without their create's intent, rebinds its
+// sync folder, and opens a fresh engine on it.
 func (c *crashCapture) reopen(t *testing.T) *syncHarness {
 	t.Helper()
 
@@ -262,12 +270,37 @@ func (c *crashCapture) reopen(t *testing.T) *syncHarness {
 			require.NoError(t, err)
 		}
 	}
+	placeholders := map[string]bool{}
+	if c.lostWAL {
+		placeholders = placeholdersWithoutIntentIn(t, db, c.remoteCopy)
+	}
 	require.NoError(t, db.Close())
 	require.NoError(t, RebindSyncRoot(t.Context(), dbPath, testLogger(t)))
 
 	eng, syncRoot := newTestEngineInDir(t, t.Context(), c.remoteCopy.client(t), c.dstDir)
 
-	return &syncHarness{eng: eng, remote: c.remoteCopy, syncRoot: syncRoot}
+	return &syncHarness{eng: eng, remote: c.remoteCopy, syncRoot: syncRoot, placeholdersWithoutIntent: placeholders}
+}
+
+// placeholdersWithoutIntentIn is every empty file of remote, the OneDrive a
+// lost WAL left, that db, the state database it left, has neither a
+// pending-create row nor a baseline row for, by item ID
+// (syncHarness.placeholdersWithoutIntent).
+func placeholdersWithoutIntentIn(t *testing.T, db *sql.DB, remote *moveScenarioRemote) map[string]bool {
+	t.Helper()
+
+	placeholders := map[string]bool{}
+	for p, itemID := range remote.emptyFiles() {
+		var known int
+		require.NoError(t, db.QueryRowContext(t.Context(), `SELECT
+			(SELECT COUNT(*) FROM pending_creates WHERE path = ? OR item_id = ?) +
+			(SELECT COUNT(*) FROM baseline WHERE item_id = ?)`, p, itemID, itemID).Scan(&known))
+		if known == 0 {
+			placeholders[itemID] = true
+		}
+	}
+
+	return placeholders
 }
 
 // crashRecoveryScenario is a synced tree and one round of edits that passes
@@ -290,13 +323,13 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	h.eng.serializeWorkers = true
 	runScenarioPass(t, h.eng)
 	// The synced state reaches the main database file; the round's commits
-	// stay in the WAL, which the power-loss variant then loses.
+	// stay in the WAL, which the lost-WAL variant then loses.
 	_, err := h.eng.baseline.rawDB().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "docs", "a.txt"), filepath.Join(h.syncRoot, "docs", "a2.txt")))
 	remote.moveAt(t, "docs/b.txt", "docs/b2.txt")
-	writeLocalFile(t, h.syncRoot, "c.txt", "c local\n")
+	writeLocalFile(t, h.syncRoot, crashCreatedLocallyPath, crashCreatedLocallyContent)
 	remote.putFileAt(t, "d.txt", "d remote\n")
 	remote.putFileAt(t, "e.txt", "e edited\n")
 	remote.deleteRemotely("item-f")
@@ -305,10 +338,13 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	return remote, h
 }
 
-// The delete edits of crashRecoveryScenario: f.txt is deleted on OneDrive and
-// so leaves the local tree for the trash; g.txt is deleted locally and so is
-// deleted on OneDrive.
+// The create and delete edits of crashRecoveryScenario: c.txt is created
+// locally and so uploaded as a new file, the one create of the round; f.txt
+// is deleted on OneDrive and so leaves the local tree for the trash; g.txt is
+// deleted locally and so is deleted on OneDrive.
 const (
+	crashCreatedLocallyPath     = "c.txt"
+	crashCreatedLocallyContent  = "c local\n"
 	crashDeletedRemotelyPath    = "f.txt"
 	crashDeletedRemotelyContent = "f\n"
 	crashDeletedLocallyPath     = "g.txt"
@@ -332,12 +368,12 @@ func allCrashPoints() []string {
 
 // crashAndRecover runs the scenario round with a capture armed at point and
 // returns the engine that recovered from it, converged.
-func crashAndRecover(t *testing.T, point string, powerLoss bool) (*crashCapture, *syncHarness) {
+func crashAndRecover(t *testing.T, point string, lostWAL bool) (*crashCapture, *syncHarness) {
 	t.Helper()
 
 	remote, h := crashRecoveryScenario(t)
 	capture := &crashCapture{
-		point: point, powerLoss: powerLoss,
+		point: point, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	h.eng.execCfg.crashAt = capture.hook
@@ -379,25 +415,32 @@ func countOf(values []string, want string) int {
 	return n
 }
 
-func crashCaseName(point string, powerLoss bool) string {
-	if powerLoss {
-		return point + "/power-loss"
+func crashCaseName(point string, lostWAL bool) string {
+	if lostWAL {
+		return point + "/lost-wal"
 	}
 
 	return point
 }
 
-// Validates: R-6.8.9, R-2.17.1, R-6.5.2
+// Validates: R-6.5.1, R-2.17.1, R-6.5.2, R-5.6.15
 func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 	t.Parallel()
 
 	for _, point := range allCrashPoints() {
-		for _, powerLoss := range []bool{false, true} {
-			t.Run(crashCaseName(point, powerLoss), func(t *testing.T) {
+		for _, lostWAL := range []bool{false, true} {
+			t.Run(crashCaseName(point, lostWAL), func(t *testing.T) {
 				t.Parallel()
 
-				_, recovered := crashAndRecover(t, point, powerLoss)
+				_, recovered := crashAndRecover(t, point, lostWAL)
 				assertSyncInvariants(t, recovered)
+				if point == crashPointUploadCreatedUnrecorded && !lostWAL {
+					// The kept intent claims the cut create's empty item, so the
+					// upload finishes into it instead of meeting a create conflict.
+					assert.Equal(t, crashCreatedLocallyContent,
+						harnessLocalTree(t, recovered.syncRoot)[crashCreatedLocallyPath],
+						"the cut create's file holds its content at its own name")
+				}
 			})
 		}
 	}
@@ -415,11 +458,11 @@ func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing
 	t.Parallel()
 
 	for _, point := range []string{crashPointLocalDeleteTrashed, crashPointRemoteDeleteDone} {
-		for _, powerLoss := range []bool{false, true} {
-			t.Run(crashCaseName(point, powerLoss), func(t *testing.T) {
+		for _, lostWAL := range []bool{false, true} {
+			t.Run(crashCaseName(point, lostWAL), func(t *testing.T) {
 				t.Parallel()
 
-				capture, recovered := crashAndRecover(t, point, powerLoss)
+				capture, recovered := crashAndRecover(t, point, lostWAL)
 				require.True(t, assertSyncInvariants(t, recovered), "state:%s", syncStateDump(t, recovered.eng))
 
 				local := harnessLocalTree(t, recovered.syncRoot)
