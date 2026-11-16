@@ -47,7 +47,7 @@ type ChildrenPageFunc func(page []Item) (keepListing bool)
 // collection (the first page, and a later one whose link keeps that form),
 // by the documented quirk retry, never from the first page; the pages before
 // it have been handed on. Its pages are counted by askedPages, as every
-// non-delta listing's are: a circular continuation would hand the caller the
+// paged listing's are: a circular continuation would hand the caller the
 // same children over and over, and a caller that walks them would do its
 // work for them again each time.
 func (c *Client) visitChildPages(
@@ -466,12 +466,12 @@ func (c *Client) stripBaseURL(fullURL string) (string, error) {
 	return fullURL[len(c.baseURL):], nil
 }
 
-// askedPages counts the pages one non-delta paged listing asks for. Every
-// such loop asks it before each request, with the path it is about to ask
-// for: a page past maxPages fails the listing, and so does a next link back
-// to a page the listing already asked for, before that page is asked for
-// again. A circular continuation would otherwise be followed until the cap,
-// each page's results handed on or gathered again every time.
+// askedPages counts the pages one paged listing asks for, delta enumeration
+// included. Every such loop asks it before each request, with the path it is
+// about to ask for: a page past maxPages fails the listing, and so does a
+// next link back to a page the listing already asked for, before that page is
+// asked for again. A circular continuation would otherwise be followed until
+// the cap, each page's results handed on or gathered again every time.
 type askedPages struct {
 	listing  string
 	maxPages int
