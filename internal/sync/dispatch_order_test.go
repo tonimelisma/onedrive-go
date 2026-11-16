@@ -350,6 +350,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
 		TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges,
 		TestRunOnce_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathConverges,
+		TestRunOnce_FolderMovedOnOneDriveIntoAFolderMadeWhereAFileLeftConverges,
 	}
 }
 

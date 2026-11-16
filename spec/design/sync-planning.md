@@ -536,7 +536,32 @@ ever restores OneDrive's locations, so the loop ends with the remote tree.
 Emission is conservative and in pass-local coordinates. A move is emitted only
 when its target parent is in place or is placed by a move earlier in the same
 plan, its destination is free in the snapshot or vacated by an earlier move,
-and its source is not displaced by a move that runs first. OneDrive moves are
+and its source is not displaced by a move that runs first. On this computer a
+folder OneDrive made at a path that a synced item it moved away still holds
+here is not in place: SQLite plans no create at a path the baseline still
+gives that item, so the pass after the item's move makes the folder. A local
+move into such a folder and the item's own move are never planned together
+(`x` moved to `x2` and made again on OneDrive, and `f` moved into the new
+`x`: `x` moves, then `f`). Planned together, `f`'s move would land in the old
+`x` and be carried to `x2/f` if it ran first, and would find no `x` if it ran
+second. The item is found at the path the move is planned to, compared as
+OneDrive compares names: a move that runs inside a folder before the folder
+moves lands where that folder is now. Whichever composition decides first is
+planned, and the other waits for the next pass, except that the move into the
+folder waits while the item is a file or a frozen folder, neither of which it
+can land in. Deciding the first rather than waiting for the item lets two
+folders that each move into a new folder at the other's path converge
+(`TestComposeMoves_FolderMovedIntoAFolderMadeWhereAnotherFolderLeftWaits`,
+`TestRunOnce_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathConverges`,
+`TestRunOnce_FolderMovedOnOneDriveIntoAFolderMadeWhereAFileLeftConverges`).
+A move decided first lands in the folder that holds the path; while that
+folder's own move waits, this computer shows the moved item inside the old
+folder, and no remote move is planned for it, until a later pass moves the
+folder and then the item. Such a folder is not the item parked to break a
+swap or rotation on this computer
+(`TestComposeMoves_FolderAMoveLandsInIsNotParkedToBreakASwap`). On OneDrive
+the twin, a folder made here at the path of an item moved here, is created in
+the same pass, and the move into it waits for that create. OneDrive moves are
 rebased through an ancestor's committed move (remote_state and the baseline
 follow it). Local moves are not, because `local_state` is observation-owned:
 a local child move runs inside its folder before the folder moves, or waits a
@@ -670,7 +695,11 @@ side and move it back into the folder
 
 `buildDependencies` (`planner_dependencies.go`) orders moves by the paths they
 carry (`addMoveDeps`): work at or below a move's destination runs after it; a
-move onto a path another move of the same side vacates waits for it; a move
+move onto a path another move of the same side vacates waits for it, and so
+does a move into a folder below that path from a source outside it, whether
+or not the plan creates that folder: what it lands in takes the path only
+after the move
+(`TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt`); a move
 waits for same-side moves out of its source, for local writes under a local
 move's source and for remote deletes under a remote move's source; a create at
 the path a move vacates waits for the move; the delete of a destination's old
