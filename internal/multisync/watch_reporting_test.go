@@ -45,7 +45,11 @@ func stopTestRunners(t *testing.T, runners map[mountID]*watchRunner) {
 	t.Helper()
 	for id, runner := range runners {
 		runner.cancel()
-		<-runner.done
+		select {
+		case <-runner.done:
+		case <-time.After(eventWait):
+			assert.Fail(t, "a canceled watch runner did not return", "mount %s", id)
+		}
 		delete(runners, id)
 	}
 }
@@ -178,7 +182,11 @@ func (h *backoffHarness) exit(err error) {
 	wr := h.runners[h.id]
 	require.NotNil(h.t, wr)
 	wr.cancel()
-	<-wr.done
+	select {
+	case <-wr.done:
+	case <-time.After(eventWait):
+		require.FailNow(h.t, "a canceled watch runner did not return")
+	}
 	require.NoError(h.t, h.orch.handleWatchRunnerEvent(h.t.Context(),
 		watchRunnerEvent{mountID: h.id, generation: wr.generation, err: err},
 		syncengine.SyncBidirectional, syncengine.WatchOptions{}, h.runners, h.events, h.childWork))
@@ -308,7 +316,7 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 		armedMu.Lock()
 		defer armedMu.Unlock()
 		return len(armed) > 0
-	}, 5*time.Second, 5*time.Millisecond, "restart timer was not armed")
+	}, eventWait, 5*time.Millisecond, "restart timer was not armed")
 	armedMu.Lock()
 	assert.Equal(t, runnerRestartBaseDelay, armed[0])
 	armedMu.Unlock()
@@ -319,7 +327,7 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 
 	select {
 	case <-restarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "runner was not restarted when the backoff timer fired")
 	}
 
@@ -327,7 +335,7 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunWatch did not stop in time")
 	}
 
@@ -406,9 +414,17 @@ func TestStartWatchRunner_CanceledFinalDrainSendsNoEvent(t *testing.T) {
 	events := make(chan watchRunnerEvent, 1)
 	wr, err := orch.startWatchRunner(t.Context(), childMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, events)
 	require.NoError(t, err)
-	<-draining
+	select {
+	case <-draining:
+	case <-time.After(eventWait):
+		require.FailNow(t, "the final drain did not start")
+	}
 	wr.cancel()
-	<-wr.done
+	select {
+	case <-wr.done:
+	case <-time.After(eventWait):
+		require.FailNow(t, "the canceled final-drain runner did not return")
+	}
 
 	select {
 	case event := <-events:
@@ -573,7 +589,7 @@ func runFailingFirstWatchBesideASibling(t *testing.T, firstRun func(*slog.Logger
 
 	select {
 	case <-engines.siblingStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "sibling mount did not start")
 	}
 
@@ -582,7 +598,7 @@ func runFailingFirstWatchBesideASibling(t *testing.T, firstRun func(*slog.Logger
 	select {
 	case delay := <-armed:
 		assert.Equal(t, runnerRestartBaseDelay, delay)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the failed mount's restart was never armed")
 	}
 	require.Len(t, warningsContaining(capture, "Stopped syncing Panicky"), 1)
@@ -599,7 +615,7 @@ func runFailingFirstWatchBesideASibling(t *testing.T, firstRun func(*slog.Logger
 	fire <- clock.now()
 	select {
 	case <-engines.panickyRestarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the failed mount was not restarted when its backoff fired")
 	}
 
@@ -607,7 +623,7 @@ func runFailingFirstWatchBesideASibling(t *testing.T, firstRun func(*slog.Logger
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunWatch did not stop in time")
 	}
 	assert.Equal(t, int32(2), engines.panickyStarts.Load())

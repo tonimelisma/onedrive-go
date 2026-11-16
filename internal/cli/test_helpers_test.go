@@ -6,12 +6,23 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 )
+
+// eventWait is how long a test waits for an event that must come: a signal's
+// cancellation, a helper process's line or exit, a goroutine's unwinding, a
+// file a started command writes. A wait returns the moment its event arrives,
+// so a passing test never spends it; it only bounds how long a broken one
+// hangs. It is long because a loaded two-core host under the race detector
+// takes seconds for what takes milliseconds alone, and shorter bounds failed
+// tests there that were correct. A deadline that is the subject of a test
+// keeps its own name beside that test.
+const eventWait = time.Minute
 
 func writeTestResponse(t *testing.T, w io.Writer, body string) {
 	t.Helper()

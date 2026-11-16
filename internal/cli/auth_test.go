@@ -406,23 +406,22 @@ func TestOpenBrowser_StartsValidatedCommand(t *testing.T) {
 
 	const executablePerms = 0o755
 	const authURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test"
-	const browserLaunchTimeout = 15 * time.Second
 
 	tempDir := t.TempDir()
 	outputPath := filepath.Join(tempDir, "browser-url.txt")
 	scriptPath := filepath.Join(tempDir, command)
-	script := "#!/bin/sh\nprintf '%s' \"$1\" > \"$CODEX_BROWSER_OUT\"\n"
+	script := "#!/bin/sh\nprintf '%s' \"$1\" > \"$ONEDRIVE_GO_TEST_BROWSER_OUT\"\n"
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), executablePerms))
 
 	t.Setenv("PATH", tempDir)
-	t.Setenv("CODEX_BROWSER_OUT", outputPath)
+	t.Setenv("ONEDRIVE_GO_TEST_BROWSER_OUT", outputPath)
 
 	require.NoError(t, openBrowser(t.Context(), authURL))
 
 	require.Eventually(t, func() bool {
 		data, readErr := localpath.ReadFile(outputPath)
 		return readErr == nil && string(data) == authURL
-	}, browserLaunchTimeout, 25*time.Millisecond)
+	}, eventWait, 25*time.Millisecond, "the browser command did not receive the URL")
 }
 
 func TestOpenBrowser_CommandStartFailure(t *testing.T) {
