@@ -516,8 +516,8 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 			userEdits = append(userEdits, resolved...)
 		}
 	}
-	require.Failf(r.t, modelNotConvergedMessage, "%s: still changing after %d passes; %s\nstate:%s",
-		label, modelMaxSyncPasses, r.failureContext(), syncStateDump(r.t, r.eng))
+	require.Failf(r.t, modelNotConvergedMessage, "%s: still changing after %d sync runs (%d in a storm); %s\nstate:%s",
+		label, modelMaxSyncPasses+stormPasses, stormPasses, r.failureContext(), syncStateDump(r.t, r.eng))
 
 	return userEdits
 }
