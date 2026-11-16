@@ -126,33 +126,15 @@ func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(perf.WithCollector(t.Context(), commandCollector))
-	defer cancel()
+	cancel, done := runInBackground(t, perf.WithCollector(t.Context(), commandCollector), runWatchOf(orch))
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
-
-	select {
-	case err := <-recorded:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "watch runner did not record in time")
-	}
+	require.NoError(t, receiveWithin(t, recorded, "the watch runner to record"))
 
 	// Read while the watch still runs, as `status --perf` does: a mount's
 	// collector leaves the runtime when its runner exits.
 	mounts := orch.perfRuntime.SnapshotByMount()
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 
 	assertContextPerfMetricsAtEveryLevel(t, rd.CanonicalID.String(), mounts, orch.perfRuntime, commandCollector)
 }
@@ -215,9 +197,7 @@ func TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture(t *testing.T) {
 
 	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the one-shot control server", control.Close) })
 
 	client := controlTestClient(cfg.ControlSocketPath)
 
@@ -286,9 +266,7 @@ func TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration(t *
 
 	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the one-shot control server", control.Close) })
 
 	client := controlTestClient(cfg.ControlSocketPath)
 	requestBody, err := json.Marshal(synccontrol.PerfCaptureRequest{DurationMS: 0})

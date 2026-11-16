@@ -296,20 +296,21 @@ Static verification is a first-class architectural constraint, not a best-effort
   `internal/multisync` and `internal/cli`; a deadline that is itself the
   subject of a test keeps its own name. A wait returns as soon as its event
   arrives, so the bound decides only how long a broken test hangs; ten-second
-  bounds failed correct watch tests under load. In `internal/sync` a test
-  never waits unboundedly for a watch or loop to return, whether it runs in
-  the background or is the test's own call: it starts one in a goroutine
-  only through `runInBackground` (`runWatchInBackground` for `RunWatch`),
-  whose cleanup cancels it and waits within `eventWait`, so a failing test
-  never leaves one running into the next, and reads the result with
-  `receiveWithin` or `stopWatch`; its own call of one goes through
-  `runWithin`. Each fails naming what it waited for. A call whose state
-  makes it return at once (a canceled context, a quiescent phase, a signal
-  already queued) stays a plain call. In `internal/multisync` and
-  `internal/cli` every wait for a watch or loop that a test runs on a
-  goroutine to return is bounded by `eventWait` and fails naming what it
-  waited for. Inside a `testing/synctest` bubble a blocked receive is
-  reported as a deadlock instead, and virtual waits stay as they are.
+  bounds failed correct watch tests under load. In `internal/sync`,
+  `internal/multisync` and `internal/cli` a test never waits unboundedly for
+  a watch or loop to return, whether it runs in the background or is the
+  test's own call: it starts one in a goroutine only through
+  `runInBackground` (`runWatchInBackground` for `RunWatch` on the test's
+  context), whose cleanup cancels it and waits within `eventWait`, so a
+  failing test never leaves one running into the next, and reads the result
+  with `receiveWithin` or `stopWatch`; its own call of one goes through
+  `runWithin`. Each package declares those its tests use in its own test
+  helpers, and each fails naming what it waited for once `eventWait` has
+  passed (`TestWatchHelpers_FailNamingWhatTheyWaitedFor`). A call whose
+  state makes it return at once (a canceled context, a quiescent phase, a
+  signal already queued, a fake that returns at once) stays a plain call.
+  Inside a `testing/synctest` bubble a blocked receive is reported as a
+  deadlock instead, and virtual waits stay as they are.
 - A test never shows that something does not happen by waiting a fixed time:
   on a loaded host the event a short window rules out can arrive after it,
   and the test then passes whether the product is right or wrong. It waits,

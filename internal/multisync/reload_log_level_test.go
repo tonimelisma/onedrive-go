@@ -39,13 +39,8 @@ func TestOrchestrator_Reload_AppliesTheConfigLogLevel(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
-	require.Eventually(t, func() bool { return started.Load() >= 1 }, eventWait, 10*time.Millisecond)
+	cancel, done := runWatchInBackground(t, orch)
+	require.Eventually(t, func() bool { return started.Load() >= 1 }, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// #nosec G304 -- cfgPath is a test-owned config path from writeTestConfig.
 	data, err := os.ReadFile(cfgPath)
@@ -60,11 +55,5 @@ func TestOrchestrator_Reload_AppliesTheConfigLogLevel(t *testing.T) {
 		return ok && level == "debug"
 	}, eventWait, 10*time.Millisecond, "the reload did not hand the new log_level over")
 
-	cancel()
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }

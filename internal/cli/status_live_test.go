@@ -97,6 +97,9 @@ func (b *statusLiveTestBudget) context(ctx context.Context) (context.Context, co
 	if b.deadline > 0 {
 		askCtx, stopDeadline = context.WithTimeoutCause(askCtx, b.deadline, errStatusLiveBudgetSpent)
 	}
+	// The command calls this seam off the test's goroutine, so the goroutine
+	// is not runInBackground's: the returned cancel, which the command
+	// defers, ends it.
 	go func() {
 		select {
 		case <-b.spent:
@@ -168,37 +171,22 @@ func newStatusLiveRun(t *testing.T, graphURL string, budget *statusLiveTestBudge
 }
 
 // status runs the status command and fails the test if it does not return
-// within statusLiveTestGuard. The command goroutine is waited for in cleanup,
-// after its context is canceled, so a failing run does not outlive the test.
+// within statusLiveTestGuard. runInBackground's cleanup cancels a run that has
+// not returned and waits for it, so a failing run does not outlive the test.
 func (r *statusLiveRun) status(t *testing.T, ctx context.Context) error {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- runStatusCommand(ctx, r.cc, false) }()
-
-	var result error
-	returned := false
-	t.Cleanup(func() {
-		cancel()
-		if returned {
-			return
-		}
-		select {
-		case <-done:
-		case <-time.After(eventWait):
-			assert.Fail(t, "status did not return after its context was canceled")
-		}
+	done := runInBackground(t, ctx, func(runCtx context.Context) error {
+		return runStatusCommand(runCtx, r.cc, false)
 	})
 
 	select {
-	case result = <-done:
-		returned = true
+	case result := <-done:
+		return result
 	case <-time.After(statusLiveTestGuard):
 		require.FailNow(t, "status did not return", "it waited on OneDrive for more than %s", statusLiveTestGuard)
+		return nil
 	}
-
-	return result
 }
 
 // notes returns the stderr lines status wrote about accounts it could not

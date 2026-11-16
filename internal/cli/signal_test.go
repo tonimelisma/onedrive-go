@@ -39,12 +39,7 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 	// Send SIGINT to ourselves.
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
 
-	select {
-	case <-ctx.Done():
-		// Expected: context canceled on first signal.
-	case <-time.After(eventWait):
-		require.Fail(t, "context not canceled after SIGINT")
-	}
+	receiveWithin(t, ctx.Done(), "the first SIGINT to cancel the context")
 
 	// Clean up: cancel parent to stop the goroutine.
 	cancel()
@@ -180,12 +175,7 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 	// Cancel parent — derived context should also cancel.
 	cancel()
 
-	select {
-	case <-ctx.Done():
-		// Expected: context canceled when parent is canceled.
-	case <-time.After(eventWait):
-		require.Fail(t, "context not canceled after the parent was canceled")
-	}
+	receiveWithin(t, ctx.Done(), "the parent's cancel to cancel the derived context")
 }
 
 func runShutdownContextSecondSignalHelper() {
@@ -360,11 +350,7 @@ func TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine(t *testing.
 	ctx, stop := shutdownContext(context.Background(), logger)
 
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
-	select {
-	case <-ctx.Done():
-	case <-time.After(eventWait):
-		require.Fail(t, "context not canceled after SIGINT")
-	}
+	receiveWithin(t, ctx.Done(), "the first SIGINT to cancel the context")
 
 	stop()
 
@@ -394,11 +380,7 @@ func TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError(t *testing.T)
 	defer stop()
 
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
-	select {
-	case <-ctx.Done():
-	case <-time.After(eventWait):
-		require.FailNow(t, "the handler's panic did not end the command")
-	}
+	receiveWithin(t, ctx.Done(), "the handler's panic to end the command")
 
 	require.ErrorIs(t, commandPanicCause(ctx), panicguard.ErrPanic)
 	require.ErrorContains(t, commandPanicCause(ctx), "internal error in the signal handler: log call exploded")

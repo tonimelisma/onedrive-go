@@ -1,7 +1,6 @@
 package multisync
 
 import (
-	"context"
 	"database/sql"
 	"log/slog"
 	"path/filepath"
@@ -48,16 +47,7 @@ func testStandaloneMountIdentity(cid driveid.CanonicalID) MountIdentity {
 func testShortcutChildAckRef(t *testing.T, bindingItemID string) syncengine.ShortcutChildAckRef {
 	t.Helper()
 
-	return testShortcutChildAckRefWithContext(t.Context(), t, bindingItemID)
-}
-
-func testShortcutChildAckRefWithContext(
-	ctx context.Context,
-	t *testing.T,
-	bindingItemID string,
-) syncengine.ShortcutChildAckRef {
-	t.Helper()
-
+	ctx := t.Context()
 	const namespaceID = "personal:owner@example.com"
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	store, err := syncengine.NewSyncStore(ctx, dbPath, slog.New(slog.DiscardHandler))

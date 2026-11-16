@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -45,11 +44,7 @@ func stopTestRunners(t *testing.T, runners map[mountID]*watchRunner) {
 	t.Helper()
 	for id, runner := range runners {
 		runner.cancel()
-		select {
-		case <-runner.done:
-		case <-time.After(eventWait):
-			assert.Fail(t, "a canceled watch runner did not return", "mount %s", id)
-		}
+		receiveWithin(t, runner.done, "the canceled watch runner of mount "+id.String()+" to return")
 		delete(runners, id)
 	}
 }
@@ -182,11 +177,7 @@ func (h *backoffHarness) exit(err error) {
 	wr := h.runners[h.id]
 	require.NotNil(h.t, wr)
 	wr.cancel()
-	select {
-	case <-wr.done:
-	case <-time.After(eventWait):
-		require.FailNow(h.t, "a canceled watch runner did not return")
-	}
+	receiveWithin(h.t, wr.done, "the canceled watch runner to return")
 	require.NoError(h.t, h.orch.handleWatchRunnerEvent(h.t.Context(),
 		watchRunnerEvent{mountID: h.id, generation: wr.generation, err: err},
 		syncengine.SyncBidirectional, syncengine.WatchOptions{}, h.runners, h.events, h.childWork))
@@ -305,12 +296,7 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	require.Eventually(t, func() bool {
 		armedMu.Lock()
@@ -325,19 +311,9 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 	clock.advance(runnerRestartBaseDelay)
 	fire <- clock.now()
 
-	select {
-	case <-restarted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "runner was not restarted when the backoff timer fired")
-	}
+	receiveWithin(t, restarted, "the runner's restart when the backoff timer fired")
 
-	cancel()
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 
 	assert.Len(t, warningsContaining(capture, "Stopped syncing BackoffLoop"), 1)
 	for _, record := range capture.AtLeast(slog.LevelWarn) {
@@ -414,17 +390,9 @@ func TestStartWatchRunner_CanceledFinalDrainSendsNoEvent(t *testing.T) {
 	events := make(chan watchRunnerEvent, 1)
 	wr, err := orch.startWatchRunner(t.Context(), childMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, events)
 	require.NoError(t, err)
-	select {
-	case <-draining:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the final drain did not start")
-	}
+	receiveWithin(t, draining, "the final drain to start")
 	wr.cancel()
-	select {
-	case <-wr.done:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the canceled final-drain runner did not return")
-	}
+	receiveWithin(t, wr.done, "the canceled final-drain runner to return")
 
 	select {
 	case event := <-events:
@@ -444,26 +412,8 @@ func TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives(t *testing.T) {
 	setupXDGIsolation(t, rd1.CanonicalID, rd2.CanonicalID)
 
 	socketPath := shortControlSocketPath(t)
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(t.Context(), "unix", socketPath)
-	require.NoError(t, err)
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		for {
-			conn, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			if closeErr := conn.Close(); closeErr != nil {
-				return
-			}
-		}
-	}()
-	defer func() {
-		require.NoError(t, listener.Close())
-		<-acceptDone
-	}()
+	releaseSocket := occupyControlSocket(t, socketPath)
+	defer releaseSocket()
 
 	cfg := testOrchestratorConfig(t, rd1, rd2)
 	cfg.ControlSocketPath = socketPath
@@ -580,52 +530,28 @@ func runFailingFirstWatchBesideASibling(t *testing.T, firstRun func(*slog.Logger
 	engines := newPanicIsolationEngines(sibling.CanonicalID, func() error { return firstRun(logger) })
 	orch.engineFactory = engines.factory
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
-	select {
-	case <-engines.siblingStarted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "sibling mount did not start")
-	}
+	receiveWithin(t, engines.siblingStarted, "the sibling drive to start")
 
 	// The failure reaches the loop as a runner failure: a restart is armed
 	// with the first backoff delay, and the drive is reported stopped once.
-	select {
-	case delay := <-armed:
-		assert.Equal(t, runnerRestartBaseDelay, delay)
-	case <-time.After(eventWait):
-		require.FailNow(t, "the failed mount's restart was never armed")
-	}
+	assert.Equal(t, runnerRestartBaseDelay, receiveWithin(t, armed, "the failed drive's restart to be armed"))
 	require.Len(t, warningsContaining(capture, "Stopped syncing Panicky"), 1)
 
 	select {
 	case <-engines.siblingStopped:
 		require.FailNow(t, "a failure of one mount must not stop its sibling")
-	case err := <-errCh:
+	case err := <-done:
 		require.FailNow(t, "RunWatch must survive a mount's failure", "returned %v", err)
 	default:
 	}
 
 	clock.advance(runnerRestartBaseDelay)
 	fire <- clock.now()
-	select {
-	case <-engines.panickyRestarted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the failed mount was not restarted when its backoff fired")
-	}
+	receiveWithin(t, engines.panickyRestarted, "the failed drive's restart when its backoff fired")
 
-	cancel()
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 	assert.Equal(t, int32(2), engines.panickyStarts.Load())
 
 	return capture

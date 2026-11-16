@@ -27,30 +27,20 @@ type watchOutcome struct {
 	escaped any
 }
 
-// runWatchCatchingPanics runs RunWatch on a goroutine of the test's that
+// runWatchCatchingPanics runs RunWatch through runWithin, in a run that
 // catches whatever escapes it, so a missing boundary fails the test instead of
-// ending the test binary.
+// ending the test binary. The run writes the outcome before it returns.
 func runWatchCatchingPanics(t *testing.T, orch *Orchestrator) watchOutcome {
 	t.Helper()
 
-	done := make(chan watchOutcome, 1)
-	ctx := t.Context()
-	go func() {
-		var outcome watchOutcome
-		defer func() {
-			outcome.escaped = recover()
-			done <- outcome
-		}()
+	var outcome watchOutcome
+	require.NoError(t, runWithin(t, t.Context(), "RunWatch to return", func(ctx context.Context) error {
+		defer func() { outcome.escaped = recover() }()
 		outcome.err = orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+		return nil
+	}))
 
-	select {
-	case outcome := <-done:
-		return outcome
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunWatch did not return")
-		return watchOutcome{}
-	}
+	return outcome
 }
 
 // panicErrorLogs are the Error records a recovered panic left.
@@ -207,7 +197,7 @@ func TestRunWatch_ControlServerPanicEndsTheWatch(t *testing.T) {
 		return &mockEngine{}, nil
 	}
 
-	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	err := runWithin(t, t.Context(), "RunWatch to end with the control server's panic", runWatchOf(orch))
 
 	require.ErrorIs(t, err, panicguard.ErrPanic)
 	require.ErrorContains(t, err, "control channel stopped")
@@ -290,13 +280,9 @@ func TestWatchConfigReloadTriggers_PanicIsReportedOnTheFatalChannel(t *testing.T
 	})
 	defer stop()
 
-	select {
-	case err := <-fatal:
-		require.ErrorIs(t, err, panicguard.ErrPanic)
-		require.ErrorContains(t, err, "stat exploded")
-	case <-time.After(eventWait):
-		require.Fail(t, "the watcher's panic was not reported")
-	}
+	err := receiveWithin(t, fatal, "the watcher's panic on the fatal channel")
+	require.ErrorIs(t, err, panicguard.ErrPanic)
+	require.ErrorContains(t, err, "stat exploded")
 	assert.Len(t, panicErrorLogs(capture), 1)
 }
 
@@ -444,7 +430,7 @@ func TestControlServer_HandlerPanicIsLoggedThroughTheOwnersLogger(t *testing.T) 
 	serverCfg.logger = logger
 	control, err := startControlSocketServer(t.Context(), serverCfg)
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, control.Close(context.Background())) })
+	t.Cleanup(func() { closeWithin(t, "the control server", control.Close) })
 
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://localhost/v1/status", http.NoBody)
 	require.NoError(t, err)
@@ -505,19 +491,14 @@ func TestRunIndexedMountWork_APanicWhileStartingShortcutsIsThatDrivesReport(t *t
 	coordinator.started = nil
 
 	reports := make([]*MountReport, 1)
-	done := make(chan []*MountReport, 1)
-	go func() {
-		runIndexedMountWork(t.Context(), work, reports, coordinator)
-		coordinator.wait()
-		done <- coordinator.reports()
-	}()
-
 	var shortcutReports []*MountReport
-	select {
-	case shortcutReports = <-done:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the pass hung on the lock the panic left held")
-	}
+	require.NoError(t, runWithin(t, t.Context(), "the pass to finish instead of hanging on the lock the panic left held",
+		func(ctx context.Context) error {
+			runIndexedMountWork(ctx, work, reports, coordinator)
+			coordinator.wait()
+			shortcutReports = coordinator.reports()
+			return nil
+		}))
 	require.NotNil(t, reports[0])
 	require.ErrorIs(t, reports[0].Err, panicguard.ErrPanic)
 	assert.NotNil(t, reports[0].Report, "the drive's own report stands beside the panic")
