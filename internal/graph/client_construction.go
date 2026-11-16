@@ -48,6 +48,7 @@ func NewClient(
 		deltaPreferHeader:    newDeltaPreferHeader(),
 		childrenPreferHeader: newChildrenPreferHeader(),
 		maxDeltaPages:        defaultMaxDeltaPages,
+		maxListPages:         defaultMaxListPages,
 		maxRecursionDepth:    defaultMaxRecursionDepth,
 		policies: retryPolicies{
 			driveDiscovery:       retry.DriveDiscoveryPolicy(),

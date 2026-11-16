@@ -34,24 +34,39 @@ const (
 // transfer or a folder creation.
 var errTreeTestRefused = errors.New("refused by the test")
 
-// fakeTree is a remote tree generated in memory and listed by folder ID, the
-// way Graph lists it. A child's ID is its parent's ID, "/" and its name, as
-// it is (a name the walk refuses is not cleaned), so a test can name any item
-// without bookkeeping.
+// fakeTree is a remote tree generated in memory and listed by folder ID a
+// page at a time, the way Graph lists it. A child's ID is its parent's ID,
+// "/" and its name, as it is (a name the walk refuses is not cleaned), so a
+// test can name any item without bookkeeping.
 type fakeTree struct {
-	// mu guards folders, failures and listed.
+	// pageSize is the number of children on a page; 0 puts a folder on one
+	// page. Set before the tree is listed.
+	pageSize int
+	// mu guards folders, failures, listed and pagesAsked.
 	mu       stdsync.Mutex
 	folders  map[string][]graph.Item
-	failures map[string]error
-	listed   []string
-	// onList, when set, runs before a folder is listed, outside mu.
+	failures map[fakePage]error
+	// listed is every folder ID whose first page was asked for, in order.
+	listed []string
+	// pagesAsked is every page asked for, as fakePage.String, in order.
+	pagesAsked []string
+	// onList, when set, runs before a folder's first page is asked for,
+	// outside mu.
 	onList func(folderID string)
 }
+
+// fakePage names one page of a folder's listing, the first page 1.
+type fakePage struct {
+	folderID string
+	page     int
+}
+
+func (p fakePage) String() string { return fmt.Sprintf("%s#%d", p.folderID, p.page) }
 
 func newFakeTree() *fakeTree {
 	return &fakeTree{
 		folders:  map[string][]graph.Item{treeRootID: nil},
-		failures: map[string]error{},
+		failures: map[fakePage]error{},
 	}
 }
 
@@ -83,32 +98,62 @@ func treeRelPath(id string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(id, treeRootID), "/")
 }
 
-// failListing makes the listing of folderID fail with err.
+// failListing makes the listing of folderID fail with err at its first page.
 func (f *fakeTree) failListing(folderID string, err error) {
+	f.failPage(folderID, 1, err)
+}
+
+// failPage makes the listing of folderID fail with err when page is asked for.
+func (f *fakeTree) failPage(folderID string, page int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.failures[folderID] = err
+	f.failures[fakePage{folderID: folderID, page: page}] = err
 }
 
-func (f *fakeTree) ListChildren(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
+// ListChildrenPages hands parentID's children to visit a page at a time, as
+// Graph does, and asks for no page past one visit refuses.
+func (f *fakeTree) ListChildrenPages(_ context.Context, _ driveid.ID, parentID string, visit graph.ChildrenPageFunc) error {
 	if f.onList != nil {
 		f.onList(parentID)
 	}
 
+	for page := 1; ; page++ {
+		children, last, err := f.listPage(fakePage{folderID: parentID, page: page})
+		if err != nil {
+			return err
+		}
+		if !visit(children) || last {
+			return nil
+		}
+	}
+}
+
+// listPage is the page of a folder's children asked for, and whether it is
+// the folder's last page.
+func (f *fakeTree) listPage(asked fakePage) ([]graph.Item, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.listed = append(f.listed, parentID)
-	if err := f.failures[parentID]; err != nil {
-		return nil, err
+	if asked.page == 1 {
+		f.listed = append(f.listed, asked.folderID)
 	}
-	children, ok := f.folders[parentID]
+	f.pagesAsked = append(f.pagesAsked, asked.String())
+	if err := f.failures[asked]; err != nil {
+		return nil, false, err
+	}
+	children, ok := f.folders[asked.folderID]
 	if !ok {
-		return nil, graph.ErrNotFound
+		return nil, false, graph.ErrNotFound
+	}
+	if f.pageSize == 0 {
+		return slices.Clone(children), true, nil
 	}
 
-	return slices.Clone(children), nil
+	start := min((asked.page-1)*f.pageSize, len(children))
+	end := min(start+f.pageSize, len(children))
+
+	return slices.Clone(children[start:end]), end == len(children), nil
 }
 
 // listedFolders is every folder ID listed so far, in order.
@@ -117,6 +162,14 @@ func (f *fakeTree) listedFolders() []string {
 	defer f.mu.Unlock()
 
 	return slices.Clone(f.listed)
+}
+
+// askedPages is every page asked for so far, in order.
+func (f *fakeTree) askedPages() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.pagesAsked)
 }
 
 // filesOf is the files directly in folderID.

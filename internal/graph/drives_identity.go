@@ -79,8 +79,8 @@ func (c *Client) fetchAllDrives(ctx context.Context, apiPath string, subject str
 	var drives []Drive
 
 	for page := 1; apiPath != ""; page++ {
-		if page > defaultMaxListPages {
-			return nil, fmt.Errorf("graph: listing %s exceeded %d pages", subject, defaultMaxListPages)
+		if page > c.maxListPages {
+			return nil, fmt.Errorf("graph: listing %s exceeded %d pages", subject, c.maxListPages)
 		}
 
 		dlr, err := c.fetchDrivesPage(ctx, apiPath, subject)

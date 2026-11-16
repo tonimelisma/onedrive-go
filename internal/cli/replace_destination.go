@@ -95,7 +95,8 @@ func parentRemotePath(remotePath string) string {
 
 // hintAboutLeftoverAside tells the user about a previous version an
 // interrupted --force left behind (a crash or kill between the rename aside
-// and the cleanup), so it can be recovered. Listing failures are not
+// and the cleanup), so it can be recovered. It reads the folder a page at a
+// time, noting each copy as its page arrives. Listing failures are not
 // errors: the hint is a courtesy, and the command itself goes on.
 func hintAboutLeftoverAside(ctx context.Context, cc *CLIContext, session *driveops.MountSession, destPath string, dest destInfo) {
 	folder := parentRemotePath(destPath)
@@ -103,17 +104,18 @@ func hintAboutLeftoverAside(ctx context.Context, cc *CLIContext, session *driveo
 		folder = driveops.CleanRemotePath(destPath)
 	}
 
-	children, err := session.ListChildren(ctx, folder)
+	err := session.ListChildrenPages(ctx, folder, func(children []graph.Item) bool {
+		for i := range children {
+			if isAsideNameFor(children[i].Name, dest.newName) {
+				cc.Statusf("Note: %s is a previous version of %s left by an interrupted --force; rename or delete it.\n",
+					joinDisplayPath("/"+folder, children[i].Name), dest.newName)
+			}
+		}
+
+		return true
+	})
 	if err != nil {
 		cc.Logger.Debug("list destination folder for leftover --force copies", slog.Any("error", err))
-		return
-	}
-
-	for i := range children {
-		if isAsideNameFor(children[i].Name, dest.newName) {
-			cc.Statusf("Note: %s is a previous version of %s left by an interrupted --force; rename or delete it.\n",
-				joinDisplayPath("/"+folder, children[i].Name), dest.newName)
-		}
 	}
 }
 

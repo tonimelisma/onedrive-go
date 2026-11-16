@@ -193,7 +193,8 @@ All API quirks handled at the graph boundary — downstream code never sees them
   earlier unconditional URL-decode renamed such files locally and invented
   subfolders. No surface has been recorded returning an encoded name; if one
   is, decode only that response shape, with a recorded fixture.
-- Paginated non-delta item surfaces (`ListChildren`, drive search) keep
+- Paginated non-delta item surfaces (`ListChildrenPages` and the slice forms
+  built on it, drive search) keep
   provider-visible package items. Sync-only package suppression is owned by
   `internal/sync/item_converter.go`, not by the Graph client.
 - An item's kind is reported, never defaulted: `Item.IsBundle` decodes the
@@ -238,6 +239,8 @@ Paginated delta with normalization pipeline. Returns `[]Item` (clean, normalized
 The client owns its safety guards and Graph-specific request metadata:
 
 - `maxDeltaPages`: upper bound for full delta enumeration
+- `maxListPages`: upper bound on the pages every non-delta paged listing
+  asks for (`defaultMaxListPages`; tests lower it)
 - full delta enumeration fails closed when a provider page has neither
   `@odata.nextLink` nor `@odata.deltaLink`; callers must never receive an
   empty completed cursor after malformed provider pagination
@@ -286,7 +289,7 @@ The Graph client does not own websocket runtime state. It performs one synchrono
 
 ## Item Operations (`items.go`)
 
-GetItem, ListChildren, CreateFolder, CreateFile, MoveItem, CopyItem, DeleteItem. Every check of whether a returned name is the one asked for (`GetItemByPath` verification, created-item read-backs) uses `internal/namekey`, OneDrive's own name equivalence, not `strings.EqualFold` (R-2.12.3, `TestGetItemByPath_PathValidationUsesNamespaceKey`). All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown. `MoveItemIfMatch` and `DeleteItemIfMatch` are the conditional mutation variants used by sync execution after live preflight; they add `If-Match` when the caller supplies an eTag and map HTTP 412 to `ErrPreconditionFailed`.
+GetItem, ListChildren and ListChildrenPages (see Paged Listings), CreateFolder, CreateFile, MoveItem, CopyItem, DeleteItem. Every check of whether a returned name is the one asked for (`GetItemByPath` verification, created-item read-backs) uses `internal/namekey`, OneDrive's own name equivalence, not `strings.EqualFold` (R-2.12.3, `TestGetItemByPath_PathValidationUsesNamespaceKey`). All operations use `graph.Item` — the clean type after normalization. `Item.ParentPath` carries the decoded root-relative `parentReference.path` when Graph provides it and `Item.ParentPathKnown` records that the path was valid, so callers never need to parse Graph's absolute `"/drives/{id}/root:..."` representation themselves or guess whether an empty parent path means root or unknown. `MoveItemIfMatch` and `DeleteItemIfMatch` are the conditional mutation variants used by sync execution after live preflight; they add `If-Match` when the caller supplies an eTag and map HTTP 412 to `ErrPreconditionFailed`.
 
 `CreateFolder` also owns one narrow ambiguous-success recovery path. If Graph
 returns a success status for `POST .../children` but the body is empty, the
@@ -491,7 +494,9 @@ drive simply does not exist as far as the rest of the program is concerned.
 The bound matters for the opposite reason. Delta already refused to follow more
 than a fixed number of pages because a circular continuation would otherwise
 loop until the process died; the plain listings had no such guard. They share
-one now.
+one now, `maxListPages`, and every loop counts the pages it asks for: a
+listing of exactly that many pages completes, and a page past it is never
+asked for (`TestPagedListings_ThePageCapCountsThePagesAskedFor`).
 
 Every continuation goes through `stripBaseURL`, which refuses a link off the
 client's base URL, so a hostile `@odata.nextLink` cannot redirect the bearer
@@ -501,6 +506,41 @@ elsewhere (`TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`).
 sent as a page size, not a result cap, so the walk follows `@odata.nextLink`
 until that many sites are in hand or the pages run out, and never returns
 more than the limit (`TestSearchSites_StopsFollowingAtTheLimit`).
+
+A folder's children are read through `ListChildrenPages` (by item ID) or
+`ListChildrenByPathPages`. One loop, `visitChildPages`, hands each page to a
+`ChildrenPageFunc` as it arrives, in the order OneDrive returns it, and asks
+for the next page only after that function returned, so a caller that walks
+holds one page (at most 200 children) of a folder of any size. Returning
+false stops the listing with no further request, and a context that ends
+between pages ends it with the context's error. Stopping early is the one
+exception to following `@odata.nextLink` to completion, and only a recursive
+`get` takes it: when it cannot create the local folder a listing fills, and
+when its context ends the walk. A failed page is retried as itself, by the
+retrying transport and, for a page asked for at the drive root's children
+collection (the first page, and a later one whose link keeps that form), by
+the root 404 quirk retry: the pages before it are neither asked for again nor
+handed on twice, and the caller sees the page's error after them.
+`ListChildren`, `ListChildrenByPath` and `ListRecycleBinItems` are that loop
+appending every page, for callers that need the whole list: a sort or one
+output document (`ls`), a lookup by name (the created-item read-backs, the
+lookup after a 409, path resolution), or everything at once (sync,
+`ListChildrenRecursive`). A caller that only walks the children, a recursive
+`get` and the `--force` leftover hint, uses the paged form
+(`TestListChildrenPages_HandsEachPageOnBeforeAskingForTheNext`,
+`TestListChildrenPages_RetriesAFailedPageAsThatPage`,
+`TestListChildrenPages_CancellationBetweenPagesAsksForNoFurtherPage`,
+`TestListChildrenPages_ACallerThatStopsAsksForNoFurtherPage`,
+`TestListChildren_ReturnsEveryPageInListingOrder`).
+
+Because each page is handed on before the next is asked for, the page cap
+alone does not bound a walker's work: a next link back to a page already read
+would hand the same children on again until the cap, and a recursive `get`
+would queue their files and walk their subfolders again each time. So
+`visitChildPages` keeps the path of every page it asked for, at most the
+cap's, and a next link back to one of them fails the listing before that page
+is asked for again
+(`TestListChildrenPages_ALinkBackToAPageAlreadyAskedForFailsTheListing`).
 
 ## Response Body Bounds
 
