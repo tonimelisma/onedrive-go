@@ -526,14 +526,18 @@ func TestPrintedValueRuleFollowsValues(t *testing.T) {
 		{at: "planted_flow_test.go:47", call: "t.Logf", value: "item", class: printedClassOutput},
 		{at: "planted_flow_test.go:51", call: "t.Logf", value: "shortcutPath", class: printedClassIdentity},
 		{at: "planted_flow_test.go:53", call: "assert.Equal", value: "drive", class: printedClassIdentity},
+		{at: "planted_flow_test.go:58", call: "t.Run", value: "drive", class: printedClassIdentity},
+		{at: "planted_flow_test.go:62", call: "require.NoError", value: "err", class: printedClassIdentity},
+		{at: "planted_flow_test.go:63", call: "t.Logf", value: "err", class: printedClassIdentity},
 	}, findings,
 		"a decoded listing, a value ranged and one indexed out of it, a runner's output under any name and a "+
 			"variable set from one, a fixture name through a path join, an os error quoting a path built from "+
 			"one, an output helper's message and a what argument, an element under %d, a slice conversion under "+
 			"%d, an expected value that only looks like a format, a variable set from an element under %t, an "+
-			"address under %d, a ranged value under %t, a helper's parameter given a fixture path, and a live value in a test that runs no "+
-			"CLI; not the data os.WriteFile writes, a typed field under %d, a %T, the value of True or a masked "+
-			"message")
+			"address under %d, a ranged value under %t, a helper's parameter given a fixture path, a live value in a test that runs no "+
+			"CLI, a subtest named by a drive, an os error quoting a token path testutil builds from a drive, and that "+
+			"error's text; not the data os.WriteFile writes, a typed field under %d, a %T, the value of True, a subtest "+
+			"named by a role or a masked message")
 }
 
 // plantedFlowSource is a live suite file in miniature whose printed values
@@ -594,4 +598,13 @@ func logPlantedPath(t *testing.T, shortcutPath string) { t.Logf("restoring %s", 
 func TestPlantedLiveValue(t *testing.T) { assert.Equal(t, "x", drive) }
 
 func assertPlantedIdentity(t *testing.T, what, want, got string) {}
+
+func TestPlantedSubtestAndTokenPath(t *testing.T) {
+	t.Run(drive, func(t *testing.T) {})
+	t.Run(suiteDriveRoles.Role(drive), func(t *testing.T) {})
+	tokenPath := filepath.Join(testDataDir, testutil.TokenFileName(drive))
+	_, err := os.Stat(tokenPath)
+	require.NoError(t, err)
+	t.Logf("stat: %s", err.Error())
+}
 `
