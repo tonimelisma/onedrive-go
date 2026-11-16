@@ -9,7 +9,10 @@ import (
 // runner-owned outbox until the runtime settles. The outbox is a field, not a
 // value threaded through the loop, because a completion applied inside the
 // loop can take admitted work back out of it: a scope that activates retires
-// what it blocks before a worker reaches it (R-6.8.24).
+// what it blocks before a worker reaches it (R-6.8.24). While the loop runs,
+// the end of ctx is recorded (noteRunCancel), so a stop's bound starts at the
+// cancel. A pass that stopped returns the store failure its drain ended with
+// (endStopDrain) when nothing failed it before.
 func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -18,13 +21,37 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	initialOutbox []*trackedAction,
 ) error {
 	r.outbox = append([]*trackedAction(nil), initialOutbox...)
+	stopNoting := r.noteRunCancel(ctx)
+	defer stopNoting()
+	err := r.runResultsLoop(ctx, cancel, bl, completions)
+	drainErr := r.endStopDrain()
+	if err != nil {
+		return err
+	}
+
+	return drainErr
+}
+
+func (r *oneShotRunner) runResultsLoop(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	bl *Baseline,
+	completions <-chan actionCompletion,
+) error {
 	var fatalErr error
 
 	for {
-		if fatalErr != nil && len(r.outbox) > 0 {
-			r.completeOutboxAsShutdown(r.outbox)
-			r.outbox = nil
-			continue
+		if fatalErr != nil || ctx.Err() != nil {
+			// The pass is stopping: the stop's one bound is set, measured
+			// from the cancel (beginStopDrain), and work admitted but not
+			// handed to a worker completes as shutdown instead of being
+			// offered to the workers after the stop, as a watch's drain
+			// seals its outbox.
+			r.beginStopDrain()
+			if len(r.outbox) > 0 {
+				r.completeOutboxAsShutdown(r.outbox)
+				r.outbox = nil
+			}
 		}
 		if nextFatal, handled := r.pollImmediateCompletion(ctx, cancel, bl, completions, fatalErr); handled {
 			fatalErr = nextFatal
@@ -73,9 +100,13 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	}
 }
 
+// finishResultsLoopIfSettled ends the loop once nothing is in flight or
+// admitted and, while the pass goes on, no held work is due. A stopping pass
+// releases no due held work: its held actions stay for the next sync.
 func (r *oneShotRunner) finishResultsLoopIfSettled(fatalErr error) (bool, error) {
 	switch {
-	case fatalErr == nil && len(r.outbox) == 0 && r.sched.runningCount == 0 && !r.hasDueHeldWork(r.deps.now()):
+	case fatalErr == nil && len(r.outbox) == 0 && r.sched.runningCount == 0 &&
+		(r.stop != nil || !r.hasDueHeldWork(r.deps.now())):
 		return true, nil
 	case fatalErr != nil && len(r.outbox) == 0 && r.sched.runningCount == 0:
 		return true, fatalErr
@@ -107,14 +138,14 @@ func (r *oneShotRunner) runResultsLoopIdle(
 }
 
 // releaseIdleDueHeldWork moves due held work into the outbox while the
-// runtime is otherwise idle. It reports whether it did anything; on a
-// reduction failure the released work has already been completed as shutdown
-// and the error is returned.
+// runtime is otherwise idle and the pass is not stopping. It reports whether
+// it did anything; on a reduction failure the released work has already been
+// completed as shutdown and the error is returned.
 func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
 	bl *Baseline,
 ) (error, bool) {
-	if r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
+	if r.stop != nil || r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
 		return nil, false
 	}
 
@@ -240,8 +271,12 @@ func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 	}
 }
 
+// resultsLoopCtxDone is the end of the pass's context for a select of the
+// loop, until the pass is stopping. From then the loop waits for completions
+// only, which end when the workers' exit closes their channel; a select on a
+// context that stays done would return at once on every turn and spin.
 func resultsLoopCtxDone(ctx context.Context, fatalErr error) <-chan struct{} {
-	if fatalErr != nil {
+	if fatalErr != nil || ctx.Err() != nil {
 		return nil
 	}
 

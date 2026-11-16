@@ -60,18 +60,21 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 	runCtx, end := e.beginRun(ctx)
 	defer func() { err = end(err) }()
 
-	return e.runWatch(runCtx, mode, opts)
+	return e.runWatch(runCtx, newWatchRuntime(e), mode, opts)
 }
 
-// runWatch is the watch RunWatch runs under its bound context.
-func (e *Engine) runWatch(ctx context.Context, mode SyncMode, opts WatchOptions) error {
+// runWatch is the watch RunWatch runs on rt under its bound context. The end
+// of that context is recorded for the whole watch (noteRunCancel), so the
+// stop's bound starts at the cancel.
+func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode SyncMode, opts WatchOptions) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
 		slog.Duration("debounce", e.resolveDebounce(opts)),
 	)
 
-	rt := newWatchRuntime(e)
+	stopNoting := rt.noteRunCancel(ctx)
+	defer stopNoting()
 	bl, err := rt.runStartupStage(ctx)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
@@ -147,9 +150,12 @@ func isWatchObserverStartupStopped(ctx context.Context, err error) bool {
 // cancellation's own echo. A separate failure that landed during the stop is
 // still the watch's error: the report of a loop that ended without draining
 // says so even when the context is done (runWatchLoop). A request that timed
-// out while the run goes on is never a stop.
+// out while the run goes on is never a stop, and neither is a store that did
+// not answer within its bound (errStoreAccessTimedOut): that deadline is the
+// engine's limit on its database, as for classifyResult, so a drain whose
+// bound cut records short ends the watch with that store failure.
 func isWatchShutdownError(ctx context.Context, err error) bool {
-	return runEnded(ctx, err) && isCancellationEcho(err)
+	return runEnded(ctx, err) && isCancellationEcho(err) && !errors.Is(err, errStoreAccessTimedOut)
 }
 
 // watchPipeline holds watch-loop dependencies that are not already runtime-owned.

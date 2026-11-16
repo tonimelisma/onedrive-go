@@ -99,9 +99,9 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | A fresh plan opens into its backlog with two of a drive's actions in flight, doubling per round of successful completions up to the worker pool size; a 429 during the slow start hands the drive to the throttle scope, a plan that starts under a persisted scope is the scope's from the start, and the next fresh plan starts over (R-6.8.25). | `TestColdStart_OneShotRampsInFlightFromTwo`, `TestColdStart_OneShotHandsOverToTheThrottleScopeAndResetsPerPlan`, `TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance`, `TestColdStart_AllowanceDoublesPerRoundToThePoolSize`, `TestColdStart_HandOverOpensTheTargetToTheScope` |
 | Superseded action completions retire exact stale work without success, ordinary retry, blocker mutation, or old-plan dependent admission. | `TestClassifyResult_LocalPersistenceAndScopeRouting`, `TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOrSuccess`, `TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEmptyScope`, `TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry` |
 | Admission validates ready actions against committed current truth before worker dispatch. Remote mismatches retire old-plan work as superseded, do not persist ordinary retry work, do not release dependents, and dirty watch mode for replacement planning. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents` |
-| Canceled worker/admission freshness checks fail closed without store reads or side effects, while shutdown completion may bypass canceled-context freshness only to collapse newly-ready graph frontier without dispatch. | `TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead`, `TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReadyAsShutdown` |
+| Canceled worker/admission freshness checks fail closed without store reads or side effects. A stopping run's completion, a scope trial's included, makes no permission probe and admits nothing (`isStoppingRun`): its newly-ready frontier completes as shutdown without a freshness read, a held row or a publication, and its due held work stays held. | `TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead`, `TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReadyAsShutdown`, `TestEngineFlow_AStoppingRunAsksOneDriveNothing`, `TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial`, `TestEngineFlow_AStoppingRunReleasesNoHeldWork` |
 | Post-sync housekeeping skips the transfer-artifact cleanup for a pass whose protected-root refresh failed, warns once per failure streak and resumes when the store reads again; a failing trash purge is one Warn naming the trash directory per streak, Debug on repeats, Info on recovery (R-6.6.30). | `TestPostSyncHousekeeping_SkipsTransferCleanupWhenProtectedRootsCannotBeRead`, `TestPurgeExpiredTrash_WarnsOncePerFailureStreak`, `TestPostSyncHousekeeping_SkipsProtectedShortcutRoots`, `TestPostSyncHousekeeping_SkipsConfiguredChildRoots`, `TestPostSyncHousekeeping_RespectsIncludedDirs` |
-| A store failure while clearing `retry_work` after a successful action is returned from the completion path, and a store failure reading the persisted remote block scopes is returned from the 403 probe instead of answering "no blocked boundaries". | `TestClearRetryWorkOnSuccess_StoreFailureIsReturned`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`, `TestPermHandler_Handle403_BlockScopeReadFailureIsReturned` |
+| A store failure while clearing `retry_work` after a successful action is returned from the completion path, and a store failure reading the persisted remote block scopes is returned from the 403 probe, and fails the completion, a scope trial's included, instead of answering "no blocked boundaries" or recording the 403 as ordinary retry work. | `TestClearRetryWorkOnSuccess_StoreFailureIsReturned`, `TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow`, `TestPermHandler_Handle403_BlockScopeReadFailureIsReturned`, `TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletion`, `TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion` |
 | Repeated supersedes of one action are visible: Debug on each, one Warn per streak, reset on success. From the streak threshold the action is parked in retry_work with exponential backoff (30 s doubling to 1 h), so a wedge is a slow retry visible in status instead of a hot replan loop in watch mode (R-2.8.11, D-059d). Only consecutive supersedes count: any other completion of the action, or a plan without it, resets the streak. | `TestRecordSupersede_WarnsOnceWhenTheSameActionKeepsGoingStale`, `TestPruneSupersedeStreaks_ForgetsActionsTheNewPlanLacks`, `TestApplySupersededCompletion_ParksTheSameActionAfterAStreak`, `TestSupersedeParkDelay_DoublesToACap`, `TestRunOnce_RandomizedBidirectionalEditsConverge` |
 | Every ready frontier leaves through one engine-owned dispatch order (`dispatchOrder`, nil in production), and a test can serialize the worker pool to one worker (`serializeWorkers`), so a test pins the execution order forward, reversed or seeded-shuffled (D-090). Every TestRunOnce_ scenario also passes with the frontier reversed, and one model-test seed replays the same actions and trees. `ONEDRIVE_GO_DISPATCH_ORDER=forward|reverse|shuffle:<seed>` runs the package's test engines under one order. The reversed re-run and the replay are exhaustive tests: `go test -short` (the per-PR `verify quick` lane) skips them (`skipInShort`), and the full profiles and nightly CI run them. | `TestReverseDispatch_RunOnceScenariosPass`, `TestReverseDispatchTable_ListsEveryRunOnceScenario`, `TestModel_SameSeedReplaysIdentically` |
 | Timing-dependent watch behavior is tested on a virtual clock (`inVirtualTime`, a `testing/synctest` bubble): the real timers run and the tests state exact durations -- one quiet period after the last signal, the max wait under sustained churn, one write-coalescing hash one cooldown after the last write, the safety scan at its interval -- without real waiting (D-095). | `TestDirtyBuffer_VirtualTime_FlushesOneQuietPeriodAfterTheLastSignal`, `TestDirtyBuffer_VirtualTime_ContinuousSignalsFlushAtExactlyTheMaxWait`, `TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash`, `TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval` |
@@ -460,15 +460,23 @@ Once one-shot shutdown has started, late worker completions no longer re-enter
 the normal outbox path. The engine runs them through the same shutdown
 completion boundary watch drain uses, immediately collapsing any newly-ready
 frontier back into shutdown completion instead of handing it to dispatch.
-Shutdown collapse carries an explicit freshness-bypass marker only for that
-graph bookkeeping path; ordinary canceled worker/admission freshness checks
-fail closed and do not authorize executor side effects.
-Likewise, one-shot idle waiting must release any already-due held retry or
-trial work before blocking on worker completions; held-work timing remains part
-of the shared engine runtime, not a watch-only side path. If idle held-release
-reduction fails after shutdown-completing a returned exact frontier, the
-one-shot runner consumes that shutdown work immediately instead of surfacing the
-same outbox to a second shutdown-completion pass.
+A stopping run's completion runs on a context marked as such (`isStoppingRun`),
+which admission, the frontier's reduction (the publication drain and the
+release of due held work, `reduceReadyFrontier`), the permission probes, a
+scope trial's included, and the persisted invariant checks read: it records
+what happened and starts nothing, so it needs no freshness read, while
+ordinary canceled worker/admission freshness checks fail closed and do not
+authorize executor side effects. Likewise, one-shot idle waiting must release
+any already-due held retry or trial work before blocking on worker
+completions; held-work timing remains part of the shared engine runtime, not
+a watch-only side path. A stopping pass releases no due held work, neither
+while idle nor in a completion it drains: its held work stays for the next
+sync (`TestEngineFlow_AStoppingRunReleasesNoHeldWork`). A scope trial that
+succeeded still releases its scope's next batch, the record of that success:
+the batch completes as shutdown, its rows unblocked for the next sync. If
+idle held-release reduction fails after shutdown-completing a returned exact
+frontier, the one-shot runner consumes that shutdown work immediately instead
+of surfacing the same outbox to a second shutdown-completion pass.
 
 Full-remote-refresh cadence is restart-safe even when a full remote refresh
 returns no delta cursor. The engine still advances the persisted cadence in
@@ -932,13 +940,38 @@ one exception: if context cancellation lands during that steady-state replan
 handoff, the loop clears the best-effort sync-status batch and exits cleanly
 into shutdown instead of surfacing a fatal watch error.
 
-Once shutdown drain has sealed new admission, late action-completion
-classification or persistence errors are treated as shutdown bookkeeping only.
-The loop logs them, keeps draining the already-owned completion sources, and
-returns clean shutdown rather than converting cancellation timing into a fatal
-watch error. That same shutdown-completion boundary now lives in
-`engine_runtime_shutdown.go` and is shared by watch drain plus one-shot
-late-completion handling after fatal shutdown or cancellation.
+Once shutdown drain has sealed new admission, a late action completion is the
+result of work that already happened, and the drain records it as a live run
+does, on a context detached from the run's cancellation (`stopDrain`). One
+`OutcomeCommitTimeout` bounds the records of the whole drain whatever the
+number of completions. It is measured from the cancel, the instant the run's context
+ended (`noteRunCancel`), or from the moment the run first sees a stop no
+cancel caused, so a store wait the run's goroutine was in when the cancel
+landed leaves the drain what remains of the bound instead of adding one. A
+detached store access nested in the drain, such as a success's retry-work
+clear, keeps that bound instead of starting its own (`detachedStoreContext`).
+A record that fails for another reason is logged; the loop keeps draining the
+already-owned completion sources and returns clean shutdown rather than
+converting cancellation timing into a fatal watch error. A record the bound
+cuts short, because the store did not answer within it or because its
+completion reached the drain after it, is counted: when the drain ends the
+count is said once ("The stop's time ran out before N results were
+recorded"), and the engine's run ends with that store failure, which
+`isWatchShutdownError` never reads as a clean stop. A one-shot `sync` then
+fails as for a store failure; `sync --watch`, whose orchestrator drops the
+error of a runner it stopped, says the loss in that one warning and stops as
+asked. That shutdown-completion
+boundary lives in `engine_runtime_shutdown.go` and is shared by watch drain
+plus one-shot late-completion handling after fatal shutdown or cancellation; a
+one-shot pass that stops also seals its outbox and then waits for completions
+only (`TestOneShotEngineLoop_ACanceledPassRecordsTheCompletionsItDrains`,
+`TestWatchRuntime_ADrainRecordsTheCompletionsItReceives`,
+`TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound`,
+`TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound`,
+`TestWatchRuntime_AStopsBoundStartsAtItsCancel`,
+`TestRunWatch_RecordsTheCancelOfItsRun`,
+`TestOneShotEngineLoop_ACanceledPassSealsItsOutbox`,
+`TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid`).
 
 ### Maintenance And Refresh
 
@@ -1470,7 +1503,14 @@ the same expression that detaches it:
 | clearing a succeeded action's retry work | `engine_retry_trial.go` `clearRetryWorkOnActionSuccess` | `OutcomeCommitTimeout` |
 | findings observed before a shutdown | `engine_watch_loop.go` `handleWatchSkippedSignal` | `OutcomeCommitTimeout` |
 | persisted-invariant checks (tests and debug only) | `engine_runtime_invariants.go` | `OutcomeCommitTimeout` |
+| the records of the completions a stopping run drains | `engine_runtime_shutdown.go` `processShutdownCompletion` | one `OutcomeCommitTimeout` for the whole drain, measured from the cancel (`stopDrain`) |
 | the WAL checkpoint in `SyncStore.Close` | `store.go` | `StoreCloseCheckpointTimeout` (10 s) |
+
+An access detached inside a context that is already detached
+(`detachedStoreContext`) keeps the outer bound instead of starting its own
+(`TestRunDetachedStoreAccess_ANestedAccessKeepsTheOuterBound`), so the
+records of a stop, a success's retry-work clear among them, add up to one
+bound.
 
 Callers of `SyncStore.Close` (engine close, startup failure, reset, rebind,
 the dry-run scratch store) pass their context as it is: Close detaches the
@@ -1774,7 +1814,9 @@ reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
   create attempt that did not succeed, which keeps its pending-create intent
   instead of failing to clear it
   (`TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly`), are Debug. One
-  that succeeded clears its intent on a detached, bounded context.
+  that succeeded clears its intent on a detached, bounded context. A stop
+  whose one bound cut records short is not quiet: it warns once, with their
+  count.
 
 ## Activity Hook
 

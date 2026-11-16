@@ -631,26 +631,37 @@ func TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure(t *testing.T) 
 }
 
 // A stopping run that receives an action whose outcome commit outlasted its
-// bound has lost the record of work that already happened, and it says so:
-// its own write of the failure fails on the ended run's context, which is no
-// reason to keep that loss quiet. The next sync checks the path again.
+// bound records that failure as retry work on the stop's own bound, so the
+// next sync tries the action again and there is no loss to say. Only when the
+// store does not answer the stop's record either is the loss said, once, and
+// the stop ends with the store failure.
 //
-// Validates: R-2.5.3, R-6.6.21
+// Validates: R-2.5.3, R-2.8.3, R-6.6.21
 func TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid(t *testing.T) {
 	t.Parallel()
 
 	wedged := wedgedCommitCompletion(t)
 	wedged.RunEnded = true
+
 	logger, logs := newCapturedLogger()
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
-	stopped, stop := context.WithCancel(t.Context())
-	stop()
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &wedged, nil))
+	require.NoError(t, flow.endStopDrain())
+	assert.Equal(t, []string{wedged.Path}, retryWorkPaths(t, eng.baseline), "the stop records the failure")
+	assert.Zero(t, countLevel(logs.String(), "WARN"), "nothing is lost: %s", logs.String())
 
-	err := flow.processShutdownCompletion(stopped, &wedged, nil)
-	require.ErrorIs(t, err, context.Canceled, "the stop cannot record the failure either")
-	flow.logSuppressedShutdownCompletionError(&wedged, err)
-
-	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the lost record is said: %s", logs.String())
-	assert.Contains(t, logs.String(), "Could not record the result for "+wedged.Path+" while stopping")
+	logger, logs = newCapturedLogger()
+	eng, _ = newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	flow = testEngineFlow(t, eng)
+	flow.stopBound = workerTestCommitBound
+	stopped := stoppedContext(t)
+	flow.beginStopDrain()
+	release := holdStoreConnection(t, eng.baseline)
+	require.NoError(t, flow.processShutdownCompletion(stopped, &wedged, nil))
+	release()
+	require.ErrorIs(t, flow.endStopDrain(), errStoreAccessTimedOut, "the stop ends with the store failure")
+	assert.Empty(t, retryWorkPaths(t, eng.baseline))
+	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the lost record is said once: %s", logs.String())
+	assert.Contains(t, logs.String(), "The stop's time ran out before 1 result was recorded")
 }

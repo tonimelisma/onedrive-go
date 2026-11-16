@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // invariantChecksEnabled gates expensive invariant assertions used by tests
@@ -96,10 +97,16 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
 		return nil
 	}
 
+	// A canceled run, and a stopping run's completion (isStoppingRun), which
+	// collapses its frontier as shutdown instead of admitting it, are not
+	// checked against persisted truth.
 	select {
 	case <-ctx.Done():
 		return nil
 	default:
+	}
+	if isStoppingRun(ctx) {
+		return nil
 	}
 
 	checkCtx, cancel := detachedInvariantCheckContext(ctx)
@@ -110,9 +117,10 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
 
 // detachedInvariantCheckContext keeps ctx's values without its cancellation,
 // so an assertion is not skipped because a shutdown began, bounded like every
-// detached store access so a wedged store cannot hold it.
+// detached store access (detachedStoreContext) so a wedged store cannot hold
+// it; inside a stopping run's drain it keeps the drain's one bound.
 func detachedInvariantCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+	return detachedStoreContext(ctx, time.Now().Add(OutcomeCommitTimeout))
 }
 
 func (flow *engineFlow) assertWatchRuntimeInvariants() error {

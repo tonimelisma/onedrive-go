@@ -72,8 +72,12 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 	r *actionCompletion,
 	bl *Baseline,
 ) ([]*trackedAction, error) {
-	if handled, err := flow.maybeHandlePermissionFailure(ctx, decision, current, r, bl); handled {
-		return nil, err
+	handled, err := flow.maybeHandlePermissionFailure(ctx, decision, current, r, bl)
+	if err != nil {
+		return nil, flow.failAfterControlStateError(current, err)
+	}
+	if handled {
+		return nil, nil
 	}
 
 	switch decision.Class {
@@ -561,7 +565,8 @@ func (flow *engineFlow) completePublicationDrainAction(
 // publication failures through the same runtime completion stage, and returns
 // only the remaining concrete worker frontier. If it returns an error, the
 // returned slice contains exact actions the caller still owns and should
-// complete as shutdown instead of dispatching.
+// complete as shutdown instead of dispatching. A stopping run never gets here
+// (reduceReadyFrontier).
 func (flow *engineFlow) runPublicationDrainStage(
 	ctx context.Context,
 	bl *Baseline,

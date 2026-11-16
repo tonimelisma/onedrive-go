@@ -78,14 +78,16 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	// a finished effect: like the outcome commit it runs detached from
 	// cancellation, or a shutdown that lands between the effect and this
 	// write would leave the row behind and fail the completion. It has the
-	// outcome commit's bound too, so a wedged store cannot hold a shutdown.
-	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
-	defer cancel()
-	if err := flow.resolveRetryWorkAndLogResolution(
-		clearCtx,
-		retryWorkKeyForAction(action),
-		retryResolutionSourceActionSuccess,
-	); err != nil {
+	// outcome commit's bound too (runDetachedStoreAccess), so a wedged store
+	// cannot hold a shutdown; in a stopping run's drain that is the drain's
+	// one bound.
+	if err := runDetachedStoreAccess(ctx, OutcomeCommitTimeout, func(clearCtx context.Context) error {
+		return flow.resolveRetryWorkAndLogResolution(
+			clearCtx,
+			retryWorkKeyForAction(action),
+			retryResolutionSourceActionSuccess,
+		)
+	}); err != nil {
 		return fmt.Errorf("clear retry work after success: %w", err)
 	}
 

@@ -27,11 +27,18 @@ type admissionDecision struct {
 
 // admitReady applies exact retry/block-scope admission to a ready action set.
 // Dependency readiness is already satisfied; admission decides whether the
-// action dispatches now or is held as exact work for later release.
+// action dispatches now or is held as exact work for later release. A
+// stopping run admits nothing (isStoppingRun): the ready set comes back as it
+// is, for the caller to complete as shutdown, with no freshness read and no
+// held row written for work that will not run.
 func (flow *engineFlow) admitReady(
 	ctx context.Context,
 	ready []*trackedAction,
 ) ([]*trackedAction, error) {
+	if isStoppingRun(ctx) {
+		return ready, nil
+	}
+
 	decisions := flow.decideAdmission(flow.deps.now(), ready)
 	filtered, ownedOnError, err := flow.filterFreshAdmissionDecisions(ctx, decisions)
 	if err != nil {
