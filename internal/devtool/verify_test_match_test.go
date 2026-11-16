@@ -57,7 +57,7 @@ func TestAssertTestsMatched_AcceptsTreeWithSomeEmptyPackages(t *testing.T) {
 		"?   \tgithub.com/tonimelisma/onedrive-go/internal/sync/testdata\t[no test files]",
 	}, "\n")
 
-	require.NoError(t, assertTestsMatched(output, "sync concurrency race x50"))
+	require.NoError(t, assertTestsMatched(output, string(stressSyncConcurrencyRaceStepName)))
 }
 
 // Validates: R-6.10.1, R-6.10.8
@@ -73,9 +73,9 @@ func TestAssertTestsMatched_RejectsTreeWhereNothingRan(t *testing.T) {
 		"?   \tgithub.com/tonimelisma/onedrive-go/internal/sync/testdata\t[no test files]",
 	}, "\n")
 
-	err := assertTestsMatched(output, "sync concurrency race x50")
+	err := assertTestsMatched(output, string(stressSyncConcurrencyRaceStepName))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sync concurrency race x50 matched no tests")
+	assert.Contains(t, err.Error(), string(stressSyncConcurrencyRaceStepName)+" matched no tests")
 }
 
 // Validates: R-6.10.1, R-6.10.8, R-6.10.26
@@ -111,8 +111,8 @@ func TestAssertTestsMatched_RejectsATreeWithNoTestFiles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			require.ErrorContains(t, assertTestsMatched(tc.output, stressSyncRaceStepName()),
-				stressSyncRaceStepName()+" matched no tests")
+			require.ErrorContains(t, assertTestsMatched(tc.output, string(stressSyncRaceStepName)),
+				string(stressSyncRaceStepName)+" matched no tests")
 		})
 	}
 }

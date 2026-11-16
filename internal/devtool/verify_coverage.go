@@ -76,6 +76,9 @@ func resolveCoverageThreshold(plan verifyPlan, repoRoot string, explicit float64
 	return requiredCoverage(repoRoot)
 }
 
+// coverageStepName names the coverage gate's step.
+const coverageStepName verifyStepName = "coverage"
+
 func runCoverageGate(
 	ctx context.Context,
 	runner commandRunner,

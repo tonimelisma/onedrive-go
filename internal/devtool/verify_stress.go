@@ -26,10 +26,10 @@ const syncTestTree = "./internal/sync/..."
 const stressSyncConcurrencyPattern = "TestRunWatch|TestWatch|TestOneShot|TestWorkerPool|Shutdown|Drain|Concurren|Cancel"
 
 // stressSyncRaceRuns is how many race runs of the whole sync tree the stress
-// lane makes, as the -count of one go test. The step's name, its status line
-// and its deadline all follow from it, the deadline as this many times the
-// race profile's deadline for one run on the same cores, so a run of the tree
-// that grows moves the two lanes' budgets together.
+// lane makes, as the -count of one go test. The step's status line and its
+// deadline follow from it, the deadline as this many times the race profile's
+// deadline for one run on the same cores, so a run of the tree that grows
+// moves the two lanes' budgets together.
 const stressSyncRaceRuns = 3
 
 // stressSyncRaceTimeout is go test's deadline for the stress lane's race runs
@@ -38,11 +38,13 @@ func stressSyncRaceTimeout(cores int) time.Duration {
 	return stressSyncRaceRuns * raceSyncTimeoutForCores(cores)
 }
 
-// stressSyncRaceStepName names the stress lane's race runs of the sync tree
-// in the summary, by their number.
-func stressSyncRaceStepName() string {
-	return fmt.Sprintf("sync race x%d", stressSyncRaceRuns)
-}
+// The stress lane's steps, in the order they run. A name holds no count, so
+// a change to how often a step repeats its tests renames no nightly key.
+const (
+	stressMultisyncRaceStepName       verifyStepName = "multisync-race-repeated"
+	stressSyncConcurrencyRaceStepName verifyStepName = "sync-concurrency-race-repeated"
+	stressSyncRaceStepName            verifyStepName = "sync-tree-race-repeated"
+)
 
 // stressSyncRaceCommand is the stress lane's step of race runs of the whole
 // sync tree for the given cores. It runs through `go test -json`, so the
@@ -52,7 +54,7 @@ func stressSyncRaceCommand(cores int) stressCommandSpec {
 	deadline := "-timeout=" + stressSyncRaceTimeout(cores).String()
 
 	return stressCommandSpec{
-		stepName:         stressSyncRaceStepName(),
+		stepName:         stressSyncRaceStepName,
 		statusLine:       fmt.Sprintf("==> go test -json -race %s -shuffle=on %s %s\n", count, deadline, syncTestTree),
 		args:             []string{"test", "-json", "-race", count, "-shuffle=on", deadline, syncTestTree},
 		collectSlowTests: true,
@@ -60,7 +62,7 @@ func stressSyncRaceCommand(cores int) stressCommandSpec {
 }
 
 type stressCommandSpec struct {
-	stepName         string
+	stepName         verifyStepName
 	statusLine       string
 	args             []string
 	collectSlowTests bool
@@ -100,7 +102,7 @@ func runStress(
 	// so each repetition also varies what runs beside what.
 	stressCommands := []stressCommandSpec{
 		{
-			stepName: "multisync race x50",
+			stepName: stressMultisyncRaceStepName,
 			statusLine: fmt.Sprintf(
 				"==> go test -race -count=50 -shuffle=on -timeout=%s ./internal/multisync\n",
 				stressMultisyncTimeout,
@@ -115,7 +117,7 @@ func runStress(
 			},
 		},
 		{
-			stepName: "sync concurrency race x50",
+			stepName: stressSyncConcurrencyRaceStepName,
 			statusLine: fmt.Sprintf(
 				"==> go test -race -count=50 -shuffle=on -timeout=%s -run %s %s\n",
 				stressSyncConcurrencyTimeout, stressSyncConcurrencyPattern, syncTestTree,
@@ -169,7 +171,7 @@ func runStressCommand(
 		return nil, fmt.Errorf("write status: %w", err)
 	}
 
-	output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, command.stepName, command.args...)
+	output, err := runGoTestMatching(ctx, runner, repoRoot, env, stdout, stderr, string(command.stepName), command.args...)
 
 	var slowTests []StressSlowTestSummary
 	if command.collectSlowTests {

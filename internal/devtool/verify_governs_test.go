@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -186,17 +187,20 @@ func TestSpecGoverns_AcceptsCitationOfExistingTest(t *testing.T) {
 	require.NoError(t, f.run(t))
 }
 
+// writeRoutingTable writes the repository guide: a title line, then the
+// routing table's heading and body.
 func (f governsFixture) writeRoutingTable(t *testing.T, body string) {
 	t.Helper()
 
-	require.NoError(t, writeFile(filepath.Join(f.root, "CLAUDE.md"), []byte(body)))
+	guide := "# Thing\n" + routingTableHeading + "\n" + body
+	require.NoError(t, writeFile(filepath.Join(f.root, routingTableDoc), []byte(guide)))
 }
 
 // Validates: R-6.10.5
 //
 // CLAUDE.md's routing table is the first thing a contributor reads to find the
 // governing doc for the code they are about to touch, so a reference that no
-// longer resolves sends them nowhere.
+// longer resolves sends them nowhere. The failure names the guide's line.
 func TestSpecGoverns_RejectsDeadRoutingTableReference(t *testing.T) {
 	t.Parallel()
 
@@ -208,7 +212,7 @@ func TestSpecGoverns_RejectsDeadRoutingTableReference(t *testing.T) {
 
 	err := f.run(t)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `routing table references "internal/thing/gone.go", which matches no file`)
+	assert.Contains(t, err.Error(), `CLAUDE.md: line 4: routing table references "internal/thing/gone.go", which matches no file`)
 	assert.NotContains(t, err.Error(), "thing.go\", which matches no file")
 }
 
@@ -222,6 +226,83 @@ func TestSpecGoverns_AcceptsResolvableRoutingTable(t *testing.T) {
 	f.writeRoutingTable(t, "| `internal/thing/*.go` | `spec/design/thing.md` |\n")
 
 	require.NoError(t, f.run(t))
+}
+
+// Validates: R-6.10.5
+//
+// A row indented by spaces is still a row, as markdown renders it, so its
+// references are checked too.
+func TestSpecGoverns_ReadsARowIndentedBySpaces(t *testing.T) {
+	t.Parallel()
+
+	f := newGovernsFixture(t)
+	f.writeGo(t, "internal/thing/thing.go", "package thing\n")
+	f.writeDoc(t, "thing.md", "# Thing\n\nGOVERNS: internal/thing/*.go\n")
+	f.writeRoutingTable(t, "   | `internal/thing/gone.go` | `spec/design/thing.md` |\n")
+
+	require.ErrorContains(t, f.run(t),
+		`CLAUDE.md: line 3: routing table references "internal/thing/gone.go", which matches no file`)
+}
+
+// Validates: R-6.10.5
+//
+// The check reads the routing table's rows, the lines that start with `|`
+// under its heading, and nothing else of the guide: prose under the table and
+// any later section may name a path-like text, a git ref prefix or a
+// directory that is not in the tree, without failing the check.
+func TestSpecGoverns_ChecksOnlyTheRoutingTableRows(t *testing.T) {
+	t.Parallel()
+
+	f := newGovernsFixture(t)
+	f.writeGo(t, "internal/thing/thing.go", "package thing\n")
+	f.writeDoc(t, "thing.md", "# Thing\n\nGOVERNS: internal/thing/*.go\n")
+	f.writeRoutingTable(t, "| `internal/thing/*.go` | `spec/design/thing.md` |\n\n"+
+		"Prose under the table naming `internal/gone/` and `spec/gone.md`.\n\n"+
+		"## Dev Process\n\n"+
+		"Claims live under `refs/nightly-claims/`.\n"+
+		"| `internal/elsewhere/gone.go` | a table in another section |\n")
+
+	require.NoError(t, f.run(t))
+}
+
+// Validates: R-6.10.5
+//
+// The check finds the real guide's routing table and reads every row of it,
+// counted a second way, so neither a renamed heading nor a partial read can
+// turn it into a check of less than the table.
+func TestSpecGoverns_ReadsTheRealGuidesRoutingTable(t *testing.T) {
+	t.Parallel()
+
+	guide, err := readFile(filepath.Join(repoRootFromDevtoolPackage(t), routingTableDoc))
+	require.NoError(t, err)
+
+	rows := routingTableRows(string(guide))
+	references := 0
+	for _, row := range rows {
+		references += len(routingPathPattern.FindAllStringSubmatch(row.text, -1))
+	}
+	assert.Positive(t, references, "the guide's routing table holds no path the check reads")
+	assert.Len(t, rows, countRoutingTableRows(t, string(guide)), "the check reads every row of the guide's routing table")
+}
+
+// countRoutingTableRows counts the rows of a guide's routing table apart from
+// routingTableRows: it cuts the text from the table's heading to the next
+// heading of its level, and counts the lines there that start with `|` after
+// any spaces.
+func countRoutingTableRows(t *testing.T, guide string) int {
+	t.Helper()
+
+	_, section, found := strings.Cut(guide, "\n"+routingTableHeading+"\n")
+	require.True(t, found, "the guide has no %q heading", routingTableHeading)
+	section, _, _ = strings.Cut(section, "\n"+routingSectionStart)
+	rows := 0
+	for line := range strings.Lines(section) {
+		if strings.HasPrefix(strings.TrimLeft(line, " "), routingRowStart) {
+			rows++
+		}
+	}
+
+	return rows
 }
 
 // Validates: R-6.10.5

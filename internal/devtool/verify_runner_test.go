@@ -400,7 +400,7 @@ func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t
 	assert.Equal(t, runner.runCommands[0].args, runner.runCommands[1].args)
 	assert.Contains(t, stdout, "LI-20260405-06")
 	assert.Contains(t, stdout, "classified reruns:")
-	assertVerifySummaryHasStep(t, summary, "auth preflight")
+	assertVerifySummaryHasStep(t, summary, authPreflightStepName)
 }
 
 func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *testing.T) {
@@ -418,9 +418,11 @@ func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *te
 		},
 	}
 
-	_, stdout, err := runE2EFullForTest(t, runner, true)
+	summary, stdout, err := runE2EFullForTest(t, runner, true)
 	require.NoError(t, err)
 
+	require.Len(t, summary.ClassifiedReruns, 1)
+	assert.Equal(t, string(fastE2EStepName), summary.ClassifiedReruns[0].Phase, "a rerun is recorded under its step's name")
 	assert.Empty(t, runner.combinedCommands, "the classified fast suite streams through Run")
 	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+1+len(fullE2EBuckets()))
 	assert.Equal(t, []string{"test", "-json", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[2].args)
@@ -459,7 +461,7 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
 	assert.Equal(t,
 		[]string{verifySummaryStatusPass, verifySummaryStatusPass, verifySummaryStatusPass},
 		bucketStatuses(summary))
-	fast := requireVerifySummaryStep(t, summary, "fast e2e")
+	fast := requireVerifySummaryStep(t, summary, fastE2EStepName)
 	assert.Equal(t, verifySummaryStatusFail, fast.Status)
 	assert.Equal(t, []string{"TestE2E_Sync_DeletePropagation"}, fast.FailedTests)
 }
@@ -573,7 +575,7 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	assert.Equal(t, verifySummaryStatusPass, summary.Status)
 	assert.GreaterOrEqual(t, summary.TotalDurationMS, int64(0))
 	assertVerifySummaryHasStep(t, summary, "format")
-	assertVerifySummaryHasStep(t, summary, "e2e-full compile")
+	assertVerifySummaryHasStep(t, summary, fullE2ECompileStepName)
 	assert.Empty(t, summary.ClassifiedReruns)
 	assert.Contains(t, stdout.String(), "verify summary")
 	assert.Contains(t, stdout.String(), "classified reruns: none")
@@ -591,7 +593,7 @@ func TestVerifySummaryCollectorFinalizeReadsQuirkSummary(t *testing.T) {
 
 	stdout := &bytes.Buffer{}
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
-	collector := newVerifySummaryCollector(VerifyE2E, stdout, summaryPath, logDir)
+	collector := newVerifySummaryCollector(VerifyE2E, stdout, &bytes.Buffer{}, summaryPath, logDir)
 
 	require.NoError(t, collector.finalize(nil))
 
@@ -631,7 +633,7 @@ func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
 	readVerifySummaryFile(t, summaryPath, &summary)
 	assert.Equal(t, string(VerifyE2EFull), summary.Profile)
 	assert.Equal(t, verifySummaryStatusFail, summary.Status)
-	assertVerifySummaryHasStep(t, summary, "fast e2e")
+	assertVerifySummaryHasStep(t, summary, fastE2EStepName)
 	assertVerifyBucketSummary(t, summary, fullE2EParallelMiscBucket().Name, verifySummaryStatusPass)
 	assertVerifyBucketSummary(t, summary, fullE2ESerialSyncBucket().Name, verifySummaryStatusFail)
 	// The bucket after the failing one still ran.
@@ -983,7 +985,7 @@ func TestRunVerifyStressSyncRaceStepTakesTheRaceDeadlineOncePerRun(t *testing.T)
 
 			var summary VerifySummary
 			readVerifySummaryFile(t, summaryPath, &summary)
-			assert.Equal(t, verifySummaryStatusPass, requireVerifySummaryStep(t, summary, "sync race x3").Status)
+			assert.Equal(t, verifySummaryStatusPass, requireVerifySummaryStep(t, summary, stressSyncRaceStepName).Status)
 		})
 	}
 }
@@ -1073,7 +1075,7 @@ func TestRunVerifyRaceFailsWhenNoPackageRanATest(t *testing.T) {
 		Stdout:   &bytes.Buffer{},
 		Stderr:   &bytes.Buffer{},
 	})
-	require.ErrorContains(t, err, raceStepName+" matched no tests")
+	require.ErrorContains(t, err, string(raceStepName)+" matched no tests")
 }
 
 // Validates: R-6.10.8, R-6.10.26
@@ -1099,8 +1101,8 @@ func TestRunVerifyStressFailsAStepWhosePackagesHaveNoTests(t *testing.T) {
 		Stdout:   &bytes.Buffer{},
 		Stderr:   &bytes.Buffer{},
 	})
-	require.ErrorContains(t, err, "multisync race x50 matched no tests")
-	assert.NotContains(t, err.Error(), stressSyncRaceStepName()+" matched", "the other steps ran a test")
+	require.ErrorContains(t, err, string(stressMultisyncRaceStepName)+" matched no tests")
+	assert.NotContains(t, err.Error(), string(stressSyncRaceStepName)+" matched", "the other steps ran a test")
 	require.Len(t, runner.runCommands, 3, "every step still runs")
 }
 
@@ -1134,7 +1136,7 @@ func TestRunVerifyStressFailsWhenConcurrencyPatternMatchesNothing(t *testing.T) 
 		Stderr:   &bytes.Buffer{},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sync concurrency race x50 matched no tests")
+	assert.Contains(t, err.Error(), string(stressSyncConcurrencyRaceStepName)+" matched no tests")
 	assert.Len(t, runner.runCommands, 3, "the step after the one that verified nothing still runs")
 }
 
@@ -1209,11 +1211,11 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 
 	assert.Contains(t, stdout.String(), "slowest completed sync race tests")
 	assert.Contains(t, stdout.String(), "github.com/tonimelisma/onedrive-go/internal/sync TestSlow runs=2 total=2.5s max=1.5s")
-	assert.Contains(t, stdout.String(), stressSyncRaceStepName()+": pass")
+	assert.Contains(t, stdout.String(), string(stressSyncRaceStepName)+": pass")
 
 	var summary VerifySummary
 	readVerifySummaryFile(t, summaryPath, &summary)
-	step := requireVerifySummaryStep(t, summary, stressSyncRaceStepName())
+	step := requireVerifySummaryStep(t, summary, stressSyncRaceStepName)
 	require.Len(t, step.SlowTests, 3)
 	assert.Equal(t, "github.com/tonimelisma/onedrive-go/internal/sync", step.SlowTests[0].Package)
 	assert.Equal(t, "TestSlow", step.SlowTests[0].Test)

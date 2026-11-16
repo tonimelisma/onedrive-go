@@ -350,10 +350,51 @@ func findMissingCitedTests(repoRoot string) ([]governsViolation, error) {
 // CLAUDE.md's routing table.
 var routingPathPattern = regexp.MustCompile("`([A-Za-z0-9_./*-]+\\.(?:go|md)|[A-Za-z0-9_/*-]+/)`")
 
+// The routing table is the rows, the lines that start with routingRowStart
+// after any spaces, of the section of CLAUDE.md under routingTableHeading,
+// which ends at the next heading of its level (routingSectionStart).
+const (
+	routingTableHeading = "## Routing Table"
+	routingSectionStart = "## "
+	routingRowStart     = "|"
+)
+
+// routingTableRow is one row of the routing table and its line in CLAUDE.md,
+// counted from 1.
+type routingTableRow struct {
+	line int
+	text string
+}
+
+// routingTableRows are the rows of the routing table: the lines that start
+// with `|`, after any spaces, which markdown renders as rows too, in the
+// section under routingTableHeading. The rest of the guide is
+// prose, where a path-like text (a git ref prefix, a directory of another
+// checkout) is not a routing entry and is not checked.
+func routingTableRows(guide string) []routingTableRow {
+	rows := []routingTableRow{}
+	inTable := false
+	number := 0
+	for line := range strings.Lines(guide) {
+		number++
+		text := strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(text, routingSectionStart) {
+			inTable = text == routingTableHeading
+			continue
+		}
+		if inTable && strings.HasPrefix(strings.TrimLeft(text, " "), routingRowStart) {
+			rows = append(rows, routingTableRow{line: number, text: text})
+		}
+	}
+
+	return rows
+}
+
 // findDeadRoutingTablePaths reports routing-table entries that point at
-// nothing. CLAUDE.md is the first thing a contributor or agent reads to decide
-// which design doc governs the code they are about to touch, so a reference
-// that no longer resolves sends them to the wrong place — or nowhere.
+// nothing, each with its line. CLAUDE.md is the first thing a contributor or
+// agent reads to decide which design doc governs the code they are about to
+// touch, so a reference that no longer resolves sends them to the wrong place
+// — or nowhere. Only the table's rows are read (routingTableRows).
 func findDeadRoutingTablePaths(repoRoot string) ([]governsViolation, error) {
 	routingDoc := filepath.Join(repoRoot, routingTableDoc)
 
@@ -370,24 +411,26 @@ func findDeadRoutingTablePaths(repoRoot string) ([]governsViolation, error) {
 
 	var violations []governsViolation
 
-	for _, match := range routingPathPattern.FindAllStringSubmatch(string(data), -1) {
-		reference := match[1]
-		if seen[reference] {
-			continue
-		}
+	for _, row := range routingTableRows(string(data)) {
+		for _, match := range routingPathPattern.FindAllStringSubmatch(row.text, -1) {
+			reference := match[1]
+			if seen[reference] {
+				continue
+			}
 
-		seen[reference] = true
+			seen[reference] = true
 
-		matches, globErr := filepath.Glob(filepath.Join(repoRoot, filepath.FromSlash(reference)))
-		if globErr != nil {
-			return nil, fmt.Errorf("expand routing reference %q: %w", reference, globErr)
-		}
+			matches, globErr := filepath.Glob(filepath.Join(repoRoot, filepath.FromSlash(reference)))
+			if globErr != nil {
+				return nil, fmt.Errorf("expand routing reference %q: %w", reference, globErr)
+			}
 
-		if len(matches) == 0 {
-			violations = append(violations, governsViolation{
-				Path:    routingTableDoc,
-				Message: fmt.Sprintf("routing table references %q, which matches no file", reference),
-			})
+			if len(matches) == 0 {
+				violations = append(violations, governsViolation{
+					Path:    routingTableDoc,
+					Message: fmt.Sprintf("line %d: routing table references %q, which matches no file", row.line, reference),
+				})
+			}
 		}
 	}
 

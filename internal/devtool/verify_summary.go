@@ -2,18 +2,63 @@ package devtool
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 )
 
-func newVerifySummaryCollector(profile VerifyProfile, stdout io.Writer, summaryJSONPath string, e2eLogDir string) *verifySummaryCollector {
+// verifyStepFailedPrefix starts the one line a failed step prints on stderr
+// after its own output: the prefix, the profile, one space and the step's
+// name, as in `verify step failed: public lint`. The line holds nothing
+// else, no path, command line, output of the step or duration, because the
+// nightly reader keys a failed job by the steps these lines name
+// (nightlyFailedStepKeys) and the public issue carries the keys. The printer
+// and the reader share the prefix and the form (failedStepMarker,
+// readFailedStepMarker).
+const verifyStepFailedPrefix = "verify step failed: "
+
+// failedStepMarker is the line a failed step of profile prints.
+func failedStepMarker(profile string, step verifyStepName) string {
+	return verifyStepFailedPrefix + profile + " " + string(step) + "\n"
+}
+
+// readFailedStepMarker reads one line of text as a failed step's marker and
+// returns the step it names: the prefix at the start of the line, a verify
+// profile, one space and a step of the closed set, and nothing else. Any other
+// line is none, an indented one or a test's output that quotes a marker among
+// them, so what a reader takes from a log is a name of the set and never text
+// the log's other lines put there.
+func readFailedStepMarker(line string) (verifyStepName, bool) {
+	rest, isMarker := strings.CutPrefix(line, verifyStepFailedPrefix)
+	if !isMarker {
+		return "", false
+	}
+	profile, step, hasStep := strings.Cut(rest, " ")
+	if !hasStep {
+		return "", false
+	}
+	if _, err := resolveVerifyPlan(VerifyProfile(profile)); err != nil {
+		return "", false
+	}
+	if !slices.Contains(verifyStepNames(), verifyStepName(step)) {
+		return "", false
+	}
+
+	return verifyStepName(step), true
+}
+
+func newVerifySummaryCollector(
+	profile VerifyProfile, stdout, stderr io.Writer, summaryJSONPath string, e2eLogDir string,
+) *verifySummaryCollector {
 	return &verifySummaryCollector{
 		summary: VerifySummary{
 			Profile: string(profile),
 		},
 		stdout:          stdout,
+		stderr:          stderr,
 		summaryJSONPath: summaryJSONPath,
 		e2eLogDir:       e2eLogDir,
 		startedAt:       time.Now(),
@@ -30,20 +75,40 @@ type stepOutcome struct {
 	skipped bool
 }
 
-func (c *verifySummaryCollector) runStep(name string, fn func() error) error {
+// run is the one runner of every step a profile runs, a bucket of the full
+// live suite included: it runs fn and times it, and when fn fails it prints
+// the step's marker line on stderr, after everything the step printed. A step
+// that passes or skips prints none. runStepWithOutcome and runBucket record
+// what it returns in the summary.
+func (c *verifySummaryCollector) run(name verifyStepName, fn func() (stepOutcome, error)) (stepOutcome, int64, error) {
+	startedAt := time.Now()
+	outcome, err := fn()
+	elapsedMS := durationMS(time.Since(startedAt))
+	if err == nil {
+		return outcome, elapsedMS, nil
+	}
+	if writeErr := writeStatus(c.stderr, failedStepMarker(c.summary.Profile, name)); writeErr != nil {
+		err = errors.Join(err, fmt.Errorf("write failed step marker: %w", writeErr))
+	}
+
+	return outcome, elapsedMS, err
+}
+
+func (c *verifySummaryCollector) runStep(name verifyStepName, fn func() error) error {
 	return c.runStepWithOutcome(name, func() (stepOutcome, error) {
 		return stepOutcome{}, fn()
 	})
 }
 
-func (c *verifySummaryCollector) runStepWithOutcome(name string, fn func() (stepOutcome, error)) error {
-	startedAt := time.Now()
-	outcome, err := fn()
+// runStepWithOutcome runs one step through run and records it in the
+// summary's steps.
+func (c *verifySummaryCollector) runStepWithOutcome(name verifyStepName, fn func() (stepOutcome, error)) error {
+	outcome, elapsedMS, err := c.run(name, fn)
 
 	step := VerifyStepSummary{
-		Name:       name,
+		Name:       string(name),
 		Status:     verifySummaryStatusPass,
-		DurationMS: durationMS(time.Since(startedAt)),
+		DurationMS: elapsedMS,
 		SlowTests:  outcome.slowTests,
 	}
 	switch {
@@ -60,27 +125,30 @@ func (c *verifySummaryCollector) runStepWithOutcome(name string, fn func() (step
 }
 
 // recordStepNotRun records a step the profile did not start, and why.
-func (c *verifySummaryCollector) recordStepNotRun(name string, reason string) {
+func (c *verifySummaryCollector) recordStepNotRun(name verifyStepName, reason string) {
 	c.summary.Steps = append(c.summary.Steps, VerifyStepSummary{
-		Name:   name,
+		Name:   string(name),
 		Status: verifySummaryStatusNotRun,
 		Error:  reason,
 	})
 }
 
-// runBucket runs one full-suite bucket; fn returns the bucket's failed
-// top-level tests with its error.
+// runBucket runs one full-suite bucket through run and records it in the
+// summary's buckets; fn returns the bucket's failed top-level tests with its
+// error.
 func (c *verifySummaryCollector) runBucket(bucket fullE2EBucketSpec, fn func() ([]string, error)) error {
-	startedAt := time.Now()
-	failedTests, err := fn()
+	outcome, elapsedMS, err := c.run(bucket.Name, func() (stepOutcome, error) {
+		failedTests, runErr := fn()
+		return stepOutcome{failedTests: failedTests}, runErr
+	})
 
 	summary := newE2EBucketSummary(bucket)
 	summary.Status = verifySummaryStatusPass
-	summary.DurationMS = durationMS(time.Since(startedAt))
+	summary.DurationMS = elapsedMS
 	if err != nil {
 		summary.Status = verifySummaryStatusFail
 		summary.Error = err.Error()
-		summary.FailedTests = failedTests
+		summary.FailedTests = outcome.failedTests
 	}
 
 	c.summary.E2EFullBuckets = append(c.summary.E2EFullBuckets, summary)
@@ -100,7 +168,7 @@ func (c *verifySummaryCollector) recordBucketsNotRun(buckets []fullE2EBucketSpec
 
 func newE2EBucketSummary(bucket fullE2EBucketSpec) E2EBucketSummary {
 	return E2EBucketSummary{
-		Name:       bucket.Name,
+		Name:       string(bucket.Name),
 		Kind:       string(bucket.Kind),
 		RunPattern: fullE2EBucketRunPattern(bucket.TestNames),
 		Parallel:   bucket.Parallel,

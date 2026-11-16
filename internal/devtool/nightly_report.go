@@ -39,7 +39,8 @@ const (
 
 // nightlyRunReport is what the report knows about one run. The issue text is
 // built from runURL and jobs alone: job logs can hold fixture names, and
-// only the names of the failed tests are taken from them.
+// only the names of the failed tests and the failed steps, each step a name
+// of a closed set, are taken from them.
 type nightlyRunReport struct {
 	// runID is the run the command was given, whatever its view decodes.
 	runID   int64
@@ -112,7 +113,8 @@ func describeNotRun(names []string, limit int) string {
 }
 
 // renderNightlyFailure is the issue text of a red night: the run, then each
-// job that made it red, how it ended, and the failed tests its log named.
+// job that made it red, how it ended, the failed tests its log named and the
+// keys of the failed steps the job is keyed by.
 func renderNightlyFailure(r nightlyRunReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The scheduled CI run failed: %s\n\n", r.runURL)
@@ -124,6 +126,9 @@ func renderNightlyFailure(r nightlyRunReport) string {
 			if hidden := len(job.tests) - len(shown); hidden > 0 {
 				fmt.Fprintf(&b, ", and %d more", hidden)
 			}
+		}
+		if len(job.steps) > 0 {
+			fmt.Fprintf(&b, "; failed steps: `%s`", strings.Join(job.steps, "`, `"))
 		}
 		if job.logUnreadable {
 			b.WriteString("; its log could not be read")

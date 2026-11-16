@@ -381,7 +381,7 @@ func TestRunVerifySeedsFailsWhenNoPackageRanATest(t *testing.T) {
 		return "ok  \t" + repoModulePath + "/internal/sync\t0.011s [no tests to run]\n"
 	}}
 	_, err := runSeedsProfile(t, runner, 1)
-	require.ErrorContains(t, err, seedsStepName+" matched no tests")
+	require.ErrorContains(t, err, string(seedsStepName)+" matched no tests")
 }
 
 // Validates: R-6.10.25
