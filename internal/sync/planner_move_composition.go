@@ -39,11 +39,16 @@ import (
 // target parent is already in place or is placed by a move earlier in the same
 // plan, its destination is free or vacated by an earlier move, and its source
 // path is not displaced by a move that runs first (except on OneDrive, where
-// remote_state and the baseline follow every committed move). Anything else is
-// deferred: the item stays where it is on both sides and the next pass, which
-// observes the moves this one made, plans it simply. An item is decided after
-// the item its target hangs off, which is shallower, and, when its target lies
-// at or below the path a folder's move vacates, after that folder
+// remote_state and the baseline follow every committed move). A folder
+// OneDrive made at a path that, on this computer, a synced item leaving it
+// still holds is not in place: a local move into it and that item's own move
+// are never planned together (localFolderHolder). The one decided first
+// moves, except that the move into the folder waits while the item is a file
+// or frozen, which it cannot land in (cannotLandInTheHolder). Anything else
+// is deferred: the item stays where it is on both sides and the next pass,
+// which observes the moves this one made, plans it simply. An item is decided
+// after the item its target hangs off, which is shallower, and, when its
+// target lies at or below the path a folder's move vacates, after that folder
 // (vacatingFolder), an ancestor of its source, and, as a file OneDrive moves,
 // after every folder OneDrive relocates (waitsForVacatingFolder); each of
 // these waits ends with the decision of the item waited for. An item also
@@ -675,7 +680,10 @@ func truncateNameBytes(s string, limit int) string {
 // emitted and the items never converged. The first item of the cycle moves to
 // a free temporary name beside its source, as a user swapping two names would;
 // that vacates its path for the rest of the cycle, which then resolves in this
-// plan, and the parked item reaches its target on the next pass. It reports
+// plan, and the parked item reaches its target on the next pass. An item that
+// holds the path of a folder a local move of the plan lands in is not parked
+// on this computer (holdsALocalLanding): parked, it would leave that path to
+// the next item of the cycle, which the move would land in. It reports
 // whether it parked an item.
 func (e *moveEmitter) parkOneOccupancyCycle(order []string) bool {
 	for _, key := range order {
@@ -683,7 +691,7 @@ func (e *moveEmitter) parkOneOccupancyCycle(order []string) bool {
 			continue
 		}
 		side, ok := e.occupancyCycleSide(key)
-		if !ok {
+		if !ok || (side == moveCoordLocal && e.holdsALocalLanding(key)) {
 			continue
 		}
 		n := e.nodes[key]
@@ -987,6 +995,11 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 		}
 		oldPath = earlier.newPath + strings.TrimPrefix(oldPath, earlier.oldPath)
 	}
+	// The holder is looked up at the final newPath: a local move that runs
+	// inside a folder before the folder moves lands where that folder is now.
+	if e.waitsForALocalFolderHolder(n.key, side, newPath) {
+		return composedMove{}, false
+	}
 	if oldPath == newPath {
 		return composedMove{}, false
 	}
@@ -1004,6 +1017,76 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 		remotePath: remotePath,
 		displaced:  displaced,
 	}, true
+}
+
+// localFolderHolder reports the synced item that holds, in the local
+// snapshot, the path of the folder a local move of key to targetPath lands in,
+// when that folder is not a synced item (a folder OneDrive made) and the item
+// holding its path is relocated on this computer. That item leaves the path,
+// and the folder the move needs is made there only by a later pass: SQLite
+// plans no create at a path the baseline still gives an item OneDrive moved
+// away. Planned with the item's own move, the move would land in the item
+// before it leaves, which carries it along, or find no folder after it left.
+// The path is compared as OneDrive compares names (occupantAt): a
+// case-insensitive volume resolves a new folder X to the item at x.
+func (e *moveEmitter) localFolderHolder(key, targetPath string) (string, bool) {
+	if !strings.HasPrefix(e.target[key].parent, unsyncedParentPrefix) {
+		return "", false
+	}
+	holder, isNode := e.occupantAt(moveCoordLocal, path.Dir(targetPath))
+	if !isNode {
+		return "", false
+	}
+	h := e.nodes[holder]
+	if !e.isMoveParticipant(h) || sameLocation(e.location(h, moveCoordLocal), e.target[holder]) {
+		return "", false
+	}
+
+	return holder, true
+}
+
+// waitsForALocalFolderHolder reports whether key's move on side to targetPath
+// waits for the next pass because of localFolderHolder: on this computer, the
+// move lands where a holder is that it cannot land in, or it would vacate the
+// path a planned move lands in.
+func (e *moveEmitter) waitsForALocalFolderHolder(key string, side moveCoord, targetPath string) bool {
+	if side != moveCoordLocal {
+		return false
+	}
+
+	return e.cannotLandInTheHolder(key, targetPath) || e.holdsALocalLanding(key)
+}
+
+// cannotLandInTheHolder reports whether key's local move to targetPath lands
+// in a folder whose path an item holds (localFolderHolder) that the move
+// cannot land in, so the move waits for the next pass: an item already
+// decided (moved away by this plan, or held for the next pass, it leaves the
+// path before the folder is made), a file, or a frozen folder, below which
+// nothing moves this pass. A pending folder that is not frozen waits instead
+// (holdsALocalLanding): the move lands in it and the folder moves a pass
+// later, carrying it. Whichever composition decides first moves, so two
+// folders that each land where the other leaves converge.
+func (e *moveEmitter) cannotLandInTheHolder(key, targetPath string) bool {
+	holder, held := e.localFolderHolder(key, targetPath)
+
+	return held && (e.state[holder] != moveEmitPending || e.nodes[holder].itemType != ItemTypeFolder || e.unresolvable[holder])
+}
+
+// holdsALocalLanding reports whether a local move this plan makes lands in a
+// folder at key's local path (localFolderHolder): key's own local move waits
+// for the next pass, which sees that move made.
+func (e *moveEmitter) holdsALocalLanding(key string) bool {
+	for i := range e.result.moves {
+		move := &e.result.moves[i]
+		if move.side != moveCoordLocal || e.state[move.key] != moveEmitSettled {
+			continue
+		}
+		if holder, held := e.localFolderHolder(move.key, move.newPath); held && holder == key {
+			return true
+		}
+	}
+
+	return false
 }
 
 // vacatingFolder finds the folder whose move on side vacates the path n's
