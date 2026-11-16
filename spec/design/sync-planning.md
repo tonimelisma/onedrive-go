@@ -540,9 +540,90 @@ and its source is not displaced by a move that runs first. OneDrive moves are
 rebased through an ancestor's committed move (remote_state and the baseline
 follow it). Local moves are not, because `local_state` is observation-owned:
 a local child move runs inside its folder before the folder moves, or waits a
-pass. Anything that cannot be ordered is deferred, with a Debug notice, and the
-next pass, which observes the moves this one made, plans it simply; the
-shallowest pending item is always ready, so every pass progresses. Items whose
+pass. An item whose target lies at or below the path a folder above it vacates
+on that side (a folder made at that path, or the path itself) is decided after
+that folder's move and moves after it: an item's path equal to its baseline
+path does not make it unmoved, since its parent there may be another folder
+now. On OneDrive a file's move is rebased through the folder's move and runs in
+the same pass; a local move, or a folder's move, whose subtree can hold work
+addressed at the old paths, waits a pass
+(`TestComposeMoves_EntryMovedIntoTheFolderRecreatedAtAMovedFoldersPath`,
+`TestComposeMoves_SubfolderMovedToThePathItsMovedParentLeftWaitsForTheParent`,
+`TestRunOnce_MoveIntoAFolderRecreatedAtAMovedFoldersPathConverges`,
+`TestRunOnce_SubfolderMovedOnOneDriveToThePathItsMovedParentLeftConverges`).
+So does the file when the folder moves into or onto a path that another
+folder's OneDrive move of the plan vacates (`x` moved to `x2` and made again,
+`f` moved into the new `x`, a new `f` made and `x/f/b.txt` moved into it): its
+rebased source `x/f/b.txt` would lie below `x`, the dependency rules would
+make `x`'s move wait for the file to leave first, and the file waits for
+`f`'s move, which waits for the path `x` left to be filled, a cycle. Such a
+file is decided after every folder OneDrive relocates, so composition sees
+each of their sources whichever of them it decides first, and moves in the
+next pass
+(`TestComposeMoves_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathWaits`,
+`TestComposeMoves_FileMovedBackWaitsForAFolderDecidedAfterIt`,
+`TestRunOnce_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathConverges`).
+A directory between the item and the moving folder that is not a synced item
+(a folder made on one side) moves with that folder and changes none of this
+(`TestComposeMoves_FileMovedOnOneDriveOutOfAFolderMadeHereWaitsForItsFolder`,
+`TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges`). The search
+for the moving folder stops at the nearest synced folder above the item that
+is relocated on that side or present on that side only (one SQLite deletes
+or re-creates). When that folder is a nearer relocated one the item does not
+land in (`docs/sub` renamed inside the moving `docs`, and its `inner.txt`
+moved into the new `docs`), or the one-sided folder, composition neither
+rebases nor holds the move, which keeps its source below the folder move's.
+Where the plan creates a folder at the vacated path on that side, and no move
+of the folder the search stopped at holds the item back (that folder is
+renamed inside the moving one, or made again on the side SQLite lost it),
+`buildDependencies` lets such a move run after the folder move, from the
+source that move took away: it is superseded once, and the next pass of the
+same sync moves it
+(`TestComposeMoves_EntryBelowARenamedSubfolderKeepsItsSource`,
+`TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges`,
+`TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges`).
+Where SQLite deletes the one-sided folder instead, the delete waits for the
+move to leave it (named from where the folder move puts it, the move would
+not hold the delete back, and the folder would be deleted online with the
+file still inside), the folder move waits for the delete, and the move waits
+for the folder made at the vacated path, which waits for the folder move: a
+cycle the planner drops on every pass, so nothing is deleted and every sync
+reports the work unfinished
+(`TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource`). Where the
+plan makes no folder at the vacated path, because the move lands on that path
+itself or in a folder moved onto it (on OneDrive, `docs/sub` renamed
+`docs/sub2`, `docs` moved to `archive`, and `archive/sub2/inner.txt` moved to
+`docs`, or `photos` moved to `docs` and the file to `docs/inner.txt`), nothing
+orders the move: the folder move waits for it to leave first, and it waits
+for the folder move, directly or through the folder moved onto the path, a
+cycle the planner drops on every pass. So it is where the folder the search
+stopped at moves out of the moving one (`docs` moved to `archive` and made
+again, `archive/sub` moved to `photos/sub`, and `photos/sub/inner.txt` moved
+into the new `docs`): that folder's own move waits for the item to leave it
+first, the item for the new folder, and the new folder for the folder move,
+which waits for the subfolder to leave. So it is where the new folder can
+only be made after the moving folder has moved (`y` moved to `x/y` and made
+again, `x/a.txt` moved into the new `y`, and `x` moved to `x2`): `x`'s move
+waits for `a.txt` to leave, `a.txt` for the new `y`, and the new `y` for
+`y`'s move, which, composed to `x2/y`, waits for `x`'s.
+Anything that cannot be ordered is
+deferred, with a Debug notice, and the next pass, which observes the moves
+this one made, plans it simply. An item is decided after the item its target
+hangs off, which is shallower, after a folder whose move vacates the path it
+lands at or below, an ancestor of its source, and, as a file OneDrive moves
+there, after every folder OneDrive relocates; each of these waits ends with
+the decision of the item waited for. An item also waits while another item
+holds its destination, whatever that item does: until a move of the plan
+vacates the destination, until one item of a swap or rotation is parked
+beside its source, or until the end of composition defers it. So the pending
+items are decided in turn unless their waits loop. Nothing breaks the loop of
+a folder whose target hangs off an entry that waits for it: every pass defers
+its items, and a one-shot sync ends with them unfinished. The loop of a
+folder whose destination is held by a file that waits for it, as one of the
+folders OneDrive relocates, lasts until the move that vacates the file's
+target commits: the pass defers both, and a pass in which the file lands
+where no move vacates plans both
+(`TestComposeMoves_FolderMovedOntoAWaitingFilesPathWaitsOnePass`). Items whose
 paths touch unavailable truth are frozen with their subtree. Creates that would
 land on a path a composed item still holds this pass are dropped until the item
 has moved. A remote move whose local copy sits elsewhere in the snapshot carries
@@ -579,6 +660,13 @@ folder, unknown content) makes the move wait. Reconciliation downloads and
 conflict copies of an item composition moves locally are dropped, and so is a
 metadata baseline update of a moved item (identical content at the destination,
 new eTag), which recorded the replaced file's local identity for the moved item.
+A baseline update of an item whose move, one the mode runs, waits for the next
+pass is dropped too, so the item keeps the baseline row the plan's moves leave
+it: a folder move of the plan can carry the item, while the update, addressed
+at the path the item had and waiting for the folder made there, would record
+it at that path again, and the next pass would read it as moved on the other
+side and move it back into the folder
+(`TestDropReconciliationOfComposedMoves_HeldMoveKeepsItsBaselineRow`).
 
 `buildDependencies` (`planner_dependencies.go`) orders moves by the paths they
 carry (`addMoveDeps`): work at or below a move's destination runs after it; a
@@ -586,23 +674,33 @@ move onto a path another move of the same side vacates waits for it; a move
 waits for same-side moves out of its source, for local writes under a local
 move's source and for remote deletes under a remote move's source; a create at
 the path a move vacates waits for the move; the delete of a destination's old
-occupant runs first. The one exception to children leaving first is a
-same-side move out of a folder's source into or below a folder the plan
-creates, on that side, at the path the folder move vacates (`docs` moved to
-`photos/photos` and re-created, `docs/a.txt` moved to `docs/b.txt`): it waits
-for the create through its parent folders, the create waits for the folder
-move, so the folder move does not wait for it. Held to both rules, the three
-would wait on each other: a cycle. The child's move still names its source as
-it was before the folder moved, so once the folder has moved it is superseded
-and the next pass of the same run moves it from the path the folder move gave
-it
+occupant runs first. A move from a folder's source into or below a folder the
+plan creates at the path the folder move vacates (`docs` moved to
+`photos/photos` and re-created, `docs/a.txt` moved to `docs/b.txt`) would wait
+for the create, the create for the folder move and the folder move for the
+child leaving first; one onto the vacated path itself would wait for the
+folder move directly. Either is a cycle. Composition names such a move's
+source where the folder move puts it (`photos/photos/a.txt`), so it waits for
+the folder move and the create and holds neither, or holds it for the next
+pass. It holds it also where that source would lie below the source of
+another folder move of the plan, which the rule for children leaving first
+would then make wait for it while the path that folder leaves is filled only
+after it moves: a cycle
+(`TestBuildDependencies_FileRebasedBelowAnotherFoldersVacatedPath`). Where
+composition neither rebases nor holds the move (Move Composition), the one
+exception to children leaving first orders the first kind: a same-side move
+from the folder's source into or below a folder created at the vacated path
+on that side does not hold the folder move back, so it runs after the folder
+move from its old source, is superseded, and the next pass moves it from
+where the folder move put it. The exception needs that create, so it does
+not reach a move onto the vacated path itself, which stays a cycle
 (`TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder`,
 `TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSource`,
-`TestRunOnce_MoveIntoAFolderRecreatedAtAMovedFoldersPathConverges`). `ExecuteLocalMove`
-requires the destination's parent to exist and reports a missing one as stale
-instead of creating it (D-054). A local folder create's outcome never moves the
-item in `remote_state` (it may run at a local path that differs from OneDrive's
-until a parent's local move commits).
+`TestBuildDependencies_FileMovedOntoAVacatedPathFromAFolderMadeInsideIt`).
+`ExecuteLocalMove` requires the destination's parent to exist and reports a
+missing one as stale instead of creating it (D-054). A local folder create's
+outcome never moves the item in `remote_state` (it may run at a local path
+that differs from OneDrive's until a parent's local move commits).
 
 ### Dependency Build
 
