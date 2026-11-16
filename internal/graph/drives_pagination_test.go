@@ -153,6 +153,20 @@ func pagedListingCalls() map[string]func(ctx context.Context, client *Client) (a
 	}
 }
 
+// everyPagedListingCall is pagedListingCalls and the all-pages delta
+// listings, each delta one returning the items and the token it handed back.
+func everyPagedListingCall() map[string]func(ctx context.Context, client *Client) (any, error) {
+	calls := pagedListingCalls()
+	for name, call := range deltaListingCalls() {
+		calls[name] = func(ctx context.Context, c *Client) (any, error) {
+			items, token, err := call(ctx, c)
+			return deltaListing{items: items, token: token}, err
+		}
+	}
+
+	return calls
+}
+
 // Every non-delta paged listing counts the pages it asks for against one
 // cap: a listing of exactly that many pages completes, and a continuation
 // past it, as an endless chain of new links would give, fails without
@@ -256,15 +270,16 @@ func (l *loopingListing) asks() []int {
 	return append([]int(nil), l.asked...)
 }
 
-// Every non-delta paged listing fails on a next link back to a page it
-// already asked for, before that page is asked for again, and hands its
-// caller nothing: a listing that gathers every page would otherwise hold the
-// same entries over and over until the page cap, and a site search, which
-// stops at its caller's limit, would return a site twice. The link back to a
-// later page than the first shows that every page asked for is remembered,
-// not only the listing's own first request. The cap is one page above what
-// the longest case asks for, so it stops no case, and low only so that a
-// listing that followed the link back ends within a few requests.
+// Every paged listing, delta enumeration included, fails on a next link back
+// to a page it already asked for, before that page is asked for again, and
+// hands its caller nothing, a delta listing no token either: a listing that
+// gathers every page would otherwise hold the same entries over and over
+// until the page cap, and a site search, which stops at its caller's limit,
+// would return a site twice. The link back to a later page than the first
+// shows that every page asked for is remembered, not only the listing's own
+// first request. Both caps are one page above what the longest case asks
+// for, so they stop no case, and low only so that a listing that followed
+// the link back ends within a few requests.
 //
 // Validates: R-6.7.32
 func TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing(t *testing.T) {
@@ -283,7 +298,7 @@ func TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing(t *testing
 		},
 	}
 
-	for listingName, call := range pagedListingCalls() {
+	for listingName, call := range everyPagedListingCall() {
 		t.Run(listingName, func(t *testing.T) {
 			t.Parallel()
 
@@ -294,6 +309,7 @@ func TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing(t *testing
 					listing := newLoopingListing(t, tc.linkFrom, tc.linkTo)
 					client := newTestClient(t, listing.srv.URL)
 					client.maxListPages = testListPages + 1
+					client.maxDeltaPages = testListPages + 1
 
 					result, err := call(t.Context(), client)
 

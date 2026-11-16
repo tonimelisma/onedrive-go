@@ -1,19 +1,180 @@
 package graph
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
+// deltaCapErrorFormat is the error text of a delta listing stopped by its
+// page cap, as its callers see it.
+const deltaCapErrorFormat = "graph: delta enumeration exceeded %d pages"
+
+// deltaListing is what an all-pages delta listing hands its caller.
+type deltaListing struct {
+	items []Item
+	token string
+}
+
+// deltaListingCalls are the client's all-pages delta listings, each called
+// with arguments the server ignores. One starts from a saved token, a link to
+// the server, so its first request is that link instead of the listing's own
+// path.
+func deltaListingCalls() map[string]func(ctx context.Context, c *Client) ([]Item, string, error) {
+	drive := driveid.New("d")
+
+	return map[string]func(ctx context.Context, c *Client) ([]Item, string, error){
+		"drive delta": func(ctx context.Context, c *Client) ([]Item, string, error) {
+			return c.DeltaAll(ctx, drive, "")
+		},
+		"drive delta from a saved token": func(ctx context.Context, c *Client) ([]Item, string, error) {
+			return c.DeltaAll(ctx, drive, c.baseURL+"/drives/d/root/delta?token=saved")
+		},
+		"folder delta": func(ctx context.Context, c *Client) ([]Item, string, error) {
+			return c.DeltaFolderAll(ctx, drive, "folder-abc", "")
+		},
+	}
+}
+
+// A delta listing that loops back fails the way one stopped by the page cap
+// fails, so its callers classify the two alike: neither error wraps a
+// sentinel or a *GraphError, and the callers branch on nothing else. A
+// shared-folder observation enumerates again on ErrGone, lists the folder
+// instead on ErrNotFound or ErrMethodNotAllowed, records the root's read
+// issue on ErrNotFound or ErrForbidden, and takes the context's errors for
+// the end of the run; any other error fails a one-shot run and is retried
+// with backoff in watch mode.
+//
+// Validates: R-6.7.32
+func TestDeltaListings_ALoopBackFailsAsThePageCapDoes(t *testing.T) {
+	t.Parallel()
+
+	branchedOn := []error{ErrGone, ErrNotFound, ErrMethodNotAllowed, ErrForbidden, context.Canceled, context.DeadlineExceeded}
+
+	for name, call := range deltaListingCalls() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var requests atomic.Int64
+			capped := newTestClient(t, pageOnServer(t, 0, &requests).URL)
+			capped.maxDeltaPages = testListPages
+			_, _, capErr := call(t.Context(), capped)
+			require.EqualError(t, capErr, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+
+			looping := newTestClient(t, newLoopingListing(t, 1, 1).srv.URL)
+			looping.maxDeltaPages = testListPages
+			_, _, loopErr := call(t.Context(), looping)
+			require.ErrorContains(t, loopErr, "graph: delta enumeration looped back")
+
+			for _, target := range branchedOn {
+				assert.Equal(t, errors.Is(capErr, target), errors.Is(loopErr, target), "errors.Is(err, %v)", target)
+			}
+			var graphErr *GraphError
+			assert.Equal(t, errors.As(capErr, &graphErr), errors.As(loopErr, &graphErr), "errors.As(err, *GraphError)")
+		})
+	}
+}
+
+// deltaEndingLinkPath is the path of the delta link deltaEndingServer ends a
+// listing with.
+const deltaEndingLinkPath = "/drives/d/root/delta?token=next"
+
+// deltaEndingServer is a Graph server whose delta pages link on, each link
+// new, until page lastPage answers the delta link that ends the listing,
+// counting the pages in requests.
+func deltaEndingServer(t *testing.T, lastPage int64, requests *atomic.Int64) *httptest.Server {
+	t.Helper()
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		page := requests.Add(1)
+		link := fmt.Sprintf(`"@odata.nextLink":%q`, fmt.Sprintf("%s/next-page?page=%d", srv.URL, page+1))
+		if page >= lastPage {
+			link = fmt.Sprintf(`"@odata.deltaLink":%q`, srv.URL+deltaEndingLinkPath)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{"value":[],`+link+`}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// A delta listing of exactly the page cap's pages completes: the cap bounds
+// the pages asked for, and the delta link on the last of them ends the
+// listing with its token.
+//
+// Validates: R-6.7.32
+func TestDeltaListings_AListingOfExactlyThePageCapCompletes(t *testing.T) {
+	t.Parallel()
+
+	for name, call := range deltaListingCalls() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var requests atomic.Int64
+			srv := deltaEndingServer(t, testListPages, &requests)
+			client := newTestClient(t, srv.URL)
+			client.maxDeltaPages = testListPages
+
+			_, token, err := call(t.Context(), client)
+			require.NoError(t, err)
+			assert.Equal(t, int64(testListPages), requests.Load(), "every page up to the cap is asked for once")
+			assert.Equal(t, srv.URL+deltaEndingLinkPath, token)
+		})
+	}
+}
+
+// A next link off the client's base URL fails a delta listing before the page
+// it names is counted or asked for: the bearer goes nowhere else, and the
+// caller is told of the bad link even when the page cap is spent.
+//
+// Validates: R-6.7.32
+func TestDeltaListings_ANextLinkOffTheBaseURLIsRefusedBeforeItIsAsked(t *testing.T) {
+	t.Parallel()
+
+	pageCaps := map[string]int{"below the page cap": testListPages, "at the page cap": 1}
+
+	for name, call := range deltaListingCalls() {
+		for capName, pageCap := range pageCaps {
+			t.Run(name+", "+capName, func(t *testing.T) {
+				t.Parallel()
+
+				var requests atomic.Int64
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					requests.Add(1)
+					w.Header().Set("Content-Type", "application/json")
+					writeTestResponse(t, w, `{"value":[],"@odata.nextLink":"https://elsewhere.invalid/next-page"}`)
+				}))
+				t.Cleanup(srv.Close)
+
+				client := newTestClient(t, srv.URL)
+				client.maxDeltaPages = pageCap
+
+				items, token, err := call(t.Context(), client)
+				require.ErrorContains(t, err, "does not match base URL")
+				assert.Equal(t, int64(1), requests.Load(), "the link off the base URL is never asked for")
+				assert.Nil(t, items)
+				assert.Empty(t, token)
+			})
+		}
+	}
+}
+
 func TestDelta_SendsPreferHeader(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify the Prefer header is sent on delta requests.
 		assert.Equal(t, "deltashowremoteitemsaliasid, Include-Feature=AddToOneDrive", r.Header.Get("Prefer"))
@@ -30,6 +191,8 @@ func TestDelta_SendsPreferHeader(t *testing.T) {
 }
 
 func TestDelta_SinglePage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +225,8 @@ func TestDelta_SinglePage(t *testing.T) {
 }
 
 func TestDelta_MultiPage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +269,8 @@ func TestDelta_MultiPage(t *testing.T) {
 }
 
 func TestDelta_EmptyToken(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/drives/000000test-drive/root/delta", r.URL.Path)
 
@@ -122,6 +289,8 @@ func TestDelta_EmptyToken(t *testing.T) {
 }
 
 func TestDelta_WithToken(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +318,8 @@ func TestDelta_WithToken(t *testing.T) {
 }
 
 func TestDelta_EmptyPage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -170,6 +341,8 @@ func TestDelta_EmptyPage(t *testing.T) {
 }
 
 func TestDelta_KeepsPackages(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -195,6 +368,8 @@ func TestDelta_KeepsPackages(t *testing.T) {
 }
 
 func TestDelta_InvalidTokenURL(t *testing.T) {
+	t.Parallel()
+
 	client := newTestClient(t, "http://localhost:1234")
 
 	_, err := client.Delta(t.Context(), driveid.New("d"), "http://evil.example.com/drives/d/root/delta?token=bad")
@@ -203,6 +378,8 @@ func TestDelta_InvalidTokenURL(t *testing.T) {
 }
 
 func TestDeltaAll_SinglePage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -229,6 +406,8 @@ func TestDeltaAll_SinglePage(t *testing.T) {
 }
 
 func TestDeltaAll_MultiPage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	callCount := 0
@@ -277,6 +456,8 @@ func TestDeltaAll_MultiPage(t *testing.T) {
 }
 
 func TestDeltaAll_GoneError(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-gone-all")
 		w.WriteHeader(http.StatusGone)
@@ -291,6 +472,8 @@ func TestDeltaAll_GoneError(t *testing.T) {
 }
 
 func TestDeltaAll_MissingContinuationLinkReturnsError(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -310,29 +493,23 @@ func TestDeltaAll_MissingContinuationLinkReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "neither nextLink nor deltaLink")
 }
 
+// A drive delta whose next links never end, each one new, stops at the page
+// cap: the cap's pages are asked for, the next one is not, and the caller
+// gets no items and no token.
+//
+// Validates: R-6.7.32
 func TestDeltaAll_MaxPages(t *testing.T) {
-	var srv *httptest.Server
+	t.Parallel()
 
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Always return a NextLink, never a DeltaLink — simulates infinite loop.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponsef(t, w, `{
-			"value": [
-				{"id":"item","name":"file.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"root","driveId":"d"}}
-			],
-			"@odata.nextLink": "%s/drives/d/root/delta?token=next"
-		}`, srv.URL)
-	}))
-	defer srv.Close()
+	var requests atomic.Int64
+	client := newTestClient(t, pageOnServer(t, 0, &requests).URL)
+	client.maxDeltaPages = testListPages
 
-	client := newTestClient(t, srv.URL)
-	client.maxDeltaPages = 3
-
-	_, _, err := client.DeltaAll(t.Context(), driveid.New("d"), "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeded")
-	assert.Contains(t, err.Error(), "3")
+	items, token, err := client.DeltaAll(t.Context(), driveid.New("d"), "")
+	require.EqualError(t, err, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+	assert.Equal(t, int64(testListPages), requests.Load(), "no page past the cap is asked for")
+	assert.Nil(t, items)
+	assert.Empty(t, token)
 }
 
 // An empty token, or one that is not a URL, starts from the initial path;
@@ -374,6 +551,8 @@ func TestResolveDeltaToken(t *testing.T) {
 // --- DeltaFolder tests ---
 
 func TestDeltaFolder_SinglePage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +586,8 @@ func TestDeltaFolder_SinglePage(t *testing.T) {
 }
 
 func TestDeltaFolder_WithToken(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -434,6 +615,8 @@ func TestDeltaFolder_WithToken(t *testing.T) {
 }
 
 func TestDeltaFolder_Gone(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("request-id", "req-gone-folder")
 		w.WriteHeader(http.StatusGone)
@@ -448,6 +631,8 @@ func TestDeltaFolder_Gone(t *testing.T) {
 }
 
 func TestDeltaFolder_KeepsPackages(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -473,6 +658,8 @@ func TestDeltaFolder_KeepsPackages(t *testing.T) {
 }
 
 func TestDeltaFolderAll_SinglePage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -499,6 +686,8 @@ func TestDeltaFolderAll_SinglePage(t *testing.T) {
 }
 
 func TestDeltaFolderAll_MultiPage(t *testing.T) {
+	t.Parallel()
+
 	var srv *httptest.Server
 
 	callCount := 0
@@ -539,6 +728,8 @@ func TestDeltaFolderAll_MultiPage(t *testing.T) {
 }
 
 func TestDeltaFolderAll_MissingContinuationLinkReturnsError(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -558,25 +749,20 @@ func TestDeltaFolderAll_MissingContinuationLinkReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "neither nextLink nor deltaLink")
 }
 
+// A folder delta whose next links never end, each one new, stops at the page
+// cap as a drive delta does.
+//
+// Validates: R-6.7.32
 func TestDeltaFolderAll_MaxPages(t *testing.T) {
-	var srv *httptest.Server
+	t.Parallel()
 
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		writeTestResponsef(t, w, `{
-			"value": [
-				{"id":"item","name":"file.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"folder-abc","driveId":"d"}}
-			],
-			"@odata.nextLink": "%s/drives/d/items/folder-abc/delta?token=next"
-		}`, srv.URL)
-	}))
-	defer srv.Close()
+	var requests atomic.Int64
+	client := newTestClient(t, pageOnServer(t, 0, &requests).URL)
+	client.maxDeltaPages = testListPages
 
-	client := newTestClient(t, srv.URL)
-	client.maxDeltaPages = 3
-
-	_, _, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeded")
+	items, token, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
+	require.EqualError(t, err, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+	assert.Equal(t, int64(testListPages), requests.Load(), "no page past the cap is asked for")
+	assert.Nil(t, items)
+	assert.Empty(t, token)
 }

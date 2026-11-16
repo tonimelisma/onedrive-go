@@ -26,6 +26,20 @@ const deltaHTTPPrefix = "http"
 // no token (or a non-HTTP token) is provided.
 type deltaPathBuilder func() string
 
+// driveDeltaPath builds the initial path of a drive's delta.
+func driveDeltaPath(driveID driveid.ID) deltaPathBuilder {
+	return func() string {
+		return fmt.Sprintf("/drives/%s/root/delta", driveID)
+	}
+}
+
+// folderDeltaPath builds the initial path of a folder-scoped delta.
+func folderDeltaPath(driveID driveid.ID, folderID string) deltaPathBuilder {
+	return func() string {
+		return fmt.Sprintf("/drives/%s/items/%s/delta", driveID, folderID)
+	}
+}
+
 // Delta fetches one page of delta changes for a drive.
 // Pass an empty token for the initial sync (fetches all items).
 // For subsequent calls, pass the DeltaLink or NextLink value from the
@@ -33,9 +47,7 @@ type deltaPathBuilder func() string
 // Returns a DeltaPage with normalized items, and either NextLink (more pages)
 // or DeltaLink (done). HTTP 410 (Gone) means the token has expired — returns ErrGone.
 func (c *Client) Delta(ctx context.Context, driveID driveid.ID, token string) (*DeltaPage, error) {
-	return c.fetchDeltaPage(ctx, token, func() string {
-		return fmt.Sprintf("/drives/%s/root/delta", driveID)
-	}, slog.String("drive_id", driveID.String()))
+	return c.fetchDeltaPage(ctx, token, driveDeltaPath(driveID), slog.String("drive_id", driveID.String()))
 }
 
 // DeltaFolder fetches one page of delta changes for a specific folder within a drive.
@@ -43,14 +55,12 @@ func (c *Client) Delta(ctx context.Context, driveID driveid.ID, token string) (*
 // Only works on OneDrive Personal — Business/SharePoint only support root-scoped delta.
 // Pass an empty token for initial sync. Returns ErrGone on HTTP 410.
 func (c *Client) DeltaFolder(ctx context.Context, driveID driveid.ID, folderID, token string) (*DeltaPage, error) {
-	return c.fetchDeltaPage(ctx, token, func() string {
-		return fmt.Sprintf("/drives/%s/items/%s/delta", driveID, folderID)
-	}, slog.String("drive_id", driveID.String()), slog.String("folder_id", folderID))
+	return c.fetchDeltaPage(ctx, token, folderDeltaPath(driveID, folderID),
+		slog.String("drive_id", driveID.String()), slog.String("folder_id", folderID))
 }
 
-// fetchDeltaPage is the shared implementation for Delta and DeltaFolder.
-// It resolves the token to an API path, fetches one page, decodes the response,
-// and applies the normalization pipeline.
+// fetchDeltaPage is the shared implementation for Delta and DeltaFolder: it
+// resolves the token to an API path and fetches the page there.
 func (c *Client) fetchDeltaPage(
 	ctx context.Context,
 	token string,
@@ -62,9 +72,21 @@ func (c *Client) fetchDeltaPage(
 		return nil, err
 	}
 
+	return c.fetchDeltaPath(ctx, path, token == "", logAttrs...)
+}
+
+// fetchDeltaPath fetches the delta page at path, decodes the response, and
+// applies the normalization pipeline. initialSync says whether the page is
+// asked for without a token: the first page of an initial sync.
+func (c *Client) fetchDeltaPath(
+	ctx context.Context,
+	path string,
+	initialSync bool,
+	logAttrs ...slog.Attr,
+) (*DeltaPage, error) {
 	args := attrsToArgs(logAttrs)
-	args = append(args, slog.Bool("initial_sync", token == ""))
-	c.logger.Info("fetching delta page", args...)
+	args = append(args, slog.Bool("initial_sync", initialSync))
+	c.logger.Debug("fetching delta page", args...)
 
 	resp, err := c.doGetWithHeaders(ctx, path, c.deltaPreferHeader)
 	if err != nil {
@@ -120,26 +142,28 @@ func (c *Client) resolveDeltaToken(token string, buildPath deltaPathBuilder) (st
 // and the new delta token for the next sync run.
 // On success, the returned token is always a non-empty DeltaLink.
 func (c *Client) DeltaAll(ctx context.Context, driveID driveid.ID, token string) ([]Item, string, error) {
-	return c.deltaAllPages(token, func(t string) (*DeltaPage, error) {
-		return c.Delta(ctx, driveID, t)
-	}, slog.String("drive_id", driveID.String()))
+	return c.deltaAllPages(ctx, token, driveDeltaPath(driveID), slog.String("drive_id", driveID.String()))
 }
 
 // DeltaFolderAll fetches all pages of folder-scoped delta changes and returns
 // the combined items and the new delta token.
 // Only works on OneDrive Personal — Business/SharePoint only support root-scoped delta.
 func (c *Client) DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]Item, string, error) {
-	return c.deltaAllPages(token, func(t string) (*DeltaPage, error) {
-		return c.DeltaFolder(ctx, driveID, folderID, t)
-	}, slog.String("drive_id", driveID.String()), slog.String("folder_id", folderID))
+	return c.deltaAllPages(ctx, token, folderDeltaPath(driveID, folderID),
+		slog.String("drive_id", driveID.String()), slog.String("folder_id", folderID))
 }
 
-// deltaAllPages is the shared pagination loop for DeltaAll and DeltaFolderAll.
-// It calls fetchPage repeatedly until a DeltaLink is received or maxDeltaPages
-// is exceeded.
+// deltaAllPages is the shared pagination loop for DeltaAll and DeltaFolderAll:
+// it fetches page after page until a DeltaLink is received. askedPages counts
+// its pages, keyed on the path each token resolves to. A loop that follows
+// next links until a delta link comes can never finish on a link back to a
+// page it already asked for, the one just asked included, so such a link fails
+// the listing before that page is asked for again; a chain of ever new links
+// stops at maxDeltaPages.
 func (c *Client) deltaAllPages(
+	ctx context.Context,
 	token string,
-	fetchPage func(string) (*DeltaPage, error),
+	buildPath deltaPathBuilder,
 	logAttrs ...slog.Attr,
 ) ([]Item, string, error) {
 	args := attrsToArgs(logAttrs)
@@ -148,11 +172,21 @@ func (c *Client) deltaAllPages(
 
 	var allItems []Item
 
+	pages := newAskedPages("delta enumeration", c.maxDeltaPages)
 	currentToken := token
-	page := 1
 
 	for {
-		dp, err := fetchPage(currentToken)
+		path, err := c.resolveDeltaToken(currentToken, buildPath)
+		if err != nil {
+			return nil, "", err
+		}
+
+		page, err := pages.ask(path)
+		if err != nil {
+			return nil, "", err
+		}
+
+		dp, err := c.fetchDeltaPath(ctx, path, currentToken == "", logAttrs...)
 		if err != nil {
 			return nil, "", err
 		}
@@ -180,11 +214,6 @@ func (c *Client) deltaAllPages(
 		// NextLink means more pages — continue with the next page URL as token.
 		if dp.NextLink != "" {
 			currentToken = dp.NextLink
-			page++
-
-			if page > c.maxDeltaPages {
-				return nil, "", fmt.Errorf("graph: delta enumeration exceeded %d pages", c.maxDeltaPages)
-			}
 
 			continue
 		}
