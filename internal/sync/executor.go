@@ -513,8 +513,8 @@ func (e *executor) ExecuteLocalMove(ctx context.Context, action *Action) actionO
 
 	// The parent must already exist. Planning orders a move after whatever
 	// creates or moves its target parent (D-054); fabricating a missing parent
-	// here hid ordering bugs and left stray folders that the next pass
-	// uploaded.
+	// here would hide an ordering bug and leave a stray folder for the next
+	// pass to upload.
 	if err := e.validateLocalMoveParentExists(dest); err != nil {
 		return e.failedOutcomeWithFailure(
 			action,

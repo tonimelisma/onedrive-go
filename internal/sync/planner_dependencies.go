@@ -381,7 +381,11 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 //   - work at or under a move's destination runs after the move: the target
 //     parent must exist, and a move composed into a folder an earlier move
 //     places waits for it;
-//   - a move onto the path another move of the same side vacates waits for it;
+//   - a move onto the path another move of the same side vacates waits for it,
+//     and so does a move into a folder below that path from a source outside
+//     it (movesIntoVacatedPath): that folder is a new one, which takes the
+//     path only after the move, so the order holds whether or not the plan
+//     creates it;
 //   - a move waits for the work under its source that does not follow it to
 //     its destination (children leave first, and writes addressed at the old
 //     path land before the folder moves away), except a same-side move from
@@ -509,7 +513,23 @@ func movePrecedes(move, a *Action) bool {
 	if underMoveDestination(a, move) || createsAtVacatedSource(a, move) {
 		return true
 	}
-	return isMoveAction(a) && a.Type == move.Type && a.Path == move.OldPath
+	return isMoveAction(a) && a.Type == move.Type && (a.Path == move.OldPath || movesIntoVacatedPath(a, move))
+}
+
+// movesIntoVacatedPath reports whether a, a move of move's side, lands
+// strictly below the path move vacates from a source outside it. What a lands
+// in there is a new folder that takes the path once move has left it, so a
+// runs after move, whether or not the plan also creates that folder.
+// Unordered, a would land, run first, in the item move carries away, and find
+// no folder, run second. A move from below the path is work that leaves first
+// (underMoveSource).
+func movesIntoVacatedPath(a, move *Action) bool {
+	if move.OldPath == "" {
+		return false
+	}
+	vacated := move.OldPath + "/"
+
+	return strings.HasPrefix(a.Path, vacated) && !strings.HasPrefix(a.OldPath, vacated)
 }
 
 // underMoveDestination reports whether a works at or below move's

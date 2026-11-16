@@ -367,6 +367,33 @@ func TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverge
 		"each move made here is one move on OneDrive")
 }
 
+// Validates: R-2.17.6, R-2.17.1
+//
+// On OneDrive the file x is moved to zz/a/x2, a folder x is made at the path
+// it left and folder f is moved into the new x, before one sync. On this
+// computer a file cannot carry f, so f's move waits for x's: one sync finishes
+// it, with both sides holding the tree OneDrive has, and nothing moved or
+// uploaded on OneDrive.
+func TestRunOnce_FolderMovedOnOneDriveIntoAFolderMadeWhereAFileLeftConverges(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-x", "root", "x", "x\n")
+	remote.addFolder("item-f", "root", "f")
+	remote.addFile(t, "item-c", "item-f", "c.txt", "c\n")
+	remote.addFolder("item-zz", "root", "zz")
+	remote.addFolder("item-a", "item-zz", "a")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	remote.moveAt(t, "x", "zz/a/x2")
+	remote.mkdirAt(t, "x")
+	remote.moveAt(t, "f", "x/f")
+
+	assertOneSyncLeavesTree(t, eng, remote, syncRoot, logs, map[string]string{
+		"zz": "/", "zz/a": "/", "zz/a/x2": "x\n", "x": "/", "x/f": "/", "x/f/c.txt": "c\n",
+	})
+	assert.Empty(t, remote.moves, "nothing is moved on OneDrive")
+}
+
 // movedBackCase is one way to take b.txt back out of folder f after f was
 // moved into the path folder x left: x moved to x2, a new x made there or
 // folder g moved onto it, f moved into x, a new f made, and x/f/b.txt moved

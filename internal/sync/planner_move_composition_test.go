@@ -668,6 +668,141 @@ func TestComposeMoves_FileMovedBackWaitsForAFolderDecidedAfterIt(t *testing.T) {
 	assert.Len(t, kept, len(actions))
 }
 
+// Validates: R-2.17.6, R-2.17.1
+//
+// The composition inputs of the first pass of
+// TestRunOnce_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathConverges,
+// made on OneDrive: x moved to x2, a new x made, f moved into it, a new f
+// made, and x/f/b.txt moved into the new f. On this computer x and f are still
+// where they were, and the new folders are made only by a later pass: SQLite
+// plans no create at a path the baseline still gives an item OneDrive moved
+// away. So f's move into the new x and x's move away from its path are never
+// planned together: run first, f's would land in the old x and be carried to
+// x2/f; run second, it would find no x. Whichever composition decides first
+// is planned, and the other waits for the next pass, and so does b.txt, whose
+// new f is not there either. The rows hold x decided first, f decided first
+// (x moved deeper), and two folders each moved into a new folder at the
+// other's path, where waiting for the other's decision would never end. A
+// file x cannot carry f, nor can a frozen x, below which nothing moves this
+// pass, so f waits for it although f is decided first. A new folder X, whose
+// name folds to x as OneDrive compares names, is held as x is. One level
+// down, inside a folder OneDrive also moved, c's move into the new P/A/new
+// waits for new's move away from that path.
+func TestComposeMoves_FolderMovedIntoAFolderMadeWhereAnotherFolderLeftWaits(t *testing.T) {
+	t.Parallel()
+
+	// moved holds x moved to x2 on OneDrive and f moved into the new folder
+	// into; b.txt, last, moved to back.
+	moved := func(into, x2, back string) []moveNode {
+		return []moveNode{
+			composeNode("x", ItemTypeFolder, "x", "x", x2),
+			composeNode("keep", ItemTypeFile, "x/keep.txt", "x/keep.txt", x2+"/keep.txt"),
+			composeNode("f", ItemTypeFolder, "f", "f", into+"/f"),
+			composeNode("c", ItemTypeFile, "f/c.txt", "f/c.txt", into+"/f/c.txt"),
+			composeNode("b", ItemTypeFile, "f/b.txt", "f/b.txt", back),
+		}
+	}
+	deeper := append(moved("x", "zz/a/x2", "f/d.txt"),
+		composeNode("zz", ItemTypeFolder, "zz", "zz", "zz"),
+		composeNode("a", ItemTypeFolder, "zz/a", "zz/a", "zz/a"))
+	fileX := append([]moveNode{composeNode("x", ItemTypeFile, "x", "x", "zz/a/x2")}, deeper[2:]...)
+	nested := []moveNode{
+		composeNode("P", ItemTypeFolder, "P", "P", "P2"),
+		composeNode("A", ItemTypeFolder, "P/A", "P/A", "P2/A"),
+		composeNode("new", ItemTypeFolder, "P/A/new", "P/A/new", "P2/A/new2"),
+		composeNode("c", ItemTypeFile, "P/A/c", "P/A/c", "P2/A/new/c"),
+	}
+	madeXF := []string{"x", "f"}
+	bothWait := map[string]bool{"f": true, "b": true}
+	for _, tc := range []struct {
+		name         string
+		nodes        []moveNode
+		made         []string // the folders OneDrive made
+		frozen       map[string]bool
+		wantLocal    []string
+		wantDeferred map[string]bool
+	}{
+		{name: "renamed", nodes: moved("x", "x2", "f/d.txt"), made: madeXF, wantLocal: []string{"x->x2"}, wantDeferred: bothWait},
+		{name: "same name", nodes: moved("x", "x2", "f/b.txt"), made: madeXF, wantLocal: []string{"x->x2"}, wantDeferred: bothWait},
+		{
+			name: "x moved deeper, decided after f", nodes: deeper, made: madeXF,
+			wantLocal: []string{"f->x/f"}, wantDeferred: map[string]bool{"x": true, "b": true},
+		},
+		{
+			name: "each into a new folder at the other's path", nodes: moved("x", "f/x", "")[:4], made: madeXF,
+			wantLocal: []string{"x->f/x"}, wantDeferred: map[string]bool{"f": true},
+		},
+		{
+			name: "a file x moved deeper, decided after f", nodes: fileX, made: madeXF,
+			wantLocal: []string{"x->zz/a/x2"}, wantDeferred: bothWait,
+		},
+		{
+			name: "a frozen x moved deeper, decided after f", nodes: deeper, made: madeXF, frozen: map[string]bool{"x": true},
+			wantDeferred: map[string]bool{"x": true, "f": true, "b": true},
+		},
+		{
+			name: "a new folder X", nodes: moved("X", "x2", "f/d.txt"), made: []string{"X", "f"},
+			wantLocal: []string{"x->x2"}, wantDeferred: bothWait,
+		},
+		{
+			name: "inside a folder OneDrive moved", nodes: nested, made: []string{"P2/A/new"},
+			wantLocal: []string{"P->P2", "P/A/new->P/A/new2"}, wantDeferred: map[string]bool{"c": true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			occupancy := composeOccupancy(tc.nodes)
+			for _, made := range tc.made {
+				occupancy.remote[made] = true
+			}
+			c := composeMoves(tc.nodes, occupancy, tc.frozen)
+
+			assert.Equal(t, tc.wantLocal, composedMovesBySide(&c, moveCoordLocal))
+			assert.Empty(t, composedMovesBySide(&c, moveCoordRemote))
+			assert.Equal(t, tc.wantDeferred, c.deferred)
+
+			actions := composedMoveActions(&c, tc.nodes)
+			kept, _ := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions))
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// On OneDrive Q is renamed R, the folders z and h inside it trade names, a new
+// Q is made with a new folder z in it, and m is moved into that z. On this
+// computer m's move lands in the folder at Q/z, which the old z holds until
+// its own move, so the old z is not the item parked to break the swap: h is
+// parked beside its path, and the old z waits for the next pass. Parked
+// instead, the old z would leave Q/z to h, which m's move would then land in.
+// m's move also waits for Q's, as it lands below the path Q vacates, so it
+// finds no Q/z when it runs, and a later pass, which makes the new Q, moves it.
+func TestComposeMoves_FolderAMoveLandsInIsNotParkedToBreakASwap(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("Q", ItemTypeFolder, "Q", "Q", "R"),
+		composeNode("z", ItemTypeFolder, "Q/z", "Q/z", "R/h"),
+		composeNode("h", ItemTypeFolder, "Q/h", "Q/h", "R/z"),
+		composeNode("m", ItemTypeFile, "m", "m", "Q/z/m"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.remote["Q"] = true
+	occupancy.remote["Q/z"] = true
+	c := composeMoves(nodes, occupancy, nil)
+
+	require.Equal(t, []string{"Q->R", "m->Q/z/m", "Q/h->Q/h.swap-1"}, composedMovesBySide(&c, moveCoordLocal))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordRemote))
+	assert.Equal(t, map[string]bool{"z": true, "h": true}, c.deferred)
+
+	actions := composedMoveActions(&c, nodes)
+	kept, deps := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions))
+	assert.Contains(t, deps[1], 0, "m's move waits for Q's")
+}
+
 // Validates: R-2.17.6
 //
 // A loop through that wait lasts one pass. f moved to f2 and made again,
@@ -877,6 +1012,59 @@ func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder
 
 // Validates: R-2.17.6
 //
+// A move into a folder at the path another move of the same side vacates, from
+// a source outside that path, waits for that move, whether or not the plan
+// creates the folder there: x moved to x2 and f moved into a new x. Unordered,
+// f's move would land in the old x if it ran first, which x's move would
+// then carry to x2/f, and would find no x if it ran second. On OneDrive the
+// plan also creates the new x, which waits for x's move, and f's move waits
+// for both. A move from below the vacated path (a rename inside x) is not
+// held: x's move waits for it to leave first. A move of the other side is not
+// held either.
+func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	move := func(moveType actionType, from, to string, view *pathView) Action {
+		return Action{Type: moveType, OldPath: from, Path: to, View: view}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		actions  []Action
+		wantDeps [][]int
+	}{
+		{name: "on this computer", actions: []Action{
+			move(ActionLocalMove, "x", "x2", folder),
+			move(ActionLocalMove, "f", "x/f", folder),
+		}, wantDeps: [][]int{nil, {0}}},
+		{name: "on OneDrive, with the new x", actions: []Action{
+			move(ActionRemoteMove, "x", "x2", folder),
+			move(ActionRemoteMove, "f", "x/f", folder),
+			{Type: ActionFolderCreate, Path: "x", CreateSide: CreateRemote},
+		}, wantDeps: [][]int{nil, {0, 2}, {0}}},
+		{name: "a rename inside the vacated path", actions: []Action{
+			move(ActionLocalMove, "x", "x2", folder),
+			move(ActionLocalMove, "x/a.txt", "x/b.txt", file),
+		}, wantDeps: [][]int{{1}, nil}},
+		{name: "a move of the other side", actions: []Action{
+			move(ActionLocalMove, "x", "x2", folder),
+			move(ActionRemoteMove, "f", "x/f", folder),
+		}, wantDeps: [][]int{nil, nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			kept, deps := isolateDependencyCycles(tc.actions, nil)
+			assert.Len(t, kept, len(tc.actions), "no action is dropped as a cycle")
+			assert.Equal(t, tc.wantDeps, deps)
+		})
+	}
+}
+
+// Validates: R-2.17.6
+//
 // Work under a folder move's source that does not follow it leaves first: a
 // rename inside the folder, a sibling moving elsewhere, a delete, and any of
 // them when the folder made at the vacated path is on the other side. The one
@@ -1016,8 +1204,9 @@ func assertDependencyRows(t *testing.T, rows []dependencyRow) {
 // x/f/b.txt moved into the new f as d.txt, on this computer. Moved on
 // OneDrive in the pass that moves x and f, from x/f/b.txt, where f's move
 // puts it, b.txt's move lies below x's source, so x's move waits for it
-// (children leave first), while it waits for f's move, f's move for the new
-// x, and the new x for x's move: a cycle the planner drops, with the new f,
+// (children leave first), while it waits for f's move, and f's move for x's
+// move, directly (it lands below the path x's move vacates) and through the
+// new x, which waits for x's move: a cycle the planner drops, with the new f,
 // on every pass. Composition holds b.txt instead (rebasedSourceMisread): the
 // first plan moves both folders and makes both new ones, the second moves
 // b.txt.
@@ -1038,12 +1227,12 @@ func TestBuildDependencies_FileRebasedBelowAnotherFoldersVacatedPath(t *testing.
 		{
 			name:     "b.txt moved in the pass that moves x and f",
 			actions:  []Action{moveX, moveF, moveB, createX, createF},
-			wantDeps: [][]int{{2}, {3}, {1, 4}, {0}, {1}},
+			wantDeps: [][]int{{2}, {0, 3}, {1, 4}, {0}, {1}},
 		},
 		{
 			name:     "first pass",
 			actions:  []Action{moveX, moveF, createX, createF},
-			wantDeps: [][]int{nil, {2}, {0}, {1}}, wantKept: 4,
+			wantDeps: [][]int{nil, {0, 2}, {0}, {1}}, wantKept: 4,
 		},
 		{name: "second pass", actions: []Action{moveB}, wantDeps: [][]int{nil}, wantKept: 1},
 	})
