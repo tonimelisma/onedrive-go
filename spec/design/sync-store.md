@@ -390,9 +390,21 @@ changes the statement and that one mapping
 
 That same store boundary also owns publication-only planner actions:
 
-- `ActionBaselineUpdate` publishes an upsert for converged current truth
+- `ActionBaselineUpdate` publishes an upsert for converged current truth.
+  Its item type is the observed remote's, also where the baseline recorded
+  another: a folder both sides replaced with the same file is recorded as
+  that file, since keeping the folder's type would plan the same update on
+  every pass (R-2.17.4,
+  `TestRunOnce_AFolderBothSidesReplacedWithTheSameFileConverges`,
+  `TestCrashRecovery_AFolderReplacedOnOneDriveWhoseDownloadWasCutConverges`).
+  A hash or size the view left unknown is filled from the baseline only when
+  the baseline holds the same item type: a folder that replaced a file keeps
+  none of the file's content. An observed remote's eTag is recorded even when
+  it is empty: the comparison reads the eTag from remote_state, so the
+  baseline's in its place would plan the same update on every pass
+  (`TestPublicationMutation_RecordsTheObservedItem`).
 - `ActionCleanup` publishes a delete for baseline rows absent from both current
-  snapshots
+  snapshots.
 
 ### Outcome writes
 

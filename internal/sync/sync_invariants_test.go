@@ -159,10 +159,11 @@ func assertStoreIntegrity(t *testing.T, eng *testEngine) bool {
 		{"retry_work rows after convergence", `SELECT COUNT(*) FROM retry_work`},
 		{"held deletes after convergence", `SELECT COUNT(*) FROM held_deletes`},
 		{"pending creates after convergence", `SELECT COUNT(*) FROM pending_creates`},
-		{"baseline rows whose item is elsewhere or absent in remote_state", `SELECT COUNT(*) FROM baseline b
-			WHERE NOT EXISTS (SELECT 1 FROM remote_state r WHERE r.item_id = b.item_id AND r.path = b.path)`},
-		{"baseline rows absent from local_state", `SELECT COUNT(*) FROM baseline b
-			WHERE NOT EXISTS (SELECT 1 FROM local_state l WHERE l.path = b.path)`},
+		{"baseline rows whose item is elsewhere, of another type or absent in remote_state", `SELECT COUNT(*) FROM baseline b
+			WHERE NOT EXISTS (SELECT 1 FROM remote_state r
+				WHERE r.item_id = b.item_id AND r.path = b.path AND r.item_type = b.item_type)`},
+		{"baseline rows absent from local_state or of another type there", `SELECT COUNT(*) FROM baseline b
+			WHERE NOT EXISTS (SELECT 1 FROM local_state l WHERE l.path = b.path AND l.item_type = b.item_type)`},
 	} {
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, query.sql).Scan(&count), query.what)
