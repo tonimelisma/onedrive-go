@@ -81,35 +81,6 @@ func tlsHandshakeTimedOutError(t *testing.T) error {
 // leave: its transport or its token source fails each one first.
 const unreachedGraphURL = "http://127.0.0.1:1"
 
-// failingTransport fails every round trip with err, as net/http's own
-// transport hands the client a failure of the connection a request was on.
-type failingTransport struct {
-	err error
-}
-
-func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, f.err
-}
-
-// lostHTTP2ConnectionError is the error graph returns for one item request
-// on an HTTP/2 connection the transport closed because its health-check ping
-// went unanswered: net/http's HTTP/2 client fails the request with an error
-// of that text and no type, and the client wraps it in the *url.Error it
-// wraps every transport failure in.
-func lostHTTP2ConnectionError(t *testing.T) error {
-	t.Helper()
-
-	lost := &http.Client{Transport: failingTransport{err: errors.New("http2: client connection lost")}}
-	client, err := graph.NewClient(unreachedGraphURL, lost, stalledServerToken{},
-		slog.New(slog.DiscardHandler), "lost-connection")
-	require.NoError(t, err)
-
-	_, err = client.GetItem(t.Context(), driveid.New(engineTestDriveID), "item-on-a-lost-connection")
-	require.Error(t, err)
-
-	return fmt.Errorf("get the item: %w", err)
-}
-
 // failingTokenSource hands graph err in place of a token.
 type failingTokenSource struct {
 	err error
@@ -182,13 +153,16 @@ type timedOutRequest struct {
 // timedOutRequests are the ways a request ends because OneDrive stopped
 // answering: the transport's response-header, dial and whole-request
 // timeouts and its TLS handshake timeout against a real silent server, a
-// transfer the stall watchdog abandoned, a body read whose connection's
-// keepalive found the server gone, a request on an HTTP/2 connection whose
-// ping went unanswered, and a token Microsoft sign-in never answered for,
-// without which no request to OneDrive can be sent.
+// transfer the stall watchdog abandoned, an answer whose body brought nothing
+// for the stall window, a body read whose connection's keepalive found the
+// server gone, a request and a body read on an HTTP/2 connection whose ping
+// went unanswered, and a token Microsoft sign-in never answered for, without
+// which no request to OneDrive can be sent. The graph package's tests make
+// the stalled body and the lost connection against real servers; here they
+// are built from the types graph gives them.
 func timedOutRequests() []timedOutRequest {
 	kinds := stalledRequestKinds()
-	requests := make([]timedOutRequest, 0, len(kinds)+5)
+	requests := make([]timedOutRequest, 0, len(kinds)+7)
 	for _, kind := range kinds {
 		requests = append(requests, timedOutRequest{name: kind.name, err: func(t *testing.T) error {
 			t.Helper()
@@ -206,12 +180,30 @@ func timedOutRequests() []timedOutRequest {
 			// made is named in the text, not wrapped.
 			return fmt.Errorf("download a.bin: %w: no data moved for 2m0s (context canceled)", graph.ErrTransferStalled)
 		}},
+		timedOutRequest{name: "answer whose body brought nothing for the stall window", err: func(t *testing.T) error {
+			t.Helper()
+
+			// The shape graph's response body returns: the closed body's read
+			// error is named in the text, not wrapped.
+			return fmt.Errorf("get the item: %w", &graph.ResponseReadError{
+				Err: fmt.Errorf("%w: no data moved for 2m0s (http: read on closed response body)", graph.ErrResponseStalled),
+			})
+		}},
 		timedOutRequest{name: "body read the keepalive gave up on", err: func(t *testing.T) error {
 			t.Helper()
 
 			return keepaliveTimedOutReadError()
 		}},
-		timedOutRequest{name: "HTTP/2 connection whose ping went unanswered", err: lostHTTP2ConnectionError},
+		timedOutRequest{name: "request on an HTTP/2 connection whose ping went unanswered", err: func(t *testing.T) error {
+			t.Helper()
+
+			return fmt.Errorf("get the item: %w", graph.ErrConnectionLost)
+		}},
+		timedOutRequest{name: "body read on an HTTP/2 connection whose ping went unanswered", err: func(t *testing.T) error {
+			t.Helper()
+
+			return fmt.Errorf("list the folder: %w", &graph.ResponseReadError{Err: graph.ErrConnectionLost})
+		}},
 		timedOutRequest{name: "token Microsoft sign-in never answered for", err: signInTimedOutError},
 	)
 }

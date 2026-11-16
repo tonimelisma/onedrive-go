@@ -91,6 +91,12 @@ Features:
   makes a replay of a committed create a harmless 409 (R-6.8.21,
   `TestRetryTransport_ReplaySafePostIsRetriedWithItsBody`)
 - `X-Retry-Count` header annotation on retried requests
+- an answer that is retried is closed unread: reading it waited on a body that
+  stopped after its headers with no bound but the request's context, because
+  the graph client bounds the silence only of the answers that reach it
+  (R-6.8.20). Over HTTP/2 the close resets only that answer's stream; over
+  HTTP/1 it costs the connection
+  (`TestRetryTransport_ARetriedAnswerIsClosedUnread`)
 - request-scoped log target override via `WithRequestLogTarget(req, target)`
 - retryable status codes: 408, 429, 500, 502, 503, 504, 509
 - no wait past the request's deadline (R-6.8.8): every wait the transport

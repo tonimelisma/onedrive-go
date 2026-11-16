@@ -359,7 +359,7 @@ func bodyEvidenceCases() []bodyEvidenceCase {
 	}
 }
 
-// Validates: R-2.10.72
+// Validates: R-2.10.72, R-6.7.30
 func TestBuildError_DebugLineRecordsWhatTheBodyHeld(t *testing.T) {
 	t.Parallel()
 

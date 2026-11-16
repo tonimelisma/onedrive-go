@@ -2,7 +2,7 @@
 
 GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
-Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified], R-6.8.27 [verified]
+Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified], R-6.8.27 [verified], R-6.7.30 [verified], R-6.7.35 [verified], R-6.8.20 [verified]
 
 ## Overview
 
@@ -47,13 +47,14 @@ the target is known.
 - `ResponseHeaderTimeout` detects servers that accept the connection but stall before sending headers
 - dial and TLS handshake deadlines protect connection setup
 - keepalives detect dead connections without bounding total transfer duration
+- after the headers, `graph` bounds every response body's silence (Error Handling)
 
 `graphtransport` also treats `http.DefaultTransport` being anything other than
 `*http.Transport` as an invariant violation. The stdlib guarantees the default
 shape; a global replacement would silently drop the tuned clone settings, so
 the builder panics instead of constructing a degraded fallback transport.
 
-This boundary exists to prevent one blunt client-wide timeout from becoming a competing owner of caller deadlines. Total operation budgets still belong to caller contexts. Transport stall detection belongs to `graphtransport`.
+This boundary exists to prevent one blunt client-wide timeout from becoming a competing owner of caller deadlines. Total operation budgets still belong to caller contexts. Transport stall detection up to the response headers belongs to `graphtransport`.
 
 ## Internal Domain Layout
 
@@ -355,8 +356,8 @@ and replaced the user's file online with an empty one.
 Transfer bodies run under a stall watchdog (`transfer_watchdog.go`): the
 download routes and every upload fragment get a request context that is
 canceled with `ErrTransferStalled` when the body moves no bytes for
-`defaultTransferStallTimeout` (2 minutes; tests shorten
-`transferStallTimeout`). It is armed only around body I/O, while a request
+`defaultStallTimeout` (2 minutes, the window of every response body too; tests
+shorten `stallTimeout`). It is armed only around body I/O, while a request
 body is being written and while a response body is read; the wait for
 headers belongs to the transports' `ResponseHeaderTimeout`, and
 `RetryTransport` disarms it before every retry or throttle wait
@@ -384,7 +385,12 @@ resume (`ErrRangeResumeRejected`, 416) starts over
 (`TestTransferManager_StalledResumeKeepsPartial`). The transports bound only dialing, TLS and the wait
 for headers, so a connection that delivered headers and went quiet held a
 worker forever (D-045, `TestDownload_StalledBodyIsAbandoned`,
-`TestUploadChunk_StalledBodyIsAbandoned`). The transfer and metadata
+`TestUploadChunk_StalledBodyIsAbandoned`). A download's response body comes
+back bounded like every response body (Error Handling below); handed to the
+watchdog's `reader`, it starts no timer of its own, so the watchdog alone
+bounds it: the windows are the same, and a download failed as a stalled
+response instead of a stalled transfer would lose its partial
+(`TestStallWatchdog_ABodyItReadsStartsNoTimerOfItsOwn`). The transfer and metadata
 transports also ping idle HTTP/2 connections (`graphtransport`,
 `TestTransferTransport_PingsIdleHTTP2Connections`). The stall timer's
 callback (`stalled`) recovers its own panic and cancels the transfer with the
@@ -607,11 +613,50 @@ kept reporting the new file's folder as missing, even after 7
 tries: ...") and deliberately does not contain the quirk name, so rewording it
 cannot break a classifier.
 
-`dispatchRequest` wraps every response body so a read failure other than
-`io.EOF` carries `*ResponseReadError` (cause reachable through `Unwrap`). It
-tells "the connection dropped while OneDrive was answering" apart from a local
-write failure returned by the same `io.Copy`, which net/http cannot: it reports
-body read failures without the `*url.Error` it uses before the response.
+`dispatchRequestWith`, the one place every response that reaches the client
+comes back through, wraps every response body (`responseBody`), so a read
+failure other than `io.EOF` carries `*ResponseReadError` (cause reachable
+through `Unwrap`). It tells "the connection dropped while OneDrive was
+answering" apart from a local write failure returned by the same `io.Copy`,
+which net/http cannot: it reports body read failures without the `*url.Error`
+it uses before the response. The wrap also bounds the body's silence, so no
+call site has to: the transports bound dialing, TLS and the wait for headers,
+and after the headers only this bound and the caller's context end a body that
+stops moving. An answer that does not reach the client is never read: the
+retrying transport closes an answer it retries unread, and `closingRedirects`
+closes a redirect's body unread before net/http, which would read up to 2 KB of
+it, follows the redirect, and puts an empty body in its place, so that body is
+closed once and what net/http reads and closes is the empty one; the client's
+own redirect policy still decides, and without one net/http's limit of 10
+holds (`TestRetryTransport_ARetriedAnswerIsClosedUnread`,
+`TestGetItem_ARetriedAnswerWhoseBodyStallsIsNotWaitedOn`,
+`TestGetItem_ARedirectWhoseBodyStallsIsFollowed`,
+`TestGetItem_TheBodyOfARedirectIsClosedOnceAndNeverRead`,
+`TestGetItem_RedirectsStopAtTheLimitOfNetHTTP`). Each
+read starts a timer of the stall window (`defaultStallTimeout`, 2 minutes, the
+transfer window) and its return stops it; a timer that fires closes the body,
+which ends the pending read, and the read fails with the retryable
+`ErrResponseStalled`, explained as a transfer stall is (`explainStall`: the
+closed body's error kept as text only). Only time spent waiting in a read
+counts, so a body that keeps moving, however slowly, is never failed; an error
+body that stalls returns its answer's `*GraphError` with the placeholder
+message, and a stalled drain fails like a stalled decode
+(`TestGetItem_AStalledBodyFailsWithinTheStallWindow`,
+`TestGetItem_AStalledBodyFailsWithinTheStallWindowOverHTTP2`,
+`TestGetItem_ABodyThatKeepsMovingIsNotFailed`,
+`TestGetItem_AStalledErrorBodyReturnsItsAnswer`,
+`TestDeleteItem_AStalledDrainFailsWithinTheStallWindow`). No request of the
+client legitimately stays silent longer: none is a long poll, and the
+notification channel is a websocket that sync dials itself. A request on an
+HTTP/2 connection the health check closed for an unanswered ping, and a body
+being read on it, fail with an error net/http gives no type; its text
+(`http2ConnectionLostText`) is read in one place, `markLostConnection`, which
+both the round trip and the body read pass through and which gives either
+failure `ErrConnectionLost` (`TestGetItem_AConnectionLostBeforeTheAnswerIsTyped`,
+`TestGetItem_AConnectionLostDuringTheBodyIsTyped`: both produce it from the
+real HTTP/2 client, so a Go release that rewords the text fails them). Sync
+reads `ErrResponseStalled` and `ErrConnectionLost` as a request OneDrive never
+answered.
 `CheckSavedLogin` validates a token file without building a token source or
 logging, for health checks that must not repeat the "loaded saved token" record
 of the real `TokenSourceFromPath` load.

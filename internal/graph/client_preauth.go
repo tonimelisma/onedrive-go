@@ -186,19 +186,25 @@ func (c *Client) dispatchRequest(req *http.Request) (*http.Response, error) {
 }
 
 // dispatchRequestWith sends req through client (c.httpClient, or a copy
-// with a different redirect policy). A request the retrying transport
-// returned unsent because the throttle wait outlasts its deadline
+// with a different redirect policy). It is the one place every response that
+// reaches the client comes back through, so every response body is a
+// responseBody here, bounded by the stall window and typed on failure, and a
+// failed round trip on a lost HTTP/2 connection carries ErrConnectionLost.
+// The answers that do not reach it are never read: the retrying transport
+// closes an answer it retries unread, and a redirect's body is closed unread
+// before net/http follows it (closingRedirects). A request the retrying
+// transport returned unsent because the throttle wait outlasts its deadline
 // (*retry.ThrottledError) carries errRequestNotSent and ErrThrottled: it is
 // the earlier 429's answer, and nothing was asked of OneDrive.
 func (c *Client) dispatchRequestWith(client *http.Client, req *http.Request) (*http.Response, error) {
 	// Callers validate the request URL before dispatch: Graph base URLs are
 	// checked in NewClient and pre-auth URLs are validated at their boundary.
-	resp, err := client.Do(req) //nolint:gosec // Request URLs are validated by the Graph/pre-auth boundary helpers.
+	resp, err := c.closingRedirects(client).Do(req) //nolint:gosec // Request URLs are validated by the Graph/pre-auth boundary helpers.
 	if err != nil {
 		// net/http wraps transport failures in *url.Error, whose text carries
 		// the full request URL. Pre-authenticated URLs embed their credential,
 		// so scrub it before the error can reach logs or the console.
-		redacted := redactURLError(err)
+		redacted := markLostConnection(redactURLError(err))
 
 		var throttled *retry.ThrottledError
 		if errors.As(redacted, &throttled) {
@@ -209,10 +215,53 @@ func (c *Client) dispatchRequestWith(client *http.Client, req *http.Request) (*h
 	}
 
 	if resp.Body != nil {
-		resp.Body = markedResponseBody{ReadCloser: resp.Body}
+		resp.Body = newResponseBody(resp.Body, c.stallWindow(), c.logger)
 	}
 
 	return resp, nil
+}
+
+// maxRedirects is net/http's own limit on the redirects one request follows,
+// kept for a client without a redirect policy of its own.
+const maxRedirects = 10
+
+// closingRedirects returns a copy of client that closes a redirect's body
+// unread before it follows the redirect. net/http reads up to 2 KB of that
+// body first, to reuse the connection, where no bound of the client reaches:
+// a redirect whose body stopped after its headers held the request for as
+// long as the server stayed quiet. Over HTTP/2 the close resets only that
+// answer's stream. The closed body is replaced by an empty one, which is what
+// net/http then reads and closes: a second close of an HTTP/2 body would
+// return its buffered bytes to the connection's receive window again.
+// client's redirect policy decides as before, and a redirect it keeps
+// (http.ErrUseLastResponse) comes back with its body open, through the stall
+// window like every answer.
+func (c *Client) closingRedirects(client *http.Client) *http.Client {
+	policy := client.CheckRedirect
+	follow := *client
+	follow.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		var err error
+		switch {
+		case policy != nil:
+			err = policy(next, via)
+		case len(via) >= maxRedirects:
+			err = fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		if errors.Is(err, http.ErrUseLastResponse) || next.Response == nil || next.Response.Body == nil {
+			return err
+		}
+		if closeErr := next.Response.Body.Close(); closeErr != nil {
+			c.logger.Debug("closing a redirect's response body failed",
+				slog.Int("status", next.Response.StatusCode),
+				slog.Any("error", closeErr),
+			)
+		}
+		next.Response.Body = http.NoBody
+
+		return err
+	}
+
+	return &follow
 }
 
 func (c *Client) validatedUploadURL(raw UploadURL) (string, error) {

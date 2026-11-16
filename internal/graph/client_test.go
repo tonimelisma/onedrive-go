@@ -954,6 +954,7 @@ func TestDoPreAuth_MakeReqError(t *testing.T) {
 	assert.Contains(t, err.Error(), "factory failed")
 }
 
+// Validates: R-6.7.30
 func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
 	// Verify that error response bodies are capped at maxErrBodySize (64 KiB)
 	// to prevent OOM from malicious/buggy servers (B-314).
@@ -977,6 +978,7 @@ func TestDo_ErrorBodyCappedAt64KiB(t *testing.T) {
 	assert.Len(t, ge.Message, maxErrBodySize, "error body should be exactly 64 KiB (truncated)")
 }
 
+// Validates: R-6.7.30
 func TestDoPreAuth_ErrorBodyCappedAt64KiB(t *testing.T) {
 	// Same test but for the pre-auth path (B-314).
 	bigBody := strings.Repeat("Y", 128*1024)

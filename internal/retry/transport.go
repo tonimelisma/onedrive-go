@@ -311,7 +311,7 @@ func (rt *RetryTransport) handleResponse(
 		return true, resp, nil
 	}
 
-	// --- Retryable status → extract backoff, discard body, retry ---
+	// --- Retryable status → extract backoff, close body unread, retry ---
 	backoff := rt.retryBackoff(resp, attempt)
 	if !rt.waitFits(req, backoff, "retryable status "+strconv.Itoa(resp.StatusCode)) {
 		// The answer goes back with its body unread, as when the attempts
@@ -322,16 +322,19 @@ func (rt *RetryTransport) handleResponse(
 		collector.RecordHTTPRetry(backoff)
 	}
 
-	// Drain response body to allow connection reuse. A drain/close failure
-	// is not terminal for the retry path, but it is still operationally
-	// relevant because it can reduce connection reuse.
+	// The answer being retried is closed unread. Reading it would wait on a
+	// body that stops after its headers with no bound but the request's
+	// context: the caller's bound on a body's silence applies only to the
+	// answers that reach it. Over HTTP/2 the close resets only the answer's
+	// stream; over HTTP/1 it costs the connection, which a retry after a
+	// backoff can afford. A close failure is not terminal for the retry.
 	logTarget := requestLogTarget(req)
-	if drainErr := drainAndCloseBody(resp.Body); drainErr != nil {
-		rt.Logger.Debug("retry response body cleanup degraded",
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		rt.Logger.Debug("closing a retried response body failed",
 			slog.String("method", req.Method),
 			slog.String("url", logTarget),
 			slog.Int("status", resp.StatusCode),
-			slog.Any("error", drainErr),
+			slog.Any("error", closeErr),
 		)
 	}
 
@@ -386,21 +389,6 @@ func retryableRequestMethod(method string) bool {
 	default:
 		return false
 	}
-}
-
-func drainAndCloseBody(body io.ReadCloser) error {
-	_, drainErr := io.Copy(io.Discard, body)
-	closeErr := body.Close()
-
-	if drainErr != nil {
-		return fmt.Errorf("draining body: %w", drainErr)
-	}
-
-	if closeErr != nil {
-		return fmt.Errorf("closing body: %w", closeErr)
-	}
-
-	return nil
 }
 
 // announceLongWait says once per throttling episode that a retry wait is
