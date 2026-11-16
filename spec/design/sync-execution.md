@@ -50,6 +50,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | A recursive remote folder delete refuses to take descendants sync never saw or that changed online; a remote delete re-checks local absence and the sync folder identity; a local folder delete over only ignored children converges and the folder stays deleted online until it holds something sync sees. | `TestExecuteRemoteDelete_FolderWithUnobservedChildIsStale`, `TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns`, `TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale`, `TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale`, `TestRunOnce_LocalFolderDeleteKeepsRemoteChildAddedAfterObservation`, `TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded`, `TestDeleteLocalFolder_OnlyIgnoredChildrenConverges`, `TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges`, `TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline` |
 | Through the engine, a folder whose live listing exceeds the cap is left on OneDrive, its delete recorded as a backed-off durable issue that the next pass neither relists nor retries; a child edited online after observation stops the folder delete and the edit comes back down; a folder back locally before its delete runs stays on both sides; and local absence still holds below a regular file and across a type change, so those remote deletes run. | `TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEveryPass`, `TestRunOnce_RemoteFolderDeleteRefusesAChildEditedOnlineAfterObservation`, `TestRunOnce_RemoteFolderDeleteRefusedWhenTheFolderIsBackLocally`, `TestExecuteRemoteDelete_LocalAbsenceHoldsBelowAFileAndAcrossATypeChange` |
 | A crash right after a local delete moved the file into the trash (its entry still pending) or right after OneDrive deleted an item, before either outcome commits, recovers: the trash entry is listed once and restores, nothing is deleted twice, re-uploaded or downloaded again (crash points `delete.local_trashed` and `delete.remote_done`, D-091). | `TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry`, `TestCrashRecovery_EveryCrashPointConverges` |
+| A crash between the two steps of a local move that replaces its destination, after the destination's file went to the trash and before the rename, recovers: the next plan finishes the move with no delete on OneDrive, no conflict copy and no upload, and the displaced file stays in the trash once (crash point `exec.local_move_destination_trashed`, R-2.17.9). | `TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove` |
 | Executor live preconditions reject stale work at the side-effect boundary without mutating local or remote state. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure`, `TestExecutor_RemoteDelete_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteDelete_WrongDrivePreflightReturnsStalePrecondition`, `TestExecutor_RemoteDelete_StalePathPreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_StaleSourcePreflightReturnsStalePrecondition`, `TestExecutor_RemoteMove_UsesConditionalETagFromPreflight`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_CreateRemoteFolder_MissingParentPreflightReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition`, `TestExecutor_ConflictDownload_TargetReappearsAfterConflictCopyReturnsStalePrecondition`, `TestExecutor_Download_MountRootAllowsGraphDriveRootPath`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestExecutor_LocalMove_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_LocalDelete_SymlinkedAncestorReturnsStalePrecondition` |
 | On a byte-exact filesystem every local operation addresses an existing entry by its spelling on disk: an NFD-named file uploads in one pass, a remote edit replaces it in place, a remote delete, rename or move removes or moves it, a conflict copy preserves it, an NFD-named folder receives remote additions inside itself and is deleted, a remote delete is superseded when the NFD-named file is back, and the permission probe reports the stored boundary (R-2.13.2). | `TestRunOnce_LocalNFDNamedFileUploadsInOnePass`, `TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile`, `TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile`, `TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile`, `TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth`, `TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted`, `TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded`, `TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
@@ -276,41 +277,78 @@ and a listing that fails is the listing's failure, not recorded under the 409
 
 A spelling-only local move (the old and new names are one OneDrive name:
 case or Unicode form) accepts a destination that is the source's own inode,
-which is what a case- or normalization-insensitive volume reports. It renames
-directly, and only when the directory still holds the old spelling goes
-through a temporary sibling named `.onedrive-go.spelling.<name>`, which local
-observation always excludes and cleanup never deletes, so a crash between the
-two renames leaves nothing that syncs (R-2.12.4,
+which is what a case- or normalization-insensitive volume reports. Like every
+local move it first renames without replacing; only when that rename finds the
+destination taken and the destination is the source itself, as on a volume
+that folds case, does it rename plainly. A different entry made at the new
+spelling after the check is kept and the move superseded: the two names'
+entries are compared, and a different file is not the source
+(`TestExecutor_LocalMove_DestinationTakenAfterTheCheckIsKept`,
+`TestExecutor_RenameLocal_SpellingRenameOntoAnotherFileKeepsBoth`). On a volume
+that tells the spellings apart, two hard links of one file named in both
+spellings pass that check too, and the plain rename leaves both names. When
+the directory still holds the old spelling after the rename, the move goes
+through a temporary sibling with two renames that never replace; the sibling
+is named `.onedrive-go.spelling.<name>`, which local observation always
+excludes and cleanup never deletes, so a crash between the two renames
+leaves nothing that syncs (R-2.12.4,
 `TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded`,
 `TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Accepting it
 is what lets a remote case-only rename apply on macOS's case-insensitive volume.
+A failure of either step through the temporary sibling, the second finding the
+new spelling taken included, is the rename's own failure, not a superseded
+move (`TestExecutor_LocalMove_SpellingRenameWhoseSecondStepFindsTheNameTakenFails`).
 A name left behind once the entry has its new spelling is a rename that
 happened, logged with that name
 (`TestExecutor_RenameLocal_SpellingRenameThatLeavesItsTemporaryNameIsDone`).
 
-Local move checks that its destination is absent and then renames, a
-check-then-act shape the conflict copy takes only where the system offers
-neither the no-replace flag nor a hard link for the entry (a folder never
-has one). The asymmetry
-is deliberate, and worth stating so it does not read as an oversight.
+A local move checks that its destination is absent and then renames with the
+sync tree's no-replace rename (`synctree.Root.RenameNoReplace`), which never
+replaces an entry at the destination. The check turns an occupied destination
+into a stale precondition early; an entry that takes the destination after
+the check is kept, the rename refuses, and the move ends the same way,
+superseded and replanned from what is there
+(`TestExecutor_LocalMove_DestinationTakenAfterTheCheckIsKept`). A file moves
+without a window wherever the system has the flag (`RENAME_NOREPLACE` on
+Linux, `RENAME_EXCL` on macOS) or hard links: by the flag, or by a link and
+an unlink where the flag is refused. A folder has no hard link, so where the
+flag is refused (FreeBSD, which the build supports, or a filesystem that
+refuses it) the rename checks the destination on its folder's descriptor and
+then renames, and so does a file on a filesystem that has neither the flag
+nor hard links. That check and rename is the one window left, which only
+something outside this program can fill: the planner chose the destination,
+the executor found it absent, and the dependency graph serializes it against
+other actions on that path. A move whose link and unlink placed the entry but
+could not remove its old name (`synctree.ErrSourceNotRemoved`) happened, and
+the name left is logged; that name is a second name of the same file, which a
+later pass sees as a new local file
+(`TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened`).
+
+A move that replaces its destination (D-058: OneDrive moved an item over a
+file it deleted, whose local copy is the synced version) makes way first by
+the local delete rule: the file at the destination leaves the sync folder
+only while it is the version the plan saw, verified through the descriptor
+of the inode that leaves, into the trash when the drive has one and removed
+otherwise. The rename then finds the name free and replaces nothing, and the
+displaced file is moved once, or copied through its verified descriptor
+when the trash is on another filesystem
+(`TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`). A file that
+takes the freed name between the two steps is kept: the rename refuses, the
+move is superseded, and the displaced file stays in the trash
+(`TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName`). A
+trash that fails fails the move, with both files where they were, and never
+reads as a destination that left on its own
+(`TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove`). A
+crash between the two steps (crash point `exec.local_move_destination_trashed`)
+leaves the destination absent, its old content in the trash under a pending
+entry and the source at its old path, with nothing recorded; the next plan
+finishes the move as an ordinary one, with no delete on OneDrive and no
+conflict copy (`TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove`).
 
 A conflict-copy collision is reachable by design: the destination name carries
 a one-second timestamp, so two copies resolved in the same second are handed
 the same name by construction, and no amount of care in the planner prevents
-it. A local move destination is chosen by the planner, verified absent, and
-serialized against other actions on that path by the dependency graph. What
-remains is the window between the check and the rename, which only something
-outside this program can fill.
-
-Closing that window atomically needs `RENAME_NOREPLACE` on Linux and
-`RENAME_EXCL` on macOS, with no equivalent on FreeBSD, which the build
-supports. The sync tree's no-replace rename
-(`synctree.Root.RenameNoReplace`, which the conflict copy uses) carries that
-platform split: where the flag is refused it links and unlinks, and for an
-entry that cannot be linked (a folder, a filesystem without hard links) it
-checks and then renames, so on such a system it has the same window; for a
-race the planner already narrows, the local move's check stands and the
-residual risk is recorded here.
+it.
 
 A conflict copy takes its destination with that rename instead of finding a
 free name first. The readable part of the name is the timestamp, but
@@ -405,7 +443,8 @@ planned content facts when available; folder sources validate stable local
 identity when the sync tree supplied device/inode facts (and the birth time,
 where both the plan and the live entry know one: a folder born again under the
 planned inode number is not the planned source, R-2.17.1). Local moves also reject
-an unexpectedly occupied destination before `Rename`.
+an unexpectedly occupied destination before their rename, which itself never
+replaces one (local move, above).
 
 For remote deletes, moves, downloads, overwrite uploads, and remote folder/file
 creates, the executor performs a live `GetItem` preflight for the planned
@@ -616,8 +655,8 @@ keep the stored path. The resolution is `synctree.Root.Spelling` (see
 - an existing entry (`Spelling`): the upload source, a download over an
   existing file (`downloadTargetSpelling`, chosen when the plan saw a local
   file), a local delete, both endpoints of a local move (an existing
-  destination is what a replacing move replaces), a conflict copy's source,
-  and a remote delete's local-absence check;
+  destination is what a replacing move takes out of the way), a conflict
+  copy's source, and a remote delete's local-absence check;
 - a new entry (`SpellingOfParent`): a download of a new file, a local folder
   create and a conflict copy's name are written under the stored name inside
   their parents' spellings on disk, and the new entry's own folder is never
@@ -678,7 +717,13 @@ rename is a directory update that is not durable until the directory is;
 unlinking the original first left a power cut with a trash entry holding only
 a `.copy-*` file and no original anywhere. A directory sync the filesystem
 cannot do (`localpath.IsDirSyncUnsupported`) is tolerated; any other failure
-discards the copy and is reported, and the original is linked back. The
+discards the copy and is reported, and the original is linked back. A trash
+that fails, its entry's folder gone (the trash emptied meanwhile) or the move
+or copy into it refused, is `synctree.ErrDestinationFailed`, its cause named
+as text, and never reads as a file already gone: the delete fails and the
+file stays, instead of the delete being superseded as one whose file is
+already absent (`TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone`,
+`TestDetachRegularFile_ADestinationThatFailsIsNotAFileThatIsGone`). The
 in-place check
 after the set-aside rests on size and mtime alone (the rename changes ctime):
 a writer that keeps both, such as `rsync --inplace -t` or a write through an

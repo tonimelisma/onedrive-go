@@ -73,6 +73,13 @@ func (v resolvedDriveValidator) validateForSync(rd *ResolvedDrive) error {
 			rd.CanonicalID.String(), rd.SyncDir)
 	}
 
+	// The folder a drive syncs into, configured or its default, never meets
+	// a folder the client keeps for itself. Config load checks configured
+	// sync_dirs only; a default exists only once the drive is resolved.
+	if errs := checkSyncDirMeetsNoManagedFolder(rd.CanonicalID.String(), canonicalSyncDirPath(rd.SyncDir)); len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
 	info, err := v.io.statLocalPath(rd.SyncDir)
 	switch {
 	case err == nil && !info.IsDir():
@@ -80,7 +87,7 @@ func (v resolvedDriveValidator) validateForSync(rd *ResolvedDrive) error {
 			rd.CanonicalID.String(), rd.SyncDir)
 	case errors.Is(err, os.ErrNotExist):
 		return nil
-	case err != nil && !errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return fmt.Errorf("drive %q sync_dir: %w", rd.CanonicalID.String(), err)
 	}
 

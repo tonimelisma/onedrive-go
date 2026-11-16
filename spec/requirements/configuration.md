@@ -56,7 +56,11 @@ The system shall resolve settings with a four-layer override chain: defaults →
   (e.g. poll_interval >= 30s), enum fields (e.g. log_level, log_format),
   and size formats (e.g. min_free_space). [verified]
 - R-4.8.3: The system shall prevent overlapping or duplicate sync directories
-  across drives. [verified]
+  across drives, and a drive's sync directory, configured or default, and a
+  folder the client manages for itself (its data directory, which holds the
+  sync state, the sign-ins and the trash, and its configuration directory)
+  that are the same folder or contain one another, with a message that names
+  both paths, says which holds which and says what to change. [verified]
 - R-4.8.4: Informational commands (`drive list`, `status`, `shared`) shall
   tolerate config validation errors, parsing what they can and reporting
   warnings instead of failing. [verified]

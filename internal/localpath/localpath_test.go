@@ -495,12 +495,13 @@ func TestOpenRegular_RejectsFIFOWithoutBlocking(t *testing.T) {
 // Validates: R-6.4.8
 //
 // A link the filesystem cannot make is told apart from one that failed for
-// another reason, however it is wrapped: no hard links, a folder, or too
-// many links already.
+// another reason, however it is wrapped: no hard links (a FUSE filesystem
+// without a link operation answers ENOSYS), a folder, or too many links
+// already.
 func TestIsLinkUnsupported_OnlyTheErrnosOfALinkThatCannotBeMade(t *testing.T) {
 	t.Parallel()
 
-	for _, errno := range []syscall.Errno{syscall.EPERM, syscall.ENOTSUP, syscall.EOPNOTSUPP, syscall.EMLINK} {
+	for _, errno := range []syscall.Errno{syscall.EPERM, syscall.ENOTSUP, syscall.EOPNOTSUPP, syscall.ENOSYS, syscall.EMLINK} {
 		assert.True(t, IsLinkUnsupported(&os.LinkError{Op: "linkat", Old: "a", New: "b", Err: errno}), errno.Error())
 	}
 	for _, errno := range []syscall.Errno{syscall.EEXIST, syscall.ENOENT, syscall.EACCES, syscall.EXDEV} {

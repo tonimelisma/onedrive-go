@@ -73,10 +73,3 @@ func ComputeQuickXorHashFromReaderContext(ctx context.Context, r io.Reader) (str
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
 }
-
-// ComputeQuickXorHashFromReader is ComputeQuickXorHashFromReaderContext
-// without cancellation, for the executor's descriptor-hashing seam, whose
-// destructive-action checks carry no context.
-func ComputeQuickXorHashFromReader(r io.Reader) (string, error) {
-	return ComputeQuickXorHashFromReaderContext(context.Background(), r)
-}

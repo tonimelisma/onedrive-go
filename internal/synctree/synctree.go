@@ -133,9 +133,11 @@ func (h *osRootHandle) Close() error {
 // absolute path carries no containment, so accepting one here would let a
 // future call site reintroduce the escape this boundary exists to prevent.
 //
-// lstatAbs is the single deliberate exception. It answers questions about the
-// sync root directory itself, which by definition sits outside any root
-// handle, and must never be used for paths beneath the root.
+// lstatAbs is the deliberate exception for the root itself. It answers
+// questions about the sync root directory, which by definition sits outside
+// any root handle, and must never be used for paths beneath the root. linkOut
+// and syncDir take an absolute path only for the place outside the root a
+// file is linked or copied to, which the detach refuses inside the root.
 type rootOps struct {
 	openRoot  func(dir string) (rootHandle, error)
 	mkdirAll  func(root rootHandle, name string, perm os.FileMode) error
@@ -164,6 +166,11 @@ type rootOps struct {
 	// without extended attributes.
 	getRootMark func(dir *os.File) (string, error)
 	setRootMark func(dir *os.File, token string) error
+	// linkOut links an entry of a folder opened through the root to dest, an
+	// absolute path outside the root: how PreserveRegularFile keeps a file
+	// (detach_unix.go); a seam so tests can model a link the filesystem
+	// refuses.
+	linkOut func(dir *os.File, name string, dest string) error
 	// syncDir flushes a directory outside the root, the trash entry a
 	// detached file is copied into (detach_unix.go); a seam because an fsync
 	// has no observable effect to test.
@@ -213,6 +220,7 @@ func defaultRootOps() rootOps {
 		lstatAbs:        os.Lstat,
 		getRootMark:     getRootMarkXattr,
 		setRootMark:     setRootMarkXattr,
+		linkOut:         linkatOut,
 		syncDir:         syncDirectory,
 		syncDirFile:     (*os.File).Sync,
 	}

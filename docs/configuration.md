@@ -121,7 +121,18 @@ Default sync folders:
 If that folder is already used by another configured drive, a more specific
 name is chosen (with the display name, then the account email added). Two
 drives can never share or nest sync folders: overlapping `sync_dir` values are
-a configuration error.
+a configuration error. A drive's sync folder, set by `sync_dir` or the default
+above, and a folder onedrive-go keeps for itself can also never be the same
+folder or contain one another. Those are its data folder, which holds your
+sign-ins, the sync state and the trash (`$XDG_DATA_HOME/onedrive-go`, else
+`~/.local/share/onedrive-go`), and its configuration folder
+(`$XDG_CONFIG_HOME/onedrive-go`, else `~/.config/onedrive-go`); on macOS,
+without the XDG variables, both are one folder, `~/Library/Application
+Support/onedrive-go`. A sync folder that is `/`, or your home folder while
+either of these folders lies in it (as the default ones do), or that lies
+inside one of these folders, is therefore refused, with a message that
+names both folders and says which holds which: choose a folder that neither
+holds them nor lies inside them, such as `~/OneDrive`.
 
 ## Filters
 

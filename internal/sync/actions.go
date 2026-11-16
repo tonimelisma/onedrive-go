@@ -101,8 +101,9 @@ type Action struct {
 	MovedRemotePath string
 	// ReplaceLocalTarget lets a remote-origin local move replace the entry
 	// planned at its destination (View.Local): a synced file OneDrive no
-	// longer has, which the move verifies against that plan, keeps in the
-	// trash, and then replaces (D-058).
+	// longer has, which the move verifies against that plan and takes out of
+	// the sync folder by the local delete rule (into the trash when the drive
+	// has one) before it renames onto the freed name (D-058).
 	ReplaceLocalTarget bool
 	// DeleteConfirmed marks a delete the user approved with
 	// `sync --confirm-deletes`. The store leaves it out of the delete ledger

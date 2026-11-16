@@ -570,15 +570,15 @@ shutdown stops a hash within one chunk instead of at the end of the file
 on a sync worker, takes the upload's context; `WithContentHasher` replaces it,
 which the sync engine's tests use to prove that stopping the worker pool does
 not wait on a whole-file read. The sync package's local observer and scanner
-use the Context form too. `ComputeQuickXorHash` and
-`ComputeQuickXorHashFromReader` remain, as `context.Background()` wrappers,
-only for the callers whose own signatures carry no context: the executor's
-live precondition checks and syncverify's hasher seam. Evidence:
+use the Context form too, and so do syncverify's hasher seam and the
+executor's checks of the descriptor a destructive action verifies, which hash
+under the action's context. Evidence:
 `TestComputeQuickXorHashFromReaderContext_StopsAtCancel`,
 `TestComputeQuickXorHashContext_CanceledContextDoesNotHashTheFile`,
 `TestComputeQuickXorHashContext_ChunkedReadMatchesSinglePass`,
 `TestTransferManager_UploadFile_CanceledContextStopsAtTheHash`,
-`TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload`. `SelectHash` returns only an item's QuickXorHash: SHA-256 and SHA-1 can never equal a local QuickXor digest, so the old fallback made such items fail every verification and never compare equal (D-041). An item with SHA digests only is hashless, and its size is the evidence (`TestSelectHash_ReturnsOnlyQuickXor`).
+`TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload`,
+`TestExecutor_LocalMove_DestinationHashStopsWhenTheContextEnds`. `SelectHash` returns only an item's QuickXorHash: SHA-256 and SHA-1 can never equal a local QuickXor digest, so the old fallback made such items fail every verification and never compare equal (D-041). An item with SHA digests only is hashless, and its size is the evidence (`TestSelectHash_ReturnsOnlyQuickXor`).
 
 ## Download Verification
 

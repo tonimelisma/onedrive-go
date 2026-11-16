@@ -101,7 +101,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 		return e.DeleteLocalFolder(ctx, action, absPath)
 	}
 
-	return e.DeleteLocalFile(action, local)
+	return e.DeleteLocalFile(ctx, action, local)
 }
 
 func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutcome {
@@ -202,9 +202,9 @@ func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPat
 // mismatch means the file changed after planning; the executor keeps it and
 // returns a stale-precondition failure so the engine replans from current
 // truth. local is the file's rooted spelling on disk.
-func (e *executor) DeleteLocalFile(action *Action, local string) actionOutcome {
+func (e *executor) DeleteLocalFile(ctx context.Context, action *Action, local string) actionOutcome {
 	verify := func(f *os.File, info os.FileInfo) error {
-		return e.verifyLocalDeleteContent(action, f, info)
+		return e.verifyLocalDeleteContent(ctx, action, f, info)
 	}
 
 	if err := e.removeVerifiedLocalFile(local, verify); err != nil {
@@ -245,7 +245,7 @@ func (e *executor) DeleteLocalFile(action *Action, local string) actionOutcome {
 // They are too weak to prove two files equal, but sound as a guard: any
 // difference is proof the file changed, and a destructive action may not run
 // on no evidence at all.
-func (e *executor) verifyLocalDeleteContent(action *Action, f *os.File, info os.FileInfo) error {
+func (e *executor) verifyLocalDeleteContent(ctx context.Context, action *Action, f *os.File, info os.FileInfo) error {
 	var baselineEntry *BaselineEntry
 	if action.View != nil {
 		baselineEntry = action.View.Baseline
@@ -270,7 +270,7 @@ func (e *executor) verifyLocalDeleteContent(action *Action, f *os.File, info os.
 		)
 	}
 
-	currentHash, err := e.hashReader(f)
+	currentHash, err := e.hashReader(ctx, f)
 	if err != nil {
 		return fmt.Errorf("hashing %s before delete: %w", action.Path, err)
 	}
@@ -303,8 +303,21 @@ func (e *localContentChangedError) Error() string {
 func (e *localContentChangedError) Unwrap() error { return errActionPreconditionChanged }
 
 // removeVerifiedLocalFile takes the verified file at rel out of the sync
-// folder: into the trash when the drive has one, otherwise removed.
+// folder for a local delete: into the trash when the drive has one,
+// otherwise removed.
 func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc) error {
+	return e.takeOutVerifiedLocalFile(rel, verify, localtrash.ReasonDeleted, crashPointLocalDeleteTrashed)
+}
+
+// takeOutVerifiedLocalFile takes the verified file at rel out of the sync
+// folder, only the inode verify approved: into the trash, recorded for
+// reason, when the drive has one, otherwise removed. A local delete and a
+// local move that replaces its destination both take a file out this way.
+// trashedPoint is the crash point between the file reaching the trash and
+// its entry being committed.
+func (e *executor) takeOutVerifiedLocalFile(
+	rel string, verify synctree.VerifyFunc, reason localtrash.Reason, trashedPoint string,
+) error {
 	if e.trash == nil {
 		if err := e.syncTree.RemoveVerifiedRegularFile(rel, verify); err != nil {
 			return fmt.Errorf("removing verified file: %w", err)
@@ -312,7 +325,7 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 		return nil
 	}
 
-	placement, err := e.trash.Reserve(e.syncTree.Path(), rel, localtrash.ReasonDeleted)
+	placement, err := e.trash.Reserve(e.syncTree.Path(), rel, reason)
 	if err != nil {
 		return fmt.Errorf("reserving a trash entry: %w", err)
 	}
@@ -325,7 +338,7 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 	}
 	// The file is in the trash under a pending entry: a crash here must
 	// leave it listed and restorable (crash_points.go).
-	if err := e.reachCrashPoint(crashPointLocalDeleteTrashed); err != nil {
+	if err := e.reachCrashPoint(trashedPoint); err != nil {
 		return err
 	}
 	e.commitTrashPlacement(rel, placement)
@@ -334,9 +347,9 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 }
 
 // commitTrashPlacement records a placement whose file already left the sync
-// folder. The delete itself has happened, so a failure here does not fail the
-// action; the entry keeps its pending record, which lists and restores and is
-// never purged automatically.
+// folder. The file is out of the folder already, so a failure here does not
+// fail the action; the entry keeps its pending record, which lists and
+// restores and is never purged automatically.
 func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placement) {
 	if _, err := placement.Commit(); err != nil {
 		e.logger.Warn("could not finish recording a trashed file; it stays listed as interrupted and can be restored",

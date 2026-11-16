@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 func localDeleteActionFor(t *testing.T, path, content string) *Action {
@@ -77,8 +78,8 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 				cfg.SetTrash(trash)
 			}
 			target := writeExecTestFile(t, syncRoot, "a.txt", "synced\n")
-			cfg.hashReader = func(r io.Reader) (string, error) {
-				hash, err := driveops.ComputeQuickXorHashFromReader(r)
+			cfg.hashReader = func(ctx context.Context, r io.Reader) (string, error) {
+				hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
 				replacement := writeExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
 				require.NoError(t, os.Rename(replacement, target))
 				if err != nil {
@@ -101,6 +102,79 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hashRemovingTrash hashes as the executor does after removing the trash at
+// trashDir: a trash whose entry folder is gone between its reservation and
+// the move, as when the trash is emptied meanwhile.
+func hashRemovingTrash(t *testing.T, trashDir string) func(context.Context, io.Reader) (string, error) {
+	t.Helper()
+
+	return func(ctx context.Context, r io.Reader) (string, error) {
+		require.NoError(t, os.RemoveAll(trashDir))
+		hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
+		if err != nil {
+			return "", fmt.Errorf("hashing in test: %w", err)
+		}
+		return hash, nil
+	}
+}
+
+// A local delete whose trash fails is a failed delete, not a file already
+// gone: when the trash entry's folder disappears between its reservation and
+// the move, the delete fails instead of being superseded as a file that is
+// already absent, and the file stays in the sync folder.
+//
+// Validates: R-6.4.9
+func TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	trashDir := filepath.Join(t.TempDir(), "trash")
+	cfg.SetTrash(localtrash.Open(trashDir, nil))
+	cfg.hashReader = hashRemovingTrash(t, trashDir)
+	writeExecTestFile(t, syncRoot, "docs/a.txt", "synced\n")
+
+	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt", "synced\n"))
+
+	requireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, synctree.ErrDestinationFailed)
+	require.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	requireExecFileContent(t, syncRoot, "docs/a.txt", "synced\n")
+}
+
+// A replacing local move whose trash fails fails: when the trash entry's
+// folder disappears between its reservation and the move, the move is not
+// read as one whose destination left on its own, to be superseded when its
+// rename finds the name taken. It fails, the file at the destination stays,
+// and the moved file stays at its source.
+//
+// Validates: R-6.4.9, R-2.17.9
+func TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	trashDir := filepath.Join(t.TempDir(), "trash")
+	cfg.SetTrash(localtrash.Open(trashDir, nil))
+	cfg.hashReader = hashRemovingTrash(t, trashDir)
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "a.txt", "moving\n")
+	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
+	planned := plannedDestination(t, e, syncRoot, "b.txt")
+
+	o := e.ExecuteMove(t.Context(), &Action{
+		Type: ActionLocalMove, Path: "b.txt", OldPath: "a.txt", ReplaceLocalTarget: true,
+		View: &pathView{
+			Path: "b.txt", Local: planned,
+			Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
+		},
+	})
+
+	requireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, synctree.ErrDestinationFailed)
+	require.NotErrorIs(t, o.Error, errActionPreconditionChanged)
+	requireExecFileContent(t, syncRoot, "b.txt", "bravo\n")
+	requireExecFileContent(t, syncRoot, "a.txt", "moving\n")
 }
 
 // A run that died after setting a file aside leaves it under a hidden name in
