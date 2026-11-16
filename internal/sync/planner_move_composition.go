@@ -41,8 +41,25 @@ import (
 // path is not displaced by a move that runs first (except on OneDrive, where
 // remote_state and the baseline follow every committed move). Anything else is
 // deferred: the item stays where it is on both sides and the next pass, which
-// observes the moves this one made, plans it simply. Every pass makes progress
-// because the shallowest pending item is always ready.
+// observes the moves this one made, plans it simply. An item is decided after
+// the item its target hangs off, which is shallower, and, when its target lies
+// at or below the path a folder's move vacates, after that folder
+// (vacatingFolder), an ancestor of its source, and, as a file OneDrive moves,
+// after every folder OneDrive relocates (waitsForVacatingFolder); each of
+// these waits ends with the decision of the item waited for. An item also
+// waits while another item holds its destination, whatever that item does
+// (blockingPendingMove): until a move of the plan vacates the destination,
+// parkOneOccupancyCycle parks an item of a swap or rotation, or emit's final
+// sweep defers the waiting item. So the pending items are decided in turn
+// unless their waits loop: emit's final sweep defers every item on a loop,
+// so the pass still ends. Nothing breaks the loop of a folder whose target
+// hangs off an entry that waits for it: every later pass defers its items
+// again, and a one-shot sync ends with them unfinished, after a pass that
+// does nothing else or at its pass limit. The loop of a folder whose
+// destination is held by a file that waits for it, as one of the folders
+// OneDrive relocates, lasts until the move that vacates the file's target
+// commits: a pass in which the file lands where no move vacates decides
+// both.
 //
 // composeMoves is deterministic and performs no I/O.
 
@@ -168,20 +185,25 @@ type moveComposition struct {
 // one-way mode holds back waits for no later pass of that mode.
 func (c *moveComposition) deferredRelocationsInMode(mode SyncMode) int {
 	count := 0
-	for _, moves := range c.deferredMoves {
-		if len(moves) == 0 {
+	for key, moves := range c.deferredMoves {
+		if len(moves) == 0 || c.holdsMoveInMode(key, mode) {
 			count++
-			continue
-		}
-		for _, moveType := range moves {
-			if actionAllowedInMode(&Action{Type: moveType}, mode) {
-				count++
-				break
-			}
 		}
 	}
 
 	return count
+}
+
+// holdsMoveInMode reports whether key's relocation has a move mode admits
+// that waits for a later pass.
+func (c *moveComposition) holdsMoveInMode(key string, mode SyncMode) bool {
+	for _, moveType := range c.deferredMoves[key] {
+		if actionAllowedInMode(&Action{Type: moveType}, mode) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // moveOccupancy reports the paths each side's snapshot holds, so a move is
@@ -563,6 +585,11 @@ type moveEmitter struct {
 	// built on first use (occupantAt, occupiedFolded).
 	foldedByPath   [moveCoordCount]map[string]string
 	foldedOccupied [moveCoordCount]map[string]bool
+	// undecidedRemoteFolders lists the folders OneDrive relocates that are
+	// still pending, listed on first use and shrunk as they are decided
+	// (remoteFolderUndecided).
+	undecidedRemoteFolders []string
+	remoteFoldersListed    bool
 }
 
 func (c *moveComposer) emit() moveComposition {
@@ -707,8 +734,13 @@ func (e *moveEmitter) occupancyCycleSide(key string) (moveCoord, bool) {
 	return 0, false
 }
 
-// blockingPendingMove reports the pending item whose source holds the
-// destination of key's move on side, when that item must move on side too.
+// blockingPendingMove reports the item that holds, in side's snapshot, the
+// destination of key's move on side, while key is pending and not yet at its
+// target there. It names any item there but key, whatever the occupant's
+// state and whether it moves at all: occupancyCycleSide follows these names
+// and stops at an occupant that is no longer pending or needs no move on
+// side, and an entry whose occupant never leaves stays pending until emit's
+// final sweep defers it.
 func (e *moveEmitter) blockingPendingMove(key string, side moveCoord) (string, bool) {
 	n := e.nodes[key]
 	if n == nil || e.state[key] != moveEmitPending || !n.present(side) ||
@@ -874,11 +906,14 @@ func (e *moveEmitter) resolve(key string) bool {
 		if !n.present(side) || sameLocation(e.location(n, side), target) {
 			continue
 		}
+		if e.waitsForVacatingFolder(n, side, newPath) {
+			return false
+		}
 		move, ok := e.planMove(n, side, newPath)
 		if !ok {
 			if _, waits := e.blockingPendingMove(key, side); waits {
-				// The destination's occupant has a move of its own still
-				// to decide; it may vacate the path (parkOneOccupancyCycle).
+				// Another item holds the destination; a move of its own may
+				// still vacate the path (parkOneOccupancyCycle).
 				return false
 			}
 			e.deferNode(key)
@@ -912,7 +947,27 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 			continue
 		}
 		if !strings.HasPrefix(newPath, earlier.newPath+"/") {
-			// The earlier move waits for this one (children leave first).
+			if folder, lands := e.vacatingFolder(n, side, newPath); !lands || folder != earlier.key {
+				// The earlier move waits for this one (children leave first).
+				continue
+			}
+			// The item lands at or below the path the earlier move vacates (a
+			// folder made there, or that path itself), so it moves after that
+			// move. On OneDrive a file's source is rebased through it, as for
+			// an ancestor's move below. A local source rebased so is not in
+			// local truth before the next scan. Work below a folder addressed
+			// at its old paths lies below both the earlier move's source and
+			// this move's destination, so each move would wait for it. Those
+			// moves wait for the next pass, which observes the folder moved,
+			// and so does a file whose rebased source the dependency rules
+			// would misread (rebasedSourceMisread).
+			if side == moveCoordLocal || n.itemType != ItemTypeFile {
+				return composedMove{}, false
+			}
+			oldPath = earlier.newPath + strings.TrimPrefix(oldPath, earlier.oldPath)
+			if e.rebasedSourceMisread(oldPath, newPath) {
+				return composedMove{}, false
+			}
 			continue
 		}
 		// An ancestor's move carries both this item's source and its target.
@@ -949,6 +1004,108 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 		remotePath: remotePath,
 		displaced:  displaced,
 	}, true
+}
+
+// vacatingFolder finds the folder whose move on side vacates the path n's
+// target lies at or below: the nearest folder above n on side that is
+// relocated there, when newPath is that folder's path on side or lies below
+// it. A directory that is not a synced item moves with the folder above it on
+// side, so the search passes over it; a synced folder present on one side
+// only (one SQLite deletes or re-creates) ends it with none. With none, or
+// with a nearer relocated folder n does not land in, n's move keeps its
+// source, and buildDependencies orders it after a folder move whose vacated
+// path the plan creates a folder at (movesIntoRecreatedSource), unless that
+// nearer folder moves out of the moving one: its own move then waits for n
+// to leave it first, a cycle through the folder made there. When the plan
+// deletes the one-sided folder instead, that delete waits for the move and
+// the folder move for the delete, and when n lands on the vacated path itself
+// or in a folder moved onto it, n's move and the folder move wait for each
+// other: cycles the planner drops on every pass (sync-planning.md, Move
+// Composition).
+func (e *moveEmitter) vacatingFolder(n *moveNode, side moveCoord, newPath string) (string, bool) {
+	for dir := path.Dir(n.paths[side]); dir != "." && dir != "/"; dir = path.Dir(dir) {
+		key, isNode := e.byPath[side][dir]
+		if !isNode {
+			continue
+		}
+		if !e.isMoveParticipant(e.nodes[key]) {
+			return "", false
+		}
+		if sameLocation(e.location(e.nodes[key], side), e.target[key]) {
+			continue
+		}
+
+		return key, newPath == dir || strings.HasPrefix(newPath, dir+"/")
+	}
+
+	return "", false
+}
+
+// waitsForVacatingFolder reports whether n's move on side lands where a
+// folder's move vacates (vacatingFolder) while that move is still to be
+// decided: n is decided after it, so planMove can order n after it. A file
+// whose OneDrive source planMove rebases through that move is also decided
+// after every folder OneDrive relocates, so rebasedSourceMisread sees the
+// source of each folder move the plan makes.
+func (e *moveEmitter) waitsForVacatingFolder(n *moveNode, side moveCoord, newPath string) bool {
+	folder, lands := e.vacatingFolder(n, side, newPath)
+	if !lands {
+		return false
+	}
+	if e.state[folder] == moveEmitPending {
+		return true
+	}
+
+	return side == moveCoordRemote && n.itemType == ItemTypeFile && e.remoteFolderUndecided()
+}
+
+// remoteFolderUndecided reports whether a folder OneDrive relocates is still
+// pending.
+func (e *moveEmitter) remoteFolderUndecided() bool {
+	if !e.remoteFoldersListed {
+		e.remoteFoldersListed = true
+		for _, key := range e.keys {
+			n := e.nodes[key]
+			if n.itemType == ItemTypeFolder && e.isMoveParticipant(n) &&
+				!sameLocation(e.location(n, moveCoordRemote), e.target[key]) {
+				e.undecidedRemoteFolders = append(e.undecidedRemoteFolders, key)
+			}
+		}
+	}
+	undecided := e.undecidedRemoteFolders[:0]
+	for _, key := range e.undecidedRemoteFolders {
+		if e.state[key] == moveEmitPending {
+			undecided = append(undecided, key)
+		}
+	}
+	e.undecidedRemoteFolders = undecided
+
+	return len(undecided) > 0
+}
+
+// rebasedSourceMisread reports whether a file's OneDrive source, rebased
+// through the move of the folder that vacates the path its target lies at or
+// below, lies below the source of another folder move of the plan that does
+// not carry target too. That folder's path is then filled again (the vacating
+// folder moves into a folder made there or moved onto it, or onto the path
+// itself), and the source exists only after it moved away; but the
+// dependency rules read work below a folder move's source as leaving the
+// folder first (children leave first), so the folder move would wait for the
+// file, which waits for the vacating folder's move, which waits for the path
+// to be filled after the folder move: a cycle dropped on every pass. Such a
+// file waits for the next pass, which observes both folders moved.
+func (e *moveEmitter) rebasedSourceMisread(source, target string) bool {
+	for i := range e.result.moves {
+		move := &e.result.moves[i]
+		if move.side != moveCoordRemote || e.nodes[move.key].itemType != ItemTypeFolder {
+			continue
+		}
+		if strings.HasPrefix(source, move.oldPath+"/") && !strings.HasPrefix(target, move.newPath+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // localParentPresent reports whether dir, in the local snapshot, is the
@@ -1559,12 +1716,20 @@ func createsOnSide(action *Action, side moveCoord) bool {
 // content is identical and only the eTag moved, a metadata baseline update that
 // recorded the moved item at the destination with the replaced file's local
 // identity. Composition's move publishes the destination itself.
-func dropReconciliationOfComposedMoves(actions []Action, composition *moveComposition) []Action {
+//
+// It also removes the baseline update of an item that has a move mode runs
+// and composition holds for the next pass. The item keeps its baseline row
+// as the plan's moves leave it: a folder move of this plan can carry the
+// item (the baseline follows a committed move), while the update, addressed
+// at the path the item had and waiting for a folder made there, would record
+// it at that path again; the next pass would read the item as moved on the
+// other side and move it back into the folder.
+func dropReconciliationOfComposedMoves(actions []Action, composition *moveComposition, mode SyncMode) []Action {
 	moved := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range composition.moves {
 		moved[composition.moves[i].side][composition.moves[i].key] = true
 	}
-	if len(moved[moveCoordLocal]) == 0 && len(moved[moveCoordRemote]) == 0 {
+	if len(moved[moveCoordLocal]) == 0 && len(moved[moveCoordRemote]) == 0 && len(composition.deferredMoves) == 0 {
 		return actions
 	}
 
@@ -1573,7 +1738,8 @@ func dropReconciliationOfComposedMoves(actions []Action, composition *moveCompos
 		action := &actions[i]
 		switch action.Type {
 		case ActionBaselineUpdate:
-			if moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID] {
+			if moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID] ||
+				composition.holdsMoveInMode(action.ItemID, mode) {
 				continue
 			}
 		case ActionDownload, ActionConflictCopy:

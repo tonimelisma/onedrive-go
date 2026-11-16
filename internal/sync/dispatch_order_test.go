@@ -345,6 +345,11 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope,
 		TestRunOnce_OneTimedOutRequestOpensNoOutageScope,
 		TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile,
+		TestRunOnce_SubfolderMovedOnOneDriveToThePathItsMovedParentLeftConverges,
+		TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges,
+		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
+		TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges,
+		TestRunOnce_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathConverges,
 	}
 }
 
