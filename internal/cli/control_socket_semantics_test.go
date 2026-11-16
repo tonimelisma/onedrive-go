@@ -115,14 +115,17 @@ func startCLIControlSocketWithStatusHandler(
 		}),
 	}
 
-	go func() {
+	runInBackground(t, t.Context(), func(context.Context) error {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			assert.NoError(t, err, "test control server")
 		}
-	}()
+		return nil
+	})
 
+	// Registered after runInBackground's cleanup, so it runs first and ends
+	// the Serve that cleanup waits for.
 	t.Cleanup(func() {
-		assert.NoError(t, server.Shutdown(context.Background()))
+		closeWithin(t, "the test control server", server.Shutdown)
 		assert.NoError(t, os.RemoveAll(socketPath))
 	})
 }

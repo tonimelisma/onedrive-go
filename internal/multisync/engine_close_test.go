@@ -59,12 +59,7 @@ func TestRunOnce_AnEngineThatDoesNotCloseFailsTheRun(t *testing.T) {
 	errorLogs := capture.AtLeast(slog.LevelError)
 	require.Len(t, errorLogs, 1)
 	assert.Contains(t, errorLogs[0].Attrs["stack"], "goroutine ")
-	var closeCtx context.Context
-	select {
-	case closeCtx = <-closeCtxs:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the engine's close did not start")
-	}
+	closeCtx := receiveWithin(t, closeCtxs, "the engine's close to start")
 	require.NoError(t, closeCtx.Err())
 	deadline, hasDeadline := closeCtx.Deadline()
 	require.True(t, hasDeadline, "the close is bounded")

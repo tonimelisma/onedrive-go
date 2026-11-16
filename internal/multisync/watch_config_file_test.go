@@ -123,19 +123,10 @@ func TestWatchConfigReloadTriggers_PollsOnItsIntervalWithoutInjectedTicks(t *tes
 	})
 	defer stop()
 
-	select {
-	case <-firstRead:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the config watcher did not read the version it starts from")
-	}
+	receiveWithin(t, firstRead, "the config watcher to read the version it starts from")
 	require.NoError(t, os.WriteFile(path, []byte("# v2, longer\n"), 0o600))
 
-	select {
-	case got := <-triggers:
-		assert.Equal(t, "config file changed", got)
-	case <-time.After(eventWait):
-		require.FailNow(t, "no reload trigger for config file changed")
-	}
+	assert.Equal(t, "config file changed", receiveWithin(t, triggers, "a reload trigger for the changed config file"))
 }
 
 // Regression: a poll landing between an in-place write's truncate and its

@@ -37,10 +37,10 @@ func handMadeRunner(mount *mountSpec, exited bool) *watchRunner {
 	return &watchRunner{mount: mount, engine: &mockEngine{}, cancel: func() {}, done: done, generation: 1}
 }
 
-// handleEventWithin runs handleWatchRunnerEvent on its own goroutine and
-// fails the test when it has not returned in time; before runner events
-// carried a generation, an event from a replaced runner blocked on the
-// replacement's done channel.
+// handleEventWithin runs handleWatchRunnerEvent through runWithin, so a call
+// that does not return fails the test instead of hanging it: an event from a
+// replaced runner that waited on its replacement's done channel would never
+// return.
 func handleEventWithin(
 	t *testing.T,
 	orch *Orchestrator,
@@ -49,19 +49,11 @@ func handleEventWithin(
 ) {
 	t.Helper()
 
-	handled := make(chan error, 1)
-	ctx := t.Context()
-	go func() {
-		handled <- orch.handleWatchRunnerEvent(ctx, event, syncengine.SyncBidirectional, syncengine.WatchOptions{},
-			runners, make(chan watchRunnerEvent, 1), newParentChildWorkSnapshots())
-	}()
-
-	select {
-	case err := <-handled:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "the event of a replaced runner was applied to its replacement")
-	}
+	require.NoError(t, runWithin(t, t.Context(), "the replaced runner's event to be handled without its replacement",
+		func(ctx context.Context) error {
+			return orch.handleWatchRunnerEvent(ctx, event, syncengine.SyncBidirectional, syncengine.WatchOptions{},
+				runners, make(chan watchRunnerEvent, 1), newParentChildWorkSnapshots())
+		}))
 }
 
 // finalDrainMount builds the runtime spec of a shortcut child of parent that
@@ -228,11 +220,7 @@ func TestApplyWatchMountSetForParent_NormalToFinalDrainRestartsChild(t *testing.
 	assert.Equal(t, 1, stopped, "the normal runner is stopped")
 	assert.Equal(t, 1, started, "a final-drain runner replaces it")
 	assert.Equal(t, 1, stops)
-	select {
-	case <-drained:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the final drain did not run")
-	}
+	receiveWithin(t, drained, "the final drain to run")
 	stopTestRunners(t, runners)
 }
 
@@ -548,7 +536,7 @@ type stuckWatch struct {
 	cfgPath string
 	capture *synctest.LogCapture
 	cancel  context.CancelFunc
-	errCh   chan error
+	done    <-chan error
 	starts  atomic.Int32
 }
 
@@ -557,7 +545,7 @@ func startStuckWatch(t *testing.T, cidStr, name string) *stuckWatch {
 
 	rd := testStandaloneMount(t, cidStr, name)
 	setupXDGIsolation(t, rd.CanonicalID)
-	w := &stuckWatch{cfgPath: writeTestConfig(t, rd.CanonicalID), errCh: make(chan error, 1)}
+	w := &stuckWatch{cfgPath: writeTestConfig(t, rd.CanonicalID)}
 	var logger *slog.Logger
 	w.capture, logger = synctest.NewLogCapture()
 	w.cfg = testOrchestratorConfigWithPath(t, w.cfgPath, rd)
@@ -581,17 +569,8 @@ func startStuckWatch(t *testing.T, cidStr, name string) *stuckWatch {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	w.cancel = cancel
-	go func() {
-		w.errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
-	select {
-	case <-started:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the drive did not start")
-	}
+	w.cancel, w.done = runWatchInBackground(t, orch)
+	receiveWithin(t, started, "the drive to start")
 
 	return w
 }
@@ -599,13 +578,7 @@ func startStuckWatch(t *testing.T, cidStr, name string) *stuckWatch {
 func (w *stuckWatch) result(t *testing.T) error {
 	t.Helper()
 
-	select {
-	case err := <-w.errCh:
-		return err
-	case <-time.After(eventWait):
-		require.FailNow(t, "the watch kept waiting for a drive that does not stop")
-		return nil
-	}
+	return receiveWithin(t, w.done, "the watch to end instead of waiting for a drive that does not stop")
 }
 
 // A reload that has to stop a drive whose sync ignores the stop ends the
@@ -674,18 +647,10 @@ func TestStartWatchRunner_CancelledRunnerDoesNotBlockOnAFullEventChannel(t *test
 	unread := make(chan watchRunnerEvent)
 	wr, err := orch.startWatchRunner(t.Context(), drainMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, unread)
 	require.NoError(t, err)
-	select {
-	case <-draining:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the final drain did not start")
-	}
+	receiveWithin(t, draining, "the final drain to start")
 	wr.cancel()
 
-	select {
-	case <-wr.done:
-	case <-time.After(eventWait):
-		require.FailNow(t, "a canceled runner blocked on the event channel")
-	}
+	receiveWithin(t, wr.done, "the canceled runner to return instead of blocking on the event channel")
 }
 
 // unfiredTimer is a retire timer that never runs out, so no bound of the
@@ -794,44 +759,35 @@ func TestRunWatch_OwnerLockHeldUntilRunnersDrain(t *testing.T) {
 	drives, closing, factory := newDrainingDrives(lockPath, cfg.ControlSocketPath,
 		mountID(first.CanonicalID.String()), mountID(second.CanonicalID.String()))
 	orch.engineFactory = factory
+	waiting := make(chan struct{})
+	orch.drainWaiting = gosync.OnceFunc(func() { close(waiting) })
+
+	cancel, done := runWatchInBackground(t, orch)
 	// A test that fails before it lets the drives return still releases
-	// them, so the watch it leaves behind can end.
+	// them, so the watch it leaves behind can end. Registered after the
+	// watch's own cleanup, so it runs first.
 	releaseDrives := gosync.OnceFunc(func() {
 		for _, drive := range drives {
 			close(drive.release)
 		}
 	})
 	t.Cleanup(releaseDrives)
-	waiting := make(chan struct{})
-	orch.drainWaiting = gosync.OnceFunc(func() { close(waiting) })
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
 	for id, drive := range drives {
-		receiveBeforeReturn(t, drive.started, errCh, "drive "+id.String()+" started")
+		receiveBeforeReturn(t, drive.started, done, "drive "+id.String()+" started")
 	}
 
 	cancel()
-	receiveBeforeReturn(t, waiting, errCh, "the drain waited for its drives")
+	receiveBeforeReturn(t, waiting, done, "the drain waited for its drives")
 	require.NoError(t, ownerLockHeldElsewhere(lockPath, cfg.ControlSocketPath), "as the drain began waiting for the drives")
 	assert.FileExists(t, cfg.ControlSocketPath)
 
 	releaseDrives()
 	for closed := range len(drives) {
-		lockErr := receiveBeforeReturn(t, closing, errCh, "the drain closed a drive's sync state")
+		lockErr := receiveBeforeReturn(t, closing, done, "the drain closed a drive's sync state")
 		require.NoError(t, lockErr, "as the drain closed the sync state of drive %d of %d", closed+1, len(drives))
 	}
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunWatch did not stop in time")
-	}
+	require.NoError(t, receiveWithin(t, done, "RunWatch to return after the drain"))
 	assert.NoFileExists(t, cfg.ControlSocketPath)
 	assert.NoFileExists(t, lockPath)
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,15 +130,19 @@ func TestRunSyncDaemon_NotifiesSystemdOfLifecycle(t *testing.T) {
 		{Phase: multisync.WatchStopping},
 	}}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- runSyncDaemonWithFactory(t.Context(), holder, nil, syncengine.SyncBidirectional,
+	done := runInBackground(t, t.Context(), func(ctx context.Context) error {
+		return runSyncDaemonWithFactory(ctx, holder, nil, syncengine.SyncBidirectional,
 			syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard, "/tmp/control.sock",
 			nil, notifier, func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 				orch.cfg = cfg
 				return orch
 			})
-	}()
+	})
+	// The fake watch ignores its context and ends when release closes; a
+	// test that fails first closes it here. Registered after the run's own
+	// cleanup, so it runs first.
+	endWatch := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(endWatch)
 
 	assert.Equal(t, "READY=1\nSTATUS=Watching "+syncDir, socket.nextNonWatchdog())
 	reloading := socket.nextNonWatchdog()
@@ -155,14 +160,9 @@ func TestRunSyncDaemon_NotifiesSystemdOfLifecycle(t *testing.T) {
 	for !keepaliveSeen {
 		keepaliveSeen = socket.next() == watchdogMessage
 	}
-	close(release)
+	endWatch()
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "the sync daemon did not return after the watch ended")
-	}
+	require.NoError(t, receiveWithin(t, done, "the sync daemon to return after the watch ended"))
 }
 
 // Validates: R-6.6.32, R-6.6.31
@@ -248,11 +248,13 @@ func TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError(t *testing.T) {
 	require.NoError(t, receiver.Close())
 	logger := slog.New(synctest.PanicOnMessage{Message: "systemd watchdog keepalive failed", Next: slog.DiscardHandler})
 
-	err = runSyncDaemonWithFactory(t.Context(), holder, nil, syncengine.SyncBidirectional,
-		syncengine.WatchOptions{}, logger, io.Discard, "/tmp/control.sock",
-		nil, notifier, func(*multisync.OrchestratorConfig) syncDaemonOrchestrator {
-			return contextBoundOrchestrator{}
-		})
+	err = runWithin(t, t.Context(), "the keepalive's panic to end the watch", func(ctx context.Context) error {
+		return runSyncDaemonWithFactory(ctx, holder, nil, syncengine.SyncBidirectional,
+			syncengine.WatchOptions{}, logger, io.Discard, "/tmp/control.sock",
+			nil, notifier, func(*multisync.OrchestratorConfig) syncDaemonOrchestrator {
+				return contextBoundOrchestrator{}
+			})
+	})
 
 	require.ErrorIs(t, err, panicguard.ErrPanic)
 	require.ErrorContains(t, err, "internal error in the systemd watchdog keepalive: log call exploded")

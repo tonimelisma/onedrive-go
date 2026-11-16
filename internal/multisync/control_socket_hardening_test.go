@@ -153,9 +153,7 @@ func startWatchControlServer(t *testing.T, orch *Orchestrator, commands chan<- c
 
 	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeWatch, commands, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the watch control server", control.Close) })
 }
 
 // takeOneCommand plays a loop that takes one command and is still working on
@@ -163,15 +161,15 @@ func startWatchControlServer(t *testing.T, orch *Orchestrator, commands chan<- c
 func takeOneCommand(t *testing.T, commands <-chan controlCommand) <-chan controlCommand {
 	t.Helper()
 
-	ctx := t.Context()
 	taken := make(chan controlCommand, 1)
-	go func() {
+	runInBackground(t, t.Context(), func(ctx context.Context) error {
 		select {
 		case cmd := <-commands:
 			taken <- cmd
 		case <-ctx.Done():
 		}
-	}()
+		return nil
+	})
 
 	return taken
 }
@@ -205,9 +203,7 @@ func TestControlSocketServer_SetsReadIdleAndHeaderLimits(t *testing.T) {
 	socketPath := shortControlSocketPath(t)
 	control, err := startControlSocketServer(t.Context(), testControlServerConfig(t, socketPath, http.NewServeMux()))
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the control server", control.Close) })
 
 	assert.Equal(t, controlHeaderTimeout, control.server.ReadHeaderTimeout)
 	assert.Equal(t, controlReadTimeout, control.server.ReadTimeout)
@@ -241,9 +237,7 @@ func TestControlSocket_SlowBodyIsCutOff(t *testing.T) {
 	orch.controlTimeouts.read = shortControlWait
 	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the one-shot control server", control.Close) })
 
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(t.Context(), "unix", orch.cfg.ControlSocketPath)
@@ -309,12 +303,8 @@ func TestHandleControlRequest_SlowReloadAnswersInProgress(t *testing.T) {
 	assert.Equal(t, synccontrol.StatusReloadInProgress, response.Status)
 	assert.Empty(t, response.Code)
 
-	select {
-	case cmd := <-taken:
-		assert.Equal(t, controlCommandReload, cmd.kind, "the loop took the reload before the owner answered")
-	case <-time.After(eventWait):
-		require.FailNow(t, "the loop never took the reload the owner answered for")
-	}
+	cmd := receiveWithin(t, taken, "the loop to take the reload the owner answered for")
+	assert.Equal(t, controlCommandReload, cmd.kind, "the loop took the reload before the owner answered")
 }
 
 // Validates: R-2.9.7
@@ -354,18 +344,12 @@ func TestStartControlSocketServer_UnexpectedServeEndIsFatal(t *testing.T) {
 	serverCfg.fatal = fatal
 	control, err := startControlSocketServer(t.Context(), serverCfg)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the control server", control.Close) })
 
 	// Closing the listener under Serve is an end nobody asked for.
 	require.NoError(t, control.listener.Close())
 
-	select {
-	case serveErr := <-fatal:
-		require.ErrorIs(t, serveErr, net.ErrClosed)
-		require.ErrorContains(t, serveErr, "control channel stopped")
-	case <-time.After(eventWait):
-		require.Fail(t, "the end of Serve was not reported as fatal")
-	}
+	serveErr := receiveWithin(t, fatal, "the end of Serve on the fatal channel")
+	require.ErrorIs(t, serveErr, net.ErrClosed)
+	require.ErrorContains(t, serveErr, "control channel stopped")
 }
