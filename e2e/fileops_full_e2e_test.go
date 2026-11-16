@@ -36,29 +36,29 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 	t.Run("ls_root", func(t *testing.T) {
 		stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/")
-		assert.Contains(t, stdout, "NAME")
+		assertOutputContains(t, stdout, "NAME")
 	})
 
 	t.Run("mkdir", func(t *testing.T) {
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testSubfolder)
-		assert.Contains(t, stderr, "Created")
+		assertOutputContains(t, stderr, "Created")
 	})
 
 	t.Run("put", func(t *testing.T) {
 		uploadPath := writeTempContentFile(t, string(testContent))
 
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", uploadPath, "/"+testFile)
-		assert.Contains(t, stderr, "Uploaded")
+		assertOutputContains(t, stderr, "Uploaded")
 	})
 
 	t.Run("ls_folder", func(t *testing.T) {
 		stdout, _ := waitForRemoteParentListingContains(t, cfgPath, nil, drive, "/"+testFolder, "test.txt")
-		assert.Contains(t, stdout, "subfolder")
+		assertOutputContains(t, stdout, "subfolder")
 	})
 
 	t.Run("stat", func(t *testing.T) {
 		stdout, _ := waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testFile)
-		assert.Contains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
+		assertOutputContains(t, stdout, fmt.Sprintf("%d bytes", len(testContent)))
 	})
 
 	t.Run("get", func(t *testing.T) {
@@ -66,7 +66,7 @@ func TestE2E_RoundTrip(t *testing.T) {
 		localPath := filepath.Join(tmpDir, "downloaded.txt")
 
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "get", "/"+testFile, localPath)
-		assert.Contains(t, stderr, "Downloaded")
+		assertOutputContains(t, stderr, "Downloaded")
 
 		downloaded := mustReadFile(t, localPath)
 		assert.Equal(t, testContent, downloaded)
@@ -75,14 +75,14 @@ func TestE2E_RoundTrip(t *testing.T) {
 	t.Run("rm_file", func(t *testing.T) {
 		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testFile)
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "/"+testFile)
-		assert.Contains(t, stderr, "Deleted")
+		assertOutputContains(t, stderr, "Deleted")
 		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "test.txt", "ls", "/"+testFolder)
 	})
 
 	t.Run("rm_subfolder", func(t *testing.T) {
 		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+testSubfolder)
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "rm", "-r", "/"+testSubfolder)
-		assert.Contains(t, stderr, "Deleted")
+		assertOutputContains(t, stderr, "Deleted")
 		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "subfolder", "ls", "/"+testFolder)
 	})
 
@@ -91,12 +91,12 @@ func TestE2E_RoundTrip(t *testing.T) {
 
 		permFile := testFolder + "/perm-test.txt"
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", uploadPath, "/"+permFile)
-		assert.Contains(t, stderr, "Uploaded")
+		assertOutputContains(t, stderr, "Uploaded")
 
 		waitForRemoteExactStatVisible(t, cfgPath, nil, drive, "/"+permFile)
 
 		_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", "--permanent", "/"+permFile)
-		assert.Contains(t, stderr, "Permanently deleted")
+		assertOutputContains(t, stderr, "Permanently deleted")
 		waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "perm-test.txt", "ls", "/"+testFolder)
 	})
 
@@ -106,16 +106,16 @@ func TestE2E_RoundTrip(t *testing.T) {
 		)
 
 		email := strings.SplitN(drive, ":", 2)[1]
-		assert.Contains(t, stdout, email, "status text output should contain the account email")
+		assertOutputContains(t, stdout, email, "status text output should contain the account email")
 	})
 
 	t.Run("status", func(t *testing.T) {
 		stdout, _ := pollCLIWithConfigRetryingTransientGraphFailures(
 			t, cfgPath, nil, drive, "status",
 		)
-		assert.Contains(t, stdout, "Folder:", "status should show the configured drive folder")
-		assert.NotContains(t, stdout, "Auth:", "healthy status should not show auth state")
-		assert.NotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
+		assertOutputContains(t, stdout, "Folder:", "status should show the configured drive folder")
+		assertOutputNotContains(t, stdout, "Auth:", "healthy status should not show auth state")
+		assertOutputNotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
 	})
 }
 
@@ -152,17 +152,17 @@ func TestE2E_ErrorCases(t *testing.T) {
 
 	t.Run("ls_not_found", func(t *testing.T) {
 		output := runCLIWithConfigExpectError(t, cfgPath, nil, "ls", "/nonexistent-uuid-path-12345")
-		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+		assertOutputContains(t, output, "nonexistent-uuid-path-12345")
 	})
 
 	t.Run("get_not_found", func(t *testing.T) {
 		output := runCLIWithConfigExpectError(t, cfgPath, nil, "get", "/nonexistent-uuid-path-12345")
-		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+		assertOutputContains(t, output, "nonexistent-uuid-path-12345")
 	})
 
 	t.Run("rm_not_found", func(t *testing.T) {
 		output := runCLIWithConfigExpectError(t, cfgPath, nil, "rm", "/nonexistent-uuid-path-12345")
-		assert.Contains(t, output, "nonexistent-uuid-path-12345")
+		assertOutputContains(t, output, "nonexistent-uuid-path-12345")
 	})
 
 	t.Run("rm_folder_without_recursive", func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestE2E_ErrorCases(t *testing.T) {
 
 		runCLIWithConfig(t, cfgPath, nil, "mkdir", "/"+testFolder)
 		output := runCLIWithConfigExpectError(t, cfgPath, nil, "rm", "/"+testFolder)
-		assert.Contains(t, output, "recursive")
+		assertOutputContains(t, output, "recursive")
 	})
 }
 
@@ -188,13 +188,15 @@ func TestE2E_JSONOutput(t *testing.T) {
 
 		var items []map[string]interface{}
 		require.NoError(t, json.Unmarshal([]byte(stdout), &items),
-			"ls --json output should be valid JSON array, got: %s", stdout)
+			"ls --json output should be valid JSON array, got: %s", printable(stdout))
 
 		require.NotEmpty(t, items, "expected at least one item in root listing")
 
 		for i, item := range items {
-			assert.Contains(t, item, "name", "item %d missing 'name' key", i)
-			assert.Contains(t, item, "id", "item %d missing 'id' key", i)
+			for _, key := range []string{"name", "id"} {
+				_, hasKey := item[key]
+				assert.Truef(t, hasKey, "item %d missing %q key", i, key)
+			}
 		}
 	})
 
@@ -203,10 +205,12 @@ func TestE2E_JSONOutput(t *testing.T) {
 
 		var obj map[string]interface{}
 		require.NoError(t, json.Unmarshal([]byte(stdout), &obj),
-			"stat --json output should be valid JSON object, got: %s", stdout)
+			"stat --json output should be valid JSON object, got: %s", printable(stdout))
 
-		assert.Contains(t, obj, "name", "stat JSON missing 'name' key")
-		assert.Contains(t, obj, "id", "stat JSON missing 'id' key")
+		for _, key := range []string{"name", "id"} {
+			_, hasKey := obj[key]
+			assert.Truef(t, hasKey, "stat JSON missing %q key", key)
+		}
 	})
 }
 
@@ -228,6 +232,6 @@ func TestE2E_QuietFlag(t *testing.T) {
 		uploadPath := writeTempContentFile(t, "quiet test content\n")
 
 		_, stderr := runCLIWithConfig(t, cfgPath, nil, "put", "--quiet", uploadPath, remotePath)
-		assert.Empty(t, stderr, "expected no stderr output with --quiet flag")
+		assert.Empty(t, printable(stderr), "expected no stderr output with --quiet flag")
 	})
 }

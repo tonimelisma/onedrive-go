@@ -520,7 +520,7 @@ func TestE2E_SyncWatch_GracefulShutdown(t *testing.T) {
 	out, _ := runSyncPass(t, cfgPath, env, "--upload-only")
 
 	// Verify the one-shot sync uploaded only the new file (incremental).
-	assert.Contains(t, out, "Uploaded ", "one-shot should name the uploaded file")
+	assertOutputContains(t, out, "Uploaded ", "one-shot should name the uploaded file")
 
 	// The one-shot pass uploaded the new file; the size wait before the
 	// shutdown already holds the daemon's.
@@ -581,13 +581,13 @@ func requireNotUploadedDuringPause(
 		_, statStderr, statErr := runRemoteReadAttemptWithRecovery(t, cfgPath, env, driveID, pauseEnds, "stat", remotePath)
 		require.NotErrorIsf(t, statErr, errSharedRootListingLagging,
 			"the mount root's listing did not answer, so stat cannot say whether the file uploaded\nstderr: %s",
-			suiteDriveRoles.Redact(statStderr))
+			printable(statStderr))
 		require.Truef(t, time.Now().Before(pauseEnds),
 			"a stat in the window answered after the pause could have ended, so it cannot say what the pause held back: lengthen pauseOutlastsWindowMargin")
 		require.Error(t, statErr, "the file reached OneDrive while the drive was paused")
 		require.Truef(t, cliReportsRemoteItemMissing(statStderr),
 			"stat failed for a reason other than a missing item, so it cannot say whether the file uploaded\nstderr: %s",
-			suiteDriveRoles.Redact(statStderr))
+			printable(statStderr))
 		sleepForLiveTestPropagation(1 * time.Second)
 	}
 }

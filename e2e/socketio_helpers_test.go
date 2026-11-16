@@ -81,7 +81,8 @@ func waitForDaemonReady(t *testing.T, eventsPath string) {
 	}
 
 	require.FailNowf(t, "daemon did not become ready",
-		"no observer started within %v; events: %+v", daemonReadyTimeout, readSocketIODebugEvents(t, eventsPath))
+		"no observer started within %v; %s", daemonReadyTimeout,
+		debugEventsSummary(suiteDriveRoles, readSocketIODebugEvents(t, eventsPath)))
 }
 
 func readSocketIODebugEvents(t *testing.T, path string) []syncengine.DebugEvent {
@@ -92,7 +93,7 @@ func readSocketIODebugEvents(t *testing.T, path string) []syncengine.DebugEvent 
 		if os.IsNotExist(err) {
 			return nil
 		}
-		require.NoError(t, err)
+		requireNoLocalError(t, err, "read the debug-event stream")
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
@@ -129,21 +130,22 @@ func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Dura
 			case debugEventWebsocketConnected:
 				return
 			case debugEventWebsocketEndpointFailed:
-				require.FailNowf(t, "socket.io endpoint fetch failed", "%+v", *event)
+				require.FailNowf(t, "socket.io endpoint fetch failed", "%s", debugEventSummary(suiteDriveRoles, event))
 			case debugEventWebsocketConnectFailed:
-				require.FailNowf(t, "socket.io connection failed", "%+v", *event)
+				require.FailNowf(t, "socket.io connection failed", "%s", debugEventSummary(suiteDriveRoles, event))
 			case debugEventWebsocketFallback:
 				if isExpectedMountRootWebsocketFallback(event) {
 					continue
 				}
-				require.FailNowf(t, "socket.io fell back to polling", "%+v", *event)
+				require.FailNowf(t, "socket.io fell back to polling", "%s", debugEventSummary(suiteDriveRoles, event))
 			}
 		}
 
 		sleepForLiveTestPropagation(500 * time.Millisecond)
 	}
 
-	require.FailNowf(t, "socket.io did not connect within the startup window", "events: %+v", readSocketIODebugEvents(t, eventsPath))
+	require.FailNowf(t, "socket.io did not connect within the startup window", "%s",
+		debugEventsSummary(suiteDriveRoles, readSocketIODebugEvents(t, eventsPath)))
 }
 
 func isExpectedMountRootWebsocketFallback(event *syncengine.DebugEvent) bool {
@@ -173,9 +175,9 @@ func waitForObserverStarted(
 	require.FailNowf(
 		t,
 		"observer did not start within the startup window",
-		"observer=%s events=%+v",
+		"observer=%s %s",
 		observer,
-		readSocketIODebugEvents(t, eventsPath),
+		debugEventsSummary(suiteDriveRoles, readSocketIODebugEvents(t, eventsPath)),
 	)
 }
 
@@ -199,9 +201,9 @@ func waitForSocketIOWakeAndLocalFileAfter(
 			case debugEventWebsocketNotificationWake:
 				wakeSeen = true
 			case debugEventWebsocketEndpointFailed:
-				require.FailNowf(t, "socket.io endpoint fetch failed", "%+v", *event)
+				require.FailNowf(t, "socket.io endpoint fetch failed", "%s", debugEventSummary(suiteDriveRoles, event))
 			case debugEventWebsocketConnectFailed:
-				require.FailNowf(t, "socket.io connection failed", "%+v", *event)
+				require.FailNowf(t, "socket.io connection failed", "%s", debugEventSummary(suiteDriveRoles, event))
 			}
 		}
 
@@ -219,11 +221,11 @@ func waitForSocketIOWakeAndLocalFileAfter(
 			require.FailNowf(
 				t,
 				"socket.io wake and local convergence did not arrive",
-				"path=%s expected=%q file=%s events=%+v",
+				"path=%s expected=%q file=%s %s",
 				localPath,
 				expected,
 				fileState,
-				events,
+				debugEventsSummary(suiteDriveRoles, events),
 			)
 		}
 

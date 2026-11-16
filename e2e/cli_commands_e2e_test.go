@@ -43,9 +43,9 @@ func TestE2E_Status_AfterSync(t *testing.T) {
 
 	// Check status output.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "Folder:", "status should show the configured drive folder")
-	assert.NotContains(t, stdout, "Auth:", "healthy status should not show auth state")
-	assert.NotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
+	assertOutputContains(t, stdout, "Folder:", "status should show the configured drive folder")
+	assertOutputNotContains(t, stdout, "Auth:", "healthy status should not show auth state")
+	assertOutputNotContains(t, stdout, "No active conditions.", "healthy status should not print empty issue sections")
 }
 
 // TestE2E_Status_JSON validates that status --json exposes the unified
@@ -86,7 +86,7 @@ func TestE2E_Status_PausedDrive(t *testing.T) {
 
 	// The human surface still has to say so, so pin the rendered label too.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "status")
-	assert.Contains(t, stdout, "Status: Paused", "status text should show the paused state")
+	assertOutputContains(t, stdout, "Status: Paused", "status text should show the paused state")
 
 	// Resume the drive.
 	runCLIWithConfig(t, cfgPath, env, "resume")
@@ -107,8 +107,8 @@ func TestE2E_Pause_WithDuration(t *testing.T) {
 
 	// Pause for 30 seconds.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "pause", "30s")
-	assert.Contains(t, stderr, "Paused ", "pause with duration should confirm the pause")
-	assert.Contains(t, stderr, " until ", "pause with duration should say until when")
+	assertOutputContains(t, stderr, "Paused ", "pause with duration should confirm the pause")
+	assertOutputContains(t, stderr, " until ", "pause with duration should say until when")
 
 	// Resume to clean up.
 	runCLIWithConfig(t, cfgPath, env, "resume")
@@ -125,11 +125,11 @@ func TestE2E_Pause_IndefiniteAndResume(t *testing.T) {
 
 	// Pause indefinitely.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "pause")
-	assert.Contains(t, stderr, "Paused ", "pause should confirm drive is paused")
+	assertOutputContains(t, stderr, "Paused ", "pause should confirm drive is paused")
 
 	// Resume.
 	_, stderr = runCLIWithConfig(t, cfgPath, env, "resume")
-	assert.Contains(t, stderr, "resumed", "resume should confirm drive is resumed")
+	assertOutputContains(t, stderr, "resumed", "resume should confirm drive is resumed")
 
 	// Status should no longer report the drive paused. It has never synced
 	// in this test, so the healthy state is "not_synced" (R-6.6.25).
@@ -148,7 +148,7 @@ func TestE2E_Resume_NotPaused(t *testing.T) {
 
 	// Resume on a non-paused drive.
 	_, stderr := runCLIWithConfig(t, cfgPath, env, "resume")
-	assert.Contains(t, stderr, "is not paused",
+	assertOutputContains(t, stderr, "is not paused",
 		"resuming a non-paused drive should say 'is not paused'")
 }
 
@@ -169,7 +169,7 @@ func TestE2E_Resume_AllDrives(t *testing.T) {
 
 	// Resume all drives (no --drive flag).
 	_, stderr := runCLIWithConfigAllDrives(t, cfgPath, env, "resume")
-	assert.Contains(t, stderr, "resumed", "resume all should confirm drives resumed")
+	assertOutputContains(t, stderr, "resumed", "resume all should confirm drives resumed")
 }
 
 // Validates: R-2.3.3
@@ -191,7 +191,8 @@ func TestE2E_Status_PerDrive_NoIssuesOrRetries(t *testing.T) {
 	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, status.Issues)
+	listedIssues := len(status.Issues)
+	assert.Zerof(t, listedIssues, "status issues: %s", printableIssues(status.Issues))
 	assert.Zero(t, status.IssueCount)
 	assert.Zero(t, status.Retrying)
 }
@@ -217,7 +218,9 @@ func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 	runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, status.Issues, 1, "status should surface one invalid-filename issue for the Windows device name")
+	listedIssues := len(status.Issues)
+	require.Equalf(t, 1, listedIssues,
+		"status should surface one invalid-filename issue for the Windows device name: %s", printableIssues(status.Issues))
 	assert.Equal(t, 1, status.IssueCount)
 
 	issue := status.Issues[0]
@@ -225,7 +228,7 @@ func TestE2E_Status_JSON_IssueDetails(t *testing.T) {
 	assert.Equal(t, 1, issue.Count)
 	assert.NotEmpty(t, issue.Reason)
 	assert.NotEmpty(t, issue.Action)
-	assert.Contains(t, strings.Join(issue.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "CON.txt")))
+	assertOutputContains(t, strings.Join(issue.Paths, "\n"), filepath.ToSlash(filepath.Join(testFolder, "CON.txt")))
 }
 
 // Validates: R-2.3.12
@@ -249,7 +252,7 @@ func TestE2E_CLI_NoResolveCommand(t *testing.T) {
 	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	output := runCLIWithConfigExpectError(t, cfgPath, env, "resolve", "local", "nonexistent-id")
-	assert.Contains(t, output, "unknown command \"resolve\"", "sync decisions should stay inside the engine path")
+	assertOutputContains(t, output, "unknown command \"resolve\"", "sync decisions should stay inside the engine path")
 }
 
 // TestE2E_InternalBaselineVerification_AfterSync validates that the internal
@@ -302,8 +305,9 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder, "--json")
 	var lsItems []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &lsItems),
-		"ls --json should produce valid JSON, got: %s", stdout)
-	require.Len(t, lsItems, 1)
+		"ls --json should produce valid JSON, got: %s", printable(stdout))
+	listedCount := len(lsItems)
+	require.Equalf(t, 1, listedCount, "ls lists the one uploaded file")
 	itemID, ok := lsItems[0]["id"].(string)
 	require.True(t, ok, "item should have an id field")
 
@@ -312,25 +316,25 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 
 	// List recycle bin — should contain our file.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
-	assert.Contains(t, stdout, "recycle-test.txt", "recycle bin should contain deleted file")
+	assertOutputContains(t, stdout, "recycle-test.txt", "recycle bin should contain deleted file")
 
 	// List in JSON mode.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list", "--json")
 	var rbItems []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &rbItems),
-		"recycle-bin list --json should produce valid JSON, got: %s", stdout)
+		"recycle-bin list --json should produce valid JSON, got: %s", printable(stdout))
 
 	// Find our item in the list.
 	var foundID string
 	for _, item := range rbItems {
 		if name, nameOK := item["name"].(string); nameOK && name == "recycle-test.txt" {
 			id, idOK := item["id"].(string)
-			require.Truef(t, idOK, "recycle bin item id should be a string, got %T", item["id"])
+			require.Truef(t, idOK, "recycle bin item id should be a string")
 			foundID = id
 		}
 	}
 	require.NotEmpty(t, foundID, "should find recycle-test.txt in recycle bin list")
-	assert.Equal(t, itemID, foundID, "recycle bin item ID should match original")
+	assertSameIdentity(t, "the recycle bin item ID of the deleted file", itemID, foundID)
 
 	// Restore the file.
 	runCLIWithConfig(t, cfgPath, env, "recycle-bin", "restore", itemID)
@@ -338,9 +342,12 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	// Verify the file is back.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder, "--json")
 	require.NoError(t, json.Unmarshal([]byte(stdout), &lsItems),
-		"ls --json after restore should produce valid JSON, got: %s", stdout)
-	require.Len(t, lsItems, 1)
-	assert.Equal(t, "recycle-test.txt", lsItems[0]["name"])
+		"ls --json after restore should produce valid JSON, got: %s", printable(stdout))
+	restoredCount := len(lsItems)
+	require.Equalf(t, 1, restoredCount, "ls lists the restored file")
+	restoredName, isName := lsItems[0]["name"].(string)
+	require.True(t, isName, "the restored item has a name")
+	assertOutputEqual(t, "recycle-test.txt", restoredName, "the restored file keeps its name")
 }
 
 // TestE2E_RecycleBinEmpty validates that recycle-bin empty --confirm
@@ -365,7 +372,7 @@ func TestE2E_RecycleBinEmpty(t *testing.T) {
 
 	// Verify the item is in the recycle bin.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
-	assert.Contains(t, stdout, "empty-test.txt", "file should be in recycle bin")
+	assertOutputContains(t, stdout, "empty-test.txt", "file should be in recycle bin")
 
 	// Empty without --confirm should fail.
 	_, _, err := runCLIWithConfigAllowError(t, cfgPath, env, "recycle-bin", "empty")
@@ -376,7 +383,7 @@ func TestE2E_RecycleBinEmpty(t *testing.T) {
 
 	// Verify the recycle bin is empty or the file is gone.
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "recycle-bin", "list")
-	assert.NotContains(t, stdout, "empty-test.txt",
+	assertOutputNotContains(t, stdout, "empty-test.txt",
 		"file should no longer be in recycle bin after empty")
 }
 
@@ -402,12 +409,12 @@ func TestE2E_Mv_Rename(t *testing.T) {
 
 	// Rename.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "/"+testFolder+"/original.txt", "/"+testFolder+"/renamed.txt")
-	assert.Contains(t, stderr, "Moved", "mv should confirm the move")
+	assertOutputContains(t, stderr, "Moved", "mv should confirm the move")
 
 	// Verify new name exists and old name is gone.
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "renamed.txt", "renamed file should exist")
-	assert.NotContains(t, stdout, "original.txt", "original file should not exist")
+	assertOutputContains(t, stdout, "renamed.txt", "renamed file should exist")
+	assertOutputNotContains(t, stdout, "original.txt", "original file should not exist")
 }
 
 // Validates: R-1.6
@@ -428,14 +435,14 @@ func TestE2E_Mv_MoveToFolder(t *testing.T) {
 
 	// Move file into subfolder.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv", "/"+testFolder+"/moveme.txt", "/"+testFolder+"/sub")
-	assert.Contains(t, stderr, "Moved", "mv should confirm the move")
+	assertOutputContains(t, stderr, "Moved", "mv should confirm the move")
 
 	// Verify file is now in sub and not in parent.
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder+"/sub")
-	assert.Contains(t, stdout, "moveme.txt", "file should be in subfolder")
+	assertOutputContains(t, stdout, "moveme.txt", "file should be in subfolder")
 
 	stdout, _ = runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
-	assert.NotContains(t, stdout, "moveme.txt", "file should no longer be in parent")
+	assertOutputNotContains(t, stdout, "moveme.txt", "file should no longer be in parent")
 }
 
 // Validates: R-1.6
@@ -465,10 +472,11 @@ func assertMoveOrCopyJSON(t *testing.T, verb, folderPrefix, srcName, dstName, co
 
 	var result map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
-		"%s --json should produce valid JSON, got: %s", verb, stdout)
-	assert.Contains(t, result, "source", "JSON should have source field")
-	assert.Contains(t, result, "destination", "JSON should have destination field")
-	assert.Contains(t, result, "id", "JSON should have id field")
+		"%s --json should produce valid JSON, got: %s", verb, printable(stdout))
+	for _, field := range []string{"source", "destination", "id"} {
+		_, hasField := result[field]
+		assert.Truef(t, hasField, "JSON should have a %s field", field)
+	}
 }
 
 // Validates: R-1.6
@@ -480,7 +488,7 @@ func TestE2E_Mv_NotFound(t *testing.T) {
 	cfgPath := writeMinimalConfig(t)
 
 	output := runCLIWithConfigExpectError(t, cfgPath, nil, "mv", "/nonexistent-uuid-mv-12345", "/somewhere")
-	assert.Contains(t, output, "nonexistent-uuid-mv-12345", "error should mention the source path")
+	assertOutputContains(t, output, "nonexistent-uuid-mv-12345", "error should mention the source path")
 }
 
 // ---------------------------------------------------------------------------
@@ -504,12 +512,12 @@ func TestE2E_Cp_File(t *testing.T) {
 
 	// Copy to a new name.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/source.txt", "/"+testFolder+"/copy.txt")
-	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
+	assertOutputContains(t, stderr, "Copied", "cp should confirm the copy")
 
 	// Verify both files exist after the remote copy settles.
 	stdout, _ := waitForRemoteReadContains(t, cfgPath, nil, "", "copy.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "source.txt", "source file should still exist")
-	assert.Contains(t, stdout, "copy.txt", "copied file should exist")
+	assertOutputContains(t, stdout, "source.txt", "source file should still exist")
+	assertOutputContains(t, stdout, "copy.txt", "copied file should exist")
 
 	// Verify content matches.
 	content := getRemoteFile(t, cfgPath, nil, "/"+testFolder+"/copy.txt")
@@ -534,11 +542,11 @@ func TestE2E_Cp_IntoFolder(t *testing.T) {
 
 	// Copy into the dest folder.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "cp", "/"+testFolder+"/src.txt", "/"+testFolder+"/dest")
-	assert.Contains(t, stderr, "Copied", "cp should confirm the copy")
+	assertOutputContains(t, stderr, "Copied", "cp should confirm the copy")
 
 	// Verify the copy is in the dest folder.
 	stdout, _ := waitForRemoteReadContains(t, cfgPath, nil, "", "src.txt", remoteWritePropagationTimeout, "ls", "/"+testFolder+"/dest")
-	assert.Contains(t, stdout, "src.txt", "copied file should appear in dest folder")
+	assertOutputContains(t, stdout, "src.txt", "copied file should appear in dest folder")
 }
 
 // Validates: R-1.7
@@ -559,7 +567,7 @@ func TestE2E_Cp_NotFound(t *testing.T) {
 	cfgPath := writeMinimalConfig(t)
 
 	output := runCLIWithConfigExpectError(t, cfgPath, nil, "cp", "/nonexistent-uuid-cp-12345", "/somewhere")
-	assert.Contains(t, output, "nonexistent-uuid-cp-12345", "error should mention the source path")
+	assertOutputContains(t, output, "nonexistent-uuid-cp-12345", "error should mention the source path")
 }
 
 // ---------------------------------------------------------------------------
@@ -582,7 +590,7 @@ func TestE2E_Mv_ForceOverwrite(t *testing.T) {
 	waitForRemoteFileContent(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "new content")
 
 	stdout, _ := waitForRemoteDeleteDisappearance(t, cfgPath, nil, "", "src.txt", "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "dst.txt", "destination should exist")
+	assertOutputContains(t, stdout, "dst.txt", "destination should exist")
 }
 
 // Validates: R-1.7
@@ -601,8 +609,8 @@ func TestE2E_Cp_ForceOverwrite(t *testing.T) {
 	waitForRemoteFileContent(t, cfgPath, nil, "/"+testFolder+"/dst.txt", "copied content")
 
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "src.txt", "source should still exist after copy")
-	assert.Contains(t, stdout, "dst.txt", "destination should exist")
+	assertOutputContains(t, stdout, "src.txt", "source should still exist after copy")
+	assertOutputContains(t, stdout, "dst.txt", "destination should exist")
 }
 
 // runForceOverwrite creates a remote folder holding src.txt (srcContent) and
@@ -623,11 +631,11 @@ func runForceOverwrite(t *testing.T, cfgPath, verb, folderPrefix, srcContent, co
 
 	// Without --force the command should fail (destination already exists).
 	output := runCLIWithConfigExpectError(t, cfgPath, nil, verb, "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
-	assert.Contains(t, output, "already exists", "%s without --force should report destination exists", verb)
+	assertOutputContains(t, output, "already exists", "%s without --force should report destination exists", verb)
 
 	// With --force it should succeed and overwrite.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, verb, "--force", "/"+testFolder+"/src.txt", "/"+testFolder+"/dst.txt")
-	assert.Contains(t, stderr, confirmation, "%s --force should confirm the %s", verb, noun)
+	assertOutputContains(t, stderr, confirmation, "%s --force should confirm the %s", verb, noun)
 
 	return testFolder
 }
@@ -657,16 +665,16 @@ func TestE2E_Mv_Folder(t *testing.T) {
 	// Move folder into dest-parent with a new name.
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mv",
 		"/"+testFolder+"/source-dir", "/"+testFolder+"/dest-parent/moved-dir")
-	assert.Contains(t, stderr, "Moved", "mv folder should confirm the move")
+	assertOutputContains(t, stderr, "Moved", "mv folder should confirm the move")
 
 	// Verify folder contents are at the new location.
 	stdout, _ := runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder+"/dest-parent/moved-dir")
-	assert.Contains(t, stdout, "inner.txt", "inner file should be in moved folder")
+	assertOutputContains(t, stdout, "inner.txt", "inner file should be in moved folder")
 
 	// Verify source directory is gone from the parent.
 	stdout, _ = runCLIWithConfig(t, cfgPath, nil, "ls", "/"+testFolder)
-	assert.NotContains(t, stdout, "source-dir", "source directory should no longer exist")
-	assert.Contains(t, stdout, "dest-parent", "dest-parent should still exist")
+	assertOutputNotContains(t, stdout, "source-dir", "source directory should no longer exist")
+	assertOutputContains(t, stdout, "dest-parent", "dest-parent should still exist")
 }
 
 // ---------------------------------------------------------------------------
@@ -721,9 +729,10 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 
 	status := readStatusSyncState(t, cfgPath, env)
-	require.Len(t, status.Issues, 1)
+	listedIssues := len(status.Issues)
+	require.Equalf(t, 1, listedIssues, "status issues: %s", printableIssues(status.Issues))
 	assert.Equal(t, "Path too long", status.Issues[0].Title)
-	assert.Contains(t, strings.Join(status.Issues[0].Paths, "\n"), testFolder)
+	assertOutputContains(t, strings.Join(status.Issues[0].Paths, "\n"), testFolder)
 
 	// Fix the underlying problem by removing the long path and creating
 	// a valid replacement that can sync normally.
@@ -734,8 +743,9 @@ func TestE2E_Status_IssueLifecycle(t *testing.T) {
 	runSyncThroughTransientFailures(t, cfgPath, env, "--upload-only")
 
 	status = readStatusSyncState(t, cfgPath, env)
-	assert.Empty(t, status.Issues, "status should be clean after the next sync")
+	listedIssues = len(status.Issues)
+	assert.Zerof(t, listedIssues, "status should be clean after the next sync: %s", printableIssues(status.Issues))
 
 	listing, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
-	assert.Contains(t, listing, "fixed.txt", "replacement file should sync after the condition clears")
+	assertOutputContains(t, listing, "fixed.txt", "replacement file should sync after the condition clears")
 }

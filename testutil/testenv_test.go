@@ -225,6 +225,12 @@ func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
 	cfg, err := LoadLiveTestConfig(moduleRoot)
 	require.NoError(t, err)
 
+	nameDefaults := []string{
+		writableShortcutNameEnvVar, readOnlyShortcutNameEnvVar, writableShortcutSentinelPathEnvVar,
+		readOnlyShortcutSentinelPathEnvVar, standaloneSharedFolderNameEnvVar,
+	}
+	assert.Equal(t, nameDefaults, cfg.DefaultedFixtureVariables,
+		"each unset variable whose default applied is named; a sharer with no parent drive has none")
 	assert.Empty(t, cfg.Fixtures.WritableShortcutParentDrive, "no configured drive is guessed as a shortcut's parent")
 	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutParentDrive)
 	assert.Empty(t, cfg.Fixtures.WritableShortcutSharerEmail)
@@ -240,6 +246,8 @@ func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
 	cfg, err = LoadLiveTestConfig(moduleRoot)
 	require.NoError(t, err)
 
+	assert.Equal(t, append(nameDefaults, writableShortcutSharerEmailEnvVar, readOnlyShortcutSharerEmailEnvVar),
+		cfg.DefaultedFixtureVariables)
 	assert.Equal(t, "personal:second@example.com", cfg.Fixtures.WritableShortcutParentDrive)
 	assert.Equal(t, "first@example.com", cfg.Fixtures.WritableShortcutSharerEmail)
 	assert.Equal(t, "personal:first@example.com", cfg.Fixtures.ReadOnlyShortcutParentDrive)
@@ -265,6 +273,11 @@ func TestLoadDotEnvFile_ReturnsErrors(t *testing.T) {
 	assert.Equal(t, "set", os.Getenv("ONEDRIVE_TEST_ENV_FILE_KEY"))
 }
 
+// Validates: R-6.10.27
+//
+// A malformed fixture selector is named by its variable only: the suite
+// prints this error before any role exists, and the selector holds an
+// address, a drive and an item.
 func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {
 	for _, key := range []string{
 		"ONEDRIVE_TEST_DRIVE",
@@ -291,13 +304,21 @@ func TestLoadLiveTestConfig_InvalidSharedSelector(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, ".env"), []byte(
 		"ONEDRIVE_TEST_DRIVE=personal:primary@example.com\n",
 	), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(
-		"ONEDRIVE_TEST_READONLY_SHARED_FOLDER=not-a-selector\n",
-	), 0o600))
+	malformed := "shared:planted.one@example.test:0e1f2a3b4c5d6978"
+	selectorVariables := []string{"ONEDRIVE_TEST_WRITABLE_SHARED_FOLDER", "ONEDRIVE_TEST_READONLY_SHARED_FOLDER"}
+	for _, variable := range selectorVariables {
+		for _, key := range selectorVariables {
+			t.Setenv(key, "")
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(fixturesDir, "fixtures.env"), []byte(variable+"="+malformed+"\n"), 0o600))
 
-	_, err := LoadLiveTestConfig(moduleRoot)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ONEDRIVE_TEST_READONLY_SHARED_FOLDER")
+		_, err := LoadLiveTestConfig(moduleRoot)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), variable)
+		for _, part := range []string{"planted.one@example.test", "0e1f2a3b4c5d6978"} {
+			assert.NotContains(t, err.Error(), part, "the error quotes no part of the selector")
+		}
+	}
 }
 
 func TestLiveTestConfig_DriveIDForEmail(t *testing.T) {

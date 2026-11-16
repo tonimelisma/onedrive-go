@@ -179,7 +179,7 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	require.NotEmpty(t, syncDir, "drive list should expose the configured sync_dir for the added read-only shared folder")
 
 	out, _ := runSyncThroughTransientFailuresForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "--download-only")
-	assert.Contains(t, out, "(download only)")
+	assertOutputContains(t, out, "(download only)")
 
 	blockedLocalPath := filepath.Join(syncDir, "blocked-from-recipient.txt")
 	require.NoError(t, os.MkdirAll(filepath.Dir(blockedLocalPath), 0o700))
@@ -188,15 +188,15 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	// Single pass by design: this one pass must record the denied write that
 	// status shows next. The file stays unsynced, so the pass exits 1.
 	out, stderr, err := runCLIWithConfigAllowErrorForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--upload-only")
-	assert.Contains(t, out, "(upload only)")
+	assertOutputContains(t, out, "(upload only)")
 	requireSyncLeftWork(t, out, stderr, err)
 
 	statusOut, _ := runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "status")
 	// The rendered title is sentence case ("Shared folder writes blocked"); the
 	// uppercase form predates the status redesign and matched nothing.
-	assert.Contains(t, statusOut, "Shared folder writes blocked")
-	assert.Contains(t, statusOut, "Downloads continue normally.")
-	assert.Contains(t, statusOut, "blocked-from-recipient.txt")
+	assertOutputContains(t, statusOut, "Shared folder writes blocked")
+	assertOutputContains(t, statusOut, "Downloads continue normally.")
+	assertOutputContains(t, statusOut, "blocked-from-recipient.txt")
 
 	// Single pass by design: a later run does not finish the write either,
 	// and says so with its exit status every time, as status does (R-6.6.28).
@@ -208,5 +208,5 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	// attempt is work the mode holds back, and the pass prunes the held upload
 	// and its write block, which no action of its plan needs.
 	out, _ = runCLIWithConfigForDrive(t, cfgPath, env, readOnlyFixture.FolderItem.Selector, "sync", "--download-only")
-	assert.Contains(t, out, "(download only)")
+	assertOutputContains(t, out, "(download only)")
 }

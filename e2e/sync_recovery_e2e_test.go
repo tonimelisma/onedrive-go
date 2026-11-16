@@ -55,15 +55,18 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 	// the global delta feed non-idle.
 	// Single pass by design: the one pass after the baseline must re-upload nothing.
 	out := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
-	assert.NotContains(t, out, "Uploaded "+testFolder+"/",
+	assertOutputNotContains(t, out, "Uploaded "+testFolder+"/",
 		"incremental upload-only sync should not re-upload unchanged files once the delta token is established")
 
 	// Add a new file remotely.
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/delta-new.txt", "new from remote")
 
-	// Verify the new file was downloaded locally.
+	// Verify the new file was downloaded locally. Any pass may be the one that
+	// downloads it, not only the last, so each pass's output is read for it.
 	newFilePath := filepath.Join(localDir, "delta-new.txt")
+	downloadLine := "Downloaded " + testFolder + "/delta-new.txt"
 	var data []byte
+	sawDownloadLine := false
 	attempt := requireSyncEventuallyConverges(
 		t,
 		cfgPath,
@@ -71,6 +74,9 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 		120*time.Second,
 		"incremental download should eventually materialize a newly visible remote file after delta catches up",
 		func(result syncAttemptResult) bool {
+			if strings.Contains(result.Stdout, downloadLine) {
+				sawDownloadLine = true
+			}
 			if result.Err != nil {
 				return false
 			}
@@ -85,8 +91,9 @@ func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assert.Contains(t, attempt.Stdout, "Downloaded "+testFolder+"/delta-new.txt",
-		"incremental download should name the new file once delta catches up")
+	assert.Truef(t, sawDownloadLine,
+		"incremental download should name the new file in one of its passes; the last pass printed: %s",
+		printable(attempt.Stdout))
 	assert.Equal(t, "new from remote", string(data))
 }
 
@@ -155,7 +162,7 @@ func TestE2E_Sync_CrashRecoveryIdempotent(t *testing.T) {
 	// Single pass by design: the one pass after convergence must find nothing
 	// to do, so it leaves nothing ("Up to date").
 	out, _ := runSyncPass(t, cfgPath, env)
-	assert.Contains(t, out, "Up to date",
+	assertOutputContains(t, out, "Up to date",
 		"immediate re-sync after mixed changes should be idempotent")
 }
 
@@ -207,10 +214,10 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		},
 		"--upload-only",
 	)
-	assert.Contains(t, attempt.Stdout, "Held back by --upload-only:",
+	assertOutputContains(t, attempt.Stdout, "Held back by --upload-only:",
 		"upload-only should report remote drift even when it cannot apply it")
-	assert.Contains(t, attempt.Stdout, "downloads")
-	assert.Contains(t, attempt.Stdout, "local deletes")
+	assertOutputContains(t, attempt.Stdout, "downloads")
+	assertOutputContains(t, attempt.Stdout, "local deletes")
 
 	editData := mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "original remote edit", string(editData))
@@ -241,10 +248,10 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		},
 		"--download-only",
 	)
-	assert.Contains(t, attempt.Stdout, "Done in",
+	assertOutputContains(t, attempt.Stdout, "Done in",
 		"download-only should settle durable remote mirror drift")
-	assert.Contains(t, attempt.Stdout, "Downloaded "+testFolder+"/remote-edit.txt")
-	assert.Contains(t, attempt.Stdout, "Deleted locally "+testFolder+"/remote-delete.txt")
+	assertOutputContains(t, attempt.Stdout, "Downloaded "+testFolder+"/remote-edit.txt")
+	assertOutputContains(t, attempt.Stdout, "Deleted locally "+testFolder+"/remote-delete.txt")
 
 	editData = mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "updated from remote", string(editData))
@@ -256,7 +263,7 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	// Single pass by design: the one pass after settlement must be idle and
 	// change nothing, so it leaves nothing ("Up to date").
 	out, _ := runSyncPass(t, cfgPath, env, "--download-only")
-	assert.Contains(t, out, "Up to date",
+	assertOutputContains(t, out, "Up to date",
 		"immediate rerun after durable mirror settlement should be idle")
 	assert.Equal(t, snapshot, snapshotLocalTree(t, localDir))
 }
@@ -302,9 +309,9 @@ func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
 	// Single pass by design: the first pass on an empty state must enumerate
 	// and download in one go; it may leave work a transient failure causes.
 	out, _ := runSyncPass(t, cfgPath, env, "--download-only")
-	assert.Contains(t, out, "Done in",
+	assertOutputContains(t, out, "Done in",
 		"sync after purge should report applied work for at least one mount")
-	assert.Contains(t, out, "Downloaded "+testFolder+"/purge-a.txt",
+	assertOutputContains(t, out, "Downloaded "+testFolder+"/purge-a.txt",
 		"sync after purge should re-enumerate and re-download the removed local files")
 
 	// Verify files re-downloaded locally.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,7 +92,19 @@ func runCLIBestEffort(
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, driveID, args...)
 	if err != nil {
-		t.Logf("best-effort CLI command %v failed: %v\nstdout: %s\nstderr: %s", args, err, stdout, stderr)
+		t.Logf("best-effort CLI command %v failed: %v\nstdout: %s\nstderr: %s", printable(fmt.Sprint(args)), err, printable(stdout), printable(stderr))
+	}
+}
+
+// requireCLISucceeded fails the test when a CLI command failed, with the
+// command and its output masked and bounded (printable). A command that
+// succeeded is not masked: masking a --debug log on every call costs time.
+func requireCLISucceeded(t *testing.T, err error, args []string, stdout, stderr string) {
+	t.Helper()
+
+	if err != nil {
+		require.NoErrorf(t, err, "CLI command %s failed\nstdout: %s\nstderr: %s",
+			printable(fmt.Sprint(args)), printable(stdout), printable(stderr))
 	}
 }
 
@@ -108,8 +119,7 @@ func runCLIWithConfig(
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
-	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
-		args, stdout, stderr)
+	requireCLISucceeded(t, err, args, stdout, stderr)
 
 	return stdout, stderr
 }
@@ -148,7 +158,7 @@ func runCLIWithoutDrive(
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", args...)
-	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s", args, stdout, stderr)
+	requireCLISucceeded(t, err, args, stdout, stderr)
 
 	return stdout, stderr
 }
@@ -163,8 +173,7 @@ func runCLIWithConfigAllDrives(
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", args...)
-	require.NoErrorf(t, err, "CLI command %v failed\nstdout: %s\nstderr: %s",
-		args, stdout, stderr)
+	requireCLISucceeded(t, err, args, stdout, stderr)
 
 	return stdout, stderr
 }
@@ -194,8 +203,10 @@ func runCLIWithConfigForDrive(
 
 	resolvedDriveID := resolveDriveSelection(env, driveID)
 	stdout, stderr, err := runCLICore(t, cfgPath, env, resolvedDriveID, args...)
-	require.NoErrorf(t, err, "CLI command %s (drive=%s) failed\nstdout: %s\nstderr: %s",
-		suiteDriveRoles.Redact(fmt.Sprint(args)), suiteDriveRoles.Role(resolvedDriveID), stdout, stderr)
+	if err != nil {
+		require.NoErrorf(t, err, "CLI command %s (drive=%s) failed\nstdout: %s\nstderr: %s",
+			printable(fmt.Sprint(args)), suiteDriveRoles.Role(resolvedDriveID), printable(stdout), printable(stderr))
+	}
 
 	return stdout, stderr
 }
@@ -212,8 +223,10 @@ func runCLIWithConfigExpectError(
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, resolveDriveSelection(env, ""), args...)
 
-	require.Error(t, err, "expected CLI to fail for args %v, but it succeeded\nstdout: %s\nstderr: %s",
-		args, stdout, stderr)
+	if err == nil {
+		require.Failf(t, "expected the CLI to fail", "args %s succeeded\nstdout: %s\nstderr: %s",
+			printable(fmt.Sprint(args)), printable(stdout), printable(stderr))
+	}
 
 	return stdout + stderr
 }
@@ -222,25 +235,26 @@ func TestResolveDriveSelection(t *testing.T) {
 	t.Parallel()
 
 	t.Run("defaults to suite drive", func(t *testing.T) {
-		assert.Equal(t, drive, resolveDriveSelection(nil, ""))
+		assertSameIdentity(t, "the drive an empty request resolves to", drive, resolveDriveSelection(nil, ""))
 	})
 
+	// A regression returns the suite drive, so each result prints masked.
 	t.Run("uses env selected drive for empty request", func(t *testing.T) {
-		assert.Equal(t, "shared:user@example.com:drive:item", resolveDriveSelection(
+		assertOutputEqual(t, "shared:user@example.com:drive:item", resolveDriveSelection(
 			map[string]string{"ONEDRIVE_GO_DRIVE": "shared:user@example.com:drive:item"},
 			"",
 		))
 	})
 
 	t.Run("uses env selected drive for suite drive request", func(t *testing.T) {
-		assert.Equal(t, "business:alt@example.com", resolveDriveSelection(
+		assertOutputEqual(t, "business:alt@example.com", resolveDriveSelection(
 			map[string]string{"ONEDRIVE_GO_DRIVE": "business:alt@example.com"},
 			drive,
 		))
 	})
 
 	t.Run("preserves explicit non-default drive", func(t *testing.T) {
-		assert.Equal(t, "business:other@example.com", resolveDriveSelection(
+		assertOutputEqual(t, "business:other@example.com", resolveDriveSelection(
 			map[string]string{"ONEDRIVE_GO_DRIVE": "shared:user@example.com:drive:item"},
 			"business:other@example.com",
 		))

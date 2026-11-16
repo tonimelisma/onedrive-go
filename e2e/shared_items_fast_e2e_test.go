@@ -29,5 +29,5 @@ func TestE2E_Shared_FileDiscoveryRejectsDriveAdd(t *testing.T) {
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "add", fixture.FileItem.Selector)
 	require.Error(t, err)
-	assert.Contains(t, stdout+stderr, "shared files are direct stat/get/put targets")
+	assertOutputContains(t, stdout+stderr, "shared files are direct stat/get/put targets")
 }

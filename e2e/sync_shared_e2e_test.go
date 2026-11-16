@@ -80,7 +80,7 @@ func TestE2E_SharedFolder_RemoteMutationSyncsToRecipient(t *testing.T) {
 			data, err := os.ReadFile(localPath) //nolint:gosec // a file inside the test's own sync dir
 			return result.Err == nil && err == nil && string(data) == expectedContent
 		}, "--download-only")
-	assert.Contains(t, attempt.Stdout, "(download only)")
+	assertOutputContains(t, attempt.Stdout, "(download only)")
 }
 
 func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
@@ -121,5 +121,5 @@ func TestE2E_SharedFolder_RecipientSyncTwice_Idempotent(t *testing.T) {
 		"sync",
 		"--download-only",
 	)
-	assert.Contains(t, out, "(download only)")
+	assertOutputContains(t, out, "(download only)")
 }

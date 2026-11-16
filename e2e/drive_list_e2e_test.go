@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,16 +33,16 @@ func TestE2E_DriveList_HappyPath_Text(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.NoError(t, err, "drive list should succeed\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list should succeed\nstdout: %s", printable(stdout))
 
 	// Configured drives section must be present with drive info.
-	assert.Contains(t, stdout, "Configured drives:",
+	assertOutputContains(t, stdout, "Configured drives:",
 		"should show configured drives header")
-	assert.Contains(t, stdout, drive,
+	assertOutputContains(t, stdout, drive,
 		"should show the configured drive's canonical ID")
-	assert.Contains(t, stdout, "ready",
+	assertOutputContains(t, stdout, "ready",
 		"configured drive should show ready state")
-	assert.Contains(t, stdout, syncDir,
+	assertOutputContains(t, stdout, syncDir,
 		"configured drive should show sync directory")
 }
 
@@ -56,7 +57,7 @@ func TestE2E_DriveList_JSON(t *testing.T) {
 	cfgPath, env := writeSyncConfig(t, syncDir)
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
-	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", printable(stdout))
 
 	var result struct {
 		Configured []struct {
@@ -69,7 +70,7 @@ func TestE2E_DriveList_JSON(t *testing.T) {
 	}
 
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
-		"drive list --json output should be valid JSON, got: %s", stdout)
+		"drive list --json output should be valid JSON, got: %s", printable(stdout))
 
 	// At least one configured drive.
 	require.NotEmpty(t, result.Configured,
@@ -77,10 +78,10 @@ func TestE2E_DriveList_JSON(t *testing.T) {
 
 	entry := result.Configured[0]
 	assert.NotEmpty(t, entry.CanonicalID, "canonical_id should be set")
-	assert.Contains(t, []string{"up_to_date", "not_synced"}, entry.State,
-		"a configured drive is either up to date or has never synced in this data dir")
-	assert.Equal(t, "configured", entry.Source, "source should be configured")
-	assert.Equal(t, syncDir, entry.SyncDir, "sync_dir should match")
+	assert.Truef(t, slices.Contains([]string{"up_to_date", "not_synced"}, entry.State),
+		"a configured drive is either up to date or has never synced in this data dir, not %s", printable(entry.State))
+	assertOutputEqual(t, "configured", entry.Source, "source should be configured")
+	assertOutputEqual(t, syncDir, entry.SyncDir, "sync_dir should match")
 
 	// Available array must exist (may be empty).
 	assert.NotNil(t, result.Available,
@@ -97,13 +98,13 @@ func TestE2E_DriveList_NoAccounts(t *testing.T) {
 	cfgPath, env := writeSyncConfigNoDrive(t)
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.NoError(t, err, "drive list should succeed even with no accounts\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list should succeed even with no accounts\nstdout: %s", printable(stdout))
 
-	assert.Contains(t, stdout, "No drives configured",
+	assertOutputContains(t, stdout, "No drives configured",
 		"should show the no-accounts guidance message")
-	assert.Contains(t, stdout, "login",
+	assertOutputContains(t, stdout, "login",
 		"should guide user to run login")
-	assert.NotContains(t, stdout, "Configured drives:",
+	assertOutputNotContains(t, stdout, "Configured drives:",
 		"should NOT show configured drives header when there are none")
 }
 
@@ -132,18 +133,18 @@ func TestE2E_DriveList_AccountsNoDrives(t *testing.T) {
 	}
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.NoError(t, err, "drive list should succeed\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list should succeed\nstdout: %s", printable(stdout))
 
 	// No configured drives section.
-	assert.NotContains(t, stdout, "Configured drives:",
+	assertOutputNotContains(t, stdout, "Configured drives:",
 		"should not show configured drives header")
 
 	// Available drives should be discovered from the network.
-	assert.Contains(t, stdout, "Available drives (not configured):",
+	assertOutputContains(t, stdout, "Available drives (not configured):",
 		"should show available drives discovered from tokens")
 
 	// Footer with add command hint.
-	assert.Contains(t, stdout, "drive add",
+	assertOutputContains(t, stdout, "drive add",
 		"should show footer with add command hint")
 }
 
@@ -172,7 +173,7 @@ func TestE2E_DriveList_PersonalAccountDoesNotDuplicateCanonicalDrive(t *testing.
 	}
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
-	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list --json should succeed\nstdout: %s", printable(stdout))
 
 	var result struct {
 		Available []struct {
@@ -203,13 +204,13 @@ func TestE2E_DriveList_ConfiguredNoSyncDir(t *testing.T) {
 	cfgPath := writeMinimalConfig(t)
 
 	stdout, _, err := runCLICore(t, cfgPath, nil, "", "drive", "list")
-	require.NoError(t, err, "drive list should succeed\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list should succeed\nstdout: %s", printable(stdout))
 
-	assert.Contains(t, stdout, "Configured drives:",
+	assertOutputContains(t, stdout, "Configured drives:",
 		"should show configured drives header")
-	assert.Contains(t, stdout, drive,
+	assertOutputContains(t, stdout, drive,
 		"should show the configured drive's canonical ID")
-	assert.Contains(t, stdout, "ready",
+	assertOutputContains(t, stdout, "ready",
 		"configured drive should show ready state")
 }
 
@@ -241,9 +242,9 @@ func TestE2E_DriveList_ConfigTolerance(t *testing.T) {
 	}
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "drive", "list")
-	require.NoError(t, err, "drive list should succeed despite unknown config key\nstdout: %s", stdout)
+	require.NoError(t, err, "drive list should succeed despite unknown config key\nstdout: %s", printable(stdout))
 
-	assert.Contains(t, stdout, "Configured drives:",
+	assertOutputContains(t, stdout, "Configured drives:",
 		"should show configured drives header despite unknown config key")
 }
 
@@ -275,14 +276,14 @@ func TestE2E_Status_ConfigTolerance(t *testing.T) {
 	}
 
 	stdout, _, err := runCLICore(t, cfgPath, env, "", "status")
-	require.NoError(t, err, "status should succeed despite unknown config key\nstdout: %s", stdout)
+	require.NoError(t, err, "status should succeed despite unknown config key\nstdout: %s", printable(stdout))
 
 	// Status output should contain account and configured-drive information.
-	assert.Contains(t, stdout, "Account:",
+	assertOutputContains(t, stdout, "Account:",
 		"status should show account header despite unknown config key")
-	assert.Contains(t, stdout, "Folder:",
+	assertOutputContains(t, stdout, "Folder:",
 		"status should show configured drive folder despite unknown config key")
-	assert.NotContains(t, stdout, "Auth:",
+	assertOutputNotContains(t, stdout, "Auth:",
 		"healthy status should not show auth state despite unknown config key")
 }
 

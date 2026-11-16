@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,11 +78,11 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	requireReadyAccountBeforeLogout(t, cfgPath, env, email)
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "logout")
-	require.NoErrorf(t, err, "logout should succeed\nstdout: %s\nstderr: %s", stdout, stderr)
-	combinedLogout := stdout + stderr
-	assert.Contains(t, combinedLogout, "Token removed")
-	assert.Contains(t, combinedLogout, "State databases kept")
-	assert.Contains(t, combinedLogout, "Sync directories untouched")
+	require.NoErrorf(t, err, "logout should succeed\nstdout: %s\nstderr: %s", printable(stdout), printable(stderr))
+	logoutOutput := stdout + stderr
+	assertOutputContains(t, logoutOutput, "Token removed")
+	assertOutputContains(t, logoutOutput, "State databases kept")
+	assertOutputContains(t, logoutOutput, "Sync directories untouched")
 
 	_, tokenErr := os.Stat(tokenPath)
 	assert.True(t, os.IsNotExist(tokenErr), "logout should remove the token file")
@@ -90,10 +91,10 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 	require.NoError(t, catalogErr, "logout should preserve the managed catalog")
 
 	cfgBytes := mustReadFile(t, cfgPath)
-	assert.NotContains(t, string(cfgBytes), drive, "logout should remove the drive config section")
+	assertOutputNotContains(t, string(cfgBytes), drive, "logout should remove the drive config section")
 
 	stdout, stderr, err = runCLICore(t, cfgPath, env, "", "status", "--json")
-	require.NoErrorf(t, err, "offline status should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
+	require.NoErrorf(t, err, "offline status should still succeed after logout\nstdout: %s\nstderr: %s", printable(stdout), printable(stderr))
 
 	var statusAfterLogout w7LiveStatusOutput
 	require.NoError(t, json.Unmarshal([]byte(stdout), &statusAfterLogout))
@@ -106,8 +107,9 @@ func TestE2E_Logout_PreservesOfflineAccountCatalog(t *testing.T) {
 
 		loggedOutAccountFound = true
 		require.NotNil(t, account.SignInRequired)
-		assert.Contains(t, account.SignInRequired.Action, "login")
-		assert.Empty(t, account.Drives)
+		assertOutputContains(t, account.SignInRequired.Action, "login")
+		driveCount := len(account.Drives)
+		assert.Zerof(t, driveCount, "the logged-out account lists no drives")
 	}
 	assert.True(t, loggedOutAccountFound, "status should retain the logged-out account in the offline catalog view")
 
@@ -154,11 +156,13 @@ func assertDriveListRequiresLoginAfterLogout(t *testing.T, cfgPath string, env m
 	t.Helper()
 
 	stdout, stderr, err := runCLICore(t, cfgPath, env, "", "drive", "list", "--json")
-	require.NoErrorf(t, err, "drive list should still succeed after logout\nstdout: %s\nstderr: %s", stdout, stderr)
+	require.NoErrorf(t, err, "drive list should still succeed after logout\nstdout: %s\nstderr: %s", printable(stdout), printable(stderr))
 
 	var driveListAfterLogout w7LiveDriveListOutput
 	require.NoError(t, json.Unmarshal([]byte(stdout), &driveListAfterLogout))
-	assert.Empty(t, driveListAfterLogout.Configured)
+	// A count, not the list: its entries name the drives.
+	configuredAfterLogout := len(driveListAfterLogout.Configured)
+	assert.Zero(t, configuredAfterLogout, "logout leaves no configured drive")
 	require.NotEmpty(t, driveListAfterLogout.AccountsRequiringAuth)
 	var foundDriveListAccount bool
 	for i := range driveListAfterLogout.AccountsRequiringAuth {
@@ -167,7 +171,7 @@ func assertDriveListRequiresLoginAfterLogout(t *testing.T, cfgPath string, env m
 		}
 
 		foundDriveListAccount = true
-		assert.Equal(t, "missing_login", driveListAfterLogout.AccountsRequiringAuth[i].Reason)
+		assertOutputEqual(t, "missing_login", driveListAfterLogout.AccountsRequiringAuth[i].Reason)
 	}
 	assert.True(t, foundDriveListAccount, "drive list should retain the logged-out account in accounts_requiring_auth")
 }
@@ -194,9 +198,12 @@ func TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
 
 	var listing w7LiveSharedOutput
 	require.NoError(t, json.Unmarshal([]byte(stdout), &listing))
-	assert.Empty(t, listing.AccountsRequiringAuth)
+	// Counts, not the lists: their entries name the accounts.
+	requiringAuthCount := len(listing.AccountsRequiringAuth)
+	assert.Zerof(t, requiringAuthCount, "no account needs a sign-in")
 	if len(listing.Items) == 0 {
-		assert.Empty(t, listing.AccountsDegraded, "empty shared discovery should be an honest best-effort result, not degraded")
+		degradedCount := len(listing.AccountsDegraded)
+		assert.Zerof(t, degradedCount, "empty shared discovery should be an honest best-effort result, not degraded")
 		return
 	}
 
@@ -204,7 +211,9 @@ func TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
 		assert.NotEmpty(t, listing.Items[i].Selector)
 		assert.NotEmpty(t, listing.Items[i].RemoteDriveID)
 		assert.NotEmpty(t, listing.Items[i].RemoteItemID)
-		assert.Equal(t, fixture.RecipientEmail, listing.Items[i].AccountEmail)
-		assert.Contains(t, []string{"file", "folder"}, listing.Items[i].Type)
+		assertSameIdentity(t, "a shared item's account email", fixture.RecipientEmail, listing.Items[i].AccountEmail)
+		itemType := listing.Items[i].Type
+		assert.Truef(t, slices.Contains([]string{"file", "folder"}, itemType),
+			"a shared item is a file or a folder, not %s", printable(itemType))
 	}
 }

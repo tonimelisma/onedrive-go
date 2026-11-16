@@ -90,8 +90,8 @@ func TestE2E_Sync_KillMidUploadResumesSession(t *testing.T) {
 	// Single pass by design: the very next pass must resume the dead sync's
 	// upload session; it may leave work a transient failure causes.
 	_, stderr := runSyncPass(t, cfgPath, env, "--upload-only")
-	assert.Contains(t, stderr, stderrUploadSessionResumed, "the second sync did not resume the dead sync's upload session")
-	assert.NotContains(t, stderr, stderrUploadSessionExpired)
+	assertOutputContains(t, stderr, stderrUploadSessionResumed, "the second sync did not resume the dead sync's upload session")
+	assertOutputNotContains(t, stderr, stderrUploadSessionExpired)
 
 	remotePath := "/" + testFolder + "/kill-upload.bin"
 	waitForRemoteStatSize(t, opsCfgPath, nil, remotePath, int64(killMidUploadSize), pollTimeout)
@@ -100,7 +100,7 @@ func TestE2E_Sync_KillMidUploadResumesSession(t *testing.T) {
 	// Single pass by design: the one pass after the resumed upload must find
 	// nothing to do, so it leaves nothing ("Up to date").
 	out, _ := runSyncPass(t, cfgPath, env, "--upload-only")
-	assert.Contains(t, out, "Up to date", "a resumed upload should leave nothing for the next sync")
+	assertOutputContains(t, out, "Up to date", "a resumed upload should leave nothing for the next sync")
 }
 
 // Validates: R-5.2.2, R-5.2.4
@@ -125,7 +125,7 @@ func TestE2E_Sync_KillMidDownloadResumesPartial(t *testing.T) {
 	require.NoError(t, os.WriteFile(srcPath, data, 0o600))
 	remotePath := "/" + testFolder + "/kill-download.bin"
 	_, stderr := runCLIWithConfig(t, opsCfgPath, nil, "put", srcPath, remotePath)
-	assert.Contains(t, stderr, "Uploaded")
+	assertOutputContains(t, stderr, "Uploaded")
 	waitForRemoteStatSize(t, opsCfgPath, nil, remotePath, int64(killMidDownloadSize), pollTimeout)
 
 	localDir := filepath.Join(syncDir, testFolder)
@@ -146,7 +146,7 @@ func TestE2E_Sync_KillMidDownloadResumesPartial(t *testing.T) {
 	// Single pass by design: the very next pass must resume from the dead
 	// sync's partial; it may leave work a transient failure causes.
 	_, stderr = runSyncPass(t, cfgPath, env, "--download-only")
-	assert.Contains(t, stderr, stderrDownloadPartialResume, "the second sync did not resume from the dead sync's partial")
+	assertOutputContains(t, stderr, stderrDownloadPartialResume, "the second sync did not resume from the dead sync's partial")
 
 	assert.Equal(t, data, mustReadFile(t, targetPath), "the resumed download does not match the uploaded content")
 	leftovers, err := filepath.Glob(filepath.Join(localDir, downloadPartialGlob))
@@ -229,7 +229,7 @@ func waitForStderrContains(t *testing.T, buf *syncBuffer, needle string, timeout
 
 	deadline := time.Now().Add(timeout)
 	for !strings.Contains(buf.String(), needle) {
-		require.Less(t, time.Now(), deadline, "stderr never showed %q within %s:\n%s", needle, timeout, buf.String())
+		require.Less(t, time.Now(), deadline, "stderr never showed %q within %s:\n%s", needle, timeout, printable(buf.String()))
 		sleepForLiveTestPropagation(10 * time.Millisecond)
 	}
 }
@@ -264,7 +264,7 @@ func assertRemoteContentEquals(t *testing.T, opsCfgPath, remotePath string, want
 	var got struct {
 		HashVerified bool `json:"hash_verified"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "get --json output: %s", stdout)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "get --json output: %s", printable(stdout))
 	assert.True(t, got.HashVerified, "OneDrive's hash of the resumed upload did not verify")
 	assert.Equal(t, want, mustReadFile(t, localPath), "the content on OneDrive differs from the local file")
 }
