@@ -292,20 +292,24 @@ Static verification is a first-class architectural constraint, not a best-effort
 - A test's wait for an event that must come (a debug event, an observer
   batch, a pass result, a goroutine's return) is bounded by one named wait,
   long enough for a loaded two-core host under the race detector: `eventWait`
-  (one minute) in `internal/sync`. A wait returns as soon as its event
+  (one minute), declared once in the test helpers of `internal/sync`,
+  `internal/multisync` and `internal/cli`; a deadline that is itself the
+  subject of a test keeps its own name. A wait returns as soon as its event
   arrives, so the bound decides only how long a broken test hangs; ten-second
-  bounds failed correct watch tests under load. A test never waits unboundedly
-  for a watch or
-  loop to return, whether it runs in the background or is the test's own
-  call. It starts one in a goroutine only through `runInBackground`
-  (`runWatchInBackground` for `RunWatch`), whose cleanup cancels it and waits
-  within `eventWait`, so a failing test never leaves one running into the
-  next, and reads the result with `receiveWithin` or `stopWatch`; its own
-  call of one goes through `runWithin`. Each fails naming what it waited for.
-  A call whose state makes it return at once (a canceled context, a
-  quiescent phase, a signal already queued) stays a plain call. Inside a
-  `testing/synctest` bubble a blocked receive is reported as a deadlock
-  instead, and virtual waits stay as they are.
+  bounds failed correct watch tests under load. In `internal/sync` a test
+  never waits unboundedly for a watch or loop to return, whether it runs in
+  the background or is the test's own call: it starts one in a goroutine
+  only through `runInBackground` (`runWatchInBackground` for `RunWatch`),
+  whose cleanup cancels it and waits within `eventWait`, so a failing test
+  never leaves one running into the next, and reads the result with
+  `receiveWithin` or `stopWatch`; its own call of one goes through
+  `runWithin`. Each fails naming what it waited for. A call whose state
+  makes it return at once (a canceled context, a quiescent phase, a signal
+  already queued) stays a plain call. In `internal/multisync` and
+  `internal/cli` every wait for a watch or loop that a test runs on a
+  goroutine to return is bounded by `eventWait` and fails naming what it
+  waited for. Inside a `testing/synctest` bubble a blocked receive is
+  reported as a deadlock instead, and virtual waits stay as they are.
 - A test never shows that something does not happen by waiting a fixed time:
   on a loaded host the event a short window rules out can arrive after it,
   and the test then passes whether the product is right or wrong. It waits,
@@ -327,11 +331,15 @@ Static verification is a first-class architectural constraint, not a best-effort
   which a window could not tell from a scan that skipped them. In
   `internal/multisync` a reload's answer, or the warning it sends, is the
   signal: it comes once the reload has made the engines of what it restarts,
-  so a count of the engine factory's calls read then is final. Two
-  multisync tests keep a window until the product gives them a signal, each
-  commented with the signal it lacks: the owner lock held while a canceled
-  drive drains (`TestRunWatch_OwnerLockHeldUntilRunnersDrain`) and the config
-  poller that must not trigger a reload
+  so a count of the engine factory's calls read then is final. The watch's
+  drain calls a test hook, nil outside tests, once it has canceled every
+  runner and starts waiting for them; a canceled drive that returns only when
+  the test lets it then shows that the owner lock is held while it drains,
+  and again as the drain closes its engine
+  (`TestRunWatch_OwnerLockHeldUntilRunnersDrain`). The config poller takes its
+  ticks from the test on an unbuffered channel, which it reads only between
+  polls: once a test has sent n+1 ticks, n polls have ended, and two ended
+  polls without a trigger show that an unchanged file does not reload
   (`TestWatchConfigReloadTriggers_FileEditsAndSIGHUP`).
 - The chaos model (`TestModel_ChaosGraphConverges`) logs each seed's fault
   summary from a test cleanup, so a failing seed prints it. Its one `-race`

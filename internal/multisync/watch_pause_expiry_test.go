@@ -35,7 +35,7 @@ func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return len(w.armedDelays()) > 0
-	}, 5*time.Second, 5*time.Millisecond, "the pause-expiry wake-up was not armed")
+	}, eventWait, 5*time.Millisecond, "the pause-expiry wake-up was not armed")
 	assert.Equal(t, w.wait, w.armedDelays()[0], "armed for the pause's end")
 	select {
 	case <-w.started:
@@ -48,7 +48,7 @@ func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 
 	select {
 	case <-w.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the drive did not start when its timed pause expired")
 	}
 
@@ -64,7 +64,7 @@ func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunWatch did not stop in time")
 	}
 }

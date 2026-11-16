@@ -20,7 +20,7 @@ func nextLifecycleEvent(t *testing.T, events <-chan WatchLifecycleEvent) WatchLi
 	select {
 	case event := <-events:
 		return event
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "no watch lifecycle event")
 		return WatchLifecycleEvent{}
 	}
@@ -91,7 +91,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -118,7 +118,7 @@ func TestRunWatch_StartupFailureIsNotReady(t *testing.T) {
 		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 	err := orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	require.NoError(t, ctx.Err(), "a watch whose only drive failed to start must return, not idle")

@@ -1258,7 +1258,7 @@ func TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper(t *testing.T) {
 		_, walErr := os.Stat(walPath)
 		_, shmErr := os.Stat(shmPath)
 		return walErr == nil && shmErr == nil
-	}, time.Second, 10*time.Millisecond, "WAL sidecars were not created")
+	}, eventWait, 10*time.Millisecond, "WAL sidecars were not created")
 
 	require.NoError(t, os.Chmod(dbPath, 0o400))
 	// #nosec G302 -- test intentionally makes the directory read-only to prove status stays on the read-only path.

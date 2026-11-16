@@ -100,7 +100,9 @@ const (
 
 // fakeGraphTimeout bounds how long a JSON-contract case may run, so a fake
 // that a command polls (visibility, copy monitor) fails fast instead of
-// hanging the suite.
+// hanging the suite. The command's retry waits read this deadline (a wait
+// that does not fit returns OneDrive's answer at once), so it is part of
+// what the cases test and stays short; it is not an event wait.
 const fakeGraphTimeout = 30 * time.Second
 
 func newFakeGraphDrive(t *testing.T, driveID string) *fakeGraphDrive {

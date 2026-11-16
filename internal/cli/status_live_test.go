@@ -181,8 +181,13 @@ func (r *statusLiveRun) status(t *testing.T, ctx context.Context) error {
 	returned := false
 	t.Cleanup(func() {
 		cancel()
-		if !returned {
-			<-done
+		if returned {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(eventWait):
+			assert.Fail(t, "status did not return after its context was canceled")
 		}
 	})
 

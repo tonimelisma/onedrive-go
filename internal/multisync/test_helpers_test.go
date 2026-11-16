@@ -18,6 +18,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// eventWait is how long a test waits for an event that must come: a runner's
+// start, a lifecycle event, a control answer, RunWatch's return. A wait
+// returns the moment its event arrives, so a passing test never spends it; it
+// only bounds how long a broken one hangs. It is long because a loaded
+// two-core host under the race detector takes seconds for what takes
+// milliseconds alone, and shorter bounds failed tests there that were
+// correct. A test never shows that something did not happen by letting a wait
+// run out: it waits for the signal that the input was handled, then checks.
+const eventWait = time.Minute
+
 func testCanonicalID(t *testing.T, s string) driveid.CanonicalID {
 	t.Helper()
 

@@ -42,8 +42,8 @@ func TestShutdownContext_FirstSignalCancels(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		// Expected: context canceled on first signal.
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "context not canceled within 2 seconds of SIGINT")
+	case <-time.After(eventWait):
+		require.Fail(t, "context not canceled after SIGINT")
 	}
 
 	// Clean up: cancel parent to stop the goroutine.
@@ -56,7 +56,7 @@ func TestShutdownContext_SecondSignalForcesExit(t *testing.T) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
 	exe, err := os.Executable()
@@ -138,7 +138,7 @@ func runFirstSignalSyncWatchSubprocess(
 ) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
 	exe, err := os.Executable()
@@ -183,8 +183,8 @@ func TestShutdownContext_ParentCancelStopsGoroutine(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		// Expected: context canceled when parent is canceled.
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "context not canceled within 2 seconds of parent cancel")
+	case <-time.After(eventWait):
+		require.Fail(t, "context not canceled after the parent was canceled")
 	}
 }
 
@@ -340,7 +340,7 @@ func TestShutdownContext_CancelReleasesSignalGoroutine(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return runtime.NumGoroutine() <= before+2
-	}, 5*time.Second, 10*time.Millisecond,
+	}, eventWait, 10*time.Millisecond,
 		"signal goroutines should unwind after cancel")
 }
 
@@ -362,15 +362,15 @@ func TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine(t *testing.
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
 	select {
 	case <-ctx.Done():
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "context not canceled within 2 seconds of SIGINT")
+	case <-time.After(eventWait):
+		require.Fail(t, "context not canceled after SIGINT")
 	}
 
 	stop()
 
 	require.Eventually(t, func() bool {
 		return runtime.NumGoroutine() <= before+2
-	}, 5*time.Second, 10*time.Millisecond,
+	}, eventWait, 10*time.Millisecond,
 		"the signal goroutine must unwind once stop is called after a first signal")
 }
 
@@ -396,7 +396,7 @@ func TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError(t *testing.T)
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT), "failed to send SIGINT")
 	select {
 	case <-ctx.Done():
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the handler's panic did not end the command")
 	}
 
