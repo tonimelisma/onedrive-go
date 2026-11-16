@@ -47,7 +47,7 @@ func runWatchCatchingPanics(t *testing.T, orch *Orchestrator) watchOutcome {
 	select {
 	case outcome := <-done:
 		return outcome
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunWatch did not return")
 		return watchOutcome{}
 	}
@@ -294,7 +294,7 @@ func TestWatchConfigReloadTriggers_PanicIsReportedOnTheFatalChannel(t *testing.T
 	case err := <-fatal:
 		require.ErrorIs(t, err, panicguard.ErrPanic)
 		require.ErrorContains(t, err, "stat exploded")
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.Fail(t, "the watcher's panic was not reported")
 	}
 	assert.Len(t, panicErrorLogs(capture), 1)
@@ -461,7 +461,7 @@ func TestControlServer_HandlerPanicIsLoggedThroughTheOwnersLogger(t *testing.T) 
 			}
 		}
 		return false
-	}, testWait, time.Millisecond, "the handler's panic reaches the owner's logger at Error")
+	}, eventWait, time.Millisecond, "the handler's panic reaches the owner's logger at Error")
 }
 
 // oneDriveWork is the one-shot work of the first drive of cfg, a report it
@@ -515,7 +515,7 @@ func TestRunIndexedMountWork_APanicWhileStartingShortcutsIsThatDrivesReport(t *t
 	var shortcutReports []*MountReport
 	select {
 	case shortcutReports = <-done:
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the pass hung on the lock the panic left held")
 	}
 	require.NotNil(t, reports[0])

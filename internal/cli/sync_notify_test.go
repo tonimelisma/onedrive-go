@@ -49,10 +49,10 @@ func newFakeNotifySocket(t *testing.T) *fakeNotifySocket {
 func (f *fakeNotifySocket) next() string {
 	f.t.Helper()
 
-	require.NoError(f.t, f.conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(f.t, f.conn.SetReadDeadline(time.Now().Add(eventWait)))
 	buf := make([]byte, 4096)
 	n, err := f.conn.Read(buf)
-	require.NoError(f.t, err)
+	require.NoError(f.t, err, "no notify message arrived")
 
 	return string(buf[:n])
 }
@@ -157,7 +157,12 @@ func TestRunSyncDaemon_NotifiesSystemdOfLifecycle(t *testing.T) {
 	}
 	close(release)
 
-	require.NoError(t, <-errCh)
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(eventWait):
+		require.FailNow(t, "the sync daemon did not return after the watch ended")
+	}
 }
 
 // Validates: R-6.6.32, R-6.6.31

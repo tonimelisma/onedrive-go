@@ -53,6 +53,10 @@ type configReloadWatch struct {
 	fatal chan<- error
 	// readStamp reads the file's version; nil means readConfigFileStamp.
 	readStamp func(path string) configFileStamp
+	// ticks start the polls; nil means a ticker of interval. A test sends
+	// them on an unbuffered channel, which the watcher reads only between
+	// polls, so a sent tick shows that the poll before it has ended.
+	ticks <-chan time.Time
 }
 
 // watchConfigReloadTriggers delivers one value whenever config.toml changes
@@ -82,8 +86,12 @@ func watchConfigReloadTriggers(ctx context.Context, watch configReloadWatch) (<-
 				}
 			}
 		}()
-		ticker := time.NewTicker(watch.interval)
-		defer ticker.Stop()
+		ticks := watch.ticks
+		if ticks == nil {
+			ticker := time.NewTicker(watch.interval)
+			defer ticker.Stop()
+			ticks = ticker.C
+		}
 
 		poll := configFilePoll{last: readStamp(watch.path)}
 		for {
@@ -93,7 +101,7 @@ func watchConfigReloadTriggers(ctx context.Context, watch configReloadWatch) (<-
 			case <-hup:
 				poll.reset(readStamp(watch.path))
 				sendLatest(triggers, "SIGHUP")
-			case <-ticker.C:
+			case <-ticks:
 				if watch.path == "" {
 					continue
 				}

@@ -126,6 +126,11 @@ type Orchestrator struct {
 	// retireTimer arms the bound on one watch runner's stop or one engine's
 	// close (retireWatchRunner). Injectable so a test fires it by hand.
 	retireTimer func(time.Duration) (<-chan time.Time, func())
+	// drainWaiting is a test hook: the watch's drain calls it on the RunWatch
+	// goroutine once it has canceled every runner, as it starts waiting for
+	// them (retireAllWatchRunners). It must not block: the runners' stop
+	// bound is already running when it is called. Nil outside tests.
+	drainWaiting func()
 	// lastRunnerGeneration is the generation given to the newest watch
 	// runner. Owned by the RunWatch goroutine, which starts every runner.
 	lastRunnerGeneration uint64

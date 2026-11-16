@@ -247,7 +247,10 @@ func getControlStatus(t *testing.T, socketPath string) synccontrol.StatusRespons
 	var decoded synccontrol.StatusResponse
 	require.Eventually(t, func() bool {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
-		require.NoError(t, err)
+		// The condition runs on its own goroutine, where require cannot end the test.
+		if !assert.NoError(t, err) {
+			return false
+		}
 
 		// #nosec G704 -- fixed Unix-domain test socket client.
 		resp, err := client.Do(req)
@@ -263,7 +266,7 @@ func getControlStatus(t *testing.T, socketPath string) synccontrol.StatusRespons
 		}
 
 		return true
-	}, 5*time.Second, 10*time.Millisecond, "control socket status did not succeed")
+	}, eventWait, 10*time.Millisecond, "control socket status did not succeed")
 
 	return decoded
 }
@@ -275,7 +278,10 @@ func postControlJSON(t *testing.T, socketPath string, path string, body []byte) 
 	var decoded synccontrol.MutationResponse
 	require.Eventually(t, func() bool {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
-		require.NoError(t, err)
+		// The condition runs on its own goroutine, where require cannot end the test.
+		if !assert.NoError(t, err) {
+			return false
+		}
 		req.Header.Set("Content-Type", "application/json")
 
 		// #nosec G704 -- fixed Unix-domain test socket client.
@@ -289,7 +295,7 @@ func postControlJSON(t *testing.T, socketPath string, path string, body []byte) 
 		}
 
 		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 10*time.Millisecond, "control socket request did not succeed")
+	}, eventWait, 10*time.Millisecond, "control socket request did not succeed")
 
 	return decoded
 }
@@ -309,7 +315,10 @@ func postControlJSONAnyStatus(
 	statusCode := 0
 	require.Eventually(t, func() bool {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
-		require.NoError(t, err)
+		// The condition runs on its own goroutine, where require cannot end the test.
+		if !assert.NoError(t, err) {
+			return false
+		}
 		req.Header.Set("Content-Type", "application/json")
 
 		// #nosec G704 -- fixed Unix-domain test socket client.
@@ -320,7 +329,7 @@ func postControlJSONAnyStatus(
 		defer resp.Body.Close()
 		statusCode = resp.StatusCode
 		return json.NewDecoder(resp.Body).Decode(&decoded) == nil
-	}, 5*time.Second, 10*time.Millisecond, "control socket request was not answered")
+	}, eventWait, 10*time.Millisecond, "control socket request was not answered")
 
 	return statusCode, decoded
 }
@@ -1138,12 +1147,16 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "watch runner did not start")
 	}
 
 	wr.cancel()
-	<-wr.done
+	select {
+	case <-wr.done:
+	case <-time.After(eventWait):
+		require.FailNow(t, "a canceled watch runner did not return")
+	}
 	require.NoError(t, wr.engine.Close(t.Context()))
 	cancel()
 }
@@ -1208,7 +1221,7 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 		assert.Equal(t, syncengine.SyncBidirectional, call.mode)
 		assert.True(t, call.opts.FullReconcile)
 		assert.True(t, call.opts.ReleaseLocalTree)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "final-drain runner did not run")
 	}
 	select {
@@ -1216,10 +1229,14 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 		assert.Equal(t, mountID(childID), event.mountID)
 		require.NoError(t, event.err)
 		require.NotNil(t, event.report)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "final-drain runner did not report completion")
 	}
-	<-wr.done
+	select {
+	case <-wr.done:
+	case <-time.After(eventWait):
+		require.FailNow(t, "final-drain runner did not return after reporting completion")
+	}
 }
 
 // Validates: R-2.4.8
@@ -1484,12 +1501,12 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 
 	select {
 	case <-parentBStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "parent B did not start")
 	}
 	select {
 	case <-childStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "parent A child did not start while parent B was still running")
 	}
 	close(releaseParentB)
@@ -1497,7 +1514,7 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 	var result RunOnceResult
 	select {
 	case result = <-resultCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunOnce did not finish")
 	}
 	require.Len(t, result.Reports, 3)
@@ -1569,14 +1586,14 @@ func TestRunOnce_StartsParentChildrenAfterPublishingParentSafePoint(t *testing.T
 	}
 	select {
 	case <-childStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "child did not start after parent safe point")
 	}
 
 	var result RunOnceResult
 	select {
 	case result = <-resultCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunOnce did not finish")
 	}
 	require.Len(t, result.Reports, 2)
@@ -1708,18 +1725,18 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 	close(releaseParent)
 	select {
 	case <-childCompleted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "final-drain child did not start after parent safe point")
 	}
 	select {
 	case <-acked:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "final-drain ack did not happen after parent safe point")
 	}
 	select {
 	case result := <-resultCh:
 		require.Len(t, result.Reports, 2)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunOnce did not finish")
 	}
 }
@@ -1849,7 +1866,7 @@ func TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *test
 
 	select {
 	case <-childStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not start bootstrapped child in time")
 	}
 
@@ -1858,7 +1875,7 @@ func TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *test
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -1885,12 +1902,12 @@ func TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot(t *testing.T) {
 
 	select {
 	case <-harness.parentStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "parent did not start")
 	}
 	select {
 	case <-harness.secondStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "second child did not start from live parent snapshot")
 	}
 	assert.Equal(t, int32(1), harness.parentRunCount.Load())
@@ -1900,7 +1917,7 @@ func TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -2285,8 +2302,12 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 	assert.Equal(t, []string{"stop-child", "start-child"}, events)
 
 	cancel()
-	for _, runner := range runners {
-		<-runner.done
+	for id, runner := range runners {
+		select {
+		case <-runner.done:
+		case <-time.After(eventWait):
+			require.FailNow(t, "a watch runner did not return after its context was canceled", "mount %s", id)
+		}
 	}
 }
 
@@ -2377,9 +2398,13 @@ func TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild(t 
 	assert.Empty(t, childWork.latestFor(parentMount.id()).RunCommands)
 
 	cancel()
-	for _, runner := range runners {
+	for id, runner := range runners {
 		runner.cancel()
-		<-runner.done
+		select {
+		case <-runner.done:
+		case <-time.After(eventWait):
+			require.FailNow(t, "a canceled watch runner did not return", "mount %s", id)
+		}
 	}
 }
 
@@ -2468,19 +2493,18 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 
 	clock.advance(runnerRestartBaseDelay)
 	require.NoError(t, orch.reconcileWatchRunners(
-		ctx,
-		syncengine.SyncBidirectional,
-		syncengine.WatchOptions{},
-		runners,
-		make(chan watchRunnerEvent, 4),
-		childWork,
+		ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{}, runners, make(chan watchRunnerEvent, 4), childWork,
 	))
 	assert.Equal(t, []mountID{parentMount.id()}, restarted)
 
 	cancel()
-	for _, runner := range runners {
+	for id, runner := range runners {
 		runner.cancel()
-		<-runner.done
+		select {
+		case <-runner.done:
+		case <-time.After(eventWait):
+			require.FailNow(t, "a canceled watch runner did not return", "mount %s", id)
+		}
 		assert.NoError(t, runner.engine.Close(context.Background()))
 	}
 }
@@ -2569,7 +2593,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunOnce did not start in time")
 	}
 	status := getControlStatus(t, cfg.ControlSocketPath)
@@ -2585,7 +2609,7 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 	case result := <-reportsCh:
 		require.Len(t, result.Reports, 1)
 		require.NoError(t, result.Reports[0].Err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunOnce did not stop in time")
 	}
 }
@@ -2794,7 +2818,7 @@ func TestOrchestrator_RunWatch_SingleMount(t *testing.T) {
 	// Wait for watch to start, then shut down.
 	select {
 	case <-watchStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not start in time")
 	}
 
@@ -2803,7 +2827,7 @@ func TestOrchestrator_RunWatch_SingleMount(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -2841,14 +2865,14 @@ func TestOrchestrator_RunWatch_MultiMount(t *testing.T) {
 	// Wait until both mounts have started.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	cancel()
 
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -2891,7 +2915,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts
 
 	select {
 	case <-watchStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not start healthy mount in time")
 	}
 
@@ -2901,7 +2925,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts
 		require.Len(t, results, 1)
 		assert.Equal(t, testStandaloneMountIdentity(rd2.CanonicalID), results[0].Identity)
 		assert.Equal(t, MountStartupIncompatibleStore, results[0].Status)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not emit startup warning")
 	}
 
@@ -2910,7 +2934,7 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -2982,7 +3006,7 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 		assert.Empty(t, event.Skipped)
 		require.Len(t, event.Paused, 1)
 		assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), event.Paused[0].Identity)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not report ready")
 	}
 	assert.Zero(t, started.Load(), "a paused drive is not started")
@@ -2992,13 +3016,13 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 	postControlReload(t, cfg.ControlSocketPath)
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond, "the resumed drive starts syncing")
+	}, eventWait, 10*time.Millisecond, "the resumed drive starts syncing")
 
 	cancel()
 	select {
 	case err := <-errCh:
 		require.NoError(t, err, "a watch stopped while idle exits cleanly")
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3049,7 +3073,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 
 	select {
 	case <-watchStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not start in time")
 	}
 
@@ -3073,7 +3097,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3118,7 +3142,7 @@ func TestRunWatch_ControlServerExitEndsTheWatch(t *testing.T) {
 
 	select {
 	case <-watchStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not start in time")
 	}
 
@@ -3129,7 +3153,7 @@ func TestRunWatch_ControlServerExitEndsTheWatch(t *testing.T) {
 	case err := <-errCh:
 		require.ErrorIs(t, err, net.ErrClosed)
 		require.ErrorContains(t, err, "control channel stopped")
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch kept running without its control channel")
 	}
 	assert.NoFileExists(t, cfg.ControlSocketPath)
@@ -3212,7 +3236,7 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	// Wait for first mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	// Add a second mount to the config and request a control-socket reload.
 	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot, rd2CID, t.TempDir())
@@ -3221,14 +3245,14 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	// Wait for the second mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	cancel()
 
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3285,7 +3309,7 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 		mu.Lock()
 		defer mu.Unlock()
 		return started[rd1ID] == 1 && started[rd2ID] == 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	insertDriveConfigLine(t, cfgPath, rd1.CanonicalID, `ignored_dirs = ["hidden"]`)
 	postControlReload(t, cfg.ControlSocketPath)
@@ -3301,14 +3325,14 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 		mu.Lock()
 		defer mu.Unlock()
 		return started[rd1ID] == 2 && stopped[rd1ID] == 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	cancel()
 
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3349,7 +3373,7 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	// Wait for both mounts to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	// Remove rd2 from config and request a control-socket reload.
 	writeTestConfigSingle(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot)
@@ -3358,14 +3382,14 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	// Wait for one runner to stop (the removed mount).
 	require.Eventually(t, func() bool {
 		return stopped.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	cancel()
 
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3405,7 +3429,7 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	// Pause the mount and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
@@ -3414,14 +3438,14 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	// The mount runner should stop.
 	require.Eventually(t, func() bool {
 		return stopped.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	cancel()
 
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3460,7 +3484,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	// Write invalid TOML and request a control-socket reload; old state should
 	// remain, and the requester must be told the reload did not apply instead
@@ -3483,7 +3507,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3537,7 +3561,7 @@ func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	postControlReload(t, cfg.ControlSocketPath)
 
@@ -3547,7 +3571,7 @@ func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
 		require.Len(t, results, 1)
 		assert.Equal(t, MountStartupFatal, results[0].Status)
 		require.ErrorIs(t, results[0].Err, reloadErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "reload warning was not emitted")
 	}
 
@@ -3560,7 +3584,7 @@ func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }
@@ -3605,7 +3629,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	// Set an already-expired timed pause and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
@@ -3619,7 +3643,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		}
 		d := reloadedCfg.Drives[rd.CanonicalID]
 		return d.Paused == nil && d.PausedUntil == nil
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 
 	assert.Equal(t, int32(0), stopped.Load(), "mount should NOT be stopped — expired pause is cleared, mount stays running")
 	assert.Equal(t, int32(1), started.Load(), "mount should NOT be restarted — the mount was already running")
@@ -3636,7 +3660,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 }

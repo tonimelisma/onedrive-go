@@ -42,8 +42,8 @@ const testDriveID = synctest.TestDriveID
 // only bounds how long a broken one hangs. It is long because events that take
 // milliseconds alone took over ten seconds on a loaded two-core host under the
 // race detector, and a ten-second wait failed tests there that were correct.
-// A wait that proves something does NOT happen is the opposite case: its
-// expiry is the passing path, so it stays short, at its use.
+// A test never shows that something did not happen by letting a wait run out:
+// it waits for the signal that the input was handled, then checks.
 const eventWait = time.Minute
 
 // emptyBaseline returns a Baseline with initialized but empty maps.

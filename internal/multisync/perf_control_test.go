@@ -10,19 +10,15 @@ import (
 	"testing"
 	"time"
 
-	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
-const (
-	contextPerfUploadBytes = 512
-	contextPerfWait        = 5 * time.Second
-)
+const contextPerfUploadBytes = 512
 
 // cannedRoundTripper answers every request with an empty 200, so the
 // production perf round tripper can be driven without a network.
@@ -141,7 +137,7 @@ func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
 	select {
 	case err := <-recorded:
 		require.NoError(t, err)
-	case <-time.After(contextPerfWait):
+	case <-time.After(eventWait):
 		require.Fail(t, "watch runner did not record in time")
 	}
 
@@ -154,7 +150,7 @@ func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(contextPerfWait):
+	case <-time.After(eventWait):
 		require.Fail(t, "RunWatch did not stop in time")
 	}
 

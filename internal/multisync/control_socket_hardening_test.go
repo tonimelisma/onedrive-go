@@ -120,10 +120,6 @@ func TestAssertControlSocketDirSafe_MissingDirectoryIsReported(t *testing.T) {
 	assert.Contains(t, err.Error(), "stat control socket directory")
 }
 
-// controlTestGuard bounds every wait in these tests, so a deadline the server
-// lacks fails the test instead of hanging it.
-const controlTestGuard = 5 * time.Second
-
 // shortControlWait stands in for the owner's real waits (seconds), so a test
 // reaches a deadline in milliseconds.
 const shortControlWait = 20 * time.Millisecond
@@ -185,7 +181,7 @@ func takeOneCommand(t *testing.T, commands <-chan controlCommand) <-chan control
 func sendControlRequest(t *testing.T, socketPath, method, path string) (int, synccontrol.MutationResponse) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), controlTestGuard)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, method, synccontrol.HTTPBaseURL+path, http.NoBody)
@@ -193,7 +189,7 @@ func sendControlRequest(t *testing.T, socketPath, method, path string) (int, syn
 
 	// #nosec G704 -- fixed Unix-domain test socket client.
 	resp, err := controlTestClient(socketPath).Do(req)
-	require.NoError(t, err, "the owner must answer before the test's guard")
+	require.NoError(t, err, "the owner must answer within eventWait")
 	defer resp.Body.Close()
 
 	var decoded synccontrol.MutationResponse
@@ -221,7 +217,7 @@ func TestControlSocketServer_SetsReadIdleAndHeaderLimits(t *testing.T) {
 
 	// The limit is real: a header block several times the limit is refused
 	// before any handler runs.
-	ctx, cancel := context.WithTimeout(t.Context(), controlTestGuard)
+	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
 	require.NoError(t, err)
@@ -259,7 +255,7 @@ func TestControlSocket_SlowBodyIsCutOff(t *testing.T) {
 		`{"duration_ms":`)
 	require.NoError(t, err)
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(controlTestGuard)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(eventWait)))
 	_, err = io.Copy(io.Discard, conn)
 	require.NoError(t, err, "the owner must close the connection, not wait for the rest of the body")
 }
@@ -313,8 +309,12 @@ func TestHandleControlRequest_SlowReloadAnswersInProgress(t *testing.T) {
 	assert.Equal(t, synccontrol.StatusReloadInProgress, response.Status)
 	assert.Empty(t, response.Code)
 
-	cmd := <-taken
-	assert.Equal(t, controlCommandReload, cmd.kind, "the loop took the reload before the owner answered")
+	select {
+	case cmd := <-taken:
+		assert.Equal(t, controlCommandReload, cmd.kind, "the loop took the reload before the owner answered")
+	case <-time.After(eventWait):
+		require.FailNow(t, "the loop never took the reload the owner answered for")
+	}
 }
 
 // Validates: R-2.9.7
@@ -365,7 +365,7 @@ func TestStartControlSocketServer_UnexpectedServeEndIsFatal(t *testing.T) {
 	case serveErr := <-fatal:
 		require.ErrorIs(t, serveErr, net.ErrClosed)
 		require.ErrorContains(t, serveErr, "control channel stopped")
-	case <-time.After(controlTestGuard):
+	case <-time.After(eventWait):
 		require.Fail(t, "the end of Serve was not reported as fatal")
 	}
 }

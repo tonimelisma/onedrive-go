@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	gosync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,10 +17,6 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
-
-// testWait bounds how long a test waits for something it expects to happen
-// at once.
-const testWait = 5 * time.Second
 
 // firedTimer is a retire timer that has already run out: the bound it arms
 // is over the moment it is armed.
@@ -62,7 +59,7 @@ func handleEventWithin(
 	select {
 	case err := <-handled:
 		require.NoError(t, err)
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the event of a replaced runner was applied to its replacement")
 	}
 }
@@ -233,7 +230,7 @@ func TestApplyWatchMountSetForParent_NormalToFinalDrainRestartsChild(t *testing.
 	assert.Equal(t, 1, stops)
 	select {
 	case <-drained:
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the final drain did not run")
 	}
 	stopTestRunners(t, runners)
@@ -592,7 +589,7 @@ func startStuckWatch(t *testing.T, cidStr, name string) *stuckWatch {
 	}()
 	select {
 	case <-started:
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the drive did not start")
 	}
 
@@ -605,7 +602,7 @@ func (w *stuckWatch) result(t *testing.T) error {
 	select {
 	case err := <-w.errCh:
 		return err
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the watch kept waiting for a drive that does not stop")
 		return nil
 	}
@@ -677,45 +674,136 @@ func TestStartWatchRunner_CancelledRunnerDoesNotBlockOnAFullEventChannel(t *test
 	unread := make(chan watchRunnerEvent)
 	wr, err := orch.startWatchRunner(t.Context(), drainMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, unread)
 	require.NoError(t, err)
-	<-draining
+	select {
+	case <-draining:
+	case <-time.After(eventWait):
+		require.FailNow(t, "the final drain did not start")
+	}
 	wr.cancel()
 
 	select {
 	case <-wr.done:
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "a canceled runner blocked on the event channel")
 	}
+}
+
+// unfiredTimer is a retire timer that never runs out, so no bound of the
+// product decides a test that holds the drain itself.
+func unfiredTimer(time.Duration) (<-chan time.Time, func()) {
+	return nil, func() {}
+}
+
+// errOwnerLockFree is an owner lock a test could take: nobody held it.
+var errOwnerLockFree = errors.New("the owner lock was free")
+
+// ownerLockHeldElsewhere returns nil when someone else holds the owner lock
+// at lockPath. Otherwise it returns errOwnerLockFree, having taken the lock
+// and given it back at once, or the error that stopped the attempt.
+func ownerLockHeldElsewhere(lockPath, socketPath string) error {
+	lock, err := acquireOwnerLock(lockPath, socketPath)
+	if err == nil {
+		return errors.Join(errOwnerLockFree, lock.release())
+	}
+	var inUse *ControlSocketInUseError
+	if errors.As(err, &inUse) {
+		return nil
+	}
+
+	return err
+}
+
+// drainingDrive is one drive of a watch whose sync, once canceled, returns
+// only when the test closes release.
+type drainingDrive struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+// newDrainingDrives makes one drainingDrive for each of ids, and the engine
+// factory that gives each mount its own. Each drive's engine close hands the
+// owner lock's state over on closing, which the drives share. closing is
+// unbuffered, so the drain stays in a close until the test has read it.
+func newDrainingDrives(lockPath, socketPath string, ids ...mountID) (map[mountID]*drainingDrive, <-chan error, engineFactoryFunc) {
+	drives := make(map[mountID]*drainingDrive, len(ids))
+	for _, id := range ids {
+		drives[id] = &drainingDrive{started: make(chan struct{}), release: make(chan struct{})}
+	}
+	closing := make(chan error)
+	factory := func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		drive := drives[req.Mount.id()]
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				close(drive.started)
+				<-ctx.Done()
+				<-drive.release
+				return ctx.Err()
+			},
+			closeFn: func(ctx context.Context) error {
+				select {
+				case closing <- ownerLockHeldElsewhere(lockPath, socketPath):
+				case <-ctx.Done():
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	return drives, closing, factory
+}
+
+// receiveBeforeReturn returns what ch delivers, and fails the test when
+// RunWatch returns first (returned) or nothing comes within eventWait.
+func receiveBeforeReturn[T any](t *testing.T, ch <-chan T, returned <-chan error, what string) T {
+	t.Helper()
+
+	select {
+	case value := <-ch:
+		return value
+	case err := <-returned:
+		require.FailNow(t, "RunWatch returned before "+what, "returned %v", err)
+	case <-time.After(eventWait):
+		require.FailNow(t, "timed out waiting for "+what)
+	}
+	var none T
+	return none
 }
 
 // The control socket's owner lock is the proof that this process owns its
 // drives. It used to be released the moment the context was canceled, while
 // the runners were still draining, so `drive reset-sync-state` and a second
-// sync saw no owner during a slow drain.
+// sync saw no owner during a slow drain. The drain reports when it starts
+// waiting for the canceled drives, which return only when the test lets them:
+// RunWatch cannot return before then, and the lock must be held. The drain
+// closes each drive's sync state only once that drive returned, one drive
+// after the other, and the lock must still be held at each close, the last
+// drive's included.
 //
-// Validates: R-6.3.9, R-2.9.4
+// Validates: R-6.3.9, R-2.9.4, R-6.10.10
 func TestRunWatch_OwnerLockHeldUntilRunnersDrain(t *testing.T) {
-	rd := testStandaloneMount(t, "personal:lock-drain@example.com", "LockDrain")
-	setupXDGIsolation(t, rd.CanonicalID)
-	cfgPath := writeTestConfig(t, rd.CanonicalID)
-	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	first := testStandaloneMount(t, "personal:lock-drain@example.com", "LockDrain")
+	second := testStandaloneMount(t, "personal:lock-drain-second@example.com", "LockDrainSecond")
+	setupXDGIsolation(t, first.CanonicalID, second.CanonicalID)
+	cfgPath := writeTestConfig(t, first.CanonicalID, second.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, first, second)
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+	lockPath := cfg.ControlSocketPath + controlLockSuffix
 	orch := NewOrchestrator(cfg)
-
-	started := make(chan struct{})
-	canceled := make(chan struct{})
-	release := make(chan struct{})
-	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
-		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
-				close(started)
-				<-ctx.Done()
-				close(canceled)
-				<-release
-				return ctx.Err()
-			},
-		}, nil
-	}
+	orch.retireTimer = unfiredTimer
+	drives, closing, factory := newDrainingDrives(lockPath, cfg.ControlSocketPath,
+		mountID(first.CanonicalID.String()), mountID(second.CanonicalID.String()))
+	orch.engineFactory = factory
+	// A test that fails before it lets the drives return still releases
+	// them, so the watch it leaves behind can end.
+	releaseDrives := gosync.OnceFunc(func() {
+		for _, drive := range drives {
+			close(drive.release)
+		}
+	})
+	t.Cleanup(releaseDrives)
+	waiting := make(chan struct{})
+	orch.drainWaiting = gosync.OnceFunc(func() { close(waiting) })
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -723,34 +811,25 @@ func TestRunWatch_OwnerLockHeldUntilRunnersDrain(t *testing.T) {
 	go func() {
 		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
 	}()
-	select {
-	case <-started:
-	case <-time.After(testWait):
-		require.FailNow(t, "the drive did not start")
+	for id, drive := range drives {
+		receiveBeforeReturn(t, drive.started, errCh, "drive "+id.String()+" started")
 	}
 
 	cancel()
-	<-canceled
-	lockPath := cfg.ControlSocketPath + controlLockSuffix
-	// A window, kept until the orchestrator gives a signal: this test needs
-	// the orchestrator's report that it is waiting for the canceled runner
-	// to drain (after that point a released lock is a bug), and the
-	// orchestrator reports no such thing yet.
-	assert.Never(t, func() bool {
-		lock, err := acquireOwnerLock(lockPath, cfg.ControlSocketPath)
-		if err != nil {
-			return false
-		}
-		assert.NoError(t, lock.release())
-		return true
-	}, 200*time.Millisecond, 10*time.Millisecond, "the owner lock was released while a drive was still draining")
+	receiveBeforeReturn(t, waiting, errCh, "the drain waited for its drives")
+	require.NoError(t, ownerLockHeldElsewhere(lockPath, cfg.ControlSocketPath), "as the drain began waiting for the drives")
 	assert.FileExists(t, cfg.ControlSocketPath)
 
-	close(release)
+	releaseDrives()
+	for closed := range len(drives) {
+		lockErr := receiveBeforeReturn(t, closing, errCh, "the drain closed a drive's sync state")
+		require.NoError(t, lockErr, "as the drain closed the sync state of drive %d of %d", closed+1, len(drives))
+	}
+
 	select {
 	case err := <-errCh:
 		require.NoError(t, err)
-	case <-time.After(testWait):
+	case <-time.After(eventWait):
 		require.FailNow(t, "RunWatch did not stop in time")
 	}
 	assert.NoFileExists(t, cfg.ControlSocketPath)

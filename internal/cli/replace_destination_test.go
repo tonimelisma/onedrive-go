@@ -279,9 +279,17 @@ func TestReplaceDestination_RestoreIsBounded(t *testing.T) {
 	fake.mu.Unlock()
 
 	started := time.Now()
-	err = replaceDestination(t.Context(), cc, session, "/dst.txt",
-		destInfo{parentID: fakeGraphRootID, newName: "dst.txt", existingID: existing.ID}, time.Unix(7, 0),
-		func() error { return errors.New("copy failed") })
+	done := make(chan error, 1)
+	go func() {
+		done <- replaceDestination(t.Context(), cc, session, "/dst.txt",
+			destInfo{parentID: fakeGraphRootID, newName: "dst.txt", existingID: existing.ID}, time.Unix(7, 0),
+			func() error { return errors.New("copy failed") })
+	}()
+	select {
+	case err = <-done:
+	case <-time.After(eventWait):
+		require.FailNow(t, "replaceDestination did not return after the restore of the original hung")
+	}
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is kept on OneDrive as", "the user is told where the original is")

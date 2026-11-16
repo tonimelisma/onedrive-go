@@ -103,6 +103,9 @@ func (o *Orchestrator) retireAllWatchRunners(ctx context.Context, runners map[mo
 			o.requestWatchRunnerStop(wr)
 		}
 	}
+	if o.drainWaiting != nil {
+		o.drainWaiting()
+	}
 
 	var stuck []error
 	for _, id := range order {
