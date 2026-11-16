@@ -1,12 +1,31 @@
 package devtool
 
 import (
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Validates: R-6.10.1, R-6.10.8
+//
+// A log that refuses a write fails the step with the log's error, and the
+// caller still reads all the command printed: the capture takes each write
+// before the log does, so a test the log never showed still counts.
+func TestRunGoTeedKeepsTheCaptureWhenTheLogRefusesAWrite(t *testing.T) {
+	t.Parallel()
+
+	printed := `{"Action":"pass","Package":"example.com/inventory/gizmo","Test":"TestGizmo_Holds"}` + "\n"
+	runner := &fakeRunner{runStdoutFunc: func([]string) string { return printed }}
+
+	output, err := runGoTeed(t.Context(), runner, t.TempDir(), nil, closedLog{}, io.Discard, "gizmo step", "test", "./...")
+
+	require.ErrorIs(t, err, errGizmoLogClosed)
+	assert.Equal(t, printed, output)
+	require.NoError(t, assertTestsMatched(output, "gizmo step"), "the empty-run guard sees the test")
+}
 
 // Validates: R-6.10.1
 //

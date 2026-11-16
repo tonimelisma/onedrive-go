@@ -68,16 +68,18 @@ const (
 	VerifyFailedTest  VerifyProfile = "failed-test"
 )
 
-// Go test deadlines of the live and stress profiles; the race and seeds
-// profiles keep theirs beside their steps (verify_race.go, verify_seeds.go),
-// the stress lane's race runs of the sync tree take the race profile's once
-// per run (stressSyncRaceTimeout), and the unit tiers', the race profile's
-// and the linter's scale with the cores (deadlineForCores). Every go test a
-// profile starts names its own, and the deadlines one CI job's profile can
-// start, classified reruns included, sum with the job's setup to no more than
-// that job's timeout-minutes (TestCIJobTimeoutsCoverEveryGoTestDeadline). A
-// hung test then ends at go test's deadline, with a goroutine dump that names
-// it and a verify summary, not at the job's, which leaves neither.
+// Go test deadlines of the live profiles; the race and seeds profiles keep
+// theirs beside their steps (verify_race.go, verify_seeds.go), the stress
+// lane's repeated steps derive theirs from a budget for one pass
+// (stressRepeatedStep.timeout), its race runs of the sync tree take the race
+// profile's once per run (stressSyncRaceTimeout), and the unit tiers', the
+// race profile's and the linter's scale with the cores (deadlineForCores).
+// Every go test a profile starts names its own, and the deadlines one CI
+// job's profile can start, classified reruns included, sum with the job's
+// setup to no more than that job's timeout-minutes
+// (TestCIJobTimeoutsCoverEveryGoTestDeadline). A hung test then ends at go
+// test's deadline, with a goroutine dump that names it and a verify summary,
+// not at the job's, which leaves neither.
 const (
 	// e2ePreflightTimeout bounds each preflight. The auth preflight's own
 	// budget is 90 seconds per endpoint per drive.
@@ -93,13 +95,7 @@ const (
 	classifiedRerunTimeout = "10m"
 	// integrationTimeout bounds the integration tier, whose runs take about
 	// two minutes.
-	integrationTimeout     = "5m"
-	stressMultisyncTimeout = "20m"
-	// stressSyncConcurrencyTimeout bounds the fifty repetitions of the sync
-	// tree's concurrency tests. The step took 11.5, 24.0 and 39.4 minutes on
-	// the scheduled runs of 2026-11-13 to 2026-11-15, the last 37 seconds
-	// short of the 40 minutes it had then; this is twice that night.
-	stressSyncConcurrencyTimeout = "80m"
+	integrationTimeout = "5m"
 )
 
 type VerifyOptions struct {

@@ -906,13 +906,17 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	require.Len(t, runner.runCommands, 3)
 	assert.Empty(t, runner.combinedCommands)
 
+	// The multisync step runs every test of its package; the sync step runs
+	// its declared members.
+	repeated := stressRepeatedSteps()
 	assert.Equal(t, "go", runner.runCommands[0].name)
 	assert.Equal(t, []string{
 		"test",
+		"-json",
 		"-race",
 		"-count=50",
 		"-shuffle=on",
-		"-timeout=20m",
+		"-timeout=25m0s",
 		"./internal/multisync",
 	}, runner.runCommands[0].args)
 
@@ -921,11 +925,12 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 	assert.Equal(t, "go", runner.runCommands[1].name)
 	assert.Equal(t, []string{
 		"test",
+		"-json",
 		"-race",
 		"-count=50",
 		"-shuffle=on",
-		"-timeout=80m",
-		"-run", stressSyncConcurrencyPattern,
+		"-timeout=1h15m0s",
+		"-run", "^(" + strings.Join(repeated[1].members(), "|") + ")$",
 		"./internal/sync/...",
 	}, runner.runCommands[1].args)
 
@@ -947,18 +952,19 @@ func TestRunVerifyStressRunsExpectedSteps(t *testing.T) {
 // step name and deadline all carry stressSyncRaceRuns: the deadline is that
 // many times the race profile's deadline for one run on the same cores, so a
 // suite that grows moves both lanes' budgets together instead of ending the
-// night at a fixed number. The other two steps keep their own deadlines on
-// any host. Every want is a literal: three runs at the race profile's 30
-// minutes on a runner and at its 120 on 2 cores.
+// night at a fixed number. The two repeated steps take the deadlines of their
+// own pass budgets on the same cores. Every want is a literal: three runs at
+// the race profile's 30 minutes on a runner and at its 120 on 2 cores.
 func TestRunVerifyStressSyncRaceStepTakesTheRaceDeadlineOncePerRun(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		cores    int
-		deadline string
+		cores     int
+		deadline  string
+		repeating []string
 	}{
-		{cores: 2, deadline: "-timeout=6h0m0s"},
-		{cores: 4, deadline: "-timeout=1h30m0s"},
+		{cores: 2, deadline: "-timeout=6h0m0s", repeating: []string{"-timeout=56m15s", "-timeout=7h30m0s"}},
+		{cores: 4, deadline: "-timeout=1h30m0s", repeating: []string{"-timeout=25m0s", "-timeout=1h15m0s"}},
 	} {
 		t.Run(strconv.Itoa(tc.cores)+" cores", func(t *testing.T) {
 			t.Parallel()
@@ -976,8 +982,8 @@ func TestRunVerifyStressSyncRaceStepTakesTheRaceDeadlineOncePerRun(t *testing.T)
 			}))
 
 			require.Len(t, runner.runCommands, 3)
-			assert.Contains(t, runner.runCommands[0].args, "-timeout=20m")
-			assert.Contains(t, runner.runCommands[1].args, "-timeout=80m")
+			assert.Contains(t, runner.runCommands[0].args, tc.repeating[0])
+			assert.Contains(t, runner.runCommands[1].args, tc.repeating[1])
 			assert.Equal(t, []string{"test", "-json", "-race", "-count=3", "-shuffle=on", tc.deadline, syncTestTree},
 				runner.runCommands[2].args)
 			assert.Contains(t, stdout.String(),
@@ -1108,16 +1114,17 @@ func TestRunVerifyStressFailsAStepWhosePackagesHaveNoTests(t *testing.T) {
 
 // Validates: R-6.10.1, R-6.10.8
 //
-// go test exits 0 when a -run pattern matches nothing, so the x50 step would
-// stay green after a rename took every concurrency test out of the pattern.
-// Over the tree, a package without a match is fine; no match anywhere fails
-// the step, and the profile reports it once its other steps have run.
-func TestRunVerifyStressFailsWhenConcurrencyPatternMatchesNothing(t *testing.T) {
+// go test exits 0 when a -run pattern matches nothing, so the sync step would
+// stay green after every declared member was renamed away. Over the tree, a
+// package without a member is fine; no member run anywhere fails the step,
+// and the profile reports it once its other steps have run.
+func TestRunVerifyStressFailsWhenNoMemberOfTheSyncStepRan(t *testing.T) {
 	t.Parallel()
 
+	syncArgs := stressRepeatedSteps()[1].command(runtime.GOMAXPROCS(0)).args
 	runner := &fakeRunner{
 		runStdoutFunc: func(args []string) string {
-			if !slices.Contains(args, "-run") {
+			if !slices.Equal(args, syncArgs) {
 				return passingGoTestOutput(args)
 			}
 
@@ -1209,7 +1216,7 @@ func TestRunVerifyStressWritesSlowTestSummaryToStdoutAndJSON(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Contains(t, stdout.String(), "slowest completed sync race tests")
+	assert.Contains(t, stdout.String(), "slowest completed race tests")
 	assert.Contains(t, stdout.String(), "github.com/tonimelisma/onedrive-go/internal/sync TestSlow runs=2 total=2.5s max=1.5s")
 	assert.Contains(t, stdout.String(), string(stressSyncRaceStepName)+": pass")
 
@@ -1265,7 +1272,8 @@ func (r *streamCheckRunner) Run(
 //
 // The whole-tree step captured its output until go test exited, so on CI a
 // hang in it printed nothing until its deadline, and a job killed meanwhile
-// left no test output at all. It streams like every other step.
+// left no test output at all. It streams like every other step: the text of
+// each package's result reaches the log while the step still runs.
 func TestRunVerifyStressStreamsTheRepeatStep(t *testing.T) {
 	t.Parallel()
 
@@ -1291,10 +1299,11 @@ func TestRunVerifyStressStreamsTheRepeatStep(t *testing.T) {
 	case err := <-verified:
 		require.Failf(t, "the whole-tree step did not stream", "verify returned (%v) without running the step through Run", err)
 	}
-	assert.Contains(t, stdout.String(), fakePassingTestName, "the step's output is on stdout while the step still runs")
+	assert.Contains(t, stdout.String(), rawGoTestPackagePassPrefix+fakeGoTestPackage(runner.stepArgs),
+		"the step's output is on stdout while the step still runs")
 	close(runner.seen)
 	require.NoError(t, <-verified)
-	assert.Contains(t, stdout.String(), "slowest completed sync race tests", "the step keeps its slow-test summary")
+	assert.Contains(t, stdout.String(), "slowest completed race tests", "the step keeps its slow-test summary")
 }
 
 // Validates: R-6.10.26

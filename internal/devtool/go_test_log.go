@@ -14,6 +14,14 @@ const (
 	goTestActionPass   = "pass"
 	goTestActionSkip   = "skip"
 	goTestActionOutput = "output"
+	goTestActionRun    = "run"
+	// goTestActionPause and goTestActionCont report that a parallel test
+	// waits for its turn and that it goes on.
+	goTestActionPause = "pause"
+	goTestActionCont  = "cont"
+	// goTestActionBuildOutput is a line the compiler printed while building
+	// a test binary; go test names the binary by ImportPath, not Package.
+	goTestActionBuildOutput = "build-output"
 
 	rawGoTestFailurePrefix = "--- FAIL:"
 	rawGoTestPassPrefix    = "--- PASS:"
