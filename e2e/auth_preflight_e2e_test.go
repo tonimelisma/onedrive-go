@@ -45,7 +45,8 @@ func assertLiveAuthPreflight(t *testing.T, driveID string) {
 
 	tokenPath := filepath.Join(testDataDir, testutil.TokenFileName(driveID))
 	ts, err := graph.TokenSourceFromPath(tokenPath, graphtransport.AuthClient(), slog.New(slog.DiscardHandler))
-	require.NoError(t, err, "load token source for %s", suiteDriveRoles.Role(driveID))
+	// The error quotes the token file's path, whose name spells the account.
+	requireNoLocalError(t, err, "load token source for "+suiteDriveRoles.Role(driveID))
 
 	httpClient := &http.Client{}
 

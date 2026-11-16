@@ -70,24 +70,6 @@ type cliQuirkLogLine struct {
 	Error                  string                    `json:"error"`
 }
 
-// Fixture recurrence reasons are recorder-owned taxonomy values because both
-// command-window retries and later readiness waits emit the same quirk summary
-// vocabulary.
-type liveProviderRecurrenceReason string
-
-const (
-	liveProviderRecurrenceFreshParentChildCreateLag      liveProviderRecurrenceReason = "fresh_parent_child_create_lag"
-	liveProviderRecurrenceFreshParentParentPathLag       liveProviderRecurrenceReason = "fresh_parent_parent_path_lag"
-	liveProviderRecurrencePostMutationDestinationPathLag liveProviderRecurrenceReason = "post_mutation_destination_visibility_lag"
-	liveProviderRecurrenceTransientGraphGatewayFailure   liveProviderRecurrenceReason = "transient_graph_gateway_failure"
-	liveProviderRecurrenceUnknown                        liveProviderRecurrenceReason = "unknown"
-)
-
-type liveProviderRecurrenceDecision struct {
-	Reason liveProviderRecurrenceReason
-	Retry  bool
-}
-
 func newE2EQuirkRecorder(logDir string) (*e2eQuirkRecorder, error) {
 	if logDir == "" {
 		return nil, fmt.Errorf("quirk recorder log dir is required")

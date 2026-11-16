@@ -29,41 +29,47 @@ import (
 // The rule reads the files built only with the e2e tag, and in them every
 // function except a test that checks planted values only: it reaches no
 // makeCmd, the one place the suite starts the CLI, and names none of the
-// suite's live values (suiteLiveValues). A printing call is a testify
-// assertion given t, a method of t in the Log, Error, Fatal and Skip
-// families, fmt.Errorf, fmt.Print*, fmt.Fprint* to os.Stderr or os.Stdout,
-// and a suite function's msgAndArgs or what argument (the output assertions
-// and assertSameIdentity print their message as it is given). An argument
-// prints a name or a field, an element or a part of one, and what +,
-// string(), a conversion to a slice, a String() method, a fmt.Sprint* call,
-// a strings Trim, Join or case call, filepath.Join, path.Join,
-// filepath.FromSlash, append or an os call (whose error quotes the paths it
-// is given) makes of one; any other call (the maskers among them) prints its
-// own result. True and False print no value, NotEmpty, NotNil and NotZero
-// only an empty one, and a constant is the suite's own. An argument the
-// call's constant format, at its message position, prints with %T prints no
-// text, and so does one under %t or %d that is no element of a map or a
-// slice, no ranged value and no variable set from either, and under %d
-// also neither a conversion to a slice nor an address (printsNoText).
+// suite's live values (suiteLiveValues). Of the other files it reads every
+// function but a test that one of those reaches: a helper the live suite
+// shares with the unit tests that run without an account (scannedFuncs). A
+// printing call is a testify assertion given t, a method of t in the Log,
+// Error, Fatal and Skip families, t.Run's name (go test prints it on every
+// result line), fmt.Errorf, fmt.Print*, fmt.Fprint* to os.Stderr or
+// os.Stdout, and a suite function's msgAndArgs or what argument (the output
+// assertions and assertSameIdentity print their message as it is given). An
+// argument prints a name or a field, an element or a part of one, and what +,
+// string(), a conversion to a slice, a String() or an Error() method, a
+// fmt.Sprint* call, a strings Trim, Join or case call, filepath.Join,
+// path.Join, filepath.FromSlash, append, an os call (whose error quotes the
+// paths it is given) or a testutil function (testutil.TokenFileName of a
+// drive) makes of one; any other call (the maskers among them) prints its own
+// result. True and False print no value, NotEmpty, NotNil and NotZero only an
+// empty one, and a constant is the suite's own. An argument the call's
+// constant format, at its message position, prints with %T prints no text,
+// and so does one under %t or %d that is no element of a map or a slice, no
+// ranged value and no variable set from either, and under %d also neither a
+// conversion to a slice nor an address (printsNoText).
 //
 // A value is known by its name, the suite's convention: a command output is
 // stdout, stderr, out or output, or ends in Stdout, Stderr, Out or Output; a
 // command line is args or ends in Args; an identity value is drive, email,
 // selector or id, or ends in ID, Email, Selector, Link, Drive, ShortcutName,
-// SharedFolderName or SentinelPath, a trailing number aside. A Graph request
-// ID names no account, drive or item, so a name ending in RequestID is none,
-// and neither is testify's msgAndArgs. A value is known as well by where it
-// comes from, whatever its name (printed_value_flow_test.go): what a JSON
-// decode fills is a command's output, what a CLI runner returns
-// (suiteCLIRunners) its output or its command line, and a variable set or
-// ranged from a known value, the error of an os call given one, and a suite
-// function's parameter a caller passes one hold its class.
+// SharedFolderName or SentinelPath, or in IDs, Emails, Selectors or Links for
+// a list of them (not in Drives, which ends the names of counts such as
+// TotalDrives), a trailing number aside. A Graph request ID names no account,
+// drive or item, so a name ending in RequestID is none, and neither is
+// testify's msgAndArgs. A value is known as well by where it comes from,
+// whatever its name (printed_value_flow_test.go): what a JSON decode fills is
+// a command's output, what a CLI runner returns (suiteCLIRunners) its output
+// or its command line, and a variable set or ranged from a known value, the
+// error of an os call given one, and a suite function's parameter a caller
+// passes one hold its class.
 //
 // What the rule cannot see: a value a suite function other than a runner
 // decodes or reads and returns; a method's parameters, since the scan builds
 // no types and does not know a call's receiver; and a value any other call
-// makes of a known one (testutil.TokenFileName of a drive) or a
-// strings.Builder collects. A composite literal ends the flow: the fields of
+// makes of a known one (a method's result, liveConfig.CandidateDriveIDs()) or
+// a strings.Builder collects. A composite literal ends the flow: the fields of
 // a struct or slice literal built from a known value are not followed. A
 // function literal's parameters and a range key are never classed. A field
 // named Name, DisplayName or OrgName holds no identity by its name, so a
@@ -78,6 +84,24 @@ import (
 // field, a variable or a parameter declared as one (a decode target among
 // them), a type assertion to one and a slice of one. The scan tells only an
 // element, a ranged value and a variable set from either.
+//
+// The sites of the live suite a hand fix masks and the rule cannot see are
+// accepted, for these reasons. Values a suite function decodes or returns:
+// the status issues readStatusSyncState returns, the control socket's
+// mounts, a status drive's issues, the shortcut root waits' poll state,
+// liveConfig.CandidateDriveIDs() and the errors the shared fixture helpers
+// return; following a function's results would class every decoded count
+// and name the suite compares. Messages a suite function builds from its
+// parameters and returns: outputMismatch, printableIssues, redactedSummary,
+// sharedRootListingDescription, the status poll descriptions and
+// formatAuthPreflightFailure; each masks what it is given. The local paths
+// assertSamePath compares, classed only when built from a fixture's name. The
+// error of a product call or a CLI run (the catalog learnSuiteRoles loads, a
+// drive's token source, the baseline pass of the standing conditions), which
+// names no value the scan can class. And the
+// artifacts, which no printing call writes: the timing and quirk events and a
+// debug log's name and lines, which TestE2ERecordersRecordRolesNotDrives
+// holds.
 //
 // Shapes of the product's output the suite does not print today and the
 // masks would not catch: the SHARED BY column of shared's text table (the
@@ -113,8 +137,9 @@ func (finding printedValueFinding) message() string {
 		finding.at, finding.call, finding.class, finding.value, fix)
 }
 
-// findPrintedValues lists, in file and source order, the values the live
-// suite's files in dir print as they are.
+// findPrintedValues lists, function by function in the order scannedFuncs
+// gives them, the values the live suite's functions in dir print as they
+// are.
 func findPrintedValues(dir string) ([]printedValueFinding, error) {
 	src, err := readSuiteSources(dir)
 	if err != nil {
@@ -129,17 +154,7 @@ func findPrintedValues(dir string) ([]printedValueFinding, error) {
 		fset: fset, constants: constantNames(files), runners: runnerResultsOf(files),
 		packages: importedPackages(files), messages: messageParameters(files), paramNames: parameterNames(files),
 	}
-	var live []*ast.FuncDecl
-	for _, file := range files {
-		if !isLiveSuiteFile(file) {
-			continue
-		}
-		for _, decl := range file.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil && !isPlantedValueTest(fn, src) {
-				live = append(live, fn)
-			}
-		}
-	}
+	live := scannedFuncs(files, src)
 
 	scan.followParameters(live)
 	for _, fn := range live {
@@ -148,6 +163,42 @@ func findPrintedValues(dir string) ([]printedValueFinding, error) {
 	}
 
 	return scan.findings, nil
+}
+
+// scannedFuncs lists the functions the rule reads: in file and source order,
+// each function of a live suite file but a test that checks planted values
+// only, then each function but a test of the other files that one of those
+// reaches, a helper the live suite shares with the unit tests.
+func scannedFuncs(files []*ast.File, src *suiteSources) []*ast.FuncDecl {
+	var live, shared []*ast.FuncDecl
+	for _, file := range files {
+		liveFile := isLiveSuiteFile(file)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			switch {
+			case !ok || fn.Body == nil:
+			case liveFile:
+				if !isPlantedValueTest(fn, src) {
+					live = append(live, fn)
+				}
+			case !isTest(fn.Name.Name):
+				shared = append(shared, fn)
+			}
+		}
+	}
+
+	roots := make([]string, 0, len(live))
+	for _, fn := range live {
+		roots = append(roots, funcKey(fn))
+	}
+	reached := src.reachedFrom(roots)
+	for _, fn := range shared {
+		if reached[funcKey(fn)] {
+			live = append(live, fn)
+		}
+	}
+
+	return live
 }
 
 // parseSuiteFiles parses every Go file of dir with its comments, whatever its
@@ -363,6 +414,9 @@ func (scan *printedValueScan) printingCallArgs(call *ast.CallExpr) (string, []as
 		return name, call.Args[1:]
 	case receiver.Name == "t" && slices.Contains([]string{"Log", "Logf", "Error", "Errorf", "Fatal", "Fatalf", "Skip", "Skipf"}, selector.Sel.Name):
 		return name, call.Args
+	case receiver.Name == "t" && selector.Sel.Name == "Run" && len(call.Args) > 0:
+		// go test prints a subtest's name on every result line.
+		return name, call.Args[:1]
 	case receiver.Name == fmtPackage:
 		if printed, prints := fmtPrintedArgs(selector.Sel.Name, call.Args); prints {
 			return name, printed
@@ -599,11 +653,16 @@ const (
 	stringTypeName = "string"
 	// fmtPackage is the name the suite imports fmt under.
 	fmtPackage = "fmt"
+	// errorMethodName is the error interface's method, which returns the
+	// error's text.
+	errorMethodName = "Error"
 )
 
 // handsOnEveryArg reports a package function whose result or error holds
 // every argument it is given as it is: fmt.Sprint*, the path joins and
-// filepath.FromSlash, and any os function, whose error quotes its paths.
+// filepath.FromSlash, any os function, whose error quotes its paths, and any
+// testutil function, which builds a name of what it is given
+// (testutil.TokenFileName of a drive) and masks nothing.
 func handsOnEveryArg(fun *ast.SelectorExpr) bool {
 	pkg, ok := fun.X.(*ast.Ident)
 	if !ok {
@@ -615,7 +674,7 @@ func handsOnEveryArg(fun *ast.SelectorExpr) bool {
 		return true
 	}
 
-	return pkg.Name == "os" || (pkg.Name == fmtPackage && strings.HasPrefix(fun.Sel.Name, "Sprint"))
+	return pkg.Name == "os" || pkg.Name == "testutil" || (pkg.Name == fmtPackage && strings.HasPrefix(fun.Sel.Name, "Sprint"))
 }
 
 // printedCallLeaves lists what a call hands on as it is: a conversion to
@@ -644,13 +703,13 @@ func (scan *printedValueScan) printedCallLeaves(call *ast.CallExpr) []ast.Expr {
 }
 
 // selectorHandedOn lists the arguments, or the receiver, that a call of fun
-// with args hands on as they are: a String() method's receiver, fmt.Sprint*,
-// strings' trimming, joining and case calls' first argument, the path joins,
-// and an os call's arguments, whose error quotes the paths it is given (that
-// of os.WriteFile its file name, not the data it writes).
+// with args hands on as they are: a String() or an Error() method's receiver,
+// fmt.Sprint*, strings' trimming, joining and case calls' first argument, the
+// path joins, and an os call's arguments, whose error quotes the paths it is
+// given (that of os.WriteFile its file name, not the data it writes).
 func selectorHandedOn(fun *ast.SelectorExpr, args []ast.Expr) []ast.Expr {
 	switch {
-	case fun.Sel.Name == "String" && len(args) == 0:
+	case (fun.Sel.Name == "String" || fun.Sel.Name == errorMethodName) && len(args) == 0:
 		return []ast.Expr{fun.X}
 	case isIdentNamed(fun.X, "os") && fun.Sel.Name == "WriteFile" && len(args) > 0:
 		return args[:1]
@@ -713,7 +772,8 @@ func printedValueClass(name string) string {
 	case trimmed == "args" || hasSuffix("Args"):
 		return printedClassCommand
 	case slices.Contains([]string{"drive", "email", "selector", "id"}, trimmed) ||
-		hasSuffix("ID", "Email", "Selector", "Link", "Drive", "ShortcutName", "SharedFolderName", "SentinelPath"):
+		hasSuffix("ID", "Email", "Selector", "Link", "Drive", "ShortcutName", "SharedFolderName", "SentinelPath") ||
+		hasSuffix("IDs", "Emails", "Selectors", "Links"):
 		return printedClassIdentity
 	}
 
@@ -737,6 +797,22 @@ func (src *suiteSources) reaches(from, target string) bool {
 	}
 
 	return false
+}
+
+// reachedFrom lists the suite functions that one of roots is or reaches.
+func (src *suiteSources) reachedFrom(roots []string) map[string]bool {
+	reached := map[string]bool{}
+	pending := slices.Clone(roots)
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if fn, ok := src.funcs[current]; ok && !reached[current] {
+			reached[current] = true
+			pending = append(pending, fn.refs...)
+		}
+	}
+
+	return reached
 }
 
 // Validates: R-6.10.27
@@ -774,13 +850,21 @@ func TestPrintedValueRuleReportsRawPrints(t *testing.T) {
 		{at: "planted_live_test.go:19", call: "t.Logf", value: "fixture.ShortcutName", class: printedClassIdentity},
 		{at: "planted_live_test.go:21", call: "fmt.Fprintln", value: "drive2", class: printedClassIdentity},
 		{at: "planted_live_test.go:22", call: "fmt.Println", value: "stdout", class: printedClassOutput},
-		{at: "planted_live_test.go:26", call: "fmt.Errorf", value: "syncArgs", class: printedClassCommand},
+		{at: "planted_live_test.go:23", call: "t.Logf", value: "candidateDriveIDs", class: printedClassIdentity},
+		{at: "planted_live_test.go:23", call: "t.Logf", value: "recipientEmails", class: printedClassIdentity},
+		{at: "planted_live_test.go:23", call: "t.Logf", value: "shareSelectors", class: printedClassIdentity},
+		{at: "planted_live_test.go:23", call: "t.Logf", value: "sharingLinks", class: printedClassIdentity},
+		{at: "planted_live_test.go:28", call: "fmt.Errorf", value: "syncArgs", class: printedClassCommand},
+		{
+			at: "planted_unit_test.go:6", call: "fmt.Errorf", value: "candidate.fixture.RecipientEmail",
+			class: printedClassIdentity,
+		},
 	}, findings,
 		"a raw output as a value, through String(), as a field and through strings.TrimSpace, a fixture name, a "+
-			"drive on os.Stderr, an output on os.Stdout and a command line in an error; not a masked output, a "+
-			"constant, a length, request "+
-			"IDs, a value NotEmpty prints only when empty, a config builder, a masked address, a unit test that runs "+
-			"no CLI, or an untagged file")
+			"drive on os.Stderr, an output on os.Stdout, lists of IDs, addresses, selectors and links, a command "+
+			"line in an error and an address in an untagged helper a live test calls; not a masked output, a "+
+			"constant, a length, request IDs, a value NotEmpty prints only when empty, a config builder, a masked "+
+			"address, a count of drives, a unit test that runs no CLI, or an untagged function no live test reaches")
 }
 
 // plantedLivePrintSource is a live suite file in miniature; its lines are the
@@ -807,6 +891,8 @@ func TestPlantedLive(t *testing.T) {
 	fmt.Fprintf(&builder, "[%q]", driveID)
 	fmt.Fprintln(os.Stderr, "drive:", drive2)
 	fmt.Println("listing:", stdout)
+	t.Logf("%v %v %v %v of %v", candidateDriveIDs, recipientEmails, shareSelectors, sharingLinks, summary.TotalDrives)
+	plantedSelection(candidate)
 }
 
 func plantedHelper(syncArgs []string, sharerEmail string) error {
@@ -816,8 +902,13 @@ func plantedHelper(syncArgs []string, sharerEmail string) error {
 func TestPlantedUnit(t *testing.T) { assert.Equal(t, "x", stdout) }
 `
 
-// plantedUnitPrintSource is an untagged file, which the rule does not read.
+// plantedUnitPrintSource is an untagged file, of which the rule reads only
+// what a live test reaches.
 const plantedUnitPrintSource = `package e2e
 
 func plantedUntagged(t *testing.T) { t.Log(stdout) }
+
+func plantedSelection(candidate plantedCandidate) error {
+	return fmt.Errorf("selected %s", candidate.fixture.RecipientEmail)
+}
 `
