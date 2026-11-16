@@ -15,10 +15,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-// ChildLister lists the children of a remote folder by item ID, every page of
-// them. *graph.Client satisfies it.
+// ChildLister hands the children of a remote folder, listed by item ID, on a
+// page at a time (graph.Client.ListChildrenPages). *graph.Client satisfies it.
 type ChildLister interface {
-	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc) error
 }
 
 // FileDownloader downloads one remote file to a local path. *TransferManager
@@ -46,57 +46,119 @@ type TreeDownload struct {
 }
 
 // DownloadTree downloads the tree d names. The caller's goroutine walks it
-// depth first, a folder at a time: it lists the folder, creates it locally
-// as a folder in the user's tree (R-5.10.2), queues the folder's files for
-// TreeWorkers workers and walks each subfolder before the next entry. Files
-// download while the walk goes on, and the walk waits while the queue is
-// full, so a tree of any size holds one listing per level of depth and
-// 2×TreeWorkers files in flight. Nothing counts or caches the tree first.
+// depth first, a folder at a time: it reads the folder a page at a time,
+// creates it locally as a folder in the user's tree (R-5.10.2) once the first
+// page is in, queues each page's files for TreeWorkers workers, walks each
+// subfolder before the next entry, and asks for the next page only once it is
+// done with the page before. Files download while the walk goes on, and the
+// walk waits while the queue is full, so a tree of any size holds one page of
+// a listing per level of depth and 2×TreeWorkers files in flight. Nothing
+// counts or caches the tree first.
 //
 // A failure of one file or folder is an event, and the walk goes on with its
-// siblings. The returned error is a *TreeRootError when the root folder
-// cannot be listed, before anything is reported; the end of ctx, once every
-// file the run queued and did not finish was reported failed with it and
-// every folder it cut short was reported; or a panic of the walk or of an
-// event's report. The summary counts what was reported either way.
+// siblings; a page that fails after a folder's first one is that folder's
+// failure, the root's included. The returned error is a *TreeRootError when
+// the root folder's first page cannot be read, before anything is reported;
+// the end of ctx, once every file the run queued and did not finish was
+// reported failed with it and every folder it cut short was reported; or a
+// panic of the walk or of an event's report. The summary counts what was
+// reported either way.
 func DownloadTree(ctx context.Context, d TreeDownload) (TreeSummary, error) {
-	children, err := d.Lister.ListChildren(ctx, d.DriveID, d.FolderID)
-	if err != nil {
-		return TreeSummary{}, &TreeRootError{Err: fmt.Errorf("list children: %w", err)}
-	}
-
 	pool := startTreePool(ctx, d.Logger, "downloading", "folder download", d.OnEvent)
 	walk := downloadWalk{tree: &d, pool: pool}
-	pool.walk(func() { walk.folder(ctx, children, "", d.LocalRoot) })
+	pool.walk(func() { walk.folder(ctx, d.FolderID, "", d.LocalRoot) })
 
-	return pool.finish(ctx)
+	summary, err := pool.finish(ctx)
+	if walk.unlistedRoot != nil {
+		return TreeSummary{}, &TreeRootError{Err: walk.unlistedRoot}
+	}
+
+	return summary, err
 }
 
 // downloadWalk is the walk of one DownloadTree, on the caller's goroutine.
 type downloadWalk struct {
 	tree *TreeDownload
 	pool *treePool
+	// unlistedRoot is the failure of the root folder's first page, after
+	// which nothing was reported.
+	unlistedRoot error
 }
 
-// folder creates the local folder of a listed remote folder, queues its files
-// and walks its subfolders, in listing order. It returns false once ctx has
-// ended the walk.
-func (w *downloadWalk) folder(ctx context.Context, children []graph.Item, relPath, localPath string) bool {
+// folder reads the remote folder folderID a page at a time and walks each
+// page before it asks for the next. The first page creates the local folder:
+// one that cannot be created is the folder's failure, and its listing stops.
+// A page that fails is the folder's failure, after the pages before it were
+// walked; the root's first page failing is unlistedRoot instead. It returns
+// false once ctx has ended the walk.
+func (w *downloadWalk) folder(ctx context.Context, folderID, relPath, localPath string) bool {
+	pages, goesOn := 0, true
+	err := w.tree.Lister.ListChildrenPages(ctx, w.tree.DriveID, folderID, func(children []graph.Item) bool {
+		pages++
+		if pages == 1 && !w.createFolder(relPath, localPath) {
+			return false
+		}
+		goesOn = w.walkPage(ctx, children, relPath, localPath)
+
+		return goesOn
+	})
+
+	switch {
+	case !goesOn:
+		return false
+	case err == nil:
+		return true
+	case pages == 0 && relPath == "":
+		w.unlistedRoot = fmt.Errorf("list children: %w", err)
+		return false
+	default:
+		return w.listingFailed(ctx, err, relPath, localPath)
+	}
+}
+
+// createFolder creates the local folder of a listed remote folder and reports
+// it when this call made it. A folder it cannot create is one failure, and
+// nothing is walked into it.
+func (w *downloadWalk) createFolder(relPath, localPath string) bool {
 	created, err := createDownloadFolder(localPath)
 	if err != nil {
 		w.pool.reportWalked(TreeFolderFailed, relPath, localPath, err)
-		return true
+		return false
 	}
 	if created {
 		w.pool.reportWalked(TreeFolderCreated, relPath, localPath, nil)
 	}
 
+	return true
+}
+
+// walkPage queues the files of one page of a folder's children and walks its
+// subfolders, in listing order. It returns false once ctx has ended the
+// walk, the folder reported as cut short.
+func (w *downloadWalk) walkPage(ctx context.Context, children []graph.Item, relPath, localPath string) bool {
 	for i := range children {
 		if !w.child(ctx, &children[i], relPath, localPath) {
 			w.pool.reportUnfinished(ctx, relPath, localPath)
 			return false
 		}
 	}
+
+	return true
+}
+
+// listingFailed reports a folder whose listing failed with err. The end of
+// ctx cuts the walk short; any other failure is one failure of the folder,
+// which names the remote folder and the local folder it would have filled,
+// and its siblings go on.
+func (w *downloadWalk) listingFailed(ctx context.Context, err error, relPath, localPath string) bool {
+	if ctx.Err() != nil {
+		w.pool.reportUnfinished(ctx, relPath, localPath)
+		return false
+	}
+
+	remoteFolder := path.Join(w.tree.RemoteRoot, relPath)
+	w.pool.reportWalked(TreeFolderFailed, relPath, localPath,
+		fmt.Errorf("listing the OneDrive folder %q to fill %s: %w", remoteFolder, localPath, err))
 
 	return true
 }
@@ -134,28 +196,16 @@ func (w *downloadWalk) child(ctx context.Context, item *graph.Item, parentRel, p
 	})
 }
 
-// subfolder lists a remote folder and walks it. A folder that cannot be
-// listed is one failure, which names the remote folder and the local folder
-// it would have filled; its siblings go on.
+// subfolder lists a remote folder and walks it, unless ctx has already ended
+// the walk. A folder that cannot be listed is one failure (listingFailed);
+// its siblings go on.
 func (w *downloadWalk) subfolder(ctx context.Context, folderID, relPath, localPath string) bool {
 	if ctx.Err() != nil {
 		w.pool.reportUnfinished(ctx, relPath, localPath)
 		return false
 	}
 
-	children, err := w.tree.Lister.ListChildren(ctx, w.tree.DriveID, folderID)
-	switch {
-	case err != nil && ctx.Err() != nil:
-		w.pool.reportUnfinished(ctx, relPath, localPath)
-		return false
-	case err != nil:
-		remoteFolder := path.Join(w.tree.RemoteRoot, relPath)
-		w.pool.reportWalked(TreeFolderFailed, relPath, localPath,
-			fmt.Errorf("listing the OneDrive folder %q to fill %s: %w", remoteFolder, localPath, err))
-		return true
-	default:
-		return w.folder(ctx, children, relPath, localPath)
-	}
+	return w.folder(ctx, folderID, relPath, localPath)
 }
 
 // createDownloadFolder creates a folder of a tree download, asking for

@@ -591,36 +591,51 @@ func (s *MountSession) resolveConvergingPath(ctx context.Context, remotePath str
 	return s.resolveItemFromParentListing(ctx, remotePath)
 }
 
-// ListChildren lists children of a remote path. For root (""), uses
-// ListChildren with "root". Otherwise uses ListChildrenByPath.
-func (s *MountSession) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
+// ListChildrenPages hands the children of the folder at remotePath to visit a
+// page at a time (graph.Client.ListChildrenPages), for a caller that only
+// walks them. The root ("") is the mount's root folder; below it, a mounted
+// folder is walked down by name from its root item and listed by ID, and a
+// drive's folder is listed by path.
+func (s *MountSession) ListChildrenPages(ctx context.Context, remotePath string, visit graph.ChildrenPageFunc) error {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
-		items, err := s.Meta.ListChildren(ctx, s.DriveID, s.remoteRootItemID())
-		if err != nil {
-			return nil, fmt.Errorf("list root children: %w", err)
+		if err := s.Meta.ListChildrenPages(ctx, s.DriveID, s.remoteRootItemID(), visit); err != nil {
+			return fmt.Errorf("list root children: %w", err)
 		}
 
-		return items, nil
+		return nil
 	}
 
 	if s.hasMountRoot() {
 		parent, err := s.resolveItemFromMountRoot(ctx, clean)
 		if err != nil {
-			return nil, fmt.Errorf("list children for %q: %w", clean, err)
+			return fmt.Errorf("list children for %q: %w", clean, err)
 		}
 
-		items, err := s.Meta.ListChildren(ctx, s.DriveID, parent.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list children for %q: %w", clean, err)
+		if err := s.Meta.ListChildrenPages(ctx, s.DriveID, parent.ID, visit); err != nil {
+			return fmt.Errorf("list children for %q: %w", clean, err)
 		}
 
-		return items, nil
+		return nil
 	}
 
-	items, err := s.Meta.ListChildrenByPath(ctx, s.DriveID, clean)
-	if err != nil {
-		return nil, fmt.Errorf("list children for %q: %w", clean, err)
+	if err := s.Meta.ListChildrenByPathPages(ctx, s.DriveID, clean, visit); err != nil {
+		return fmt.Errorf("list children for %q: %w", clean, err)
+	}
+
+	return nil
+}
+
+// ListChildren lists every child of the folder at remotePath, every page
+// read, for a caller that needs the whole list (ls sorts it, a lookup by name
+// matches over it); the folder is found as ListChildrenPages finds it.
+func (s *MountSession) ListChildren(ctx context.Context, remotePath string) ([]graph.Item, error) {
+	var items []graph.Item
+	if err := s.ListChildrenPages(ctx, remotePath, func(page []graph.Item) bool {
+		items = append(items, page...)
+		return true
+	}); err != nil {
+		return nil, err
 	}
 
 	return items, nil

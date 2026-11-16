@@ -401,6 +401,136 @@ func TestDownloadTree_UnlistableRootIsTheReturnedError(t *testing.T) {
 	assert.NoDirExists(t, localRoot)
 }
 
+// The walk is done with a folder's page, the whole walk of a subfolder on it
+// included, before it asks for the folder's next page: it holds one page per
+// level of depth, never a whole listing.
+//
+// Validates: R-1.2.1, R-1.1.3
+func TestDownloadTree_WalksAPageBeforeAskingForTheNext(t *testing.T) {
+	t.Parallel()
+
+	tree := newFakeTree()
+	tree.pageSize = 2
+	sub := tree.addFolder(treeRootID, "Sub")
+	tree.addFile(sub, "s.txt", 1)
+	tree.addFile(treeRootID, "a.txt", 1)
+	tree.addFile(treeRootID, "b.txt", 1)
+
+	run := downloadTreeNow(t, tree, newGatedFiles(3), t.TempDir())
+
+	require.NoError(t, run.err)
+	assert.Equal(t, []string{
+		fakePage{folderID: treeRootID, page: 1}.String(),
+		fakePage{folderID: sub, page: 1}.String(),
+		fakePage{folderID: treeRootID, page: 2}.String(),
+	}, tree.askedPages())
+	assert.Equal(t, 3, run.summary.Files)
+	assertEveryListedFileAccounted(t, tree, run)
+	assertSummaryCountsEvents(t, run)
+}
+
+// A page that fails after a folder's first one is that folder's failure: what
+// the pages before it held downloads, its siblings go on, and for the root it
+// is a failure of the root folder, not the run's error.
+//
+// Validates: R-1.2.1
+func TestDownloadTree_AFailedLaterPageFailsOnlyItsFolder(t *testing.T) {
+	t.Parallel()
+
+	tree := newFakeTree()
+	tree.pageSize = 2
+	sub := tree.addFolder(treeRootID, "Sub")
+	for _, name := range []string{"s1.txt", "s2.txt", "s3.txt"} {
+		tree.addFile(sub, name, 1)
+	}
+	tree.addFile(treeRootID, "a.txt", 1)
+	tree.addFile(treeRootID, "never.txt", 1)
+	tree.failPage(sub, 2, errTreeTestRefused)
+	tree.failPage(treeRootID, 2, errTreeTestRefused)
+	localRoot := t.TempDir()
+
+	run := downloadTreeNow(t, tree, newGatedFiles(3), localRoot)
+
+	require.NoError(t, run.err, "a later page of the root is not the run's error")
+	for _, done := range []string{"Sub/s1.txt", "Sub/s2.txt", "a.txt"} {
+		assert.Equal(t, TreeFileDone, eventFor(t, run.events, done).Kind, done)
+	}
+	failed := eventsOf(run.events, TreeFolderFailed)
+	assert.Equal(t, []string{"Sub", ""}, relPaths(failed))
+	require.Len(t, failed, 2)
+	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`/Sub" to fill `+filepath.Join(localRoot, "Sub")+
+		": "+errTreeTestRefused.Error(), failed[0].Err.Error())
+	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`" to fill `+localRoot+
+		": "+errTreeTestRefused.Error(), failed[1].Err.Error())
+	assertSummaryCountsEvents(t, run)
+}
+
+// A download canceled while the walk waits for the queue asks for no further
+// page: the walk stops in the page it was in.
+//
+// Validates: R-6.3.6, R-1.2.1
+func TestDownloadTree_CancellationAsksForNoFurtherPage(t *testing.T) {
+	t.Parallel()
+
+	const files, pageSize = 6 * TreeWorkers, 2
+	tree := newFakeTree()
+	tree.pageSize = pageSize
+	for i := range files {
+		tree.addFile(treeRootID, fmt.Sprintf("file-%02d.bin", i), 1)
+	}
+	transfers := newGatedFiles(files)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	run := startTreeDownload(ctx, tree, transfers, t.TempDir())
+	transfers.waitWorkersBusy(t)
+	cancel()
+	run.wait(t)
+
+	require.ErrorIs(t, run.err, context.Canceled)
+	// The workers and the queue take 2×TreeWorkers files; the walk waits on
+	// the first file of the page after them, and asks for nothing more.
+	assert.LessOrEqual(t, len(tree.askedPages()), 2*TreeWorkers/pageSize+1, "pages asked for: %v", tree.askedPages())
+	assertEveryListedFileAccounted(t, tree, run)
+	assertSummaryCountsEvents(t, run)
+}
+
+// A later page that fails because the download was canceled is not a listing
+// failure of its folder: the folder is reported as cut short, with the
+// context's error, and the run ends with that error.
+//
+// Validates: R-6.3.6, R-1.2.1
+func TestDownloadTree_CancellationAtALaterPageCutsItsFolderShort(t *testing.T) {
+	t.Parallel()
+
+	tree := newFakeTree()
+	tree.pageSize = 1
+	sub := tree.addFolder(treeRootID, "Sub")
+	tree.addFile(treeRootID, "never.txt", 1)
+	tree.failPage(treeRootID, 2, context.Canceled)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The download is canceled while the root's first page is walked, once
+	// the walk has gone into Sub.
+	tree.onList = func(folderID string) {
+		if folderID == sub {
+			cancel()
+		}
+	}
+	localRoot := t.TempDir()
+	transfers := newGatedFiles(1)
+	transfers.openGate()
+
+	run := startTreeDownload(ctx, tree, transfers, localRoot)
+	run.wait(t)
+
+	require.ErrorIs(t, run.err, context.Canceled)
+	failed := eventsOf(run.events, TreeFolderFailed)
+	require.Len(t, failed, 1)
+	assert.Empty(t, failed[0].RelPath, "the root is the folder cut short")
+	assert.Equal(t, localRoot+": stopped before the folder was finished: "+context.Canceled.Error(), failed[0].Err.Error())
+	assertSummaryCountsEvents(t, run)
+}
+
 // Every folder exists locally before a file is downloaded into it: the walk
 // creates it before it queues the folder's files.
 //

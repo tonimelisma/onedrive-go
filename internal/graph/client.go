@@ -46,9 +46,10 @@ const (
 	// response approaches this.
 	maxItemResponseSize = 1024 * 1024
 
-	// defaultMaxListPages bounds every non-delta paged listing. A circular or
-	// buggy nextLink chain would otherwise loop until the process dies, and
-	// unlike delta these listings have no natural terminator to fall back on.
+	// defaultMaxListPages bounds the pages every non-delta paged listing asks
+	// for (Client.maxListPages, which tests lower). A circular or buggy
+	// nextLink chain would otherwise loop until the process dies, and unlike
+	// delta these listings have no natural terminator to fall back on.
 	defaultMaxListPages = 10000
 
 	// maxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
@@ -120,6 +121,7 @@ type Client struct {
 	deltaPreferHeader    http.Header
 	childrenPreferHeader http.Header
 	maxDeltaPages        int
+	maxListPages         int
 	maxRecursionDepth    int
 	policies             retryPolicies
 	validators           urlValidators

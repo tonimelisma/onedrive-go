@@ -1,13 +1,17 @@
 package graph
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // twoPageServer serves a listing split across two pages, linking the first
@@ -97,32 +101,86 @@ func TestSiteDrives_FollowsNextLinkAcrossPages(t *testing.T) {
 	assert.Equal(t, []string{"/sites/site-1/drives", "/sites/site-1/drives-page-2"}, *requestedPaths)
 }
 
-// Validates: R-6.7.32
-//
-// A nextLink that points back at itself would otherwise loop until the process
-// dies. Delta already guards this; the plain listings did not.
-func TestDrives_SelfReferentialNextLinkIsBounded(t *testing.T) {
-	t.Parallel()
+// testListPages is the page cap the bound tests give a client, so the bound
+// is reached in a few requests.
+const testListPages = 3
 
-	var requests int
+// pageOnServer is a Graph server whose every listing answers an empty page
+// that links to another while fewer than lastPage pages were asked for,
+// counting the pages in requests. lastPage 0 links on forever, as a circular
+// nextLink would.
+func pageOnServer(t *testing.T, lastPage int64, requests *atomic.Int64) *httptest.Server {
+	t.Helper()
 
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
+		page := requests.Add(1)
+		next := ""
+		if lastPage == 0 || page < lastPage {
+			next = fmt.Sprintf(`,"@odata.nextLink":%q`, fmt.Sprintf("%s/next-page?page=%d", srv.URL, page+1))
+		}
 
 		w.Header().Set("Content-Type", "application/json")
-		writeTestResponse(t, w, fmt.Sprintf(
-			`{"value":[{"id":"drive-loop","name":"Loop","driveType":"business"}],`+
-				`"@odata.nextLink":%q}`, srv.URL+"/me/drives-loop"))
+		writeTestResponse(t, w, `{"value":[]`+next+`}`)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
-	client := newTestClient(t, srv.URL)
+	return srv
+}
 
-	_, err := client.Drives(t.Context())
-	require.Error(t, err, "a circular nextLink must terminate with an error, not spin forever")
-	assert.Contains(t, err.Error(), "exceeded")
-	assert.LessOrEqual(t, requests, defaultMaxListPages+1)
+// pagedListingCalls are the non-delta paged listings of the client, each
+// called with arguments the server ignores.
+func pagedListingCalls() map[string]func(ctx context.Context, client *Client) error {
+	drive := driveid.New("d")
+
+	return map[string]func(ctx context.Context, client *Client) error{
+		"drives":            func(ctx context.Context, c *Client) error { _, err := c.Drives(ctx); return err },
+		"site drives":       func(ctx context.Context, c *Client) error { _, err := c.SiteDrives(ctx, "site-1"); return err },
+		"site search":       func(ctx context.Context, c *Client) error { _, err := c.SearchSites(ctx, "*", 10); return err },
+		"drive item search": func(ctx context.Context, c *Client) error { _, err := c.SearchDriveItems(ctx, "q"); return err },
+		"item permissions": func(ctx context.Context, c *Client) error {
+			_, err := c.ListItemPermissions(ctx, drive, "item")
+			return err
+		},
+		"children": func(ctx context.Context, c *Client) error { _, err := c.ListChildren(ctx, drive, "p"); return err },
+		"children by path": func(ctx context.Context, c *Client) error {
+			_, err := c.ListChildrenByPath(ctx, drive, "Docs")
+			return err
+		},
+		"recycle bin": func(ctx context.Context, c *Client) error { _, err := c.ListRecycleBinItems(ctx, drive); return err },
+	}
+}
+
+// Every non-delta paged listing counts the pages it asks for against one
+// cap: a listing of exactly that many pages completes, and a continuation
+// past it, which a circular nextLink would follow until the process died,
+// fails without asking for one more page. The cases lower the cap; a client
+// from the constructor holds the default one.
+//
+// Validates: R-6.7.32
+func TestPagedListings_ThePageCapCountsThePagesAskedFor(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, defaultMaxListPages, newTestClient(t, "http://unused").maxListPages,
+		"a client from the constructor holds the default page cap")
+
+	for name, call := range pagedListingCalls() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var whole atomic.Int64
+			client := newTestClient(t, pageOnServer(t, testListPages, &whole).URL)
+			client.maxListPages = testListPages
+			require.NoError(t, call(t.Context(), client), "a listing of exactly the cap's pages")
+			assert.Equal(t, int64(testListPages), whole.Load())
+
+			var endless atomic.Int64
+			client = newTestClient(t, pageOnServer(t, 0, &endless).URL)
+			client.maxListPages = testListPages
+			require.ErrorContains(t, call(t.Context(), client), "exceeded")
+			assert.Equal(t, int64(testListPages), endless.Load(), "no page past the cap is asked for")
+		})
+	}
 }
 
 // Validates: R-6.7.32

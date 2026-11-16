@@ -48,18 +48,23 @@ func newGraphServer(t *testing.T, status int, body string, opts graphServerOptio
 	}))
 }
 
+// writeTestResponse writes body as a test server's answer. It runs on the
+// server's goroutine, where a failing require would end only the handler
+// and not the test, so a failed write is recorded with assert.
 func writeTestResponse(t *testing.T, w io.Writer, body string) {
 	t.Helper()
 
 	_, err := io.WriteString(w, body)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
+// writeTestResponsef is writeTestResponse with a format, on the server's
+// goroutine as well.
 func writeTestResponsef(t *testing.T, w io.Writer, format string, args ...any) {
 	t.Helper()
 
 	_, err := fmt.Fprintf(w, format, args...)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
 func setTestDirPermissions(t *testing.T, path string, perms os.FileMode) {
