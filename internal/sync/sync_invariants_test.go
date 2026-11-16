@@ -31,8 +31,11 @@ import (
 //   - nothing left waiting: retry_work, held_deletes and pending_creates are
 //     empty;
 //   - no stray artifacts: no partial download or other .onedrive-go. file in
-//     the tree, no upload session left behind, no empty conflict-copy
-//     reservation.
+//     the tree, no upload session left behind, no empty file at a
+//     conflict-copy name: a conflict copy is its source renamed, and scenario
+//     content is never empty. The one empty file allowed there is the item a
+//     create left on OneDrive whose intent the crash harness's lost-WAL
+//     variant then took with the WAL (syncHarness.placeholdersWithoutIntent).
 
 // syncHarness is a test engine, its sync root and the fake OneDrive it
 // syncs with.
@@ -44,6 +47,16 @@ type syncHarness struct {
 	// held is every file content present on either side when beginRound
 	// last ran: the no-loss invariant's input.
 	held []string
+
+	// placeholdersWithoutIntent are the OneDrive items, by ID, that a
+	// lost-WAL snapshot held as empty files its state database had neither
+	// a pending-create row nor a baseline row for (crashCapture.reopen): the
+	// item of a create cut after OneDrive made it, whose committed intent the
+	// lost WAL took. Nothing then tells the item from another client's empty
+	// file, so the restart keeps it beside the local file as two files created
+	// at one name (R-2.3.5) and downloads it, empty. A plain crash keeps the
+	// intent, so it adds nothing here.
+	placeholdersWithoutIntent map[string]bool
 }
 
 func newSyncHarness(t *testing.T, remote *moveScenarioRemote) *syncHarness {
@@ -175,11 +188,14 @@ func assertNoStrayArtifacts(t *testing.T, h *syncHarness, local map[string]strin
 	t.Helper()
 
 	ok := true
+	remoteEmpty := h.remote.emptyFiles()
 	for p, content := range local {
 		name := filepath.Base(p)
 		ok = assert.False(t, strings.HasPrefix(name, ".onedrive-go."), "invariant: no transfer artifact left at %s", p) && ok
-		ok = assert.False(t, strings.Contains(name, modelConflictMarker) && content == "",
-			"invariant: no empty conflict-copy reservation left at %s (scenario content is never empty)", p) && ok
+		allowed := h.placeholdersWithoutIntent[remoteEmpty[p]]
+		ok = assert.False(t, strings.Contains(name, modelConflictMarker) && content == "" && !allowed,
+			"invariant: no empty file at the conflict-copy name %s (a conflict copy holds its source's content, "+
+				"and scenario content is never empty)", p) && ok
 	}
 
 	sessions, err := os.ReadDir(filepath.Join(h.eng.dataDir, "upload-sessions"))

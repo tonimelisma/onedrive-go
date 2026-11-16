@@ -610,7 +610,17 @@ file and is downloaded, the lesser harm
 `TestPendingCreateIntent_ClearedWhenNothingWasCreatedAndKeepsAKnownItem`,
 `TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted`,
 `TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile`, and the
-`upload.created_unrecorded` crash point). The executor is the second place
+`upload.created_unrecorded` crash point). The intent survives a power loss:
+the store commits in WAL mode with `synchronous(FULL)`. A loss that also
+takes committed WAL frames (a disk that never honored the fsyncs, a copy
+restored without the WAL) takes the intent too, and then nothing tells the
+empty item from another client's empty file: the restart meets two files
+created at one name and keeps both (R-2.3.5), the local file renamed to a
+conflict copy and the empty item downloaded at the path, the same lesser
+harm with nothing lost. When the cut upload was a conflict copy's own, that
+empty file carries the copy's name
+(`TestCrashRecovery_ConflictCopyWhoseUploadWasCutAfterTheCreate`).
+The executor is the second place
 that claims on an intent, with the same freshness test
 (`PendingCreate.intentIsFresh`, which the prune asks too) and no schema of
 its own: a

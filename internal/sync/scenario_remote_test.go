@@ -345,6 +345,20 @@ func (r *moveScenarioRemote) tree() map[string]string {
 	return out
 }
 
+// emptyFiles is every zero-byte file of the drive as path -> item ID.
+func (r *moveScenarioRemote) emptyFiles() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]string{}
+	for id, item := range r.items {
+		if !item.IsFolder && r.contents[id] == "" {
+			out[r.pathOf(id)] = id
+		}
+	}
+
+	return out
+}
+
 // Remote-side edits by path, as another device would make them.
 
 func (r *moveScenarioRemote) putFileAt(t *testing.T, remotePath, content string) {

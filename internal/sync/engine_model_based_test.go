@@ -139,7 +139,7 @@ func TestModel_SameSeedReplaysIdentically(t *testing.T) {
 	}
 }
 
-// Validates: R-6.8.9
+// Validates: R-6.5.1, R-6.5.2
 //
 // Every batch of a few seeds also crashes at a crash point the seed picks
 // (D-091), sometimes losing the WAL too, and sync must converge from what the
@@ -361,17 +361,17 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 }
 
 // armCrash installs a capture at a crash point the seed picks, half the time
-// with power loss (everything since a checkpoint taken now is lost).
+// with the WAL lost (everything since a checkpoint taken now is lost).
 func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
 	points := allCrashPoints()
 	capture := &crashCapture{
-		point:     points[rng.IntN(len(points))],
-		powerLoss: rng.IntN(2) == 0,
-		srcDir:    filepath.Dir(r.syncRoot),
-		dstDir:    r.t.TempDir(),
-		remote:    r.remote,
+		point:   points[rng.IntN(len(points))],
+		lostWAL: rng.IntN(2) == 0,
+		srcDir:  filepath.Dir(r.syncRoot),
+		dstDir:  r.t.TempDir(),
+		remote:  r.remote,
 	}
-	if capture.powerLoss {
+	if capture.lostWAL {
 		_, err := r.eng.baseline.rawDB().ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 		require.NoError(r.t, err)
 	}
@@ -385,13 +385,21 @@ func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
 // left behind.
 func (r *modelRun) recoverFrom(capture *crashCapture, label string) *syncHarness {
 	kind := "crash"
-	if capture.powerLoss {
-		kind = "power loss"
+	if capture.lostWAL {
+		kind = "crash with the WAL lost"
 	}
 	r.logf("%s: %s at %s; a fresh engine opens what it left", label, kind, capture.point)
 	held := r.harness.held
 	recovered := capture.reopen(r.t)
 	recovered.held = held
+	// An item an earlier lost WAL left without its intent stays allowed while
+	// it is still empty: by now it is synced, so reopen, which names only
+	// items the snapshot's database does not know, does not name it again.
+	for _, itemID := range recovered.remote.emptyFiles() {
+		if r.harness.placeholdersWithoutIntent[itemID] {
+			recovered.placeholdersWithoutIntent[itemID] = true
+		}
+	}
 	r.harness = recovered
 	r.remote = recovered.remote
 	r.syncRoot = recovered.syncRoot
