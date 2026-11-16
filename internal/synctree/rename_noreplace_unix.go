@@ -86,8 +86,12 @@ func (r *Root) RenameNoReplace(srcRel, dstRel string) error {
 // inside it, never replacing anything at dstRel, as RenameNoReplace does.
 // Only the destination is resolved through the root: srcAbs lies in a folder
 // the caller manages outside every sync tree (the local trash), so its parent
-// is opened by path, also as a folder, and a source inside the sync root is
-// refused. Where the flag is refused the file is linked and unlinked, and
+// is opened by path, also as a folder. A parent that is the sync root or lies
+// below it is refused (ErrUnsafePath), decided by what the opened folder is,
+// not by the path's text (refuseFolderWithinRoot), so a trash path that
+// reaches the sync folder through a symbolic link, or through another
+// spelling on a volume that folds case, is refused too. Where the flag is
+// refused the file is linked and unlinked, and
 // where it cannot be linked a regular file is created at dstRel exclusively,
 // copied, synced, its folder synced and only then the source removed, while
 // its name still holds the file copied, which
@@ -100,9 +104,6 @@ func (r *Root) MoveInNoReplace(srcAbs, dstRel string) error {
 	if !filepath.IsAbs(srcAbs) {
 		return unsafePathf("%q is not an absolute path outside the sync folder", srcAbs)
 	}
-	if _, inside := r.Rel(srcAbs); inside == nil {
-		return unsafePathf("%s is inside the sync folder, not a file to move into it", srcAbs)
-	}
 	dstClean, err := cleanEntryName(dstRel)
 	if err != nil {
 		return err
@@ -113,6 +114,9 @@ func (r *Root) MoveInNoReplace(srcAbs, dstRel string) error {
 		return fmt.Errorf("moving %s to %s: %w", srcAbs, dstClean, err)
 	}
 	defer closeDirectory(srcParent)
+	if refuseErr := r.refuseFolderWithinRoot(srcParent, srcAbs, "not a file to move into it"); refuseErr != nil {
+		return refuseErr
+	}
 	dstParent, err := r.openParentFolder(dstClean)
 	if err != nil {
 		return fmt.Errorf("moving %s to %s: %w", srcAbs, dstClean, err)
@@ -183,6 +187,55 @@ func (r *Root) openParentFolder(clean string) (*os.File, error) {
 	}
 
 	return nil, err
+}
+
+// maxFoldersAboveAFolder bounds the walk refuseFolderWithinRoot makes from a
+// folder up to the top of its filesystem, so the walk ends with an error
+// instead of running on where no folder above reports itself as its own
+// parent. A real folder tree reaches its top in far fewer steps.
+const maxFoldersAboveAFolder = 1024
+
+// refuseFolderWithinRoot refuses dir, an open folder outside the root's
+// handle, when it is the sync folder or lies below it: name, the path in it
+// the caller would move a file from or to, is then in the tree, and the
+// refusal says so, followed by refusal. The answer comes from what the
+// folders are, not from a path's text: dir and each folder above it,
+// reached by "..", "../.." and so on from dir's descriptor without following
+// any link, are compared by device and inode with the sync folder as its root
+// handle sees it, until the walk reaches the folder that is its own parent.
+// So a path to dir that went through a symbolic link into the tree, or that
+// spelled a folder of the tree another way on a volume that folds case, is
+// still found inside.
+func (r *Root) refuseFolderWithinRoot(dir *os.File, name, refusal string) error {
+	rootInfo, err := r.Stat(".")
+	if err != nil {
+		return fmt.Errorf("checking whether %s is inside the sync folder: %w", name, err)
+	}
+	rootID, ok := IdentityFromFileInfo(rootInfo)
+	if !ok {
+		return fmt.Errorf("checking whether %s is inside the sync folder: the sync folder's device and inode cannot be read", name)
+	}
+
+	up := "."
+	var below FileIdentity
+	for range maxFoldersAboveAFolder {
+		st, statErr := lstatEntryAt(dir, up)
+		if statErr != nil {
+			return fmt.Errorf("checking whether %s is inside the sync folder: %w", name, statErr)
+		}
+		folder := FileIdentity{Device: statFieldToUint64(st.Dev), Inode: statFieldToUint64(st.Ino)}
+		switch {
+		case folder.Device == rootID.Device && folder.Inode == rootID.Inode:
+			return unsafePathf("%s is inside the sync folder, %s", name, refusal)
+		case folder == below:
+			// The top of the filesystem is its own parent.
+			return nil
+		}
+		below = folder
+		up = filepath.Join(up, "..")
+	}
+
+	return fmt.Errorf("checking whether %s is inside the sync folder: more than %d folders above it", name, maxFoldersAboveAFolder)
 }
 
 // normalizeDescriptorFailure is normalizeNotExist for a failure of a call

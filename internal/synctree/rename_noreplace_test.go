@@ -635,6 +635,36 @@ func TestRoot_MoveInNoReplace_NeverReplacesAndTakesOnlyOutsideSources(t *testing
 	}
 }
 
+// Validates: R-6.4.8
+//
+// Whether the file to move in lies outside the sync folder is decided by the
+// folder its path resolves to, not by the path's text: a trash path that
+// reaches the sync folder through a symbolic link, to the folder itself or to
+// a folder below it, names a file of the tree. Moving it "in" would move it
+// to another name of the tree, so it is refused and both names stay.
+func TestRoot_MoveInNoReplace_RefusesASourceThatResolvesIntoTheSyncFolder(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{".", "docs"} {
+		t.Run("a link to "+target, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := openTestRoot(t)
+			require.NoError(t, os.Mkdir(filepath.Join(dir, "docs"), 0o700))
+			inTree := filepath.Join(dir, target, "a.txt")
+			require.NoError(t, os.WriteFile(inTree, []byte("in the tree"), 0o600))
+			outside := t.TempDir()
+			require.NoError(t, os.Symlink(filepath.Join(dir, target), filepath.Join(outside, "trash")))
+
+			err := root.MoveInNoReplace(filepath.Join(outside, "trash", "a.txt"), "moved.txt")
+
+			require.ErrorIs(t, err, ErrUnsafePath)
+			requireFileContent(t, inTree, "in the tree")
+			assert.NoFileExists(t, filepath.Join(dir, "moved.txt"))
+		})
+	}
+}
+
 // Validates: R-6.4.8, R-6.4.9
 //
 // A move into the sync folder from another filesystem fails with an error

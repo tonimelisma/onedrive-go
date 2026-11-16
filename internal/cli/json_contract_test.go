@@ -668,7 +668,7 @@ func lsLeaf(t *testing.T) *cobra.Command {
 func TestGet_JSONPrintsTheFileItWrote(t *testing.T) {
 	setTestDriveHome(t)
 	const content = "hello"
-	hash, err := driveops.ComputeQuickXorHashFromReader(strings.NewReader(content))
+	hash, err := driveops.ComputeQuickXorHashFromReaderContext(t.Context(), strings.NewReader(content))
 	require.NoError(t, err)
 
 	for _, tc := range []struct {

@@ -522,10 +522,18 @@ func plannedLocalState(action *Action) *localState {
 	return action.View.Local
 }
 
+// Names of the existing file an action is about to replace, for the
+// stale-precondition messages of the check that it is still the version the
+// plan saw.
+const (
+	downloadTargetNoun       = "download target"
+	localMoveDestinationNoun = "local move destination"
+)
+
 func (e *executor) validateExistingDownloadTarget(
 	ctx context.Context, action *Action, target string, info os.FileInfo, planned *localState,
 ) error {
-	if err := validateDownloadTargetMetadata(action, info, planned); err != nil {
+	if err := validateExistingTargetMetadata(action, info, planned, downloadTargetNoun); err != nil {
 		return err
 	}
 	if expected := expectedDownloadTargetHash(action, planned); expected != "" {
@@ -563,20 +571,22 @@ func expectedDownloadTargetHash(action *Action, planned *localState) string {
 	return action.View.Baseline.LocalHash
 }
 
-// validateDownloadTargetMetadata is the cheap half of the overwrite check:
+// validateExistingTargetMetadata is the cheap half of the overwrite check:
 // the file the planner saw must still be a file of the same size and mtime.
-func validateDownloadTargetMetadata(action *Action, info os.FileInfo, planned *localState) error {
+// noun names the file in the refusal (downloadTargetNoun,
+// localMoveDestinationNoun).
+func validateExistingTargetMetadata(action *Action, info os.FileInfo, planned *localState, noun string) error {
 	if info.IsDir() || planned.ItemType != ItemTypeFile {
-		return stalePreconditionError("download target %s changed type", action.Path)
+		return stalePreconditionError("%s %s changed type", noun, action.Path)
 	}
 	if planned.Size != 0 && info.Size() != planned.Size {
-		return stalePreconditionError("download target %s changed size", action.Path)
+		return stalePreconditionError("%s %s changed size", noun, action.Path)
 	}
 	if planned.Mtime != 0 && info.ModTime().UnixNano() != planned.Mtime {
-		return stalePreconditionError("download target %s changed mtime", action.Path)
+		return stalePreconditionError("%s %s changed mtime", noun, action.Path)
 	}
 	if plannedCtimeChanged(planned, info) {
-		return stalePreconditionError("download target %s changed since it was observed", action.Path)
+		return stalePreconditionError("%s %s changed since it was observed", noun, action.Path)
 	}
 
 	return nil
@@ -615,33 +625,38 @@ func (e *executor) validateDownloadTargetBeforeReplace(ctx context.Context, acti
 		return stalePreconditionError("download target %s appeared", action.Path)
 	}
 
-	return e.preserveReplacedDownloadTarget(action, target, e.downloadTargetVerifier(action, planned))
+	return e.preserveReplacedDownloadTarget(action, target, e.existingTargetVerifier(ctx, action, planned, downloadTargetNoun))
 }
 
-// downloadTargetVerifier checks, through the open descriptor, that the file a
-// download is about to replace is still the version the plan saw.
-func (e *executor) downloadTargetVerifier(action *Action, planned *localState) synctree.VerifyFunc {
+// existingTargetVerifier checks, through the open descriptor, that the file a
+// download or a replacing local move is about to replace is still the
+// version the plan saw; its hash stops when ctx ends. noun names the file in
+// the refusal.
+func (e *executor) existingTargetVerifier(
+	ctx context.Context, action *Action, planned *localState, noun string,
+) synctree.VerifyFunc {
 	return func(f *os.File, current os.FileInfo) error {
-		if metaErr := validateDownloadTargetMetadata(action, current, planned); metaErr != nil {
+		if metaErr := validateExistingTargetMetadata(action, current, planned, noun); metaErr != nil {
 			return metaErr
 		}
 		expected := expectedDownloadTargetHash(action, planned)
 		if expected == "" {
 			return nil
 		}
-		currentHash, hashErr := e.hashReader(f)
+		currentHash, hashErr := e.hashReader(ctx, f)
 		if hashErr != nil {
-			return fmt.Errorf("hashing download target %s: %w", action.Path, hashErr)
+			return fmt.Errorf("hashing %s %s: %w", noun, action.Path, hashErr)
 		}
 		if currentHash != expected {
-			return stalePreconditionError("download target %s changed hash", action.Path)
+			return stalePreconditionError("%s %s changed hash", noun, action.Path)
 		}
 		return nil
 	}
 }
 
 // preserveReplacedDownloadTarget keeps the verified version of the file at
-// target (rooted, spelled as on disk) in the trash before it is replaced.
+// target (rooted, spelled as on disk) in the trash before a download renames
+// over it; the file stays at target until then.
 func (e *executor) preserveReplacedDownloadTarget(action *Action, target string, verify synctree.VerifyFunc) error {
 	placement, err := e.trash.Reserve(e.syncTree.Path(), target, localtrash.ReasonReplaced)
 	if err != nil {
@@ -786,12 +801,6 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, dest strin
 	return nil
 }
 
-// validateLocalMoveSourceAgainstBaseline requires the source to still be the
-// synced item: the same type and, when known, the same filesystem identity.
-// Its content may have changed (D-053): a rename carries the bytes unchanged,
-// the move outcome keeps the baseline's content facts, and the next pass
-// uploads the local edit at the destination. Requiring unchanged content
-// superseded the remote move on every pass and stranded the edit.
 // clearLocalMoveDestination makes way for a replacing local move immediately
 // before its rename, after the source and the parent were validated.
 func (e *executor) clearLocalMoveDestination(ctx context.Context, action *Action, dest string) error {
@@ -810,10 +819,16 @@ func (e *executor) clearLocalMoveDestination(ctx context.Context, action *Action
 }
 
 // clearReplacedLocalMoveTarget makes way for a move that replaces the file at
-// its destination (D-058): the file must still be exactly the version the plan
-// saw (a regular file with its observed hash, metadata and ctime), and is kept
-// in the trash when one is configured, verified through the descriptor that is
-// preserved. Without a trash the verified file is replaced by the rename.
+// its destination (D-058) by taking the file out of the sync folder the way a
+// local delete does: only while it is still exactly the version the plan saw
+// (a regular file with its observed hash, metadata and ctime), verified
+// through the descriptor of the inode that leaves, into the trash when the
+// drive has one and removed otherwise. The hash stops when ctx ends. The file
+// is moved once, or copied through its verified descriptor when the trash is
+// on another filesystem; the move's rename then finds the name free and
+// replaces nothing. A file that takes the name between the two is kept, the
+// rename refuses, and the move is superseded with the displaced file in the
+// trash. A file that left the name on its own leaves nothing to make way for.
 func (e *executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Action, dest string, destInfo os.FileInfo) error {
 	planned := plannedLocalState(action)
 	if !destInfo.Mode().IsRegular() || planned == nil || planned.Hash == "" {
@@ -822,13 +837,27 @@ func (e *executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Act
 	if err := e.refuseLiveDatabaseTarget(dest); err != nil {
 		return err
 	}
-	if e.trash == nil {
-		return e.validateExistingDownloadTarget(ctx, action, dest, destInfo, planned)
-	}
 
-	return e.preserveReplacedDownloadTarget(action, dest, e.downloadTargetVerifier(action, planned))
+	err := e.takeOutVerifiedLocalFile(dest, e.existingTargetVerifier(ctx, action, planned, localMoveDestinationNoun),
+		localtrash.ReasonReplaced, crashPointLocalMoveDestinationTrashed)
+	switch {
+	case err == nil, errors.Is(err, os.ErrNotExist):
+		return nil
+	case errors.Is(err, errActionPreconditionChanged):
+		return err
+	case errors.Is(err, synctree.ErrDetachRaced):
+		return stalePreconditionError("local move destination %s changed while it was checked", action.Path)
+	default:
+		return fmt.Errorf("making way for the move to %s: %w", action.Path, normalizeSyncTreePathError(err))
+	}
 }
 
+// validateLocalMoveSourceAgainstBaseline requires the source to still be the
+// synced item: the same type and, when known, the same filesystem identity.
+// Its content may have changed (D-053): a rename carries the bytes unchanged,
+// the move outcome keeps the baseline's content facts, and the next pass
+// uploads the local edit at the destination. Requiring unchanged content
+// would supersede the remote move on every pass and strand the edit.
 func (e *executor) validateLocalMoveSourceAgainstBaseline(
 	ctx context.Context,
 	source string,

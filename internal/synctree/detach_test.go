@@ -6,15 +6,19 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 const (
-	opDetach = "detach"
-	opRemove = "remove"
+	opDetach   = "detach"
+	opRemove   = "remove"
+	opPreserve = "preserve"
 )
 
 func newDetachTree(t *testing.T) (*Root, string) {
@@ -64,7 +68,7 @@ func TestDetachRegularFile_VerifyRefusalLeavesTheFile(t *testing.T) {
 func TestDetachRegularFile_FileReplacedDuringVerifyIsKept(t *testing.T) {
 	t.Parallel()
 
-	for _, operation := range []string{opDetach, opRemove, "preserve"} {
+	for _, operation := range []string{opDetach, opRemove, opPreserve} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 
@@ -115,6 +119,278 @@ func TestPreserveRegularFile_KeepsTheFileInPlace(t *testing.T) {
 	assert.Equal(t, "synced\n", string(data))
 }
 
+// The version a download replaces is kept by a hard link where one can be
+// made, and by a copy through the verified descriptor where it cannot: across
+// filesystems, or where the filesystem refuses the link (no hard links, a
+// FUSE filesystem without a link operation, too many links already). Either
+// way the file stays where it is, unchanged. Any other refusal fails the
+// preserve and copies nothing.
+//
+// Validates: R-6.4.9
+func TestPreserveRegularFile_CopiesWhenTheLinkCannotBeMade(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		errno  unix.Errno
+		copies bool
+	}{
+		{name: "EXDEV", errno: unix.EXDEV, copies: true},
+		{name: "EPERM", errno: unix.EPERM, copies: true},
+		{name: "EMLINK", errno: unix.EMLINK, copies: true},
+		{name: "ENOTSUP", errno: unix.ENOTSUP, copies: true},
+		{name: "EOPNOTSUPP", errno: unix.EOPNOTSUPP, copies: true},
+		{name: "ENOSYS", errno: unix.ENOSYS, copies: true},
+		{name: "EIO", errno: unix.EIO},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := newDetachTree(t)
+			source := filepath.Join(dir, "docs", "a.txt")
+			before, err := os.Lstat(source)
+			require.NoError(t, err)
+			root.ops.linkOut = func(*os.File, string, string) error { return tt.errno }
+			dest := filepath.Join(t.TempDir(), "item")
+
+			err = root.PreserveRegularFile("docs/a.txt", nil, dest)
+
+			requireFileContent(t, source, "synced\n")
+			after, statErr := os.Lstat(source)
+			require.NoError(t, statErr)
+			assert.True(t, os.SameFile(before, after), "the file stays where it was")
+			if !tt.copies {
+				require.ErrorIs(t, err, tt.errno)
+				assert.NoFileExists(t, dest)
+				return
+			}
+			require.NoError(t, err)
+			requireFileContent(t, dest, "synced\n")
+			kept, keptErr := os.Lstat(dest)
+			require.NoError(t, keptErr)
+			assert.False(t, os.SameFile(before, kept), "the kept version is a copy")
+		})
+	}
+}
+
+// A destination that fails is told apart from a file that is gone: when the
+// folder the file was to land in is missing, before the destination is
+// checked or after the check and before the move, the take-out fails with
+// ErrDestinationFailed, which does not match os.ErrNotExist, and the file
+// stays where it was, with no set-aside sibling left.
+//
+// Validates: R-6.4.9
+func TestDetachRegularFile_ADestinationThatFailsIsNotAFileThatIsGone(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name                 string
+		removedBeforeTheMove bool
+	}{
+		{name: "missing before the check"},
+		{name: "removed before the move", removedBeforeTheMove: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := newDetachTree(t)
+			folder := filepath.Join(t.TempDir(), "entry")
+			var verify VerifyFunc
+			if tt.removedBeforeTheMove {
+				require.NoError(t, os.Mkdir(folder, 0o700))
+				verify = func(*os.File, os.FileInfo) error {
+					require.NoError(t, os.Remove(folder))
+					return nil
+				}
+			}
+
+			err := root.DetachRegularFile("docs/a.txt", verify, filepath.Join(folder, "item"))
+
+			require.ErrorIs(t, err, ErrDestinationFailed)
+			require.NotErrorIs(t, err, os.ErrNotExist)
+			requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+			assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
+		})
+	}
+}
+
+// detachOrPreserve runs operation (opDetach or opPreserve) on docs/a.txt.
+func detachOrPreserve(root *Root, operation, dest string) error {
+	if operation == opDetach {
+		return root.DetachRegularFile("docs/a.txt", nil, dest)
+	}
+
+	return root.PreserveRegularFile("docs/a.txt", nil, dest)
+}
+
+// Validates: R-6.4.8
+//
+// A file taken out of the sync folder, or copied out of it, goes to a place
+// outside the folder: a destination inside it, or the folder itself, is
+// refused before anything moves, so the file is neither renamed inside the
+// tree nor linked beside itself.
+func TestDetachRegularFile_RefusesADestinationInsideTheSyncFolder(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []string{opDetach, opPreserve} {
+		for _, place := range []string{"inside", "the folder itself"} {
+			t.Run(operation+"/"+place, func(t *testing.T) {
+				t.Parallel()
+
+				root, dir := newDetachTree(t)
+				dest := filepath.Join(dir, "docs", "moved.txt")
+				if place == "the folder itself" {
+					dest = dir
+				}
+
+				require.ErrorIs(t, detachOrPreserve(root, operation, dest), ErrUnsafePath)
+				requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+				assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
+				assert.Equal(t, []string{"docs"}, entryNames(t, dir))
+			})
+		}
+	}
+}
+
+// Validates: R-6.4.8
+//
+// Whether a destination lies in the sync folder is decided by the folder it
+// resolves to, not by its text: a destination below a link in the folder
+// that leads outside it is taken, and the file lands outside, while one below
+// a link outside that leads into the folder is refused before anything
+// moves.
+func TestDetachRegularFile_DecidesTheDestinationByTheFolderItResolvesTo(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []string{opDetach, opPreserve} {
+		t.Run(operation+"/below a link in the folder to outside it", func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := newDetachTree(t)
+			outside := t.TempDir()
+			require.NoError(t, os.Symlink(outside, filepath.Join(dir, "elsewhere")))
+
+			dest := filepath.Join(dir, "elsewhere", "taken-out")
+
+			require.NoError(t, detachOrPreserve(root, operation, dest))
+			requireFileContent(t, filepath.Join(outside, filepath.Base(dest)), "synced\n")
+			if operation == opPreserve {
+				requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+			} else {
+				assert.NoFileExists(t, filepath.Join(dir, "docs", "a.txt"))
+			}
+		})
+		t.Run(operation+"/below a link outside to a folder in it", func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := newDetachTree(t)
+			intoTheTree := filepath.Join(t.TempDir(), "into-the-tree")
+			require.NoError(t, os.Symlink(filepath.Join(dir, "docs"), intoTheTree))
+
+			require.ErrorIs(t, detachOrPreserve(root, operation, filepath.Join(intoTheTree, "moved.txt")), ErrUnsafePath)
+			requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+			assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
+		})
+	}
+}
+
+// lstatReportsFolder answers a lstat of name with folder, a real folder's
+// stat, whatever is there: the parent the ancestor walk checked as a folder
+// and that was swapped for something else before it was opened.
+type lstatReportsFolder struct {
+	Handle
+	name   string
+	folder os.FileInfo
+}
+
+func (h lstatReportsFolder) Lstat(name string) (os.FileInfo, error) {
+	if name == h.name {
+		return h.folder, nil
+	}
+
+	return h.Handle.Lstat(name) //nolint:wrapcheck // passes the wrapped handle's answer through
+}
+
+// Validates: R-6.4.8
+//
+// A parent folder swapped for a FIFO after the ancestor walk checked it fails
+// the removal without blocking: the parent is opened as a folder and never
+// waits for a writer.
+func TestDetachRegularFile_AFIFOInPlaceOfTheParentFailsWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []string{opDetach, opRemove, opPreserve} {
+		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := openTestRoot(t)
+			require.NoError(t, unix.Mkfifo(filepath.Join(dir, "fifo"), 0o600))
+			folder, err := os.Lstat(t.TempDir())
+			require.NoError(t, err)
+			root = root.Interpose(func(h Handle) Handle {
+				return lstatReportsFolder{Handle: h, name: "fifo", folder: folder}
+			})
+			rel := filepath.Join("fifo", "a.txt")
+			dest := filepath.Join(t.TempDir(), "item")
+
+			err = returnsWithoutWaitingOnFIFO(t, filepath.Join(dir, "fifo"), func() error {
+				switch operation {
+				case opDetach:
+					return root.DetachRegularFile(rel, nil, dest)
+				case opRemove:
+					return root.RemoveVerifiedRegularFile(rel, nil)
+				default:
+					return root.PreserveRegularFile(rel, nil, dest)
+				}
+			})
+
+			require.ErrorIs(t, err, unix.ENOTDIR)
+			assert.NoFileExists(t, dest)
+		})
+	}
+}
+
+// fifoWaitBound is how long a call that must not open a FIFO for reading gets
+// to return before the test takes it as waiting for a writer. The call makes
+// a few system calls, so the bound only has to outlast a loaded machine.
+const fifoWaitBound = 30 * time.Second
+
+// returnsWithoutWaitingOnFIFO runs call and returns its result. A call that
+// has not returned within fifoWaitBound is taken as waiting in an open of
+// fifo for a writer: the test opens fifo for writing itself, which releases
+// that open, and fails, so a regression fails this test instead of hanging
+// the package until its deadline.
+func returnsWithoutWaitingOnFIFO(t *testing.T, fifo string, call func() error) error {
+	t.Helper()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- call()
+	}()
+
+	bound := time.NewTimer(fifoWaitBound)
+	defer bound.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-bound.C:
+	}
+
+	// O_RDWR opens a FIFO without waiting for a reader, and its writing end
+	// releases a reader that waits in open.
+	writer, err := localpath.OpenFile(fifo, os.O_RDWR, 0)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	select {
+	case <-done:
+		require.FailNow(t, "the call waited in an open of the FIFO in place of its parent folder until the test opened it for writing")
+	case <-time.After(fifoWaitBound):
+		require.FailNow(t, "the call waited on the FIFO in place of its parent folder and still had not returned after the test opened it for writing")
+	}
+
+	return nil
+}
+
 // Validates: R-6.4.8
 func TestDetachRegularFile_RefusesSymlinks(t *testing.T) {
 	t.Parallel()
@@ -135,7 +411,7 @@ func TestDetachRegularFile_RefusesSymlinks(t *testing.T) {
 func TestDetachRegularFile_InPlaceWriteAfterVerifyIsKept(t *testing.T) {
 	t.Parallel()
 
-	for _, operation := range []string{opDetach, opRemove, "preserve"} {
+	for _, operation := range []string{opDetach, opRemove, opPreserve} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 
@@ -244,7 +520,8 @@ func TestCopyVerified_DirectorySyncFailureLeavesNothingAtTheDestination(t *testi
 	failingSync := func(string) error { return fmt.Errorf("syncing directory: %w", unix.EIO) }
 
 	err := copyVerified(file, stamp, dest, failingSync)
-	require.ErrorIs(t, err, unix.EIO)
+	require.ErrorIs(t, err, ErrDestinationFailed)
+	require.ErrorContains(t, err, unix.EIO.Error())
 	assert.NoFileExists(t, dest, "a copy whose placement is not durable is not left for the caller to unlink the source over")
 	entries, readErr := os.ReadDir(filepath.Dir(dest))
 	require.NoError(t, readErr)

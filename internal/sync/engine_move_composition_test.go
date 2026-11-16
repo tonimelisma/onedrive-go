@@ -409,7 +409,8 @@ func TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit(t *testing.T) {
 // OneDrive moved a.txt over b.txt, replacing it (D-058). The local copy of
 // a.txt moves onto b.txt, whose old local copy is unchanged and therefore
 // replaced; nothing is uploaded, so a.txt is not resurrected online as a
-// spurious duplicate.
+// spurious duplicate. The old b.txt is in the trash exactly once, as itself,
+// and the rename replaced nothing: b.txt is the moved file itself.
 func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testing.T) {
 	t.Parallel()
 
@@ -421,6 +422,7 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
+	moved, displaced := entryIdentity(t, filepath.Join(syncRoot, "a.txt")), entryIdentity(t, filepath.Join(syncRoot, "b.txt"))
 
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
@@ -433,6 +435,9 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, "alpha\n", string(data))
 	assert.Zero(t, remote.uploads, "the moved file must not be uploaded again")
+	assert.Equal(t, moved, entryIdentity(t, filepath.Join(syncRoot, "b.txt")), "b.txt is the moved file itself")
+	kept := requireTrashHoldsOnce(t, eng.trash, "b.txt", "bravo\n")
+	assert.Equal(t, displaced, entryIdentity(t, kept.ItemPath), "the trash holds the old b.txt itself, not a copy")
 	requireScenarioQuietPlan(t, eng)
 }
 
@@ -489,6 +494,7 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
+	moved := entryIdentity(t, filepath.Join(syncRoot, "a.txt"))
 
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
@@ -512,6 +518,8 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 	identity, ok := synctree.IdentityFromFileInfo(info)
 	require.True(t, ok)
 	assert.Equal(t, identity.Inode, entry.LocalInode, "the baseline records the moved file's identity")
+	assert.Equal(t, moved.Inode, identity.Inode, "b.txt is the moved file itself")
+	requireTrashHoldsOnce(t, eng.trash, "b.txt", "same\n")
 	requireScenarioQuietPlan(t, eng)
 	assert.Zero(t, remote.uploads)
 }

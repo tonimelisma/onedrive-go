@@ -2,12 +2,16 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"os"
 	slashpath "path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // validateDrives checks all drive-level constraints: required fields,
@@ -28,6 +32,7 @@ func validateDrives(cfg *Config) []error {
 	}
 
 	errs = append(errs, checkSyncDirOverlap(syncDirs)...)
+	errs = append(errs, checkSyncDirsMeetNoManagedFolder(syncDirs)...)
 
 	return errs
 }
@@ -125,9 +130,12 @@ func normalizeFilterPath(path string) string {
 	return filepath.ToSlash(path)
 }
 
+// parentPathComponent is the path component that names a folder's parent.
+const parentPathComponent = ".."
+
 func hasParentPathComponent(path string) bool {
 	for _, part := range strings.Split(path, "/") {
-		if part == ".." {
+		if part == parentPathComponent {
 			return true
 		}
 	}
@@ -200,9 +208,10 @@ func checkSyncDirOverlap(syncDirs map[string]string) []error {
 	}
 
 	// Paths are already Clean'd by EvalSymlinks in checkDriveSyncDirUniqueness.
+	// Sorted, so the same config reports its overlaps in the same order.
 	entries := make([]entry, 0, len(syncDirs))
-	for path, id := range syncDirs {
-		entries = append(entries, entry{path: path, id: id})
+	for _, path := range slices.Sorted(maps.Keys(syncDirs)) {
+		entries = append(entries, entry{path: path, id: syncDirs[path]})
 	}
 
 	var errs []error
@@ -221,11 +230,162 @@ func checkSyncDirOverlap(syncDirs map[string]string) []error {
 }
 
 // isAncestorOrDescendant returns true if a is an ancestor of b or b is an
-// ancestor of a. Uses filepath.Separator suffix to avoid false positives from
-// path prefixes (e.g., "/OneDrive" vs "/OneDriveBackup").
+// ancestor of a.
 func isAncestorOrDescendant(a, b string) bool {
-	aSlash := a + string(filepath.Separator)
-	bSlash := b + string(filepath.Separator)
+	return pathContains(a, b) || pathContains(b, a)
+}
 
-	return strings.HasPrefix(bSlash, aSlash) || strings.HasPrefix(aSlash, bSlash)
+// pathContains reports whether path is dir or lies below it, comparing whole
+// components: "/OneDrive" does not contain "/OneDriveBackup", and "/"
+// contains every absolute path.
+func pathContains(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+
+	return err == nil && rel != parentPathComponent && !strings.HasPrefix(rel, parentPathComponent+string(filepath.Separator))
+}
+
+// managedFolder is a folder onedrive-go keeps for itself, which no sync
+// folder may be, hold or lie inside.
+type managedFolder struct {
+	path string
+	// holds says what the folder is, for the refusal.
+	holds string
+}
+
+// managedFolders returns the data and configuration folders, resolved as
+// sync_dirs are. Where both are one folder (macOS), it is named once.
+func managedFolders() []managedFolder {
+	dataDir, configDir := DefaultDataDir(), DefaultConfigDir()
+	if dataDir != "" {
+		dataDir = canonicalSyncDirPath(dataDir)
+	}
+	if configDir != "" {
+		configDir = canonicalSyncDirPath(configDir)
+	}
+	if dataDir != "" && dataDir == configDir {
+		return []managedFolder{{
+			path:  dataDir,
+			holds: "the folder onedrive-go keeps its own data and configuration in (sign-ins, sync state, trash, config.toml)",
+		}}
+	}
+
+	var folders []managedFolder
+	if dataDir != "" {
+		folders = append(folders, managedFolder{
+			path:  dataDir,
+			holds: "the folder onedrive-go keeps its own data in (sign-ins, sync state, trash)",
+		})
+	}
+	if configDir != "" {
+		folders = append(folders, managedFolder{
+			path:  configDir,
+			holds: "the folder onedrive-go keeps its configuration in",
+		})
+	}
+
+	return folders
+}
+
+// checkSyncDirsMeetNoManagedFolder runs checkSyncDirMeetsNoManagedFolder on
+// every configured sync_dir. The syncDirs map holds resolved paths, as
+// checkDriveSyncDirUniqueness fills it.
+func checkSyncDirsMeetNoManagedFolder(syncDirs map[string]string) []error {
+	var errs []error
+
+	for _, syncDir := range slices.Sorted(maps.Keys(syncDirs)) {
+		errs = append(errs, checkSyncDirMeetsNoManagedFolder(syncDirs[syncDir], syncDir)...)
+	}
+
+	return errs
+}
+
+// checkSyncDirMeetsNoManagedFolder refuses syncDir, the resolved path
+// (canonicalSyncDirPath) of driveID's sync folder, when it and a folder
+// onedrive-go manages for itself, resolved the same way, are the same folder
+// or either holds the other (R-4.8.3). A sync folder holding one would upload
+// the client's state databases, sign-ins and trash, the files sync moves to
+// the trash would come back as new files, and a trashed file could not be
+// restored, since a restore moves a file into the sync folder from outside
+// it. A sync folder inside one is synced where the client writes its own
+// files, and inside the data folder it holds the trash's files or lies beside
+// them. Each refusal names both paths, which holds which, and what to change.
+func checkSyncDirMeetsNoManagedFolder(driveID, syncDir string) []error {
+	var errs []error
+
+	// outsideIt is the change for a sync folder that is a managed folder or
+	// lies inside one.
+	const outsideIt = "outside it"
+
+	for _, folder := range managedFolders() {
+		var relation, change string
+		switch nestingOf(syncDir, folder.path) {
+		case foldersApart:
+			continue
+		case foldersSame:
+			relation, change = "is", outsideIt
+		case firstFolderHoldsSecond:
+			relation, change = "contains", "that does not contain it"
+		case secondFolderHoldsFirst:
+			relation, change = "lies inside", outsideIt
+		}
+
+		errs = append(errs, fmt.Errorf("drive %q sync_dir %s %s %s, %s; set sync_dir to a folder %s",
+			driveID, syncDir, relation, folder.path, folder.holds, change))
+	}
+
+	return errs
+}
+
+// folderNesting is how two folders lie: apart, as one folder, or one holding
+// the other.
+type folderNesting int
+
+const (
+	foldersApart folderNesting = iota
+	foldersSame
+	firstFolderHoldsSecond
+	secondFolderHoldsFirst
+)
+
+// nestingOf decides how the folders first and second lie, both resolved
+// paths. It decides by text, component by component (pathContains), and,
+// where both are absolute paths, also by what the folders are: a folder that
+// exists is compared (os.SameFile) with every folder above the other path
+// that exists, and with the other when both exist, so a path that names a
+// folder in another spelling, as on a volume that ignores letter case, is
+// still found, whether or not the other path exists yet. A folder that does
+// not exist yet, or cannot be read, is compared by text alone.
+func nestingOf(first, second string) folderNesting {
+	firstInfo, firstErr := localpath.Stat(first)
+	secondInfo, secondErr := localpath.Stat(second)
+	// Each identity is compared only between absolute paths: a relative one
+	// would be read against the working folder.
+	bothAbsolute := filepath.IsAbs(first) && filepath.IsAbs(second)
+	firstHasIdentity := bothAbsolute && firstErr == nil
+	secondHasIdentity := bothAbsolute && secondErr == nil
+
+	switch {
+	case first == second || firstHasIdentity && secondHasIdentity && os.SameFile(firstInfo, secondInfo):
+		return foldersSame
+	case pathContains(first, second) || firstHasIdentity && hasFolderAbove(second, firstInfo):
+		return firstFolderHoldsSecond
+	case pathContains(second, first) || secondHasIdentity && hasFolderAbove(first, secondInfo):
+		return secondFolderHoldsFirst
+	default:
+		return foldersApart
+	}
+}
+
+// hasFolderAbove reports whether folder is one of the folders above path, an
+// absolute path, found by taking its last component off, one at a time, up
+// to the filesystem's root.
+func hasFolderAbove(path string, folder os.FileInfo) bool {
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		if info, err := localpath.Stat(dir); err == nil && os.SameFile(info, folder) {
+			return true
+		}
+		if filepath.Dir(dir) == dir {
+			return false
+		}
+	}
 }
