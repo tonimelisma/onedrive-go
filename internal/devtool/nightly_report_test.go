@@ -280,6 +280,46 @@ func TestNightlyReportIssueTextHoldsOnlyJobsTestsAndTheRunURL(t *testing.T) {
 
 // Validates: R-6.10.24
 //
+// A job whose log names no failed test but names its failed steps is shown
+// with the steps' keys, the words a claim takes, and never with a line of the
+// log.
+func TestNightlyReportIssueNamesTheFailedStepsOfAJobWithoutAFailedTest(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, "")
+	remote.jobs = nightlyRunView(t, map[string]string{"stress": checkConclusionFailure}, nightlyReportJobEntry())
+	remote.jobLogs["13"] = "upload stalled\n" + verifyStepFailedPrefix + "stress multisync-race-repeated\n" +
+		verifyStepFailedPrefix + "stress sync-concurrency-race-repeated\n"
+
+	runNightlyReport(t, remote, false)
+	require.Len(t, remote.issues, 1)
+	body := remote.issues[0].body
+	assert.Contains(t, body, "- `stress`: failed; failed steps: "+
+		"`step-stress-multisync-race-repeated`, `step-stress-sync-concurrency-race-repeated`\n")
+	assert.NotContains(t, body, "upload stalled")
+}
+
+// Validates: R-6.10.24
+//
+// A job whose log names failed tests and a failed step that runs no go test
+// is shown with both: the tests' keys and the step's key, the words each
+// claim takes.
+func TestNightlyReportIssueNamesAStepOutsideGoTestBesideTheFailedTests(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, "")
+	remote.jobs = nightlyRunView(t, map[string]string{nightlyTestUbuntuLeg: checkConclusionFailure}, nightlyReportJobEntry())
+	remote.jobLogs["10"] = nightlyTestPlannerFailure +
+		verifyStepFailedPrefix + "public unit-tests\n" + verifyStepFailedPrefix + "public lint\n"
+
+	runNightlyReport(t, remote, false)
+	require.Len(t, remote.issues, 1)
+	assert.Contains(t, remote.issues[0].body, "- `"+nightlyTestUbuntuLeg+"`: failed; failed tests: `internal/sync.TestPlanner`; "+
+		"failed steps: `step-verify-full--ubuntu-latest-lint`\n")
+}
+
+// Validates: R-6.10.24
+//
 // A rerun of the report job reports the same run again. It posts the same
 // commit status, and it writes nothing to the issue that the issue already
 // says: no second issue, and no comment naming the run a second time.

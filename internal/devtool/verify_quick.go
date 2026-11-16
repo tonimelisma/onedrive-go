@@ -112,11 +112,14 @@ func runPRLaneVerification(
 	}
 	switch {
 	case plan.runQuickChecks:
-		steps = append(steps, verifyStep{"format", formatStep(plan.checkFormat)})
+		steps = append(steps, verifyStep{name: formatStepName, run: formatStep(plan.checkFormat)})
 		steps = append(steps, repoRuleSteps()...)
-		steps = append(steps, verifyStep{"build", runBuild}, verifyStep{"tagged vet", runTaggedVet})
+		steps = append(steps,
+			verifyStep{name: buildStepName, run: runBuild},
+			verifyStep{name: taggedVetStepName, run: runTaggedVet},
+		)
 	case plan.runPlatformChecks:
-		steps = append(steps, verifyStep{"build", runHostBuild})
+		steps = append(steps, verifyStep{name: hostBuildStepName, run: runHostBuild})
 	}
 	if len(steps) == 0 {
 		return nil
@@ -128,10 +131,14 @@ func runPRLaneVerification(
 		return nil
 	}
 
-	return collector.runStep("short unit tests", func() error {
+	return collector.runStep(shortUnitTestsStepName, func() error {
 		return runShortUnitTests(ctx, runner, repoRoot, env, shard, shortUnitTimeout, stdout, stderr)
 	})
 }
+
+// hostBuildStepName names the platform profile's build step, the host build
+// alone.
+const hostBuildStepName verifyStepName = "host-build"
 
 func runHostBuild(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
 	if err := writeStatus(stdout, "==> go build\n"); err != nil {
@@ -143,6 +150,9 @@ func runHostBuild(ctx context.Context, runner commandRunner, repoRoot string, en
 
 	return nil
 }
+
+// shortUnitTestsStepName names the short unit tier's step.
+const shortUnitTestsStepName verifyStepName = "short-unit-tests"
 
 // runShortUnitTests runs the short unit tier: `go test -short` without the
 // race detector or a coverage profile, optionally one shard of it. -short

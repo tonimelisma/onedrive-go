@@ -32,6 +32,9 @@ type failedGoTestTarget struct {
 	Replay *seedReplay
 }
 
+// failedTestRerunStepName names the failed-test profile's one step.
+const failedTestRerunStepName verifyStepName = "failed-test-rerun"
+
 func runFailedTestVerification(
 	ctx context.Context,
 	runner commandRunner,
@@ -45,7 +48,7 @@ func runFailedTestVerification(
 		return fmt.Errorf("verify failed-test: --failed-log is required")
 	}
 
-	return collector.runStep("failed test rerun", func() error {
+	return collector.runStep(failedTestRerunStepName, func() error {
 		data, err := readFile(failedLogPath)
 		if err != nil {
 			return fmt.Errorf("read failed test log %s: %w", failedLogPath, err)

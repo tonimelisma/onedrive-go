@@ -22,7 +22,7 @@ const e2eFullCommandsBeforeBuckets = 4
 // bucketFailureOutput returns a fake go test stdout that prints a `--- FAIL:`
 // line for each test named for the bucket whose command runs; every other
 // command, and a bucket with no test named, passes.
-func bucketFailureOutput(failedByBucket map[string][]string) func(args []string) string {
+func bucketFailureOutput(failedByBucket map[verifyStepName][]string) func(args []string) string {
 	return func(args []string) string {
 		for _, bucket := range fullE2EBuckets() {
 			failed := failedByBucket[bucket.Name]
@@ -68,12 +68,12 @@ func TestRunVerifyE2EFullRunsEveryBucketAfterOneFails(t *testing.T) {
 	misc := fullE2EParallelMiscBucket()
 	runner := &fakeRunner{
 		runErrByKey:   map[string]error{goCommandKey(fullE2EBucketCommandArgs(misc)): assert.AnError},
-		runStdoutFunc: bucketFailureOutput(map[string][]string{misc.Name: {"TestE2E_RapidFileChurn"}}),
+		runStdoutFunc: bucketFailureOutput(map[verifyStepName][]string{misc.Name: {"TestE2E_RapidFileChurn"}}),
 	}
 
 	summary, _, err := runE2EFullForTest(t, runner, false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), misc.Name)
+	assert.Contains(t, err.Error(), string(misc.Name))
 
 	buckets := fullE2EBuckets()
 	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(buckets))
@@ -111,11 +111,11 @@ func TestRunVerifyE2EFullFailsASuiteThatRanNoTests(t *testing.T) {
 
 	summary, _, err := runE2EFullForTest(t, runner, false)
 	require.ErrorContains(t, err, "fast e2e matched no tests")
-	require.ErrorContains(t, err, "bucket "+serial.Name+": full e2e matched no tests")
+	require.ErrorContains(t, err, "bucket "+string(serial.Name)+": full e2e matched no tests")
 	assert.Equal(t,
 		[]string{verifySummaryStatusPass, verifySummaryStatusFail, verifySummaryStatusPass},
 		bucketStatuses(summary))
-	assert.Equal(t, verifySummaryStatusFail, requireVerifySummaryStep(t, summary, "fast e2e").Status)
+	assert.Equal(t, verifySummaryStatusFail, requireVerifySummaryStep(t, summary, fastE2EStepName).Status)
 }
 
 // Validates: R-6.10.26
@@ -129,7 +129,7 @@ func TestRunVerifyE2EFullReportsEveryFailingBucket(t *testing.T) {
 			goCommandKey(fullE2EBucketCommandArgs(misc)):  assert.AnError,
 			goCommandKey(fullE2EBucketCommandArgs(watch)): assert.AnError,
 		},
-		runStdoutFunc: bucketFailureOutput(map[string][]string{
+		runStdoutFunc: bucketFailureOutput(map[verifyStepName][]string{
 			misc.Name:  {"TestE2E_RapidFileChurn", "TestE2E_InvalidFilenameRejection"},
 			watch.Name: {"TestE2E_SyncWatch_PauseResume"},
 		}),
@@ -137,8 +137,8 @@ func TestRunVerifyE2EFullReportsEveryFailingBucket(t *testing.T) {
 
 	summary, stdout, err := runE2EFullForTest(t, runner, false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), misc.Name)
-	assert.Contains(t, err.Error(), watch.Name)
+	assert.Contains(t, err.Error(), string(misc.Name))
+	assert.Contains(t, err.Error(), string(watch.Name))
 
 	require.Len(t, summary.E2EFullBuckets, len(fullE2EBuckets()))
 	assert.Equal(t,
@@ -183,11 +183,11 @@ func TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure(t *testing.T)
 			buckets := fullE2EBuckets()
 			require.Len(t, summary.E2EFullBuckets, len(buckets))
 			for i, bucket := range buckets {
-				assert.Equal(t, bucket.Name, summary.E2EFullBuckets[i].Name)
+				assert.Equal(t, string(bucket.Name), summary.E2EFullBuckets[i].Name)
 				assert.Equal(t, verifySummaryStatusNotRun, summary.E2EFullBuckets[i].Status)
 				assert.Contains(t, summary.E2EFullBuckets[i].Error, "preflight")
 			}
-			assert.Contains(t, stdout, buckets[0].Name+": "+verifySummaryStatusNotRun)
+			assert.Contains(t, stdout, string(buckets[0].Name)+": "+verifySummaryStatusNotRun)
 		})
 	}
 }
@@ -263,6 +263,7 @@ func TestRunVerifyE2EFullReportsTheAuthPreflightRerunFailure(t *testing.T) {
 	require.Len(t, runner.runCommands, 2)
 	require.Len(t, summary.ClassifiedReruns, 1)
 	assert.Equal(t, verifySummaryStatusFail, summary.ClassifiedReruns[0].Status)
+	assert.Equal(t, string(authPreflightStepName), summary.ClassifiedReruns[0].Phase, "a rerun is recorded under its step's name")
 }
 
 // Validates: R-6.10.26
@@ -294,7 +295,7 @@ func TestRunVerifyE2EFullNamesTheFailedTestWhenTheAuthPreflightRerunSkipped(t *t
 	summary, _, err := runE2EFullForTest(t, runner, true)
 	require.ErrorIs(t, err, errE2EPreflight)
 	require.ErrorContains(t, err, "skipped "+authPreflightTestName)
-	assert.Equal(t, []string{authPreflightTestName}, requireVerifySummaryStep(t, summary, "auth preflight").FailedTests)
+	assert.Equal(t, []string{authPreflightTestName}, requireVerifySummaryStep(t, summary, authPreflightStepName).FailedTests)
 }
 
 // Validates: R-6.10.26
@@ -332,9 +333,9 @@ func TestRunVerifyRecordsASkippedAuthPreflightAsSkipped(t *testing.T) {
 
 	var summary VerifySummary
 	readVerifySummaryFile(t, summaryPath, &summary)
-	assert.Equal(t, verifySummaryStatusSkipped, requireVerifySummaryStep(t, summary, "auth preflight").Status)
+	assert.Equal(t, verifySummaryStatusSkipped, requireVerifySummaryStep(t, summary, authPreflightStepName).Status)
 	assert.Contains(t, stdout.String(), authPreflightSkippedNotice)
-	assert.Contains(t, stdout.String(), "auth preflight: "+verifySummaryStatusSkipped)
+	assert.Contains(t, stdout.String(), string(authPreflightStepName)+": "+verifySummaryStatusSkipped)
 }
 
 // The made-up live test and incident of the classified rerun tests.
@@ -351,8 +352,9 @@ func runClassifiedRerunForTest(t *testing.T, output string, goTestErr error) (*v
 
 	runner := &fakeRunner{runErr: goTestErr, runStdoutFunc: func([]string) string { return output }}
 	stdout := &bytes.Buffer{}
-	collector := newVerifySummaryCollector(VerifyE2EFull, stdout, "", "")
-	_, err := rerunClassifiedQuirk(t.Context(), runner, t.TempDir(), nil, collector, stdout, &bytes.Buffer{}, classifiedQuirkRerun{
+	stderr := &bytes.Buffer{}
+	collector := newVerifySummaryCollector(VerifyE2EFull, stdout, stderr, "", "")
+	_, err := rerunClassifiedQuirk(t.Context(), runner, t.TempDir(), nil, collector, stdout, stderr, classifiedQuirkRerun{
 		incidentID: rerunTestIncident,
 		phase:      "widget bucket",
 		trigger:    rerunTestName,

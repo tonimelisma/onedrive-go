@@ -28,10 +28,12 @@ const (
 	seedsChaosCount   = 2
 	// seedsTimeout is go test's deadline for the seeds step, which took 11.5
 	// minutes on a shared, loaded 2-core host (November 2026).
-	seedsTimeout  = "30m"
-	seedsStepName = "model seeds"
-	hoursPerDay   = 24
+	seedsTimeout = "30m"
+	hoursPerDay  = 24
 )
+
+// seedsStepName names the seeds profile's one step.
+const seedsStepName verifyStepName = "model-seeds"
 
 // The model families' variables, as internal/sync's tests read them
 // (TestSeedsRunPatternNamesExistingTests holds each to their source).
@@ -183,7 +185,7 @@ func runSeedsVerification(
 			return stepOutcome{}, fmt.Errorf("write status: %w", err)
 		}
 
-		output, err := runGoTestMatching(ctx, runner, repoRoot, seedsEnv(env, start), stdout, stderr, seedsStepName,
+		output, err := runGoTestMatching(ctx, runner, repoRoot, seedsEnv(env, start), stdout, stderr, string(seedsStepName),
 			"test", "-count=1", "-timeout="+seedsTimeout, "-run", seedsRunPattern(), syncTestTree)
 		outcome := stepOutcome{failedTests: parseGoTestLog(output).failedTopLevelTests()}
 		if replays := failingSeedReplays(output); len(replays) > 0 {
