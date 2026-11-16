@@ -112,12 +112,12 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 	_, stderr := runSyncUntilOnlyConditionsRemain(t, cfgPath, env, "--upload-only")
 
 	// The debug stderr should mention skipping the invalid entry.
-	assert.Contains(t, stderr, "skipping invalid entry",
+	assertOutputContains(t, stderr, "skipping invalid entry",
 		"should log debug message about invalid filename")
 
 	// Verify only valid.txt appeared remotely (poll for eventual consistency).
 	stdout, _ := waitForRemoteReadContains(t, opsCfgPath, nil, "", "valid.txt", pollTimeout, "ls", "/"+testFolder)
-	assert.NotContains(t, stdout, "CON",
+	assertOutputNotContains(t, stdout, "CON",
 		"invalid filename should not be uploaded")
 }
 

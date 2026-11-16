@@ -51,7 +51,7 @@ func remoteFileNames(t *testing.T, cfgPath string, env map[string]string, remote
 	var items []struct {
 		Name string `json:"name"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &items), "ls --json: %s", stdout)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items), "ls --json: %s", printable(stdout))
 	names := make([]string, 0, len(items))
 	for _, item := range items {
 		names = append(names, item.Name)
@@ -80,11 +80,11 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	// for confirmation are a deliberate hold, not work left, so it exits 0
 	// (R-6.6.28).
 	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-	combined := stdout + stderr
-	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", combined)
-	assert.NotRegexp(t, syncLeftWorkPattern, stdout)
-	assert.Contains(t, combined, "deletes for confirmation", "the deletes are held: %s", combined)
-	assert.Contains(t, combined, "sync --confirm-deletes", "the summary names the command: %s", combined)
+	combinedOutput := stdout + stderr
+	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", printable(combinedOutput))
+	assertOutputDoesNotMatch(t, syncLeftWorkPattern, stdout)
+	assertOutputContains(t, combinedOutput, "deletes for confirmation", "the deletes are held")
+	assertOutputContains(t, combinedOutput, "sync --confirm-deletes", "the summary names the command")
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
 		"nothing is deleted on OneDrive while the hold stands")
 
@@ -100,13 +100,14 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 			assert.Equal(t, safetyFileCount+1, issue.Count, "status counts the held deletes, the folder included")
 		}
 	}
-	assert.True(t, heldIssue, "status lists the held deletes: %+v", driveStatus.SyncState.Issues)
+	assert.True(t, heldIssue, "status lists the held deletes: %s",
+		suiteDriveRoles.Redact(fmt.Sprintf("%+v", driveStatus.SyncState.Issues)))
 
 	// A second ordinary pass holds them again: the hold is derived from
 	// current truth, not from a one-shot flag. It exits 0 too.
 	stdout, stderr, syncErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", stdout+stderr)
-	assert.Contains(t, stdout+stderr, "deletes for confirmation")
+	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", printable(stdout)+printable(stderr))
+	assertOutputContains(t, stdout+stderr, "deletes for confirmation")
 	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
 
 	runSyncThroughTransientFailures(t, cfgPath, env, "--confirm-deletes")
@@ -118,7 +119,7 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	// Single pass by design: the one pass after the confirmed deletes must
 	// hold nothing; it may leave work a transient failure causes.
 	stdout, stderr = runSyncPass(t, cfgPath, env)
-	assert.NotContains(t, stdout+stderr, "deletes for confirmation", "nothing is held once applied")
+	assertOutputNotContains(t, stdout+stderr, "deletes for confirmation", "nothing is held once applied")
 }
 
 // Validates: R-6.4.9
@@ -160,11 +161,12 @@ func TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores(t *testing.T) {
 			Reason string `json:"reason"`
 		} `json:"entries"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &listing), "trash list --json: %s", stdout)
-	require.Len(t, listing.Entries, 1, "exactly the deleted file is in the trash: %s", stdout)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &listing), "trash list --json: %s", printable(stdout))
+	trashedCount := len(listing.Entries)
+	require.Equalf(t, 1, trashedCount, "exactly the deleted file is in the trash: %s", printable(stdout))
 	entry := listing.Entries[0]
-	assert.Equal(t, folder+"/"+victim, entry.Path)
-	assert.Equal(t, "deleted", entry.Reason)
+	assertOutputEqual(t, folder+"/"+victim, entry.Path)
+	assertOutputEqual(t, "deleted", entry.Reason)
 
 	runCLIWithConfig(t, cfgPath, env, "trash", "restore", entry.ID)
 	require.FileExists(t, localVictim, "the file is back where sync removed it")
@@ -172,7 +174,8 @@ func TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores(t *testing.T) {
 
 	stdout, _ = runCLIWithConfig(t, cfgPath, env, "trash", "list", "--json")
 	require.NoError(t, json.Unmarshal([]byte(stdout), &listing))
-	assert.Empty(t, listing.Entries, "the restored entry has left the trash")
+	remainingCount := len(listing.Entries)
+	assert.Zerof(t, remainingCount, "the restored entry has left the trash: %s", printable(stdout))
 }
 
 // Validates: R-6.2.12, R-6.6.28
@@ -197,20 +200,20 @@ func TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	refusal := runCLIWithConfigExpectError(t, cfgPath, env, "sync")
-	assert.Contains(t, refusal, "rebind-root", "the refusal names the command: %s", refusal)
+	assertOutputContains(t, refusal, "rebind-root", "the refusal names the command")
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
 		"a refused sync deletes nothing on OneDrive")
 	assert.NoFileExists(t, filepath.Join(syncDir, folder, "f00.txt"), "and downloads nothing into the stranger")
 
 	stdout, stderr := runCLIWithConfig(t, cfgPath, env, "drive", "rebind-root", "--yes")
-	t.Logf("rebind-root: %s%s", stdout, stderr)
+	t.Logf("rebind-root: %s%s", printable(stdout), printable(stderr))
 
 	// Single pass by design: this one pass must hold the deletes, and a pass
 	// that only holds deletes exits 0 (R-6.6.28).
 	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
-	require.NoErrorf(t, syncErr, "the rebound folder's held deletes are not work left: %s", stdout+stderr)
-	assert.Contains(t, stdout+stderr, "deletes for confirmation",
-		"the rebound empty folder holds the deletes it implies: %s", stdout+stderr)
+	require.NoErrorf(t, syncErr, "the rebound folder's held deletes are not work left: %s", printable(stdout)+printable(stderr))
+	assertOutputContains(t, stdout+stderr, "deletes for confirmation",
+		"the rebound empty folder holds the deletes it implies")
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
 		"still nothing deleted on OneDrive")
 }

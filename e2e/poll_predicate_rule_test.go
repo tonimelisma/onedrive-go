@@ -22,11 +22,20 @@ import (
 // reaches one. It fails the test when it calls a testify assertion on t or a
 // method of t that fails or skips the test (testEndingMethods), directly or
 // through the suite's functions to any depth; a skip counts because it turns a
-// transient state into a test that did not run. Two shapes are outside the
-// scan: a predicate a suite function builds and returns
-// (dryRunPlanHasLineStarting), and one a function forwards from a variable or
-// a parameter instead of writing it at the call. No predicate of the suite
-// goes through a method or a struct field.
+// transient state into a test that did not run. A predicate a suite function
+// builds and returns (dryRunPlanHasLineStarting) is read at its call as the
+// literal the function returns, so the literal's failing call counts and the
+// builder's own, which runs before the wait, does not. One kept in a variable
+// is read where the variable is handed to a wait, as the literal or the
+// builder's call the variable was set to. One a function hands on through a
+// parameter (ready in requireSyncWithModeEventuallyConverges) is read at the
+// call that gives it, since a function that hands a parameter on to a wait
+// reaches the wait itself. Outside the scan stays a predicate that goes
+// through a method or a struct field, which the suite has none of: telling
+// which method a call reaches needs type information the scan does not build.
+// A builder's predicate is read only when the builder returns a function
+// literal directly (returnedLiterals); one that returns a variable or a named
+// function stays outside too, and the suite's builders return literals.
 
 // pollPredicateFinding is a predicate given to a wait that can fail the test.
 type pollPredicateFinding struct {
@@ -61,13 +70,28 @@ func (src *suiteSources) failingPollPredicates() []pollPredicateFinding {
 			if passed.named != "" && !src.funcs[passed.named].returnsValue {
 				continue
 			}
-			if fails := passed.failingCall(canFail); fails != "" {
-				findings = append(findings, pollPredicateFinding{at: passed.at, in: name, wait: passed.to, fails: fails})
+			for _, predicate := range src.predicatesOf(passed) {
+				if fails := predicate.failingCall(canFail); fails != "" {
+					findings = append(findings, pollPredicateFinding{at: passed.at, in: name, wait: passed.to, fails: fails})
+				}
 			}
 		}
 	}
 
 	return findings
+}
+
+// predicatesOf is what a wait runs as the predicate passed: passed itself,
+// or for a suite function's call the literals that function returns.
+func (src *suiteSources) predicatesOf(passed passedFunc) []passedFunc {
+	if passed.built == "" {
+		return []passedFunc{passed}
+	}
+	if builder, ok := src.funcs[passed.built]; ok {
+		return builder.returned
+	}
+
+	return nil
 }
 
 // failingCall names the call in passed that can fail the test: its own
@@ -131,8 +155,12 @@ func TestPollPredicateScanReportsFailingPredicates(t *testing.T) {
 		{at: "planted_test.go:26", in: "TestPlantedPredicates", wait: "waitForPlantedSize", fails: "t.Fatalf"},
 		{at: "planted_test.go:27", in: "TestPlantedPredicates", wait: "waitForPlantedSize", fails: "t.Skip"},
 		{at: "planted_test.go:28", in: "TestPlantedPredicates", wait: "readPlanted", fails: "plantedStateHolds"},
+		{at: "planted_test.go:30", in: "TestPlantedPredicates", wait: "waitForPlantedSize", fails: "require.True"},
+		{at: "planted_test.go:32", in: "TestPlantedPredicates", wait: "forwardPlanted", fails: "require.True"},
 	}, src.failingPollPredicates(),
 		"a predicate that asserts itself, one that asserts through a helper, that helper by name, one that calls "+
-			"t.Fatalf, one that skips, and one that asserts two calls down inside a function that waits through another; "+
-			"not the one that reports, the two actions, or the predicate of a function that does not wait")
+			"t.Fatalf, one that skips, one that asserts two calls down inside a function that waits through another, "+
+			"the asserting builder's predicate at its call, and the asserting predicate a variable hands on through a "+
+			"parameter; not the one that reports, the two actions, the predicate of a function that does not wait, "+
+			"the pure builder's (whose own assertion runs before the wait), or the pure forwarded one")
 }

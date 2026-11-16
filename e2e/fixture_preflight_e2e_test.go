@@ -14,15 +14,16 @@ func TestE2E_FixturePreflight_Fast(t *testing.T) {
 
 	fixture := resolveSharedFileFixture(t, requireSharedFileLink(t))
 
-	assert.Equal(t, fixture.RecipientEmail, fixture.FileItem.AccountEmail)
-	assert.Equal(t, fixture.FileItem.Selector, fixture.RawStat.SharedSelector)
+	assertSharedFileFixtureConsistent(t, &fixture)
 	assert.NotEmpty(t, fixture.RecipientDriveID)
 
 	writableShortcut := requireShortcutFixtureWithCatalog(t, shortcutFixtureWritable)
 	readOnlyShortcut := requireShortcutFixtureWithCatalog(t, shortcutFixtureReadOnly)
 
-	assert.Equal(t, writableShortcut.ParentEmail, writableShortcut.SharedItem.AccountEmail)
-	assert.Equal(t, readOnlyShortcut.ParentEmail, readOnlyShortcut.SharedItem.AccountEmail)
+	assertSameIdentity(t, "the writable shortcut's shared item account",
+		writableShortcut.ParentEmail, writableShortcut.SharedItem.AccountEmail)
+	assertSameIdentity(t, "the read-only shortcut's shared item account",
+		readOnlyShortcut.ParentEmail, readOnlyShortcut.SharedItem.AccountEmail)
 	assert.NotEmpty(t, writableShortcut.SharedItem.RemoteDriveID)
 	assert.NotEmpty(t, readOnlyShortcut.SharedItem.RemoteDriveID)
 }

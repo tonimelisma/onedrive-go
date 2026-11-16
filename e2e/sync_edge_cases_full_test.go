@@ -107,7 +107,7 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 		"--upload-only",
 	)
 	require.NoErrorf(t, setup.Err, "unexpected sync setup failure\nstdout: %s\nstderr: %s",
-		suiteDriveRoles.Redact(setup.Stdout), suiteDriveRoles.Redact(setup.Stderr))
+		printable(setup.Stdout), printable(setup.Stderr))
 
 	// Verify deep file exists remotely.
 	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
@@ -183,7 +183,7 @@ func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
 	// elsewhere can still make the global run report unrelated deferred work.
 	// Single pass by design: the one pass after the mtime change must upload nothing.
 	out := assertSyncLeavesLocalTreeStable(t, cfgPath, env, localDir, "sync", "--upload-only")
-	assert.NotContains(t, out, "Uploaded "+testFolder+"/",
+	assertOutputNotContains(t, out, "Uploaded "+testFolder+"/",
 		"mtime-only change should not trigger upload when hash matches baseline")
 }
 
@@ -218,13 +218,13 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 
 	// The test-owned remote subtree should still contain the same files.
 	stdout, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder)
-	assert.Contains(t, stdout, "a.txt")
-	assert.Contains(t, stdout, "b.txt")
-	assert.Contains(t, stdout, "c.txt")
-	assert.Contains(t, stdout, "sub")
+	assertOutputContains(t, stdout, "a.txt")
+	assertOutputContains(t, stdout, "b.txt")
+	assertOutputContains(t, stdout, "c.txt")
+	assertOutputContains(t, stdout, "sub")
 
 	subOut, _ := runCLIWithConfig(t, cfgPath, env, "ls", "/"+testFolder+"/sub")
-	assert.Contains(t, subOut, "nested.txt")
+	assertOutputContains(t, subOut, "nested.txt")
 }
 
 // TestE2E_Sync_TransferWorkersConfig validates that the transfer_workers
@@ -278,5 +278,5 @@ func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
 		},
 		"--upload-only",
 	)
-	assert.Contains(t, attempt.Stdout, "(upload only)")
+	assertOutputContains(t, attempt.Stdout, "(upload only)")
 }

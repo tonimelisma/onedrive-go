@@ -29,7 +29,7 @@ func TestE2E_FileOpsSmokeCRUD(t *testing.T) {
 	})
 
 	_, stderr := runCLIWithConfig(t, cfgPath, nil, "mkdir", remoteFolder)
-	assert.Contains(t, stderr, "Created")
+	assertOutputContains(t, stderr, "Created")
 
 	tmpFile, err := os.CreateTemp("", "e2e-smoke-upload-*")
 	require.NoError(t, err)
@@ -40,17 +40,17 @@ func TestE2E_FileOpsSmokeCRUD(t *testing.T) {
 	require.NoError(t, tmpFile.Close())
 
 	_, stderr = runCLIWithConfig(t, cfgPath, nil, "put", tmpFile.Name(), remotePath)
-	assert.Contains(t, stderr, "Uploaded")
+	assertOutputContains(t, stderr, "Uploaded")
 	waitForRemoteFixtureSeedVisible(t, cfgPath, nil, drive, remotePath)
 
 	localPath := filepath.Join(t.TempDir(), "smoke.txt")
 	_, stderr = runCLIWithConfig(t, cfgPath, nil, "get", remotePath, localPath)
-	assert.Contains(t, stderr, "Downloaded")
+	assertOutputContains(t, stderr, "Downloaded")
 
 	downloaded := mustReadFile(t, localPath)
 	assert.Equal(t, content, downloaded)
 
 	_, stderr = runCLIWithConfig(t, cfgPath, nil, "rm", remotePath)
-	assert.Contains(t, stderr, "Deleted")
+	assertOutputContains(t, stderr, "Deleted")
 	waitForRemoteDeleteDisappearance(t, cfgPath, nil, drive, "smoke.txt", "ls", remoteFolder)
 }

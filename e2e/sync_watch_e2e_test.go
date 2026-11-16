@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,7 +114,7 @@ func TestE2E_SyncWatch_BasicRoundTrip(t *testing.T) {
 		// Some platforms return exit code 1 for signal-interrupted processes.
 		// Check that the daemon at least started correctly.
 		t.Logf("daemon exited with: %v", waitErr)
-		t.Logf("daemon stderr: %s", stderr.String())
+		t.Logf("daemon stderr: %s", printable(stderr.String()))
 	}
 }
 
@@ -174,10 +173,10 @@ func TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners(t *testing.T) {
 		require.Error(t, err, "%s should fail while watch owner is live", name)
 		require.NotEqual(t, context.DeadlineExceeded, ctx.Err(), "%s should fail promptly instead of hanging", name)
 
-		combined := stdout.String() + stderr.String()
-		assert.Contains(
+		combinedOutput := stdout.String() + stderr.String()
+		assertOutputContains(
 			t,
-			combined,
+			combinedOutput,
 			"another onedrive-go sync is already running",
 			"%s should report the owner-socket conflict",
 			name,

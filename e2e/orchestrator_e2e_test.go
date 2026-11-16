@@ -91,8 +91,8 @@ func TestE2E_Orchestrator_Status(t *testing.T) {
 	// Both drive IDs (which contain the email) should appear in status output.
 	email1 := strings.SplitN(drive, ":", 2)[1]
 	email2 := strings.SplitN(drive2, ":", 2)[1]
-	assert.Contains(t, stdout, email1, "status should show drive1 email")
-	assert.Contains(t, stdout, email2, "status should show drive2 email")
+	assertOutputContains(t, stdout, email1, "status should show drive1 email")
+	assertOutputContains(t, stdout, email2, "status should show drive2 email")
 }
 
 // TestE2E_Orchestrator_DriveIsolation uploads a file to drive1 only, then
@@ -182,18 +182,18 @@ func TestE2E_Orchestrator_OneDriveFails(t *testing.T) {
 	require.Error(t, err, "sync should exit non-zero when one drive fails")
 
 	// drive2's error should be mentioned.
-	combined := stdout + stderr
+	combinedOutput := stdout + stderr
 	assert.True(t,
-		strings.Contains(combined, drive2) || strings.Contains(combined, "token"),
+		strings.Contains(combinedOutput, drive2) || strings.Contains(combinedOutput, "token"),
 		"output should mention the failing drive or token error")
 
 	// Verify the CLI reported the error explicitly in the output.
-	assert.Contains(t, combined, "Error:",
+	assertOutputContains(t, combinedOutput, "Error:",
 		"output should contain 'Error:' for the failed drive")
 
 	// Verify drive1 reported a finished run (not stale remote state). The
-	// per-drive summary is on stdout; combined holds both streams.
-	assert.True(t, strings.Contains(combined, "Done in") || strings.Contains(combined, "Up to date"),
+	// per-drive summary is on stdout; combinedOutput holds both streams.
+	assert.True(t, strings.Contains(combinedOutput, "Done in") || strings.Contains(combinedOutput, "Up to date"),
 		"output should contain drive1's summary proving it completed this run")
 
 	// drive1's file should still have been uploaded.

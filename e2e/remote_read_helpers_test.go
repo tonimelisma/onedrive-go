@@ -488,7 +488,7 @@ func waitForRemoteFileContent(
 	if !isReady {
 		require.Failf(t, "waitForRemoteFileContent: timed out",
 			"after %v waiting for %q to hold %s\nlast download: %s\nlast get stderr: %s",
-			daemonPollTimeout, remotePath, summarizeContent([]byte(want)), lastDownload, suiteDriveRoles.Redact(stderr))
+			daemonPollTimeout, remotePath, summarizeContent([]byte(want)), lastDownload, printable(stderr))
 	}
 }
 

@@ -92,6 +92,15 @@ type statusIssueJSON struct {
 	Paths     []string `json:"paths"`
 }
 
+// printableIssues prints status issues for a failure message through
+// printable: an issue's scope and paths can name a shortcut in the drive
+// root, and a shared folder's scope reads as its local path. A test compares
+// the number of issues, never the list, whose testify Len or Empty failure
+// would print it raw.
+func printableIssues(issues []statusIssueJSON) string {
+	return printable(fmt.Sprintf("%+v", issues))
+}
+
 func runStatusAllowError(
 	t *testing.T,
 	cfgPath string,
@@ -160,7 +169,7 @@ func readStatus(t *testing.T, cfgPath string, env map[string]string) statusJSON 
 
 	output, stdout, stderr, err := runStatusAllowError(t, cfgPath, env)
 	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s",
-		suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
+		printable(stdout), printable(stderr))
 
 	return output
 }
@@ -170,7 +179,7 @@ func readStatusAllDrives(t *testing.T, cfgPath string, env map[string]string) st
 
 	output, stdout, stderr, err := runStatusAllDrivesAllowError(t, cfgPath, env)
 	require.NoErrorf(t, err, "status command failed\nstdout: %s\nstderr: %s",
-		suiteDriveRoles.Redact(stdout), suiteDriveRoles.Redact(stderr))
+		printable(stdout), printable(stderr))
 
 	return output
 }

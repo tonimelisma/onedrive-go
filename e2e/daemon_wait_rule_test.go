@@ -325,6 +325,10 @@ func readPlantedSuiteSources(t *testing.T) *suiteSources {
 // calls t.Fatalf (26), one that skips the test (27), one that asserts two
 // calls down and is given to a function that waits only through another
 // (28), and a function without a result passed by name, an action too (29).
+// Then predicates that are not written at the call: one an asserting builder
+// returns (30), one a pure builder returns, the builder asserting outside it
+// (31), and two kept in a variable and handed on through a parameter of
+// forwardPlanted, one asserting (32, given at 33) and one pure (34, 35).
 const plantedDaemonWaitSource = `package e2e
 
 func startPlanted(cmd plantedCmd) { _ = cmd.Start() }
@@ -354,11 +358,28 @@ func TestPlantedPredicates(t *testing.T) {
 	waitForPlantedSize(func() bool { t.Skip(); return true })
 	readPlanted(func() bool { return plantedStateHolds(t) })
 	waitForPlantedSize(notePlantedState)
+	waitForPlantedSize(plantedAssertingBuilder(t))
+	waitForPlantedSize(plantedPureBuilder(t))
+	assertingForward := func() bool { require.True(t, true); return true }
+	forwardPlanted(assertingForward)
+	pureForward := func() bool { return true }
+	forwardPlanted(pureForward)
 }
 
 func plantedStateHolds(t *testing.T) bool { return requirePlantedState(t) }
 
 func notePlantedState(t *testing.T) { require.True(t, true) }
+
+func plantedAssertingBuilder(t *testing.T) func() bool {
+	return func() bool { require.True(t, true); return true }
+}
+
+func plantedPureBuilder(t *testing.T) func() bool {
+	require.True(t, true)
+	return func() bool { return true }
+}
+
+func forwardPlanted(ready func() bool) { waitForPlantedSize(ready) }
 `
 
 // suiteFunc is one function or method of the package's sources, keyed in
@@ -380,13 +401,18 @@ type suiteFunc struct {
 	// passed are the functions its body passes as arguments to a poll
 	// primitive or to a suite function, in source order.
 	passed []passedFunc
+	// returned are the function literals with a result its own body returns:
+	// what a call of it hands a wait when it builds a predicate.
+	returned []passedFunc
 }
 
-// passedFunc is a function literal with a result, or a suite function named
-// as a value, passed as an argument: a predicate when the call it is passed to
-// waits.
+// passedFunc is a function literal with a result, a suite function named as
+// a value, or a suite function's call, passed as an argument directly or
+// through a variable the body set to one: a predicate when the call it is
+// passed to waits.
 type passedFunc struct {
-	// at is the argument's file and line.
+	// at is the argument's file and line, or the line a variable's literal
+	// or builder call stands on.
 	at string
 	// to is the poll primitive or the suite function it is passed to.
 	to string
@@ -394,6 +420,9 @@ type passedFunc struct {
 	toPrimitive bool
 	// named is the suite function passed by name, or empty for a literal.
 	named string
+	// built is the suite function whose call is passed: the literals it
+	// returns are the predicate, and its own body is not.
+	built string
 	// fails names the first call in a literal's body that can fail the test.
 	fails string
 	// refs are the suite functions a literal calls, or the named function.
@@ -461,9 +490,13 @@ func readSuiteSources(dir string) (*suiteSources, error) {
 
 	src := &suiteSources{funcs: make(map[string]*suiteFunc, len(decls))}
 	for _, fn := range decls {
-		scan := bodyScan{fset: fset, file: declFiles[fn], functions: functions, methods: methods}
+		scan := bodyScan{
+			fset: fset, file: declFiles[fn], functions: functions, methods: methods,
+			predicates: map[string][]passedFunc{},
+		}
 		scanned := scan.body(fn.Body)
 		scanned.returnsValue = hasResults(fn.Type)
+		scanned.returned = scan.returnedLiterals(fn.Body)
 		src.funcs[funcKey(fn)] = scanned
 	}
 
@@ -494,6 +527,11 @@ type bodyScan struct {
 	file      string
 	functions map[string]bool
 	methods   map[string][]string
+	// predicates are the predicates the function being scanned keeps in a
+	// variable, by the variable's name, so a wait it is handed to later
+	// reads it as that predicate. A name reused for another value in another
+	// block of the same function is not told apart; the suite reuses none.
+	predicates map[string][]passedFunc
 }
 
 // body records what one body calls: suite functions by name, suite methods by
@@ -525,12 +563,86 @@ func (scan bodyScan) body(body *ast.BlockStmt) *suiteFunc {
 			if scan.functions[node.Name] && !selectorNames[node] {
 				addRef(node.Name)
 			}
+		case *ast.AssignStmt:
+			scan.recordPredicateVars(node.Lhs, node.Rhs)
+		case *ast.ValueSpec:
+			names := make([]ast.Expr, 0, len(node.Names))
+			for _, name := range node.Names {
+				names = append(names, name)
+			}
+			scan.recordPredicateVars(names, node.Values)
 		}
 
 		return true
 	})
 
 	return fn
+}
+
+// recordPredicateVars keeps what an assignment puts in a variable when it is
+// a predicate value (predicateValue), once per position: a literal's body is
+// scanned again on its own, which must not keep its variables twice.
+func (scan bodyScan) recordPredicateVars(targets, values []ast.Expr) {
+	if len(targets) != len(values) {
+		return
+	}
+
+	for i, target := range targets {
+		name, ok := target.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		predicate, ok := scan.predicateValue(values[i])
+		if !ok || slices.ContainsFunc(scan.predicates[name.Name], func(kept passedFunc) bool { return kept.at == predicate.at }) {
+			continue
+		}
+		scan.predicates[name.Name] = append(scan.predicates[name.Name], predicate)
+	}
+}
+
+// predicateValue describes expr when it can be a predicate: a function
+// literal with a result, or a call of a suite function, whose returned
+// literals (suiteFunc.returned) are then the predicate.
+func (scan bodyScan) predicateValue(expr ast.Expr) (passedFunc, bool) {
+	switch expr := expr.(type) {
+	case *ast.FuncLit:
+		if !hasResults(expr.Type) {
+			return passedFunc{}, false
+		}
+		literal := scan.body(expr.Body)
+
+		return passedFunc{at: scan.position(expr), fails: literal.fails, refs: literal.refs}, true
+	case *ast.CallExpr:
+		if ident, ok := expr.Fun.(*ast.Ident); ok && scan.functions[ident.Name] {
+			return passedFunc{at: scan.position(expr), built: ident.Name}, true
+		}
+	}
+
+	return passedFunc{}, false
+}
+
+// returnedLiterals lists the function literals with a result that body
+// returns itself; a return inside a literal of body is the literal's own.
+func (scan bodyScan) returnedLiterals(body *ast.BlockStmt) []passedFunc {
+	var returned []passedFunc
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			for _, result := range node.Results {
+				if literal, ok := result.(*ast.FuncLit); ok {
+					if predicate, isPredicate := scan.predicateValue(literal); isPredicate {
+						returned = append(returned, predicate)
+					}
+				}
+			}
+		}
+
+		return true
+	})
+
+	return returned
 }
 
 // recordCall records what one call says about the body it is in.
@@ -548,8 +660,11 @@ func (scan bodyScan) recordCall(fn *suiteFunc, call *ast.CallExpr) {
 }
 
 // passedFuncs lists what call passes when it calls a poll primitive or a
-// suite function: each function literal with a result, and each suite
-// function named as an argument.
+// suite function: each function literal with a result, each suite function
+// named as an argument or called in one, and each variable the body set to
+// one of those. A parameter the body hands on is not among them: the
+// predicate its caller wrote is read at that call, since a function that
+// hands a parameter on to a wait reaches the wait itself.
 func (scan bodyScan) passedFuncs(call *ast.CallExpr) []passedFunc {
 	to, toPrimitive := pollPrimitiveCall(call)
 	if !toPrimitive {
@@ -562,25 +677,30 @@ func (scan bodyScan) passedFuncs(call *ast.CallExpr) []passedFunc {
 
 	var passed []passedFunc
 	for _, arg := range call.Args {
-		switch arg := arg.(type) {
-		case *ast.FuncLit:
-			if !hasResults(arg.Type) {
-				continue
-			}
-			literal := scan.body(arg.Body)
-			passed = append(passed, passedFunc{
-				at: scan.position(arg), to: to, toPrimitive: toPrimitive, fails: literal.fails, refs: literal.refs,
-			})
-		case *ast.Ident:
-			if scan.functions[arg.Name] {
-				passed = append(passed, passedFunc{
-					at: scan.position(arg), to: to, toPrimitive: toPrimitive, named: arg.Name, refs: []string{arg.Name},
-				})
-			}
+		for _, predicate := range scan.argPredicates(arg) {
+			predicate.to, predicate.toPrimitive = to, toPrimitive
+			passed = append(passed, predicate)
 		}
 	}
 
 	return passed
+}
+
+// argPredicates is what one argument passes as a predicate.
+func (scan bodyScan) argPredicates(arg ast.Expr) []passedFunc {
+	ident, isIdent := arg.(*ast.Ident)
+	switch {
+	case isIdent && scan.functions[ident.Name]:
+		return []passedFunc{{at: scan.position(ident), named: ident.Name, refs: []string{ident.Name}}}
+	case isIdent:
+		return slices.Clone(scan.predicates[ident.Name])
+	}
+
+	if predicate, ok := scan.predicateValue(arg); ok {
+		return []passedFunc{predicate}
+	}
+
+	return nil
 }
 
 func (scan bodyScan) position(node ast.Node) string {
