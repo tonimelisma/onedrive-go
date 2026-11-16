@@ -1,11 +1,11 @@
 package multisync
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	gosync "sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,18 +38,20 @@ func TestStartControlSocketServer_RacingOwnersYieldExactlyOne(t *testing.T) {
 		const contenders = 2
 		servers := make([]*controlSocketServer, contenders)
 		errs := make([]error, contenders)
+		started := make([]<-chan error, contenders)
 		start := make(chan struct{})
-		var wg gosync.WaitGroup
 		for i := range contenders {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			serverCfg := testControlServerConfig(t, socketPath, http.NewServeMux())
+			_, started[i] = runInBackground(t, t.Context(), func(ctx context.Context) error {
 				<-start
-				servers[i], errs[i] = startControlSocketServer(t.Context(), testControlServerConfig(t, socketPath, http.NewServeMux()))
-			}()
+				servers[i], errs[i] = startControlSocketServer(ctx, serverCfg)
+				return nil
+			})
 		}
 		close(start)
-		wg.Wait()
+		for i := range contenders {
+			require.NoError(t, receiveWithin(t, started[i], "a contender's control server start to return"))
+		}
 
 		winners := 0
 		for i := range contenders {

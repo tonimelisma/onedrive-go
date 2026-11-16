@@ -1,7 +1,6 @@
 package multisync
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,18 +35,6 @@ func testParentMountSpec() *mountSpec {
 func testChildRecord(t *testing.T, parentID mountID, bindingID, relativePath string) syncengine.ShortcutChildRunCommand {
 	t.Helper()
 
-	return testChildRecordWithContext(t.Context(), t, parentID, bindingID, relativePath)
-}
-
-func testChildRecordWithContext(
-	ctx context.Context,
-	t *testing.T,
-	parentID mountID,
-	bindingID string,
-	relativePath string,
-) syncengine.ShortcutChildRunCommand {
-	t.Helper()
-
 	return syncengine.ShortcutChildRunCommand{
 		ChildMountID: config.ChildMountID(parentID.String(), bindingID),
 		DisplayName:  filepath.Base(filepath.FromSlash(relativePath)),
@@ -57,7 +44,7 @@ func testChildRecordWithContext(
 			RemoteItemID:  "remote-root",
 		},
 		Mode:   syncengine.ShortcutChildRunModeNormal,
-		AckRef: testShortcutChildAckRefWithContext(ctx, t, bindingID),
+		AckRef: testShortcutChildAckRef(t, bindingID),
 	}
 }
 

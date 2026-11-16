@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,13 +16,7 @@ import (
 func nextLifecycleEvent(t *testing.T, events <-chan WatchLifecycleEvent) WatchLifecycleEvent {
 	t.Helper()
 
-	select {
-	case event := <-events:
-		return event
-	case <-time.After(eventWait):
-		require.Fail(t, "no watch lifecycle event")
-		return WatchLifecycleEvent{}
-	}
+	return receiveWithin(t, events, "the next watch lifecycle event")
 }
 
 // Validates: R-6.6.32
@@ -50,13 +43,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	ready := nextLifecycleEvent(t, events)
 	assert.Equal(t, WatchReady, ready.Phase)
@@ -88,12 +75,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 	cancel()
 	assert.Equal(t, WatchStopping, nextLifecycleEvent(t, events).Phase)
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	require.NoError(t, receiveWithin(t, done, "RunWatch to return after cancellation"))
 }
 
 // Validates: R-6.6.32
@@ -101,9 +83,9 @@ func TestRunWatch_StartupFailureIsNotReady(t *testing.T) {
 	// A real startup failure, not a paused drive: a selection in which every
 	// drive is paused starts and idles as ready (R-3.4.2,
 	// TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed),
-	// which this fixture once relied on to never be ready. The deadline
-	// turns a watch that idles instead of failing into a test failure
-	// rather than a hang.
+	// so a paused drive cannot stand in for one that never becomes ready.
+	// runWithin turns a watch that idles instead of failing into a test
+	// failure rather than a hang.
 	rd := testStandaloneMount(t, "personal:neverready@example.com", "NeverReady")
 	cfgPath := writeTestConfig(t, rd.CanonicalID)
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -118,10 +100,7 @@ func TestRunWatch_StartupFailureIsNotReady(t *testing.T) {
 		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 	}
 
-	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
-	defer cancel()
-	err := orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	require.NoError(t, ctx.Err(), "a watch whose only drive failed to start must return, not idle")
+	err := runWithin(t, t.Context(), "a watch whose only drive failed to start to return, not idle", runWatchOf(orch))
 	require.Error(t, err)
 	var startupErr *WatchStartupError
 	require.ErrorAs(t, err, &startupErr)

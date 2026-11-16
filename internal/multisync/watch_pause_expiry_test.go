@@ -26,12 +26,7 @@ import (
 func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 	w := newTimedPauseWatch(t)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- w.orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, w.orch)
 
 	require.Eventually(t, func() bool {
 		return len(w.armedDelays()) > 0
@@ -46,11 +41,7 @@ func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 	w.clock.advance(w.wait)
 	w.fire <- w.clock.now()
 
-	select {
-	case <-w.started:
-	case <-time.After(eventWait):
-		require.FailNow(t, "the drive did not start when its timed pause expired")
-	}
+	receiveWithin(t, w.started, "the drive to start when its timed pause expired")
 
 	loaded, err := config.LoadOrDefault(w.cfgPath, w.logger)
 	require.NoError(t, err)
@@ -60,13 +51,7 @@ func TestRunWatch_TimedPauseExpiresWithoutAReload(t *testing.T) {
 	assert.True(t, w.logged("Reloading the config (timed pause expired)"),
 		"the expiry is reported as the reason for the reload")
 
-	cancel()
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // timedPauseWatch is an orchestrator whose one drive is paused until an hour

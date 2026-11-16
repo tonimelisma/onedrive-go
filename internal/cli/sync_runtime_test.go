@@ -25,8 +25,7 @@ type testSyncDaemonOrchestrator struct {
 	err    error
 }
 
-func (o *testSyncDaemonOrchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
-	_ = ctx
+func (o *testSyncDaemonOrchestrator) RunWatch(_ context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
 	o.called = true
 	o.mode = mode
 	o.opts = opts

@@ -585,6 +585,43 @@ func TestRunOnce_OneMount_Success(t *testing.T) {
 	assert.Equal(t, 5, result.Reports[0].Report.Downloads)
 }
 
+// occupyControlSocket listens on path as another sync that owns the control
+// socket does, accepting and dropping every connection. The returned release
+// closes the listener and requires the accept loop to end within eventWait
+// without an error of its own; a cleanup closes it for a test that fails
+// first.
+func occupyControlSocket(t *testing.T, path string) (release func()) {
+	t.Helper()
+
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", path)
+	require.NoError(t, err)
+
+	_, accepting := runInBackground(t, t.Context(), func(context.Context) error {
+		for {
+			conn, acceptErr := listener.Accept()
+			if errors.Is(acceptErr, net.ErrClosed) {
+				return nil
+			}
+			if acceptErr != nil {
+				return fmt.Errorf("accept a connection: %w", acceptErr)
+			}
+			if closeErr := conn.Close(); closeErr != nil {
+				return fmt.Errorf("close an accepted connection: %w", closeErr)
+			}
+		}
+	})
+	// Registered after runInBackground's cleanup, so it runs first and ends
+	// the accept loop that cleanup waits for.
+	closeListener := sync.OnceValue(listener.Close)
+	t.Cleanup(func() { assert.NoError(t, closeListener()) })
+
+	return func() {
+		require.NoError(t, closeListener())
+		require.NoError(t, receiveWithin(t, accepting, "the accept loop to end once its listener closed"))
+	}
+}
+
 // Validates: R-2.1.5
 func TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup(t *testing.T) {
 	rd := testStandaloneMount(t, "personal:dry-run-socket@example.com", "Dry Run")
@@ -592,22 +629,7 @@ func TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup(t *testing.T) {
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	cfg.ControlSocketPath = shortControlSocketPath(t)
 
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", cfg.ControlSocketPath)
-	require.NoError(t, err)
-
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		for {
-			conn, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			if closeErr := conn.Close(); closeErr != nil {
-				return
-			}
-		}
-	}()
+	releaseSocket := occupyControlSocket(t, cfg.ControlSocketPath)
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
@@ -623,8 +645,7 @@ func TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup(t *testing.T) {
 	assert.Equal(t, MountStartupFatal, result.Startup.Results[0].Status)
 	assert.Empty(t, result.Reports)
 
-	require.NoError(t, listener.Close())
-	<-acceptDone
+	releaseSocket()
 }
 
 // Validates: R-2.4
@@ -697,6 +718,7 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 	}
 	var callsMu sync.Mutex
 	calls := make([]runCall, 0, 2)
+	cleanupAckRef := testShortcutChildAckRef(t, "binding-drain")
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		ackDrainFn := func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error) {
 			return syncengine.ShortcutChildWorkSnapshot{}, nil
@@ -705,16 +727,19 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 			return syncengine.ShortcutChildWorkSnapshot{}, nil
 		}
 		if req.Mount.projectionKind() == MountProjectionStandalone {
-			ackDrainFn = func(ctx context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+			ackDrainFn = func(_ context.Context, ack syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error) {
 				assert.False(t, ack.Ref.IsZero())
-				require.NoError(t, os.RemoveAll(childRoot))
+				//nolint:testifylint // the ack runs on the pass's goroutine, where require cannot end the test
+				if !assert.NoError(t, os.RemoveAll(childRoot)) {
+					return syncengine.ShortcutChildWorkSnapshot{}, assert.AnError
+				}
 				snapshot := cleanupRequestSnapshot(
 					parent.CanonicalID.String(),
 					syncengine.ShortcutChildCleanupCommand{
 						ChildMountID: childID,
 						LocalRoot:    childRoot,
 						Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
-						AckRef:       testShortcutChildAckRefWithContext(ctx, t, "binding-drain"),
+						AckRef:       cleanupAckRef,
 					},
 				)
 				return snapshot, nil
@@ -730,7 +755,9 @@ func TestRunOnce_FinalDrainChildRunsBidirectionalFullReconcileAndReleasesAfterSu
 			ackCleanupFn: ackCleanupFn,
 			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
 				if req.Mount.projectionKind() == MountProjectionStandalone {
-					require.NotNil(t, req.Mount.shortcutChildWorkSink())
+					if !assert.NotNil(t, req.Mount.shortcutChildWorkSink()) {
+						return nil, assert.AnError
+					}
 					if err := req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
@@ -835,7 +862,9 @@ func TestRunOnce_FinalDrainChildFailureKeepsProjectionReserved(t *testing.T) {
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				if req.Mount.projectionKind() == MountProjectionStandalone {
-					require.NotNil(t, req.Mount.shortcutChildWorkSink())
+					if !assert.NotNil(t, req.Mount.shortcutChildWorkSink()) {
+						return nil, assert.AnError
+					}
 					if err := req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
@@ -870,6 +899,7 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	seedShortcutChildStateArtifactsForTest(t, cfg.DataDir, &parent, &child, true)
 	orch := NewOrchestrator(cfg)
+	cleanupAckRef := testShortcutChildAckRef(t, "binding-discard")
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		assert.Equal(t, MountProjectionStandalone, req.Mount.projectionKind())
 		return &mockEngine{
@@ -883,7 +913,7 @@ func TestRunOnce_ParentCleanupRequestPurgesShortcutChildStateArtifacts(t *testin
 						ChildMountID: child.ChildMountID,
 						LocalRoot:    child.Engine.LocalRoot,
 						Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
-						AckRef:       testShortcutChildAckRefWithContext(ctx, t, "binding-discard"),
+						AckRef:       cleanupAckRef,
 					},
 				))
 				return &syncengine.Report{}, err
@@ -972,11 +1002,17 @@ func TestRunOnce_UsesFinalParentSnapshotInsteadOfIntermediateSkip(t *testing.T) 
 		case MountProjectionStandalone:
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					require.NotNil(t, req.Mount.shortcutChildWorkSink())
-					require.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, syncengine.ShortcutChildWorkSnapshot{
+					if !assert.NotNil(t, req.Mount.shortcutChildWorkSink()) {
+						return nil, assert.AnError
+					}
+					if !assert.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, syncengine.ShortcutChildWorkSnapshot{
 						NamespaceID: parent.CanonicalID.String(),
-					}))
-					require.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), runnableChild)))
+					})) {
+						return nil, assert.AnError
+					}
+					if !assert.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), runnableChild))) {
+						return nil, assert.AnError
+					}
 					return &syncengine.Report{}, nil
 				},
 			}, nil
@@ -1132,6 +1168,7 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{rd})
 	require.NoError(t, err)
 
@@ -1145,20 +1182,11 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	assert.Equal(t, rd.RemoteRootItemID, captured.Mount.remoteRootItemID())
 	assert.Equal(t, rd.CanonicalID.Email(), captured.Mount.accountEmail())
 
-	select {
-	case <-started:
-	case <-time.After(eventWait):
-		require.FailNow(t, "watch runner did not start")
-	}
+	receiveWithin(t, started, "the watch runner to start")
 
 	wr.cancel()
-	select {
-	case <-wr.done:
-	case <-time.After(eventWait):
-		require.FailNow(t, "a canceled watch runner did not return")
-	}
+	receiveWithin(t, wr.done, "the canceled watch runner to return")
 	require.NoError(t, wr.engine.Close(t.Context()))
-	cancel()
 }
 
 // Validates: R-2.4.8
@@ -1216,27 +1244,15 @@ func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testin
 		require.NoError(t, wr.engine.Close(t.Context()))
 	}()
 
-	select {
-	case call := <-captured:
-		assert.Equal(t, syncengine.SyncBidirectional, call.mode)
-		assert.True(t, call.opts.FullReconcile)
-		assert.True(t, call.opts.ReleaseLocalTree)
-	case <-time.After(eventWait):
-		require.FailNow(t, "final-drain runner did not run")
-	}
-	select {
-	case event := <-runnerEvents:
-		assert.Equal(t, mountID(childID), event.mountID)
-		require.NoError(t, event.err)
-		require.NotNil(t, event.report)
-	case <-time.After(eventWait):
-		require.FailNow(t, "final-drain runner did not report completion")
-	}
-	select {
-	case <-wr.done:
-	case <-time.After(eventWait):
-		require.FailNow(t, "final-drain runner did not return after reporting completion")
-	}
+	call := receiveWithin(t, captured, "the final-drain runner to run")
+	assert.Equal(t, syncengine.SyncBidirectional, call.mode)
+	assert.True(t, call.opts.FullReconcile)
+	assert.True(t, call.opts.ReleaseLocalTree)
+	event := receiveWithin(t, runnerEvents, "the final-drain runner to report completion")
+	assert.Equal(t, mountID(childID), event.mountID)
+	require.NoError(t, event.err)
+	require.NotNil(t, event.report)
+	receiveWithin(t, wr.done, "the final-drain runner to return after reporting completion")
 }
 
 // Validates: R-2.4.8
@@ -1397,20 +1413,27 @@ func TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *testi
 	var parentRan atomic.Bool
 	var runMountsMu sync.Mutex
 	runMounts := make([]mountID, 0)
+	child := testChildRecord(t, mountID(parent.CanonicalID.String()), bindingID, "Shortcuts/Bootstrap")
+	child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "Bootstrap")
+	child.Engine.RemoteDriveID = testChildRemoteDriveID
+	child.Engine.RemoteItemID = testChildRemoteRootID
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		if req.Mount.projectionKind() == MountProjectionStandalone {
 			return &mockEngine{
 				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-					require.False(t, startup.Swap(true), "parent child work sink published more than once")
-					require.NotNil(t, req.Mount.shortcutChildWorkSink())
-					child := testChildRecordWithContext(ctx, t, req.Mount.id(), bindingID, "Shortcuts/Bootstrap")
-					child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "Bootstrap")
-					child.Engine.RemoteDriveID = testChildRemoteDriveID
-					child.Engine.RemoteItemID = testChildRemoteRootID
-					require.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(
+					if !assert.False(t, startup.Swap(true), "parent child work sink published more than once") {
+						return nil, assert.AnError
+					}
+					if !assert.NotNil(t, req.Mount.shortcutChildWorkSink()) {
+						return nil, assert.AnError
+					}
+					//nolint:testifylint // the run is on the pass's goroutine, where require cannot end the test
+					if !assert.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(
 						req.Mount.id().String(),
 						child,
-					)))
+					))) {
+						return nil, assert.AnError
+					}
 					runMountsMu.Lock()
 					runMounts = append(runMounts, req.Mount.id())
 					runMountsMu.Unlock()
@@ -1420,7 +1443,9 @@ func TestRunOnce_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *testi
 			}, nil
 		}
 
-		require.True(t, startup.Load(), "child engine started before parent snapshot")
+		if !assert.True(t, startup.Load(), "child engine started before parent snapshot") {
+			return nil, assert.AnError
+		}
 		runMountsMu.Lock()
 		runMounts = append(runMounts, req.Mount.id())
 		runMountsMu.Unlock()
@@ -1494,29 +1519,13 @@ func TestRunOnce_StartsParentChildrenWithoutWaitingForOtherParents(t *testing.T)
 		}
 	}
 
-	resultCh := make(chan RunOnceResult, 1)
-	go func() {
-		resultCh <- orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	}()
+	result, finished := runOnceInBackground(t, orch)
 
-	select {
-	case <-parentBStarted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "parent B did not start")
-	}
-	select {
-	case <-childStarted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "parent A child did not start while parent B was still running")
-	}
+	receiveWithin(t, parentBStarted, "parent B to start")
+	receiveWithin(t, childStarted, "parent A's child to start while parent B still runs")
 	close(releaseParentB)
 
-	var result RunOnceResult
-	select {
-	case result = <-resultCh:
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunOnce did not finish")
-	}
+	require.NoError(t, receiveWithin(t, finished, "RunOnce to finish"))
 	require.Len(t, result.Reports, 3)
 	assert.Empty(t, result.Startup.SkippedResults())
 }
@@ -1569,33 +1578,17 @@ func TestRunOnce_StartsParentChildrenAfterPublishingParentSafePoint(t *testing.T
 		}
 	}
 
-	resultCh := make(chan RunOnceResult, 1)
-	go func() {
-		resultCh <- orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	}()
+	result, finished := runOnceInBackground(t, orch)
 
 	select {
 	case <-childStarted:
 		require.FailNow(t, "child started before parent safe point")
 	default:
 	}
-	select {
-	case releaseParent <- struct{}{}:
-	default:
-		close(releaseParent)
-	}
-	select {
-	case <-childStarted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "child did not start after parent safe point")
-	}
+	close(releaseParent)
+	receiveWithin(t, childStarted, "the child to start after the parent's safe point")
 
-	var result RunOnceResult
-	select {
-	case result = <-resultCh:
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunOnce did not finish")
-	}
+	require.NoError(t, receiveWithin(t, finished, "RunOnce to finish"))
 	require.Len(t, result.Reports, 2)
 }
 
@@ -1707,10 +1700,7 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 		}
 	}
 
-	resultCh := make(chan RunOnceResult, 1)
-	go func() {
-		resultCh <- orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
-	}()
+	result, finished := runOnceInBackground(t, orch)
 
 	select {
 	case <-childCompleted:
@@ -1723,22 +1713,10 @@ func TestRunOnce_DelaysFinalDrainAckUntilPublishingParentSafePoint(t *testing.T)
 	default:
 	}
 	close(releaseParent)
-	select {
-	case <-childCompleted:
-	case <-time.After(eventWait):
-		require.FailNow(t, "final-drain child did not start after parent safe point")
-	}
-	select {
-	case <-acked:
-	case <-time.After(eventWait):
-		require.FailNow(t, "final-drain ack did not happen after parent safe point")
-	}
-	select {
-	case result := <-resultCh:
-		require.Len(t, result.Reports, 2)
-	case <-time.After(eventWait):
-		require.FailNow(t, "RunOnce did not finish")
-	}
+	receiveWithin(t, childCompleted, "the final-drain child to start after the parent's safe point")
+	receiveWithin(t, acked, "the final-drain ack after the parent's safe point")
+	require.NoError(t, receiveWithin(t, finished, "RunOnce to finish"))
+	require.Len(t, result.Reports, 2)
 }
 
 // Validates: R-2.4.8, R-6.3.4
@@ -1762,7 +1740,9 @@ func TestOneShotChildRuns_ContextCancelBeforeParentSafePointSkipsAck(t *testing.
 	var childCompletedOnce sync.Once
 	var ackedOnce sync.Once
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		require.Equal(t, childID, req.Mount.id().String())
+		if !assert.Equal(t, childID, req.Mount.id().String()) {
+			return nil, assert.AnError
+		}
 		return &mockEngine{
 			runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
 				childCompletedOnce.Do(func() { close(childCompleted) })
@@ -1821,27 +1801,34 @@ func TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *test
 	childID := config.ChildMountID(parent.CanonicalID.String(), bindingID)
 	startup := false
 	childStarted := make(chan struct{})
+	child := testChildRecord(t, mountID(parent.CanonicalID.String()), bindingID, "Shortcuts/WatchBootstrap")
+	child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "WatchBootstrap")
+	child.Engine.RemoteDriveID = testChildRemoteDriveID
+	child.Engine.RemoteItemID = testChildRemoteRootID
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		switch req.Mount.projectionKind() {
 		case MountProjectionStandalone:
 			return &mockEngine{
 				runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
 					startup = true
-					require.NotNil(t, req.Mount.shortcutChildWorkSink())
-					child := testChildRecordWithContext(ctx, t, req.Mount.id(), bindingID, "Shortcuts/WatchBootstrap")
-					child.Engine.LocalRoot = filepath.Join(parent.SyncRoot, "Shortcuts", "WatchBootstrap")
-					child.Engine.RemoteDriveID = testChildRemoteDriveID
-					child.Engine.RemoteItemID = testChildRemoteRootID
-					require.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(
+					if !assert.NotNil(t, req.Mount.shortcutChildWorkSink()) {
+						return assert.AnError
+					}
+					//nolint:testifylint // the run is on the watch's goroutine, where require cannot end the test
+					if !assert.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(
 						req.Mount.id().String(),
 						child,
-					)))
+					))) {
+						return assert.AnError
+					}
 					<-ctx.Done()
 					return ctx.Err()
 				},
 			}, nil
 		case MountProjectionChild:
-			require.True(t, startup, "child engine started before parent snapshot")
+			if !assert.True(t, startup, "child engine started before parent snapshot") {
+				return nil, assert.AnError
+			}
 			assert.Equal(t, mountID(childID), req.Mount.id())
 			return &mockEngine{
 				runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
@@ -1851,33 +1838,16 @@ func TestRunWatch_PublishesParentChildWorkSnapshotBeforeStartingChildren(t *test
 				},
 			}, nil
 		default:
-			require.FailNow(t, "unexpected mount projection")
+			assert.Fail(t, "unexpected mount projection")
 		}
 		return nil, assert.AnError
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	cancel, done := runWatchInBackground(t, orch)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	receiveWithin(t, childStarted, "RunWatch to start the bootstrapped child")
 
-	select {
-	case <-childStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not start bootstrapped child in time")
-	}
-
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -1892,34 +1862,18 @@ func TestRunWatch_ReconcilesChildRunnersFromLiveParentSnapshot(t *testing.T) {
 
 	harness := newLiveParentSnapshotWatchHarness(t, orch, &parent, "binding-first", "binding-second")
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	cancel, done := runWatchInBackground(t, orch)
+	// The parent ignores its context and returns only when released, so a
+	// test that fails before it releases the parent still releases it.
+	// Registered after the watch's own cleanup, so it runs first.
+	releaseParent := sync.OnceFunc(func() { close(harness.parentRelease) })
+	t.Cleanup(releaseParent)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
-
-	select {
-	case <-harness.parentStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "parent did not start")
-	}
-	select {
-	case <-harness.secondStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "second child did not start from live parent snapshot")
-	}
+	receiveWithin(t, harness.parentStarted, "the parent to start")
+	receiveWithin(t, harness.secondStarted, "the second child to start from the live parent snapshot")
 	assert.Equal(t, int32(1), harness.parentRunCount.Load())
-	close(harness.parentRelease)
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	releaseParent()
+	stopWatch(t, cancel, done)
 }
 
 type liveParentSnapshotWatchHarness struct {
@@ -1950,40 +1904,52 @@ func newLiveParentSnapshotWatchHarness(
 	}
 	var firstStartedOnce sync.Once
 	var secondStartedOnce sync.Once
+	firstSnapshot := shortcutSnapshot(t, parent.CanonicalID.String(), firstBinding, "First")
+	secondSnapshot := shortcutSnapshot(t, parent.CanonicalID.String(), secondBinding, "Second")
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		switch req.Mount.projectionKind() {
 		case MountProjectionStandalone:
-			return harness.parentSnapshotEngine(t, req.Mount, firstBinding, secondBinding), nil
+			return harness.parentSnapshotEngine(t, req.Mount, firstSnapshot, secondSnapshot), nil
 		case MountProjectionChild:
 			return harness.childSnapshotEngine(t, req.Mount.id().String(), firstChildID, secondChildID, &firstStartedOnce, &secondStartedOnce), nil
 		default:
-			require.FailNow(t, "unexpected mount projection")
+			assert.Fail(t, "unexpected mount projection")
 		}
 		return nil, assert.AnError
 	}
 	return harness
 }
 
+// parentSnapshotEngine publishes first, waits for the first child to start,
+// publishes second, and returns when released. A run restarted after a failed
+// one counts itself but does not close parentStarted again.
 func (h *liveParentSnapshotWatchHarness) parentSnapshotEngine(
 	t *testing.T,
 	mount *mountSpec,
-	firstBinding string,
-	secondBinding string,
+	first syncengine.ShortcutChildWorkSnapshot,
+	second syncengine.ShortcutChildWorkSnapshot,
 ) *mockEngine {
 	t.Helper()
 
 	return &mockEngine{
 		runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
-			h.parentRunCount.Add(1)
-			close(h.parentStarted)
-			require.NotNil(t, mount.shortcutChildWorkSink())
-			require.NoError(t, mount.shortcutChildWorkSink()(ctx, shortcutSnapshotWithContext(ctx, t, mount.id().String(), firstBinding, "First")))
+			if h.parentRunCount.Add(1) == 1 {
+				close(h.parentStarted)
+			}
+			if !assert.NotNil(t, mount.shortcutChildWorkSink()) {
+				return assert.AnError
+			}
+			if !assert.NoError(t, mount.shortcutChildWorkSink()(ctx, first)) {
+				return assert.AnError
+			}
 			select {
 			case <-h.firstStarted:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			require.NoError(t, mount.shortcutChildWorkSink()(ctx, shortcutSnapshotWithContext(ctx, t, mount.id().String(), secondBinding, "Second")))
+			if !assert.NoError(t, mount.shortcutChildWorkSink()(ctx, second)) {
+				return assert.AnError
+			}
 			<-h.parentRelease
 			return nil
 		},
@@ -2008,7 +1974,8 @@ func (h *liveParentSnapshotWatchHarness) childSnapshotEngine(
 			case secondChildID:
 				secondStartedOnce.Do(func() { close(h.secondStarted) })
 			default:
-				require.FailNow(t, "unexpected child mount", childID)
+				assert.Fail(t, "unexpected child mount", childID)
+				return assert.AnError
 			}
 			<-ctx.Done()
 			return ctx.Err()
@@ -2016,8 +1983,7 @@ func (h *liveParentSnapshotWatchHarness) childSnapshotEngine(
 	}
 }
 
-func shortcutSnapshotWithContext(
-	ctx context.Context,
+func shortcutSnapshot(
 	t *testing.T,
 	namespaceID string,
 	bindingItemID string,
@@ -2036,7 +2002,7 @@ func shortcutSnapshotWithContext(
 				RemoteItemID:  "remote-child-" + strings.ToLower(alias),
 			},
 			Mode:   syncengine.ShortcutChildRunModeNormal,
-			AckRef: testShortcutChildAckRefWithContext(ctx, t, bindingItemID),
+			AckRef: testShortcutChildAckRef(t, bindingItemID),
 		},
 	)
 }
@@ -2112,6 +2078,7 @@ func TestReconcileWatchRunnersForParentDoesNotTouchOtherParents(t *testing.T) {
 		processSnapshot(firstParent.CanonicalID.String(), firstNew),
 	)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		// The reconcile below calls this on the test's goroutine.
 		require.Equal(t, MountProjectionChild, req.Mount.projectionKind())
 		assert.Equal(t, firstNew.ChildMountID, req.Mount.id().String())
 		events = append(events, "start-first")
@@ -2143,8 +2110,8 @@ func TestHandleWatchRunnerEvent_IgnoresStaleParentSnapshotEvents(t *testing.T) {
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	parentID := mountID(parent.CanonicalID.String())
-	staleSnapshot := shortcutSnapshotWithContext(t.Context(), t, parentID.String(), "binding-stale", "Stale")
-	currentSnapshot := shortcutSnapshotWithContext(t.Context(), t, parentID.String(), "binding-current", "Current")
+	staleSnapshot := shortcutSnapshot(t, parentID.String(), "binding-stale", "Stale")
+	currentSnapshot := shortcutSnapshot(t, parentID.String(), "binding-current", "Current")
 
 	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
@@ -2276,6 +2243,7 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 	}
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		if req.Mount.projectionKind() == MountProjectionChild {
+			// The apply below calls this on the test's goroutine.
 			require.Equal(t, []string{"stop-child"}, events)
 			events = append(events, "start-child")
 		}
@@ -2303,11 +2271,7 @@ func TestApplyWatchMountSet_StopsStaleChildBeforeStartingReplacement(t *testing.
 
 	cancel()
 	for id, runner := range runners {
-		select {
-		case <-runner.done:
-		case <-time.After(eventWait):
-			require.FailNow(t, "a watch runner did not return after its context was canceled", "mount %s", id)
-		}
+		receiveWithin(t, runner.done, "the watch runner of mount "+id.String()+" to return after its context was canceled")
 	}
 }
 
@@ -2367,6 +2331,7 @@ func TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild(t 
 		},
 	}
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		// The apply below calls this on the test's goroutine.
 		require.Equal(t, MountProjectionStandalone, req.Mount.projectionKind())
 		events = append(events, "start-parent")
 		return &mockEngine{
@@ -2400,11 +2365,7 @@ func TestApplyWatchMountSet_ParentRestartClearsSnapshotAndDoesNotRestartChild(t 
 	cancel()
 	for id, runner := range runners {
 		runner.cancel()
-		select {
-		case <-runner.done:
-		case <-time.After(eventWait):
-			require.FailNow(t, "a canceled watch runner did not return", "mount %s", id)
-		}
+		receiveWithin(t, runner.done, "the canceled watch runner of mount "+id.String()+" to return")
 	}
 }
 
@@ -2462,6 +2423,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 
 	var restarted []mountID
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
+		// The event handling below calls this on the test's goroutine.
 		require.Equal(t, MountProjectionStandalone, req.Mount.projectionKind())
 		restarted = append(restarted, req.Mount.id())
 		return &mockEngine{
@@ -2500,11 +2462,7 @@ func TestHandleWatchRunnerEvent_ParentExitStopsChildrenAndForgetsCachedSnapshot(
 	cancel()
 	for id, runner := range runners {
 		runner.cancel()
-		select {
-		case <-runner.done:
-		case <-time.After(eventWait):
-			require.FailNow(t, "a canceled watch runner did not return", "mount %s", id)
-		}
+		receiveWithin(t, runner.done, "the canceled watch runner of mount "+id.String()+" to return")
 		assert.NoError(t, runner.engine.Close(context.Background()))
 	}
 }
@@ -2584,34 +2542,21 @@ func TestRunOnce_ControlSocketBlocksWatchOwner(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	reportsCh := make(chan RunOnceResult, 1)
-	go func() {
-		reportsCh <- orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
-	}()
+	result, finished := runOnceInBackground(t, orch)
 
-	select {
-	case <-started:
-	case <-time.After(eventWait):
-		require.Fail(t, "RunOnce did not start in time")
-	}
+	receiveWithin(t, started, "RunOnce to start")
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
 
-	watchErr := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	watchErr := runWithin(t, t.Context(), "RunWatch to refuse the socket the one-shot pass owns", runWatchOf(orch))
 	require.Error(t, watchErr)
 	var inUse *ControlSocketInUseError
 	require.ErrorAs(t, watchErr, &inUse)
 
 	close(release)
-	select {
-	case result := <-reportsCh:
-		require.Len(t, result.Reports, 1)
-		require.NoError(t, result.Reports[0].Err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunOnce did not stop in time")
-	}
+	require.NoError(t, receiveWithin(t, finished, "RunOnce to finish"))
+	require.Len(t, result.Reports, 1)
+	require.NoError(t, result.Reports[0].Err)
 }
 
 // Validates: R-2.9.1
@@ -2620,23 +2565,7 @@ func TestRunOnce_BindsControlSocketBeforeEngineStartup(t *testing.T) {
 	setupXDGIsolation(t, rd.CanonicalID)
 
 	socketPath := shortControlSocketPath(t)
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(t.Context(), "unix", socketPath)
-	require.NoError(t, err)
-
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		for {
-			conn, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			if closeErr := conn.Close(); closeErr != nil {
-				return
-			}
-		}
-	}()
+	releaseSocket := occupyControlSocket(t, socketPath)
 
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ControlSocketPath = socketPath
@@ -2654,8 +2583,7 @@ func TestRunOnce_BindsControlSocketBeforeEngineStartup(t *testing.T) {
 	require.ErrorAs(t, result.Startup.Results[0].Err, &inUse)
 	assert.Equal(t, MountStartupFatal, result.Startup.Results[0].Status)
 
-	require.NoError(t, listener.Close())
-	<-acceptDone
+	releaseSocket()
 }
 
 // Validates: R-2.9.1
@@ -2664,40 +2592,23 @@ func TestRunWatch_BindsControlSocketBeforeEngineStartup(t *testing.T) {
 	setupXDGIsolation(t, rd.CanonicalID)
 
 	socketPath := shortControlSocketPath(t)
-	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(t.Context(), "unix", socketPath)
-	require.NoError(t, err)
-
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		for {
-			conn, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			if closeErr := conn.Close(); closeErr != nil {
-				return
-			}
-		}
-	}()
+	releaseSocket := occupyControlSocket(t, socketPath)
 
 	cfg := testOrchestratorConfig(t, rd)
 	cfg.ControlSocketPath = socketPath
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
-		require.Fail(t, "engine factory should not run when control socket is already owned")
+		assert.Fail(t, "engine factory should not run when control socket is already owned")
 		return nil, assert.AnError
 	}
 
-	err = orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	err := runWithin(t, t.Context(), "RunWatch to refuse the socket another owner holds", runWatchOf(orch))
 
 	var inUse *ControlSocketInUseError
 	require.ErrorAs(t, err, &inUse)
 
-	require.NoError(t, listener.Close())
-	<-acceptDone
+	releaseSocket()
 }
 
 // --- mockEngine ---
@@ -2807,29 +2718,12 @@ func TestOrchestrator_RunWatch_SingleMount(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait for watch to start, then shut down.
-	select {
-	case <-watchStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not start in time")
-	}
+	receiveWithin(t, watchStarted, "RunWatch to start the drive")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -2854,27 +2748,14 @@ func TestOrchestrator_RunWatch_MultiMount(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait until both mounts have started.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "both drives start")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 func TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts(t *testing.T) {
@@ -2905,38 +2786,17 @@ func TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	cancel, done := runWatchInBackground(t, orch)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	receiveWithin(t, watchStarted, "RunWatch to start the healthy drive")
 
-	select {
-	case <-watchStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not start healthy mount in time")
-	}
+	warning := receiveWithin(t, warnings, "RunWatch's startup warning")
+	results := warning.Summary.SkippedResults()
+	require.Len(t, results, 1)
+	assert.Equal(t, testStandaloneMountIdentity(rd2.CanonicalID), results[0].Identity)
+	assert.Equal(t, MountStartupIncompatibleStore, results[0].Status)
 
-	select {
-	case warning := <-warnings:
-		results := warning.Summary.SkippedResults()
-		require.Len(t, results, 1)
-		assert.Equal(t, testStandaloneMountIdentity(rd2.CanonicalID), results[0].Identity)
-		assert.Equal(t, MountStartupIncompatibleStore, results[0].Status)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not emit startup warning")
-	}
-
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts(t *testing.T) {
@@ -2950,7 +2810,7 @@ func TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts(t *testing
 		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 	}
 
-	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	err := runWithin(t, t.Context(), "RunWatch to refuse a start in which no drive started", runWatchOf(orch))
 	require.Error(t, err)
 
 	var startupErr *WatchStartupError
@@ -2992,23 +2852,14 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
-	select {
-	case event := <-lifecycle:
-		assert.Equal(t, WatchReady, event.Phase, "an all-paused watch is ready, not failed")
-		assert.Empty(t, event.SyncRoots)
-		assert.Empty(t, event.Skipped)
-		require.Len(t, event.Paused, 1)
-		assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), event.Paused[0].Identity)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not report ready")
-	}
+	event := receiveWithin(t, lifecycle, "RunWatch to report ready")
+	assert.Equal(t, WatchReady, event.Phase, "an all-paused watch is ready, not failed")
+	assert.Empty(t, event.SyncRoots)
+	assert.Empty(t, event.Skipped)
+	require.Len(t, event.Paused, 1)
+	assert.Equal(t, testStandaloneMountIdentity(rd.CanonicalID), event.Paused[0].Identity)
 	assert.Zero(t, started.Load(), "a paused drive is not started")
 
 	// A resume reaches the running watch through the ordinary reload.
@@ -3019,12 +2870,7 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 	}, eventWait, 10*time.Millisecond, "the resumed drive starts syncing")
 
 	cancel()
-	select {
-	case err := <-errCh:
-		require.NoError(t, err, "a watch stopped while idle exits cleanly")
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	require.NoError(t, receiveWithin(t, done, "RunWatch to stop"), "a watch stopped while idle exits cleanly")
 }
 
 // Validates: R-2.9.1
@@ -3040,7 +2886,7 @@ func TestOrchestrator_RunWatch_ClosesControlSocketWhenStartupValidationFails(t *
 		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
 	}
 
-	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	err := runWithin(t, t.Context(), "RunWatch to refuse a start that failed validation", runWatchOf(orch))
 	require.Error(t, err)
 	assert.NoFileExists(t, cfg.ControlSocketPath)
 }
@@ -3066,16 +2912,9 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 		}, nil
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	_, done := runWatchInBackground(t, orch)
 
-	select {
-	case <-watchStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not start in time")
-	}
+	receiveWithin(t, watchStarted, "RunWatch to start the drive")
 
 	client := controlTestClient(cfg.ControlSocketPath)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, synccontrol.HTTPBaseURL+synccontrol.PathStatus, http.NoBody)
@@ -3094,12 +2933,7 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
 	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	require.NoError(t, receiveWithin(t, done, "RunWatch to return after the stop request"))
 }
 
 // Validates: R-2.9.7
@@ -3135,27 +2969,16 @@ func TestRunWatch_ControlServerExitEndsTheWatch(t *testing.T) {
 		}, nil
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	_, done := runWatchInBackground(t, orch)
 
-	select {
-	case <-watchStarted:
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not start in time")
-	}
+	receiveWithin(t, watchStarted, "RunWatch to start the drive")
 
 	// Closing the listener under the server is an end nobody asked for.
-	require.NoError(t, (<-listeners).Close())
+	require.NoError(t, receiveWithin(t, listeners, "the control socket's listener").Close())
 
-	select {
-	case err := <-errCh:
-		require.ErrorIs(t, err, net.ErrClosed)
-		require.ErrorContains(t, err, "control channel stopped")
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch kept running without its control channel")
-	}
+	err := receiveWithin(t, done, "RunWatch to end without its control channel")
+	require.ErrorIs(t, err, net.ErrClosed)
+	require.ErrorContains(t, err, "control channel stopped")
 	assert.NoFileExists(t, cfg.ControlSocketPath)
 }
 
@@ -3168,9 +2991,7 @@ func TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus(t *testing.
 
 	control, err := orch.startControlServer(t.Context(), synccontrol.OwnerModeOneShot, nil, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, control.Close(context.Background()))
-	})
+	t.Cleanup(func() { closeWithin(t, "the one-shot control server", control.Close) })
 
 	status := getControlStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, synccontrol.OwnerModeOneShot, status.OwnerMode)
@@ -3225,18 +3046,12 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait for first mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the first drive starts")
 
 	// Add a second mount to the config and request a control-socket reload.
 	writeTestConfigMulti(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot, rd2CID, t.TempDir())
@@ -3245,16 +3060,9 @@ func TestOrchestrator_Reload_AddDrive(t *testing.T) {
 	// Wait for the second mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the added drive starts")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4.1, R-2.4.2
@@ -3295,13 +3103,7 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	rd1ID := rd1.CanonicalID.String()
 	rd2ID := rd2.CanonicalID.String()
@@ -3309,7 +3111,7 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 		mu.Lock()
 		defer mu.Unlock()
 		return started[rd1ID] == 1 && started[rd2ID] == 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "both drives start")
 
 	insertDriveConfigLine(t, cfgPath, rd1.CanonicalID, `ignored_dirs = ["hidden"]`)
 	postControlReload(t, cfg.ControlSocketPath)
@@ -3325,16 +3127,9 @@ func TestOrchestrator_Reload_ContentFilterChangeRestartsOnlyAffectedMount(t *tes
 		mu.Lock()
 		defer mu.Unlock()
 		return started[rd1ID] == 2 && stopped[rd1ID] == 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the changed drive restarts once")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -3362,18 +3157,12 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait for both mounts to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 2
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "both drives start")
 
 	// Remove rd2 from config and request a control-socket reload.
 	writeTestConfigSingle(t, cfgPath, rd1.CanonicalID, rd1.SyncRoot)
@@ -3382,16 +3171,9 @@ func TestOrchestrator_Reload_RemoveMount(t *testing.T) {
 	// Wait for one runner to stop (the removed mount).
 	require.Eventually(t, func() bool {
 		return stopped.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the removed drive's runner stops")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -3418,18 +3200,12 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Pause the mount and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
@@ -3438,16 +3214,9 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	// The mount runner should stop.
 	require.Eventually(t, func() bool {
 		return stopped.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the paused drive's runner stops")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4, R-2.9.3
@@ -3473,18 +3242,12 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Write invalid TOML and request a control-socket reload; old state should
 	// remain, and the requester must be told the reload did not apply instead
@@ -3502,14 +3265,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	assert.Equal(t, int32(1), made.Load(), "mount should still be running after invalid config reload")
 	assert.Equal(t, int32(1), started.Load(), "mount should still be running after invalid config reload")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -3551,42 +3307,25 @@ func TestOrchestrator_Reload_EmitsMountLocalCompilationFailures(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	postControlReload(t, cfg.ControlSocketPath)
 
-	select {
-	case warning := <-warnings:
-		results := warning.Summary.SkippedResults()
-		require.Len(t, results, 1)
-		assert.Equal(t, MountStartupFatal, results[0].Status)
-		require.ErrorIs(t, results[0].Err, reloadErr)
-	case <-time.After(eventWait):
-		require.Fail(t, "reload warning was not emitted")
-	}
+	warning := receiveWithin(t, warnings, "the reload's warning")
+	results := warning.Summary.SkippedResults()
+	require.Len(t, results, 1)
+	assert.Equal(t, MountStartupFatal, results[0].Status)
+	require.ErrorIs(t, results[0].Err, reloadErr)
 
 	// The reload warns after it has made the engines of what it restarts,
 	// and the healthy mount did not change, so it kept its one engine.
 	assert.Equal(t, int32(1), made.Load(), "the healthy mount should not restart")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -3618,18 +3357,12 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
-	}()
+	cancel, done := runWatchInBackground(t, orch)
 
 	// Wait for mount to start.
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Set an already-expired timed pause and request a control-socket reload.
 	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
@@ -3643,7 +3376,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 		}
 		d := reloadedCfg.Drives[rd.CanonicalID]
 		return d.Paused == nil && d.PausedUntil == nil
-	}, eventWait, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond, "the reload clears the expired pause from the config")
 
 	assert.Equal(t, int32(0), stopped.Load(), "mount should NOT be stopped — expired pause is cleared, mount stays running")
 	assert.Equal(t, int32(1), started.Load(), "mount should NOT be restarted — the mount was already running")
@@ -3655,14 +3388,7 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	assert.Nil(t, d.Paused, "paused should be cleared after timed pause expires")
 	assert.Nil(t, d.PausedUntil, "paused_until should be cleared after timed pause expires")
 
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(eventWait):
-		require.Fail(t, "RunWatch did not stop in time")
-	}
+	stopWatch(t, cancel, done)
 }
 
 // Validates: R-2.4
@@ -3670,7 +3396,7 @@ func TestOrchestrator_RunWatch_ZeroMounts(t *testing.T) {
 	cfg := testOrchestratorConfig(t)
 	orch := NewOrchestrator(cfg)
 
-	err := orch.RunWatch(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{})
+	err := runWithin(t, t.Context(), "RunWatch to refuse a start with no drives", runWatchOf(orch))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no drives selected for sync")
 }
@@ -3742,14 +3468,20 @@ func TestRunOnce_DriveWhoseSharedFoldersCannotBeSetUpIsOneSelectedDrive(t *testi
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
+	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-incomplete", "Shortcuts/Incomplete")
+	// Without the shared folder's remote root it cannot be set up.
+	child.Engine.RemoteItemID = ""
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
-		require.Equal(t, MountProjectionStandalone, req.Mount.projectionKind(), "no shared folder can be set up")
+		// A shared folder's factory call would come from its own run's
+		// goroutine, so this asserts and fails the call instead of requiring.
+		if !assert.Equal(t, MountProjectionStandalone, req.Mount.projectionKind(), "no shared folder can be set up") {
+			return nil, assert.AnError
+		}
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-				child := testChildRecordWithContext(ctx, t, req.Mount.id(), "binding-incomplete", "Shortcuts/Incomplete")
-				// Without the shared folder's remote root it cannot be set up.
-				child.Engine.RemoteItemID = ""
-				require.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(req.Mount.id().String(), child)))
+				if !assert.NoError(t, req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(req.Mount.id().String(), child))) {
+					return nil, assert.AnError
+				}
 				return &syncengine.Report{}, nil
 			},
 		}, nil
