@@ -33,43 +33,80 @@ func (c *Client) fetchItem(ctx context.Context, apiPath string) (*Item, error) {
 	return &item, nil
 }
 
-// fetchAllChildren paginates through all children starting from the given API path,
-// logging entry/completion with the provided attrs. Shared by ListChildren (ID-based)
-// and ListChildrenByPath (path-based) to avoid duplication.
-func (c *Client) fetchAllChildren(
+// ChildrenPageFunc receives one page of a folder's children, in the order
+// OneDrive returns them; the slice is the function's to keep. Returning false
+// stops the listing: no further page is asked for.
+type ChildrenPageFunc func(page []Item) (keepListing bool)
+
+// visitChildPages is the one loop over the pages of a children listing,
+// starting from apiPath, shared by ListChildrenPages, ListChildrenByPathPages
+// and ListRecycleBinItems. It hands each page to visit as it arrives and asks
+// for the next only after visit returned, so a caller holds one page of a
+// folder of any size. A failed page's request is retried as itself, by the
+// transport and, for a page asked for at the drive root's children
+// collection (the first page, and a later one whose link keeps that form),
+// by the documented quirk retry, never from the first page; the pages before
+// it have been handed on. The loop is bounded by maxListPages pages asked
+// for, and a next link back to a page it already asked for fails the listing
+// before that page is asked for again: a circular continuation would hand
+// the caller the same children over and over, and a caller that walks them
+// would do its work for them again each time.
+func (c *Client) visitChildPages(
 	ctx context.Context,
 	apiPath string,
 	entryMsg string,
 	doneMsg string,
 	logAttrs []slog.Attr,
-) ([]Item, error) {
-	args := make([]any, 0, len(logAttrs))
-	for _, a := range logAttrs {
-		args = append(args, a)
-	}
-
+	visit ChildrenPageFunc,
+) error {
+	args := attrsToArgs(logAttrs)
 	c.logger.Debug(entryMsg, args...)
 
-	var items []Item
-	page := 1
+	handed := 0
+	// askedPages holds the page number of each path asked for, at most
+	// maxListPages of them.
+	askedPages := make(map[string]int)
+	for page := 1; apiPath != ""; page++ {
+		if page > c.maxListPages {
+			return fmt.Errorf("graph: %s exceeded %d pages", entryMsg, c.maxListPages)
+		}
+		if earlier, asked := askedPages[apiPath]; asked {
+			return fmt.Errorf("graph: %s looped back from page %d to page %d", entryMsg, page-1, earlier)
+		}
+		askedPages[apiPath] = page
 
-	for apiPath != "" {
 		pageItems, nextPath, err := c.listChildrenPage(ctx, apiPath, page)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		items = append(items, pageItems...)
+		handed += len(pageItems)
+		if !visit(pageItems) {
+			args = append(args, slog.Int("items_handed", handed), slog.Int("pages", page))
+			c.logger.Debug(entryMsg+" stopped by its caller", args...)
+
+			return nil
+		}
+
 		apiPath = nextPath
-		page++
-
-		if page > defaultMaxListPages {
-			return nil, fmt.Errorf("graph: %s exceeded %d pages", entryMsg, defaultMaxListPages)
-		}
 	}
 
-	args = append(args, slog.Int("total_items", len(items)))
+	args = append(args, slog.Int("total_items", handed))
 	c.logger.Debug(doneMsg, args...)
+
+	return nil
+}
+
+// collectChildPages is the slice form of a paged children listing: every
+// page, appended in the order it arrived, or nil and the listing's error.
+func collectChildPages(list func(visit ChildrenPageFunc) error) ([]Item, error) {
+	var items []Item
+	if err := list(func(page []Item) bool {
+		items = append(items, page...)
+		return true
+	}); err != nil {
+		return nil, err
+	}
 
 	return items, nil
 }
@@ -239,9 +276,14 @@ func pathAddressChunks(remotePath string, limit int) []string {
 	return append(chunks, current)
 }
 
-// ListChildren returns all children of a folder, handling pagination automatically.
-func (c *Client) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]Item, error) {
-	return c.fetchAllChildren(
+// ListChildrenPages hands the children of the folder parentID to visit a page
+// at a time (at most listChildrenPageSize children), in the order OneDrive
+// returns them, asking for each page only after visit returned from the one
+// before. A caller that only walks the children uses it; visit returning false
+// ends the listing without an error. A page that fails ends it with that
+// page's error after the pages before it were handed on.
+func (c *Client) ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit ChildrenPageFunc) error {
+	return c.visitChildPages(
 		ctx,
 		fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, parentID, listChildrenPageSize),
 		"listing children",
@@ -250,28 +292,38 @@ func (c *Client) ListChildren(ctx context.Context, driveID driveid.ID, parentID 
 			slog.String("drive_id", driveID.String()),
 			slog.String("parent_id", parentID),
 		},
+		visit,
 	)
 }
 
-// ListChildrenByPath returns all children of a folder identified by path,
-// handling pagination automatically. The path must NOT have a leading slash and
-// must not be empty — returns ErrInvalidPath for both cases.
-// For root, callers should use ListChildren with parentID "root" instead.
-func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, remotePath string) ([]Item, error) {
+// ListChildren returns every child of a folder, every page read, for a
+// caller that needs the whole list (a sort, a lookup by name, one output
+// document); a caller that only walks the children uses ListChildrenPages.
+func (c *Client) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]Item, error) {
+	return collectChildPages(func(visit ChildrenPageFunc) error {
+		return c.ListChildrenPages(ctx, driveID, parentID, visit)
+	})
+}
+
+// ListChildrenByPathPages is ListChildrenPages for a folder identified by
+// path. The path must NOT have a leading slash and must not be empty —
+// returns ErrInvalidPath for both cases, before any request. For root,
+// callers should use ListChildrenPages with parentID "root" instead.
+func (c *Client) ListChildrenByPathPages(ctx context.Context, driveID driveid.ID, remotePath string, visit ChildrenPageFunc) error {
 	if err := validateRemotePath(remotePath); err != nil {
-		return nil, err
+		return err
 	}
 
 	route := fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodePathSegments(remotePath), listChildrenPageSize)
 	if len(encodePathSegments(remotePath)) > maxPathAddressedLength {
 		folder, err := c.fetchItemByPathChunks(ctx, driveID, remotePath)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		route = fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, folder.ID, listChildrenPageSize)
 	}
 
-	return c.fetchAllChildren(
+	return c.visitChildPages(
 		ctx,
 		route,
 		"listing children by path",
@@ -280,7 +332,16 @@ func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, rem
 			slog.String("drive_id", driveID.String()),
 			slog.String("remote_path", remotePath),
 		},
+		visit,
 	)
+}
+
+// ListChildrenByPath is ListChildren for a folder identified by path, with
+// the path rules of ListChildrenByPathPages.
+func (c *Client) ListChildrenByPath(ctx context.Context, driveID driveid.ID, remotePath string) ([]Item, error) {
+	return collectChildPages(func(visit ChildrenPageFunc) error {
+		return c.ListChildrenByPathPages(ctx, driveID, remotePath, visit)
+	})
 }
 
 // ListChildrenRecursive returns all descendants of a folder by recursively

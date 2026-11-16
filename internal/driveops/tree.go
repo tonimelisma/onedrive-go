@@ -77,9 +77,9 @@ func (s *TreeSummary) count(event *TreeEvent) {
 	}
 }
 
-// TreeRootError is a tree transfer that could not start: a download's root
-// folder could not be listed, or an upload's could not be opened locally or
-// made on OneDrive. Nothing was reported before it.
+// TreeRootError is a tree transfer that could not start: the first page of a
+// download's root folder could not be read, or an upload's root could not be
+// opened locally or made on OneDrive. Nothing was reported before it.
 type TreeRootError struct {
 	Err error
 }

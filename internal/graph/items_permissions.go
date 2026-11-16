@@ -257,8 +257,8 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 	var permissions []Permission
 
 	for page := 1; apiPath != ""; page++ {
-		if page > defaultMaxListPages {
-			return nil, fmt.Errorf("graph: listing item permissions exceeded %d pages", defaultMaxListPages)
+		if page > c.maxListPages {
+			return nil, fmt.Errorf("graph: listing item permissions exceeded %d pages", c.maxListPages)
 		}
 
 		lpr, err := c.fetchPermissionsPage(ctx, apiPath)
@@ -302,16 +302,19 @@ func (c *Client) fetchPermissionsPage(ctx context.Context, apiPath string) (*lis
 func (c *Client) ListRecycleBinItems(
 	ctx context.Context, driveID driveid.ID,
 ) ([]Item, error) {
-	return c.fetchAllChildren(
-		ctx,
-		fmt.Sprintf("/drives/%s/special/recyclebin/children?$top=%d",
-			driveID, listChildrenPageSize),
-		"listing recycle bin items",
-		"listed recycle bin items complete",
-		[]slog.Attr{
-			slog.String("drive_id", driveID.String()),
-		},
-	)
+	return collectChildPages(func(visit ChildrenPageFunc) error {
+		return c.visitChildPages(
+			ctx,
+			fmt.Sprintf("/drives/%s/special/recyclebin/children?$top=%d",
+				driveID, listChildrenPageSize),
+			"listing recycle bin items",
+			"listed recycle bin items complete",
+			[]slog.Attr{
+				slog.String("drive_id", driveID.String()),
+			},
+			visit,
+		)
+	})
 }
 
 // RestoreItem restores a deleted item from the recycle bin to its original

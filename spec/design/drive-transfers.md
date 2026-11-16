@@ -81,15 +81,18 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   ID through a `ChildLister` (`*graph.Client`), and every file goes to a
   `FileDownloader` (the `TransferManager`, built by `newDownloadManager`,
   the one place every `get` reads `min_free_space`, reporting a value it
-  cannot read instead of turning the disk-space check off). The walk lists
-  a folder, then creates it: a folder that cannot be listed is reported and
+  cannot read instead of turning the disk-space check off). The walk reads
+  a folder a page at a time (`ListChildrenPages`) and creates it once the
+  first page is in: a folder whose first page cannot be read is reported and
   not created, in one line that names the remote folder by its path below
   `TreeDownload.RemoteRoot` (the drive path or shared selector the user
-  gave), the local folder it would have filled, and the cause. Every folder
-  it creates is a folder in the user's tree: it asks for
-  `localpath.UserTreeDirPerm`, 0777 minus the umask, like the files in it
-  (R-5.10.2). A folder that is already there is used as it is, keeps its
-  mode and is not counted in `folders_created` (R-1.2.4).
+  gave), the local folder it would have filled, and the cause. A page that
+  fails after the first is the same failure of that folder: what the pages
+  before it held downloads, and the walk goes on, as after an upload's
+  failed read. Every folder it creates is a folder in the user's tree: it
+  asks for `localpath.UserTreeDirPerm`, 0777 minus the umask, like the files
+  in it (R-5.10.2). A folder that is already there is used as it is, keeps
+  its mode and is not counted in `folders_created` (R-1.2.4).
 - **Refused names.** A remote child whose name is empty, `.` or `..`, holds
   `/` or `\`, or fails `filepath.IsLocal` is refused before any local path is
   built from it: a failed event whose error is a `RefusedNameError` naming
@@ -145,22 +148,27 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   overwrites it (R-1.3.8).
 - **Failures and the returned error.** The failure of one file or folder is
   an event, counted, and the walk goes on with its siblings; its error text
-  names the path. The returned error is a `TreeRootError` when the root
-  cannot be listed (download), or opened or made on OneDrive (upload),
-  before anything is reported, which the command returns as one error that
-  names the remote path (`listing "<remote>": …` for `get`,
-  `uploading "<remote>": …` for `put`); the end of the context, once the run
-  reported every
-  file it queued and did not finish as failed with the context's error and
-  every folder whose walk it cut short (one event for what the walk had not
-  reached in it); or a panic of the walk or of an event's report, which
-  fails the command. A panic in one file's transfer is that file's failure
-  (R-6.3.10).
+  names the path. The returned error is a `TreeRootError` when the root's
+  first page cannot be read (download) or the root cannot be opened or made
+  on OneDrive (upload), before anything is reported, which the command
+  returns as one error that names the remote path (`listing "<remote>": …`
+  for `get`, `uploading "<remote>": …` for `put`); the end of the context,
+  once the run reported every file it queued and did not finish as failed
+  with the context's error and every folder whose walk it cut short (one
+  event for what the walk had not reached in it); or a panic of the walk or
+  of an event's report, which fails the command. A panic in one file's
+  transfer is that file's failure (R-6.3.10). Nothing is downloaded or
+  created when the root cannot be listed, which holds for the root's first
+  page; a later page of the root that fails is the root folder's failure
+  like any other folder's, after the pages before it were walked, and `get`
+  exits 1 whatever the page's error, a sign-in failure included, unless the
+  context has ended.
 
 Evidence: `TestDownloadTree_RefusesUnsafeRemoteNames`,
 `TestDownloadTree_ListFailureIsReportedAndSiblingsContinue`,
 `TestDownloadTree_TransferFailureIsReportedAndOthersContinue`,
 `TestDownloadTree_UnlistableRootIsTheReturnedError`,
+`TestDownloadTree_AFailedLaterPageFailsOnlyItsFolder`,
 `TestDownloadTree_FolderExistsBeforeItsFilesDownload`,
 `TestDownloadTree_CreatedFolderFollowsTheUmask`,
 `TestDownloadTree_CountsOnlyTheFoldersItCreates`,
@@ -694,9 +702,12 @@ A recursive `get` or `put` is bounded in one place, the pool of `tree.go` in
   waits on a goroutine of its own. `put` runs as parallel as `get`.
 - **No whole-tree state.** Nothing counts or lists the tree first, nothing
   caches its listings, and no map of folder IDs exists: a folder's ID
-  travels down the walk's own stack. The walk holds one listing per level of
-  depth for a download (a listing is the folder's children, every page), and
-  one open folder and one batch of entries per level for an upload.
+  travels down the walk's own stack. The walk holds one page of a listing
+  per level of depth for a download, at most 200 children: the Graph client
+  hands a folder on a page at a time (`ListChildrenPages`) and asks for the
+  next page only once the walk, a subfolder's included, is done with the one
+  before, so no folder is ever one slice. An upload holds one open folder
+  and one batch of entries per level.
 - **One collector.** A single goroutine counts every event and hands it to
   the caller's `OnEvent`, in the order the events happen, so the CLI's
   rendering needs no lock. A panic in `OnEvent` stops the delivery, not the
@@ -712,8 +723,12 @@ tree listed before the first byte moves. Evidence:
 `TestDownloadTree_InFlightNeverExceedsWorkers` (10,000 files in one folder,
 generated in memory, peak transfers equal `TreeWorkers`),
 `TestDownloadTree_WalkBlocksWhileWorkersAreBusy`,
+`TestDownloadTree_WalksAPageBeforeAskingForTheNext`,
 `TestDownloadTree_GoroutinesDoNotScaleWithFilesOrFolders`,
 `TestDownloadTree_CancellationReportsEveryUnstartedFile`,
+`TestDownloadTree_CancellationAsksForNoFurtherPage`,
+`TestDownloadTree_CancellationAtALaterPageCutsItsFolderShort`,
+`TestListChildrenPages_HandsEachPageOnBeforeAskingForTheNext`,
 `TestUploadTree_InFlightNeverExceedsWorkers`,
 `TestUploadTree_CancellationReportsEveryUnstartedFile`,
 `TestTreeWorkers_FourFilesTransferAtOnce`,

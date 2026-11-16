@@ -24,8 +24,8 @@ func (c *Client) SearchSites(ctx context.Context, query string, limit int) ([]Si
 	sites := make([]Site, 0)
 
 	for page := 1; path != "" && len(sites) < limit; page++ {
-		if page > defaultMaxListPages {
-			return nil, fmt.Errorf("graph: site search exceeded %d pages", defaultMaxListPages)
+		if page > c.maxListPages {
+			return nil, fmt.Errorf("graph: site search exceeded %d pages", c.maxListPages)
 		}
 
 		slr, err := c.fetchSitesPage(ctx, path)
