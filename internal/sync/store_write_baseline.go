@@ -290,11 +290,14 @@ func actionItemType(action *Action) ItemType {
 }
 
 // fillMutationFromBaselineDefaults fills from the baseline the facts a
-// publication's view left unknown. A modification time is filled only for a
-// side the view did not observe: an observed 0 is a local file dated exactly
-// the epoch or a remote item with no time, and either way it is the value the
-// planner's comparison reads from current truth, so the baseline's time in
-// its place would differ from current truth on every pass.
+// publication's view left unknown. A modification time, and the remote's
+// eTag, are filled only for a side the view did not observe: an observed 0 is
+// a local file dated exactly the epoch or a remote item with no time, an
+// observed empty eTag is a remote item with none, and either way it is the
+// value the planner's comparison reads from current truth, so the baseline's
+// value in its place would differ from current truth on every pass. Content
+// (hashes and sizes) is filled only from a baseline of the publication's own
+// item type: what a file held is no fact about the folder that replaced it.
 func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *BaselineEntry, remoteObserved bool) {
 	if mutation == nil || baseline == nil {
 		return
@@ -306,12 +309,8 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 	if mutation.ParentID == "" {
 		mutation.ParentID = baseline.ParentID
 	}
-	if mutation.LocalHash == "" {
-		mutation.LocalHash = baseline.LocalHash
-	}
-	if !mutation.LocalSizeKnown {
-		mutation.LocalSize = baseline.LocalSize
-		mutation.LocalSizeKnown = baseline.LocalSizeKnown
+	if baseline.ItemType == mutation.ItemType {
+		fillMutationContentFromBaseline(mutation, baseline)
 	}
 	if mutation.LocalMtime == 0 && !mutation.LocalIdentityObserved {
 		mutation.LocalMtime = baseline.LocalMtime
@@ -323,18 +322,30 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 		mutation.LocalBirthTime = baseline.LocalBirthTime
 		mutation.LocalHasIdentity = baseline.LocalHasIdentity
 	}
+	if !storedTimeIsSet(mutation.RemoteMtime) && !remoteObserved {
+		mutation.RemoteMtime = baseline.RemoteMtime
+	}
+	if mutation.ETag == "" && !remoteObserved {
+		mutation.ETag = baseline.ETag
+	}
+}
+
+// fillMutationContentFromBaseline fills the hashes and sizes the view left
+// unknown from a baseline of the same item type.
+func fillMutationContentFromBaseline(mutation *BaselineMutation, baseline *BaselineEntry) {
+	if mutation.LocalHash == "" {
+		mutation.LocalHash = baseline.LocalHash
+	}
+	if !mutation.LocalSizeKnown {
+		mutation.LocalSize = baseline.LocalSize
+		mutation.LocalSizeKnown = baseline.LocalSizeKnown
+	}
 	if mutation.RemoteHash == "" {
 		mutation.RemoteHash = baseline.RemoteHash
 	}
 	if !mutation.RemoteSizeKnown {
 		mutation.RemoteSize = baseline.RemoteSize
 		mutation.RemoteSizeKnown = baseline.RemoteSizeKnown
-	}
-	if !storedTimeIsSet(mutation.RemoteMtime) && !remoteObserved {
-		mutation.RemoteMtime = baseline.RemoteMtime
-	}
-	if mutation.ETag == "" {
-		mutation.ETag = baseline.ETag
 	}
 }
 
@@ -364,6 +375,9 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 			mutation.RemoteSizeKnown = true
 			mutation.RemoteMtime = action.View.Remote.Mtime
 			mutation.ETag = action.View.Remote.ETag
+			// The observed type stands where the baseline recorded another:
+			// a folder both sides replaced with the same file is that file,
+			// and keeping the folder's type plans this update on every pass.
 			mutation.ItemType = action.View.Remote.ItemType
 			if !action.View.Remote.DriveID.IsZero() {
 				mutation.DriveID = action.View.Remote.DriveID
@@ -386,10 +400,6 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 		fillMutationFromBaselineDefaults(mutation, action.View.Baseline, action.View.Remote != nil)
 		if action.OldPath != "" && action.OldPath != action.Path {
 			keepPendingContentAcrossRekey(mutation, action.View)
-		}
-
-		if mutation.ItemType == ItemTypeFile && action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
-			mutation.ItemType = action.View.Baseline.ItemType
 		}
 	}
 

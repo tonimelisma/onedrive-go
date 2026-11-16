@@ -397,7 +397,7 @@ func syncHarnessUntilQuiet(t *testing.T, h *syncHarness) {
 		report, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 		if report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates+report.Moves+
-			report.Failed+report.HeldLocalDeletes+report.HeldRemoteDeletes == 0 {
+			report.ConflictCopies+report.BaselineUpdates+report.Failed+report.HeldLocalDeletes+report.HeldRemoteDeletes == 0 {
 			return
 		}
 	}
