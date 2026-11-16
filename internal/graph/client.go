@@ -47,12 +47,13 @@ const (
 	maxItemResponseSize = 1024 * 1024
 
 	// defaultMaxListPages bounds the pages every non-delta paged listing asks
-	// for (Client.maxListPages, which tests lower). A circular or buggy
-	// nextLink chain would otherwise loop until the process dies, and unlike
-	// delta these listings have no natural terminator to fall back on.
+	// for (Client.maxListPages, which tests lower; askedPages counts them). A
+	// buggy nextLink chain of ever new links would otherwise loop until the
+	// process dies, and unlike delta these listings have no natural
+	// terminator to fall back on; a circular one fails at its first repeat.
 	defaultMaxListPages = 10000
 
-	// maxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
+	// defaultMaxDeltaPages is the upper bound on pages fetched by DeltaAll/DeltaFolderAll.
 	// A buggy API or circular NextLinks could loop forever without this guard.
 	defaultMaxDeltaPages = 10000
 

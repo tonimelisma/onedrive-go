@@ -256,9 +256,10 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 
 	var permissions []Permission
 
-	for page := 1; apiPath != ""; page++ {
-		if page > c.maxListPages {
-			return nil, fmt.Errorf("graph: listing item permissions exceeded %d pages", c.maxListPages)
+	pages := newAskedPages("listing item permissions", c.maxListPages)
+	for apiPath != "" {
+		if _, err := pages.ask(apiPath); err != nil {
+			return nil, err
 		}
 
 		lpr, err := c.fetchPermissionsPage(ctx, apiPath)
