@@ -90,7 +90,7 @@ This keeps domain-specific logic close to its tests without reopening the public
 | The authenticated request helpers take the body as bytes, and every attempt, the 401 refresh-and-retry included, is built from them: the retry sends exactly the bytes of the first request, and a body that cannot be replayed cannot be passed (R-6.8.14). | `TestDo_401RetrySendsTheBytesOfTheFirstRequest`, `TestDoOnce_401_RefreshSucceedsWithBodyAndQueryPreserved`, `TestDoOnce_401_RefreshSucceeds`, `TestDo_ContentTypeForBody` |
 | A request that never left the client (token source failed, a token refresh its context cut short included, context already ended, request not buildable, a retry after a refusal not sent, a throttle wait the retrying transport would not start past the deadline) carries `errRequestNotSent`, and neither the create mark nor the final-fragment mark is set on it (R-5.6.12, R-5.6.15, R-6.8.27). | `TestCreateFile_TokenFailureIsNotOutcomeUnknown`, `TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown`, `TestCreateFile_UnsentRetryIsNotOutcomeUnknown`, `TestCreateFile_MarksOnlyAFailureThatMayHaveCreatedTheFile`, `TestUploadFromSession_UnsentFinalFragmentIsNotUncertain`, `TestDo_ContextCancellation`, `TestDo_ATokenRefreshCutByTheContextIsNotSent`, `TestDo_AThrottleWaitPastTheDeadlineIsNotSent`, `TestSimpleUploadToItem_TokenError` |
 | The Socket.IO notification URL is sensitive in both spellings (`/callback` and the `/socket.io` websocket form, or any `snthgk` query), and `*url.Error` redaction runs before wrapping (R-6.8.17). | `TestIsSensitiveURL_SocketIONotificationURLs`, `TestRedactURLError_ScrubsSocketIOWebsocketURL`, `TestRedactURLError_MustRunBeforeWrapping` |
-| Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit` |
+| Item permissions and site search follow `@odata.nextLink` through `stripBaseURL`, bounded by the shared page cap; site search stops at the caller's limit; every non-delta listing fails on a next link back to a page it already asked for, before asking for it again (R-6.7.32). | `TestListItemPermissions_FollowsNextLinkAcrossPages`, `TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`, `TestSearchSites_FollowsNextLinkAcrossPages`, `TestSearchSites_StopsFollowingAtTheLimit`, `TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing` |
 | Every sign-in request (silent refresh, device code and its polls, code exchange) goes through the injected auth client, whose deadlines (30 s headers, 60 s request) release every caller of a stalled token endpoint; a nil auth client, one without a timeout and a nil Graph HTTP client are errors, never `http.DefaultClient` (R-6.8.27). | `TestAuthClient_BoundsEveryRequest`, `TestTokenSourceFromPath_RefreshUsesTheInjectedClient`, `TestTokenSourceFromPath_StalledTokenEndpointTimesOut`, `TestTokenSourceFromPath_NilAuthClientIsAnError`, `TestSignInFlows_AuthClientWithoutATimeoutIsAnError`, `TestLoginFlows_NilAuthClientIsAnError`, `TestLogin_UsesTheInjectedAuthClient`, `TestLoginWithBrowser_UsesTheInjectedAuthClient`, `TestNewClient_NilHTTPClientIsAnError` |
 | The browser sign-in's callback server is owned: shutdown waits for its serving goroutine, a panic there is the login's callback error, and a handler's panic, which net/http recovers per connection, is logged through the login's logger, not the standard `log` package (R-6.3.10, R-6.3.4). | `TestCallbackServer_HandlerPanicIsLoggedAndShutdownWaitsForServe` |
 | A token refresh runs under the context of the request that needs it: one refresh at a time, shared by every caller waiting for it, each caller waiting no longer than its own context (whose cause it keeps); a caller that leaves does not cancel it for the others, a refresh nobody waits for ends by the sign-in client's timeout, a panic in it fails its callers, and only a refresh that finished with a token writes the token file (R-6.8.27). | `TestTokenSource_ARefreshEndsWithTheCallersContext`, `TestTokenSource_ARefreshOneCallerAbandonedStillServesTheNext`, `TestTokenSource_AnAbandonedRefreshWritesNoTokenFile`, `TestTokenSource_ConcurrentCallersShareOneRefresh`, `TestTokenSource_ARefreshThatPanicsFailsItsCallers`, `TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst` |
@@ -481,22 +481,23 @@ so `Upload`/`UploadToItem` return the uploaded item together with a
 Every paged listing follows `@odata.nextLink` to completion, and every page
 loop is bounded.
 
-Both halves were incomplete. `/me/drives` and `/sites/{id}/drives` decoded a
-single page and stopped -- and the response type did not even declare the
-continuation field, so dropping it was undetectable. `ListItemPermissions`
-and `SearchSites` had the same shape until later: a write grant on a second
-permissions page went unseen, and a site past the first search page vanished
-(`TestListItemPermissions_FollowsNextLinkAcrossPages`,
-`TestSearchSites_FollowsNextLinkAcrossPages`). That failure is silent in
-the worst way: the caller receives a short list that looks complete, and a
-drive simply does not exist as far as the rest of the program is concerned.
+A listing that stopped at its first page would fail silently in the worst
+way: the caller would receive a short list that looks complete, so a drive
+past the first page of `/me/drives` or `/sites/{id}/drives` would not exist
+as far as the rest of the program is concerned, a write grant on a second
+permissions page would go unseen, and a site past the first search page
+would vanish. Every listing's response type declares the continuation
+field, and every listing follows it (`TestDrives_FollowsNextLinkAcrossPages`,
+`TestSiteDrives_FollowsNextLinkAcrossPages`,
+`TestListItemPermissions_FollowsNextLinkAcrossPages`,
+`TestSearchSites_FollowsNextLinkAcrossPages`).
 
-The bound matters for the opposite reason. Delta already refused to follow more
-than a fixed number of pages because a circular continuation would otherwise
-loop until the process died; the plain listings had no such guard. They share
-one now, `maxListPages`, and every loop counts the pages it asks for: a
-listing of exactly that many pages completes, and a page past it is never
-asked for (`TestPagedListings_ThePageCapCountsThePagesAskedFor`).
+The bound matters for the opposite reason: a continuation that never ends
+would loop until the process died. Delta enumeration stops at `maxDeltaPages`;
+every non-delta listing counts the pages it asks for in one `askedPages`,
+against one cap, `maxListPages`: a listing of exactly that many pages
+completes, and a page past it is never asked for
+(`TestPagedListings_ThePageCapCountsThePagesAskedFor`).
 
 Every continuation goes through `stripBaseURL`, which refuses a link off the
 client's base URL, so a hostile `@odata.nextLink` cannot redirect the bearer
@@ -533,14 +534,23 @@ lookup after a 409, path resolution), or everything at once (sync,
 `TestListChildrenPages_ACallerThatStopsAsksForNoFurtherPage`,
 `TestListChildren_ReturnsEveryPageInListingOrder`).
 
-Because each page is handed on before the next is asked for, the page cap
-alone does not bound a walker's work: a next link back to a page already read
-would hand the same children on again until the cap, and a recursive `get`
-would queue their files and walk their subfolders again each time. So
-`visitChildPages` keeps the path of every page it asked for, at most the
-cap's, and a next link back to one of them fails the listing before that page
-is asked for again
-(`TestListChildrenPages_ALinkBackToAPageAlreadyAskedForFailsTheListing`).
+The page cap alone does not bound what a circular continuation costs. A next
+link back to a page already read would be followed until the cap: a walker
+would be handed the same children again, and a recursive `get` would queue
+their files and walk their subfolders again each time; a listing that
+gathers every page would ask for and hold the cap's pages; a site search,
+which stops at its caller's limit, would return a site twice. So
+`askedPages` also keeps the path of every page its listing asked for, at
+most the cap's, and a next link back to one of them fails every non-delta
+listing with `graph: <listing> looped back from page N to page M` before that page
+is asked for again: the slice forms return nothing, and a walker has been
+handed each page once. A site search that reaches its limit before the link
+repeats returns its sites
+(`TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing`,
+`TestListChildrenPages_ALinkBackToAPageAlreadyAskedForFailsTheListing`,
+`TestSearchSites_StopsFollowingAtTheLimit`). Delta enumeration keeps no such
+record: a delta next link it already followed is asked for again, bounded
+only by `maxDeltaPages`.
 
 ## Response Body Bounds
 

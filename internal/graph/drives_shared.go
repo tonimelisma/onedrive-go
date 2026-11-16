@@ -19,17 +19,18 @@ func (c *Client) SearchDriveItems(ctx context.Context, query string) ([]Item, er
 	var items []Item
 	path := fmt.Sprintf("/me/drive/root/search(q='%s')", url.QueryEscape(query))
 
-	for pageNumber := 1; path != ""; pageNumber++ {
-		if pageNumber > c.maxListPages {
-			return nil, fmt.Errorf("graph: drive item search exceeded %d pages", c.maxListPages)
+	pages := newAskedPages("drive item search", c.maxListPages)
+	for path != "" {
+		if _, err := pages.ask(path); err != nil {
+			return nil, err
 		}
 
-		page, nextPath, err := c.fetchItemPage(ctx, path, "search")
+		pageItems, nextPath, err := c.fetchSearchPage(ctx, path)
 		if err != nil {
 			return nil, err
 		}
 
-		items = append(items, page...)
+		items = append(items, pageItems...)
 		path = nextPath
 	}
 
@@ -38,10 +39,9 @@ func (c *Client) SearchDriveItems(ctx context.Context, query string) ([]Item, er
 	return items, nil
 }
 
-// fetchItemPage fetches one page of items from a paginated endpoint.
-// Handles response decoding, item normalization, and @odata.nextLink
-// extraction. The label is used in error messages only.
-func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item, string, error) {
+// fetchSearchPage fetches one page of a drive item search: it decodes the
+// response, normalizes the items and extracts the @odata.nextLink.
+func (c *Client) fetchSearchPage(ctx context.Context, path string) ([]Item, string, error) {
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, "", err
@@ -53,7 +53,7 @@ func (c *Client) fetchItemPage(ctx context.Context, path, label string) ([]Item,
 		NextLink string              `json:"@odata.nextLink"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, "", fmt.Errorf("graph: decoding %s response: %w", label, err)
+		return nil, "", fmt.Errorf("graph: decoding search response: %w", err)
 	}
 
 	items := make([]Item, 0, len(page.Value))

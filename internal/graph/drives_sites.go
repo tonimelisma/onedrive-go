@@ -14,8 +14,10 @@ import (
 // Uses GET /sites?search={query}&$top={limit}&$select=id,displayName,name,webUrl.
 // Graph treats $top as a page size and may continue with @odata.nextLink, so
 // the walk follows the continuation until limit sites are in hand or the
-// pages run out. Personal accounts have no SharePoint — the caller should
-// only call this for business accounts.
+// pages run out. A next link back to a page already asked for fails the
+// search (askedPages) instead of gathering that page's sites again. Personal
+// accounts have no SharePoint — the caller should only call this for
+// business accounts.
 func (c *Client) SearchSites(ctx context.Context, query string, limit int) ([]Site, error) {
 	c.logger.Info("searching SharePoint sites", slog.String("query", query), slog.Int("limit", limit))
 
@@ -23,9 +25,10 @@ func (c *Client) SearchSites(ctx context.Context, query string, limit int) ([]Si
 
 	sites := make([]Site, 0)
 
-	for page := 1; path != "" && len(sites) < limit; page++ {
-		if page > c.maxListPages {
-			return nil, fmt.Errorf("graph: site search exceeded %d pages", c.maxListPages)
+	pages := newAskedPages("site search", c.maxListPages)
+	for path != "" && len(sites) < limit {
+		if _, err := pages.ask(path); err != nil {
+			return nil, err
 		}
 
 		slr, err := c.fetchSitesPage(ctx, path)
