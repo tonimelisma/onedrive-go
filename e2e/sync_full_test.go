@@ -766,7 +766,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditEditConflict(t *testing.T) {
 				// conflict-copy rename is suppressed too. Local truth must stay put.
 				assertOutputNotContains(t, out, "kept both versions of")
 				assertOutputContains(t, out, "Held back by --upload-only:")
-				assertOutputContains(t, out, "downloads")
+				assertOutputContains(t, out, "1 download")
 				assert.Empty(t, conflictCopiesForPath(t, conflictFile))
 
 				originalData := mustReadFile(t, conflictFile)
@@ -866,7 +866,7 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 
 			if mode.flag == flagDownloadOnly {
 				assertOutputContains(t, attempt.Stdout, "Held back by --download-only:")
-				assertOutputContains(t, attempt.Stdout, "uploads")
+				assertOutputContains(t, attempt.Stdout, "1 upload")
 				waitForRemoteDeleteDisappearance(t, cfgPath, env, resolveDriveSelection(env, ""), "fragile.txt", "ls", "/"+testFolder)
 				assert.Empty(t, conflictCopiesForPath(t, fragileFile), "directional edit-delete should preserve the local canonical file without a conflict copy")
 				return
@@ -911,7 +911,7 @@ func TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict(t *testing.T) {
 				// canonical file must remain untouched instead of being renamed.
 				assertOutputNotContains(t, out, "kept both versions of")
 				assertOutputContains(t, out, "Held back by --upload-only:")
-				assertOutputContains(t, out, "downloads")
+				assertOutputContains(t, out, "1 download")
 				assert.Empty(t, conflictCopiesForPath(t, conflictFile))
 
 				originalData := mustReadFile(t, conflictFile)

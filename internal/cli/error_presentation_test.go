@@ -153,7 +153,7 @@ func TestWriteCommandError_JournalLinesCarryErrPriority(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	writeCommandError(&buf, "Error: one\nRun 'x --help' for usage.")
+	require.NoError(t, writeCommandError(&buf, "Error: one\nRun 'x --help' for usage."))
 	require.Equal(t, "Error: one\nRun 'x --help' for usage.\n", buf.String(), "a plain writer is not the journal")
 }
 
@@ -164,7 +164,7 @@ func TestBulkTransferError_NamesEachFailureAndFails(t *testing.T) {
 	require.NoError(t, bulkTransferError(nil, "download", nil))
 
 	var stderr bytes.Buffer
-	err := bulkTransferError(&stderr, "download", []string{"a.txt: boom", "b.txt: bang"})
+	err := bulkTransferError(&CLIContext{StatusWriter: &stderr}, "download", []string{"a.txt: boom", "b.txt: bang"})
 	require.EqualError(t, err, "2 items failed to download")
 	assert.Equal(t, "Failed: a.txt: boom\nFailed: b.txt: bang\n", stderr.String())
 

@@ -15,11 +15,3 @@ type statusConditionJSON struct {
 	Count         int      `json:"count"`
 	Paths         []string `json:"paths,omitempty"`
 }
-
-func itemNoun(n int) string {
-	if n == 1 {
-		return "item"
-	}
-
-	return "items"
-}

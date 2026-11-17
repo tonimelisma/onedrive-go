@@ -120,7 +120,7 @@ func runRecycleBinEmptyWithFactory(
 	}
 
 	if !cc.Flags.JSON {
-		cc.Statusf("Permanently deleting %d items...\n", len(items))
+		cc.Statusf("Permanently deleting %s...\n", countItems(len(items)))
 	}
 
 	deleteRecycleBinItems(ctx, cc, session, items, &report)
@@ -132,7 +132,7 @@ func runRecycleBinEmptyWithFactory(
 	}
 
 	if failed := len(report.Failed); failed > 0 {
-		return fmt.Errorf("%d of %d items failed to delete", failed, len(items))
+		return fmt.Errorf("%d of %s failed to delete", failed, countItems(len(items)))
 	}
 
 	if !cc.Flags.JSON {

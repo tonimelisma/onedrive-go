@@ -154,7 +154,7 @@ type CLIContext struct {
 	Flags            CLIFlags
 	Logger           *slog.Logger
 	OutputWriter     io.Writer                // destination for primary command output (default: os.Stdout)
-	StatusWriter     io.Writer                // destination for Statusf output (default: os.Stderr)
+	StatusWriter     io.Writer                // destination for status, warning and progress lines (default: os.Stderr)
 	CfgPath          string                   // resolved config file path (set for every account command)
 	Env              config.EnvOverrides      // environment overrides read at startup (zero when no account is needed)
 	GraphBaseURL     string                   // Graph root of the command's clients; empty means graph.DefaultBaseURL
@@ -168,9 +168,9 @@ type CLIContext struct {
 	logging          config.LoggingConfig     // logging settings the command logger was last built from
 	hasLogging       bool                     // logging holds settings from a config file (not just the bootstrap flags)
 	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
-	statusErr        error
-	progressShown    bool       // a redrawn progress line is on screen and must be cleared before other output
-	reconcileMu      sync.Mutex // guards reconcileNotices and selector mutation
+	statusErr        error                    // the first write StatusWriter refused; main reads it once the command returned
+	progressShown    bool                     // a redrawn progress line is on screen and must be cleared before other output
+	reconcileMu      sync.Mutex               // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
 	lastBadLogLevel  string // the unknown log_level last warned about on a reload
 }
@@ -216,8 +216,9 @@ func (cc *CLIContext) useLoggingConfig(logging config.LoggingConfig) error {
 		return nil
 	}
 
-	logger, closer := buildLoggerDualWithStatusWriter(
-		&config.ResolvedDrive{LoggingConfig: logging}, cc.Flags, cc.Status())
+	drive := &config.ResolvedDrive{LoggingConfig: logging}
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(drive, cc.Flags, cc.Status())
+	cc.warnAboutLogging(drive, closer != nil, openErr)
 	if err := cc.replaceCommandLogger(logger, closer); err != nil {
 		return err
 	}
@@ -230,6 +231,22 @@ func (cc *CLIContext) useLoggingConfig(logging config.LoggingConfig) error {
 	cc.hasLogging = true
 
 	return nil
+}
+
+// warnAboutLogging tells the user which logging settings the command logger
+// built from drive could not follow: a log file it could not open (openErr;
+// the console logs alone), an unknown log_format (the console uses auto) and,
+// when the log file is open, an unknown log_level (the file logs at info).
+func (cc *CLIContext) warnAboutLogging(drive *config.ResolvedDrive, logFileOpen bool, openErr error) {
+	if openErr != nil {
+		cc.warnf("Warning: cannot open log file %q: %v\n", drive.LogFile, openErr)
+	}
+	if _, known := consoleLogFormat(drive); !known {
+		cc.warnf("Warning: unknown log_format %q in the config; using auto.\n", drive.LogFormat)
+	}
+	if _, known := parseLogLevel(drive.LogLevel); logFileOpen && drive.LogLevel != "" && !known {
+		cc.warnf("Warning: unknown log_level %q in the config; logging to the log file at info.\n", drive.LogLevel)
+	}
 }
 
 // applyFileLogLevel moves the log file's level to the config's log_level,
@@ -648,22 +665,24 @@ func Main(args []string) int {
 	return mainWithWriters(args, nil, nil)
 }
 
-func closeRootCommandLogger(cmd *cobra.Command) error {
+// rootCLIContext is the command context PersistentPreRunE stored on the root
+// command, which main reaches after the command returned; nil when it was
+// never built.
+func rootCLIContext(cmd *cobra.Command) *CLIContext {
 	if cmd == nil {
 		return nil
 	}
 
-	root := cmd.Root()
-	if root == nil {
-		root = cmd
-	}
-
-	cc := cliContextFrom(root.Context())
-	if cc == nil {
+	ctx := cmd.Root().Context()
+	if ctx == nil {
 		return nil
 	}
 
-	return cc.closeCommandLogger()
+	return cliContextFrom(ctx)
+}
+
+func closeRootCommandLogger(cmd *cobra.Command) error {
+	return rootCLIContext(cmd).closeCommandLogger()
 }
 
 // newSignalLogger reports signal handling before the command logger exists.
@@ -684,17 +703,18 @@ func newSignalLogger(statusWriter io.Writer) *slog.Logger {
 	return slog.New(newConsoleLogHandler(statusWriter, slog.LevelInfo, style))
 }
 
-// writeCommandError prints main's final error. Under the systemd journal each
-// line carries the err priority, so `journalctl -p err` finds it.
-func writeCommandError(w io.Writer, text string) {
+// writeCommandError prints main's final error and returns the write's error.
+// Under the systemd journal each line carries the err priority, so
+// `journalctl -p err` finds it.
+func writeCommandError(w io.Writer, text string) error {
 	if isWriterJournal(w) {
 		text = "<3>" + strings.ReplaceAll(text, "\n", "\n<3>")
 	} else if isWriterTTY(w) {
 		// Clear a progress line the failed command may have left behind.
-		text = "\r\x1b[K" + text
+		text = clearLine + text
 	}
 
-	writeWarningf(w, "%s\n", text)
+	return writeWarningf(w, "%s\n", text)
 }
 
 // asUsageError tags command-line mistakes so main can point at --help and
@@ -751,6 +771,15 @@ func markUsageErrors(root *cobra.Command) {
 	walk(root)
 }
 
+// statusStreamFailedMessage is the command logger's record of a command whose
+// status stream refused a write.
+const statusStreamFailedMessage = "could not write to stderr"
+
+// mainWithWriters runs the command and returns the process exit status. Its
+// own last lines (the warning that the log file did not close, the final
+// error) are written only for a command whose exit status is not 0 already,
+// and after the log file closed, so a write of theirs that fails has nowhere
+// left to be reported and is dropped.
 func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitCode int) {
 	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
@@ -777,12 +806,14 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitC
 	err = asUsageError(executed, err)
 	err = withCommandPanic(cmd.Context(), err)
 	completeRootCommandPerf(cmd, err)
+	// Read while the log file is open, so the failure reaches it.
+	statusErr := statusStreamFailure(cmd)
 	closeErr := closeRootCommandLogger(cmd)
 	if closeErr != nil {
 		if err == nil {
 			err = closeErr
 		} else {
-			writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr)
+			_ = writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr) //nolint:errcheck // see the doc comment
 		}
 	}
 
@@ -794,9 +825,39 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitC
 		// signal handler already said "Stopping...". A timeout or an internal
 		// cancellation is a failure and must say so.
 	case exitUsage:
-		writeCommandError(statusWriter, commandErrorText(err, false))
+		_ = writeCommandError(statusWriter, commandErrorText(err, false)) //nolint:errcheck // see the doc comment
 	default:
-		writeCommandError(statusWriter, commandFailureText(err, commandWantsErrorDetails(cmd)))
+		_ = writeCommandError(statusWriter, commandFailureText(err, commandWantsErrorDetails(cmd))) //nolint:errcheck // see the doc comment
+	}
+
+	return exitCodeAfterStatusStream(exitCode, statusErr)
+}
+
+// statusStreamFailure returns the first write the command's status stream
+// refused, or nil, and gives it once to the command logger at warn level:
+// the log file gets it when there is one. A command whose context was never
+// built (a usage error, --help) has no record.
+func statusStreamFailure(cmd *cobra.Command) error {
+	cc := rootCLIContext(cmd)
+	if cc == nil {
+		return nil
+	}
+
+	err := cc.StatusError()
+	if err != nil && cc.Logger != nil {
+		cc.Logger.Warn(statusStreamFailedMessage, slog.Any("error", err))
+	}
+
+	return err
+}
+
+// exitCodeAfterStatusStream is the exit status of a command whose status
+// stream refused a write (streamErr): a command that worked ends with exit 1,
+// as the GNU tools do when standard error fails, and a command that failed
+// keeps its own status.
+func exitCodeAfterStatusStream(exitCode int, streamErr error) int {
+	if streamErr != nil && exitCode == exitSuccess {
+		return exitFailure
 	}
 
 	return exitCode
@@ -819,20 +880,19 @@ func commandFailureText(err error, details bool) string {
 // logger, which reaches the log file when there is one (before the command
 // logger exists, through fallback); the log file is then closed so the record
 // is on disk; and the error and the stack go to stderr, as for any command
-// that ends with a recovered panic.
+// that ends with a recovered panic. A write of those last lines that fails is
+// dropped: the exit status is 1 already and the log file is closed.
 func reportMainPanic(cmd *cobra.Command, statusWriter io.Writer, fallback *slog.Logger, r any) int {
 	logger := fallback
-	if ctx := cmd.Context(); ctx != nil {
-		if cc := cliContextFrom(ctx); cc != nil && cc.Logger != nil {
-			logger = cc.Logger
-		}
+	if cc := rootCLIContext(cmd); cc != nil && cc.Logger != nil {
+		logger = cc.Logger
 	}
 
 	err := panicguard.Recovered(logger, "in onedrive-go", r)
 	if closeErr := closeRootCommandLogger(cmd); closeErr != nil {
-		writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr)
+		_ = writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr) //nolint:errcheck // see the doc comment
 	}
-	writeCommandError(statusWriter, commandFailureText(err, false))
+	_ = writeCommandError(statusWriter, commandFailureText(err, false)) //nolint:errcheck // see the doc comment
 
 	return exitFailure
 }
@@ -857,16 +917,7 @@ func newCommandPerfSession(
 }
 
 func completeRootCommandPerf(cmd *cobra.Command, err error) {
-	if cmd == nil {
-		return
-	}
-
-	root := cmd.Root()
-	if root == nil {
-		root = cmd
-	}
-
-	cc := cliContextFrom(root.Context())
+	cc := rootCLIContext(cmd)
 	if cc == nil || cc.PerfSession == nil {
 		return
 	}
@@ -926,7 +977,7 @@ func buildLoggerWithStatusWriter(cfg *config.ResolvedDrive, flags CLIFlags, stat
 	level := resolveConsoleLogLevel(flags)
 	opts := &slog.HandlerOptions{Level: level}
 
-	return slog.New(buildHandlerWithStatusWriter(statusWriterOrDefault(statusWriter), cfg, opts, statusWriter))
+	return slog.New(buildHandlerWithStatusWriter(statusWriterOrDefault(statusWriter), cfg, opts))
 }
 
 // resolveConsoleLogLevel sets the console half of the command logger. The
@@ -956,48 +1007,48 @@ func resolveConsoleLogLevel(flags CLIFlags) slog.Level {
 	return level
 }
 
-func resolveFileLogLevelWithStatusWriter(cfg *config.ResolvedDrive, statusWriter io.Writer) slog.Level {
-	level := slog.LevelInfo
-	if cfg == nil || cfg.LogLevel == "" {
-		return level
+// resolveFileLogLevel is the log file's level: the config's log_level, or
+// info when it is empty or names no level (useLoggingConfig warns about it).
+func resolveFileLogLevel(cfg *config.ResolvedDrive) slog.Level {
+	if cfg != nil && cfg.LogLevel != "" {
+		if mapped, ok := parseLogLevel(cfg.LogLevel); ok {
+			return mapped
+		}
 	}
 
-	if mapped, ok := parseLogLevel(cfg.LogLevel); ok {
-		return mapped
-	}
-
-	writeWarningf(statusWriter, "Warning: unknown log_level %q in the config; logging to the log file at info.\n", cfg.LogLevel)
-
-	return level
+	return slog.LevelInfo
 }
 
-// buildHandlerWithStatusWriter creates the appropriate slog.Handler based on
-// the log_format config setting. A nil cfg (bootstrap) or empty format means
-// "auto", so the bootstrap logger and the configured logger render the same
-// way. w is the output destination (typically os.Stderr); statusWriter gets
-// the warning about an unknown log_format.
-func buildHandlerWithStatusWriter(
-	w io.Writer,
-	cfg *config.ResolvedDrive,
-	opts *slog.HandlerOptions,
-	statusWriter io.Writer,
-) slog.Handler {
-	format := logFormatAuto
-	if cfg != nil && cfg.LogFormat != "" {
-		format = cfg.LogFormat
-	}
-
+// buildHandlerWithStatusWriter creates the console's slog.Handler on w, the
+// status stream (typically os.Stderr), in the format consoleLogFormat reads
+// from cfg, so the bootstrap logger (a nil cfg) and the configured logger
+// render the same way.
+func buildHandlerWithStatusWriter(w io.Writer, cfg *config.ResolvedDrive, opts *slog.HandlerOptions) slog.Handler {
+	format, _ := consoleLogFormat(cfg)
 	switch format {
 	case logFormatJSON:
 		return slog.NewJSONHandler(w, withLevelNames(opts))
 	case logFormatText:
 		return slog.NewTextHandler(w, withLevelNames(opts))
-	case logFormatAuto:
-		return autoConsoleHandler(w, opts)
 	default:
-		writeWarningf(statusWriter, "Warning: unknown log_format %q in the config; using auto.\n", format)
-
 		return autoConsoleHandler(w, opts)
+	}
+}
+
+// consoleLogFormat is the console format cfg's log_format names: json, text
+// or auto, with auto for a nil config or an empty value. known is false for a
+// value that names no format, which means auto too (useLoggingConfig warns
+// about it).
+func consoleLogFormat(cfg *config.ResolvedDrive) (format string, known bool) {
+	if cfg == nil || cfg.LogFormat == "" {
+		return logFormatAuto, true
+	}
+
+	switch cfg.LogFormat {
+	case logFormatJSON, logFormatText, logFormatAuto:
+		return cfg.LogFormat, true
+	default:
+		return logFormatAuto, false
 	}
 }
 
@@ -1125,7 +1176,9 @@ func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &multiHandler{handlers: handlers}
 }
 
-// WithGroup returns a new multiHandler where each inner handler has the group.
+// withTimestamps returns a new multiHandler whose human console handlers
+// (consoleTimestamper) stamp each line with the time of day now returns; the
+// other handlers are kept as they are.
 func (m *multiHandler) withTimestamps(now func() time.Time) slog.Handler {
 	handlers := make([]slog.Handler, len(m.handlers))
 	for i, h := range m.handlers {
@@ -1138,6 +1191,7 @@ func (m *multiHandler) withTimestamps(now func() time.Time) slog.Handler {
 	return &multiHandler{handlers: handlers}
 }
 
+// WithGroup returns a new multiHandler where each inner handler has the group.
 func (m *multiHandler) WithGroup(name string) slog.Handler {
 	handlers := make([]slog.Handler, len(m.handlers))
 	for i, h := range m.handlers {
@@ -1151,19 +1205,21 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 // output. When cfg.LogFile is set, logs go to both statusWriter (stderr when
 // nil; console format, CLI-flag-driven level) and the file (JSON format,
 // config log_level-driven level). Returns an io.Closer for the log file (nil
-// when no file is used).
+// when no file is used) and, when the file could not be opened, why: the
+// logger then writes to the console alone. It writes no warning itself; the
+// command context does (useLoggingConfig).
 func buildLoggerDualWithStatusWriter(
 	cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer,
-) (*slog.Logger, io.Closer) {
+) (*slog.Logger, io.Closer, error) {
 	if cfg == nil || cfg.LogFile == "" {
-		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
+		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil, nil
 	}
 
 	// Retention runs before the open, so an expired current log is removed and
 	// the open starts it afresh. What it could not do is reported once, through
 	// the logger built here; it never keeps the log from opening.
 	retentionErr := logfile.RemoveExpired(cfg.LogFile, cfg.LogRetentionDays)
-	logger, closer := buildFileLogger(cfg, flags, statusWriter)
+	logger, closer, openErr := buildFileLogger(cfg, flags, statusWriter)
 	if retentionErr != nil {
 		logger.Warn("could not remove expired log files",
 			slog.String("log_file", cfg.LogFile),
@@ -1171,18 +1227,17 @@ func buildLoggerDualWithStatusWriter(
 		)
 	}
 
-	return logger, closer
+	return logger, closer, openErr
 }
 
 // buildFileLogger opens cfg.LogFile and builds the dual console and file
-// logger on it, falling back to the console alone when the file cannot be
-// opened.
-func buildFileLogger(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) (*slog.Logger, io.Closer) {
+// logger on it, falling back to the console alone, and returning why, when
+// the file cannot be opened.
+func buildFileLogger(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.Writer) (*slog.Logger, io.Closer, error) {
 	f, err := logfile.Open(cfg.LogFile)
 	if err != nil {
-		writeWarningf(statusWriter, "Warning: cannot open log file %q: %v\n", cfg.LogFile, err)
-
-		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil
+		// The warning names the log file and prints this as its reason.
+		return buildLoggerWithStatusWriter(cfg, flags, statusWriter), nil, err
 	}
 
 	// Console handler: CLI-flag-driven level, config-driven format.
@@ -1191,16 +1246,15 @@ func buildFileLogger(cfg *config.ResolvedDrive, flags CLIFlags, statusWriter io.
 		statusWriterOrDefault(statusWriter),
 		cfg,
 		&slog.HandlerOptions{Level: consoleLevel},
-		statusWriter,
 	)
 
 	// File handler: config-driven level, always JSON for machine parsing.
 	// The level is a variable so a config reload can move it (R-2.8.1).
 	fileLevel := new(slog.LevelVar)
-	fileLevel.Set(resolveFileLogLevelWithStatusWriter(cfg, statusWriter))
+	fileLevel.Set(resolveFileLogLevel(cfg))
 	fileHandler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: fileLevel, ReplaceAttr: loglevel.ReplaceLevelName})
 
-	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), &logFileHandle{Closer: f, level: fileLevel}
+	return slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler}}), &logFileHandle{Closer: f, level: fileLevel}, nil
 }
 
 // commandWantsErrorDetails reports whether --verbose or --debug asked for the

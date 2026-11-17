@@ -151,8 +151,8 @@ scripts and service managers:
 
 | Status | Meaning | Chosen by |
 | --- | --- | --- |
-| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused) | `err == nil` |
-| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, and a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation |
+| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused), unless stderr refused a write | `err == nil` and no refused stderr write recorded |
+| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, and a command that worked but could not write to stderr | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`) |
 | 2 | command-line mistake | `*usageError` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
 | 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
@@ -161,6 +161,25 @@ scripts and service managers:
 77 and 78 mean "running again unchanged fails the same way", so a unit can set
 `RestartPreventExitStatus=77 78`. A sign-in the user declined or let expire
 during `login` exits 1: rerunning `login` is the fix.
+
+What the CLI could not tell the user changes the exit status, as it does for
+the GNU tools when standard error fails: `Statusf`, `warnf`, `Progressf`,
+`ProgressDone` and the watch's warning that a drive did not start record the
+first write stderr refused (`recordStatusError`), and once the command has
+returned `mainWithWriters` gives that record once to the command logger at
+warn level, the log file included, and ends a command that worked with exit 1;
+a command that failed for its own reason keeps its message and status
+(`TestMainWithWriters_AStatusStreamThatFailsAWriteFailsAWorkingCommand`,
+`TestMainWithWriters_AFailedCommandKeepsItsStatusWhenTheStatusStreamFails`,
+`TestRunSyncDaemonWithFactory_AStartWarningThatCannotBeWrittenIsRecorded`).
+Two kinds of stderr line are not recorded, and a write of theirs that fails is
+dropped: the lines `sync` writes through `syncConsole` (a failed or retried
+file action, a drive's error, held deletes), and main's own last lines (the
+final error, the warning that the log file did not close), which are written
+only for a command whose exit status is not 0 already, after the log file
+closed. A broken pipe on stderr never reaches the record: the CLI does not
+ask for SIGPIPE, so Go ends a program that writes to one on descriptor 2 with
+that signal.
 
 Classification is by sentinel only. `internal/config` tags every failure at its
 exported read/parse/validate/resolve entrypoints (`Load*`, `Validate*`,
@@ -626,9 +645,10 @@ compactly, `stat` exactly with the zone name); `--json` timestamps are always
 UTC.
 
 Transfer progress goes through `CLIContext.Progressf`, which redraws one line
-(`\r` + erase-line) on a terminal and prints nothing otherwise; `Statusf` and
-main's final error clear it first (R-6.6.29). A folder `get` or `put` shows a
-running count, `Downloaded N files` or `Uploaded N files`, and no total: its
+(`\r` + erase-line) on a terminal and prints nothing otherwise; `Statusf`, a
+warning (`warnf`) and main's final error clear it first (R-6.6.29). A folder
+`get` or `put` shows a running count, `Downloaded N files` or `Uploaded N
+files`, and no total: its
 transfers start before the tree is listed (`drive-transfers.md`, "Recursive
 Transfer Concurrency"). Its final line keeps its counts, `Downloaded N files,
 M folders (size)`; a count of one reads `1 file` and `1 folder`. A folder
@@ -636,6 +656,10 @@ M folders (size)`; a count of one reads `1 file` and `1 folder`. A folder
 files upload at once (`folder_transfer.go`,
 `TestRunGet_FolderReportsEveryFileAsTextAndJSON`,
 `TestRunPut_FolderReportsEveryFileAsTextAndJSON`, `TestCountOf_OneIsSingular`).
+Every count the CLI prints, on stdout, stderr or in the systemd `STATUS=`
+line, is worded by `countOf` (`format.go`), singular for one; a string with a
+number verb straight before a plural noun fails
+`TestCLIStrings_EveryCountIsWordedByCountOf`.
 
 ### Commands Must Consume The Command Context
 

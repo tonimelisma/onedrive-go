@@ -706,6 +706,15 @@ func descriptorFallbackCase() descriptorCase {
 }
 
 // Validates: R-6.6.25
+func TestRetryingPaths_OneAttemptIsSingular(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"docs/a.txt (upload, 1 attempt)"}, retryingPaths([]syncengine.RetryWorkRow{
+		{Path: "docs/a.txt", ActionType: syncengine.ActionUpload, AttemptCount: 1},
+	}, false, 1))
+}
+
+// Validates: R-6.6.25
 func TestBuildSyncStateInfo_ListsRetryingWork(t *testing.T) {
 	t.Parallel()
 

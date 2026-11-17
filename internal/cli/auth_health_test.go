@@ -221,6 +221,22 @@ func TestAuthErrorMessage_AADOutcomesArePlain(t *testing.T) {
 	}
 }
 
+// Validates: R-6.6.23
+func TestPrintAccountAuthRequirementsText_CountsStateDatabases(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	require.NoError(t, printAccountAuthRequirementsText(&out, []accountAuthRequirement{
+		{Email: "a@example.com", DriveType: "personal"},
+		{Email: "b@example.com", DriveType: "personal", StateDBs: 1},
+		{Email: "c@example.com", DriveType: "business", StateDBs: 2},
+	}))
+
+	assert.Contains(t, out.String(), "\n  a@example.com — personal, no state databases\n")
+	assert.Contains(t, out.String(), "\n  b@example.com — personal, 1 state database\n")
+	assert.Contains(t, out.String(), "\n  c@example.com — business, 2 state databases\n")
+}
+
 func TestMergeAuthRequirements_PrefersExistingFieldsAndSorts(t *testing.T) {
 	t.Parallel()
 

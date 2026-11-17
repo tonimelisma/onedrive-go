@@ -266,15 +266,3 @@ func TestFolderTransferReport_ACanceledRunReportsThenEndsWithTheCancellation(t *
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "Downloaded 1 file, 1 folder (3 B)\nFailed: Docs/b.txt: context canceled\n", stderr.String())
 }
-
-// The progress line and the summary count files and folders in words that
-// agree with the number: one file, not one files.
-//
-// Validates: R-6.6.29
-func TestCountOf_OneIsSingular(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "0 files", countOf(0, "file"))
-	assert.Equal(t, "1 file", countOf(1, "file"))
-	assert.Equal(t, "2 folders", countOf(2, "folder"))
-}

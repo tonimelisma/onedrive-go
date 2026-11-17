@@ -437,7 +437,8 @@ func addSharedDriveByName(
 			return driveAddResult{}, err
 		}
 
-		return driveAddResult{}, fmt.Errorf("%d shared folders match %q; nothing was added", len(matches), selector)
+		// Two or more match here, so the verb stays plural.
+		return driveAddResult{}, fmt.Errorf("%s match %q; nothing was added", countOf(len(matches), "shared folder"), selector)
 	}
 }
 

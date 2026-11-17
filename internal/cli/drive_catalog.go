@@ -483,19 +483,18 @@ const (
 func printSharePointGapNotes(cc *CLIContext, gaps sharePointGaps) {
 	printSharePointSourceNotes(cc, gaps)
 	if len(gaps.FailedSiteSearches) > 0 || len(gaps.UnlistedSites) > 0 {
-		writeWarningf(cc.Status(), "%s", incompleteListingNote)
+		cc.warnf("%s", incompleteListingNote)
 	}
 }
 
 // printSharePointSourceNotes writes the stderr note of each source that did
 // not answer: each failed site search, then each unlisted site.
 func printSharePointSourceNotes(cc *CLIContext, gaps sharePointGaps) {
-	status := cc.Status()
 	for _, failed := range gaps.FailedSiteSearches {
-		writeWarningf(status, failedSiteSearchNoteFormat, failed.Account, failed.Reason)
+		cc.warnf(failedSiteSearchNoteFormat, failed.Account, failed.Reason)
 	}
 	for _, site := range gaps.UnlistedSites {
-		writeWarningf(status, unlistedSiteNoteFormat, site.SiteName, site.Account, site.Error)
+		cc.warnf(unlistedSiteNoteFormat, site.SiteName, site.Account, site.Error)
 	}
 }
 

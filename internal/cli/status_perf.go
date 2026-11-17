@@ -252,10 +252,10 @@ func formatPerfElapsed(durationMS int64) string {
 
 func formatDetailedPerfHTTP(snapshot *perf.Snapshot) string {
 	return fmt.Sprintf(
-		"%d req, %d retries, %d transport errors",
+		"%d req, %s, %s",
 		snapshot.HTTPRequestCount,
-		snapshot.HTTPRetryCount,
-		snapshot.HTTPTransportErrors,
+		countOf(snapshot.HTTPRetryCount, "retry"),
+		countOf(snapshot.HTTPTransportErrors, "transport error"),
 	)
 }
 

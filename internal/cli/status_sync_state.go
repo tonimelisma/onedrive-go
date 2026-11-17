@@ -125,7 +125,7 @@ func retryingPaths(rows []syncengine.RetryWorkRow, verbose bool, limit int) []st
 		if rows[i].OldPath != "" && rows[i].OldPath != rows[i].Path {
 			path = rows[i].OldPath + " -> " + rows[i].Path
 		}
-		paths = append(paths, fmt.Sprintf("%s (%s, %d attempts)", path, rows[i].ActionType.String(), rows[i].AttemptCount))
+		paths = append(paths, fmt.Sprintf("%s (%s, %s)", path, rows[i].ActionType.String(), countOf(rows[i].AttemptCount, "attempt")))
 	}
 
 	return paths

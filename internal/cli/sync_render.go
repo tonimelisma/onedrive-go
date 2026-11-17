@@ -51,7 +51,7 @@ func runOnceLeftWorkError(result multisync.RunOnceResult, left map[string]syncen
 
 	if result.Startup.StartupResultCount() <= 1 {
 		return newPresentedError(fmt.Sprintf("sync left %s unsynced; run 'onedrive-go status' for details",
-			formatStatusCount(files, "file", "files")), errSyncLeftWork)
+			countOf(files, "file")), errSyncLeftWork)
 	}
 
 	return newPresentedError(leftMounts.phrase(result.Startup)+" left files unsynced (see above)", errSyncLeftWork)
@@ -150,13 +150,12 @@ func (t *selectionTally) count() int {
 // selected drives", "1 of 2 shared folders in 1 selected drive" when only
 // shared folders are tallied, or both joined by "and".
 func (t *selectionTally) phrase(startup multisync.StartupSelectionSummary) string {
-	selectedDrives := formatStatusCount(startup.SelectedDriveCount(), "selected drive", "selected drives")
+	selectedDrives := countOf(startup.SelectedDriveCount(), "selected drive")
 	if len(t.sharedFolders) == 0 {
 		return fmt.Sprintf("%d of %s", len(t.drives), selectedDrives)
 	}
 
-	folderPart := fmt.Sprintf("%d of %s", len(t.sharedFolders),
-		formatStatusCount(sharedFolderCount(startup), "shared folder", "shared folders"))
+	folderPart := fmt.Sprintf("%d of %s", len(t.sharedFolders), countOf(sharedFolderCount(startup), "shared folder"))
 	if len(t.drives) == 0 {
 		return folderPart + " in " + selectedDrives
 	}
