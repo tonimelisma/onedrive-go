@@ -1111,6 +1111,72 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 	assert.Equal(t, 1, flow.sched.graph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")
 }
 
+// A 403 whose permission check cannot read the persisted boundaries fails the
+// completion with that store failure, as every other store failure of the
+// stage does, instead of going on to record it as ordinary retry work.
+//
+// Validates: R-2.14.1
+func TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletion(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	flow := testEngineFlow(t, eng)
+	current := flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "Shared/file.txt"}, 1, nil)
+	require.NotNil(t, current)
+	flow.sched.markRunning(current)
+
+	require.NoError(t, eng.baseline.Close(t.Context()))
+
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &actionCompletion{
+		ActionID:   1,
+		Path:       "Shared/file.txt",
+		ActionType: ActionUpload,
+		HTTPStatus: http.StatusForbidden,
+		ErrMsg:     "folder is read-only",
+	}, &Baseline{})
+
+	require.ErrorContains(t, err, "list remote block scopes")
+	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
+	assert.Empty(t, ready)
+	assert.Zero(t, flow.sched.runningCount, "the completed action's bookkeeping is finished")
+}
+
+// A scope trial's 403 whose permission check cannot read the persisted
+// boundaries fails the completion with that store failure too, instead of
+// going on to record the trial as ordinary retry work.
+//
+// Validates: R-2.14.1
+func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &engineMockClient{})
+	setupWatchEngine(t, eng)
+	flow := testEngineFlow(t, eng)
+	scopeKey := SKService()
+	setTestBlockScope(t, eng, &BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
+	current := flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "Shared/file.txt"}, 1, nil)
+	require.NotNil(t, current)
+	flow.sched.markRunning(current)
+
+	require.NoError(t, eng.baseline.Close(t.Context()))
+
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &actionCompletion{
+		ActionID:      1,
+		Path:          "Shared/file.txt",
+		ActionType:    ActionUpload,
+		HTTPStatus:    http.StatusForbidden,
+		ErrMsg:        "folder is read-only",
+		IsTrial:       true,
+		TrialScopeKey: scopeKey,
+	}, &Baseline{})
+
+	require.ErrorContains(t, err, "list remote block scopes")
+	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
+	assert.Empty(t, ready)
+	assert.Zero(t, flow.sched.runningCount, "the completed action's bookkeeping is finished")
+}
+
 // Validates: R-2.10.66, R-2.14.1
 func TestEngineFlow_Quota403OnSharedMountIsQuotaNotPermission(t *testing.T) {
 	t.Parallel()

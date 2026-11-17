@@ -32,7 +32,9 @@ func shouldHandleLocalPermission(r *actionCompletion) bool {
 // its error is a permission answer. A superseded completion never is, whatever
 // its error chain also holds: the stale verdict decides (classifyResult), and
 // probing it recorded permission retry work or a write-denied scope for work
-// the replan replaces.
+// the replan replaces. A stopping run probes nothing (isStoppingRun): it asks
+// OneDrive and the disk nothing new, records the failure as the retry work it
+// is, and leaves the probe to the next sync.
 func (flow *engineFlow) maybeHandlePermissionFailure(
 	ctx context.Context,
 	decision *resultDecision,
@@ -41,7 +43,7 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 	bl *Baseline,
 ) (bool, error) {
 	switch {
-	case decision.Class == errclass.ClassSuperseded:
+	case decision.Class == errclass.ClassSuperseded, isStoppingRun(ctx):
 		return false, nil
 	case shouldHandleRemote403Permission(r):
 		return flow.handleRemote403PermissionFailure(ctx, decision, current, r, bl)
@@ -153,11 +155,19 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 	return nil
 }
 
+// applyTrialPermissionReclassification hands a scope trial's failure to the
+// permission probes when its error is a permission answer, and reports
+// whether the probes' evidence decided it. A stopping run probes nothing for a
+// trial either (isStoppingRun): the trial falls back to the retry work it is.
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
 	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
+	if isStoppingRun(ctx) {
+		return false, nil
+	}
+
 	evidence, handled, err := flow.permissionEvidenceForCompletion(ctx, r, bl)
 	if err != nil {
 		return false, err

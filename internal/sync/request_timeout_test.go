@@ -225,10 +225,10 @@ func TestCancelCauses_AnswerToCanceledAndNameTheirCancel(t *testing.T) {
 
 // A watch step that failed is the stop only when the run has ended and the
 // failure is that end's own cancellation coming back: a disk error during the
-// stop is still the watch's error, and while the run goes on neither is a
-// stop.
+// stop, or a store that did not answer within its bound, is still the watch's
+// error, and while the run goes on neither is a stop.
 //
-// Validates: R-6.8.29
+// Validates: R-6.8.29, R-2.8.3
 func TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -237,10 +237,12 @@ func TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation(t *testing.T) {
 	canceled := fmt.Errorf("watch step: %w", context.Canceled)
 	expired := fmt.Errorf("watch step: %w", context.DeadlineExceeded)
 	diskFailure := errors.New("write sync state: disk I/O error")
+	storeSilent := fmt.Errorf("record retry work: %w: %w", context.DeadlineExceeded, errStoreAccessTimedOut)
 
 	assert.True(t, isWatchShutdownError(ended, canceled), "the cancel coming back")
 	assert.True(t, isWatchShutdownError(ended, expired), "an ended context's deadline coming back")
 	assert.False(t, isWatchShutdownError(ended, diskFailure), "a separate failure during the stop")
+	assert.False(t, isWatchShutdownError(ended, storeSilent), "a store that did not answer within its bound")
 	assert.False(t, isWatchShutdownError(t.Context(), canceled), "a cancel while the run goes on")
 	assert.False(t, isWatchShutdownError(t.Context(), expired), "a timed-out request while the run goes on")
 	assert.False(t, isWatchShutdownError(t.Context(), diskFailure), "a failure while the run goes on")

@@ -80,6 +80,7 @@ func stressSyncRunWatchMembers() []string {
 		"TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing",
 		"TestRunWatch_MountRootKeepsPollingOnly",
 		"TestRunWatch_ProcessBatch_EmptyPlan",
+		"TestRunWatch_RecordsTheCancelOfItsRun",
 		"TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch",
 		"TestRunWatch_ShutdownStopsRetryAndTrialTimers",
 		"TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning",
@@ -97,6 +98,9 @@ func stressSyncRunWatchMembers() []string {
 // stressSyncWatchRuntimeMembers are the members of the watch runtime.
 func stressSyncWatchRuntimeMembers() []string {
 	return []string{
+		"TestWatchRuntime_ADrainRecordsTheCompletionsItReceives",
+		"TestWatchRuntime_AStopsBoundStartsAtItsCancel",
+		"TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound",
 		"TestWatchRuntime_AnObserverWhoseRequestTimedOutIsWarnedAndReturned",
 		"TestWatchRuntime_ArmRetryTimer_FiresAfterDelay",
 		"TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue",
@@ -106,6 +110,7 @@ func stressSyncWatchRuntimeMembers() []string {
 		"TestWatchRuntime_BootstrapWaitLogsOnlyWhenCountsChange",
 		"TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance",
 		"TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce",
+		"TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound",
 		"TestWatchRuntime_FallbackScanRecordsAndClearsFindings",
 		"TestWatchRuntime_HandleMaintenanceTick_EmitsDebugEventWithoutSQLiteProbe",
 		"TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename",
@@ -230,6 +235,8 @@ func stressSyncWatchMembers() []string {
 // result loop, whole one-shot passes and the worker pool.
 func stressSyncOneShotAndWorkerPoolMembers() []string {
 	return []string{
+		"TestOneShotEngineLoop_ACanceledPassRecordsTheCompletionsItDrains",
+		"TestOneShotEngineLoop_ACanceledPassSealsItsOutbox",
 		"TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork",
 		"TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry",
 		"TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady",
@@ -252,6 +259,8 @@ func stressSyncOneShotAndWorkerPoolMembers() []string {
 		"TestRunOnce_FinalDrainRemovesALeftoverDownloadPartialFirst",
 		"TestRunOnce_FinalDrainRemovesBundledJunkUnderTheConfiguredRule",
 		"TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure",
+		"TestWorkerPool_ACompletionDroppedAfterTheStopIsLogged",
+		"TestWorkerPool_AStoppedPoolDeliversEveryCompletionItHasRoomFor",
 		"TestWorkerPool_ClosedDispatchChannelClosesCompletions",
 		"TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation",
 		"TestWorkerPool_ContextCancellationClosesCompletions",

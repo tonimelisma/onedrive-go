@@ -11,6 +11,10 @@ func (rt *watchRuntime) beginWatchDrain(
 ) {
 	if rt.enterDraining() {
 		rt.stopDrainTimers()
+		// The stop's one bound for recording the completions still to come
+		// is set when the watch first sees its stop, measured from the
+		// cancel (beginStopDrain).
+		rt.beginStopDrain()
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventShutdownStarted})
 		rt.deps.logger.Info("graceful shutdown: sealing new work admission",
 			slog.Int("in_flight", rt.sched.graph.InFlightCount()),
@@ -53,7 +57,28 @@ func (rt *watchRuntime) refreshDrainCompletionSources() {
 	}
 }
 
+// runDrainStep runs one step of the drain. When the drain is over, because
+// its sources ran dry or a step failed, the stop's bound ends: what the bound
+// cut short is said once, and its store failure is the watch's error unless a
+// step failed first (endStopDrain).
 func (rt *watchRuntime) runDrainStep(
+	ctx context.Context,
+	p *watchPipeline,
+) (bool, error) {
+	done, err := rt.takeDrainStep(ctx, p)
+	if !done && err == nil {
+		return false, nil
+	}
+
+	drainErr := rt.endStopDrain()
+	if err != nil {
+		return done, err
+	}
+
+	return done, drainErr
+}
+
+func (rt *watchRuntime) takeDrainStep(
 	ctx context.Context,
 	p *watchPipeline,
 ) (bool, error) {

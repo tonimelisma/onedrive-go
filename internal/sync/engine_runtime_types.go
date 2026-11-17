@@ -1,5 +1,10 @@
 package sync
 
+import (
+	"sync/atomic"
+	"time"
+)
+
 // engineFlow holds mutable per-run execution state shared by one-shot and
 // watch coordinators. The Engine itself remains a dependency container whose
 // fields are fixed after construction, apart from the few it guards itself
@@ -42,6 +47,19 @@ type engineFlow struct {
 	// action that is superseded on every replan would otherwise stall
 	// silently (a folder move once did, on a churning folder eTag).
 	supersedeStreaks map[string]int
+
+	// stop is the one bound a stopping run records the results of its
+	// completions under (beginStopDrain); nil while the run goes on.
+	stop *stopDrain
+
+	// stopBound is how long that bound lasts: OutcomeCommitTimeout, which
+	// tests shorten.
+	stopBound time.Duration
+
+	// canceledAt is when the run's context ended, set once by the callback
+	// noteRunCancel registers; nil while the run goes on. The stop's bound
+	// starts there.
+	canceledAt atomic.Pointer[time.Time]
 }
 
 func newEngineFlow(engine *Engine) *engineFlow {
@@ -56,6 +74,7 @@ func newEngineFlow(engine *Engine) *engineFlow {
 		retries:  newRetryLedger(),
 
 		supersedeStreaks: make(map[string]int),
+		stopBound:        OutcomeCommitTimeout,
 	}
 	return flow
 }

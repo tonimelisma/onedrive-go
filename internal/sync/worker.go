@@ -43,7 +43,9 @@ func poolWorkerCount(requested int, serialize bool) int {
 // OutcomeCommitTimeout bounds every store access the engine runs detached
 // from shutdown: the commit of a completed action's outcome, the record of a
 // created item, clearing a succeeded action's retry work, the findings
-// observed before the shutdown, and the invariant checks. One transaction is
+// observed before the shutdown, the invariant checks, and the records of the
+// completions a stopping run drains, which share one such bound for the whole
+// drain, measured from the cancel (engineFlow.stopBound). One transaction is
 // milliseconds (and waits at most SQLite's 5 s busy timeout for a lock); the
 // bound only exists so a store whose disk stopped answering cannot block
 // shutdown forever. It is the longest one detached wait of a canceled engine
@@ -107,8 +109,8 @@ func newWorkerPool(
 		perfCollector: nil,
 		// Buffer sizing contract: one-shot mode uses planSize (equal to
 		// the number of actions, so workers never block). Watch mode passes
-		// watchCompletionBuf with a drain goroutine reading completions
-		// concurrently, so blocking is unlikely under normal load.
+		// watchCompletionBuf, which the watch loop reads as completions
+		// arrive, so blocking is unlikely under normal load.
 		completions:          make(chan actionCompletion, planSize),
 		outcomeCommitTimeout: OutcomeCommitTimeout,
 	}
@@ -270,15 +272,42 @@ func (wp *workerPool) commitOutcome(ctx context.Context, mutation *BaselineMutat
 // innermost error of the last error a chain joins, so a user reads that the
 // sync database did not answer, not the deadline the store gave up at.
 func runDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
-	accessCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), bound, errStoreAccessTimedOut)
+	accessCtx, cancel := detachedStoreContext(ctx, time.Now().Add(bound))
 	defer cancel()
 
-	err := access(accessCtx)
-	if err != nil && errors.Is(context.Cause(accessCtx), errStoreAccessTimedOut) {
-		return fmt.Errorf("%w: %w", err, errStoreAccessTimedOut)
+	return storeAccessError(accessCtx, access(accessCtx))
+}
+
+// detachedStoreAccessKey marks a context detachedStoreContext made.
+type detachedStoreAccessKey struct{}
+
+// detachedStoreContext is the context runDetachedStoreAccess runs its access
+// on: it keeps ctx's values but not its cancellation and ends at deadline with
+// errStoreAccessTimedOut as its cause. A caller that runs several accesses
+// under one bound (a stopping run's drain) gives each the same deadline. A
+// ctx that runs under such a context, itself or one derived from it, is
+// returned as it is, any cancel of its own included, so an access detached
+// inside a detached one keeps the outer deadline: nested accesses add up to
+// one bound, never to one each.
+func detachedStoreContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	if detached, ok := ctx.Value(detachedStoreAccessKey{}).(bool); ok && detached {
+		return ctx, func() {}
 	}
 
-	return err
+	accessCtx, cancel := context.WithDeadlineCause(context.WithoutCancel(ctx), deadline, errStoreAccessTimedOut)
+
+	return context.WithValue(accessCtx, detachedStoreAccessKey{}, true), cancel
+}
+
+// storeAccessError is err from an access that ran on accessCtx, with
+// errStoreAccessTimedOut joined once when accessCtx's bound ended it.
+func storeAccessError(accessCtx context.Context, err error) error {
+	if err == nil || errors.Is(err, errStoreAccessTimedOut) ||
+		!errors.Is(context.Cause(accessCtx), errStoreAccessTimedOut) {
+		return err
+	}
+
+	return fmt.Errorf("%w: %w", err, errStoreAccessTimedOut)
 }
 
 func (wp *workerPool) validateActionFreshness(ctx context.Context, ta *trackedAction) error {
@@ -365,9 +394,12 @@ func (wp *workerPool) Completions() <-chan actionCompletion {
 // it has ended is the completion's RunEnded, the one place a worker's
 // completion learns it.
 //
-// If the context is canceled before the completion is sent (engine shutdown),
-// the ActionCompletion is silently dropped. The engine handles shutdown via
-// context cancellation on the result-processing loop (resultShutdown classification).
+// A completion is the result of work that already happened, which a stopping
+// run still records, so the send prefers delivery: it gives up only once that
+// context has ended and the channel has no room, when no one may be left to
+// read it, and says the drop at Debug. One select of both would pick at random
+// once the context has ended, and drop completions the stopping run's drain
+// still reads.
 func (wp *workerPool) sendResult(ctx context.Context, ta *trackedAction, outcome *actionOutcome, actionErr error) {
 	r := actionCompletionFromTrackedAction(ta, outcome, actionErr)
 	r.RunEnded = runEnded(ctx, r.Err)
@@ -375,7 +407,17 @@ func (wp *workerPool) sendResult(ctx context.Context, ta *trackedAction, outcome
 
 	select {
 	case wp.completions <- r:
+		return
+	default:
+	}
+
+	select {
+	case wp.completions <- r:
 	case <-ctx.Done():
+		wp.logger.Debug("worker: completion dropped after the run ended; the next sync checks it again",
+			slog.Int64("action_id", r.ActionID),
+			slog.String("path", r.Path),
+		)
 	}
 }
 
