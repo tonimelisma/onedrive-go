@@ -48,7 +48,6 @@ func TestRunVerifyQuickRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	runner := &fakeRunner{}
 	stdout := &bytes.Buffer{}
 
@@ -80,7 +79,6 @@ func TestRunVerifyQuickShardSelectsOneSliceOfTheShortTier(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	runner := &fakeRunner{}
 	stdout := &bytes.Buffer{}
 
@@ -108,7 +106,6 @@ func TestRunVerifyQuickFailsAShardThatRanNoTest(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	runner := &fakeRunner{
 		runStdoutFunc: func(args []string) string {
 			if slices.Contains(args, "-short") {
@@ -184,7 +181,6 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	runner := &fakeRunner{}
 	stdout := &bytes.Buffer{}
 
@@ -273,7 +269,6 @@ func TestRunVerifyShortTierDeadlineComesFromTheCoresByDefault(t *testing.T) {
 
 	for _, profile := range []VerifyProfile{VerifyQuick, VerifyPR, VerifyPlatform} {
 		repoRoot := t.TempDir()
-		writeRequirementsBackedReadme(t, repoRoot)
 		runner := &fakeRunner{}
 
 		err := RunVerify(context.Background(), runner, &VerifyOptions{

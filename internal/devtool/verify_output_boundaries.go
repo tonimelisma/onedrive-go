@@ -9,11 +9,14 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 )
 
+// outputBoundaryViolation is an "error" log attribute flattened to text in
+// product code. The other output boundaries (package-level slog, os.Stdout
+// and os.Stderr, log.Print) are lint rules: forbidigo in .golangci.yml, with
+// an exclusion for the files outputBoundaryFileAllowed allows here too.
 type outputBoundaryViolation struct {
 	Path    string
 	Line    int
@@ -90,12 +93,11 @@ func findOutputBoundaryViolations(repoRoot string) ([]outputBoundaryViolation, e
 
 		imports := importedPackageNames(file)
 		ast.Inspect(file, func(node ast.Node) bool {
-			message, pos, blocked := outputBoundaryNodeMessage(imports, node)
-			if blocked {
+			if call, isCall := node.(*ast.CallExpr); isCall && isFlattenedErrorAttr(imports, call) {
 				violations = append(violations, outputBoundaryViolation{
 					Path:    rel,
-					Line:    fset.Position(pos).Line,
-					Message: message,
+					Line:    fset.Position(call.Pos()).Line,
+					Message: flattenedErrorAttrMessage,
 				})
 			}
 
@@ -157,28 +159,6 @@ func importedPackageNames(file *ast.File) map[string]string {
 	return imports
 }
 
-// outputBoundaryNodeMessage reports whether node breaks an output boundary:
-// a selector that bypasses the CLI-owned writers or logger, or an "error" log
-// attribute flattened to text.
-func outputBoundaryNodeMessage(imports map[string]string, node ast.Node) (string, token.Pos, bool) {
-	switch n := node.(type) {
-	case *ast.SelectorExpr:
-		ident, ok := n.X.(*ast.Ident)
-		if !ok {
-			return "", token.NoPos, false
-		}
-		message, blocked := outputBoundarySelectorMessage(imports[ident.Name], n.Sel.Name)
-
-		return message, n.Pos(), blocked
-	case *ast.CallExpr:
-		if isFlattenedErrorAttr(imports, n) {
-			return flattenedErrorAttrMessage, n.Pos(), true
-		}
-	}
-
-	return "", token.NoPos, false
-}
-
 // flattenedErrorAttrMessage explains the "error" attribute rule. The console
 // renders an error value as its plain reason and the log file keeps the full
 // chain; a pre-flattened string is shown as given, which printed whole wrap
@@ -209,25 +189,6 @@ func isFlattenedErrorAttr(imports map[string]string, call *ast.CallExpr) bool {
 	method, ok := value.Fun.(*ast.SelectorExpr)
 
 	return ok && method.Sel.Name == "Error"
-}
-
-func outputBoundarySelectorMessage(importPath string, selector string) (string, bool) {
-	switch importPath {
-	case slogImportPath:
-		if slices.Contains([]string{"Debug", "Info", "Warn", "Error"}, selector) {
-			return "direct slog." + selector + " bypasses the CLI-owned logger; pass an injected *slog.Logger", true
-		}
-	case "os":
-		if selector == "Stdout" || selector == "Stderr" {
-			return "direct os." + selector + " bypasses CLI-owned output/status writers", true
-		}
-	case "log":
-		if strings.HasPrefix(selector, "Print") {
-			return "direct log." + selector + " bypasses the CLI-owned logger", true
-		}
-	}
-
-	return "", false
 }
 
 func formatOutputBoundaryViolations(violations []outputBoundaryViolation) string {

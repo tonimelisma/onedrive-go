@@ -957,7 +957,6 @@ func verifyStepNames() []verifyStepName {
 		workflowLintStepName,
 		outputBoundariesStepName,
 		testConventionsStepName,
-		readmeStatusStepName,
 		specGovernsStepName,
 		layeringStepName,
 		retiredBacklogIDsStepName,
@@ -1004,7 +1003,7 @@ func (name verifyStepName) runsGoTest() bool {
 		stressSyncConcurrencyRaceStepName, stressSyncRaceStepName, raceStepName, seedsStepName, failedTestRerunStepName:
 		return true
 	case formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
-		readmeStatusStepName, specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
+		specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
 		taggedVetStepName, coverageStepName, fullE2ECompileStepName, fullE2EDiscoveryStepName:
 		return false
@@ -1039,7 +1038,6 @@ func lintSteps() []verifyStep {
 const (
 	outputBoundariesStepName        verifyStepName = "output-boundaries"
 	testConventionsStepName         verifyStepName = "test-conventions"
-	readmeStatusStepName            verifyStepName = "readme-status"
 	specGovernsStepName             verifyStepName = "spec-governs"
 	layeringStepName                verifyStepName = "layering"
 	retiredBacklogIDsStepName       verifyStepName = "retired-backlog-ids"
@@ -1047,15 +1045,14 @@ const (
 	requirementTraceabilityStepName verifyStepName = "requirement-traceability"
 )
 
-// repoRuleSteps are the repository's static rules: the output-boundary,
-// test-convention, README, spec-ownership, layering, backlog-id, mutex-doc
-// and traceability checks. They take seconds, so every profile that builds
-// the tree runs them.
+// repoRuleSteps are the repository's static rules that lint cannot state: the
+// flattened-error-attribute, integration-test-name, spec-ownership, layering,
+// backlog-id, mutex-doc and traceability checks. They take seconds, so every
+// profile that builds the tree runs them.
 func repoRuleSteps() []verifyStep {
 	return []verifyStep{
 		{name: outputBoundariesStepName, run: runOutputBoundaries},
 		{name: testConventionsStepName, run: runTestConventions},
-		{name: readmeStatusStepName, run: runReadmeStatus},
 		{name: specGovernsStepName, run: runSpecGoverns},
 		{name: layeringStepName, run: runLayering},
 		{name: retiredBacklogIDsStepName, run: runRetiredBacklogIDs},
