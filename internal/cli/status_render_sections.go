@@ -50,7 +50,7 @@ func printIssueSection(w io.Writer, indent string, groups []statusConditionJSON)
 				return err
 			}
 		}
-		if err := writef(w, "%s%s: %d %s\n", indent, issueTitle(group.Title), group.Count, itemNoun(group.Count)); err != nil {
+		if err := writef(w, "%s%s: %s\n", indent, issueTitle(group.Title), countItems(group.Count)); err != nil {
 			return err
 		}
 		if group.Reason != "" {

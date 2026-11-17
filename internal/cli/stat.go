@@ -113,7 +113,7 @@ func printStatText(w io.Writer, item *graph.Item, opts statPrintOptions) error {
 	if err := writef(w, "Type:     %s\n", itemType(item)); err != nil {
 		return err
 	}
-	if err := writef(w, "Size:     %s (%d bytes)\n", formatSize(item.Size), item.Size); err != nil {
+	if err := writef(w, "Size:     %s (%s)\n", formatSize(item.Size), countOf(item.Size, "byte")); err != nil {
 		return err
 	}
 	if err := writef(w, "Modified: %s\n", formatExactTime(item.ModifiedAt)); err != nil {

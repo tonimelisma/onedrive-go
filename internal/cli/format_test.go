@@ -122,6 +122,24 @@ func TestStatusf_RecordsWriterError(t *testing.T) {
 	assert.Contains(t, err.Error(), "write status output")
 }
 
+// Every count the CLI prints is worded in words that agree with the number:
+// one file, not one files, and a noun ending in a consonant and y takes ies.
+//
+// Validates: R-6.6.19, R-6.6.29
+func TestCountOf_OneIsSingular(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "0 files", countOf(0, "file"))
+	assert.Equal(t, "1 file", countOf(1, "file"))
+	assert.Equal(t, "2 folders", countOf(2, "folder"))
+	assert.Equal(t, "1 retry", countOf(1, "retry"))
+	assert.Equal(t, "2 retries", countOf(2, "retry"))
+	assert.Equal(t, "2 days", countOf(2, "day"), "a vowel before the y keeps it")
+	const sizeAboveInt32 int64 = 5_000_000_000
+	assert.Equal(t, "1 byte", countOf(int64(1), "byte"))
+	assert.Equal(t, "5000000000 bytes", countOf(sizeAboveInt32, "byte"))
+}
+
 func TestPrintTable(t *testing.T) {
 	var buf bytes.Buffer
 

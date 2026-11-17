@@ -28,10 +28,12 @@ func statusWriterOrDefault(w io.Writer) io.Writer {
 	return w
 }
 
-func writeWarningf(w io.Writer, format string, args ...any) {
-	if err := writef(statusWriterOrDefault(w), format, args...); err != nil {
-		return
-	}
+// writeWarningf writes a warning to w (stderr when w is nil) and returns the
+// write's error. It serves main's own last lines, written after the command
+// returned, and the watch's startup warnings, whose hook records a failure in
+// the command context itself. A command warns through CLIContext.warnf.
+func writeWarningf(w io.Writer, format string, args ...any) error {
+	return writef(statusWriterOrDefault(w), format, args...)
 }
 
 func writef(w io.Writer, format string, args ...any) error {
@@ -65,6 +67,19 @@ func (cc *CLIContext) Statusf(format string, args ...any) {
 	}
 }
 
+// warnf writes a warning to the status stream (stderr by default). Unlike
+// Statusf it writes under --quiet too, which keeps warnings. A write that
+// fails is recorded like a failed status line.
+func (cc *CLIContext) warnf(format string, args ...any) {
+	cc.ProgressDone()
+	if err := writeWarningf(cc.Status(), format, args...); err != nil {
+		cc.recordStatusError(fmt.Errorf("write warning: %w", err))
+	}
+}
+
+// recordStatusError keeps the first write the status stream refused, for
+// main to read once the command has returned (StatusError). It takes
+// statusMu, so a caller that holds the mutex releases it first.
 func (cc *CLIContext) recordStatusError(err error) {
 	if err == nil {
 		return
@@ -78,6 +93,7 @@ func (cc *CLIContext) recordStatusError(err error) {
 	}
 }
 
+// StatusError returns the first write the status stream refused, or nil.
 func (cc *CLIContext) StatusError() error {
 	cc.statusMu.Lock()
 	defer cc.statusMu.Unlock()
@@ -250,21 +266,42 @@ func (out folderTransferJSONOutput[F]) withEmptyLists() folderTransferJSONOutput
 }
 
 // bulkTransferError names every item a folder get/put could not transfer
-// (on stderr, so it shows even with --quiet) and fails the command, in text
-// and --json mode alike. With w nil the failures are already in the JSON
-// document and only the exit status is set.
-func bulkTransferError(w io.Writer, noun string, failures []string) error {
+// (as warnings on stderr, so they show even with --quiet) and fails the
+// command, in text and --json mode alike. With cc nil the failures are
+// already in the JSON document and only the exit status is set.
+func bulkTransferError(cc *CLIContext, noun string, failures []string) error {
 	if len(failures) == 0 {
 		return nil
 	}
 
-	if w != nil {
+	if cc != nil {
 		for _, failure := range failures {
-			writeWarningf(w, "Failed: %s\n", failure)
+			cc.warnf("Failed: %s\n", failure)
 		}
 	}
 
 	return fmt.Errorf("%s failed to %s", countItems(len(failures)), noun)
+}
+
+// countOf words every count the CLI prints: n of noun, singular for one and
+// plural otherwise ("1 file", "0 files", "2 retries"). The plural adds s, or
+// turns a final y after a consonant into ies.
+func countOf[N ~int | ~int64](n N, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+
+	return fmt.Sprintf("%d %s", n, pluralNoun(noun))
+}
+
+// pluralNoun is the plural of a regular noun, the only kind countOf words.
+func pluralNoun(noun string) string {
+	stem, endsInY := strings.CutSuffix(noun, "y")
+	if endsInY && stem != "" && !strings.ContainsRune("aeiou", rune(stem[len(stem)-1])) {
+		return stem + "ies"
+	}
+
+	return noun + "s"
 }
 
 // countItems renders "1 item" or "N items".
@@ -287,39 +324,62 @@ func formatAPITimeForHumans(apiTime string) string {
 	return formatTime(parsed)
 }
 
+// clearLine returns a terminal to column 0 (\r) and clears the old line's
+// tail (\x1b[K).
+const clearLine = "\r\x1b[K"
+
 // Progressf redraws one transient progress line on stderr. It shows only
 // when a person is watching (stderr is a terminal) and the run is neither
 // --quiet nor --json; piped and scripted runs get the final summary only,
-// instead of one stored line per chunk, second or file.
+// instead of one stored line per chunk, second or file. A write that fails
+// is recorded like a failed status line.
 func (cc *CLIContext) Progressf(format string, args ...any) {
 	if cc.StatusWriter == nil || cc.Flags.Quiet || cc.Flags.JSON || !isWriterTTY(cc.StatusWriter) {
 		return
 	}
 
+	cc.recordStatusError(cc.drawProgress(fmt.Sprintf(format, args...)))
+}
+
+// drawProgress replaces the progress line with line under statusMu and
+// returns the write's error for the caller to record once the mutex is
+// released.
+func (cc *CLIContext) drawProgress(line string) error {
 	cc.statusMu.Lock()
 	defer cc.statusMu.Unlock()
 
-	// \r returns to column 0 and \x1b[K clears the old line's tail.
-	if _, err := fmt.Fprintf(cc.StatusWriter, "\r\x1b[K"+format, args...); err != nil {
-		return
+	if _, err := io.WriteString(cc.StatusWriter, clearLine+line); err != nil {
+		return fmt.Errorf("write progress line: %w", err)
 	}
 	cc.progressShown = true
+
+	return nil
 }
 
-// ProgressDone clears the progress line so the next message starts clean.
+// ProgressDone clears the progress line so the next message starts clean. A
+// write that fails is recorded like a failed status line.
 func (cc *CLIContext) ProgressDone() {
 	if cc.StatusWriter == nil {
 		return
 	}
 
+	cc.recordStatusError(cc.clearProgress())
+}
+
+// clearProgress clears a progress line on screen under statusMu and returns
+// the write's error for the caller to record once the mutex is released. The
+// line counts as cleared either way, so the next write does not try again.
+func (cc *CLIContext) clearProgress() error {
 	cc.statusMu.Lock()
 	defer cc.statusMu.Unlock()
 
 	if !cc.progressShown {
-		return
+		return nil
 	}
 	cc.progressShown = false
-	if _, err := fmt.Fprint(cc.StatusWriter, "\r\x1b[K"); err != nil {
-		return
+	if _, err := io.WriteString(cc.StatusWriter, clearLine); err != nil {
+		return fmt.Errorf("clear progress line: %w", err)
 	}
+
+	return nil
 }

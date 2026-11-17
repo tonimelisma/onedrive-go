@@ -210,6 +210,19 @@ func TestSyncConsole_SummaryExplainsHeldBackWork(t *testing.T) {
 	assert.Contains(t, out.String(), "Held back by --download-only: 3 uploads.")
 }
 
+// Validates: R-6.6.19
+func TestHeldBackSummary_CountsOneOfEachInTheSingular(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "Held back by --download-only: 1 upload, 1 download, 1 delete on OneDrive, "+
+		"1 local delete, 1 move, 1 folder create.", heldBackSummary(&syncengine.Report{
+		Mode: syncengine.SyncDownloadOnly,
+		DeferredByMode: syncengine.DeferredCounts{
+			Uploads: 1, Downloads: 1, RemoteDeletes: 1, LocalDeletes: 1, Moves: 1, FolderCreates: 1,
+		},
+	}))
+}
+
 // Validates: R-6.6.19, R-6.6.33
 //
 // Live, 2026-11-02: a one-shot confirm of 6,000 deletes met a 429 after

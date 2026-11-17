@@ -40,6 +40,18 @@ func TestPrintStatText(t *testing.T) {
 	assert.Contains(t, output, "image/jpeg")
 }
 
+// Validates: R-1.6
+func TestPrintStatText_OneByteIsSingular(t *testing.T) {
+	t.Parallel()
+
+	item := &graph.Item{ID: "item-1", Name: "a.txt", Size: 1}
+
+	var buf bytes.Buffer
+	require.NoError(t, printStatText(&buf, item, statPrintOptions{}))
+
+	assert.Contains(t, buf.String(), "\nSize:     1 B (1 byte)\n")
+}
+
 func TestPrintStatText_Folder(t *testing.T) {
 	item := &graph.Item{
 		ID:         "folder-456",

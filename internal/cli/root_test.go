@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -783,7 +784,7 @@ func TestBuildHandlerWithStatusWriter_FormatText(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "text"},
 	}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{})
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "expected *slog.TextHandler")
 }
@@ -795,7 +796,7 @@ func TestBuildHandlerWithStatusWriter_FormatJSON(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "json"},
 	}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{})
 	_, ok := handler.(*slog.JSONHandler)
 	assert.True(t, ok, "expected *slog.JSONHandler")
 }
@@ -810,7 +811,7 @@ func TestBuildHandlerWithStatusWriter_FormatAutoIsHumanAtDefaultVerbosity(t *tes
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
 	}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelWarn}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelWarn})
 	_, ok := handler.(*consoleLogHandler)
 	require.True(t, ok, "expected *consoleLogHandler at default verbosity")
 
@@ -826,7 +827,7 @@ func TestBuildHandlerWithStatusWriter_FormatAutoVerboseKeepsTimestampedDetail(t 
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "auto"},
 	}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelInfo}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{Level: slog.LevelInfo})
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "--verbose keeps full key=value detail")
 }
@@ -835,7 +836,7 @@ func TestBuildHandlerWithStatusWriter_NilConfigUsesText(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	handler := buildHandlerWithStatusWriter(&buf, nil, &slog.HandlerOptions{}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, nil, &slog.HandlerOptions{})
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "nil config should use *slog.TextHandler")
 }
@@ -847,43 +848,37 @@ func TestBuildHandlerWithStatusWriter_EmptyFormatUsesText(t *testing.T) {
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: ""},
 	}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{})
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "empty format should use *slog.TextHandler")
 }
 
-func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsAndFallsBack(t *testing.T) {
+// The builder falls back to auto and writes nothing: the warning is the
+// command context's (TestUseLoggingConfig_WarnsAboutAnUnknownLogFormat).
+func TestBuildHandlerWithStatusWriter_UnknownFormatFallsBackWithoutWriting(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogFormat: "xml"},
 	}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{}, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, &slog.HandlerOptions{})
 
-	// Should fall back to text handler.
 	_, ok := handler.(*slog.TextHandler)
 	assert.True(t, ok, "unknown format should fall back to *slog.TextHandler")
-
-	// Warning should be written to the same writer (not hardcoded stderr).
-	assert.Contains(t, buf.String(), `unknown log_format "xml"`)
+	assert.Empty(t, buf.String())
 }
 
-func TestBuildHandlerWithStatusWriter_UnknownFormatWarnsToStatusWriter(t *testing.T) {
+// Validates: R-4.7.1
+func TestUseLoggingConfig_WarnsAboutAnUnknownLogFormat(t *testing.T) {
 	t.Parallel()
 
-	var logBuf bytes.Buffer
-	var statusBuf bytes.Buffer
-	cfg := &config.ResolvedDrive{
-		LoggingConfig: config.LoggingConfig{LogFormat: "xml"},
-	}
+	var status bytes.Buffer
+	cc := &CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)}
+	require.NoError(t, cc.useLoggingConfig(config.LoggingConfig{LogFormat: "xml"}))
 
-	handler := buildHandlerWithStatusWriter(&logBuf, cfg, &slog.HandlerOptions{}, &statusBuf)
-
-	_, ok := handler.(*slog.TextHandler)
-	assert.True(t, ok, "unknown format should fall back to *slog.TextHandler")
-	assert.Empty(t, logBuf.String(), "format warning should not leak into the log stream")
-	assert.Contains(t, statusBuf.String(), `unknown log_format "xml"`)
+	assert.Equal(t, "Warning: unknown log_format \"xml\" in the config; using auto.\n", status.String())
+	require.NoError(t, cc.StatusError())
 }
 
 // Validates: R-4.7.2, R-6.6.4
@@ -898,7 +893,7 @@ func TestBuildHandlerWithStatusWriter_JSONOutputFormat(t *testing.T) {
 		},
 	}
 	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, opts, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, opts)
 	logger := slog.New(handler)
 
 	logger.Info("test message", slog.String("key", "value"))
@@ -922,9 +917,9 @@ func TestBuildHandlerWithStatusWriter_JSONFormatWithDebugLevel(t *testing.T) {
 			LogLevel:  "debug",
 		},
 	}
-	level := resolveFileLogLevelWithStatusWriter(cfg, nil)
+	level := resolveFileLogLevel(cfg)
 	opts := &slog.HandlerOptions{Level: level}
-	handler := buildHandlerWithStatusWriter(&buf, cfg, opts, &buf)
+	handler := buildHandlerWithStatusWriter(&buf, cfg, opts)
 
 	// Verify correct handler type.
 	_, ok := handler.(*slog.JSONHandler)
@@ -958,25 +953,50 @@ func TestIsWriterTTY_File(t *testing.T) {
 }
 
 func TestResolveFileLogLevel_UnknownLogLevel(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.ResolvedDrive{
 		LoggingConfig: config.LoggingConfig{LogLevel: "bogus"},
 	}
 
-	level := resolveFileLogLevelWithStatusWriter(cfg, nil)
+	level := resolveFileLogLevel(cfg)
 
 	assert.Equal(t, slog.LevelInfo, level)
 }
 
-func TestResolveFileLogLevelWithStatusWriter_UnknownLogLevelWarnsToProvidedWriter(t *testing.T) {
-	var statusBuf bytes.Buffer
-	cfg := &config.ResolvedDrive{
-		LoggingConfig: config.LoggingConfig{LogLevel: "bogus"},
-	}
+// An unknown log_level is reported for a log file that opened, the file that
+// logs at info because of it.
+//
+// Validates: R-4.7.1
+func TestUseLoggingConfig_WarnsAboutAnUnknownLogLevelOfAnOpenLogFile(t *testing.T) {
+	t.Parallel()
 
-	level := resolveFileLogLevelWithStatusWriter(cfg, &statusBuf)
+	var status bytes.Buffer
+	cc := &CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)}
+	t.Cleanup(func() { assert.NoError(t, cc.closeCommandLogger()) })
+	logPath := filepath.Join(t.TempDir(), "onedrive-go.log")
+	require.NoError(t, cc.useLoggingConfig(config.LoggingConfig{LogFile: logPath, LogLevel: "bogus"}))
 
-	assert.Equal(t, slog.LevelInfo, level)
-	assert.Contains(t, statusBuf.String(), `unknown log_level "bogus"`)
+	assert.Equal(t, "Warning: unknown log_level \"bogus\" in the config; logging to the log file at info.\n", status.String())
+	assert.Equal(t, slog.LevelInfo, cc.fileLogLevel.Level())
+}
+
+// Validates: R-4.7.1
+func TestUseLoggingConfig_WarnsAboutALogFileItCannotOpen(t *testing.T) {
+	t.Parallel()
+
+	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
+	logPath := filepath.Join(parentFile, "test.log")
+
+	var status bytes.Buffer
+	cc := &CLIContext{StatusWriter: &status, Logger: slog.New(slog.DiscardHandler)}
+	require.NoError(t, cc.useLoggingConfig(config.LoggingConfig{LogFile: logPath, LogLevel: "bogus"}))
+
+	lines := strings.Split(strings.TrimSuffix(status.String(), "\n"), "\n")
+	require.Len(t, lines, 1, "an unknown log_level of a log file that did not open is not reported: %s", status.String())
+	assert.True(t, strings.HasPrefix(lines[0], fmt.Sprintf("Warning: cannot open log file %q: ", logPath)), lines[0])
+	assert.Nil(t, cc.logCloser, "the console logs alone")
 }
 
 // --- B-296: sync command log_level fix ---
@@ -1189,8 +1209,8 @@ func TestBuildLoggerDualWithStatusWriter_NoLogFile(t *testing.T) {
 
 	cfg := &config.ResolvedDrive{}
 	flags := CLIFlags{}
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
-
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	require.NoError(t, openErr)
 	assert.NotNil(t, logger)
 	assert.Nil(t, closer, "closer should be nil when no log file is set")
 }
@@ -1206,28 +1226,12 @@ func TestBuildLoggerDualWithStatusWriter_LogFileOpenFailureFallsBack(t *testing.
 		},
 	}
 
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, nil)
+	var statusBuf bytes.Buffer
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &statusBuf)
+	require.Error(t, openErr, "the builder says why the log file did not open")
 	assert.NotNil(t, logger)
 	assert.Nil(t, closer, "log open failure should fall back to console-only logging")
-}
-
-func TestBuildLoggerDualWithStatusWriter_LogFileOpenFailureWritesWarning(t *testing.T) {
-	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
-	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
-
-	cfg := &config.ResolvedDrive{
-		LoggingConfig: config.LoggingConfig{
-			LogFile:  filepath.Join(parentFile, "test.log"),
-			LogLevel: "debug",
-		},
-	}
-
-	var statusBuf bytes.Buffer
-
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &statusBuf)
-	assert.NotNil(t, logger)
-	assert.Nil(t, closer)
-	assert.Contains(t, statusBuf.String(), "cannot open log file")
+	assert.Empty(t, statusBuf.String(), "the warning is the command context's (useLoggingConfig)")
 }
 
 // Validates: R-4.7.3, R-6.6.1
@@ -1262,7 +1266,8 @@ func TestBuildLoggerDualWithStatusWriter_ReportsAnExpiredLogItCannotRemoveOnce(t
 	}
 
 	var console bytes.Buffer
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &console)
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &console)
+	require.NoError(t, openErr)
 	require.NotNil(t, logger)
 	require.NotNil(t, closer, "the log opens although retention failed")
 	require.NoError(t, closer.Close())
@@ -1287,7 +1292,8 @@ func TestBuildLoggerDualWithStatusWriter_WithLogFile(t *testing.T) {
 	}
 	flags := CLIFlags{}
 
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	require.NoError(t, openErr)
 	require.NotNil(t, logger)
 	require.NotNil(t, closer, "closer should be non-nil when log file is set")
 
@@ -1313,7 +1319,8 @@ func TestBuildLoggerDualWithStatusWriter_FileGetsJSON(t *testing.T) {
 	}
 	flags := CLIFlags{}
 
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	require.NoError(t, openErr)
 	require.NotNil(t, closer)
 
 	logger.Info("json check")
@@ -1341,7 +1348,8 @@ func TestBuildLoggerDualWithStatusWriter_InfoLevelGoesToFileNotConsole(t *testin
 	}
 	var console bytes.Buffer
 
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &console)
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, CLIFlags{}, &console)
+	require.NoError(t, openErr)
 	require.NotNil(t, closer)
 
 	logger.Info("file only info")
@@ -1368,7 +1376,8 @@ func TestBuildLoggerDualWithStatusWriter_IndependentLevels(t *testing.T) {
 	// CLI flag sets console to error-only, but file should still get debug.
 	flags := CLIFlags{Quiet: true}
 
-	logger, closer := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(cfg, flags, nil)
+	require.NoError(t, openErr)
 	require.NotNil(t, closer)
 
 	logger.Debug("debug for file only")

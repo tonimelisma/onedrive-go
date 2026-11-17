@@ -29,10 +29,12 @@ func TestHeldDeletesSummary_NamesSidesAndTheReleaseCommand(t *testing.T) {
 
 	assert.Empty(t, heldDeletesSummary(&syncengine.Report{}))
 
-	line := heldDeletesSummary(&syncengine.Report{HeldRemoteDeletes: 60, HeldLocalDeletes: 2})
-	assert.Contains(t, line, "60 on OneDrive")
-	assert.Contains(t, line, "2 on this computer")
-	assert.Contains(t, line, "onedrive-go sync --confirm-deletes")
+	const advice = " for confirmation: more was deleted than looks intended. " +
+		"Check the sync folder, then run 'onedrive-go sync --confirm-deletes' to apply them."
+	assert.Equal(t, "Held 60 deletes on OneDrive and 2 deletes on this computer"+advice,
+		heldDeletesSummary(&syncengine.Report{HeldRemoteDeletes: 60, HeldLocalDeletes: 2}))
+	assert.Equal(t, "Held 1 delete on OneDrive"+advice, heldDeletesSummary(&syncengine.Report{HeldRemoteDeletes: 1}))
+	assert.Equal(t, "Held 1 delete on this computer"+advice, heldDeletesSummary(&syncengine.Report{HeldLocalDeletes: 1}))
 }
 
 // Validates: R-6.2.5

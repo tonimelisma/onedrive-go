@@ -135,6 +135,16 @@ func TestStatusPerf_FilteredJSON_WithPerfUnavailableFromActiveOwner(t *testing.T
 }
 
 // Validates: R-6.6.15
+func TestFormatDetailedPerfHTTP_CountsOneInTheSingular(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "1 req, 1 retry, 1 transport error",
+		formatDetailedPerfHTTP(&perf.Snapshot{HTTPRequestCount: 1, HTTPRetryCount: 1, HTTPTransportErrors: 1}))
+	assert.Equal(t, "2 req, 2 retries, 0 transport errors",
+		formatDetailedPerfHTTP(&perf.Snapshot{HTTPRequestCount: 2, HTTPRetryCount: 2}))
+}
+
+// Validates: R-6.6.15
 func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T) {
 	t.Parallel()
 
@@ -165,7 +175,7 @@ func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T
 	rendered := out.String()
 	assert.Contains(t, rendered, "PERF")
 	assert.Contains(t, rendered, "HTTP:")
-	assert.Contains(t, rendered, "4 req, 1 retries, 2 transport errors")
+	assert.Contains(t, rendered, "\n    HTTP:      4 req, 1 retry, 2 transport errors\n")
 	assert.Contains(t, rendered, "DB:")
 	assert.Contains(t, rendered, "3 tx in 240ms")
 	assert.Contains(t, rendered, "Transfers:")

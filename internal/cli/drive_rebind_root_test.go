@@ -56,10 +56,22 @@ func TestRunDriveRebindRoot_KeepsStateAndReportsRebind(t *testing.T) {
 	}
 
 	require.NoError(t, runDriveRebindRootWithInput(t.Context(), cc, bytes.NewBufferString(""), true))
-	assert.Contains(t, out.String(), "remembers 0 files")
-	assert.Contains(t, out.String(), "holds 1 files now")
+	assert.Contains(t, out.String(),
+		"Sync state for "+cid.String()+" remembers 0 files; "+syncDir+" holds 1 file now.\n")
 	assert.Contains(t, out.String(), "will use the folder now at its sync path")
 	assert.FileExists(t, statePath, "rebinding keeps the sync state")
+}
+
+// Validates: R-6.2.12
+func TestConfirmRebindRootIntent_CountsOneFileInTheSingular(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	require.NoError(t, confirmRebindRootIntent(bytes.NewBufferString(""), &out, "personal:rebind@example.com",
+		"/home/user/OneDrive", 1, 1, true))
+
+	assert.Equal(t, "Sync state for personal:rebind@example.com remembers 1 file; /home/user/OneDrive holds 1 file now.\n",
+		out.String())
 }
 
 // Validates: R-6.2.12

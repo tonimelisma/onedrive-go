@@ -118,12 +118,12 @@ func confirmRebindRootIntent(
 	present int,
 	yes bool,
 ) error {
-	remembered := fmt.Sprintf("%d", synced)
+	remembered := countOf(synced, "file")
 	if synced == unknownFileCount {
-		remembered = "an unknown number of"
+		remembered = "an unknown number of files"
 	}
-	if err := writef(output, "Sync state for %s remembers %s files; %s holds %d files now.\n",
-		drive, remembered, syncDir, present); err != nil {
+	if err := writef(output, "Sync state for %s remembers %s; %s holds %s now.\n",
+		drive, remembered, syncDir, countOf(present, "file")); err != nil {
 		return err
 	}
 	if yes {

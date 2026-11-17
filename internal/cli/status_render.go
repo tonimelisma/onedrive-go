@@ -459,16 +459,16 @@ func printSyncStateSummaryLines(w io.Writer, indent string, ss *syncStateInfo) e
 		format string
 	}{
 		{count: ss.FileCount, format: indent + "Files: %d\n"},
-		{count: ss.LocalDrift, format: indent + "Local changes: %d %s\n"},
-		{count: ss.RemoteDrift, format: indent + "Remote changes: %d %s\n"},
-		{count: ss.Retrying, format: indent + "Retrying: %d %s\n"},
+		{count: ss.LocalDrift, format: indent + "Local changes: %s\n"},
+		{count: ss.RemoteDrift, format: indent + "Remote changes: %s\n"},
+		{count: ss.Retrying, format: indent + "Retrying: %s\n"},
 	}
 	for i := range countLines {
 		if countLines[i].count <= 0 {
 			continue
 		}
 		if strings.Contains(countLines[i].format, "%s") {
-			if err := writef(w, countLines[i].format, countLines[i].count, itemNoun(countLines[i].count)); err != nil {
+			if err := writef(w, countLines[i].format, countItems(countLines[i].count)); err != nil {
 				return err
 			}
 			continue
@@ -486,46 +486,39 @@ func printSummaryText(w io.Writer, s *statusSummary) error {
 		return nil
 	}
 
+	// The drives in each state: a state reads the same for one drive and many.
 	var parts []string
-
-	if s.Ready > 0 {
-		parts = append(parts, formatStatusCount(s.Ready, "up to date", "up to date"))
-	}
-	if s.Syncing > 0 {
-		parts = append(parts, formatStatusCount(s.Syncing, "syncing", "syncing"))
-	}
-	if s.Pending > 0 {
-		parts = append(parts, formatStatusCount(s.Pending, "pending", "pending"))
-	}
-	if s.Paused > 0 {
-		parts = append(parts, formatStatusCount(s.Paused, "paused", "paused"))
-	}
-	if s.Issues > 0 {
-		parts = append(parts, formatStatusCount(s.Issues, "with issues", "with issues"))
-	}
-	if s.Unavailable > 0 {
-		parts = append(parts, formatStatusCount(s.Unavailable, "unavailable", "unavailable"))
+	for _, state := range []struct {
+		count int
+		label string
+	}{
+		{count: s.Ready, label: "up to date"},
+		{count: s.Syncing, label: "syncing"},
+		{count: s.Pending, label: "pending"},
+		{count: s.Paused, label: "paused"},
+		{count: s.Issues, label: "with issues"},
+		{count: s.Unavailable, label: "unavailable"},
+	} {
+		if state.count > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", state.count, state.label))
+		}
 	}
 	if s.AccountsRequiringAuth > 0 {
-		parts = append(parts, formatStatusCount(s.AccountsRequiringAuth, "account needs sign-in", "accounts need sign-in"))
+		needSignIn := " need sign-in"
+		if s.AccountsRequiringAuth == 1 {
+			needSignIn = " needs sign-in"
+		}
+		parts = append(parts, countOf(s.AccountsRequiringAuth, "account")+needSignIn)
 	}
 
-	prefix := formatStatusCount(s.TotalDrives, "drive", "drives")
+	prefix := countOf(s.TotalDrives, "drive")
 	if s.TotalSharedFolders > 0 {
-		prefix += ", " + formatStatusCount(s.TotalSharedFolders, "shared folder", "shared folders")
+		prefix += ", " + countOf(s.TotalSharedFolders, "shared folder")
 	}
 	if len(parts) == 0 {
 		return writef(w, "Status: %s\n", prefix)
 	}
 	return writef(w, "Status: %s: %s\n", prefix, strings.Join(parts, ", "))
-}
-
-func formatStatusCount(count int, singular, plural string) string {
-	label := plural
-	if count == 1 {
-		label = singular
-	}
-	return fmt.Sprintf("%d %s", count, label)
 }
 
 func statusDriveStateLabel(state string) string {

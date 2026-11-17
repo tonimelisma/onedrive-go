@@ -103,7 +103,7 @@ func reportDaemonReloadError(cc *CLIContext, err error) {
 	case errors.As(err, &daemonErr) && daemonErr.code == synccontrol.ErrorReloadFailed:
 		// The change is saved, but the running sync rejected it and kept
 		// its old settings: that needs the user's attention.
-		writeWarningf(cc.Status(), "Warning: %s\n", daemonErr.message)
+		cc.warnf("Warning: %s\n", daemonErr.message)
 	case controlOwnerDidNotAnswer(err):
 		cc.Statusf(daemonBusyNote)
 	case isControlSocketGone(err):

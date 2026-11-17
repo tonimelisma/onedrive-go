@@ -190,7 +190,7 @@ func authenticateLogin(
 		ts, err := graph.LoginWithBrowser(ctx, tempPath, authHTTP, func(openCtx context.Context, authURL string) error {
 			openErr := openBrowser(openCtx, authURL)
 			if openErr != nil {
-				writeWarningf(cc.Status(), "Open this URL in your browser:\n%s\n", authURL)
+				cc.warnf("Open this URL in your browser:\n%s\n", authURL)
 			}
 
 			return openErr
@@ -203,7 +203,7 @@ func authenticateLogin(
 	}
 
 	ts, err := graph.Login(ctx, tempPath, authHTTP, func(da graph.DeviceAuth) {
-		writeWarningf(cc.Status(), "%s", deviceLoginInstructions(da, cc.Flags.Account, time.Now()))
+		cc.warnf("%s", deviceLoginInstructions(da, cc.Flags.Account, time.Now()))
 	}, cc.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("device-code login: %w", err)
@@ -332,7 +332,7 @@ func deviceLoginInstructions(da graph.DeviceAuth, account string, now time.Time)
 	}
 	if !da.Expiry.IsZero() {
 		minutes := int(da.Expiry.Sub(now).Round(time.Minute).Minutes())
-		fmt.Fprintf(&b, "The code expires at %s (in %d minutes).", da.Expiry.Local().Format("15:04"), minutes)
+		fmt.Fprintf(&b, "The code expires at %s (in %s).", da.Expiry.Local().Format("15:04"), countOf(minutes, "minute"))
 	}
 	b.WriteString("\n")
 	b.WriteString("If a passkey or Windows Hello sign-in ends on an error page, choose \"Other ways to sign in\" and use your password.\n")

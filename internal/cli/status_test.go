@@ -1778,6 +1778,27 @@ func TestPrintSummaryText_AllStates(t *testing.T) {
 	assert.NotContains(t, output, "conditions")
 }
 
+// Every count of the summary line agrees with its number, the verb of the
+// sign-in count included.
+//
+// Validates: R-2.10.4
+func TestPrintSummaryText_CountsAgreeWithTheirNumbers(t *testing.T) {
+	t.Parallel()
+
+	var one bytes.Buffer
+	require.NoError(t, printSummaryText(&one, &statusSummary{
+		TotalDrives: 1, TotalSharedFolders: 1, Ready: 1, AccountsRequiringAuth: 1,
+	}))
+	assert.Equal(t, "Status: 1 drive, 1 shared folder: 1 up to date, 1 account needs sign-in\n", one.String())
+
+	var two bytes.Buffer
+	require.NoError(t, printSummaryText(&two, &statusSummary{
+		TotalDrives: 2, TotalSharedFolders: 2, Syncing: 2, Pending: 2, Issues: 2, Unavailable: 2, AccountsRequiringAuth: 2,
+	}))
+	assert.Equal(t, "Status: 2 drives, 2 shared folders: 2 syncing, 2 pending, 2 with issues, 2 unavailable, "+
+		"2 accounts need sign-in\n", two.String())
+}
+
 func TestPrintSummaryText_WithPendingAndRetrying(t *testing.T) {
 	t.Parallel()
 

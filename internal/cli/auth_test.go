@@ -272,6 +272,20 @@ func TestDeviceLoginInstructions_ExplainCodeExpiryAndWaiting(t *testing.T) {
 	assert.Contains(t, text, "Waiting for you to finish signing in")
 }
 
+// Validates: R-6.6.24
+func TestDeviceLoginInstructions_OneMinuteLeftIsSingular(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 23, 22, 0, 0, 0, time.Local)
+	text := deviceLoginInstructions(graph.DeviceAuth{
+		UserCode:        "ABCD1234E",
+		VerificationURI: "https://login.microsoft.com/device",
+		Expiry:          now.Add(time.Minute),
+	}, "", now)
+
+	assert.Contains(t, text, "\n\nThe code expires at 22:01 (in 1 minute).\n")
+}
+
 func TestMoveToken_Success(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()

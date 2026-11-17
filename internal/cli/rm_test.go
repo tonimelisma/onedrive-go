@@ -310,12 +310,11 @@ func TestConfirmRmParentVisibility_WarnsButSucceedsOnSettlingParent(t *testing.T
 	}
 
 	var status bytes.Buffer
-	err := confirmRmParentVisibility(context.Background(), waiter, "/docs/old-report.pdf", &status)
+	err := confirmRmParentVisibility(t.Context(), &CLIContext{StatusWriter: &status}, waiter, "/docs/old-report.pdf")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"docs"}, waiter.calls)
-	assert.Contains(t, status.String(), "Note: deleted")
-	assert.Contains(t, status.String(), "/docs")
-	assert.Contains(t, status.String(), "/docs/old-report.pdf")
+	assert.Equal(t, "Note: deleted /docs/old-report.pdf; OneDrive may take a moment to show the change in /docs.\n",
+		status.String())
 }
 
 func TestConfirmRmParentVisibility_FailsOnNonVisibilityError(t *testing.T) {
@@ -326,7 +325,7 @@ func TestConfirmRmParentVisibility_FailsOnNonVisibilityError(t *testing.T) {
 	}
 
 	var status bytes.Buffer
-	err := confirmRmParentVisibility(context.Background(), waiter, "/docs/old-report.pdf", &status)
+	err := confirmRmParentVisibility(t.Context(), &CLIContext{StatusWriter: &status}, waiter, "/docs/old-report.pdf")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "confirming parent \"/docs\" visibility after delete")
 	require.ErrorContains(t, err, "transport exploded")

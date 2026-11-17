@@ -360,29 +360,26 @@ func (c *syncConsole) reportSummary(tally *activityTally, r *syncengine.Report, 
 
 func (t *activityTally) parts() []string {
 	var parts []string
-	add := func(kind syncengine.ActivityKind, singular, plural, suffix string) {
+	add := func(kind syncengine.ActivityKind, verb, noun, suffix string) {
 		n := t.counts[kind]
 		if n == 0 {
 			return
 		}
-		text := fmt.Sprintf("%s %d %s", singular, n, plural)
-		if n == 1 {
-			text = fmt.Sprintf("%s 1 %s", singular, strings.TrimSuffix(plural, "s"))
-		}
+		text := verb + " " + countOf(n, noun)
 		if b := t.bytes[kind]; b > 0 {
 			text += " (" + formatSize(b) + ")"
 		}
 		parts = append(parts, text+suffix)
 	}
 
-	add(syncengine.ActivityDownload, "downloaded", "files", "")
-	add(syncengine.ActivityUpload, "uploaded", "files", "")
-	add(syncengine.ActivityLocalDelete, "deleted", "files", " locally")
-	add(syncengine.ActivityRemoteDelete, "deleted", "files", " on OneDrive")
-	add(syncengine.ActivityLocalMove, "moved", "items", "")
-	add(syncengine.ActivityRemoteMove, "moved", "items", " on OneDrive")
-	add(syncengine.ActivityFolderCreate, "created", "folders", "")
-	add(syncengine.ActivityConflictCopy, "kept both versions of", "conflicting files", "")
+	add(syncengine.ActivityDownload, "downloaded", "file", "")
+	add(syncengine.ActivityUpload, "uploaded", "file", "")
+	add(syncengine.ActivityLocalDelete, "deleted", "file", " locally")
+	add(syncengine.ActivityRemoteDelete, "deleted", "file", " on OneDrive")
+	add(syncengine.ActivityLocalMove, "moved", "item", "")
+	add(syncengine.ActivityRemoteMove, "moved", "item", " on OneDrive")
+	add(syncengine.ActivityFolderCreate, "created", "folder", "")
+	add(syncengine.ActivityConflictCopy, "kept both versions of", "conflicting file", "")
 
 	return parts
 }
@@ -413,13 +410,13 @@ func heldDeletesSummary(r *syncengine.Report) string {
 
 	var parts []string
 	if r.HeldRemoteDeletes > 0 {
-		parts = append(parts, fmt.Sprintf("%d on OneDrive", r.HeldRemoteDeletes))
+		parts = append(parts, countOf(r.HeldRemoteDeletes, "delete")+" on OneDrive")
 	}
 	if r.HeldLocalDeletes > 0 {
-		parts = append(parts, fmt.Sprintf("%d on this computer", r.HeldLocalDeletes))
+		parts = append(parts, countOf(r.HeldLocalDeletes, "delete")+" on this computer")
 	}
 
-	return fmt.Sprintf("Held %s deletes for confirmation: more was deleted than looks intended. "+
+	return fmt.Sprintf("Held %s for confirmation: more was deleted than looks intended. "+
 		"Check the sync folder, then run 'onedrive-go sync --confirm-deletes' to apply them.",
 		strings.Join(parts, " and "))
 }
@@ -432,17 +429,17 @@ func heldBackSummary(r *syncengine.Report) string {
 	}
 
 	var parts []string
-	add := func(n int, what string) {
+	add := func(n int, noun, suffix string) {
 		if n > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", n, what))
+			parts = append(parts, countOf(n, noun)+suffix)
 		}
 	}
-	add(d.Uploads, "uploads")
-	add(d.Downloads, "downloads")
-	add(d.RemoteDeletes, "deletes on OneDrive")
-	add(d.LocalDeletes, "local deletes")
-	add(d.Moves, "moves")
-	add(d.FolderCreates, "folder creates")
+	add(d.Uploads, "upload", "")
+	add(d.Downloads, "download", "")
+	add(d.RemoteDeletes, "delete", " on OneDrive")
+	add(d.LocalDeletes, "local delete", "")
+	add(d.Moves, "move", "")
+	add(d.FolderCreates, "folder create", "")
 
 	return fmt.Sprintf("Held back by --%s: %s.", r.Mode.String(), strings.Join(parts, ", "))
 }
