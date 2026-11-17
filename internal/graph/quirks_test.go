@@ -321,18 +321,18 @@ func TestHandleChunkResponse_Final200(t *testing.T) {
 	assert.Equal(t, "completed-item", item.ID)
 }
 
-// TestHandleChunkResponse_Unexpected2xx validates that unexpected 2xx codes
-// (e.g. 204 No Content) are treated as errors.
+// TestHandleChunkResponse_Unexpected2xx validates that a fragment answered
+// with a 2xx that is neither 202 nor a completion (here 204 No Content) fails.
 func TestHandleChunkResponse_Unexpected2xx(t *testing.T) {
-	// Build a response manually since we can't make doPreAuthRetry return 204.
-	resp := &http.Response{
-		StatusCode: http.StatusNoContent,
-		Body:       io.NopCloser(strings.NewReader("")),
-	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
 
-	client := newTestClient(t, "http://unused")
-
-	item, complete, err := client.handleChunkResponse(resp)
+	client := newTestClient(t, srv.URL)
+	fragment := []byte("fragment")
+	item, complete, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/upload")},
+		bytes.NewReader(fragment), 0, int64(len(fragment)), int64(len(fragment)))
 	require.Error(t, err)
 	assert.False(t, complete)
 	assert.Nil(t, item)
@@ -363,10 +363,6 @@ func TestDelta_HTTP410_TokenExpired(t *testing.T) {
 // ---------------------------------------------------------------------------
 // §9: Error classification edge cases
 // ---------------------------------------------------------------------------
-
-// TestGraphError_StatusBeforeSentinel and TestIsRetryable_UnmappedStatusCodes
-// were deleted: isRetryable moved to retry/transport.go. Coverage is provided
-// by retry/transport_test.go.
 
 // TestClassifyStatus_UnmappedCodes validates that unmapped status codes
 // outside the 5xx range return nil (not classified as server error).

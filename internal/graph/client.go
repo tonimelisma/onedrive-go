@@ -128,9 +128,10 @@ type Client struct {
 	policies             retryPolicies
 	validators           urlValidators
 
-	// transferStallTimeout bounds how long a transfer body may make no
-	// progress; zero means defaultTransferStallTimeout. Tests shorten it.
-	transferStallTimeout time.Duration
+	// stallTimeout bounds how long a body may make no progress: a transfer
+	// body (the stall watchdog) and every other response body
+	// (dispatchRequestWith). Zero means defaultStallTimeout. Tests shorten it.
+	stallTimeout time.Duration
 
 	// clampWarned is set once a modification time before 1900 has been
 	// clamped, so the warning is given once per client.

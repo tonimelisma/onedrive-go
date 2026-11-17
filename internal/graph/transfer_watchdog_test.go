@@ -54,7 +54,7 @@ func TestDownload_StalledBodyIsAbandoned(t *testing.T) {
 	defer graphSrv.Close()
 
 	client := newNoRetryTestClient(t, graphSrv.URL)
-	client.transferStallTimeout = testStallTimeout
+	client.stallTimeout = testStallTimeout
 
 	var buf bytes.Buffer
 	start := time.Now()
@@ -86,7 +86,7 @@ func TestUploadChunk_StalledBodyIsAbandoned(t *testing.T) {
 	defer close(release) // before Close, which waits for the blocked handler
 
 	client := newNoRetryTestClient(t, srv.URL)
-	client.transferStallTimeout = testStallTimeout
+	client.stallTimeout = testStallTimeout
 
 	chunk := bytes.Repeat([]byte("u"), ChunkedUploadChunkSize)
 	start := time.Now()
@@ -163,7 +163,7 @@ func TestUploadChunk_RetryAfterLongerThanStallTimeoutIsNotAStall(t *testing.T) {
 		Inner: http.DefaultTransport, Policy: testRetryPolicy(), Logger: slog.Default(), Sleep: sleepLongerThanStall,
 	}}
 	client := MustNewClient(normalizeTestBaseURL(srv.URL), httpClient, staticToken("t"), slog.Default(), "test-agent")
-	client.transferStallTimeout = stallTimeout
+	client.stallTimeout = stallTimeout
 
 	chunk := bytes.Repeat([]byte("u"), ChunkedUploadChunkSize)
 	item, complete, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},
@@ -195,7 +195,7 @@ func (g *gatedReader) Read([]byte) (int, error) {
 func newTestStallWatchdog(t *testing.T) *stallWatchdog {
 	t.Helper()
 
-	client := &Client{transferStallTimeout: time.Hour}
+	client := &Client{stallTimeout: time.Hour}
 	_, watchdog := client.watchTransfer(t.Context())
 	t.Cleanup(watchdog.stop)
 
@@ -241,7 +241,7 @@ func TestStallWatchdog_AWaitThatStartsDuringAReadLeavesTheTimerStopped(t *testin
 // newRoundStallWatchdog is newTestStallWatchdog for a test that makes
 // thousands: the caller stops each one itself instead of queuing a cleanup.
 func newRoundStallWatchdog() *stallWatchdog {
-	client := &Client{transferStallTimeout: time.Hour}
+	client := &Client{stallTimeout: time.Hour}
 	_, watchdog := client.watchTransfer(context.Background())
 
 	return watchdog
@@ -290,6 +290,26 @@ func TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, watchdog.timer.Stop(), "a read after the transfer ended left a timer running")
+}
+
+// A download's response body comes back bounded by the client's stall window
+// like every response body. Read through the watchdog, it starts no timer of
+// its own: the two windows are the same, and a download failed as a stalled
+// response instead of a stalled transfer would lose its partial.
+//
+// Validates: R-6.8.20
+func TestStallWatchdog_ABodyItReadsStartsNoTimerOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	body := newResponseBody(io.NopCloser(bytes.NewReader([]byte("content"))), time.Hour, slog.New(slog.DiscardHandler))
+	data, err := io.ReadAll(newTestStallWatchdog(t).reader(body))
+	require.NoError(t, err)
+	assert.Equal(t, "content", string(data))
+
+	body.mu.Lock()
+	reads := body.reads
+	body.mu.Unlock()
+	assert.Zero(t, reads, "the body's own stall timer ran beside the watchdog's")
 }
 
 // Validates: R-6.3.10

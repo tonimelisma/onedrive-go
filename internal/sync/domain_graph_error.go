@@ -168,35 +168,31 @@ func unansweredServerAnswer(err error) serverAnswer {
 // response-header and whole-request timeouts and an expired request deadline
 // carry context.DeadlineExceeded; a transfer the stall watchdog abandoned
 // carries graph.ErrTransferStalled instead, because the watchdog keeps its
-// cancellation out of the chain; a TLS handshake timeout, a read whose
-// connection's keepalive found the server gone and a request on an HTTP/2
-// connection closed for an unanswered ping carry neither (isNetworkTimeout).
-// An outcome commit or created-item record that outlasted its bound carries
-// context.DeadlineExceeded too, but it is no request: errStoreAccessTimedOut
-// marks it. Whether the run had ended is not asked here: classifyResult asks.
+// cancellation out of the chain; an answer whose body brought nothing for the
+// stall window carries graph.ErrResponseStalled, and a request or body read
+// on an HTTP/2 connection closed for an unanswered ping
+// graph.ErrConnectionLost; a TLS handshake timeout and a read whose
+// connection's keepalive found the server gone carry none of these
+// (isNetworkTimeout). An outcome commit or created-item record that outlasted
+// its bound carries context.DeadlineExceeded too, but it is no request:
+// errStoreAccessTimedOut marks it. Whether the run had ended is not asked
+// here: classifyResult asks.
 func isRequestTimeout(err error) bool {
 	if errors.Is(err, errStoreAccessTimedOut) {
 		return false
 	}
 
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, graph.ErrTransferStalled) ||
+		errors.Is(err, graph.ErrResponseStalled) || errors.Is(err, graph.ErrConnectionLost) ||
 		isNetworkTimeout(err)
 }
 
-// http2ConnectionLostText is the text of the error net/http's HTTP/2 client
-// fails every request on a connection with once the connection's health-check
-// ping went unanswered (closeForLostPing in the bundled HTTP/2 transport). The
-// library makes it with errors.New and gives it no type, no Timeout and no
-// Is, so its text is all there is to know it by.
-const http2ConnectionLostText = "http2: client connection lost"
-
 // isNetworkTimeout reports a failure the HTTP client or a connection says
-// timed out, or a request on an HTTP/2 connection closed for an unanswered
-// ping: net/http wraps every transport failure in *url.Error, and a read on a
-// connection fails as *net.OpError, and both answer Timeout() for what they
-// wrap. A chain that holds a local file error is never one: an upload's body
-// is read from the local file, and a reader that returned a timed-out read of
-// it unwrapped would make the request's *url.Error say it timed out.
+// timed out: net/http wraps every transport failure in *url.Error, and a read
+// on a connection fails as *net.OpError, and both answer Timeout() for what
+// they wrap. A chain that holds a local file error is never one: an upload's
+// body is read from the local file, and a reader that returned a timed-out
+// read of it unwrapped would make the request's *url.Error say it timed out.
 func isNetworkTimeout(err error) bool {
 	var pathErr *fs.PathError
 	if errors.As(err, &pathErr) {
@@ -204,23 +200,12 @@ func isNetworkTimeout(err error) bool {
 	}
 
 	var urlErr *url.Error
-	if errors.As(err, &urlErr) && (urlErr.Timeout() || isLostHTTP2Connection(urlErr)) {
+	if errors.As(err, &urlErr) && urlErr.Timeout() {
 		return true
 	}
 	var opErr *net.OpError
 
 	return errors.As(err, &opErr) && opErr.Timeout()
-}
-
-// isLostHTTP2Connection reports a transport error whose innermost error is
-// the HTTP/2 client's lost connection (http2ConnectionLostText).
-func isLostHTTP2Connection(urlErr *url.Error) bool {
-	inner := urlErr.Err
-	for next := errors.Unwrap(inner); next != nil; next = errors.Unwrap(inner) {
-		inner = next
-	}
-
-	return inner != nil && inner.Error() == http2ConnectionLostText
 }
 
 func classifyServerStatus(status int) serverAnswer {
