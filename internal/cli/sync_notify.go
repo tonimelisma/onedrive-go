@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -137,7 +136,7 @@ func (s *syncNotifier) watchingStatus(event multisync.WatchLifecycleEvent) strin
 	case len(roots) == 0:
 		status = "Watching no drives"
 	case len(roots) > watchStatusMaxRoots:
-		status = fmt.Sprintf("Watching %d drives", len(roots))
+		status = "Watching " + countOf(len(roots), "drive")
 	default:
 		shown := make([]string, 0, len(roots))
 		for _, root := range roots {
@@ -159,17 +158,11 @@ func (s *syncNotifier) watchingStatus(event multisync.WatchLifecycleEvent) strin
 	if len(signIn) > 0 {
 		status += "; sign-in required for " + strings.Join(signIn, ", ")
 	}
-	switch {
-	case otherSkipped == 1:
-		status += "; 1 drive could not start"
-	case otherSkipped > 1:
-		status += fmt.Sprintf("; %d drives could not start", otherSkipped)
+	if otherSkipped > 0 {
+		status += "; " + countOf(otherSkipped, "drive") + " could not start"
 	}
-	switch paused := len(event.Paused); {
-	case paused == 1:
-		status += "; 1 drive paused"
-	case paused > 1:
-		status += fmt.Sprintf("; %d drives paused", paused)
+	if paused := len(event.Paused); paused > 0 {
+		status += "; " + countOf(paused, "drive") + " paused"
 	}
 
 	return status

@@ -41,9 +41,10 @@ func dualLoggerForTest(t *testing.T, flags CLIFlags) (*slog.Logger, *bytes.Buffe
 
 	logPath := filepath.Join(t.TempDir(), "onedrive-go.log")
 	var console bytes.Buffer
-	logger, closer := buildLoggerDualWithStatusWriter(
+	logger, closer, openErr := buildLoggerDualWithStatusWriter(
 		&config.ResolvedDrive{LoggingConfig: config.LoggingConfig{LogFile: logPath}}, flags, &console)
-	require.NotNil(t, closer, "the log file must open")
+	require.NoError(t, openErr, "the log file must open")
+	require.NotNil(t, closer)
 	t.Cleanup(func() { assert.NoError(t, closer.Close()) })
 
 	return logger, &console, logPath

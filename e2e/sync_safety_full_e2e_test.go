@@ -21,6 +21,10 @@ import (
 
 const safetyFileCount = 8
 
+// heldDeletesLineText is the fixed part of the summary line of a pass that
+// held deletes for confirmation, whatever their count.
+const heldDeletesLineText = "for confirmation: more was deleted than looks intended"
+
 // seedSafetySyncRoot writes count small files under syncDir/folder and syncs
 // them up, returning the folder name and the content by file name.
 func seedSafetySyncRoot(t *testing.T, cfgPath string, env map[string]string, syncDir, folder string, count int) map[string]string {
@@ -83,7 +87,7 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	combinedOutput := stdout + stderr
 	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", printable(combinedOutput))
 	assertOutputDoesNotMatch(t, syncLeftWorkPattern, stdout)
-	assertOutputContains(t, combinedOutput, "deletes for confirmation", "the deletes are held")
+	assertOutputContains(t, combinedOutput, heldDeletesLineText, "the deletes are held")
 	assertOutputContains(t, combinedOutput, "sync --confirm-deletes", "the summary names the command")
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
 		"nothing is deleted on OneDrive while the hold stands")
@@ -107,7 +111,7 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	// current truth, not from a one-shot flag. It exits 0 too.
 	stdout, stderr, syncErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
 	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", printable(stdout)+printable(stderr))
-	assertOutputContains(t, stdout+stderr, "deletes for confirmation")
+	assertOutputContains(t, stdout+stderr, heldDeletesLineText)
 	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
 
 	runSyncThroughTransientFailures(t, cfgPath, env, "--confirm-deletes")
@@ -119,7 +123,7 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	// Single pass by design: the one pass after the confirmed deletes must
 	// hold nothing; it may leave work a transient failure causes.
 	stdout, stderr = runSyncPass(t, cfgPath, env)
-	assertOutputNotContains(t, stdout+stderr, "deletes for confirmation", "nothing is held once applied")
+	assertOutputNotContains(t, stdout+stderr, heldDeletesLineText, "nothing is held once applied")
 }
 
 // Validates: R-6.4.9
@@ -212,7 +216,7 @@ func TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound(t *testing.T) {
 	// that only holds deletes exits 0 (R-6.6.28).
 	stdout, stderr, syncErr := runCLIWithConfigAllowError(t, cfgPath, env, "sync")
 	require.NoErrorf(t, syncErr, "the rebound folder's held deletes are not work left: %s", printable(stdout)+printable(stderr))
-	assertOutputContains(t, stdout+stderr, "deletes for confirmation",
+	assertOutputContains(t, stdout+stderr, heldDeletesLineText,
 		"the rebound empty folder holds the deletes it implies")
 	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
 		"still nothing deleted on OneDrive")

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -511,5 +512,25 @@ func TestRecycleBinEmpty_FallsBackToDelete(t *testing.T) {
 
 	require.NoError(t, runRecycleBinEmptyWithFactory(t.Context(), cc, true, sessionFactory))
 	assert.Equal(t, []string{"item-1"}, mockSession.deletedIDs)
-	assert.Contains(t, out.String(), "Recycle bin emptied")
+	assert.Equal(t, "Permanently deleting 1 item...\n  Deleted \"old.txt\"\nRecycle bin emptied\n", out.String())
+}
+
+// Validates: R-1.9
+func TestRecycleBinEmpty_CountsOneFailedItemInTheSingular(t *testing.T) {
+	setTestDriveHome(t)
+
+	var out bytes.Buffer
+	mockSession := &mockRecycleBinSession{
+		items:              []graph.Item{{ID: "item-1", Name: "old.txt"}},
+		permanentDeleteErr: errors.New("gone wrong"),
+	}
+
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "config.toml"))
+	sessionFactory := func(context.Context) (recycleBinSession, error) {
+		return mockSession, nil
+	}
+
+	err := runRecycleBinEmptyWithFactory(t.Context(), cc, true, sessionFactory)
+	require.EqualError(t, err, "1 of 1 item failed to delete")
+	assert.Equal(t, "Permanently deleting 1 item...\n  Failed to delete \"old.txt\": gone wrong\n", out.String())
 }

@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 )
 
@@ -57,7 +55,7 @@ func (r *folderTransferReport) finish(
 	} else {
 		r.cc.Statusf("%s %s, %s (%s)\n", r.verb,
 			countOf(summary.Files, "file"), countOf(summary.Folders, "folder"), formatSize(summary.Bytes))
-		failed = bulkTransferError(r.cc.Status(), r.noun, r.failures)
+		failed = bulkTransferError(r.cc, r.noun, r.failures)
 	}
 
 	if treeErr != nil {
@@ -65,13 +63,4 @@ func (r *folderTransferReport) finish(
 	}
 
 	return failed
-}
-
-// countOf renders n of noun: "1 file", "0 files", "2 files".
-func countOf(n int, noun string) string {
-	if n == 1 {
-		return "1 " + noun
-	}
-
-	return fmt.Sprintf("%d %ss", n, noun)
 }

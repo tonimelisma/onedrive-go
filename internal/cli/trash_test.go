@@ -72,7 +72,7 @@ func TestTrashCommands_ListRestoreAndEmpty(t *testing.T) {
 	require.Error(t, runTrashEmpty(t.Context(), cc, false), "emptying needs --confirm")
 	out.Reset()
 	require.NoError(t, runTrashEmpty(t.Context(), cc, true))
-	assert.Contains(t, out.String(), "Permanently deleted 1 files")
+	assert.Equal(t, "Permanently deleted 1 file from the local trash.\n", out.String())
 }
 
 // Validates: R-6.4.9

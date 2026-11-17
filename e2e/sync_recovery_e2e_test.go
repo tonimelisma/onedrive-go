@@ -209,15 +209,15 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		func(result syncAttemptResult) bool {
 			return result.Err == nil &&
 				strings.Contains(result.Stdout, "Held back by --upload-only:") &&
-				strings.Contains(result.Stdout, "downloads") &&
-				strings.Contains(result.Stdout, "local deletes")
+				strings.Contains(result.Stdout, "1 download") &&
+				strings.Contains(result.Stdout, "1 local delete")
 		},
 		"--upload-only",
 	)
 	assertOutputContains(t, attempt.Stdout, "Held back by --upload-only:",
 		"upload-only should report remote drift even when it cannot apply it")
-	assertOutputContains(t, attempt.Stdout, "downloads")
-	assertOutputContains(t, attempt.Stdout, "local deletes")
+	assertOutputContains(t, attempt.Stdout, "1 download")
+	assertOutputContains(t, attempt.Stdout, "1 local delete")
 
 	editData := mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "original remote edit", string(editData))

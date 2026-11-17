@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"path"
 
@@ -90,7 +89,7 @@ func runRm(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := confirmRmParentVisibility(ctx, session, remotePath, cc.Status()); err != nil {
+	if err := confirmRmParentVisibility(ctx, cc, session, remotePath); err != nil {
 		return err
 	}
 
@@ -109,9 +108,9 @@ type rmParentVisibilitySession interface {
 
 func confirmRmParentVisibility(
 	ctx context.Context,
+	cc *CLIContext,
 	session rmParentVisibilitySession,
 	remotePath string,
-	statusWriter io.Writer,
 ) error {
 	parentPath := removableParentPath(remotePath)
 	if parentPath == "" {
@@ -121,12 +120,7 @@ func confirmRmParentVisibility(
 	if _, err := session.WaitPathVisible(ctx, parentPath); err != nil {
 		var visibilityErr *driveops.PathNotVisibleError
 		if errors.As(err, &visibilityErr) {
-			writeWarningf(
-				statusWriter,
-				"Note: deleted %s; OneDrive may take a moment to show the change in /%s.\n",
-				remotePath,
-				parentPath,
-			)
+			cc.warnf("Note: deleted %s; OneDrive may take a moment to show the change in /%s.\n", remotePath, parentPath)
 
 			return nil
 		}

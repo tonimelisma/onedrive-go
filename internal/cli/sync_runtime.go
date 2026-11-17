@@ -211,6 +211,7 @@ func runSyncDaemonWithFactory(
 		}()
 	}
 
+	cc := cliContextFrom(ctx)
 	orch := orchestratorFactory(&multisync.OrchestratorConfig{
 		Holder:                 holder,
 		StandaloneMounts:       standaloneSelection.Mounts,
@@ -221,7 +222,16 @@ func runSyncDaemonWithFactory(
 		Logger:                 logger,
 		ControlSocketPath:      controlSocketPath,
 		StartWarning: func(warning multisync.StartupWarning) {
-			writeWatchStartWarnings(statusWriter, warning)
+			warnErr := writeWatchStartWarnings(statusWriter, warning)
+			switch {
+			case warnErr == nil:
+			case cc != nil:
+				// Recorded like a refused status line, for main to read
+				// once the watch has stopped.
+				cc.recordStatusError(fmt.Errorf("write warning: %w", warnErr))
+			default:
+				logger.Warn(startWarningUnwrittenMessage, slog.Any("error", warnErr))
+			}
 		},
 		DebugEventHook: debugEventHook,
 		ActivityHook:   console.ActivityHook(),

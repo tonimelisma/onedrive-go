@@ -138,19 +138,27 @@ func startupFailureError(message string, failures []multisync.MountStartupResult
 	return errors.New(message)
 }
 
-func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning) {
-	results := warning.Summary.SkippedResults()
-	if len(results) == 0 {
-		return
-	}
+// startWarningUnwrittenMessage is the watch logger's record of a startup
+// warning the status stream refused, for a watch run without a command
+// context.
+const startWarningUnwrittenMessage = "could not write a drive's startup warning"
 
+// writeWatchStartWarnings writes one warning per drive that did not start and
+// returns the writes' errors, which the watch's start-warning hook records in
+// the command context.
+func writeWatchStartWarnings(output io.Writer, warning multisync.StartupWarning) error {
+	results := warning.Summary.SkippedResults()
+
+	var errs []error
 	for i := range results {
 		result := results[i]
-		writeWarningf(output, "Warning: %s did not start: %s\n",
+		errs = append(errs, writeWarningf(output, "Warning: %s did not start: %s\n",
 			startupResultLabel(&result),
 			formatStartupResultMessage(&result),
-		)
+		))
 	}
+
+	return errors.Join(errs...)
 }
 
 func shellQuoteArg(value string) string {

@@ -255,5 +255,5 @@ func runTrashEmpty(_ context.Context, cc *CLIContext, confirm bool) error {
 		return writeJSONDocument(cc.Output(), trashEmptyJSONOutput{Drive: drive, Removed: removed})
 	}
 
-	return writef(cc.Output(), "Permanently deleted %d files from the local trash.\n", removed)
+	return writef(cc.Output(), "Permanently deleted %s from the local trash.\n", countOf(removed, "file"))
 }

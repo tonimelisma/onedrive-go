@@ -104,7 +104,8 @@ still kept as two files rather than resolved in the direction of the mode.
   of deletions (a failing disk, a misbehaving app, a scheduled cleanup) is
   held once it adds up, not only a single large batch. Everything
   else keeps syncing. `status` lists them as "Deletes held for confirmation",
-  the sync summary says "Held N deletes for confirmation", and
+  the sync summary says "Held N deletes on OneDrive for confirmation" (or "on
+  this computer"), and
   `onedrive-go sync --confirm-deletes` applies exactly that set after you have
   looked. The hold is worked out again on every sync, so it lifts by itself if
   the files come back. Renames and moves never count.

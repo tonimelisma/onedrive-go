@@ -297,13 +297,8 @@ func printAccountAuthRequirementsText(w io.Writer, items []accountAuthRequiremen
 		}
 
 		stateDBLabel := "no state databases"
-		switch acct.StateDBs {
-		case 1:
-			stateDBLabel = "1 state database"
-		default:
-			if acct.StateDBs > 1 {
-				stateDBLabel = fmt.Sprintf("%d state databases", acct.StateDBs)
-			}
+		if acct.StateDBs > 0 {
+			stateDBLabel = countOf(acct.StateDBs, "state database")
 		}
 
 		if err := writef(w, "  %s — %s, %s\n", nameLabel, acct.DriveType, stateDBLabel); err != nil {
