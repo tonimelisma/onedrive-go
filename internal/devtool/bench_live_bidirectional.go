@@ -6,17 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 const (
@@ -73,11 +68,10 @@ type benchBidirectionalFixturePlan struct {
 }
 
 type benchBidirectionalScenarioState struct {
-	repoRoot     string
-	fixture      benchBidirectionalFixturePlan
-	workRoot     string
-	fixtureSlot  string
-	cursorReader benchObservationCursorReader
+	repoRoot    string
+	fixture     benchBidirectionalFixturePlan
+	workRoot    string
+	fixtureSlot string
 }
 
 type benchBidirectionalRuntime struct {
@@ -88,16 +82,9 @@ type benchBidirectionalRuntime struct {
 	driveID          string
 	includedDir      string
 	env              []string
-	stateDBPath      string
 	remoteScopePath  string
 	scopeRelativeDir string
 }
-
-type benchObservationCursorReader interface {
-	readObservationCursor(context.Context, *benchBidirectionalRuntime) (string, error)
-}
-
-type benchSyncStoreObservationCursorReader struct{}
 
 type benchSyncPlanCounts struct {
 	FolderCreates  int
@@ -145,11 +132,10 @@ func lookupSyncBidirectionalCatchup100MScenario() (benchScenarioDefinition, erro
 			}
 
 			state := &benchBidirectionalScenarioState{
-				repoRoot:     req.RepoRoot,
-				fixture:      fixture,
-				workRoot:     workRoot,
-				fixtureSlot:  fixtureSlot,
-				cursorReader: benchSyncStoreObservationCursorReader{},
+				repoRoot:    req.RepoRoot,
+				fixture:     fixture,
+				workRoot:    workRoot,
+				fixtureSlot: fixtureSlot,
 			}
 
 			return preparedBenchScenario{
@@ -499,18 +485,13 @@ func (s *benchBidirectionalScenarioState) prepareBidirectionalCatchup(
 		return classifyBenchProcessFailure(ctx, sample, baseline, baselineErr), false
 	}
 
-	baselineCursor, err := s.cursorReader.readObservationCursor(ctx, runtime)
-	if err != nil {
-		return benchFixtureFailureSample(sample, fmt.Errorf("read post-baseline observation cursor: %w", err)), false
-	}
-
 	mutationStartedAt := time.Now()
 	if mutationErr := applyBenchRemoteMutations(ctx, subject, runtime, s.fixture.Mutations.Remote); mutationErr != nil {
 		return benchFixtureFailureSample(sample, mutationErr), false
 	}
 	sample.Setup.RemoteMutationElapsedMicros = durationMicros(time.Since(mutationStartedAt))
 
-	deltaReady, err := waitForBenchRemoteDeltaReady(ctx, subject, runtime, s.fixture.Mutations.Remote, s.cursorReader, baselineCursor)
+	deltaReady, err := waitForBenchRemoteDeltaReady(ctx, subject, runtime, s.fixture.Mutations.Remote)
 	if err != nil {
 		return benchFixtureFailureSample(sample, err), false
 	}
@@ -662,11 +643,6 @@ func createBenchBidirectionalRuntime(
 	includedDir string,
 	remoteScopePath string,
 ) (benchBidirectionalRuntime, error) {
-	cid, parseErr := driveid.NewCanonicalID(driveID)
-	if parseErr != nil {
-		return benchBidirectionalRuntime{}, fmt.Errorf("parse benchmark drive ID: %w", parseErr)
-	}
-
 	runtimeRoot, err := mkdirTemp(workRoot, "runtime-*")
 	if err != nil {
 		return benchBidirectionalRuntime{}, fmt.Errorf("create benchmark runtime root: %w", err)
@@ -719,7 +695,6 @@ func createBenchBidirectionalRuntime(
 		driveID:          driveID,
 		includedDir:      includedDir,
 		env:              env,
-		stateDBPath:      config.DriveStatePathForDataDir(dataDir, cid),
 		remoteScopePath:  remoteScopePath,
 		scopeRelativeDir: includedDir,
 	}, nil
@@ -743,30 +718,6 @@ func (r *benchBidirectionalRuntime) asLiveRuntime() benchLiveCommandRuntime {
 		driveID:    r.driveID,
 		env:        r.env,
 	}
-}
-
-func (benchSyncStoreObservationCursorReader) readObservationCursor(
-	ctx context.Context,
-	runtime *benchBidirectionalRuntime,
-) (cursor string, err error) {
-	logger := slog.New(slog.DiscardHandler)
-	store, err := syncengine.NewSyncStore(ctx, runtime.stateDBPath, logger)
-	if err != nil {
-		return "", fmt.Errorf("open sync store for benchmark cursor read: %w", err)
-	}
-	defer func() {
-		closeErr := store.Close(context.WithoutCancel(ctx))
-		if err == nil && closeErr != nil {
-			err = fmt.Errorf("close sync store after benchmark cursor read: %w", closeErr)
-		}
-	}()
-
-	state, err := store.ReadObservationState(ctx)
-	if err != nil {
-		return "", fmt.Errorf("read observation state for benchmark cursor: %w", err)
-	}
-
-	return state.Cursor, nil
 }
 
 func applyBenchLocalMutations(scopeRoot string, mutations benchBidirectionalSideMutations) error {
@@ -863,13 +814,17 @@ func putBenchRemoteMutationFile(
 	return nil
 }
 
+// waitForBenchRemoteDeltaReady polls `sync --dry-run` until its plan holds
+// the downloads and local deletes the remote mutations call for. A dry run
+// commits no observation cursor (the sync package's dry-run tests hold it
+// to that), so the measured sync still observes these changes; a sync that
+// missed them leaves the tree short of the expected fixture, and the sample
+// is invalid.
 func waitForBenchRemoteDeltaReady(
 	ctx context.Context,
 	subject preparedBenchSubject,
 	runtime *benchBidirectionalRuntime,
 	expected benchBidirectionalSideMutations,
-	cursorReader benchObservationCursorReader,
-	baselineCursor string,
 ) (benchDeltaReadyResult, error) {
 	startedAt := time.Now()
 	deadline := startedAt.Add(benchBidirectionalDeltaPollTimeout)
@@ -881,14 +836,6 @@ func waitForBenchRemoteDeltaReady(
 		lastProcess = process
 		lastErr = err
 		if err == nil {
-			cursor, cursorErr := cursorReader.readObservationCursor(ctx, runtime)
-			if cursorErr != nil {
-				return benchDeltaReadyResult{}, fmt.Errorf("read observation cursor after dry-run probe: %w", cursorErr)
-			}
-			if cursor != baselineCursor {
-				return benchDeltaReadyResult{}, fmt.Errorf("dry-run probe advanced observation cursor")
-			}
-
 			plan := parseBenchSyncPlanOutput(process.Stdout, process.Stderr)
 			if benchRemoteDeltaPlanReady(plan, expected) {
 				return benchDeltaReadyResult{

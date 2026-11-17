@@ -124,7 +124,6 @@ func TestRunVerifyPassesThePinnedToolchainToCommands(t *testing.T) {
 
 	repoRoot := writeWorkflowFixture(t, workflowFixture)
 	writeGoModFixture(t, repoRoot, goModFixture)
-	writeRequirementsBackedReadme(t, repoRoot)
 	runner := &fakeRunner{combinedOutputs: map[string][]byte{
 		lintVersionCommand: []byte("golangci-lint has version v2.11.3 built with go1.26.6\n"),
 	}}
@@ -151,7 +150,6 @@ func TestRunVerifyKeepsAnExplicitGOTOOLCHAIN(t *testing.T) {
 
 	repoRoot := t.TempDir()
 	writeGoModFixture(t, repoRoot, goModFixture)
-	writeRequirementsBackedReadme(t, repoRoot)
 	runner := &fakeRunner{}
 
 	err := runVerifyProfileWithEnv(context.Background(), runner, &VerifyOptions{

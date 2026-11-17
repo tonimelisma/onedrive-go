@@ -76,7 +76,7 @@ func TestResetBenchRemoteScopeRetriesUntilSuccessOrNotFound(t *testing.T) {
 				return benchMeasuredProcess{Stderr: []byte("graph: HTTP 503")}, assert.AnError
 			}
 
-			return benchMeasuredProcess{Stderr: []byte("not found")}, assert.AnError
+			return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
 		},
 	}
 
@@ -84,6 +84,50 @@ func TestResetBenchRemoteScopeRetriesUntilSuccessOrNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount)
 }
+
+// Validates: R-6.10.14
+//
+// The benchmark reads a missing item from the CLI's own error line for it.
+// The words "not found" elsewhere on stderr, a log line about a request the
+// command retried or a failure that names something else, do not make a
+// failed cleanup a success or a failed probe a wait.
+func TestCLIReportsRemoteItemMissing_ReadsOnlyTheCLIErrorLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{name: "a folder rm -r or ls did not find", stderr: benchMissingFolderStderr, want: true},
+		{name: "the drive root, which has no parent to list", stderr: "Error: / was not found on OneDrive.\n", want: true},
+		{name: "a failure that recorded no path", stderr: "Error: the item was not found on OneDrive.", want: true},
+		{
+			name: "a retried not-found line before another failure",
+			stderr: `time=2026-11-17T10:00:00Z level=DEBUG msg="retrying" body="itemNotFound: The resource could not be found."` + "\n" +
+				"Error: OneDrive had a temporary server problem. Try again in a few minutes.\n",
+			want: false,
+		},
+		{name: "another failure whose text says not found", stderr: `Error: drive section ["personal:a"] not found` + "\n", want: false},
+		{name: "the sentence on a log line, not as the error", stderr: `level=WARN msg="/a.txt was not found on OneDrive."` + "\n", want: false},
+		{name: "an error that goes on after the sentence", stderr: "Error: /a.txt was not found on OneDrive. And more.\n", want: false},
+		{name: "no output", stderr: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, cliReportsRemoteItemMissing(tt.stderr))
+		})
+	}
+}
+
+// benchMissingFolderStderr is what `rm -r`, `stat` and `ls` print for a
+// folder OneDrive does not have: the error line, then, under --verbose, its
+// details.
+const benchMissingFolderStderr = "Error: /benchmarks/test was not found on OneDrive. " +
+	"Run 'onedrive-go ls /benchmarks' to see what is there.\n" +
+	`Details: resolving "/benchmarks/test": graph: HTTP 404: itemNotFound` + "\n"
 
 // Validates: R-6.10.14
 func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
@@ -96,7 +140,7 @@ func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
 			switch len(callSpecs) {
 			case 1:
 				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
-				return benchMeasuredProcess{Stderr: []byte("not found")}, assert.AnError
+				return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
 			case 2:
 				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/benchmarks"}, spec.Arg)
 				return benchMeasuredProcess{Stdout: []byte("other-scope\nbenchmarks\ntest")}, nil
@@ -126,7 +170,7 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 			switch callCount {
 			case 1:
 				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
-				return benchMeasuredProcess{Stderr: []byte("not found")}, assert.AnError
+				return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
 			case 2:
 				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/benchmarks"}, spec.Arg)
 				return benchMeasuredProcess{Stdout: []byte("test-backup\nother-entry\n")}, nil
@@ -152,9 +196,11 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 func TestClassifyBenchVisibilityErrorAllowsRetryableFamilies(t *testing.T) {
 	t.Parallel()
 
-	assert.NoError(t, classifyBenchVisibilityError([]byte("not found"), assert.AnError))
+	assert.NoError(t, classifyBenchVisibilityError([]byte(benchMissingFolderStderr), assert.AnError))
 	assert.NoError(t, classifyBenchVisibilityError([]byte("graph: HTTP 503"), assert.AnError))
 	require.Error(t, classifyBenchVisibilityError([]byte("permission denied"), assert.AnError))
+	require.Error(t, classifyBenchVisibilityError([]byte("Error: drive section not found\n"), assert.AnError),
+		"a failure whose text says not found is not a missing item")
 }
 
 // Validates: R-6.10.14

@@ -469,7 +469,6 @@ func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	remote := failingNightlyRemote(t)
 	now := time.Now()
 	remote.runs = nightlyRunListAt(t, now, nightlyListedRun{
@@ -540,7 +539,6 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverageFile := filepath.Join(repoRoot, "cover.out")
 	runner := &fakeRunner{

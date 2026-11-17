@@ -48,7 +48,6 @@ func TestRunVerifyPrintsOneMarkerLineForAFailedStepAndNoneForAPassingOne(t *test
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	buildKey := goCommandKey([]string{"build", "./..."})
 	runner := &fakeRunner{
 		runErrByKey: map[string]error{buildKey: assert.AnError},
@@ -83,7 +82,6 @@ func TestRunVerifyPublicPrintsAMarkerForEveryFailedStepInOrder(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
 	unitTimeout := 20 * time.Minute
@@ -161,7 +159,7 @@ func TestVerifyStepNamesSayWhetherTheyRunGoTest(t *testing.T) {
 	}
 	otherSteps := []verifyStepName{
 		formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
-		readmeStatusStepName, specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
+		specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
 		taggedVetStepName, coverageStepName, fullE2ECompileStepName, fullE2EDiscoveryStepName,
 	}
@@ -231,7 +229,6 @@ func profileStepNames(t *testing.T, profile VerifyProfile) []verifyStepName {
 	t.Helper()
 
 	repoRoot := newFakeE2ERepo(t)
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
 	failedLog := filepath.Join(repoRoot, "ci.log")

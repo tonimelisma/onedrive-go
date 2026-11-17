@@ -12,15 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type benchStaticCursorReader struct {
-	cursor string
-}
-
 const benchTestSyncCommand = "sync"
-
-func (r benchStaticCursorReader) readObservationCursor(context.Context, *benchBidirectionalRuntime) (string, error) {
-	return r.cursor, nil
-}
 
 // Validates: R-6.10.14
 func TestResetRemoteSlotForBaselineCopiesGoldenEverySample(t *testing.T) {
@@ -151,7 +143,6 @@ func TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs(t *testing.T) {
 	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
 	assert.Contains(t, string(configBody), `included_dirs = ["benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00"]`)
 	dataDir := filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go")
-	assert.Equal(t, filepath.Join(dataDir, "state_personal_user@example.com.db"), runtime.stateDBPath)
 	copiedToken, err := readFile(filepath.Join(dataDir, "token_personal_user@example.com.json"))
 	require.NoError(t, err, "the sign-in file is copied into the runtime's data dir")
 	assert.JSONEq(t, `{"token":"x"}`, string(copiedToken))
@@ -209,7 +200,7 @@ func TestApplyBenchLocalMutationsProducesExpectedTree(t *testing.T) {
 }
 
 // Validates: R-6.10.14
-func TestWaitForBenchRemoteDeltaReadyRequiresExpectedRemotePlanAndStableCursor(t *testing.T) {
+func TestWaitForBenchRemoteDeltaReadyReturnsOnceThePlanHoldsTheRemoteChanges(t *testing.T) {
 	t.Parallel()
 
 	expected := benchBidirectionalSideMutations{
@@ -231,46 +222,53 @@ func TestWaitForBenchRemoteDeltaReadyRequiresExpectedRemotePlanAndStableCursor(t
 	}
 
 	runtime := benchBidirectionalRuntime{}
-	result, err := waitForBenchRemoteDeltaReady(
-		t.Context(),
-		subject,
-		&runtime,
-		expected,
-		benchStaticCursorReader{cursor: "cursor-a"},
-		"cursor-a",
-	)
+	result, err := waitForBenchRemoteDeltaReady(t.Context(), subject, &runtime, expected)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Attempts)
 	assert.GreaterOrEqual(t, result.WaitMicros, int64(0))
 }
 
 // Validates: R-6.10.14
-func TestWaitForBenchRemoteDeltaReadyFailsIfDryRunAdvancesCursor(t *testing.T) {
-	t.Parallel()
+func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
+	state, fixture := newScriptedBidirectionalSampleState(t)
+	subject, script := newScriptedBidirectionalSampleSubject(t, fixture)
 
-	subject := preparedBenchSubject{
-		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
-			return benchMeasuredProcess{Stdout: []byte("Would download docs/modified.txt\n")}, nil
-		},
-	}
-
-	runtime := benchBidirectionalRuntime{}
-	_, err := waitForBenchRemoteDeltaReady(
-		t.Context(),
-		subject,
-		&runtime,
-		benchBidirectionalSideMutations{
-			Modifies: []benchLiveMutationEntry{{File: benchLiveFileEntry{RelativePath: "a", SizeBytes: 1}}},
-		},
-		benchStaticCursorReader{cursor: "cursor-b"},
-		"cursor-a",
-	)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "advanced observation cursor")
+	sample := state.runSample(t.Context(), subject, benchSamplePhaseMeasured, 1)
+	assert.Equal(t, BenchSampleSuccess, sample.Status)
+	require.NotNil(t, sample.PerfSummary)
+	require.NotNil(t, sample.Setup)
+	assert.EqualValues(t, 42, sample.PerfSummary.DurationMS)
+	assert.Equal(t, 1, sample.Setup.DeltaProbeAttempts)
+	assert.Contains(t, script.calls[0], "stat --json /benchmarks/golden/test-fixture")
+	assert.Contains(t, script.calls[1], "rm -r /benchmarks/work/test/slot-00")
+	assert.Contains(t, script.calls[2], "cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00")
+	assert.Contains(t, script.calls[5], "sync --dry-run")
+	assert.Contains(t, script.calls[6], "sync]")
 }
 
 // Validates: R-6.10.14
-func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
+//
+// A measured sync that leaves the tree short of the expected merged fixture
+// is an invalid sample. A readiness probe that had consumed the remote
+// changes would leave the measured sync nothing to download, and this is how
+// the sample says so.
+func TestRunBidirectionalSampleIsInvalidWhenTheMeasuredSyncMissesTheRemoteChanges(t *testing.T) {
+	state, fixture := newScriptedBidirectionalSampleState(t)
+	subject, script := newScriptedBidirectionalSampleSubject(t, fixture)
+	script.measuredSyncChangesNothing = true
+
+	sample := state.runSample(t.Context(), subject, benchSamplePhaseMeasured, 1)
+	assert.Equal(t, BenchSampleInvalid, sample.Status)
+	assert.Contains(t, sample.FailureExcerpt, "docs/a.txt", "the remotely deleted file is still on disk")
+	require.NotNil(t, sample.PerfSummary, "the run itself was measured")
+}
+
+// newScriptedBidirectionalSampleState is a bidirectional scenario over a
+// four-file fixture with one delete, one modify and one create on each side,
+// on a configured test drive whose sign-in file is a placeholder.
+func newScriptedBidirectionalSampleState(t *testing.T) (*benchBidirectionalScenarioState, *benchBidirectionalFixturePlan) {
+	t.Helper()
+
 	workRoot := t.TempDir()
 	credentialDir := filepath.Join(workRoot, ".testdata")
 	require.NoError(t, mkdirAll(credentialDir, 0o700))
@@ -317,34 +315,25 @@ func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
 	)
 
 	state := &benchBidirectionalScenarioState{
-		repoRoot:     workRoot,
-		fixture:      fixture,
-		workRoot:     t.TempDir(),
-		fixtureSlot:  "slot-00",
-		cursorReader: benchStaticCursorReader{cursor: "cursor-a"},
+		repoRoot:    workRoot,
+		fixture:     fixture,
+		workRoot:    t.TempDir(),
+		fixtureSlot: "slot-00",
 	}
 
-	subject, script := newScriptedBidirectionalSampleSubject(t, &fixture)
-
-	sample := state.runSample(t.Context(), subject, benchSamplePhaseMeasured, 1)
-	assert.Equal(t, BenchSampleSuccess, sample.Status)
-	require.NotNil(t, sample.PerfSummary)
-	require.NotNil(t, sample.Setup)
-	assert.EqualValues(t, 42, sample.PerfSummary.DurationMS)
-	assert.Equal(t, 1, sample.Setup.DeltaProbeAttempts)
-	assert.Contains(t, script.calls[0], "stat --json /benchmarks/golden/test-fixture")
-	assert.Contains(t, script.calls[1], "rm -r /benchmarks/work/test/slot-00")
-	assert.Contains(t, script.calls[2], "cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00")
-	assert.Contains(t, script.calls[5], "sync --dry-run")
-	assert.Contains(t, script.calls[6], "sync]")
+	return state, &state.fixture
 }
 
+// scriptedBidirectionalSampleSubject answers the sample's commands. Its
+// second sync, the measured one, leaves the expected merged tree and a
+// performance summary, or only the summary when measuredSyncChangesNothing.
 type scriptedBidirectionalSampleSubject struct {
-	t        *testing.T
-	fixture  *benchBidirectionalFixturePlan
-	calls    []string
-	syncRuns int
-	dryRuns  int
+	t                          *testing.T
+	fixture                    *benchBidirectionalFixturePlan
+	calls                      []string
+	syncRuns                   int
+	dryRuns                    int
+	measuredSyncChangesNothing bool
 }
 
 func newScriptedBidirectionalSampleSubject(
@@ -386,8 +375,10 @@ func (s *scriptedBidirectionalSampleSubject) measureSync(spec benchCommandSpec) 
 	if s.syncRuns == 2 {
 		scopeRoot := filepath.Join(spec.CWD, "sync-root", filepath.FromSlash(s.fixture.ScopeRootRelativePath))
 		logPath := filepath.Join(spec.CWD, "bench.log")
-		require.NoError(s.t, removeAll(scopeRoot))
-		require.NoError(s.t, materializeBenchLiveFixture(scopeRoot, s.fixture.ExpectedFiles))
+		if !s.measuredSyncChangesNothing {
+			require.NoError(s.t, removeAll(scopeRoot))
+			require.NoError(s.t, materializeBenchLiveFixture(scopeRoot, s.fixture.ExpectedFiles))
+		}
 		require.NoError(s.t, writeBenchLivePerfLog(logPath, &benchPerfSummary{
 			DurationMS:    42,
 			Result:        "success",

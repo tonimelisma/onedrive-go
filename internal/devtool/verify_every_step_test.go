@@ -91,7 +91,6 @@ func TestRunVerifyPublicRunsUnitTestsAfterLintFails(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
@@ -128,7 +127,6 @@ func TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail(t *testing.T)
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
 	unitTimeout := 20 * time.Minute
@@ -164,7 +162,6 @@ func TestRunVerifyPublicFailsAUnitTierThatRanNoTest(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
 	runner := &fakeRunner{

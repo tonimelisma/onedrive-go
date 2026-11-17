@@ -53,7 +53,6 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 
 	runner := &fakeRunner{
@@ -199,7 +198,6 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 
 	runner := &fakeRunner{
@@ -549,7 +547,6 @@ func TestRunVerifyWritesSummaryJSONOnSuccess(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
 	runner := &fakeRunner{
@@ -1433,15 +1430,6 @@ func TestResolveVerifyPlanRejectsUnknownProfile(t *testing.T) {
 	_, err := resolveVerifyPlan("weird")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "usage")
-}
-
-func writeRequirementsBackedReadme(t *testing.T, repoRoot string) {
-	t.Helper()
-
-	require.NoError(t, writeFile(
-		filepath.Join(repoRoot, "README.md"),
-		[]byte("# Project\n\n## Status\n\nActive development. See spec/requirements/index.md for capability status.\n"),
-	))
 }
 
 func TestWriteVerifySummaryRoundTripsJSON(t *testing.T) {

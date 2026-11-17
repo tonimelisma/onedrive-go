@@ -430,7 +430,7 @@ func resetBenchRemoteScope(
 ) error {
 	for attempt := 0; attempt < benchLiveDeleteRetryAttempts; attempt++ {
 		process, err := subject.measure(ctx, runtime.commandSpec("rm", "-r", remoteScopePath))
-		if err == nil || isRemoteNotFoundCleanup(string(process.Stderr)) {
+		if err == nil || cliReportsRemoteItemMissing(string(process.Stderr)) {
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -537,17 +537,44 @@ func classifyBenchVisibilityError(stderr []byte, err error) error {
 		return nil
 	}
 
-	lowerStderr := strings.ToLower(string(stderr))
-	if isRemoteNotFoundCleanup(lowerStderr) || isRetryableBenchGraphReadFailure(string(stderr)) {
+	if cliReportsRemoteItemMissing(string(stderr)) || isRetryableBenchGraphReadFailure(string(stderr)) {
 		return nil
 	}
 
 	return err
 }
 
-func isRemoteNotFoundCleanup(stderr string) bool {
-	lower := strings.ToLower(stderr)
-	return strings.Contains(lower, "not found") || strings.Contains(lower, "could not be found")
+// The sentence the CLI prints as its error for an item OneDrive does not
+// have (remoteFailureText in internal/cli/error_presentation.go): "Error:
+// <path> was not found on OneDrive." and, for a path with a parent, a hint to
+// list the parent.
+const (
+	cliErrorLinePrefix         = "Error: "
+	cliRemoteItemMissingSuffix = " was not found on OneDrive."
+	cliListParentHintPrefix    = " Run 'onedrive-go ls "
+	cliListParentHintSuffix    = "' to see what is there."
+)
+
+// cliReportsRemoteItemMissing reports whether a failed command's stderr holds
+// the CLI's own error line for an item OneDrive does not have. It reads that
+// line alone: a log line on stderr can say "not found" of a request the
+// command retried before it failed for another reason, and another failure's
+// own text can say it of something else.
+func cliReportsRemoteItemMissing(stderr string) bool {
+	for line := range strings.Lines(stderr) {
+		message, isError := strings.CutPrefix(strings.TrimRight(line, "\r\n"), cliErrorLinePrefix)
+		if !isError {
+			continue
+		}
+
+		_, rest, isMissing := strings.Cut(message, cliRemoteItemMissingSuffix)
+		if isMissing && (rest == "" ||
+			strings.HasPrefix(rest, cliListParentHintPrefix) && strings.HasSuffix(rest, cliListParentHintSuffix)) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isRetryableBenchGraphReadFailure(stderr string) bool {

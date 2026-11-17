@@ -50,7 +50,7 @@ The implementation should stay deliberately small:
 | The repo already has a machine-readable timing-summary foundation for live E2E timing windows rather than only human log output. | `TestE2ETimingRecorderWritesEventsAndAggregatedSummary`, `TestE2ETimingRecorderLoadsExistingEventsAcrossProcesses` |
 | The verifier already owns machine-readable run summaries instead of forcing downstream tooling to scrape console text. | `TestRunVerifyWritesSummaryJSONOnSuccess`, `TestRunVerifyWritesSummaryJSONOnFailure` |
 | Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
-| The benchmark runner now owns one canonical live bidirectional catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, scoped live config, and no-commit dry-run delta readiness checks. | `TestLoadSyncBidirectionalCatchup100MFixturePlanIsDeterministicAndSized`, `TestSyncBidirectionalCatchupMutationSelectionIsDisjoint`, `TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs`, `TestWaitForBenchRemoteDeltaReadyRequiresExpectedRemotePlanAndStableCursor`, `TestWaitForBenchRemoteDeltaReadyFailsIfDryRunAdvancesCursor`, `TestRunBidirectionalSampleCommandOrderAndPerfSummary` |
+| The benchmark runner now owns one canonical live bidirectional catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, scoped live config, and dry-run delta readiness checks; a measured sync that leaves the tree short of the expected fixture is an invalid sample, and a cleanup or probe reads a missing item only from the CLI's own error line for it. | `TestLoadSyncBidirectionalCatchup100MFixturePlanIsDeterministicAndSized`, `TestSyncBidirectionalCatchupMutationSelectionIsDisjoint`, `TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs`, `TestWaitForBenchRemoteDeltaReadyReturnsOnceThePlanHoldsTheRemoteChanges`, `TestRunBidirectionalSampleCommandOrderAndPerfSummary`, `TestRunBidirectionalSampleIsInvalidWhenTheMeasuredSyncMissesTheRemoteChanges`, `TestCLIReportsRemoteItemMissing_ReadsOnlyTheCLIErrorLine` |
 
 ## Objectives
 
@@ -196,8 +196,8 @@ synthetic manifest that totals exactly 100 MiB across roughly 2.6K files. The
 measured phase is intentionally a bidirectional catch-up run, not an initial
 sync and not a one-way repair pass. Each sample establishes an unmeasured clean
 baseline, mutates a disjoint remote subset out of band, proves the remote
-mutations are visible to the delta/planning path without advancing the
-measured state cursor, mutates a disjoint local subset, and then measures a
+mutations are visible to the delta/planning path through a dry run, which
+commits no state cursor, mutates a disjoint local subset, and then measures a
 normal bidirectional `sync`.
 
 ## Scenario Contract
@@ -522,8 +522,7 @@ Each measured sample follows the same contract:
 5. apply deterministic remote deletes, truncations, and creates through direct
    file-operation commands owned by the benchmark fixture controller
 6. poll `sync --dry-run` until the expected remote-side downloads and local
-   deletes appear in the plan, verifying after every probe that the persisted
-   observation cursor still equals the post-baseline cursor
+   deletes appear in the plan
 7. apply deterministic local deletes, truncations, and creates on disjoint
    paths
 8. measure a normal bidirectional `sync` until process exit, then verify the
@@ -533,9 +532,14 @@ The dry-run delta-readiness probe is deliberate. Graph path endpoints and the
 delta endpoint are not the same consistency surface; a direct `stat` or parent
 `ls` proving that a file exists is not proof that the next incremental sync
 will observe the same mutation. The benchmark therefore uses the product's own
-dry-run observation/planning path as the readiness proof, and treats any cursor
-advance during the probe as a fixture failure because it would consume the
-change before the measured sync.
+dry-run observation/planning path as the readiness proof. A dry run commits no
+observation cursor, which the sync package's own dry-run tests hold it to
+(`TestRunOnce_DryRun_NoExecution`,
+`TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken`); the benchmark
+reads no product state itself. A probe that consumed the changes would leave
+the measured sync nothing to download, and the tree check in step 8 marks
+that sample invalid. The benchmark imports no product package: it drives the
+built CLI and reads only its output, the log file and the synced tree.
 
 Remote fixture preparation is intentionally separate from the measured sample
 window. The benchmark consumes a ready working slot. Slot-pool automation and
