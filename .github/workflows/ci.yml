@@ -49,12 +49,13 @@ permissions:
 #
 # The full tier runs nightly and on manual dispatch: `verify public` on both
 # platforms (race detector, the coverage gate at the number R-6.10.4 states,
-# every exhaustive test), `stress` (race repetition of ./internal/multisync
-# and the ./internal/sync/... tree), `model-seeds` (the seeded model tests
-# without the race detector, on a seed range that advances every day), and
-# the live `e2e-full` profile. A data race outside the sync tree or a
-# coverage drop can therefore reach main and be caught by the next nightly
-# run; that is the trade-off for a three-minute PR lane. The
+# every exhaustive test), `stress` (fifty race runs of every test of
+# ./internal/multisync and of the declared members of ./internal/sync/...,
+# then three race runs of the whole ./internal/sync/... tree), `model-seeds`
+# (the seeded model tests without the race detector, on a seed range that
+# advances every day), and the live `e2e-full` profile. A data race outside
+# the sync tree or a coverage drop can therefore reach main and be caught by
+# the next nightly run; that is the trade-off for a three-minute PR lane. The
 # `nightly-report` job makes that run's verdict visible: the commit status
 # `nightly` on the commit it ran on, one issue labelled `nightly-failure`
 # open while the nightly is red, and one issue labelled `seed-failure` per
@@ -291,8 +292,9 @@ jobs:
 
   stress:
     runs-on: ubuntu-latest
-    # The sum of the stress steps' go test deadlines on a runner (20m + 80m +
-    # 90m, the last the race profile's 30 minutes once per race run of the
+    # The sum of the stress steps' go test deadlines on a runner (25m + 75m +
+    # 90m: the two repeated steps' pass budgets times their fifty runs times
+    # the margin, then the race profile's 30 minutes once per race run of the
     # sync tree) plus 10 minutes of setup, so a hung test ends at its own
     # deadline, with a goroutine dump and a summary, not at the job's
     # (TestCIJobTimeoutsCoverEveryGoTestDeadline). Everything outside the

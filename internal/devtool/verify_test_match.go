@@ -59,7 +59,12 @@ func runGoTestMatching(
 
 // runGoTeed runs a go command with its output streamed to stdout and stderr as
 // it is printed, and captured for the caller to read once it exits. Streaming
-// is the point on CI: a job that is killed keeps every line printed before.
+// is the point on CI: a step that streams has every line printed before a
+// kill in its log. A step whose stdout turns -json events into text
+// (goTestTextWriter) holds a running test's output until that test ends, so a
+// job killed from outside loses it; go test's own deadline comes first and
+// ends the run with it written. The capture takes each write before the log,
+// so a log that refuses one leaves the caller all the command printed.
 func runGoTeed(
 	ctx context.Context,
 	runner commandRunner,
@@ -72,7 +77,7 @@ func runGoTeed(
 	var captured outputCapture
 
 	runErr := runner.Run(
-		ctx, repoRoot, env, io.MultiWriter(stdout, &captured), io.MultiWriter(stderr, &captured), "go", args...,
+		ctx, repoRoot, env, io.MultiWriter(&captured, stdout), io.MultiWriter(&captured, stderr), "go", args...,
 	)
 	output := captured.String()
 	if runErr != nil {

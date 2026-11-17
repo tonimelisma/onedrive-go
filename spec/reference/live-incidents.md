@@ -188,11 +188,13 @@ deadline come from it. The deadline is that many times the race profile's
 deadline for the host's cores (`raceSyncTimeoutForCores`): 90 minutes on a
 CI runner, 360 on a 2-core host
 (`TestRunVerifyStressSyncRaceStepTakesTheRaceDeadlineOncePerRun`). The
-`sync concurrency race x50` step's deadline is 80 minutes, twice its
-slowest night; it is a measured number, not a derived one, because the
-step still selects its tests by a name pattern and has no budget of its
-own. The `stress` job's `timeout-minutes` is 200, the three steps'
-deadlines on a runner (20 + 80 + 90 minutes) plus setup
+fifty-times sync step runs declared members, not a name pattern, the
+multisync step every test of its package, and each deadline is the step's
+stated budget for one pass times the fifty runs times a margin: 25 minutes
+for multisync and 75 for the sync members on a runner
+(`TestStressRepeatedStepsDeadlinesFollowFromTheirPassBudget`). The
+`stress` job's `timeout-minutes` is 200, the three steps' deadlines on a
+runner (25 + 75 + 90 minutes) plus setup
 (`TestCIJobTimeoutsCoverEveryGoTestDeadline`).
 Promoted docs: [system.md](../design/system.md)
 
