@@ -28,6 +28,7 @@ type driveListSnapshot struct {
 	Available             []driveListEntry
 	AccountsRequiringAuth []accountAuthRequirement
 	AccountsDegraded      []accountDegradedNotice
+	SharePointGaps        sharePointGaps
 }
 
 func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSnapshot, error) {
@@ -129,7 +130,7 @@ func loadDriveListSnapshot(
 	}
 
 	recorder := newAuthProofRecorder(logger)
-	available, discoveredAuthRequired, discoveredDegraded := discoverAvailableDrives(
+	available, discoveredAuthRequired, discoveredDegraded, gaps := discoverAvailableDrives(
 		ctx,
 		viewSnapshot.Config,
 		viewSnapshot.Accounts,
@@ -161,5 +162,6 @@ func loadDriveListSnapshot(
 		Available:             available,
 		AccountsRequiringAuth: authRequired,
 		AccountsDegraded:      degraded,
+		SharePointGaps:        gaps,
 	}, nil
 }
