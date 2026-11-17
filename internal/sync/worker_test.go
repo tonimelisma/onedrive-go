@@ -1020,6 +1020,54 @@ func TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation(t *testing.T) {
 	assert.Equal(t, "created-Projects", entry.ItemID)
 }
 
+// A pool that has stopped still hands the engine every completion it has
+// room for: the result of work that already happened is never dropped for the
+// stop alone, only when no one is left to read it.
+//
+// Validates: R-2.8.3
+func TestWorkerPool_AStoppedPoolDeliversEveryCompletionItHasRoomFor(t *testing.T) {
+	t.Parallel()
+
+	const finished = 32
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	pool := newWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), finished)
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+
+	for i := range finished {
+		pool.sendResult(stopped, &trackedAction{
+			ID:     int64(i + 1),
+			Action: Action{Type: ActionUpload, Path: fmt.Sprintf("file-%d.txt", i)},
+		}, nil, fmt.Errorf("upload: %w", context.Canceled))
+	}
+
+	assert.Len(t, pool.completions, finished, "a stop alone drops no completion")
+}
+
+// A completion a stopped pool has no room for is dropped, and the drop is
+// said at Debug with the action it belonged to, so a result the next sync
+// redoes is not lost without a trace.
+//
+// Validates: R-2.8.3
+func TestWorkerPool_ACompletionDroppedAfterTheStopIsLogged(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	logger, logs := newCapturedLogger()
+	pool := newWorkerPool(cfg, nil, mgr, logger, 1)
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+
+	for _, path := range []string{"kept.txt", "dropped.txt"} {
+		pool.sendResult(stopped, &trackedAction{Action: Action{Type: ActionUpload, Path: path}}, nil,
+			fmt.Errorf("upload: %w", context.Canceled))
+	}
+
+	assert.Len(t, pool.completions, 1, "the channel had room for one")
+	assert.Equal(t, 1, countLevel(logs.String(), "DEBUG"), "the drop is said once: %s", logs.String())
+	assert.Contains(t, logs.String(), "path=dropped.txt")
+}
+
 // Validates: R-6.3.6
 //
 // The pre-upload content hash runs on a worker. Stop cancels the pool context

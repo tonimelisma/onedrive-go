@@ -29,8 +29,14 @@ const overdueTrialDelay = time.Millisecond
 // armRetryTimer arms the retry timer for the next held-retry release. It
 // queries the earliest held retry deadline from the current runtime and sets
 // the timer. If the retry timer channel is already signaled (non-blocking send
-// to buffered(1) channel), the next owning loop iteration processes it.
+// to buffered(1) channel), the next owning loop iteration processes it. A
+// draining runtime arms nothing: its drain records the retry work a stopping
+// run's failures leave and releases none of it, which the next sync does.
 func (rt *watchRuntime) armRetryTimer() {
+	if rt.isDraining() {
+		return
+	}
+
 	earliest, ok := rt.retries.earliestHeldRetryAt()
 	if !ok {
 		rt.resetRetryTimer(nil)
@@ -246,8 +252,14 @@ func (f *engineFlow) resetResultStats() {
 // NextTrialAt across all block scopes. Uses time.AfterFunc to send to the
 // persistent trialCh channel, avoiding a race where the watch loop's select
 // watches the old timer's channel after replacement. Called after block scopes
-// are created, trials dispatched, or trial results processed (R-2.10.5).
+// are created, trials dispatched, or trial results processed (R-2.10.5). A
+// draining runtime arms nothing, as for the retry timer: the scopes its drain
+// records are trialed by the next sync.
 func (rt *watchRuntime) armTrialTimer() {
+	if rt.isDraining() {
+		return
+	}
+
 	earliest, ok := rt.earliestTrialAt()
 	if !ok {
 		rt.resetTrialTimer(nil)

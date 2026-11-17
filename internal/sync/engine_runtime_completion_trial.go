@@ -135,8 +135,12 @@ func (flow *engineFlow) applyTrialReclassification(
 	r *actionCompletion,
 	bl *Baseline,
 ) (bool, error) {
-	if handled, err := flow.applyTrialPermissionReclassification(ctx, r, bl); handled {
-		return true, err
+	handled, err := flow.applyTrialPermissionReclassification(ctx, r, bl)
+	if err != nil {
+		return false, err
+	}
+	if handled {
+		return true, nil
 	}
 
 	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {

@@ -501,19 +501,26 @@ waits are bounded:
 
 | Bound | Value | Why |
 | --- | --- | --- |
-| Runner returns after its cancel | 45 s (`watchRunnerStopTimeout` = `syncengine.OutcomeCommitTimeout` + 15 s) | what a canceled engine still waits for is its detached store writes, each bounded by `OutcomeCommitTimeout` (30 s) |
+| Runner returns after its cancel | 45 s (`watchRunnerStopTimeout` = `syncengine.OutcomeCommitTimeout` + 15 s) | what a canceled engine still waits for is its detached store writes: each one a worker or the loop starts on its own ends `OutcomeCommitTimeout` (30 s) after it starts, and the records of the completions it drains share one such bound, measured from the cancel |
 | Engine closes | 15 s (`engineCloseTimeout` = `syncengine.StoreCloseCheckpointTimeout` + 5 s) | the store close's checkpoint (bounded at 10 s inside `SyncStore.Close`), the stale upload-session sweep and the database close; `Engine.Close` does not take its context into the sweep, so the bound is on the wait |
 
-The arithmetic. A canceled engine's remaining waits are the detached store
-writes of its drain: the commit of work that finished as the cancel landed,
-the record of a created item, clearing a succeeded action's retry work, the
-findings observed before the shutdown (sync-engine.md, Detached store
-writes). Each runs on `context.WithTimeout(context.WithoutCancel(ctx),
-OutcomeCommitTimeout)`; `TestDetachedContexts_AlwaysCarryADeadline` keeps
-any detached context in `internal/sync` and `internal/multisync` from going
+The arithmetic. A canceled engine's remaining waits are its detached store
+writes: the commit of work that finished as the cancel landed, the record of
+a created item, clearing a succeeded action's retry work, the findings
+observed before the shutdown (sync-engine.md, Detached store writes), and
+the records of the completions its drain receives. Each write a worker or
+the loop starts on its own keeps the run's values, drops its cancel and ends
+`OutcomeCommitTimeout` after it starts. The drain's records, a success's
+retry-work clear among them, share one deadline, `OutcomeCommitTimeout`
+after the cancel (`stopDrain`), so the records of a drain of any size end
+within one bound of the cancel, also when the engine's goroutine was in a
+store wait as the cancel landed. The drain also waits for every worker to
+return, and a worker's own detached writes are each bounded from their own
+start. `TestDetachedContexts_AlwaysCarryADeadline` keeps any
+detached context in `internal/sync` and `internal/multisync` from going
 without a deadline. A healthy write takes milliseconds and waits at most
 SQLite's 5 s busy timeout for a lock, so a healthy stop takes well under a
-second. The stop bound covers one write running to its 30 s limit plus 15 s
+second. The stop bound covers one bound running to its 30 s limit plus 15 s
 for everything else; a store slow enough to need two is wedged, and ending
 the watch is then the intended outcome, not a false alarm. The close bound
 holds the checkpoint's own 10 s bound plus 5 s for the sweep and the close.

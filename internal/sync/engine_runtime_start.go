@@ -59,11 +59,19 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 	return frontier, err
 }
 
+// reduceReadyFrontier applies the frontier's publication-only work and adds
+// the held work that is due. A stopping run does neither (isStoppingRun): the
+// ready set comes back as it is, for the caller to complete as shutdown, and
+// held work stays held for the next sync.
 func (flow *engineFlow) reduceReadyFrontier(
 	ctx context.Context,
 	bl *Baseline,
 	ready []*trackedAction,
 ) ([]*trackedAction, error) {
+	if isStoppingRun(ctx) {
+		return ready, nil
+	}
+
 	reduced, err := flow.runPublicationDrainStage(ctx, bl, ready)
 	if err != nil {
 		return reduced, err
