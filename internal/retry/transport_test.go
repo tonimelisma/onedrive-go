@@ -485,6 +485,78 @@ func TestRetryTransport_MaxAttemptsExhausted(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 }
 
+// silentBody is a response body that brings nothing: a read waits until the
+// body is closed, or until giveUp ends, should nothing close it.
+type silentBody struct {
+	giveUp    <-chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
+	reads     atomic.Int32
+}
+
+func (b *silentBody) Read([]byte) (int, error) {
+	b.reads.Add(1)
+	select {
+	case <-b.closed:
+		return 0, io.ErrClosedPipe
+	case <-b.giveUp:
+		return 0, io.ErrNoProgress
+	}
+}
+
+func (b *silentBody) Close() error {
+	b.closeOnce.Do(func() { close(b.closed) })
+
+	return nil
+}
+
+// An answer the transport retries is closed unread: a body that stops after
+// its headers has no bound below the client, so reading it held the request
+// for as long as the server stayed quiet.
+//
+// Validates: R-6.8.20
+func TestRetryTransport_ARetriedAnswerIsClosedUnread(t *testing.T) {
+	t.Parallel()
+
+	// Ends a read the transport should never have started.
+	giveUp, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	retried := &silentBody{giveUp: giveUp.Done(), closed: make(chan struct{})}
+
+	var attempts atomic.Int32
+	rt := &retry.RetryTransport{
+		Inner: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			if attempts.Add(1) == 1 {
+				resp := makeResponse(http.StatusServiceUnavailable, nil)
+				resp.Body = retried
+
+				return resp, nil
+			}
+
+			return makeResponse(http.StatusOK, nil), nil
+		}),
+		Policy: testPolicy(),
+		Logger: slog.Default(),
+		Sleep:  noopSleep,
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.com/test", http.NoBody)
+	require.NoError(t, err)
+
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	closeTestResponse(t, resp)
+	require.NoError(t, giveUp.Err(), "the request waited on the retried answer's body")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(2), attempts.Load())
+	assert.Zero(t, retried.reads.Load(), "the retried answer's body was read")
+	select {
+	case <-retried.closed:
+	default:
+		assert.Fail(t, "the retried answer's body was not closed")
+	}
+}
+
 // Validates: R-6.8.8
 func TestRetryTransport_ContextCanceled(t *testing.T) {
 	t.Parallel()

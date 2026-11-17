@@ -14,16 +14,29 @@ import (
 )
 
 // ErrTransferStalled reports a transfer body that made no progress for the
-// stall timeout. The transports only bound dialing, TLS and the wait for
-// response headers; a connection that delivered headers and then went quiet
-// held a worker slot forever, and a one-shot run never ended (D-045). The
-// error is retryable: a download resumes from its partial, an upload from
-// its session.
+// stall timeout. The transports bound only dialing, TLS and the wait for
+// response headers; without this bound a connection that delivered headers
+// and then went quiet would hold a worker slot, and a one-shot run, for good
+// (D-045). The error is retryable: a download resumes from its partial, an
+// upload from its session.
 var ErrTransferStalled = errors.New("graph: transfer stalled")
 
-// defaultTransferStallTimeout is how long a transfer body may make no
-// progress before it is abandoned.
-const defaultTransferStallTimeout = 2 * time.Minute
+// defaultStallTimeout is how long a body may make no progress before it is
+// abandoned: a transfer body under the stall watchdog, and every other
+// response body (responseBody). One window for both: a metadata answer is
+// small, so a server that keeps it from moving for as long as a transfer may
+// pause is not answering.
+const defaultStallTimeout = 2 * time.Minute
+
+// stallWindow is the client's stall window: stallTimeout, or
+// defaultStallTimeout when that is unset.
+func (c *Client) stallWindow() time.Duration {
+	if c.stallTimeout > 0 {
+		return c.stallTimeout
+	}
+
+	return defaultStallTimeout
+}
 
 // stallWatchdog cancels a transfer's request context when its body stops
 // moving. It runs only around body I/O: while a request body is being
@@ -56,10 +69,7 @@ type stallWatchdog struct {
 // stall timeout. The watchdog starts disarmed; the caller must call stop.
 // Retry and throttle waits inside the transport disarm it.
 func (c *Client) watchTransfer(ctx context.Context) (context.Context, *stallWatchdog) {
-	timeout := c.transferStallTimeout
-	if timeout <= 0 {
-		timeout = defaultTransferStallTimeout
-	}
+	timeout := c.stallWindow()
 
 	stallCtx, cancel := context.WithCancelCause(ctx)
 	watchdog := &stallWatchdog{timeout: timeout, cancel: cancel, logger: c.logger}
@@ -129,8 +139,15 @@ func (w *stallWatchdog) disarm(attempt int64) {
 
 // reader wraps a body so that reading it arms the watchdog, every read that
 // moves bytes re-arms it, and the end of the body disarms it. The reader
-// belongs to the attempt that is current when it is made.
+// belongs to the attempt that is current when it is made. A response body
+// (responseBody) is left to this watchdog alone: its own timer has the same
+// window and would race it, and a download that failed as a stalled response
+// rather than a stalled transfer would lose its partial.
 func (w *stallWatchdog) reader(r io.Reader) io.Reader {
+	if body, ok := r.(*responseBody); ok {
+		body.leaveBoundToTransfer()
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -142,19 +159,28 @@ func (w *stallWatchdog) reader(r io.Reader) io.Reader {
 // context.Canceled, which every caller reads as a shutdown, so a stalled
 // transfer was dropped instead of retried.
 func (w *stallWatchdog) explain(ctx context.Context, err error) error {
-	// A panic in the stall timer's callback (stalled) fails the transfer
-	// with the panic's error, the inner error kept as text for the same
-	// reason.
-	if cause := context.Cause(ctx); err != nil && errors.Is(cause, panicguard.ErrPanic) {
-		//nolint:errorlint // the inner error is deliberately not wrapped, see above
-		return fmt.Errorf("%w (%v)", cause, err)
-	}
-	if err == nil || !errors.Is(context.Cause(ctx), ErrTransferStalled) {
+	cause := context.Cause(ctx)
+	if err == nil || (!errors.Is(cause, panicguard.ErrPanic) && !errors.Is(cause, ErrTransferStalled)) {
 		return err
 	}
 
+	return explainStall(cause, w.timeout, err)
+}
+
+// explainStall is how a body abandoned for its silence explains the failure
+// it ended in, err: cause is the stall's sentinel (ErrTransferStalled,
+// ErrResponseStalled), or, for the transfer watchdog, the error of a panic in
+// its timer's callback, which fails the transfer instead. err is kept as text
+// only: it carries context.Canceled or a closed body's error, which a caller
+// would read as a shutdown or a dropped connection.
+func explainStall(cause error, timeout time.Duration, err error) error {
+	if errors.Is(cause, panicguard.ErrPanic) {
+		//nolint:errorlint // the inner error is deliberately not wrapped, see above
+		return fmt.Errorf("%w (%v)", cause, err)
+	}
+
 	//nolint:errorlint // the inner error is deliberately not wrapped, see above
-	return fmt.Errorf("%w: no data moved for %s (%v)", ErrTransferStalled, w.timeout, err)
+	return fmt.Errorf("%w: no data moved for %s (%v)", cause, timeout, err)
 }
 
 type progressReader struct {

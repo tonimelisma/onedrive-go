@@ -27,6 +27,8 @@ func forbiddenGraphError(innerCodes ...string) error {
 // inner serviceReadOnly. The token-propagation retry family keys on
 // accessDenied, so without an explicit exclusion it burns its whole budget on
 // a condition no amount of retrying can clear.
+//
+// Validates: R-6.7.35
 func TestIsTransientDrivesDiscoveryError_ServiceReadOnlyIsNotTokenPropagation(t *testing.T) {
 	t.Parallel()
 
@@ -46,6 +48,8 @@ func TestIsTransientDrivesDiscoveryError_PlainAccessDeniedStillRetries(t *testin
 
 // Callers need to tell "the provider is unavailable" apart from "this account
 // cannot do that", so the read-only window carries its own sentinel.
+//
+// Validates: R-6.7.35
 func TestServiceReadOnly_IsClassifiedAsProviderUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -55,6 +59,7 @@ func TestServiceReadOnly_IsClassifiedAsProviderUnavailable(t *testing.T) {
 	assert.True(t, IsProviderUnavailable(err))
 }
 
+// Validates: R-6.7.35
 func TestServiceReadOnly_OrdinaryForbiddenIsNotProviderUnavailable(t *testing.T) {
 	t.Parallel()
 
