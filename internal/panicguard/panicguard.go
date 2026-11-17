@@ -2,15 +2,17 @@
 // record and an error. Every recover in onedrive-go calls Recovered, so a
 // panic reads the same wherever it is caught: logged once at Error with the
 // stack of the goroutine that panicked, and returned as an error that wraps
-// ErrPanic. What each boundary then does with the error is set by R-6.3.8 and
-// R-6.3.10 (spec/requirements/non-functional.md); this package adds no rule
-// of its own.
+// ErrPanic. A boundary that ends its work through a cancel hands the cancel
+// AsCancelCause of that error. What each boundary then does with the error is
+// set by R-6.3.8 and R-6.3.10 (spec/requirements/non-functional.md); this
+// package adds no rule of its own.
 //
 // It is a leaf package: it imports only the standard library, so the CLI, the
 // Graph client and the sync packages can all use it.
 package panicguard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -66,6 +68,35 @@ func Recovered(logger *slog.Logger, where string, r any, attrs ...slog.Attr) err
 
 	return &panicError{where: where, value: r, stack: stack}
 }
+
+// AsCancelCause is err, the error Recovered returned, as the cause of a
+// cancel: the boundary of a helper goroutine with no error result ends the
+// work it belongs to through the work's context. A request or a wait that the
+// cancel interrupts hands back the context's cause in place of
+// context.Canceled, so the cause answers to context.Canceled as well as to
+// ErrPanic: the interrupted work reads as stopped, as at any other stop, and
+// whoever reads the cause still finds the panic, its text and its stack. A nil
+// err is nil, a cancel without a cause.
+func AsCancelCause(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return &stopCauseError{err: err}
+}
+
+// stopCauseError is a recovered panic's error as the cause of a cancel.
+type stopCauseError struct {
+	err error
+}
+
+func (c *stopCauseError) Error() string { return c.err.Error() }
+
+// Unwrap is the panic's error, through which ErrPanic and Stack find it.
+func (c *stopCauseError) Unwrap() error { return c.err }
+
+// Is answers true for context.Canceled, and for nothing else of its own.
+func (*stopCauseError) Is(target error) bool { return target == context.Canceled }
 
 // Stack is the stack of the goroutine whose recovered panic err carries, or
 // "" when err carries none. The CLI prints it under the error that ends a

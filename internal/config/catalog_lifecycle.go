@@ -22,8 +22,9 @@ type AccountLogin struct {
 }
 
 // recordLogin upserts the account and its primary drive with what a sign-in
-// learned. A standing auth requirement is kept: login clears it separately,
-// with its source logged, once the command has succeeded.
+// learned. The account's record is written without an auth requirement: the
+// sign-in it records works, so a requirement that stood ends in this same
+// write.
 func (c *Catalog) recordLogin(accountCID driveid.CanonicalID, login *AccountLogin, now time.Time) {
 	cachedAt := now.UTC().Format(time.RFC3339)
 	account := CatalogAccount{
@@ -35,9 +36,6 @@ func (c *Catalog) recordLogin(accountCID driveid.CanonicalID, login *AccountLogi
 		OrgName:               login.OrgName,
 		PrimaryDriveID:        login.PrimaryDriveID.String(),
 		PrimaryDriveCanonical: accountCID.String(),
-	}
-	if existing, found := c.AccountByCanonicalID(accountCID); found {
-		account.AuthRequirementReason = existing.AuthRequirementReason
 	}
 
 	drive := CatalogDrive{

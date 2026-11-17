@@ -151,9 +151,11 @@ func MarkAccountAuthRequired(dataDir, email string, reason authstate.Reason) err
 }
 
 // ClearAccountAuthRequirement clears the persisted account-auth requirement.
-// It is the single writer of that field's cleared state; callers name the
-// reason they are clearing it in their own logging, because the catalog
-// records only whether a requirement stands, not how it ended.
+// It is the one writer of that field's cleared state outside a login, whose
+// enrollment ends the requirement in the catalog write that records the login
+// (recordLogin). Callers name the reason they are clearing it in their own
+// logging, because the catalog records only whether a requirement stands, not
+// how it ended.
 func ClearAccountAuthRequirement(dataDir, email string) error {
 	if email == "" {
 		return nil

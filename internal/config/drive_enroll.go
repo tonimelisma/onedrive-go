@@ -46,6 +46,9 @@ type AddDriveResult struct {
 	// Such a section was written by hand or by an earlier version of the
 	// client, or its directory was removed since.
 	Completed bool
+	// EndedSignInRequirement means a login ended the account's standing
+	// sign-in requirement, in the catalog write that records the login.
+	EndedSignInRequirement bool
 }
 
 // AddDrive enrolls one drive as a single transaction: it takes the config
@@ -58,7 +61,9 @@ type AddDriveResult struct {
 // since it may be a folder the user already had. A process killed part way
 // leaves at most an empty sync directory and a catalog record without a
 // section, and running the same enrollment again completes it. An enrollment
-// that is already complete writes nothing.
+// that is already complete writes nothing but, for a login, the catalog
+// records it refreshes. A login also ends the account's sign-in requirement,
+// in that same catalog write.
 func AddDrive(req *AddDriveRequest, logger *slog.Logger) (AddDriveResult, error) {
 	return addDrive(req, defaultConfigIO(), defaultConfigLocker(), time.Now(), logger)
 }
@@ -90,6 +95,12 @@ func addDrive(
 		slog.Bool("added", result.Added),
 		slog.Bool("completed", result.Completed),
 	)
+	if result.EndedSignInRequirement {
+		logger.Info("cleared catalog auth requirement",
+			slog.String("account", req.Drive.Email()),
+			slog.String("source", string(AuthClearSourceLogin)),
+		)
+	}
 
 	return result, nil
 }
@@ -146,6 +157,9 @@ type enrollmentPlan struct {
 	sectionExists bool // the drive's section was already there; false means this call adds it
 	sectionLacked bool // the section is missing a key this call writes
 	recordLacked  bool // the catalog is missing a record this call writes
+	// endsSignInRequirement: a login whose account had a standing sign-in
+	// requirement, which its catalog write ends.
+	endsSignInRequirement bool
 }
 
 func enrollLocked(req *AddDriveRequest, io configIO, now time.Time) (AddDriveResult, error) {
@@ -169,10 +183,11 @@ func enrollLocked(req *AddDriveRequest, io configIO, now time.Time) (AddDriveRes
 	}
 
 	return AddDriveResult{
-		SyncDir:     plan.syncDir,
-		DisplayName: plan.displayName,
-		Added:       !plan.sectionExists,
-		Completed:   plan.sectionExists && (plan.sectionLacked || plan.recordLacked || dirMissing),
+		SyncDir:                plan.syncDir,
+		DisplayName:            plan.displayName,
+		Added:                  !plan.sectionExists,
+		Completed:              plan.sectionExists && (plan.sectionLacked || plan.recordLacked || dirMissing),
+		EndedSignInRequirement: plan.endsSignInRequirement,
 	}, nil
 }
 
@@ -224,6 +239,10 @@ func planEnrollment(req *AddDriveRequest, snapshot *enrollmentSnapshot, io confi
 
 	catalogAfter := cloneCatalog(snapshot.catalog)
 	plan.recordLacked = catalogLacksRecords(snapshot.catalog, req)
+	if req.Login != nil {
+		account, found := snapshot.catalog.AccountByCanonicalID(req.Drive)
+		plan.endsSignInRequirement = found && account.AuthRequirementReason != ""
+	}
 	applyEnrollmentToCatalog(catalogAfter, req, plan.displayName, now)
 
 	plan.syncDir = section.SyncDir

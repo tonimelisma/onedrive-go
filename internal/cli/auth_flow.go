@@ -34,8 +34,9 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 // completeLogin is everything login does once the person has signed in:
 // discover the account, install its token, enroll its primary drive in one
 // config.AddDrive transaction (putting the previous token back if that
-// fails), and report the result. It is split from the sign-in exchange so it
-// can be tested with a fake Graph server and a token that is already in hand.
+// fails), which also ends the account's sign-in requirement, and report the
+// result. It is split from the sign-in exchange so it can be tested with a
+// fake Graph server and a token that is already in hand.
 func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, tempPath string) error {
 	logger := cc.Logger
 
@@ -84,8 +85,6 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 	}
 
 	email := canonicalID.Email()
-	clearLoginAuthRequirement(email, logger)
-
 	if err := printLoginResult(cc.resultWriter(), canonicalID, orgName, &enrolled, logger); err != nil {
 		return err
 	}
@@ -167,12 +166,6 @@ func printLoginResult(
 	default:
 		logger.Info("re-login detected, token and metadata refreshed", "canonical_id", canonicalID.String())
 		return writef(w, "Token refreshed for %s.\n", email)
-	}
-}
-
-func clearLoginAuthRequirement(email string, logger *slog.Logger) {
-	if clearErr := clearAccountAuthRequirementForSource(email, config.AuthClearSourceLogin, logger); clearErr != nil {
-		logger.Warn("clearing stale account auth requirement after login", "account", email, "error", clearErr)
 	}
 }
 

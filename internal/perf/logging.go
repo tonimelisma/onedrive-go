@@ -10,15 +10,18 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
+// Session is one command's performance session: its collector, the periodic
+// updates, and the summary Complete writes.
 type Session struct {
 	name      string
 	kind      string
 	collector *Collector
 
-	// mu guards logger, stopCh, and doneCh across Start and Stop.
+	// mu guards logger, which SetLogger replaces while the updates read it.
 	mu     sync.Mutex
 	logger *slog.Logger
-	stopCh chan struct{}
+	// doneCh is closed when the periodic updates have ended, or at once for a
+	// session without them.
 	doneCh chan struct{}
 	once   sync.Once
 	// cancel ends the context NewSession returned, with a cause.
@@ -27,9 +30,12 @@ type Session struct {
 
 // NewSession starts a performance session for one command and returns the
 // command's context, which carries the session's collector. With an interval
-// it logs an update at every interval until Complete. A panic in those
-// updates ends the command: it cancels the returned context with the panic as
-// the cause, which the command returns and exits 1 with (R-6.3.10).
+// it logs an update at every interval until that context ends: at Complete,
+// or earlier when the caller's context ends, so a command that never reaches
+// Complete leaves no updates running. A panic in those updates ends the
+// command: it cancels the returned context with the panic as the cause, which
+// the command returns and exits 1 with (R-6.3.10), and which the work it
+// interrupts reads as a stop (panicguard.AsCancelCause).
 func NewSession(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -49,13 +55,12 @@ func NewSession(
 		kind:      kind,
 		collector: collector,
 		logger:    logger,
-		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
 		cancel:    cancel,
 	}
 
 	if interval > 0 {
-		go session.runPeriodic(interval)
+		go session.runPeriodic(ctx, interval)
 	} else {
 		close(session.doneCh)
 	}
@@ -63,6 +68,7 @@ func NewSession(
 	return session, WithCollector(ctx, collector)
 }
 
+// Collector is the session's collector, nil for a nil session.
 func (s *Session) Collector() *Collector {
 	if s == nil {
 		return nil
@@ -71,6 +77,8 @@ func (s *Session) Collector() *Collector {
 	return s.collector
 }
 
+// SetLogger makes logger the one the updates and the summary go to, once the
+// command's own logger exists. A nil logger is ignored.
 func (s *Session) SetLogger(logger *slog.Logger) {
 	if s == nil || logger == nil {
 		return
@@ -81,6 +89,9 @@ func (s *Session) SetLogger(logger *slog.Logger) {
 	s.logger = logger
 }
 
+// Complete ends the session once: it records err's result, releases the
+// command's context, which ends the periodic updates, waits for them to end,
+// and writes the summary. A later call does nothing.
 func (s *Session) Complete(err error) {
 	if s == nil {
 		return
@@ -90,20 +101,21 @@ func (s *Session) Complete(err error) {
 		if s.collector != nil {
 			s.collector.SetResult(resultForError(err))
 		}
-		close(s.stopCh)
+		// The command is over; release its context. A cause set earlier (a
+		// panic in the updates) stays: the first cancel wins.
+		s.cancel(nil)
 		<-s.doneCh
 		s.log("performance summary")
-		// The command is over; release its context. A cause set by a panic
-		// in the updates stays: the first cancel wins.
-		s.cancel(nil)
 	})
 }
 
-func (s *Session) runPeriodic(interval time.Duration) {
+// runPeriodic logs an update at every interval until ctx, the command's
+// context, ends.
+func (s *Session) runPeriodic(ctx context.Context, interval time.Duration) {
 	defer close(s.doneCh)
 	defer func() {
 		if r := recover(); r != nil {
-			s.cancel(panicguard.Recovered(s.currentLogger(), "in the performance logger", r))
+			s.cancel(panicguard.AsCancelCause(panicguard.Recovered(s.currentLogger(), "in the performance logger", r)))
 		}
 	}()
 
@@ -114,7 +126,7 @@ func (s *Session) runPeriodic(interval time.Duration) {
 		select {
 		case <-ticker.C:
 			s.log("performance update")
-		case <-s.stopCh:
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -145,17 +157,23 @@ func (s *Session) currentLogger() *slog.Logger {
 	return s.logger
 }
 
+// resultForError is the summary's result for the command's final error. A
+// recovered panic is an error, also when it answers to context.Canceled as
+// the cause of the cancel it made.
 func resultForError(err error) string {
 	switch {
 	case err == nil:
 		return "success"
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case !errors.Is(err, panicguard.ErrPanic) &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		return "canceled"
 	default:
 		return "error"
 	}
 }
 
+// SnapshotAttrs are the log attributes of snapshot: its duration and result,
+// and each counter above zero.
 func SnapshotAttrs(snapshot *Snapshot) []slog.Attr {
 	if snapshot == nil {
 		return nil

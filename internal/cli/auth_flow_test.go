@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
@@ -112,6 +113,36 @@ func (f *loginFixture) runLogin(t *testing.T) error {
 	cc.Runtime = newDiscoverAccountTestRuntime(srv.URL)
 
 	return completeLogin(t.Context(), cc, staticTokenSource{}, f.pendingPath)
+}
+
+// signInRequirementOf is the sign-in requirement the catalog holds for the
+// account.
+func signInRequirementOf(t *testing.T, account driveid.CanonicalID) authstate.Reason {
+	t.Helper()
+
+	record, found := loadCatalogAccount(t, account)
+	require.True(t, found)
+
+	return record.AuthRequirementReason
+}
+
+// A login that works ends the sign-in requirement of the account it signed
+// in, also when another account the catalog knows has the same email address
+// (a personal and a work or school account can), and leaves that account's
+// own requirement standing.
+//
+// Validates: R-3.3.1, R-2.10.47
+func TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn(t *testing.T) {
+	f := newLoginFixture(t, true)
+	twin := driveid.MustCanonicalID("business:user@example.com")
+	requireSignIn := func(account *config.CatalogAccount) { account.AuthRequirementReason = authReasonSyncAuthRejected }
+	seedCatalogAccount(t, f.cid, requireSignIn)
+	seedCatalogAccount(t, twin, requireSignIn)
+
+	require.NoError(t, f.runLogin(t))
+
+	assert.Empty(t, signInRequirementOf(t, f.cid), "the login ended its account's requirement")
+	assert.Equal(t, authReasonSyncAuthRejected, signInRequirementOf(t, twin), "the other account still needs its own sign-in")
 }
 
 // Validates: R-3.3.1

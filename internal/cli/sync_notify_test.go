@@ -224,6 +224,33 @@ func (contextBoundOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncM
 	return nil
 }
 
+// runWatchWithPanickingKeepalive runs a watch of orch under a unit with
+// WatchdogSec= whose keepalive panics, and returns the watch's error. With
+// nobody listening on the notify socket every keepalive fails, and the
+// failure's log call is the one that panics.
+func runWatchWithPanickingKeepalive(t *testing.T, orch syncDaemonOrchestrator) error {
+	t.Helper()
+
+	holder, _ := writeNotifyTestConfig(t)
+	address := shortSocketPath(t, "notify.sock")
+	receiver, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: address, Net: "unixgram"})
+	require.NoError(t, err)
+	env := map[string]string{sdnotify.EnvNotifySocket: address, sdnotify.EnvWatchdogUSec: "2000"}
+	notifier, err := sdnotify.Open(func(key string) string { return env[key] }, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, notifier.Close()) })
+	require.NoError(t, receiver.Close())
+	logger := slog.New(synctest.PanicOnMessage{Message: "systemd watchdog keepalive failed", Next: slog.DiscardHandler})
+
+	return runWithin(t, t.Context(), "the keepalive's panic to end the watch", func(ctx context.Context) error {
+		return runSyncDaemonWithFactory(ctx, holder, nil, syncengine.SyncBidirectional,
+			syncengine.WatchOptions{}, logger, io.Discard, "/tmp/control.sock",
+			nil, notifier, func(*multisync.OrchestratorConfig) syncDaemonOrchestrator {
+				return orch
+			})
+	})
+}
+
 // A panic in the systemd keepalive ends the watch through its context, with
 // the panic as the cause: the watch drains as on a stop and returns the
 // panic, so the command exits 1.
@@ -235,29 +262,37 @@ func TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError(t *testing.T) {
 		return
 	}
 
-	holder, _ := writeNotifyTestConfig(t)
-	address := shortSocketPath(t, "notify.sock")
-	receiver, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: address, Net: "unixgram"})
-	require.NoError(t, err)
-	env := map[string]string{sdnotify.EnvNotifySocket: address, sdnotify.EnvWatchdogUSec: "2000"}
-	notifier, err := sdnotify.Open(func(key string) string { return env[key] }, 1)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, notifier.Close()) })
-	// With nobody listening, every keepalive fails, and the failure's log
-	// call is the one that panics.
-	require.NoError(t, receiver.Close())
-	logger := slog.New(synctest.PanicOnMessage{Message: "systemd watchdog keepalive failed", Next: slog.DiscardHandler})
-
-	err = runWithin(t, t.Context(), "the keepalive's panic to end the watch", func(ctx context.Context) error {
-		return runSyncDaemonWithFactory(ctx, holder, nil, syncengine.SyncBidirectional,
-			syncengine.WatchOptions{}, logger, io.Discard, "/tmp/control.sock",
-			nil, notifier, func(*multisync.OrchestratorConfig) syncDaemonOrchestrator {
-				return contextBoundOrchestrator{}
-			})
-	})
+	err := runWatchWithPanickingKeepalive(t, contextBoundOrchestrator{})
 
 	require.ErrorIs(t, err, panicguard.ErrPanic)
 	require.ErrorContains(t, err, "internal error in the systemd watchdog keepalive: log call exploded")
+	assert.Equal(t, exitFailure, commandExitCode(err, false))
+}
+
+// causeReadingOrchestrator is a watch that runs until its context ends and
+// then hands back what work that end interrupted would: its context's cause.
+type causeReadingOrchestrator struct{}
+
+func (causeReadingOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+	<-ctx.Done()
+	return fmt.Errorf("request canceled: %w", context.Cause(ctx))
+}
+
+// What the keepalive's panic interrupts in the watch reads as stopped, as
+// under any other stop, so the drives drain as on a stop; the watch still
+// ends with the panic and exits 1.
+//
+// Validates: R-6.3.10, R-6.8.29
+func TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	err := runWatchWithPanickingKeepalive(t, causeReadingOrchestrator{})
+
+	require.ErrorIs(t, err, context.Canceled, "the interrupted work reads as stopped")
+	require.ErrorIs(t, err, panicguard.ErrPanic, "and still carries the panic")
 	assert.Equal(t, exitFailure, commandExitCode(err, false))
 }
 

@@ -15,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
 // sharePointSiteLimit caps the number of SharePoint sites fetched during
@@ -115,10 +114,10 @@ func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[strin
 }
 
 // discoverAvailableDrives queries the network for all drives accessible via
-// existing tokens. Filters out drives already in config. spSiteLimit controls
-// how many SharePoint sites are fetched (sharePointSiteLimit for default,
-// sharePointSiteUnlimited when --all is passed). The gaps are the SharePoint
-// sources that did not answer.
+// existing tokens, at most discoveryConcurrency accounts at once. Filters out
+// drives already in config. spSiteLimit controls how many SharePoint sites are
+// fetched (sharePointSiteLimit for default, sharePointSiteUnlimited when --all
+// is passed). The gaps are the SharePoint sources that did not answer.
 func discoverAvailableDrives(
 	ctx context.Context,
 	cfg *config.Config,
@@ -158,36 +157,17 @@ func discoverAvailableDrives(
 		gaps.FailedSiteSearches = append(gaps.FailedSiteSearches, tokenGaps.FailedSiteSearches...)
 	}
 
-	var wg sync.WaitGroup
-
-	for _, tokenCID := range tokens {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// A panic is this account's failure to load, reported the way a
-			// failed /me/drives is, while the other accounts load (R-6.3.10).
-			defer func() {
-				if r := recover(); r != nil {
-					//nolint:errcheck // The degraded notice is the account's report; the error is only logged.
-					panicguard.Recovered(logger, "while listing the drives of "+tokenCID.Email(), r)
-					record(nil, nil, []accountDegradedNotice{tokenDriveCatalogDegradedNotice(accounts, tokenCID, logger)}, sharePointGaps{})
-				}
-			}()
-
-			record(discoverDrivesForToken(
-				ctx,
-				tokenCID,
-				cfg,
-				accounts,
-				spSiteLimit,
-				logger,
-				recorder,
-				runtime,
-			))
-		}()
-	}
-
-	wg.Wait()
+	runBounded(ctx, logger, len(tokens),
+		func(i int) string { return "while listing the drives of " + tokens[i].Email() },
+		func(i int) {
+			record(discoverDrivesForToken(ctx, tokens[i], cfg, accounts, spSiteLimit, logger, recorder, runtime))
+		},
+		// A panic is this account's failure to load, reported the way a
+		// failed /me/drives is, while the other accounts load.
+		func(i int) {
+			record(nil, nil, []accountDegradedNotice{tokenDriveCatalogDegradedNotice(accounts, tokens[i], logger)}, sharePointGaps{})
+		},
+	)
 
 	slices.SortFunc(entries, func(a, b driveListEntry) int {
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
@@ -276,7 +256,7 @@ func discoverAccessibleDrives(
 
 	var entries []driveListEntry
 	for _, d := range drives {
-		entries = appendAvailableCatalogDrive(entries, cfg, tokenCID.Email(), d)
+		entries = appendAvailableCatalogDrive(entries, cfg, tokenCID.Email(), d, logger)
 	}
 
 	return entries, nil, nil
@@ -299,14 +279,21 @@ func tokenDriveCatalogDegradedNotice(
 	)
 }
 
+// appendAvailableCatalogDrive appends drive to entries unless config already
+// has it. A drive whose type names no drive of the account's own (a document
+// library, listed through its SharePoint site instead) is left out, at Debug.
 func appendAvailableCatalogDrive(
 	entries []driveListEntry,
 	cfg *config.Config,
 	email string,
 	drive graph.Drive,
+	logger *slog.Logger,
 ) []driveListEntry {
 	cid, cidErr := driveid.Construct(drive.DriveType, email)
 	if cidErr != nil {
+		logger.Debug("skipping drive with no account drive ID",
+			"account", email, "drive_type", drive.DriveType, "error", cidErr)
+
 		return entries
 	}
 
@@ -339,7 +326,7 @@ func appendPrimaryDriveFallbackEntry(
 		return entries
 	}
 
-	return appendAvailableCatalogDrive(entries, cfg, email, *primary)
+	return appendAvailableCatalogDrive(entries, cfg, email, *primary, logger)
 }
 
 func tokenDiscoveryAuthRequirement(

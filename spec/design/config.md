@@ -149,7 +149,7 @@ account currently has a usable saved login.
 
 | Operation | Durable mutation |
 | --- | --- |
-| `login` | write saved login, then one enrollment transaction: upsert account/primary-drive catalog records, append (or complete) the primary drive section |
+| `login` | write saved login, then one enrollment transaction: upsert account/primary-drive catalog records (ending the account's persisted auth requirement), append (or complete) the primary drive section |
 | `drive add` | one enrollment transaction: register the drive in the catalog and append (or complete) one drive section |
 | `drive remove` | delete one drive section only |
 | `drive remove --purge` | delete one drive section, then (after a running watch is told) drive-owned retained state under the store lock; prune the catalog drive record when no longer needed, and keep it while a kept store remains |
@@ -176,7 +176,12 @@ once and decides everything from that snapshot: the drive's display name, its
 `sync_dir` (`DefaultSyncDir` over the other drives' directories and the account
 names in the catalog as this enrollment will leave it), the catalog record
 (`registerOwnedDrive`, `registerSharedDrive`, or for login `recordLogin`, which
-also writes the account), and the config text. A new section carries `sync_dir`
+also writes the account), and the config text. The account record a login
+writes holds no auth requirement: the sign-in it records works, so a
+requirement that stood ends in this catalog write, never in a second step
+that could fail alone
+(`TestAddDrive_LoginEndsTheSignInRequirementInItsOneCatalogWrite`,
+`TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn`). A new section carries `sync_dir`
 and, for a shared folder, `display_name` in one append, which refuses a section
 that is already there; an existing section gets only the keys it lacks, and its
 existing values are never replaced. The new config text must pass the strict

@@ -730,16 +730,71 @@ func TestAddDrive_RefusesAnIncoherentRequest(t *testing.T) {
 	}
 }
 
+// markSignInRequired records in the fixture's catalog that the account must
+// sign in again.
+func markSignInRequired(t *testing.T, f enrollFixture, account driveid.CanonicalID) {
+	t.Helper()
+
+	require.NoError(t, UpdateCatalogForDataDir(f.dataDir, func(catalog *Catalog) error {
+		record, _ := catalog.AccountByCanonicalID(account)
+		record.AuthRequirementReason = authstate.ReasonSyncAuthRejected
+		catalog.UpsertAccount(&record)
+		return nil
+	}))
+}
+
+// signInRequirement is the account's sign-in requirement as the fixture's
+// catalog holds it.
+func signInRequirement(t *testing.T, f enrollFixture, account driveid.CanonicalID) authstate.Reason {
+	t.Helper()
+
+	catalog, err := LoadCatalogForDataDir(f.dataDir)
+	require.NoError(t, err)
+	record, found := catalog.AccountByCanonicalID(account)
+	require.True(t, found)
+
+	return record.AuthRequirementReason
+}
+
+// A login ends the account's sign-in requirement in the one catalog write
+// that records the login, so no second step can fail alone and leave a
+// sign-in that works marked as needed. A login whose enrollment fails leaves
+// the requirement standing, as it leaves the rest of the catalog.
+//
+// Validates: R-3.3.1, R-2.10.47
+func TestAddDrive_LoginEndsTheSignInRequirementInItsOneCatalogWrite(t *testing.T) {
+	f := newEnrollFixture(t, true)
+	req := f.loginRequest()
+	markSignInRequired(t, f, req.Drive)
+
+	failing := defaultConfigIO()
+	failing.writeManagedFile = failWritesTo(failing.writeManagedFile, f.configPath)
+	_, err := addDrive(&req, failing, noWaitLocker(), time.Now(), testLogger(t))
+	require.ErrorIs(t, err, errInjected)
+	assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirement(t, f, req.Drive),
+		"a failed enrollment leaves the requirement standing")
+
+	catalogWrites := 0
+	counting := defaultConfigIO()
+	writeFile := counting.writeManagedFile
+	counting.writeManagedFile = func(path string, data []byte) error {
+		if path == f.catalogPath {
+			catalogWrites++
+		}
+		return writeFile(path, data)
+	}
+	result, err := addDrive(&req, counting, noWaitLocker(), time.Now(), testLogger(t))
+	require.NoError(t, err)
+
+	assert.Empty(t, signInRequirement(t, f, req.Drive), "the login ended the requirement")
+	assert.Equal(t, 1, catalogWrites, "in the write that records the login")
+	assert.True(t, result.EndedSignInRequirement)
+}
+
 // Validates: R-3.1.5, R-3.3.1
 func TestAddDrive_LoginRecordsAccountAndPrimaryDrive(t *testing.T) {
 	f := newEnrollFixture(t, true)
 	req := f.loginRequest()
-	require.NoError(t, UpdateCatalogForDataDir(f.dataDir, func(catalog *Catalog) error {
-		account, _ := catalog.AccountByCanonicalID(req.Drive)
-		account.AuthRequirementReason = authstate.ReasonSyncAuthRejected
-		catalog.UpsertAccount(&account)
-		return nil
-	}))
 	req.Login.OrgName = enrollTestOrgName
 
 	_, err := AddDrive(&req, testLogger(t))
@@ -754,8 +809,6 @@ func TestAddDrive_LoginRecordsAccountAndPrimaryDrive(t *testing.T) {
 	assert.Equal(t, enrollTestOrgName, account.OrgName)
 	assert.Equal(t, driveid.New(enrollTestPrimaryID).String(), account.PrimaryDriveID)
 	assert.Equal(t, req.Drive.String(), account.PrimaryDriveCanonical)
-	assert.Equal(t, authstate.ReasonSyncAuthRejected, account.AuthRequirementReason,
-		"login clears the requirement itself, after the command succeeds")
 
 	drive, found := catalog.DriveByCanonicalID(req.Drive)
 	require.True(t, found)
