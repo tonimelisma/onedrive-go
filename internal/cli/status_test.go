@@ -2119,8 +2119,8 @@ func createTestStateDB(t *testing.T, dbPath string) {
 // Validates: R-3.5.1, R-4.1
 //
 // A drive that relies on the default sync_dir has an empty sync_dir in config.
-// Reporting that raw value told the user their files sync nowhere, which is
-// what TestE2E_RoundTrip/status_json caught.
+// Reporting that raw value would tell the user their files sync nowhere; the
+// live TestE2E_FileOps_RoundTrip/status_json checks the same on an account.
 func TestBuildConfiguredStatusDrive_ReportsDefaultSyncDirWhenUnset(t *testing.T) {
 	t.Parallel()
 

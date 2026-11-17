@@ -154,10 +154,10 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "top.txt should be deleted")
 }
 
-// TestE2E_Sync_MtimeOnlyChange validates that changing only mtime (without
+// TestE2E_SyncIsolated_MtimeOnlyChange validates that changing only mtime (without
 // content change) does not trigger a re-upload. The scanner compares hashes
 // against baseline and discards events where hashes match.
-func TestE2E_Sync_MtimeOnlyChange(t *testing.T) {
+func TestE2E_SyncIsolated_MtimeOnlyChange(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -227,10 +227,10 @@ func TestE2E_Sync_IdempotentReSync(t *testing.T) {
 	assertOutputContains(t, subOut, "nested.txt")
 }
 
-// TestE2E_Sync_TransferWorkersConfig validates that the transfer_workers
+// TestE2E_SyncIsolated_TransferWorkersConfig validates that the transfer_workers
 // config option is respected without assuming every concurrent upload must
 // complete in one pass through retryable transient Graph service outages.
-func TestE2E_Sync_TransferWorkersConfig(t *testing.T) {
+func TestE2E_SyncIsolated_TransferWorkersConfig(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 

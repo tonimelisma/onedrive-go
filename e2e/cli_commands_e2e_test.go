@@ -282,9 +282,9 @@ func TestE2E_InternalBaselineVerification_AfterSync(t *testing.T) {
 	assert.Empty(t, report.Mismatches)
 }
 
-// TestE2E_RecycleBinRoundtrip validates the full recycle bin workflow:
+// TestE2E_RecycleBin_Roundtrip validates the full recycle bin workflow:
 // put → rm → recycle-bin list → recycle-bin restore → verify restored.
-func TestE2E_RecycleBinRoundtrip(t *testing.T) {
+func TestE2E_RecycleBin_Roundtrip(t *testing.T) {
 	t.Parallel()
 	skipIfPersonalDrive(t)
 	registerLogDump(t)
@@ -350,9 +350,9 @@ func TestE2E_RecycleBinRoundtrip(t *testing.T) {
 	assertOutputEqual(t, "recycle-test.txt", restoredName, "the restored file keeps its name")
 }
 
-// TestE2E_RecycleBinEmpty validates that recycle-bin empty --confirm
+// TestE2E_RecycleBin_Empty validates that recycle-bin empty --confirm
 // permanently removes items from the recycle bin.
-func TestE2E_RecycleBinEmpty(t *testing.T) {
+func TestE2E_RecycleBin_Empty(t *testing.T) {
 	t.Parallel()
 	skipIfPersonalDrive(t)
 	registerLogDump(t)

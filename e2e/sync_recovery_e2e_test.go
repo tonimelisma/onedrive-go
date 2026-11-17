@@ -21,10 +21,10 @@ import (
 // and state purge reset behavior.
 // ---------------------------------------------------------------------------
 
-// TestE2E_Sync_IncrementalDeltaToken validates that delta tokens persist
+// TestE2E_SyncIsolated_IncrementalDeltaToken validates that delta tokens persist
 // across sync runs, enabling incremental sync (only new changes transferred).
 // Validates: R-2.15.1
-func TestE2E_Sync_IncrementalDeltaToken(t *testing.T) {
+func TestE2E_SyncIsolated_IncrementalDeltaToken(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -268,10 +268,10 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 	assert.Equal(t, snapshot, snapshotLocalTree(t, localDir))
 }
 
-// TestE2E_Sync_DriveRemovePurgeResetsState validates that deleting the state
+// TestE2E_SyncIsolated_DriveRemovePurgeResetsState validates that deleting the state
 // DB forces a full re-enumeration on the next sync.
 // Validates: R-2.5.1
-func TestE2E_Sync_DriveRemovePurgeResetsState(t *testing.T) {
+func TestE2E_SyncIsolated_DriveRemovePurgeResetsState(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 

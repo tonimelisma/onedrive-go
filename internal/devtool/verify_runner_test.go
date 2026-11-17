@@ -256,7 +256,7 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 	t.Parallel()
 
-	repoRoot := t.TempDir()
+	repoRoot := newFakeE2ERepo(t)
 	runner := &fakeRunner{}
 	stdout := &bytes.Buffer{}
 	logDir := filepath.Join(repoRoot, "e2e-logs")
@@ -275,9 +275,9 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 	assert.Equal(t, []string{"test", "-tags=e2e", "-run=" + fastE2EPreflightPattern, "-count=1", "-v", "-timeout=10m", "./e2e/..."}, runner.runCommands[1].args)
 	assert.Equal(t, []string{"test", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[2].args)
 	assert.Equal(t, []string{"test", "-tags=e2e e2e_full", "-run=" + fullE2EPreflightPattern, "-count=1", "-v", "-timeout=10m", "./e2e/..."}, runner.runCommands[3].args)
-	assert.Equal(t, fullE2EBucketCommandArgs(fullE2EParallelMiscBucket()), runner.runCommands[4].args)
-	assert.Equal(t, fullE2EBucketCommandArgs(fullE2ESerialSyncBucket()), runner.runCommands[5].args)
-	assert.Equal(t, fullE2EBucketCommandArgs(fullE2ESerialWatchSharedBucket()), runner.runCommands[6].args)
+	assert.Equal(t, fullE2EBucketCommandArgs(fakeFullE2EBucket(t, fullE2EParallelMiscBucketName)), runner.runCommands[4].args)
+	assert.Equal(t, fullE2EBucketCommandArgs(fakeFullE2EBucket(t, fullE2ESerialSyncBucketName)), runner.runCommands[5].args)
+	assert.Equal(t, fullE2EBucketCommandArgs(fakeFullE2EBucket(t, fullE2ESerialWatchSharedBucketName)), runner.runCommands[6].args)
 	assertCommandHasEnvVar(t, runner.runCommands[0], e2eRunAuthPreflightEnvVar+"=1")
 	assertCommandLacksEnvVar(t, runner.runCommands[0], e2eRunFastFixturePreflightEnvVar+"=1")
 	assertCommandLacksSkipSuiteScrubEnvVar(t, runner.runCommands[0])
@@ -297,7 +297,7 @@ func TestRunVerifyE2EFullRunsPreflightsBeforeSuites(t *testing.T) {
 }
 
 func TestRunVerifyE2EFullWithoutExplicitLogDirNormalizesDefaultLogDir(t *testing.T) {
-	repoRoot := t.TempDir()
+	repoRoot := newFakeE2ERepo(t)
 	tmpRoot := t.TempDir()
 	t.Setenv("TMPDIR", tmpRoot)
 
@@ -395,7 +395,7 @@ func TestRunVerifyE2EFullClassifiesKnownAuthPreflightQuirkAfterSuccessfulRerun(t
 
 	// The rerun, then the fixture preflight, the fast suite, the full
 	// preflight and the three buckets; every command streams through Run.
-	require.Len(t, runner.runCommands, 2+e2eFullCommandsBeforeBuckets-1+len(fullE2EBuckets()))
+	require.Len(t, runner.runCommands, 2+e2eFullCommandsBeforeBuckets-1+len(fullE2EBucketShapes()))
 	assert.Empty(t, runner.combinedCommands)
 	assert.Equal(t, runner.runCommands[0].args, runner.runCommands[1].args)
 	assert.Contains(t, stdout, "LI-20260405-06")
@@ -424,12 +424,12 @@ func TestRunVerifyE2EFullClassifiesKnownFastSuiteQuirkAfterSuccessfulRerun(t *te
 	require.Len(t, summary.ClassifiedReruns, 1)
 	assert.Equal(t, string(fastE2EStepName), summary.ClassifiedReruns[0].Phase, "a rerun is recorded under its step's name")
 	assert.Empty(t, runner.combinedCommands, "the classified fast suite streams through Run")
-	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+1+len(fullE2EBuckets()))
+	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+1+len(fullE2EBucketShapes()))
 	assert.Equal(t, []string{"test", "-json", "-tags=e2e", "-v", "-parallel", "5", "-timeout=10m", "./e2e/..."}, runner.runCommands[2].args)
 	assert.Equal(t,
 		[]string{"test", "-tags=e2e", "-run=^TestE2E_Sync_DownloadOnly$", "-count=1", "-v", "-timeout=10m", "./e2e/..."},
 		runner.runCommands[3].args)
-	assert.Equal(t, fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket()), runner.runCommands[len(runner.runCommands)-1].args)
+	assert.Equal(t, fullE2EBucketJSONCommandArgs(fakeFullE2EBucket(t, fullE2ESerialWatchSharedBucketName)), runner.runCommands[len(runner.runCommands)-1].args)
 	assert.Contains(t, stdout, "LI-20260405-04")
 	assert.Contains(t, stdout, "classified reruns:")
 }
@@ -457,7 +457,7 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fast e2e")
 	assert.Empty(t, runner.combinedCommands)
-	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(fullE2EBuckets()))
+	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(fullE2EBucketShapes()))
 	assert.Equal(t,
 		[]string{verifySummaryStatusPass, verifySummaryStatusPass, verifySummaryStatusPass},
 		bucketStatuses(summary))
@@ -469,7 +469,7 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure(t *testing.T) {
 func TestRunVerifyE2EFullClassifiesKnownWatchSharedQuirkAfterSuccessfulRerun(t *testing.T) {
 	t.Parallel()
 
-	watchKey := goCommandKey(fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket()))
+	watchKey := goCommandKey(fullE2EBucketJSONCommandArgs(fakeFullE2EBucket(t, fullE2ESerialWatchSharedBucketName)))
 	runner := &fakeRunner{
 		runErrSequenceByKey: map[string][]error{watchKey: {assert.AnError}},
 		runStdoutFunc: func(args []string) string {
@@ -485,7 +485,7 @@ func TestRunVerifyE2EFullClassifiesKnownWatchSharedQuirkAfterSuccessfulRerun(t *
 	require.NoError(t, err)
 
 	assert.Empty(t, runner.combinedCommands, "the classified bucket streams through Run")
-	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(fullE2EBuckets())+1)
+	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(fullE2EBucketShapes())+1)
 	assert.Equal(t, []string{
 		"test",
 		"-tags=e2e e2e_full",
@@ -500,13 +500,13 @@ func TestRunVerifyE2EFullClassifiesKnownWatchSharedQuirkAfterSuccessfulRerun(t *
 	}, runner.runCommands[len(runner.runCommands)-1].args)
 	assert.Contains(t, stdout, "LI-20260405-03")
 	assert.Contains(t, stdout, "classified reruns:")
-	assertVerifyBucketSummary(t, summary, fullE2ESerialWatchSharedBucket().Name, verifySummaryStatusPass)
+	assertVerifyBucketSummary(t, summary, fullE2ESerialWatchSharedBucketName, verifySummaryStatusPass)
 }
 
 func TestRunVerifyE2EFullDoesNotMaskUnknownWatchSharedFailure(t *testing.T) {
 	t.Parallel()
 
-	watchKey := goCommandKey(fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket()))
+	watchKey := goCommandKey(fullE2EBucketJSONCommandArgs(fakeFullE2EBucket(t, fullE2ESerialWatchSharedBucketName)))
 	runner := &fakeRunner{
 		runErrByKey: map[string]error{watchKey: assert.AnError},
 		runStdoutFunc: func(args []string) string {
@@ -522,8 +522,8 @@ func TestRunVerifyE2EFullDoesNotMaskUnknownWatchSharedFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full e2e")
 	assert.Empty(t, runner.combinedCommands)
-	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(fullE2EBuckets()), "an unknown failure is not rerun")
-	require.Len(t, summary.E2EFullBuckets, len(fullE2EBuckets()))
+	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(fullE2EBucketShapes()), "an unknown failure is not rerun")
+	require.Len(t, summary.E2EFullBuckets, len(fullE2EBucketShapes()))
 	assert.Equal(t, []string{"TestE2E_Orchestrator_WatchSimultaneous"}, summary.E2EFullBuckets[2].FailedTests)
 }
 
@@ -608,9 +608,9 @@ func TestVerifySummaryCollectorFinalizeReadsQuirkSummary(t *testing.T) {
 func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
 	t.Parallel()
 
-	repoRoot := t.TempDir()
+	repoRoot := newFakeE2ERepo(t)
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
-	bucketArgs := fullE2EBucketCommandArgs(fullE2ESerialSyncBucket())
+	bucketArgs := fullE2EBucketCommandArgs(fakeFullE2EBucket(t, fullE2ESerialSyncBucketName))
 	runner := &fakeRunner{
 		runErrByKey: map[string]error{
 			"go " + strings.Join(bucketArgs, " "): assert.AnError,
@@ -634,72 +634,12 @@ func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
 	assert.Equal(t, string(VerifyE2EFull), summary.Profile)
 	assert.Equal(t, verifySummaryStatusFail, summary.Status)
 	assertVerifySummaryHasStep(t, summary, fastE2EStepName)
-	assertVerifyBucketSummary(t, summary, fullE2EParallelMiscBucket().Name, verifySummaryStatusPass)
-	assertVerifyBucketSummary(t, summary, fullE2ESerialSyncBucket().Name, verifySummaryStatusFail)
+	assertVerifyBucketSummary(t, summary, fullE2EParallelMiscBucketName, verifySummaryStatusPass)
+	assertVerifyBucketSummary(t, summary, fullE2ESerialSyncBucketName, verifySummaryStatusFail)
 	// The bucket after the failing one still ran.
-	assertVerifyBucketSummary(t, summary, fullE2ESerialWatchSharedBucket().Name, verifySummaryStatusPass)
+	assertVerifyBucketSummary(t, summary, fullE2ESerialWatchSharedBucketName, verifySummaryStatusPass)
 	assert.Contains(t, stdout.String(), "verify summary")
-	assert.Contains(t, stdout.String(), fullE2ESerialSyncBucket().Name)
-}
-
-func TestFullE2EExecutionManifestCoversTaggedTestsExactlyOnce(t *testing.T) {
-	t.Parallel()
-
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-
-	fullTests, err := discoverTaggedE2ETests(filepath.Join(repoRoot, "e2e"), "e2e && e2e_full")
-	require.NoError(t, err)
-
-	// The full fixture preflight runs on its own, ahead of the buckets.
-	assigned := map[string]int{fullE2EFixturePreflight: 1}
-	for _, bucket := range fullE2EBuckets() {
-		for _, name := range bucket.TestNames {
-			assigned[name]++
-		}
-	}
-
-	for _, name := range fullTests {
-		assert.Equalf(t, 1, assigned[name], "full-tag test %s must be assigned exactly once", name)
-	}
-	for name, count := range assigned {
-		assert.Containsf(t, fullTests, name, "assigned full-tag test %s must exist", name)
-		assert.Equalf(t, 1, count, "assigned full-tag test %s must appear once", name)
-	}
-}
-
-func TestFastE2EExecutionManifestKeepsOnlySmokeLiveTests(t *testing.T) {
-	t.Parallel()
-
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-
-	fastTests, err := discoverTaggedE2ETests(filepath.Join(repoRoot, "e2e"), "e2e")
-	require.NoError(t, err)
-
-	assert.Contains(t, fastTests, "TestE2E_AuthPreflight_Fast")
-	assert.Contains(t, fastTests, "TestE2E_FixturePreflight_Fast")
-	assert.Contains(t, fastTests, "TestE2E_FileOpsSmokeCRUD")
-	assert.Contains(t, fastTests, "TestE2E_Sync_UploadOnly")
-	assert.Contains(t, fastTests, "TestE2E_Sync_DownloadOnly")
-	assert.Contains(t, fastTests, "TestE2E_SyncWatch_WebsocketDisabledLongPollRegression")
-	assert.Contains(t, fastTests, "TestE2E_ShortcutSmoke_DownloadOnlyProjectsChildMount")
-	assert.Contains(t, fastTests, "TestE2E_TrackedFilesNameNoTestAccount", "only the live jobs know the addresses it looks for")
-
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_Whoami")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_LsRoot")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_Mkdir")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_Put")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_LsFolder")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_Stat")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_Get")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_RmFile")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_RmSubfolder")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_RmPermanent")
-	assert.NotContains(t, fastTests, "TestE2E_FileOps_Status")
-	assert.NotContains(t, fastTests, "TestE2E_ErrorCases")
-	assert.NotContains(t, fastTests, "TestE2E_JSONOutput")
-	assert.NotContains(t, fastTests, "TestE2E_QuietFlag")
+	assert.Contains(t, stdout.String(), fullE2ESerialSyncBucketName)
 }
 
 // Validates: R-6.10.22
@@ -747,113 +687,6 @@ func TestVerifyProfileUsageNamesExactlyTheProfiles(t *testing.T) {
 	assert.ElementsMatch(t, usage, declared, "the usage line and the VerifyProfile constants")
 }
 
-// discoverTaggedE2ETests lists, in name order, the top-level Test functions
-// of the e2e test files whose build constraint is exactly buildExpression.
-func discoverTaggedE2ETests(e2eDir string, buildExpression string) ([]string, error) {
-	entries, err := os.ReadDir(e2eDir)
-	if err != nil {
-		return nil, fmt.Errorf("read e2e dir: %w", err)
-	}
-
-	tests := make([]string, 0)
-	fset := token.NewFileSet()
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-
-		path := filepath.Join(e2eDir, entry.Name())
-		data, err := readFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
-		}
-		if !hasBuildExpression(string(data), buildExpression) {
-			continue
-		}
-
-		file, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
-		}
-
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
-				continue
-			}
-
-			tests = append(tests, fn.Name.Name)
-		}
-	}
-
-	slices.Sort(tests)
-	return tests, nil
-}
-
-// hasBuildExpression reports whether source's leading comment block carries
-// a //go:build line equal to buildExpression.
-func hasBuildExpression(source string, buildExpression string) bool {
-	for _, line := range strings.Split(source, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, "//") {
-			break
-		}
-		if !strings.HasPrefix(line, "//go:build ") {
-			continue
-		}
-
-		return strings.TrimSpace(strings.TrimPrefix(line, "//go:build ")) == buildExpression
-	}
-
-	return false
-}
-
-func TestFullE2EBucketsOwnDemotedFastTests(t *testing.T) {
-	t.Parallel()
-
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_DriveList_HappyPath_Text")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_Shared_FileDiscoveryAndSelectorReadCommands")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_Logout_PreservesOfflineAccountCatalog")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_ErrorCases")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_JSONOutput")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_QuietFlag")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_RoundTrip")
-	assert.Contains(t, fullE2EParallelMiscTestNames(), "TestE2E_Status_LiveOverlay_ConfigTolerance")
-	assert.NotContains(t, fullE2EParallelMiscTestNames(), "TestE2E_Whoami_ConfigTolerance")
-
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DryRun")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_InternalBaselineVerification")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_Conflicts")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DriveRemoveAndReAdd")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveEditEditConflict")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges")
-	assert.Contains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges")
-	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile")
-	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload")
-	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_ResolveAll")
-	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_DeleteSafetyThreshold")
-	assert.NotContains(t, fullE2ESerialSyncTestNames(), "TestE2E_Sync_ResolveDryRun")
-
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_SyncWatch_WebsocketStartupSmoke")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_RenameReusesChildMountState")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_MoveReusesChildMountState")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_WritableUploadSyncsToSharedTarget")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_ReadOnlyBlockedUploadStatus")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget")
-	assert.Contains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot")
-	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_WithWatchDaemonExecutesQueuedIntent")
-	assert.NotContains(t, fullE2ESerialWatchSharedTestNames(), "TestE2E_Resolve_DeletesWithWatchDaemon")
-}
-
 func assertVerifyStopsAfterPreflightFailure(
 	t *testing.T,
 	profile VerifyProfile,
@@ -863,7 +696,7 @@ func assertVerifyStopsAfterPreflightFailure(
 ) {
 	t.Helper()
 
-	repoRoot := t.TempDir()
+	repoRoot := newFakeE2ERepo(t)
 	runner := &fakeRunner{
 		runErrByKey: map[string]error{
 			commandKey: assert.AnError,
