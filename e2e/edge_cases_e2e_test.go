@@ -20,9 +20,9 @@ import (
 // Tagged e2e,e2e_full — runs in nightly/manual CI only (60-min package timeout).
 // ---------------------------------------------------------------------------
 
-// TestE2E_ZeroByteFileSync validates that zero-byte files can be uploaded
+// TestE2E_Edge_ZeroByteFileSync validates that zero-byte files can be uploaded
 // and downloaded with correct metadata via the OneDrive API.
-func TestE2E_ZeroByteFileSync(t *testing.T) {
+func TestE2E_Edge_ZeroByteFileSync(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -52,9 +52,9 @@ func TestE2E_ZeroByteFileSync(t *testing.T) {
 	assert.Equal(t, int64(0), info.Size(), "zero-byte file should arrive as zero bytes")
 }
 
-// TestE2E_UnicodeFilenameRoundtrip validates that files with accented
+// TestE2E_Edge_UnicodeFilenameRoundtrip validates that files with accented
 // characters (NFC normalization) survive a full upload-download cycle.
-func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
+func TestE2E_Edge_UnicodeFilenameRoundtrip(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -85,11 +85,11 @@ func TestE2E_UnicodeFilenameRoundtrip(t *testing.T) {
 	assert.Equal(t, content, string(data), "unicode file content should roundtrip")
 }
 
-// TestE2E_InvalidFilenameRejection validates that OneDrive-invalid filenames
+// TestE2E_Edge_InvalidFilenameRejection validates that OneDrive-invalid filenames
 // are not uploaded and produce warnings.
 //
 // Validates: R-6.6.28
-func TestE2E_InvalidFilenameRejection(t *testing.T) {
+func TestE2E_Edge_InvalidFilenameRejection(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -121,10 +121,10 @@ func TestE2E_InvalidFilenameRejection(t *testing.T) {
 		"invalid filename should not be uploaded")
 }
 
-// TestE2E_RapidFileChurn validates that creating, modifying, deleting,
+// TestE2E_Edge_RapidFileChurn validates that creating, modifying, deleting,
 // and re-creating a file in quick succession results in the correct
 // final state after sync.
-func TestE2E_RapidFileChurn(t *testing.T) {
+func TestE2E_Edge_RapidFileChurn(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 

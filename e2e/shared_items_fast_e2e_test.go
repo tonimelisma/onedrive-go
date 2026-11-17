@@ -10,7 +10,7 @@ import (
 )
 
 // Validates: R-3.6.6, R-3.6.7, R-1.6.2, R-1.2.5
-func TestE2E_Shared_FileDiscoveryAndSelectorReadCommands(t *testing.T) {
+func TestE2E_SharedRead_FileDiscoveryAndSelectorReadCommands(t *testing.T) {
 	shared := discoverSharedFile(t)
 	rawLink, fixture, cfgPath, env := shared.rawLink, shared.fixture, shared.cfgPath, shared.env
 
@@ -20,7 +20,7 @@ func TestE2E_Shared_FileDiscoveryAndSelectorReadCommands(t *testing.T) {
 }
 
 // Validates: R-3.6.6, R-3.3.12
-func TestE2E_Shared_FileDiscoveryRejectsDriveAdd(t *testing.T) {
+func TestE2E_SharedRead_FileDiscoveryRejectsDriveAdd(t *testing.T) {
 	rawLink := requireSharedFileLink(t)
 	registerLogDump(t)
 

@@ -574,10 +574,13 @@ func runOptionalVerification(
 }
 
 // runLiveVerification runs the fast live suite and, under e2e-full, the full
-// buckets. A fast-suite test failure does not stop e2e-full: it says nothing
-// about the buckets, and the night's record has to show every failure. A
-// preflight failure does, because the account or the fixtures are unusable;
-// the buckets are then recorded as not run.
+// buckets. Under e2e-full it first discovers the full tier, before any live
+// call, and every later step uses the buckets that one discovery built; a
+// test it cannot place stops the profile there. A fast-suite test failure
+// does not stop e2e-full: it says nothing about the buckets, and the night's
+// record has to show every failure. A preflight failure does, because the
+// account or the fixtures are unusable; the buckets are then recorded as not
+// run.
 func runLiveVerification(
 	ctx context.Context,
 	runner commandRunner,
@@ -588,12 +591,20 @@ func runLiveVerification(
 	stdout, stderr io.Writer,
 	plan verifyPlan,
 ) error {
+	var buckets []fullE2EBucketSpec
+	if plan.runE2EFull {
+		var discoverErr error
+		if buckets, discoverErr = runFullE2EDiscovery(collector, opts.RepoRoot, stdout); discoverErr != nil {
+			return discoverErr
+		}
+	}
+
 	var fastErr error
 	if plan.runE2E {
 		fastErr = runE2E(ctx, runner, opts.RepoRoot, e2eEnv, collector, stdout, stderr, opts.ClassifyLiveQuirks)
 		if fastErr != nil && (!plan.runE2EFull || errors.Is(fastErr, errE2EPreflight)) {
 			if plan.runE2EFull {
-				collector.recordBucketsNotRun(fullE2EBuckets(), "fast e2e preflight failed")
+				collector.recordBucketsNotRun(buckets, "fast e2e preflight failed")
 			}
 
 			return fastErr
@@ -603,7 +614,7 @@ func runLiveVerification(
 		return nil
 	}
 
-	fullErr := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, e2eLogDir, collector, stdout, stderr, opts.ClassifyLiveQuirks)
+	fullErr := runE2EFull(ctx, runner, opts.RepoRoot, e2eEnv, e2eLogDir, buckets, collector, stdout, stderr, opts.ClassifyLiveQuirks)
 
 	return errors.Join(fastErr, fullErr)
 }
@@ -959,6 +970,7 @@ func verifyStepNames() []verifyStepName {
 		coverageStepName,
 		fullE2ECompileStepName,
 		shortUnitTestsStepName,
+		fullE2EDiscoveryStepName,
 		authPreflightStepName,
 		fastFixturePreflightStepName,
 		fastE2EStepName,
@@ -978,12 +990,12 @@ func verifyStepNames() []verifyStepName {
 
 // runsGoTest reports whether the step runs go test, whose failed tests name
 // the step's failure in its log. A step that runs no go test (the format,
-// lint and rule checks, the builds, the tagged vet, the coverage gate and
-// the compile of the full live suite) fails in a way no test names, so the
-// nightly reader keys its marker whenever a log holds it. The switch names
-// every step of the set, so a new step must say which it is
-// (TestVerifyStepNamesSayWhetherTheyRunGoTest); a name outside the set runs
-// none.
+// lint and rule checks, the builds, the tagged vet, the coverage gate, the
+// compile of the full live suite and the discovery of its tests) fails in a
+// way no test names, so the nightly reader keys its marker whenever a log
+// holds it. The switch names every step of the set, so a new step must say
+// which it is (TestVerifyStepNamesSayWhetherTheyRunGoTest); a name outside
+// the set runs none.
 func (name verifyStepName) runsGoTest() bool {
 	switch name {
 	case unitTestsStepName, shortUnitTestsStepName, authPreflightStepName, fastFixturePreflightStepName,
@@ -994,7 +1006,7 @@ func (name verifyStepName) runsGoTest() bool {
 	case formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
 		readmeStatusStepName, specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
-		taggedVetStepName, coverageStepName, fullE2ECompileStepName:
+		taggedVetStepName, coverageStepName, fullE2ECompileStepName, fullE2EDiscoveryStepName:
 		return false
 	}
 

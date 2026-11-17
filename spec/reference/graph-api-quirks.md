@@ -329,7 +329,7 @@ Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify def
   returned HTTP 404 `itemNotFound` with request ID
   `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`
 - the cascading fast-suite failure later surfaced in
-  `TestE2E_RoundTrip/rm_permanent` only because the preceding `put` had already
+  `TestE2E_FileOps_RoundTrip/rm_permanent` only because the preceding `put` had already
   failed on that false negative
 - local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on
   April 23, 2026 hit the same boundary again in
@@ -468,7 +468,7 @@ Observed extension trigger on April 5, 2026:
 Observed extension trigger on April 9, 2026 during `go run ./cmd/devtool verify
 default`:
 
-- fast E2E `TestE2E_RoundTrip/rm_permanent` proved the same family could
+- fast E2E `TestE2E_FileOps_RoundTrip/rm_permanent` proved the same family could
   outlive the old ~32-second total budget after earlier substeps had already
   created, listed, and partially cleaned up `/onedrive-go-e2e-1775753944282690000`
 - the follow-on `put /onedrive-go-e2e-1775753944282690000/perm-test.txt` kept
@@ -495,9 +495,9 @@ path, not the first resolved ID, so the CLI cannot fail immediately on that
 delete-route inconsistency.
 
 Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
--run '^TestE2E_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`:
+-run '^TestE2E_Sync_EdgeCases$|^TestE2E_Sync_BidirectionalMerge$'`:
 
-- cleanup for `TestE2E_EdgeCases/concurrent_uploads` resolved
+- cleanup for `TestE2E_Sync_EdgeCases/concurrent_uploads` resolved
   `/onedrive-go-e2e-edge-1775450932112095000/concurrent-1.txt` successfully by
   path
 - the immediate `DELETE /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5fd8d410d21d4234a567f45e01fc46e2`

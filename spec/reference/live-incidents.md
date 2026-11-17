@@ -25,7 +25,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Historical name | Removed in | Current coverage |
 | --- | --- | --- |
-| `TestE2E_FileOps_Whoami`, `_LsRoot`, `_LsFolder`, `_Mkdir`, `_Put`, `_Stat`, `_Get`, `_RmFile`, `_RmSubfolder`, `_RmPermanent`, `_Status` | #487 (`bc9913f8`), fast-lane smoke reset | `TestE2E_FileOpsSmokeCRUD` (fast lane) and `TestE2E_RoundTrip` subtests (full suite) |
+| `TestE2E_FileOps_Whoami`, `_LsRoot`, `_LsFolder`, `_Mkdir`, `_Put`, `_Stat`, `_Get`, `_RmFile`, `_RmSubfolder`, `_RmPermanent`, `_Status` | #487 (`bc9913f8`), fast-lane smoke reset | `TestE2E_FileOpsSmokeCRUD` (fast lane) and `TestE2E_FileOps_RoundTrip` subtests (full suite) |
 | `TestE2E_Sync_DownloadOnlyIgnoresLocal` | #487 (`bc9913f8`) | renamed to `TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges` |
 | `TestE2E_Sync_UploadOnlyIgnoresRemote` | #487 (`bc9913f8`) | renamed to `TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges` |
 | `TestResolveConflict_KeepLocal_FollowUpSyncDoesNotRedetectConflictWhenRemoteDeltaStillShowsLoser` | #496 (`83d303d4`), with the manual conflict-resolution workflow | no direct replacement; the `resolve` workflow no longer exists |
@@ -36,6 +36,26 @@ the product fix and the broader tests named, not on a dedicated test.
 | `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile` | #595 (`406a5409`); `sync_paths` itself went in #496 (`83d303d4`) | no direct replacement; `sync_paths` no longer exists |
 | `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload` | #595 (`406a5409`); the ignore-marker filter itself went in #496 (`83d303d4`) | no direct replacement; the ignore-marker filter no longer exists |
 | `TestE2E_Status_PerDrive_NoConditionsOrRetries`, `TestE2E_Status_JSON_ConditionDetails`, `TestE2E_Status_ConditionLifecycle` | #701 (`75f872de`), status redesign | renamed to `TestE2E_Status_PerDrive_NoIssuesOrRetries`, `TestE2E_Status_JSON_IssueDetails`, `TestE2E_Status_IssueLifecycle` |
+| `TestE2E_Sync_QuietMode` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SyncIsolated_QuietMode` |
+| `TestE2E_Sync_MtimeOnlyChange` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SyncIsolated_MtimeOnlyChange` |
+| `TestE2E_Sync_TransferWorkersConfig` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SyncIsolated_TransferWorkersConfig` |
+| `TestE2E_Sync_IncrementalDeltaToken` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SyncIsolated_IncrementalDeltaToken` |
+| `TestE2E_Sync_DriveRemovePurgeResetsState` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SyncIsolated_DriveRemovePurgeResetsState` |
+| `TestE2E_Sync_MultiDriveReport` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Orchestrator_MultiDriveReport` |
+| `TestE2E_Shared_FileDiscoveryAndSelectorReadCommands` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SharedRead_FileDiscoveryAndSelectorReadCommands` |
+| `TestE2E_Shared_FileDiscoveryRejectsDriveAdd` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SharedRead_FileDiscoveryRejectsDriveAdd` |
+| `TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog` | 2026-11, renamed for its bucket family | renamed to `TestE2E_SharedRead_JSON_RecipientListingUsesLiveAccountCatalog` |
+| `TestE2E_EdgeCases` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Sync_EdgeCases` |
+| `TestE2E_RoundTrip` | 2026-11, renamed for its bucket family | renamed to `TestE2E_FileOps_RoundTrip` |
+| `TestE2E_ErrorCases` | 2026-11, renamed for its bucket family | renamed to `TestE2E_FileOps_ErrorCases` |
+| `TestE2E_JSONOutput` | 2026-11, renamed for its bucket family | renamed to `TestE2E_FileOps_JSONOutput` |
+| `TestE2E_QuietFlag` | 2026-11, renamed for its bucket family | renamed to `TestE2E_FileOps_QuietFlag` |
+| `TestE2E_ZeroByteFileSync` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Edge_ZeroByteFileSync` |
+| `TestE2E_UnicodeFilenameRoundtrip` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Edge_UnicodeFilenameRoundtrip` |
+| `TestE2E_InvalidFilenameRejection` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Edge_InvalidFilenameRejection` |
+| `TestE2E_RapidFileChurn` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Edge_RapidFileChurn` |
+| `TestE2E_RecycleBinRoundtrip` | 2026-11, renamed for its bucket family | renamed to `TestE2E_RecycleBin_Roundtrip` |
+| `TestE2E_RecycleBinEmpty` | 2026-11, renamed for its bucket family | renamed to `TestE2E_RecycleBin_Empty` |
 
 ## Index
 
@@ -204,7 +224,7 @@ First seen: 2026-11-15
 Last seen: 2026-11-15
 Area: scheduled `e2e_full`, the suite's converge loop around a one-shot sync
 Suite / test: scheduled CI run `43739908483`, job `e2e`,
-`TestE2E_Sync_IncrementalDeltaToken`
+`TestE2E_Sync_IncrementalDeltaToken` (historical test names; see [Historical test names](#historical-test-names))
 Classification: test bug
 Status: fixed
 Recurring: no
@@ -670,7 +690,7 @@ First seen: 2026-05-03
 Last seen: 2026-05-03
 Area: scheduled `e2e_full`, remote observation, root delta
 Suite / test: scheduled CI run `25276657575`; `e2e` job,
-`full-parallel-misc`, `TestE2E_Sync_IncrementalDeltaToken`
+`full-parallel-misc`, `TestE2E_Sync_IncrementalDeltaToken` (historical test names; see [Historical test names](#historical-test-names))
 Classification: product bug
 Status: fixed
 Recurring: no
@@ -948,7 +968,7 @@ Last seen: 2026-04-25
 Area: local/manual `e2e_full`, durable mirror recovery coverage
 Suite / test: `go run ./cmd/devtool verify e2e-full`, `full-serial-sync`,
 `TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta`; scheduled
-`e2e` `full-parallel-misc`, `TestE2E_Sync_DriveRemovePurgeResetsState`
+`e2e` `full-parallel-misc`, `TestE2E_Sync_DriveRemovePurgeResetsState` (historical test names; see [Historical test names](#historical-test-names))
 Classification: test harness
 Status: fixed
 Recurring: yes
@@ -1312,7 +1332,7 @@ First seen: 2026-04-22
 Last seen: 2026-11-11
 Area: nightly/manual `e2e_full`, concurrent upload coverage, retry-work contract
 Suite / test: `go run ./cmd/devtool verify e2e-full --classify-live-quirks`;
-`full-parallel-misc`; `TestE2E_Sync_TransferWorkersConfig`
+`full-parallel-misc`; `TestE2E_Sync_TransferWorkersConfig` (historical test names; see [Historical test names](#historical-test-names))
 Classification: test harness
 Status: fixed
 Recurring: yes
@@ -1813,7 +1833,7 @@ Promoted docs: [graph-api-quirks.md](graph-api-quirks.md), [graph-client.md](../
 First seen: 2026-04-08
 Last seen: 2026-04-24
 Area: fast E2E, full E2E, CLI `put`, simple-upload finalization
-Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put`
+Suite / test: local `go run ./cmd/devtool verify default`, `TestE2E_RoundTrip/rm_permanent` setup `put` (historical test names; see [Historical test names](#historical-test-names))
 Classification: graph quirk
 Status: mitigated
 Recurring: yes

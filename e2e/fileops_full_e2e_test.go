@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These extended direct file-operation checks moved to the full battery so
-// the per-PR live lane keeps only the minimum CRUD smoke.
-func TestE2E_RoundTrip(t *testing.T) {
+// TestE2E_FileOps_RoundTrip takes one live folder through mkdir, put, ls,
+// stat, get, rm and rm --permanent, and reads status as JSON and as text.
+func TestE2E_FileOps_RoundTrip(t *testing.T) {
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
@@ -145,7 +145,7 @@ func assertRoundTripStatusJSON(t *testing.T, cfgPath string) {
 	assert.NotEmpty(t, out.Accounts[0].Drives[0].Folder)
 }
 
-func TestE2E_ErrorCases(t *testing.T) {
+func TestE2E_FileOps_ErrorCases(t *testing.T) {
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
@@ -178,7 +178,7 @@ func TestE2E_ErrorCases(t *testing.T) {
 	})
 }
 
-func TestE2E_JSONOutput(t *testing.T) {
+func TestE2E_FileOps_JSONOutput(t *testing.T) {
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)
@@ -214,7 +214,7 @@ func TestE2E_JSONOutput(t *testing.T) {
 	})
 }
 
-func TestE2E_QuietFlag(t *testing.T) {
+func TestE2E_FileOps_QuietFlag(t *testing.T) {
 	registerLogDump(t)
 
 	cfgPath := writeMinimalConfig(t)

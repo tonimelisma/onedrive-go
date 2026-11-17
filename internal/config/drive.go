@@ -325,8 +325,8 @@ func otherSyncDirs(cfg *Config, catalog *Catalog, excludeID driveid.CanonicalID)
 //
 // Read surfaces must use this rather than the raw configured value. A drive
 // that relies on the default has an empty sync_dir in config, so reporting the
-// raw field tells the user their files go nowhere -- `status` did exactly that
-// until it was caught by TestE2E_RoundTrip/status_json.
+// raw field tells the user their files go nowhere; the live
+// TestE2E_FileOps_RoundTrip/status_json holds `status --json` to a folder.
 func EffectiveSyncDir(
 	cfg *Config,
 	canonicalID driveid.CanonicalID,

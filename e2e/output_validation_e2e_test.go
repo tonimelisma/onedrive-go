@@ -89,9 +89,9 @@ func TestE2E_Status_NoDrives(t *testing.T) {
 		"status with no drives should suggest 'login' or 'drive add'")
 }
 
-// TestE2E_Sync_QuietMode validates that --quiet suppresses informational
+// TestE2E_SyncIsolated_QuietMode validates that --quiet suppresses informational
 // output during sync operations.
-func TestE2E_Sync_QuietMode(t *testing.T) {
+func TestE2E_SyncIsolated_QuietMode(t *testing.T) {
 	t.Parallel()
 	registerLogDump(t)
 
@@ -124,9 +124,9 @@ func TestE2E_Sync_QuietMode(t *testing.T) {
 	}
 }
 
-// TestE2E_Sync_MultiDriveReport validates that syncing multiple drives
+// TestE2E_Orchestrator_MultiDriveReport validates that syncing multiple drives
 // produces per-drive report headers with separator lines. Requires drive2.
-func TestE2E_Sync_MultiDriveReport(t *testing.T) {
+func TestE2E_Orchestrator_MultiDriveReport(t *testing.T) {
 	t.Parallel()
 	requireDrive2(t)
 	registerLogDump(t)

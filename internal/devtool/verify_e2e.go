@@ -13,201 +13,47 @@ import (
 	"time"
 )
 
-// The full live suite's buckets, each a step of the e2e-full profile.
+// The full live suite's buckets, each a step of the e2e-full profile. Which
+// tests a bucket runs is what discovery places in it (fullE2EFamilyBuckets).
 const (
 	fullE2EParallelMiscBucketName      verifyStepName = "full-parallel-misc"
 	fullE2ESerialSyncBucketName        verifyStepName = "full-serial-sync"
 	fullE2ESerialWatchSharedBucketName verifyStepName = "full-serial-watch-shared"
 )
 
-func fullE2EParallelMiscBucket() fullE2EBucketSpec {
-	return fullE2EBucketSpec{
-		Name:      fullE2EParallelMiscBucketName,
-		Kind:      fullE2EBucketKindParallelMisc,
-		TestNames: fullE2EParallelMiscTestNames(),
-		Parallel:  fullE2EParallelMiscParallel,
-		Timeout:   fullE2EParallelMiscTimeout,
+// fullE2EDiscoveryStepName names the e2e-full step that discovers the full
+// tier and places its tests in their buckets, before the profile's first
+// live call.
+const fullE2EDiscoveryStepName verifyStepName = "e2e-full-discovery"
+
+// runFullE2EDiscovery runs the discovery step and returns the buckets every
+// later step of the e2e-full profile uses, the records of buckets that do not
+// run included. When it fails nothing live has started: the buckets are
+// recorded as not run, with no tests, and its error is returned.
+func runFullE2EDiscovery(collector *verifySummaryCollector, repoRoot string, stdout io.Writer) ([]fullE2EBucketSpec, error) {
+	var buckets []fullE2EBucketSpec
+	err := collector.runStep(fullE2EDiscoveryStepName, func() error {
+		if err := writeStatus(stdout, "==> discover the full e2e tier's buckets\n"); err != nil {
+			return fmt.Errorf("write status: %w", err)
+		}
+
+		var discoverErr error
+		buckets, discoverErr = discoverFullE2EBuckets(repoRoot)
+
+		return discoverErr
+	})
+	if err != nil {
+		collector.recordBucketsNotRun(fullE2EBucketShapes(), "full e2e discovery failed")
+		return nil, err
 	}
+
+	return buckets, nil
 }
 
-func fullE2ESerialSyncBucket() fullE2EBucketSpec {
-	return fullE2EBucketSpec{
-		Name:      fullE2ESerialSyncBucketName,
-		Kind:      fullE2EBucketKindSerialSync,
-		TestNames: fullE2ESerialSyncTestNames(),
-		Parallel:  fullE2ESerialParallel,
-		Timeout:   fullE2ESerialSyncTimeout,
-	}
-}
-
-func fullE2ESerialWatchSharedBucket() fullE2EBucketSpec {
-	return fullE2EBucketSpec{
-		Name:      fullE2ESerialWatchSharedBucketName,
-		Kind:      fullE2EBucketKindSerialWatchShared,
-		TestNames: fullE2ESerialWatchSharedTestNames(),
-		Parallel:  fullE2ESerialParallel,
-		Timeout:   fullE2ESerialWatchSharedTimeout,
-	}
-}
-
-func fullE2EBuckets() []fullE2EBucketSpec {
-	return []fullE2EBucketSpec{
-		fullE2EParallelMiscBucket(),
-		fullE2ESerialSyncBucket(),
-		fullE2ESerialWatchSharedBucket(),
-	}
-}
-
-func fullE2EParallelMiscTestNames() []string {
-	return []string{
-		"TestE2E_DriveList_HappyPath_Text",
-		"TestE2E_DriveList_JSON",
-		"TestE2E_DriveList_NoAccounts",
-		"TestE2E_DriveList_AccountsNoDrives",
-		"TestE2E_DriveList_PersonalAccountDoesNotDuplicateCanonicalDrive",
-		"TestE2E_DriveList_ConfiguredNoSyncDir",
-		"TestE2E_DriveList_ConfigTolerance",
-		"TestE2E_Status_ConfigTolerance",
-		"TestE2E_Status_LiveOverlay_ConfigTolerance",
-		"TestE2E_Status_PersonalAccountShowsSinglePersonalLiveDrive",
-		"TestE2E_Shared_FileDiscoveryAndSelectorReadCommands",
-		"TestE2E_Shared_FileDiscoveryRejectsDriveAdd",
-		"TestE2E_Logout_PreservesOfflineAccountCatalog",
-		"TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog",
-		"TestE2E_RoundTrip",
-		"TestE2E_ErrorCases",
-		"TestE2E_JSONOutput",
-		"TestE2E_QuietFlag",
-		"TestE2E_DriveList_AllFlag",
-		"TestE2E_DriveList_StaleStateDB",
-		"TestE2E_ZeroByteFileSync",
-		"TestE2E_UnicodeFilenameRoundtrip",
-		"TestE2E_InvalidFilenameRejection",
-		"TestE2E_RapidFileChurn",
-		"TestE2E_Status_AfterSync",
-		"TestE2E_Status_JSON",
-		"TestE2E_Status_PausedDrive",
-		"TestE2E_Pause_WithDuration",
-		"TestE2E_Pause_IndefiniteAndResume",
-		"TestE2E_Resume_NotPaused",
-		"TestE2E_Resume_AllDrives",
-		"TestE2E_Status_PerDrive_NoIssuesOrRetries",
-		"TestE2E_Status_JSON_IssueDetails",
-		"TestE2E_CLI_NoResolveCommand",
-		"TestE2E_InternalBaselineVerification_AfterSync",
-		"TestE2E_RecycleBinRoundtrip",
-		"TestE2E_RecycleBinEmpty",
-		"TestE2E_Mv_Rename",
-		"TestE2E_Mv_MoveToFolder",
-		"TestE2E_Mv_JSON",
-		"TestE2E_Mv_NotFound",
-		"TestE2E_Cp_File",
-		"TestE2E_Cp_IntoFolder",
-		"TestE2E_Cp_JSON",
-		"TestE2E_Cp_NotFound",
-		"TestE2E_Mv_ForceOverwrite",
-		"TestE2E_Cp_ForceOverwrite",
-		"TestE2E_Mv_Folder",
-		"TestE2E_Status_IssueLifecycle",
-		"TestE2E_Status_JSONShape",
-		"TestE2E_Status_FilteredDriveIsSubsetOfAllDrives",
-		"TestE2E_Status_NoDrives",
-		"TestE2E_Sync_QuietMode",
-		"TestE2E_Sync_MtimeOnlyChange",
-		"TestE2E_Sync_TransferWorkersConfig",
-		"TestE2E_Sync_IncrementalDeltaToken",
-		"TestE2E_Sync_DriveRemovePurgeResetsState",
-	}
-}
-
-func fullE2ESerialSyncTestNames() []string {
-	return []string{
-		"TestE2E_Sync_DryRun",
-		"TestE2E_Sync_InternalBaselineVerification",
-		"TestE2E_Sync_Conflicts",
-		"TestE2E_Sync_DriveRemoveAndReAdd",
-		"TestE2E_EdgeCases",
-		"TestE2E_Sync_BidirectionalMerge",
-		"TestE2E_Sync_EditDeleteConflict",
-		"TestE2E_Sync_DirectionalModes_PreserveEditEditConflict",
-		"TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict",
-		"TestE2E_Sync_DirectionalModes_PreserveCreateCreateConflict",
-		"TestE2E_Sync_DeletePropagation",
-		"TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges",
-		"TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges",
-		"TestE2E_Sync_NestedFolderHierarchy",
-		"TestE2E_Sync_DryRunNonDestructive",
-		"TestE2E_Sync_ConvergentEdit",
-		"TestE2E_Sync_InternalBaselineVerificationDetectsTampering",
-		"TestE2E_Sync_EmptyDirectory",
-		"TestE2E_Sync_NestedDeletion",
-		"TestE2E_Sync_IdempotentReSync",
-		"TestE2E_Sync_CrashRecoveryIdempotent",
-		"TestE2E_Sync_FolderMovesBothWays",
-		"TestE2E_Sync_CrossMoves",
-		"TestE2E_Sync_NamingCorpusRoundtrip",
-		"TestE2E_Sync_TwoWriters",
-		"TestE2E_Sync_LargeFileBetweenClients",
-		"TestE2E_Sync_TypeChangesBothWays",
-		"TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta",
-		"TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed",
-		"TestE2E_Sync_KillMidUploadResumesSession",
-		"TestE2E_Sync_KillMidDownloadResumesPartial",
-		"TestE2E_SyncFull_RemoteDeleteGoesToLocalTrashAndRestores",
-		"TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound",
-	}
-}
-
-func fullE2ESerialWatchSharedTestNames() []string {
-	return []string{
-		"TestE2E_SyncWatch_WebsocketStartupSmoke",
-		"TestE2E_Sync_MultiDriveReport",
-		"TestE2E_SyncWatch_RemoteToLocal",
-		"TestE2E_SyncWatch_Bidirectional",
-		"TestE2E_SyncWatch_ConflictDuringWatch",
-		"TestE2E_SyncWatch_FileModification",
-		"TestE2E_SyncWatch_FileDeletion",
-		"TestE2E_SyncWatch_FolderCreation",
-		"TestE2E_SyncWatch_MultipleFiles",
-		"TestE2E_SyncWatch_LargeFile",
-		"TestE2E_SyncWatch_RapidChurn",
-		"TestE2E_SyncWatch_GracefulShutdown",
-		"TestE2E_SyncWatch_TimedPauseExpiry",
-		"TestE2E_SyncWatch_StatusPerfCountsRequests",
-		"TestE2E_SyncWatch_BasicRoundTrip",
-		"TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners",
-		"TestE2E_SyncWatch_PauseResume",
-		"TestE2E_SyncWatch_ControlSocketReload",
-		"TestE2E_SyncWatch_WebsocketRemoteWakeAndRestart",
-		"TestE2E_Shared_FileDiscoveryAndSelectorRoundTrip",
-		"TestE2E_Shared_FolderDiscoveryContinuesToDriveAdd",
-		"TestE2E_Shared_RawFolderLinkDriveAdd_NormalizesToCanonicalSharedDrive",
-		"TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter",
-		"TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX",
-		"TestE2E_SharedFolder_DriveList_ShowsExplicitSharedFixtures",
-		"TestE2E_SharedFolder_RemoteMutationSyncsToRecipient",
-		"TestE2E_SharedFolder_RecipientSyncTwice_Idempotent",
-		"TestE2E_Shortcut_ReadOnlyDownloadOnlyProjectsChildMount",
-		"TestE2E_Shortcut_ExplicitStandaloneSharedFolderRemainsConfiguredDrive",
-		"TestE2E_Shortcut_RestartIdempotentKeepsChildMountVisible",
-		"TestE2E_Shortcut_RenameReusesChildMountState",
-		"TestE2E_Shortcut_MoveReusesChildMountState",
-		"TestE2E_Shortcut_WritableUploadSyncsToSharedTarget",
-		"TestE2E_Shortcut_ReadOnlyBlockedUploadStatus",
-		"TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes",
-		"TestE2E_Shortcut_WatchLocalUploadSyncsToSharedTarget",
-		"TestE2E_Shortcut_WatchRemoteWakeUpdatesChildRoot",
-		"TestE2E_Orchestrator_SimultaneousSync",
-		"TestE2E_Orchestrator_Status",
-		"TestE2E_Orchestrator_DriveIsolation",
-		"TestE2E_Orchestrator_OneDriveFails",
-		"TestE2E_Orchestrator_SelectiveDrive",
-		"TestE2E_Orchestrator_WatchSimultaneous",
-		"TestE2E_Orchestrator_WatchDriveIsolation",
-		"TestE2E_Orchestrator_WatchPausedDrive",
-	}
-}
-
+// fullE2EBucketCommandArgs is the go test command of one bucket. Its -run
+// pattern names each of the bucket's tests exactly, never a prefix: the fast
+// tier's tests compile into the full binary too, and a prefix such as
+// TestE2E_Sync_ would run TestE2E_Sync_UploadOnly a second time.
 func fullE2EBucketCommandArgs(bucket fullE2EBucketSpec) []string {
 	return []string{
 		"test",
@@ -740,12 +586,15 @@ func runE2EPreflight(
 	})
 }
 
+// runE2EFull runs the full fixture preflight, then every one of the buckets
+// discovery built (runFullE2EDiscovery).
 func runE2EFull(
 	ctx context.Context,
 	runner commandRunner,
 	repoRoot string,
 	env []string,
 	logDir string,
+	buckets []fullE2EBucketSpec,
 	collector *verifySummaryCollector,
 	stdout, stderr io.Writer,
 	classifyLiveQuirks bool,
@@ -757,7 +606,6 @@ func runE2EFull(
 	fullEnv := append([]string{}, env...)
 	fullEnv = append(fullEnv, "E2E_LOG_DIR="+logDir)
 
-	buckets := fullE2EBuckets()
 	if err := runE2EPreflightFull(ctx, runner, repoRoot, fullEnv, collector, stdout, stderr); err != nil {
 		collector.recordBucketsNotRun(buckets, "full fixture preflight failed")
 		return err

@@ -177,7 +177,7 @@ func assertDriveListRequiresLoginAfterLogout(t *testing.T, cfgPath string, env m
 }
 
 // Validates: R-3.6.6, R-3.6.7
-func TestE2E_Shared_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
+func TestE2E_SharedRead_JSON_RecipientListingUsesLiveAccountCatalog(t *testing.T) {
 	t.Parallel()
 	rawLink := requireSharedFileLink(t)
 	registerLogDump(t)
