@@ -34,11 +34,13 @@ const (
 // receiver's type, package name first (t.Fatal on a *testing.T reads
 // testing.T.Fatal), so the rule holds for a *testing.T kept in a struct field
 // or passed as testing.TB, whatever the variable is called, and in the
-// non-test files of testutil; no exclusion exempts any file from it.
+// non-test files of testutil; no exclusion exempts any file from it, whatever
+// path the exclusion names.
 func TestGolangciConfig_ForbidigoRefusesDirectTestingFailures(t *testing.T) {
 	t.Parallel()
 
 	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "forbidigo")
 	assert.Equal(t, "true", yamlValue(t, config, "linters", "settings", "forbidigo", "analyze-types"))
 
 	rule := forbidigoRule(t, config, testFailureLintMessage)
@@ -53,13 +55,8 @@ func TestGolangciConfig_ForbidigoRefusesDirectTestingFailures(t *testing.T) {
 		assert.False(t, pattern.MatchString(method), method)
 	}
 
-	for _, path := range []string{
-		"internal/sync/engine_test.go", "e2e/sync_e2e_test.go", "testutil/testenv.go",
-		"internal/fsroot/root_test.go", "internal/devtool/verify_test.go",
-	} {
-		assert.False(t, forbidigoIssueExempt(t, config, path, "t.Fatal", testFailureLintMessage),
-			"no file is exempt from the testing rule: %s", path)
-	}
+	assert.Empty(t, lintExclusionsAdmitting(t, config, "forbidigo", forbidigoIssueText("t.Fatal", testFailureLintMessage)),
+		"no exclusion exempts any file from the testing rule")
 }
 
 // Validates: R-6.10.17
@@ -67,13 +64,19 @@ func TestGolangciConfig_ForbidigoRefusesDirectTestingFailures(t *testing.T) {
 // A test waits for a readiness signal, an injected clock or an observed
 // state, never for the wall clock: forbidigo refuses time.Sleep in every test
 // file, the filesystem packages' included. Product code may sleep (a retry's
-// backoff), and the one live-suite helper that waits for the provider carries
-// its own nolint.
+// backoff): the one exclusion the rule has exempts every file but a test. The
+// one live-suite helper that waits for the provider carries its own nolint.
 func TestGolangciConfig_ForbidigoRefusesWallClockSleepInTests(t *testing.T) {
 	t.Parallel()
 
 	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "forbidigo")
 	assert.Equal(t, `^time\.Sleep$`, forbidigoRule(t, config, sleepLintMessage)["pattern"])
+
+	exemptions := lintExclusionsAdmitting(t, config, "forbidigo", forbidigoIssueText("time.Sleep", sleepLintMessage))
+	require.Len(t, exemptions, 1, "one exclusion lets product code sleep")
+	assert.Equal(t, `_test\.go`, exemptions[0]["path-except"], "the exclusion exempts every file but a test")
+	assert.NotContains(t, exemptions[0], "path", "the exclusion exempts every file but a test")
 	for _, path := range []string{"internal/sync/engine_test.go", "e2e/sync_e2e_test.go", "internal/synctree/root_test.go"} {
 		assert.False(t, forbidigoIssueExempt(t, config, path, "time.Sleep", sleepLintMessage), path)
 	}
@@ -94,6 +97,7 @@ func TestGolangciConfig_OutputRulesExemptOnlyTheCLIWritersAndNonProductCode(t *t
 	t.Parallel()
 
 	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "forbidigo")
 	outputRules := []struct {
 		pattern, pkg, message, identifier string
 	}{
@@ -106,6 +110,8 @@ func TestGolangciConfig_OutputRulesExemptOnlyTheCLIWritersAndNonProductCode(t *t
 		rule := forbidigoRule(t, config, want.message)
 		assert.Equal(t, want.pattern, rule["pattern"])
 		assert.Equal(t, want.pkg, rule["pkg"])
+		assert.Len(t, lintExclusionsAdmitting(t, config, "forbidigo", forbidigoIssueText(want.identifier, want.message)), 1,
+			"one exclusion exempts files from %q: the one compared with the output-boundary check below", want.message)
 
 		for _, path := range slices.Concat(outputBoundaryAllowedSamples(), outputBoundaryBoundSamples()) {
 			assert.Equal(t, outputBoundaryFileAllowed(path), forbidigoIssueExempt(t, config, path, want.identifier, want.message),
@@ -123,11 +129,15 @@ func TestGolangciConfig_OutputRulesExemptOnlyTheCLIWritersAndNonProductCode(t *t
 // package never has to edit devtool, and devtool never opens a product store.
 // depguard's lax mode denies the module's internal/ prefix in both devtool
 // trees, tests included, and allows internal/devtool by its exact path: in
-// lax mode an allow entry longer than the deny it overlaps wins.
+// lax mode an allow entry longer than the deny it overlaps wins. No exclusion
+// exempts a file from the rule.
 func TestGolangciConfig_DevtoolImportsNoProductPackage(t *testing.T) {
 	t.Parallel()
 
-	rule := yamlValue(t, golangciConfig(t), "linters", "settings", "depguard", "rules", "devtool-no-product")
+	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "depguard")
+
+	rule := yamlValue(t, config, "linters", "settings", "depguard", "rules", "devtool-no-product")
 	assert.Equal(t, map[string]any{
 		"list-mode": "lax",
 		"files":     []any{"**/internal/devtool/**", "**/cmd/devtool/**"},
@@ -137,6 +147,11 @@ func TestGolangciConfig_DevtoolImportsNoProductPackage(t *testing.T) {
 			"desc": "the verification tool must not link product packages",
 		}},
 	}, rule)
+
+	// depguard's issue names the import, the rule and the deny entry's desc.
+	issue := "import 'github.com/tonimelisma/onedrive-go/internal/driveid' is not allowed from list 'devtool-no-product': " +
+		"the verification tool must not link product packages"
+	assert.Empty(t, lintExclusionsAdmitting(t, config, "depguard", issue), "no exclusion exempts any file from the devtool rule")
 }
 
 // Validates: R-6.10.2
@@ -367,32 +382,68 @@ func forbidigoRule(t *testing.T, config map[string]any, message string) map[stri
 	return found[0]
 }
 
+// assertLintReadsEveryFile asserts that golangci-lint runs linter over every
+// file of the module: the linter is enabled, test files are linted, and no
+// exclusion drops whole paths from every linter at once.
+func assertLintReadsEveryFile(t *testing.T, config map[string]any, linter string) {
+	t.Helper()
+
+	assert.Contains(t, yamlList(t, config, "linters", "enable"), any(linter), "lint enables %s", linter)
+	assert.NotEqual(t, "false", yamlMapping(t, config, "run")["tests"], "lint reads test files")
+	assert.NotContains(t, yamlMapping(t, config, "linters", "exclusions"), "paths",
+		"no exclusion drops whole paths from every linter")
+}
+
+// forbidigoIssueText is the text of the issue forbidigo reports for
+// identifier under a rule whose msg is message.
+func forbidigoIssueText(identifier, message string) string {
+	return fmt.Sprintf("use of `%s` forbidden because %q", identifier, message)
+}
+
 // forbidigoIssueExempt reports whether an exclusion rule of the config drops
 // the issue forbidigo reports for identifier at path (relative to the
-// repository, slash-separated), as golangci-lint applies its rules: one that
-// names forbidigo and whose path, path-except and text all agree. An issue's
-// text is forbidigo's: use of `identifier` forbidden because "message".
+// repository, slash-separated): one of lintExclusionsAdmitting's whose path
+// and path-except agree.
 func forbidigoIssueExempt(t *testing.T, config map[string]any, path, identifier, message string) bool {
 	t.Helper()
 
-	text := fmt.Sprintf("use of `%s` forbidden because %q", identifier, message)
-	for _, entry := range yamlList(t, config, "linters", "exclusions", "rules") {
-		rule, ok := entry.(map[string]any)
-		require.True(t, ok, "an exclusion rule is a mapping: %v", entry)
-		linters, namesLinters := rule["linters"].([]any)
-		if !namesLinters || !slices.Contains(linters, any("forbidigo")) || rule["source"] != nil {
-			continue
+	for _, rule := range lintExclusionsAdmitting(t, config, "forbidigo", forbidigoIssueText(identifier, message)) {
+		if exclusionPatternAgrees(t, rule, "path", path, true) && exclusionPatternAgrees(t, rule, "path-except", path, false) {
+			return true
 		}
-		if !exclusionPatternAgrees(t, rule, "path", path, true) ||
-			!exclusionPatternAgrees(t, rule, "path-except", path, false) ||
-			!exclusionPatternAgrees(t, rule, "text", text, true) {
-			continue
-		}
-
-		return true
 	}
 
 	return false
+}
+
+// lintExclusionsAdmitting returns every exclusion rule of the config that
+// drops linter's issue with text on some path, as golangci-lint applies its
+// rules: one that names linter or names no linter at all (such a rule applies
+// to every linter), and whose text agrees, whatever path it names. A rule
+// that applies to linter and filters by source line fails the test: which
+// lines it drops depends on the code, so no pin can say what it exempts.
+func lintExclusionsAdmitting(t *testing.T, config map[string]any, linter, text string) []map[string]any {
+	t.Helper()
+
+	var admitting []map[string]any
+	for index, entry := range yamlList(t, config, "linters", "exclusions", "rules") {
+		rule, ok := entry.(map[string]any)
+		require.True(t, ok, "an exclusion rule is a mapping: %v", entry)
+		if linters, namesLinters := rule["linters"]; namesLinters {
+			list, isList := linters.([]any)
+			require.True(t, isList, "exclusion rule %d lists its linters as a block sequence", index+1)
+			if !slices.Contains(list, any(linter)) {
+				continue
+			}
+		}
+		require.NotContains(t, rule, "source",
+			"exclusion rule %d drops %s issues by their source line, which no pin can check", index+1, linter)
+		if exclusionPatternAgrees(t, rule, "text", text, true) {
+			admitting = append(admitting, rule)
+		}
+	}
+
+	return admitting
 }
 
 // exclusionPatternAgrees reports whether the rule's regular expression under
@@ -439,6 +490,16 @@ func yamlValue(t *testing.T, node any, keys ...string) any {
 	}
 
 	return node
+}
+
+// yamlMapping returns the mapping at keys.
+func yamlMapping(t *testing.T, node any, keys ...string) map[string]any {
+	t.Helper()
+
+	mapping, ok := yamlValue(t, node, keys...).(map[string]any)
+	require.True(t, ok, "%s is a mapping", strings.Join(keys, "."))
+
+	return mapping
 }
 
 // yamlList returns the sequence at keys.
