@@ -62,20 +62,22 @@ type passCounts struct {
 	succeeded    int
 	failed       int
 	keptForRetry int
+	awaitingUser int
 	superseded   int
 	errors       []error
 }
 
 // setPassCounts records what one pass's actions came to on that pass's
-// report. Its failures, and those kept for retry, are also the last pass's
-// state while it is the run's last pass (LastPassFailed,
-// LastPassKeptForRetry), and the planned actions it neither completed nor
-// failed are left for the next sync.
+// report. Its failures, those kept for retry and those awaiting the user are
+// also the last pass's state while it is the run's last pass
+// (LastPassFailed, LastPassKeptForRetry, LastPassAwaitingUser), and the
+// planned actions it neither completed nor failed are left for the next sync.
 func (r *Report) setPassCounts(actions int, counts passCounts) {
 	r.Succeeded = counts.succeeded
 	r.Failed = counts.failed
 	r.LastPassFailed = counts.failed
 	r.LastPassKeptForRetry = counts.keptForRetry
+	r.LastPassAwaitingUser = counts.awaitingUser
 	r.Superseded = counts.superseded
 	r.Errors = counts.errors
 	r.LeftForNextSync = max(0, actions-counts.succeeded-counts.failed)
@@ -117,6 +119,7 @@ func (r *Report) withPass(pass *Report) *Report {
 	r.LeftForNextSync = pass.LeftForNextSync
 	r.LastPassFailed = pass.LastPassFailed
 	r.LastPassKeptForRetry = pass.LastPassKeptForRetry
+	r.LastPassAwaitingUser = pass.LastPassAwaitingUser
 
 	return r
 }

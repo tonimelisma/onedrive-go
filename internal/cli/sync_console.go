@@ -38,15 +38,28 @@ type syncConsole struct {
 	now    func() time.Time
 	home   string
 
-	// mu guards multi, tallies and jsonFailureReported, which engine
-	// completion goroutines update concurrently, and serializes writes so
-	// lines from several mounts never interleave.
+	// mu guards multi, tallies, jsonFailureReported and reportedConditions,
+	// which engine completion goroutines update concurrently, and serializes
+	// writes so lines from several mounts never interleave.
 	mu      sync.Mutex
 	multi   bool
 	tallies map[string]*activityTally
 	// jsonFailureReported is set once a sync --json line could not be
 	// written and the warning saying so went to stderr.
 	jsonFailureReported bool
+	// reportedConditions holds, for each path the console reported refused by
+	// a condition only the user can clear, that condition, so the retries that
+	// follow are not reported again. An activity of the path that names no
+	// condition ends the entry, and one the engine marks as the condition
+	// starting is reported whatever the entry holds (conditionReportDue), so
+	// the map holds only paths whose last activity was such a refusal.
+	reportedConditions map[reportedPath]syncengine.ConditionKey
+}
+
+// reportedPath is one path of one mount.
+type reportedPath struct {
+	mountID string
+	path    string
 }
 
 // activityTally is what the activity feed reported done for one mount, by
@@ -174,12 +187,21 @@ func newActivityTally() *activityTally {
 	}
 }
 
-// Activity prints one finished (or, for a dry run, planned) file action.
+// Activity prints one finished (or, for a dry run, planned) file action. An
+// action a condition only the user can clear refused is said when the
+// condition starts, and by each run the first time it sees the path refused,
+// in the words `status` uses for it: the retries that follow are the same
+// condition, which status keeps listing. It is said again when the engine
+// marks the condition as starting again, after the path synced or failed
+// another way, or when another condition refuses it (conditionReportDue).
 //
 //nolint:gocritic // Matches the orchestrator hook signature, which passes by value so a consumer cannot mutate engine-owned activity.
 func (c *syncConsole) Activity(ma multisync.MountActivity) {
 	a := &ma.Activity
 	c.record(ma.Identity.MountID, a)
+	if !c.conditionReportDue(ma.Identity.MountID, a) {
+		return
+	}
 	if c.json {
 		c.jsonActivity(ma)
 		return
@@ -189,6 +211,10 @@ func (c *syncConsole) Activity(ma multisync.MountActivity) {
 	switch {
 	case a.Success || a.Planned:
 		c.printOut(prefix, activitySuccessLine(a))
+	case a.ConditionKey != "":
+		words := describeStatusCondition(a.ConditionKey)
+		c.printErr(prefix, fmt.Sprintf("Can't %s %s: %s. %s %s",
+			activityVerb(a.Kind), a.Path, words.Title, words.Reason, words.Action))
 	case a.WillRetry:
 		if c.verbose {
 			c.printErr(prefix, fmt.Sprintf("Could not %s %s, will retry: %s", activityVerb(a.Kind), a.Path, plainErrorReason(a.Err)))
@@ -258,6 +284,36 @@ func (c *syncConsole) Summary(result multisync.RunOnceResult) map[string]synceng
 	}
 
 	return left
+}
+
+// conditionReportDue records what the activity says of its path on mountID
+// and reports whether it is printed. An activity that names no condition is
+// printed and ends the path's condition entry. One a condition refused is
+// printed when the engine marks the condition as starting with it
+// (ConditionStarts), and otherwise unless the path's last activity was a
+// refusal by the same condition: the console lives for a whole `sync
+// --watch`, so a path that synced and is then refused again is a condition
+// that starts again, and so is one whose retry work the plan dropped with no
+// activity of the path in between, which only the engine sees.
+func (c *syncConsole) conditionReportDue(mountID string, a *syncengine.Activity) bool {
+	key := reportedPath{mountID: mountID, path: a.Path}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if a.ConditionKey == "" {
+		delete(c.reportedConditions, key)
+		return true
+	}
+	if !a.ConditionStarts && c.reportedConditions[key] == a.ConditionKey {
+		return false
+	}
+	if c.reportedConditions == nil {
+		c.reportedConditions = make(map[reportedPath]syncengine.ConditionKey)
+	}
+	c.reportedConditions[key] = a.ConditionKey
+
+	return true
 }
 
 func (c *syncConsole) record(mountID string, a *syncengine.Activity) {

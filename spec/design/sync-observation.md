@@ -730,26 +730,34 @@ subtree:
   stops as an unavailable sync folder;
 - a mount point crossed under `cross_filesystems` is recorded in
   `mount_boundaries` with the snapshot. A later scan that finds that folder on
-  its parent's device treats the disk as not mounted: a `local_mount_boundary`
-  read boundary, not deletions, however few files it held. A flagged folder
+  its parent's device treats the disk as not mounted: a `local_mount_missing`
+  read boundary, not deletions, however few files it held. It is a type of
+  its own because `status` tells it apart: a disk to mount again, not a mount
+  point to set `cross_filesystems` for; every other per-type decision treats
+  it as `local_mount_boundary`
+  (`TestRunOnce_AVanishedCrossedMountIsMissingNotABoundary`). A flagged folder
   still on its own device is the mounted disk, so emptying it is an ordinary
   delete. `drive rebind-root` forgets recorded mount points. Watch safety scans use the flags but
   only one-shot and bootstrap scans record new ones.
-- `local_unsyncable_replacement` and `local_mount_boundary` are managed issue
-  types of the local findings batch like the scanner's other findings
-  (`localObservationManagedIssueTypes`): a full scan that no longer reports
-  the path clears the durable issue and its read-boundary scope, so a restored
-  file or a folder that stopped being a mount point syncs again. A crossed
-  mount point that is not mounted is re-reported by every scan and so stays.
-  Before this (2026-11-04) both were written once and never cleared: a
+- `local_unsyncable_replacement`, `local_mount_boundary` and
+  `local_mount_missing` are managed issue types of the local findings batch
+  like the scanner's other findings (`localObservationManagedIssueTypes`): a
+  full scan that no longer reports the path clears the durable issue and its
+  read-boundary scope, so a restored file or a folder that stopped being a
+  mount point syncs again. A crossed mount point that is not mounted is
+  re-reported by every scan and so stays until the disk is back
+  (`TestRunOnce_MountMissingClearsWhenTheScanNoLongerFindsIt`); a row an
+  older store holds for it under `local_mount_boundary` is replaced by the
+  next full scan, whose issue at the same path overwrites it.
+  Before this (2026-11-04) the first two were written once and never cleared: a
   symlink put back as a file, or a folder unmounted again, stayed unavailable
   truth for good and its edits never uploaded.
 
 Every issue type a local scan reports is a managed type of the local findings
 batch: `invalid_filename`, `path_too_long`, `file_too_large`,
 `case_collision`, `local_read_denied`, `hash_panic`,
-`local_unsyncable_replacement`, `local_mount_boundary` and
-`local_interrupted_removal`. Every full scan re-reports a finding whose cause
+`local_unsyncable_replacement`, `local_mount_boundary`, `local_mount_missing`
+and `local_interrupted_removal`. Every full scan re-reports a finding whose cause
 is still there, so the scan that no longer reports one has proven it gone and
 clears it; a type left out keeps its condition after its cause is gone.
 `local_interrupted_removal` was left out until 2026-11-11, so the report of a

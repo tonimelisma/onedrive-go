@@ -293,6 +293,7 @@ func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
 		issueDeletesHeld,
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
+		issueLocalMountMissing,
 		issueRemoteFolderUnverifiable,
 		issueLocalInterruptedRemoval,
 		issueRemovedFolderKept,

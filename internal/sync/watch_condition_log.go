@@ -9,11 +9,27 @@ import (
 
 // logWatchSummary logs a periodic one-liner summary of active sync conditions
 // in watch mode. The summary builder stays raw and machine-oriented; this
-// boundary owns human-oriented log phrasing and churn suppression.
+// boundary owns human-oriented log phrasing and churn suppression: each
+// summary line is written only when what it says changed, never once per 10 s
+// tick. A failing read of the conditions is logged like a failing housekeeping
+// step instead: a warning per failure streak, repeats at Debug.
 func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	snapshot, err := rt.deps.store.ReadDriveStatusSnapshot(ctx)
 	if err != nil {
+		// The next tick reads again. A failure warns once per failure streak
+		// and logs its repeats at Debug (R-6.6.30).
+		level := slog.LevelDebug
+		if !rt.loop.summaryReadFailing {
+			rt.loop.summaryReadFailing = true
+			level = slog.LevelWarn
+		}
+		rt.deps.logger.Log(ctx, level, "could not read the sync conditions for the watch summary",
+			slog.Any("error", err))
 		return
+	}
+	if rt.loop.summaryReadFailing {
+		rt.loop.summaryReadFailing = false
+		rt.deps.logger.Info("reading the sync conditions for the watch summary works again")
 	}
 	summary := buildWatchConditionSummary(&snapshot)
 	rt.logRemoteBlockedChanges(summary.RemoteBlocked)
@@ -24,6 +40,7 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 			rt.deps.logger.Info("sync conditions cleared")
 		}
 		rt.loop.lastSummarySignature = ""
+		rt.loop.lastSummaryBreakdown = ""
 		return
 	}
 
@@ -31,16 +48,21 @@ func (rt *watchRuntime) logWatchSummary(ctx context.Context) {
 	previous := rt.loop.lastSummarySignature
 	breakdown := formatWatchConditionBreakdown(summary)
 	if signature == previous {
-		// Same kinds of condition, only counts moved: the 10 s maintenance
-		// tick would otherwise re-warn on every count change.
-		rt.deps.logger.Debug("sync conditions changed",
-			slog.Int("total", totalConditions),
-			slog.String("breakdown", breakdown),
-		)
+		// Same kinds of condition: a count that moved is said at Debug, so
+		// the summary is not re-warned on every count change, and an
+		// unchanged breakdown is not said at all.
+		if breakdown != rt.loop.lastSummaryBreakdown {
+			rt.loop.lastSummaryBreakdown = breakdown
+			rt.deps.logger.Debug("sync conditions changed",
+				slog.Int("total", totalConditions),
+				slog.String("breakdown", breakdown),
+			)
+		}
 		return
 	}
 
 	rt.loop.lastSummarySignature = signature
+	rt.loop.lastSummaryBreakdown = breakdown
 
 	// The breakdown and the next step are already the message; repeating
 	// them as attributes printed everything twice on the console. The count
@@ -91,7 +113,8 @@ func watchConditionSummaryAddsActionable(summary watchConditionSummary, previous
 }
 
 // conditionLabelText names a condition kind in user words for console text;
-// conditionLabel prepends the noun ("file"/"files"). The switch names every
+// conditionLabel prepends the noun ("file"/"files", or "folder"/"folders" for
+// the conditions of a mount point, which is one folder). The switch names every
 // ConditionKey (the exhaustive linter holds it to that), so a new key is
 // labeled on purpose; ok is false only for a key outside the set, which
 // conditionLabel words by its own name.
@@ -133,6 +156,8 @@ func conditionLabelText(key ConditionKey) (label string, ok bool) {
 		return "renamed or replaced into something sync cannot use", true
 	case ConditionLocalMountBoundary:
 		return "on another filesystem inside the sync folder", true
+	case ConditionLocalMountMissing:
+		return "whose disk is not mounted", true
 	case ConditionLocalInterrupted:
 		return "left set aside by an interrupted removal", true
 	case ConditionRemovedFolderKept:
@@ -170,17 +195,27 @@ func conditionLabelText(key ConditionKey) (label string, ok bool) {
 	}
 }
 
+// The nouns conditionLabel counts a condition kind in. They are console
+// words, not the item types of the same spelling.
+const (
+	conditionNounFile   = "file"
+	conditionNounFolder = "folder"
+)
+
 // conditionLabel names a condition kind in user words for console text.
 func conditionLabel(key ConditionKey, count int) string {
-	files := "files"
-	if count == 1 {
-		files = "file"
+	noun := conditionNounFile
+	if key == ConditionLocalMountBoundary || key == ConditionLocalMountMissing {
+		noun = conditionNounFolder
+	}
+	if count != 1 {
+		noun += "s"
 	}
 	if label, ok := conditionLabelText(key); ok {
-		return files + " " + label
+		return noun + " " + label
 	}
 
-	return files + " with " + strings.ReplaceAll(string(key), "_", " ")
+	return noun + " with " + strings.ReplaceAll(string(key), "_", " ")
 }
 
 func formatWatchConditionBreakdown(summary watchConditionSummary) string {

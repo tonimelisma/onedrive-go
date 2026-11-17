@@ -79,6 +79,13 @@ const (
 	// issueLocalMountBoundary marks a folder on another filesystem inside the
 	// sync folder; sync does not cross into it (D-003, R-6.2.15).
 	issueLocalMountBoundary IssueType = "local_mount_boundary"
+	// issueLocalMountMissing marks a folder sync crossed into as the mount
+	// point of another filesystem (cross_filesystems) that is not mounted
+	// now. Its synced content is unavailable truth, never deleted, until the
+	// disk is back or `drive rebind-root` forgets the mount point (R-6.2.15).
+	// Every per-type decision treats it as issueLocalMountBoundary; only what
+	// the user is told differs.
+	issueLocalMountMissing IssueType = "local_mount_missing"
 	// issueRemoteFolderUnverifiable marks a folder delete on OneDrive that
 	// sync will not run because the folder is too large to list first.
 	issueRemoteFolderUnverifiable IssueType = "remote_folder_delete_unverifiable"
@@ -141,6 +148,7 @@ func (t IssueType) isMember() bool {
 		issueDeletesHeld,
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
+		issueLocalMountMissing,
 		issueRemoteFolderUnverifiable,
 		issueLocalInterruptedRemoval,
 		issueRemovedFolderKept,
@@ -207,6 +215,7 @@ func issueTypeLeavesFileUnsynced(issueType IssueType) bool {
 		issueLocalReadOnly,
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
+		issueLocalMountMissing,
 		issueRemoteFolderUnverifiable,
 		issueLocalFileTooLarge,
 		issueLocalBusy,
@@ -256,6 +265,7 @@ func issueTypeIsRootReadFailure(issueType IssueType) bool {
 		issueDeletesHeld,
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
+		issueLocalMountMissing,
 		issueRemoteFolderUnverifiable,
 		issueLocalInterruptedRemoval,
 		issueRemovedFolderKept,

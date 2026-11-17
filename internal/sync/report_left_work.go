@@ -11,13 +11,15 @@ import (
 // longer needed, is in none of them.
 type LeftWork struct {
 	// Failed is the last pass's failed actions the engine does not retry by
-	// itself.
+	// itself and does not count as awaiting the user (StillOpen).
 	Failed int
 	// WillRetry is the last pass's failures kept for retry plus the work
 	// it left for the next sync (Report.LeftForNextSync).
 	WillRetry int
-	// StillOpen is the observation issues that keep a file unsynced
-	// (Report.UnsyncedIssues).
+	// StillOpen is the files a condition `status` lists keeps unsynced until
+	// the user clears it: the observation issues that do
+	// (Report.UnsyncedIssues) and the last pass's failures such a condition
+	// refused (Report.LastPassAwaitingUser).
 	StillOpen int
 	// NotUploaded is the changes the release of a removed shared folder kept
 	// because the folder can no longer be read to upload them
@@ -56,9 +58,9 @@ func (r *Report) LeftWork() LeftWork {
 	}
 
 	return LeftWork{
-		Failed:      max(0, r.LastPassFailed-r.LastPassKeptForRetry),
+		Failed:      max(0, r.LastPassFailed-r.LastPassKeptForRetry-r.LastPassAwaitingUser),
 		WillRetry:   r.LastPassKeptForRetry + r.LeftForNextSync,
-		StillOpen:   r.UnsyncedIssues,
+		StillOpen:   r.UnsyncedIssues + r.LastPassAwaitingUser,
 		NotUploaded: r.KeptNotUploaded.Count,
 	}
 }

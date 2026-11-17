@@ -497,16 +497,38 @@ Every end of a one-shot pass records what its actions came to through one
 function (`recordPassCounts`, or `Report.setPassCounts` for a plan that never
 ran): `Succeeded`, `Failed`, the failures kept for retry (`failureKeptForRetry`
 over the result class, the predicate the activity feed's `WillRetry` reads
-too), and `LeftForNextSync` = actions - succeeded - failed, so a pass that
-ends at its first dispatch counts its work as every other pass does
+too), the failures awaiting the user (`failureAwaitsUser`: an action refused
+per item for a named condition, recorded with that condition so `status`
+lists it, R-2.10.71; the predicate that sets the activity's `ConditionKey`
+and `ConditionType`), and `LeftForNextSync` = actions - succeeded - failed,
+so a pass that ends at its first dispatch counts its work as every other
+pass does
 (`TestExecutePreparedPlan_APassThatEndsAtItsFirstDispatchLeavesItsWork`,
-`TestFailureKeptForRetry_TheFeedAndThePassCountAgree`). `withPass` adds the
+`TestFailureKeptForRetry_TheFeedAndThePassCountAgree`,
+`TestFailureAwaitsUser_TheFeedAndThePassCountAgree`). The condition is in
+the decision `classifyResult` makes, so the first refusal is reported like
+every retry of it; a failure the permission probes own is not counted
+there, because the condition and scope the probe records are known only
+after it ran, nor is a transfer OneDrive answered with other bytes than its
+own facts describe (`upload_verification_failed`, `download_integrity`),
+which nothing the user does clears and a retry may. The activity also says
+whether the condition starts with the failure (`ConditionStarts`,
+`conditionStartsWith`: the action's retry work did not hold the condition
+yet, read before the failure is recorded). When the activity feed says that
+the condition starts (`activitySaysConditionStarts`), sync's output says it
+in `status`'s words, so the engine's "Not syncing <path>" line for it is
+logged at INFO; otherwise it warns (R-2.10.71). A pass that only holds the
+action until its retry row is due counts it in `LeftForNextSync`, as every
+held action. `withPass` adds the
 work done up over the passes and keeps the last pass's state:
-`LastPassFailed`, `LastPassKeptForRetry`, `LeftForNextSync`, the held deletes
+`LastPassFailed`, `LastPassKeptForRetry`, `LastPassAwaitingUser`,
+`LeftForNextSync`, the held deletes
 and `DeferredByMode` (the `Report` comment says which is which). What the run
 left is `Report.LeftWork`, read from that state alone: `Failed` is the last
-pass's failures not kept for retry, `WillRetry` its failures kept for retry
-plus `LeftForNextSync`, `StillOpen` the issues below. Each file is counted
+pass's failures neither kept for retry nor awaiting the user, `WillRetry` its
+failures kept for retry plus `LeftForNextSync`, `StillOpen` its failures
+awaiting the user plus the issues below
+(`TestRunOnce_ARefusalOnlyTheUserCanClearIsLeftAsItsCondition`). Each file is counted
 once, and a file an earlier pass failed and a later pass of the same run
 finished, or no longer needed, is in none of them: after a pause the run
 waited out, a pass that superseded actions, or a failed cleanup a later pass
@@ -542,7 +564,7 @@ last pass's own counts:
 Retry work is not read from the store: every live pass prunes the retry rows
 no action of its plan needs (`PruneRetryWorkToCurrentActions`) and the scopes
 no row is blocked under, so each row left is an action of the last pass,
-already counted as failed or left
+already counted as failed, still open or left
 (`TestRunOnce_ReportCountsUnresolvedWork`,
 `TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`,
 `TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes`). An observation
@@ -1792,7 +1814,12 @@ reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
   issues), block scopes once on activation (throttling and outages at Info),
   poll failures once per outage via `pollOutageLog` with an Info on recovery,
   socket.io retries once at Info, the watch condition summary only when a new
-  kind of condition appears, and the inotify limit once with its fix. A
+  kind of condition appears (a moved count at Debug, and an unchanged
+  breakdown not at all, `TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges`;
+  a failing read of the conditions for it warns once per failure streak,
+  repeats at Debug and notes its recovery at Info,
+  `TestWatchConditionSummary_AFailedReadIsLoggedOnce`),
+  and the inotify limit once with its fix. A
   blocked shared-folder cleanup is persisted and warned once when it first
   blocks (or its reason changes), retried quietly after that, and never
   returned as a pass error. A failing rescan after dropped watch events warns

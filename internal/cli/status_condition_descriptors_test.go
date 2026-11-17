@@ -68,6 +68,44 @@ func TestBuildSyncStateInfo_RootReadFailureSaysWhatTheRootIs(t *testing.T) {
 	}
 }
 
+// Validates: R-6.2.15
+//
+// A folder sync crossed into as the mount point of another filesystem, found
+// not mounted now, is its own condition: status says what happened, that the
+// synced content is kept and nothing is deleted on OneDrive, what clears it
+// without losing anything (TestRunOnce_ADiskMountedAgainLosesNothing), and
+// what `drive rebind-root` leads to: it forgets every disk listed that is not
+// mounted, and sync then deletes each such folder's content on OneDrive too,
+// holding the deletes for confirmation only when they are many
+// (TestRunOnce_ARebindAfterADiskIsGoneDeletesItsContentOnOneDrive). It does
+// not suggest cross_filesystems, the setting that made sync cross it.
+func TestBuildSyncStateInfo_AMountPointNotMountedSaysWhatClearsIt(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &syncengine.DriveStatusSnapshot{
+		ObservationIssues: []syncengine.ObservationIssueRow{{
+			Path:      "nas",
+			IssueType: syncengine.IssueType("local_mount_missing"),
+			ScopeKey:  syncengine.ScopeKey{Kind: syncengine.ScopePermDirRead, Param: "nas"},
+		}},
+	}
+	info := buildSyncStateInfo(snapshot, statusStoreRootDrive, false, defaultVisiblePaths)
+	require.Len(t, info.Conditions, 1)
+
+	condition := info.Conditions[0]
+	assert.Equal(t, "local_mount_missing", condition.ConditionType)
+	assert.Equal(t, "Disk not mounted", condition.Title)
+	assert.Equal(t, "This folder was the mount point of another disk or filesystem, and that disk is not mounted now. "+
+		"Its synced content is kept, and nothing is deleted on OneDrive.", condition.Reason)
+	assert.Equal(t, "Mount the disk again; that clears it and loses nothing. If the disk is gone for good, copy what "+
+		"you need from this folder on OneDrive first: 'onedrive-go drive rebind-root' forgets every disk listed "+
+		"here that is not mounted, and sync then deletes each such folder's content on OneDrive too, holding the "+
+		"deletes for confirmation only when they are many. Mount every disk you still use before you rebind.",
+		condition.Action)
+	assert.NotContains(t, condition.Reason+condition.Action, "cross_filesystems")
+	assert.Equal(t, []string{"nas"}, condition.Paths)
+}
+
 type rootReadFailureCase struct {
 	name     string
 	root     statusStoreRoot

@@ -6,8 +6,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -204,25 +206,7 @@ func TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault(t *testing.T) {
 func TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
-	remote.addFolder("item-nas", "root", "nas")
-	for i := range 3 {
-		remote.addFile(t, fmt.Sprintf("item-n%d", i), "item-nas", fmt.Sprintf("n%d.txt", i), "nas file\n")
-	}
-	eng, syncRoot := newTestEngine(t, remote.client(t))
-	filter := ContentFilterConfig{CrossFilesystems: true}
-	eng.contentFilter = filter
-	runScenarioPass(t, eng)
-
-	// The scan that crossed into the disk recorded the mount point.
-	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
-	require.NoError(t, err)
-
-	// The disk is not mounted: the mount point is an empty folder now.
-	for i := range 3 {
-		require.NoError(t, os.Remove(filepath.Join(syncRoot, "nas", fmt.Sprintf("n%d.txt", i))))
-	}
+	remote, eng, _, _ := syncedCrossedDisksNowUnmounted(t, 3, "nas")
 
 	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
@@ -233,9 +217,216 @@ func TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted(t *testing.T) {
 	require.NoError(t, err)
 	found := false
 	for i := range issues {
-		found = found || (issues[i].Path == "nas" && issues[i].IssueType == issueLocalMountBoundary)
+		found = found || (issues[i].Path == "nas" && issues[i].IssueType == issueLocalMountMissing)
 	}
 	assert.True(t, found, "the vanished mount is reported: %+v", issues)
+}
+
+// diskFile is a file a disk held, by its path under the sync folder, with
+// its content and modification time.
+type diskFile struct {
+	relPath string
+	content []byte
+	mtime   time.Time
+}
+
+// diskFileItemID is the OneDrive item of the i-th file on the disk mounted at
+// disk (syncedCrossedDisksNowUnmounted).
+func diskFileItemID(disk string, i int) string {
+	return fmt.Sprintf("item-%s-%d", disk, i)
+}
+
+// syncedCrossedDisksNowUnmounted is a disk mounted at each of disks inside the
+// sync folder, crossed under cross_filesystems and synced with files files
+// each beside keep.txt, and then not mounted: the scan that crossed into it
+// recorded the mount point, and the mount point is an empty folder now. It
+// returns the sync folder and the files the disks held, so that a test can
+// mount a disk again (remountDisk).
+func syncedCrossedDisksNowUnmounted(
+	t *testing.T,
+	files int,
+	disks ...string,
+) (*moveScenarioRemote, *testEngine, string, []diskFile) {
+	t.Helper()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	for _, disk := range disks {
+		remote.addFolder("item-"+disk, "root", disk)
+		for i := range files {
+			remote.addFile(t, diskFileItemID(disk, i), "item-"+disk, fmt.Sprintf("f%d.txt", i), "disk file\n")
+		}
+	}
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	eng.contentFilter = ContentFilterConfig{CrossFilesystems: true}
+	runScenarioPass(t, eng)
+
+	var held []diskFile
+	for _, disk := range disks {
+		_, err := eng.baseline.rawDB().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, disk)
+		require.NoError(t, err)
+		for i := range files {
+			relPath := disk + "/" + fmt.Sprintf("f%d.txt", i)
+			absPath := filepath.Join(syncRoot, filepath.FromSlash(relPath))
+			info, statErr := os.Stat(absPath)
+			require.NoError(t, statErr)
+			content, readErr := os.ReadFile(absPath) //nolint:gosec // test reads its own temp tree
+			require.NoError(t, readErr)
+			held = append(held, diskFile{relPath: relPath, content: content, mtime: info.ModTime()})
+			require.NoError(t, os.Remove(absPath))
+		}
+	}
+
+	return remote, eng, syncRoot, held
+}
+
+// remountDisk puts back every file the disk mounted at disk held, with its
+// content and modification time, as mounting the disk again does. A disk
+// mounted again is on its own device, so the scan crosses into its folder
+// rather than find a vanished mount point; on the one filesystem a test has,
+// forgetting the recorded mount point stands in for that.
+func remountDisk(t *testing.T, eng *testEngine, syncRoot, disk string, held []diskFile) {
+	t.Helper()
+
+	for _, f := range held {
+		if !strings.HasPrefix(f.relPath, disk+"/") {
+			continue
+		}
+		absPath := filepath.Join(syncRoot, filepath.FromSlash(f.relPath))
+		require.NoError(t, os.WriteFile(absPath, f.content, 0o600))
+		require.NoError(t, os.Chtimes(absPath, f.mtime, f.mtime))
+	}
+	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `DELETE FROM mount_boundaries WHERE path = ?`, disk)
+	require.NoError(t, err)
+}
+
+// `status` tells a crossed mount point that is not mounted as "Disk not
+// mounted", and its action says what `drive rebind-root` leads to: it forgets
+// every recorded mount point, and sync then deletes the synced content of
+// every folder whose disk is not mounted on OneDrive too, holding the deletes
+// for confirmation only when they are many (describeStatusCondition); the
+// scan's warning says the first half. This runs the planner after the rebind
+// for a disk below and one above the delete-safety hold's threshold, and for
+// two disks that are not mounted.
+//
+// Validates: R-6.2.15
+func TestRunOnce_ARebindAfterADiskIsGoneDeletesItsContentOnOneDrive(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, vanishedMountSkippedItem("nas").Detail,
+		"'onedrive-go drive rebind-root' forgets every recorded mount point, and sync then deletes on OneDrive "+
+			"the content of this folder and of every other one whose disk is not mounted")
+
+	for _, tc := range []struct {
+		name  string
+		disks []string
+		files int
+		held  bool
+	}{
+		{name: "a few files", disks: []string{"nas"}, files: 3},
+		{name: "more files than the hold lets through", disks: []string{"nas"}, files: deleteSafetyMinItems + 1, held: true},
+		{name: "every disk that is not mounted", disks: []string{"nas", "usb"}, files: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			remote, eng, _, _ := syncedCrossedDisksNowUnmounted(t, tc.files, tc.disks...)
+			deletes := tc.files * len(tc.disks)
+			_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			require.NoError(t, err)
+			require.Empty(t, remote.deletes, "while the disk is not mounted nothing is deleted")
+
+			require.NoError(t, eng.baseline.ClearSyncRootIdentity(t.Context()))
+			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			require.NoError(t, err)
+			for _, disk := range tc.disks {
+				requireNoIssueOfType(t, eng, disk, issueLocalMountMissing)
+			}
+
+			if !tc.held {
+				assert.Len(t, remote.deletes, deletes, "a few deletes run without confirmation")
+				assert.Zero(t, report.HeldRemoteDeletes)
+				return
+			}
+			assert.Empty(t, remote.deletes, "many deletes are held for confirmation")
+			assert.Equal(t, deletes, report.HeldRemoteDeletes)
+
+			report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+			require.NoError(t, err)
+			assert.Len(t, remote.deletes, deletes, "confirmed, they are deleted on OneDrive")
+			assert.Zero(t, report.HeldRemoteDeletes)
+		})
+	}
+}
+
+// "Mount the disk again; that clears it and loses nothing": while a crossed
+// disk is not mounted, the passes delete nothing on either side, and once it
+// is back with what it held, the next pass transfers, deletes and moves
+// nothing, the condition clears, and a dry run afterwards plans nothing.
+//
+// Validates: R-6.2.15
+func TestRunOnce_ADiskMountedAgainLosesNothing(t *testing.T) {
+	t.Parallel()
+
+	remote, eng, syncRoot, held := syncedCrossedDisksNowUnmounted(t, 3, "nas")
+	uploads, downloads := remote.uploads, remote.downloads
+	for range 3 {
+		_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		require.NoError(t, err)
+	}
+	require.Empty(t, remote.deletes, "while the disk is not mounted nothing is deleted")
+
+	remountDisk(t, eng, syncRoot, "nas", held)
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+
+	assert.Empty(t, remote.deletes)
+	assert.Empty(t, remote.moves)
+	assert.Equal(t, uploads, remote.uploads, "nothing is uploaded")
+	assert.Equal(t, downloads, remote.downloads, "nothing is downloaded")
+	assert.Zero(t, report.LocalDeletes+report.RemoteDeletes+report.ConflictCopies+report.Failed, "%+v", report)
+	requireNoIssueOfType(t, eng, "nas", issueLocalMountMissing)
+	for _, f := range held {
+		requireScenarioLocalFile(t, syncRoot, f.relPath, string(f.content))
+	}
+
+	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	require.NoError(t, err)
+	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.Moves,
+		"a dry run afterwards plans nothing: %+v", report)
+}
+
+// A file edited on OneDrive while its disk is not mounted is not downloaded
+// into the empty mount point. Once the disk is back, the edit is downloaded
+// over the copy the disk held, with nothing uploaded and no conflict copy.
+//
+// Validates: R-6.2.15
+func TestRunOnce_AnEditOnOneDriveWhileItsDiskIsNotMountedIsDownloadedOnceItIsBack(t *testing.T) {
+	t.Parallel()
+
+	remote, eng, syncRoot, held := syncedCrossedDisksNowUnmounted(t, 3, "nas")
+	uploads := remote.uploads
+	edited := diskFileItemID("nas", 0)
+	editedPath := filepath.Join(syncRoot, "nas", "f0.txt")
+	remote.setContent(t, edited, "edited on OneDrive\n")
+
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	assert.NoFileExists(t, editedPath, "nothing is downloaded into the empty mount point")
+	require.Empty(t, remote.deletes)
+
+	remountDisk(t, eng, syncRoot, "nas", held)
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+
+	requireScenarioLocalFile(t, syncRoot, "nas/f0.txt", "edited on OneDrive\n")
+	assert.Equal(t, "edited on OneDrive\n", remote.contents[edited], "the copy the disk held is not uploaded over it")
+	assert.Equal(t, uploads, remote.uploads)
+	assert.Empty(t, remote.deletes)
+	assert.Zero(t, report.ConflictCopies)
+	entries, err := os.ReadDir(filepath.Join(syncRoot, "nas"))
+	require.NoError(t, err)
+	assert.Len(t, entries, len(held), "no conflict copy beside the files")
 }
 
 // Validates: R-6.2.15
@@ -415,4 +606,63 @@ func TestRunOnce_MountBoundaryClearsWhenTheFolderIsPlainAgain(t *testing.T) {
 
 	assert.Equal(t, 1, report.RemoteDeletes, "a delete in a folder that is no longer a mount point is an ordinary delete")
 	requireNoIssueOfType(t, eng, "Dir", issueLocalMountBoundary)
+}
+
+// A crossed mount point that is not mounted now is a condition of its own,
+// not the mount point sync does not cross, whose status text asks for the
+// cross_filesystems the user already set. A row an earlier scan stored for it
+// under the shared type is replaced by the next full scan, because the scan
+// manages both types.
+//
+// Validates: R-6.2.15
+func TestRunOnce_AVanishedCrossedMountIsMissingNotABoundary(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFolder("item-nas", "root", "nas")
+	remote.addFile(t, "item-n0", "item-nas", "n0.txt", "nas file\n")
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	eng.contentFilter = ContentFilterConfig{CrossFilesystems: true}
+	runScenarioPass(t, eng)
+
+	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
+	require.NoError(t, err)
+	stored := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{mountBoundarySkippedItem("nas")})
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &stored))
+	require.NoError(t, os.Remove(filepath.Join(syncRoot, "nas", "n0.txt")))
+
+	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+
+	assert.Empty(t, remote.deletes, "the synced content of a disk that is not mounted is kept on OneDrive")
+	issues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	require.Len(t, issues, 1, "%+v", issues)
+	assert.Equal(t, "nas", issues[0].Path)
+	assert.Equal(t, issueLocalMountMissing, issues[0].IssueType)
+	assert.Equal(t, sKPermLocalRead("nas"), issues[0].ScopeKey, "still a read boundary")
+}
+
+// The condition of a crossed mount point that is not mounted clears when a
+// full scan no longer finds it, as the mount being back makes it: the scan
+// manages the type, and the folder's changes sync again.
+//
+// Validates: R-6.2.15
+func TestRunOnce_MountMissingClearsWhenTheScanNoLongerFindsIt(t *testing.T) {
+	t.Parallel()
+
+	remote := seedUnavailableRemote(t)
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	missing := vanishedMountSkippedItem("Dir")
+	require.Equal(t, issueLocalMountMissing, missing.Reason)
+	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{missing})
+	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch))
+
+	require.NoError(t, os.Remove(filepath.Join(syncRoot, "Dir", "two.txt")))
+	report := runScenarioPass(t, eng)
+
+	assert.Equal(t, 1, report.RemoteDeletes, "a delete in a folder that is a plain folder again is an ordinary delete")
+	requireNoIssueOfType(t, eng, "Dir", missing.Reason)
 }

@@ -217,8 +217,13 @@ given, because files it created would be owned by root.
   a different folder at the path, such as an unmounted disk's empty mount
   point, is refused rather than synced. `drive rebind-root` shows the
   remembered and present file counts and asks you to type `REBIND`. The sync
-  state is kept; missing files are held for confirmation rather than deleted
-  on OneDrive.
+  state is kept, and the next sync takes files missing from the folder as
+  deleted: it deletes them on OneDrive too, holding the deletes for
+  confirmation only when the folder is empty or they are many (see
+  [Deletes](#deletes)). It also forgets every recorded mount point inside the
+  folder, so the content of a disk that is not mounted now is deleted on
+  OneDrive the same way. Copy what you need from OneDrive before you rebind a
+  folder that is missing files.
 
 ## Known gaps
 
