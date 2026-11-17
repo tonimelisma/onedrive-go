@@ -34,9 +34,9 @@ type (
 	// counts of work done add up over the passes: the action counts by type,
 	// Succeeded, Failed, Superseded and Errors. The rest is the state the
 	// last pass ended in: DeferredByMode, the held deletes, LeftForNextSync,
-	// LastPassFailed, LastPassKeptForRetry, the counts read from the store
-	// after it (UnsyncedIssues, InterruptedRemovals), and what a release of
-	// the local tree did after it (Released, KeptNotOnOneDrive,
+	// LastPassFailed, LastPassKeptForRetry, LastPassAwaitingUser, the counts
+	// read from the store after it (UnsyncedIssues, InterruptedRemovals), and
+	// what a release of the local tree did after it (Released, KeptNotOnOneDrive,
 	// KeptNotUploaded, KeptNotWritable, KeptNotRemoved). What the run left
 	// (LeftWork) and whether its local tree may be removed (LocalTreeHolds)
 	// are read from that state alone.
@@ -110,12 +110,15 @@ type (
 		// Failed is every failed action of every pass. What the run left is
 		// counted from the last pass instead (LastPassFailed).
 		Failed int
-		// LastPassFailed is the failed actions of the run's last pass, and
+		// LastPassFailed is the failed actions of the run's last pass,
 		// LastPassKeptForRetry the part of them the engine keeps as retry work
 		// it runs again by itself (a transient failure, or one a scope holds
-		// until its trial).
+		// until its trial), and LastPassAwaitingUser the part a condition only
+		// the user can clear refused, which `status` lists under that
+		// condition (R-2.10.71).
 		LastPassFailed       int
 		LastPassKeptForRetry int
+		LastPassAwaitingUser int
 		Errors               []error
 	}
 )

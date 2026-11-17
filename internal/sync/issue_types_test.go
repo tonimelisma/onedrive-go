@@ -200,7 +200,7 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 			verdict: true,
 			members: []IssueType{
 				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
-				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
+				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary, issueLocalMountMissing,
 				issueRemoteNameTwin, issueRemoteReadDenied, issueRemoteRootNotFound,
 			},
 		},
@@ -249,8 +249,8 @@ func TestIssueTypeIsRootReadFailure_EveryMemberIsDecided(t *testing.T) {
 			verdict: false,
 			members: []IssueType{
 				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
-				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary, issueRemoteNameTwin,
-				IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, issueRateLimited,
+				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary, issueLocalMountMissing,
+				issueRemoteNameTwin, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, issueRateLimited,
 				issueLocalWriteDenied, issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace,
 				issueLocalNameTooLong, issueLocalReadOnly, issueRemoteFolderUnverifiable, issueLocalFileTooLarge,
 				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,

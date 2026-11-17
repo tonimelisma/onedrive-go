@@ -148,7 +148,8 @@ func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict 
 		issueHashPanic,
 		issueLocalReadDenied,
 		issueLocalUnsyncableReplacement,
-		issueLocalMountBoundary:
+		issueLocalMountBoundary,
+		issueLocalMountMissing:
 		// The scan found the path but cannot represent it.
 		return observationIssueTruthVerdict{blocksLocal: true}
 	case issueRemoteReadDenied, issueRemoteRootNotFound:

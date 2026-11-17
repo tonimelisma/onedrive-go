@@ -40,7 +40,7 @@ are inserted, updated, pruned, and validated.
 | `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_UnreadableDataDirIsReported`, `TestManagedPathExists_DistinguishesAbsentFromUnreadable`, `TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusDrive_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_FileOps_RoundTrip` |
 | `trash list/restore/empty` read and change one configured drive's local trash offline; restore never overwrites, never re-creates a sync folder that is gone, and creates the file's missing folders with the user-tree folder mode (R-5.10.2); empty needs `--confirm`. | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites`, `TestTrash_RestoreRefusesAMissingSyncFolder`, `TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask` |
 | `get` of a shared folder downloads through the tree download every folder `get` uses (`driveops.DownloadTree`, `drive-transfers.md`), listed by item ID; a shared file `get` into a folder lands under its remote name there, as a drive path's does, through the same downloader (R-1.2.5, R-1.2.6). Given no local path or a local folder, a file `get` takes the remote name as the file's name only when it is one plain local name, and otherwise refuses before anything is written and asks for a local file (R-1.2.7). The sync folder `login` and `drive add` create is the one folder the client makes in user space on its own initiative: it is private, 0700 (`syncRootDirPerms`). | `TestRunGet_SharedFolderDownloadsItsTree`, `TestRunGet_SharedFileDownloadsIntoTheGivenFolder`, `TestLocalFileTarget_DownloadsIntoDirectories`, `TestLocalFileTarget_RefusesAnUnsafeRemoteName`, `TestRunGet_SharedFileWithAnUnsafeNameIsRefused` |
-| `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears only the recorded sync-folder fingerprint, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
+| `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears the recorded sync-folder fingerprint and every recorded mount point, keeps the rest of the state, needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root` refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or its state store (R-6.3.9). `drive remove --purge` and `logout --purge` remove the config sections, tell a running watch, and then delete each state store under the same locks, keeping one an engine still has open and naming the command that finishes (R-3.3.8, R-3.1.4). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive`, `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestLogoutPurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestLogoutPurge_NotifiesTheWatchBeforeDeleting` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer, and says nothing about it when the user stopped `status` (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer`, `TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync` |
@@ -311,7 +311,29 @@ Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
   `OrchestratorConfig.ActivityHook` (R-6.6.18). Successes and dry-run plans go
   to stdout, because for `sync` they are the command's output; failures that
   need the user go to stderr; failures the engine keeps as retry work appear
-  only with `--verbose`
+  only with `--verbose`. A failure the engine records under a condition only
+  the user can clear carries that condition on the activity
+  (`Activity.ConditionKey`, `Activity.ConditionType`; `failureAwaitsUser` in
+  `internal/sync`) and is said on stderr, in the words `status` uses for it
+  (`describeStatusCondition`), e.g. "Can't create folder deep: Path too long.
+  …", when the condition starts, and by each run the first time it sees the
+  path refused: the durable curve's retries of the same path print nothing.
+  The engine marks a refusal as the condition starting
+  (`Activity.ConditionStarts`, `conditionStartsWith`) when the action's retry
+  work did not hold that condition yet, which a path whose retry work the plan
+  dropped meets again with no activity in between. The console keeps, per
+  path, the condition it last said and drops it when an activity of the path
+  names no condition, so a path that synced or failed another way and is
+  refused again is said again, and it says every refusal the engine marks as
+  starting, also within one `sync --watch`, whose console lives for the whole
+  watch (`syncConsole.conditionReportDue`,
+  `TestSyncConsole_AConditionTheUserMustClearIsSaidOnceInStatusWords`,
+  `TestSyncConsole_AConditionIsSaidAgainOnceItsPathSyncedInBetween`,
+  `TestSyncConsole_AConditionThatStartsAgainWithNoActivityBetweenIsSaidAgain`,
+  `TestRunOnce_ARefusalAfterItsRetryWorkWasDroppedStartsTheConditionAgain`,
+  R-2.10.71). Because the console says a condition that starts, the engine
+  logs its own "Not syncing <path>" line for such a failure at INFO, not WARN
+  (`activitySaysConditionStarts`)
 - one summary line per drive in human units, plus a "Held back by
   --download-only" line for work a one-way mode skipped (R-6.6.19). The line
   is built from the activity feed's tally (`activityTally`): once
@@ -327,14 +349,17 @@ Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
   pass, each file once, that add up: `Failed`, the last pass's failed
   actions the engine does not retry by itself; `WillRetry`, its failures
   kept for retry plus `LeftForNextSync`; and `StillOpen`, `UnsyncedIssues`,
-  the observation issues that keep a file unsynced. A file an earlier pass
+  the observation issues that keep a file unsynced, plus
+  `LastPassAwaitingUser`, the last pass's failures a condition only the user
+  can clear refused, which `status` lists under that condition and which are
+  therefore not in `Failed`. A file an earlier pass
   failed and a later pass of the same run finished, or no longer needed, is
   in none of them, and the file events printed during the run change none of
   them (`TestSyncConsole_LeftWorkComesFromTheReportAlone`,
   `TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts`). Retry work is
   not read from the store, because every retry row a live pass leaves
-  belongs to an action of that pass's plan and is already in `Failed` or
-  `WillRetry`. The line adds "; N still not synced (see 'onedrive-go
+  belongs to an action of that pass's plan and is already in `Failed`,
+  `WillRetry` or, through `LastPassAwaitingUser`, `StillOpen`. The line adds "; N still not synced (see 'onedrive-go
   status')" for `StillOpen`, and a drive that left anything is never "Up to
   date". A dry run leaves nothing. `syncConsole.Summary` returns each mount's counts, the
   ones it printed, to `runOnceResultError`
@@ -527,7 +552,14 @@ has nothing to summarize and ends with the root's error alone
 `will_retry` and `still_open` from `Report.LeftWork`, and its `status` is
 `incomplete` when the drive left work (R-6.6.33,
 `TestSyncConsole_JSONWritesOnlyJSONLines`,
-`TestSyncConsole_JSONSummaryOfADriveThatLeftNothingIsDone`). `status --json`
+`TestSyncConsole_JSONSummaryOfADriveThatLeftNothingIsDone`). An `activity`
+line for a failure a condition only the user can clear refused has the
+status `still_open` and a `condition` field holding the condition as
+`status --json` names it in `type`, printed when the text line is. The
+summary counts the file in `still_open` when the run's last pass refused it;
+a last pass that only held it until its retry is due counts it in
+`will_retry` (`TestRunOnce_ARefusalOnlyTheUserCanClearIsLeftAsItsCondition`).
+`status --json`
 prints an empty document instead of prose.
 
 ### JSON Output Everywhere

@@ -424,8 +424,9 @@ func TestFailureKeptForRetry_TheFeedAndThePassCountAgree(t *testing.T) {
 		activities = nil
 		completion := &actionCompletion{ActionType: ActionUpload, Path: "a.txt", Err: errors.New("refused")}
 
-		eng.emitActivity(completion, class)
-		flow.recordError(&resultDecision{Class: class}, completion)
+		decision := &resultDecision{Class: class}
+		eng.emitActivity(completion, decision, true)
+		flow.recordError(decision, completion)
 
 		require.Len(t, activities, 1, "class %v", class)
 		assert.Equal(t, activities[0].WillRetry, flow.results.keptForRetry == 1, "class %v", class)

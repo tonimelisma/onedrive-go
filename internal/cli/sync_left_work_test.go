@@ -43,7 +43,7 @@ func TestSyncConsole_LeftWorkComesFromTheReportAlone(t *testing.T) {
 	c, out, _ := testSyncConsole()
 	c.ActivityHook()
 	for _, a := range leftWorkTestActivities() {
-		c.Activity(mountActivity(a))
+		c.Activity(mountActivity(&a))
 	}
 	out.Reset()
 	result := singleMountResult(report)
@@ -58,7 +58,7 @@ func TestSyncConsole_LeftWorkComesFromTheReportAlone(t *testing.T) {
 	c.json = true
 	c.ActivityHook()
 	for _, a := range leftWorkTestActivities() {
-		c.Activity(mountActivity(a))
+		c.Activity(mountActivity(&a))
 	}
 	out.Reset()
 	c.Summary(result)

@@ -218,6 +218,79 @@ func TestWatchConditionSummary_StatesBreakdownAndHintOnce(t *testing.T) {
 	assert.NotContains(t, output, "action=")
 }
 
+// The 10 s maintenance tick writes its debug line "sync conditions changed"
+// only when the breakdown differs from the one last written: ticks while the
+// same conditions stay write nothing.
+//
+// Validates: R-6.6.30
+func TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges(t *testing.T) {
+	t.Parallel()
+
+	logger, logs := newCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	seedBadName := func(path string) {
+		seedObservationIssueRowForTest(t, rt.deps.store, &ObservationIssue{
+			Path:      path,
+			DriveID:   driveid.New(engineTestDriveID),
+			IssueType: IssueInvalidFilename,
+		})
+	}
+
+	seedBadName("docs/CON")
+	for range 3 {
+		rt.logWatchSummary(t.Context())
+	}
+	output := logs.String()
+	assert.Equal(t, 1, countLevel(output, "WARN"), "the summary is said when the condition appears")
+	assert.Zero(t, strings.Count(output, "sync conditions changed"), "ticks with the same conditions write nothing")
+
+	seedBadName("docs/PRN")
+	for range 3 {
+		rt.logWatchSummary(t.Context())
+	}
+	output = logs.String()
+	assert.Equal(t, 1, strings.Count(output, "sync conditions changed"), "a tick whose counts moved writes one line")
+	assert.Contains(t, output, `breakdown="2 files with names OneDrive does not allow"`)
+	assert.Equal(t, 1, countLevel(output, "WARN"), "a count change is not a new kind of condition")
+}
+
+// A failed read of the conditions is a housekeeping step that keeps failing:
+// it warns once per failure streak, logs its repeats at Debug, and notes its
+// recovery once at Info.
+//
+// Validates: R-6.6.30
+func TestWatchConditionSummary_AFailedReadIsLoggedOnce(t *testing.T) {
+	t.Parallel()
+
+	logger, logs := newCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
+	// An issue type no member has: the snapshot read refuses the row.
+	db := requireStoreTestRawDB(t, eng.baseline)
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO observation_issues (path, issue_type, scope_key) VALUES ('x.txt', 'not_an_issue_type', '')`)
+	require.NoError(t, err)
+
+	for range 3 {
+		rt.logWatchSummary(t.Context())
+	}
+	const failed = `msg="could not read the sync conditions for the watch summary"`
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN "+failed), logs.String())
+	assert.Equal(t, 2, strings.Count(logs.String(), "level=DEBUG "+failed), logs.String())
+
+	_, err = db.ExecContext(t.Context(), `DELETE FROM observation_issues WHERE path = 'x.txt'`)
+	require.NoError(t, err)
+	for range 2 {
+		rt.logWatchSummary(t.Context())
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), `level=INFO msg="reading the sync conditions for the watch summary works again"`),
+		logs.String())
+	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the recovery is not a new failure")
+}
+
 // A file that stats but cannot be opened used to warn "hash computation
 // failed" on every safety scan forever. It is now a skipped local_read_denied
 // item (reported once, listed by status) and the scan logs nothing at WARN.

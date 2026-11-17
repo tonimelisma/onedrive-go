@@ -46,6 +46,7 @@ them on later passes, and `sync --watch` keeps trying in the background.
 | Hash error | Hashing a local file failed unexpectedly. | Check the file and the disk; it is retried. |
 | Deletes held for confirmation | More was deleted on one side than looks intended (an empty side, or over 50 items and 30 % of the drive, counting the last 24 hours of deletes). Nothing is deleted; everything else keeps syncing. | Check the folder. If the deletes are right, `onedrive-go sync --confirm-deletes`; if not, restore the files and the hold clears. |
 | Another filesystem inside the sync folder | A folder inside the sync folder is a mount point for another filesystem. Sync does not enter it unless `cross_filesystems = true`, so a disk that is not mounted never looks like deleted files. | Move the mount outside the sync folder, or set `cross_filesystems`. |
+| Disk not mounted | Sync crossed into this folder as the mount point of another disk (`cross_filesystems = true`), and that disk is not mounted now. Its synced content is kept, and nothing is deleted on OneDrive. | Mount the disk again; that clears it and loses nothing. If the disk is gone for good, copy what you need from the folder on OneDrive first: `onedrive-go drive rebind-root` forgets every disk `status` lists as not mounted, and sync then deletes each such folder's content on OneDrive too, holding the deletes for confirmation only when they are many. Mount every disk you still use before you rebind. |
 | Synced item can no longer sync | A synced path now holds a symbolic link, FIFO or device, or a name OneDrive rejects or a filter excludes. Its OneDrive copy is kept. | Rename or move it back; if you meant to remove it, delete it on OneDrive. |
 | Database open locally | A download would replace a SQLite database whose `-wal` or `-journal` file is in use. | Close the application; the download is retried. |
 | Blocked as malware | OneDrive's scan flagged the file and will not let it be downloaded. | Check it on the OneDrive website; delete it there if it is unwanted. |
@@ -105,9 +106,14 @@ link. The error says whether the folder lacks the `user.onedrive-go.root`
 marker or carries a different one. If you moved or restored the folder on
 purpose, run `onedrive-go drive rebind-root --drive <drive>`: it shows how
 many files the state remembers and how many the folder holds now, and asks
-you to type `REBIND` (or pass `--yes`). The sync state is kept; if files are
-missing from the folder, the next sync holds their deletes for confirmation
-instead of deleting them on OneDrive.
+you to type `REBIND` (or pass `--yes`). The sync state is kept, and the next
+sync takes files missing from the folder as deleted: it deletes them on
+OneDrive too, and holds the deletes for confirmation only when the folder is
+empty or they are many (see "Deletes held for confirmation" above). The
+rebind also forgets every recorded mount point inside the folder, so the
+content of a disk that is not mounted now is deleted on OneDrive the same
+way. Copy what you need from OneDrive before you rebind a folder that is
+missing files.
 
 ## "another onedrive-go sync is already running"
 

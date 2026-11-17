@@ -29,6 +29,7 @@ const (
 	ConditionDeletesHeld            ConditionKey = "deletes_held"
 	ConditionLocalUnsyncable        ConditionKey = "local_unsyncable_replacement"
 	ConditionLocalMountBoundary     ConditionKey = "local_mount_boundary"
+	ConditionLocalMountMissing      ConditionKey = "local_mount_missing"
 	ConditionLocalInterrupted       ConditionKey = "local_interrupted_removal"
 	ConditionRemovedFolderKept      ConditionKey = "removed_folder_kept"
 	ConditionRemoteFolderUnverified ConditionKey = "remote_folder_delete_unverifiable"
@@ -117,6 +118,7 @@ func conditionClearsAutomatically(key ConditionKey) bool {
 		ConditionDeletesHeld,
 		ConditionLocalUnsyncable,
 		ConditionLocalMountBoundary,
+		ConditionLocalMountMissing,
 		ConditionLocalInterrupted,
 		ConditionRemovedFolderKept,
 		ConditionRemoteFolderUnverified,
@@ -197,6 +199,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionLocalReadOnly,
 		ConditionLocalUnsyncable,
 		ConditionLocalMountBoundary,
+		ConditionLocalMountMissing,
 		ConditionLocalInterrupted,
 		ConditionRemovedFolderKept,
 		ConditionRemoteFolderUnverified,
@@ -281,6 +284,8 @@ func conditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
 		return ConditionLocalUnsyncable, true
 	case issueLocalMountBoundary:
 		return ConditionLocalMountBoundary, true
+	case issueLocalMountMissing:
+		return ConditionLocalMountMissing, true
 	case issueRemoteFolderUnverifiable:
 		return ConditionRemoteFolderUnverified, true
 	case issueLocalInterruptedRemoval:

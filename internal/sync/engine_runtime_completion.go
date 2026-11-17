@@ -39,7 +39,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 		)
 	}
 	current := flow.sched.trackedActionForCompletion(r)
-	flow.engine.emitActivity(r, decision.Class)
+	flow.engine.emitActivity(r, &decision, flow.conditionStartsWith(&decision, r))
 	if decision.Class != errclass.ClassSuperseded {
 		// The action ran: whatever came of it, its supersedes were not
 		// consecutive, so a wedge streak (D-059d) starts over.
@@ -616,6 +616,8 @@ func (flow *engineFlow) recordRetryWork(
 	// first as timed retry work and then again as blocked, which counted
 	// every throttled failure twice.
 	actionable := decision.Class == errclass.ClassActionable && decision.ConditionType != ""
+	// Read before the failure is recorded below, as the activity feed read it.
+	conditionStarts := flow.conditionStartsWith(decision, r)
 	var row *RetryWorkRow
 	var recErr error
 	if blocked {
@@ -637,7 +639,14 @@ func (flow *engineFlow) recordRetryWork(
 		// Said once, when the condition starts (R-6.6.30): the retries that
 		// follow are on the durable curve and change nothing the user can
 		// see. Status keeps listing the path under the condition meanwhile.
-		flow.deps.logger.Warn("Not syncing "+r.Path+": "+r.ErrMsg,
+		// When the activity feed says that the condition starts, sync's
+		// output says it to the user, so the log keeps the line at Info
+		// rather than warn it a second time; otherwise it warns.
+		level := slog.LevelWarn
+		if flow.engine.activitySaysConditionStarts(decision, r, conditionStarts) {
+			level = slog.LevelInfo
+		}
+		flow.deps.logger.Log(ctx, level, "Not syncing "+r.Path+": "+r.ErrMsg,
 			slog.String("condition_type", string(decision.ConditionType)),
 		)
 	}
@@ -765,6 +774,7 @@ func retryDelayForCondition(condition IssueType) func(int) time.Duration {
 		issueDeletesHeld,
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
+		issueLocalMountMissing,
 		issueLocalInterruptedRemoval,
 		issueRemovedFolderKept,
 		issueLocalFileTooLarge,

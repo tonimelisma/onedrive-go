@@ -47,6 +47,17 @@ func TestConditionLabel_EveryDeclaredKeyHasALabel(t *testing.T) {
 	assert.Equal(t, "file waiting for sign-in", conditionLabel(ConditionAuthenticationRequired, 1))
 }
 
+// A condition of a mount point is a condition of one folder, the mount point,
+// so the label counts folders, not files.
+//
+// Validates: R-6.6.30
+func TestConditionLabel_AMountPointIsCountedAsAFolder(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "folder whose disk is not mounted", conditionLabel(ConditionLocalMountMissing, 1))
+	assert.Equal(t, "folders on another filesystem inside the sync folder", conditionLabel(ConditionLocalMountBoundary, 2))
+}
+
 // Validates: R-6.6.30
 func TestWatchConditionSummaryFingerprint_IsTheSetOfConditionKinds(t *testing.T) {
 	t.Parallel()

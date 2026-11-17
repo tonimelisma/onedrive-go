@@ -21,6 +21,7 @@ func reportLastPassStateFields() map[string]bool {
 		"UnsyncedIssues":       true,
 		"LastPassFailed":       true,
 		"LastPassKeptForRetry": true,
+		"LastPassAwaitingUser": true,
 		"InterruptedRemovals":  true,
 		"KeptNotOnOneDrive":    true,
 		"KeptNotUploaded":      true,

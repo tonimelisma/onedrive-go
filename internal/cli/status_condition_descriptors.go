@@ -192,6 +192,16 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 				"disk that is not mounted can never look like deleted files.",
 			"Move the mount outside the sync folder, or set cross_filesystems = true to sync it.",
 		)
+	case syncengine.ConditionLocalMountMissing:
+		return newStatusConditionDescriptor(
+			"Disk not mounted",
+			"This folder was the mount point of another disk or filesystem, and that disk is not mounted now. "+
+				"Its synced content is kept, and nothing is deleted on OneDrive.",
+			"Mount the disk again; that clears it and loses nothing. If the disk is gone for good, copy what you "+
+				"need from this folder on OneDrive first: 'onedrive-go drive rebind-root' forgets every disk listed "+
+				"here that is not mounted, and sync then deletes each such folder's content on OneDrive too, holding "+
+				"the deletes for confirmation only when they are many. Mount every disk you still use before you rebind.",
+		)
 	case syncengine.ConditionDeletesHeld:
 		return newStatusConditionDescriptor(
 			"Deletes held for confirmation",
@@ -325,6 +335,7 @@ func describeRemoteStatusCondition(key syncengine.ConditionKey) statusConditionD
 		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalMountMissing,
 		syncengine.ConditionLocalInterrupted,
 		syncengine.ConditionRemovedFolderKept,
 		syncengine.ConditionRemoteFolderUnverified,
@@ -403,6 +414,7 @@ func describeFilesystemStatusCondition(key syncengine.ConditionKey) statusCondit
 		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalMountMissing,
 		syncengine.ConditionLocalInterrupted,
 		syncengine.ConditionRemovedFolderKept,
 		syncengine.ConditionRemoteFolderUnverified,
@@ -501,6 +513,7 @@ func describeLocalRuntimeStatusCondition(key syncengine.ConditionKey) statusCond
 		syncengine.ConditionDeletesHeld,
 		syncengine.ConditionLocalUnsyncable,
 		syncengine.ConditionLocalMountBoundary,
+		syncengine.ConditionLocalMountMissing,
 		syncengine.ConditionLocalInterrupted,
 		syncengine.ConditionRemovedFolderKept,
 		syncengine.ConditionRemoteFolderUnverified,
