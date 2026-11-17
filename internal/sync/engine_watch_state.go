@@ -20,10 +20,16 @@ type watchLoopState struct {
 	pendingReplanDrainIdleWorkers int
 	postReplanOutbox              bool
 
-	// Deduplication: caches the last watch-condition signature and per-scope
-	// shared-folder child-set signatures for watch summaries.
+	// Deduplication for the watch summaries: the set of condition kinds last
+	// reported, the breakdown last written, and per-scope shared-folder
+	// child-set signatures.
 	lastSummarySignature string
+	lastSummaryBreakdown string
 	lastRemoteBlocked    map[ScopeKey]string
+	// summaryReadFailing is set while the reads of the conditions for the
+	// watch summary fail: the streak's first failure warns, its recovery is
+	// noted once.
+	summaryReadFailing bool
 
 	// lastDroppedRescanErr is the error text last warned for a failed
 	// dropped-event rescan; a repeat of the same failure goes to Debug

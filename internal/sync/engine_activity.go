@@ -37,7 +37,20 @@ type Activity struct {
 	// WillRetry is true for failures the engine keeps as retry work; the user
 	// does not need to act on them yet.
 	WillRetry bool
-	Err       error
+	// ConditionStarts is set with ConditionKey when the condition starts with
+	// this failure: the action's retry work did not hold that condition yet.
+	// A retry the same condition refuses again leaves it unset, and so does
+	// every activity that names no condition.
+	ConditionStarts bool
+	// ConditionKey and ConditionType name the condition only the user can
+	// clear that refused the action, as `status` lists it
+	// (StoredConditionGroup): the family whose words status uses, and the
+	// issue type `status --json` prints. They are set only for a failure
+	// recorded with that condition (failureAwaitsUser), which the run counts
+	// with what is still not synced rather than as failed.
+	ConditionKey  ConditionKey
+	ConditionType IssueType
+	Err           error
 }
 
 // SetActivityHook registers a callback for finished file actions. The hook
@@ -73,9 +86,11 @@ func activityKindFor(t actionType) (ActivityKind, bool) {
 
 // emitActivity publishes a classified completion. Shutdown and superseded
 // completions are not outcomes the user should see: the work either stopped
-// on request or was replaced by newer truth.
-func (e *Engine) emitActivity(r *actionCompletion, class errclass.Class) {
-	if e.activityHook == nil || r == nil {
+// on request or was replaced by newer truth. conditionStarts is whether the
+// condition the failure is refused for starts with it (conditionStartsWith);
+// the activity carries it with that condition.
+func (e *Engine) emitActivity(r *actionCompletion, decision *resultDecision, conditionStarts bool) {
+	if e.activityHook == nil || r == nil || decision == nil {
 		return
 	}
 
@@ -93,18 +108,59 @@ func (e *Engine) emitActivity(r *actionCompletion, class errclass.Class) {
 		SizeKnown: r.SizeKnown,
 	}
 
-	switch class {
+	switch decision.Class {
 	case errclass.ClassSuccess:
 		activity.Success = true
 	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient,
 		errclass.ClassActionable, errclass.ClassFatal, errclass.ClassInvalid:
-		activity.WillRetry = failureKeptForRetry(class)
+		activity.WillRetry = failureKeptForRetry(decision.Class)
 		activity.Err = r.Err
+		if failureAwaitsUser(decision, r) {
+			activity.ConditionKey = decision.ConditionKey
+			activity.ConditionType = decision.ConditionType
+			activity.ConditionStarts = conditionStarts
+		}
 	case errclass.ClassShutdown, errclass.ClassSuperseded:
 		return
 	}
 
 	e.activityHook(activity)
+}
+
+// failureAwaitsUser reports whether a failure is a condition only the user can
+// clear, recorded with its retry row under the condition the decision names,
+// which `status` lists under that condition (recordRetryWork, R-2.10.71): an
+// action refused per item for a named condition. A failure the permission
+// probes own is not, because the condition and scope they record are known
+// only after the probe ran and can differ from the decision's. Nor is a
+// transfer OneDrive answered with other bytes than its own facts describe
+// (an upload not stored as sent, a download that does not match): nothing the
+// user does clears it, and its retry may succeed. The activity feed's
+// condition and a pass's count of such failures (Report.LastPassAwaitingUser)
+// both read it, so the two cannot disagree.
+func failureAwaitsUser(decision *resultDecision, r *actionCompletion) bool {
+	return decision.Class == errclass.ClassActionable && decision.Persistence == persistRetryWork &&
+		decision.ConditionType != "" && decision.ConditionKey != "" &&
+		decision.ConditionKey != ConditionUploadVerification && decision.ConditionKey != ConditionDownloadIntegrity &&
+		!shouldHandleRemote403Permission(r) && !shouldHandleLocalPermission(r)
+}
+
+// activitySaysConditionStarts reports whether the activity feed tells its
+// consumer that the condition that refused this failure starts with it
+// (failureAwaitsUser and conditionStarts): sync's output then says it to the
+// user in the words `status` uses.
+func (e *Engine) activitySaysConditionStarts(decision *resultDecision, r *actionCompletion, conditionStarts bool) bool {
+	return conditionStarts && e.activityHook != nil && decision != nil && failureAwaitsUser(decision, r)
+}
+
+// conditionStartsWith reports whether the condition decision names starts
+// with the failure r: the action's retry work does not hold that condition
+// yet. A path whose retry work the plan dropped, with no activity of the path
+// in between, starts it again. Read before the failure is recorded, the
+// activity feed and the log line of the failure read one answer.
+func (flow *engineFlow) conditionStartsWith(decision *resultDecision, r *actionCompletion) bool {
+	row, held := flow.retries.rowsByKey[retryWorkKeyForCompletion(r)]
+	return !held || row.Blocked || row.ConditionType != decision.ConditionType
 }
 
 // failureKeptForRetry reports whether the engine keeps a failure of class as

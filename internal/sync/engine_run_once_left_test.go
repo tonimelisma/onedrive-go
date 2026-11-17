@@ -66,7 +66,8 @@ func TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync(t *testing.T) {
 // Validates: R-6.6.28
 //
 // A live one-shot run counts every file it leaves unsynced once. A refusal
-// only the user can clear is a failed action, and work waiting on the retry
+// only the user can clear is a failed action that status lists under its
+// condition, so it is left as still not synced, and work waiting on the retry
 // curve is a planned action the run holds and leaves for the next sync;
 // their retry rows are the store's only retry work, because a live pass
 // prunes the rows to its plan's actions. A name OneDrive refuses has no plan
@@ -102,7 +103,7 @@ func TestRunOnce_ReportCountsUnresolvedWork(t *testing.T) {
 	assert.Equal(t, 1, report.Failed, "the folder OneDrive refused: %v", report.Errors)
 	assert.Equal(t, 1, report.LeftForNextSync, "waiting.txt is held until its retry is due")
 	assert.Equal(t, 1, report.UnsyncedIssues, "the reserved name")
-	assert.Equal(t, LeftWork{Failed: 1, WillRetry: 1, StillOpen: 1}, report.LeftWork())
+	assert.Equal(t, LeftWork{WillRetry: 1, StillOpen: 2}, report.LeftWork(), "the refused folder and the reserved name")
 
 	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)

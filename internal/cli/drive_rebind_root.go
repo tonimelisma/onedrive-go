@@ -25,9 +25,12 @@ different folder is there: an unmounted disk, a wiped folder, or a symbolic
 link pointing somewhere new would otherwise look like every file was deleted.
 
 Run this after moving, restoring, or re-pointing the sync folder on purpose.
-Sync state is kept. If the folder is missing files the state remembers, the
-next sync holds those deletes for confirmation rather than deleting them on
-OneDrive.
+Sync state is kept, and the next sync takes files missing from the folder as
+deleted: it deletes them on OneDrive too, holding the deletes for
+confirmation only when the folder is empty or they are many (over 50 and
+30 % of what is synced). The rebind also forgets every recorded mount point
+inside the folder, so the content of a disk that is not mounted now is
+deleted on OneDrive the same way. Copy what you need from OneDrive first.
 
 It shows how many files the sync state remembers and how many are in the
 folder now. Type REBIND to confirm, or use --yes for non-interactive use.`,

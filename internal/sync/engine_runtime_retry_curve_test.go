@@ -61,7 +61,7 @@ func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 				issueRateLimited, issueLocalReadDenied, issueLocalWriteDenied, issueRemoteNameTwin,
 				issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace, issueLocalNameTooLong,
 				issueLocalReadOnly, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
-				issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge, issueLocalBusy, issueLocalCrossDevice,
+				issueLocalMountMissing, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge, issueLocalBusy, issueLocalCrossDevice,
 				issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen, issueUploadVerification,
 				issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict, issueTransientNotFound,
 				issueResourceLocked, issueTransferURLRejected,

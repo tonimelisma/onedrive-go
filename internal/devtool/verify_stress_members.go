@@ -360,6 +360,8 @@ func stressSyncConcurrencyNonMembers() []stressNonMember {
 		{test: "TestWatchConditionCountTotal_SumsRawCounts", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionCounts_SortsAndAggregatesProjectedGroups", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionSummaryFingerprint_IsTheSetOfConditionKinds", reason: stressNonMemberWatchSummary},
+		{test: "TestWatchConditionSummary_AFailedReadIsLoggedOnce", reason: stressNonMemberWatchSummary},
+		{test: "TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionSummary_StatesBreakdownAndHintOnce", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionSummary_WarnsOnlyForNewActionableKinds", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchHelpers_FailNamingWhatTheyWaitedFor", reason: stressNonMemberWatchHelpers},

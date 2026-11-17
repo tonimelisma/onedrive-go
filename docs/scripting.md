@@ -93,33 +93,43 @@ Each line is one JSON object with an `event` field:
 | --- | --- | --- |
 | `start` | One-shot sync begins, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `dry_run`, `paused` |
 | `watching` | `sync --watch` is running, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `paused` |
-| `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `status`, `error` |
+| `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `status`, `condition`, `error` |
 | `summary` | A drive's one-shot sync finished; `failed`, `will_retry` and `still_open` are what its last pass left | `drive`, `status`, `duration_ms`, `counts`, `failed`, `will_retry`, `still_open`, `dry_run`, `error` |
 | `stopped` | `sync --watch` stopped | |
 
 - `mode` is `bidirectional`, `download_only` or `upload_only`.
 - `action` is `download`, `upload`, `delete_local`, `delete_remote`,
   `move_local`, `move_remote`, `create_folder` or `conflict_copy`.
-- `status` on an `activity` is `done`, `planned` (dry run), `will_retry` or
-  `failed`. On a `summary` it is `done`, `incomplete` (the drive left files
-  unsynced, and the run exits 1) or `failed` (the drive could not sync;
-  `error` says why).
+- `status` on an `activity` is `done`, `planned` (dry run), `will_retry`,
+  `still_open` or `failed`. `still_open` is an action refused by a condition
+  only you can clear, such as a path OneDrive refuses as too long: `condition`
+  names it as `status --json` does in an issue's `type` (`path_too_long`).
+  Such an action is reported when the condition starts, and by each run the
+  first time it sees the path refused, not again on each retry. It is
+  reported again when the condition starts again (the path left the plan, for
+  example because the folder was deleted, and is refused anew), when another
+  condition refuses the path, or after an action on the path ended another
+  way, which under `sync --watch` can happen within one session. The summary
+  counts the file in `still_open`
+  when the run's last pass refused it, and in `will_retry` when that pass only
+  held it until its retry is due. On a `summary` the status is `done`,
+  `incomplete` (the drive left files unsynced, and the run exits 1) or
+  `failed` (the drive could not sync; `error` says why).
 - `counts` maps the same `action` names to how many were done.
 - On a `summary`, `failed`, `will_retry` and `still_open` describe what the
-  run's last pass left, each file once: `failed` counts the files whose
-  action failed and is not retried by itself, `will_retry` the work waiting
-  to be retried or left for the next sync, and `still_open` the files an
-  issue listed by `status` keeps unsynced (a name OneDrive does not allow, a
-  folder that cannot be read). A sync can make more than one pass, and a
-  file an earlier pass failed and a later pass finished is in none of them.
-  `still_open` never counts work waiting to be retried: all such work is work
-  the run itself attempted or held, already in `failed` or `will_retry`.
-  They are the numbers of the text summary.
+  run's last pass left, each file once: `still_open` counts the files an
+  issue listed by `status` keeps unsynced until you clear it (a name OneDrive
+  does not allow, a folder that cannot be read, a path OneDrive refused as too
+  long), `will_retry` the work waiting to be retried or left for the next
+  sync, and `failed` the other files whose action failed and is not retried
+  by itself. A sync can make more than one pass, and a file an earlier pass
+  failed and a later pass finished is in none of them. They are the numbers
+  of the text summary.
 - Held deletes are not part of the `summary` object; read `status --json` and
   look for an issue with `type` `deletes_held`.
 
 ```bash
-onedrive-go sync --json | jq -c 'select(.event == "activity" and .status == "failed")'
+onedrive-go sync --json | jq -c 'select(.event == "activity" and (.status == "failed" or .status == "still_open"))'
 ```
 
 ## Exit codes

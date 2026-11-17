@@ -27,10 +27,12 @@ func localObservationManagedIssueTypes() []IssueType {
 		// symlink or FIFO, a mount point of another filesystem) is managed
 		// too: when a later full scan finds the path representable again, the
 		// condition clears and the path syncs again. A crossed mount point
-		// that is not mounted is re-reported by every scan, so it stays
-		// (R-6.2.14, R-6.2.15).
+		// that is not mounted is re-reported by every scan, so it stays until
+		// the disk is back (R-6.2.14, R-6.2.15). Both mount types are managed
+		// together, so a scan that reports one at a path replaces the other.
 		issueLocalUnsyncableReplacement,
 		issueLocalMountBoundary,
+		issueLocalMountMissing,
 		// The leftover of an interrupted removal is reported by every scan
 		// that finds it and by nothing else, so the scan that no longer finds
 		// it (the user renamed it back or deleted it) clears the report. The

@@ -77,6 +77,9 @@ type runResults struct {
 	// keptForRetry counts the failures among failed that the engine keeps as
 	// retry work it runs again by itself (failureKeptForRetry).
 	keptForRetry int
+	// awaitingUser counts the failures among failed that a condition only the
+	// user can clear refused, recorded with that condition (failureAwaitsUser).
+	awaitingUser int
 	// superseded counts the actions the run gave up on because the truth
 	// they were planned against changed; the next pass replans them.
 	superseded int

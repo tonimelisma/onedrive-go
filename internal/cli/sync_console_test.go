@@ -30,11 +30,11 @@ func testSyncConsole() (*syncConsole, *bytes.Buffer, *bytes.Buffer) {
 	}, &out, &errOut
 }
 
-func mountActivity(a syncengine.Activity) multisync.MountActivity {
+func mountActivity(a *syncengine.Activity) multisync.MountActivity {
 	return multisync.MountActivity{
 		Identity:    multisync.MountIdentity{MountID: "m1"},
 		DisplayName: "Personal",
-		Activity:    a,
+		Activity:    *a,
 	}
 }
 
@@ -60,11 +60,11 @@ func TestSyncConsole_NamesEveryCompletedFile(t *testing.T) {
 	t.Parallel()
 
 	c, out, errOut := testSyncConsole()
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "Docs/a.pdf", Size: 1536, SizeKnown: true, Success: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Success: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityRemoteDelete, Path: "old.txt", Success: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityLocalMove, OldPath: "x.txt", Path: "y.txt", Success: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "Docs", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "Docs/a.pdf", Size: 1536, SizeKnown: true, Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityRemoteDelete, Path: "old.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalMove, OldPath: "x.txt", Path: "y.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "Docs", Success: true}))
 
 	assert.Equal(t, strings.Join([]string{
 		"Downloaded Docs/a.pdf (1.5 KB)",
@@ -82,8 +82,8 @@ func TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose(t *testing.T) {
 
 	c, out, errOut := testSyncConsole()
 	denied := fmt.Errorf("write file: %w", os.ErrPermission)
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "locked.txt", Err: denied}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "locked.txt", Err: denied}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
 
 	assert.Empty(t, out.String())
 	assert.Equal(t, "Failed to download locked.txt: permission denied\n", errOut.String(),
@@ -91,7 +91,7 @@ func TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose(t *testing.T) {
 
 	c.verbose = true
 	errOut.Reset()
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
 	assert.Equal(t, "Could not upload busy.txt, will retry: throttled\n", errOut.String())
 }
 
@@ -101,8 +101,8 @@ func TestSyncConsole_QuietKeepsOnlyFailures(t *testing.T) {
 
 	c, out, errOut := testSyncConsole()
 	c.quiet = true
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.txt", Success: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "b.txt", Err: os.ErrPermission}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "b.txt", Err: os.ErrPermission}))
 	c.Summary(singleMountResult(&syncengine.Report{Downloads: 2, Succeeded: 1, Failed: 1}))
 
 	assert.Empty(t, out.String())
@@ -115,11 +115,11 @@ func TestSyncConsole_SummaryInHumanUnits(t *testing.T) {
 
 	c, out, _ := testSyncConsole()
 	for i := range 3 {
-		c.Activity(mountActivity(syncengine.Activity{
+		c.Activity(mountActivity(&syncengine.Activity{
 			Kind: syncengine.ActivityDownload, Path: fmt.Sprintf("f%d", i), Size: sizeMB, SizeKnown: true, Success: true,
 		}))
 	}
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "d", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "d", Success: true}))
 	out.Reset()
 
 	c.Summary(singleMountResult(&syncengine.Report{Duration: 5571 * time.Millisecond, Downloads: 3, FolderCreates: 1, Succeeded: 4}))
@@ -168,7 +168,7 @@ func TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts(t *testing.T) {
 	c, out, _ := testSyncConsole()
 	c.ActivityHook()
 	for _, path := range []string{"a.txt", "b.txt"} {
-		c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: path, WillRetry: true}))
+		c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: path, WillRetry: true}))
 	}
 	result := singleMountResult(&syncengine.Report{
 		Duration:             2 * time.Second,
@@ -195,6 +195,148 @@ func TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts(t *testing.T) {
 	assert.Equal(t, syncengine.LeftWork{WillRetry: 1}, left["m1"])
 	assert.NotContains(t, out.String(), "still not synced")
 	assert.Equal(t, "sync left 1 file unsynced; run 'onedrive-go status' for details", runOnceResultError(result, left).Error())
+}
+
+// Validates: R-6.6.18, R-6.6.19, R-6.6.28, R-6.6.33
+//
+// A file action a condition only the user can clear refused (OneDrive
+// refused the path as too long) is said once per path, on stderr, in the
+// words status uses for that condition, and counted with what is still not
+// synced, not as failed; its retries print nothing. Under --json the activity
+// names the condition as status --json does, and its status agrees with the
+// summary's still_open.
+func TestSyncConsole_AConditionTheUserMustClearIsSaidOnceInStatusWords(t *testing.T) {
+	t.Parallel()
+
+	refused := syncengine.Activity{
+		Kind:          syncengine.ActivityFolderCreate,
+		Path:          "deep",
+		ConditionKey:  syncengine.ConditionPathTooLong,
+		ConditionType: syncengine.IssueType("path_too_long"),
+		Err:           errors.New("graph: bad request"),
+	}
+	report := &syncengine.Report{
+		Duration: 2 * time.Second, FolderCreates: 1, Failed: 1, LastPassFailed: 1, LastPassAwaitingUser: 1,
+	}
+	words := describeStatusCondition(syncengine.ConditionPathTooLong)
+
+	c, out, errOut := testSyncConsole()
+	c.ActivityHook()
+	c.Activity(mountActivity(&refused))
+	c.Activity(mountActivity(&refused))
+	left := c.Summary(singleMountResult(report))
+
+	assert.Equal(t, "Can't create folder deep: "+words.Title+". "+words.Reason+" "+words.Action+"\n", errOut.String(),
+		"said once per path, in status's words")
+	assert.Equal(t, "Done in 2.0 s; 1 still not synced (see 'onedrive-go status').\n", out.String())
+	assert.Equal(t, syncengine.LeftWork{StillOpen: 1}, left["m1"])
+	require.ErrorIs(t, runOnceResultError(singleMountResult(report), left), errSyncLeftWork, "the run still left the file")
+
+	c, out, errOut = testSyncConsole()
+	c.json = true
+	c.ActivityHook()
+	c.Activity(mountActivity(&refused))
+	c.Activity(mountActivity(&refused))
+	c.Summary(singleMountResult(report))
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	require.Len(t, lines, 2, "one activity line for the path, then the summary")
+	var activity, summary syncJSONEvent
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &activity))
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &summary))
+	assert.Equal(t, "still_open", activity.Status)
+	assert.Equal(t, "path_too_long", activity.Condition)
+	assert.Equal(t, "graph: bad request", activity.Error)
+	require.NotNil(t, summary.Failed)
+	assert.Zero(t, *summary.Failed)
+	require.NotNil(t, summary.StillOpen)
+	assert.Equal(t, 1, *summary.StillOpen)
+	assert.Empty(t, errOut.String())
+}
+
+// Validates: R-2.10.71, R-6.6.18, R-6.6.30
+//
+// A condition is said when it starts. A path that synced after a condition
+// refused it starts over: when the condition refuses it again, the console
+// says so again, in text and under --json alike, as one console lives for a
+// whole `sync --watch`.
+func TestSyncConsole_AConditionIsSaidAgainOnceItsPathSyncedInBetween(t *testing.T) {
+	t.Parallel()
+
+	refused := syncengine.Activity{
+		Kind:          syncengine.ActivityFolderCreate,
+		Path:          "deep",
+		ConditionKey:  syncengine.ConditionPathTooLong,
+		ConditionType: syncengine.IssueType("path_too_long"),
+		Err:           errors.New("graph: bad request"),
+	}
+	synced := syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "deep", Success: true}
+	words := describeStatusCondition(syncengine.ConditionPathTooLong)
+	conditionLine := "Can't create folder deep: " + words.Title + ". " + words.Reason + " " + words.Action + "\n"
+
+	c, out, errOut := testSyncConsole()
+	for _, a := range []*syncengine.Activity{&refused, &refused, &synced, &refused} {
+		c.Activity(mountActivity(a))
+	}
+	assert.Equal(t, conditionLine+conditionLine, errOut.String())
+	assert.Equal(t, "Created folder deep\n", out.String())
+
+	c, out, _ = testSyncConsole()
+	c.json = true
+	for _, a := range []*syncengine.Activity{&refused, &refused, &synced, &refused} {
+		c.Activity(mountActivity(a))
+	}
+	var statuses []string
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var event syncJSONEvent
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		statuses = append(statuses, event.Status)
+	}
+	assert.Equal(t, []string{"still_open", "done", "still_open"}, statuses)
+}
+
+// Validates: R-2.10.71, R-6.6.18, R-6.6.30
+//
+// A condition can start again with no activity of its path in between: the
+// plan dropped the path's retry work (the refused folder was deleted, then
+// made again), and the next refusal starts the condition anew. The engine
+// marks such a refusal as the condition starting, and the console says it
+// again although the last thing it said of the path was the same condition.
+// A refusal the engine does not mark is a retry: the console says it only the
+// first time this run sees the path refused.
+func TestSyncConsole_AConditionThatStartsAgainWithNoActivityBetweenIsSaidAgain(t *testing.T) {
+	t.Parallel()
+
+	starts := syncengine.Activity{
+		Kind:            syncengine.ActivityFolderCreate,
+		Path:            "deep",
+		ConditionStarts: true,
+		ConditionKey:    syncengine.ConditionPathTooLong,
+		ConditionType:   syncengine.IssueType("path_too_long"),
+		Err:             errors.New("graph: bad request"),
+	}
+	retry := starts
+	retry.ConditionStarts = false
+	words := describeStatusCondition(syncengine.ConditionPathTooLong)
+	conditionLine := "Can't create folder deep: " + words.Title + ". " + words.Reason + " " + words.Action + "\n"
+
+	c, _, errOut := testSyncConsole()
+	for _, a := range []*syncengine.Activity{&starts, &retry, &starts, &retry} {
+		c.Activity(mountActivity(a))
+	}
+	assert.Equal(t, conditionLine+conditionLine, errOut.String(), "said when it starts, each time")
+
+	c, out, _ := testSyncConsole()
+	c.json = true
+	for _, a := range []*syncengine.Activity{&starts, &retry, &starts, &retry} {
+		c.Activity(mountActivity(a))
+	}
+	assert.Equal(t, 2, strings.Count(out.String(), `"status":"still_open"`), out.String())
+
+	c, _, errOut = testSyncConsole()
+	c.Activity(mountActivity(&retry))
+	c.Activity(mountActivity(&retry))
+	assert.Equal(t, conditionLine, errOut.String(), "a run that first sees the path on a retry says it once")
 }
 
 // Validates: R-6.6.19
@@ -371,7 +513,7 @@ func TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop(t *testing.
 	c, out, _ := testSyncConsole()
 	c.stamp = true
 	c.Watching([]multisync.StandaloneMountConfig{{SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"}}, syncengine.SyncBidirectional)
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "a.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "a.txt", Success: true}))
 	c.Stopped()
 
 	assert.Equal(t, strings.Join([]string{
@@ -389,7 +531,7 @@ func TestSyncConsole_JournalMarksFailuresWithErrorPriority(t *testing.T) {
 	c, out, errOut := testSyncConsole()
 	c.journal = true
 	c.Watching([]multisync.StandaloneMountConfig{{SyncRoot: "/srv/data", AccountEmail: "user@example.com"}}, syncengine.SyncDownloadOnly)
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.txt", Err: os.ErrPermission}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.txt", Err: os.ErrPermission}))
 
 	assert.Equal(t, "Watching /srv/data for user@example.com (download only).\n", out.String(),
 		"the journal has no keyboard, so no Ctrl-C hint")
@@ -452,8 +594,8 @@ func TestSyncConsole_JSONWritesOnlyJSONLines(t *testing.T) {
 	c.json = true
 	c.Starting([]multisync.StandaloneMountConfig{{DisplayName: "Personal", SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"}},
 		syncengine.SyncBidirectional, false)
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.pdf", Size: 10, SizeKnown: true, Success: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Err: os.ErrPermission}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.pdf", Size: 10, SizeKnown: true, Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Err: os.ErrPermission}))
 	c.Summary(singleMountResult(&syncengine.Report{
 		Duration: 2 * time.Second, Downloads: 1, Uploads: 1, Succeeded: 1, Failed: 1, LastPassFailed: 1,
 		UnsyncedIssues: 1,
@@ -552,8 +694,8 @@ func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.
 
 	c, out, _ := testSyncConsole()
 	c.ActivityHook()
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", WillRetry: true}))
-	c.Activity(mountActivity(syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", Size: 22, SizeKnown: true, Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", WillRetry: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", Size: 22, SizeKnown: true, Success: true}))
 	left := c.Summary(singleMountResult(&syncengine.Report{
 		Mode:      syncengine.SyncBidirectional,
 		Duration:  136 * time.Second,

@@ -23,7 +23,10 @@ type syncJSONEvent struct {
 	OldPath string `json:"old_path,omitempty"`
 	Size    *int64 `json:"size,omitempty"`
 	Status  string `json:"status,omitempty"`
-	Error   string `json:"error,omitempty"`
+	// Condition is, for an activity a condition only the user can clear
+	// refused, that condition as `status --json` names it in its `type`.
+	Condition string `json:"condition,omitempty"`
+	Error     string `json:"error,omitempty"`
 
 	// Summary fields.
 	DurationMS *int64         `json:"duration_ms,omitempty"`
@@ -39,6 +42,9 @@ const (
 	// syncJSONStatusIncomplete is a drive's summary when its run finished
 	// but left work (Report.LeftWork), and the run exits 1 (R-6.6.28).
 	syncJSONStatusIncomplete = "incomplete"
+	// syncJSONStatusStillOpen is an activity a condition only the user can
+	// clear refused: the file is counted in the summary's still_open.
+	syncJSONStatusStillOpen = "still_open"
 )
 
 func activityJSONAction(kind syncengine.ActivityKind) string {
@@ -136,6 +142,10 @@ func (c *syncConsole) jsonActivity(ma multisync.MountActivity) {
 		event.Status = "planned"
 	case a.Success:
 		event.Status = syncJSONStatusDone
+	case a.ConditionKey != "":
+		event.Status = syncJSONStatusStillOpen
+		event.Condition = string(a.ConditionType)
+		event.Error = plainErrorReason(a.Err)
 	case a.WillRetry:
 		event.Status = "will_retry"
 		event.Error = plainErrorReason(a.Err)
