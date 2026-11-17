@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -193,7 +194,7 @@ func TestRunVerifyStressRunsEveryStepAfterOneFails(t *testing.T) {
 
 	runner := &fakeRunner{
 		runErrByKey: map[string]error{
-			"go test -race -count=50 -shuffle=on -timeout=" + stressMultisyncTimeout + " ./internal/multisync": assert.AnError,
+			goCommandKey(stressRepeatedSteps()[0].command(runtime.GOMAXPROCS(0)).args): assert.AnError,
 		},
 	}
 

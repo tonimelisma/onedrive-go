@@ -222,6 +222,7 @@ func passingGoTestOutput(args []string) string {
 			`{"Action":"output","Package":"` + pkg + `","Test":"` + fakePassingTestName +
 				`","Output":"--- PASS: ` + fakePassingTestName + ` (0.00s)\n"}`,
 			`{"Action":"pass","Package":"` + pkg + `","Test":"` + fakePassingTestName + `","Elapsed":0}`,
+			`{"Action":"output","Package":"` + pkg + `","Output":"ok  \t` + pkg + `\t0.01s\n"}`,
 			`{"Action":"pass","Package":"` + pkg + `","Elapsed":0.01}`,
 		}, "\n") + "\n"
 	case slices.Contains(args, "-v"):
