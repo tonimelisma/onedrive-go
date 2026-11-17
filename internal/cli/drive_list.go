@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 )
 
 func runDriveListWithContext(ctx context.Context, cc *CLIContext, showAll bool) error {
@@ -9,6 +10,13 @@ func runDriveListWithContext(ctx context.Context, cc *CLIContext, showAll bool) 
 	if err != nil {
 		return err
 	}
+	// A stop during discovery is not a source that did not answer: the
+	// command ends with it before printing, as every command does.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("listing drives: %w", err)
+	}
+
+	printSharePointGapNotes(cc, snapshot.SharePointGaps)
 
 	if cc.Flags.JSON {
 		return printDriveListJSON(
@@ -17,6 +25,7 @@ func runDriveListWithContext(ctx context.Context, cc *CLIContext, showAll bool) 
 			snapshot.Available,
 			snapshot.AccountsRequiringAuth,
 			snapshot.AccountsDegraded,
+			snapshot.SharePointGaps,
 		)
 	}
 
