@@ -20,11 +20,14 @@ import (
 const e2eFullCommandsBeforeBuckets = 4
 
 // bucketFailureOutput returns a fake go test stdout that prints a `--- FAIL:`
-// line for each test named for the bucket whose command runs; every other
-// command, and a bucket with no test named, passes.
-func bucketFailureOutput(failedByBucket map[verifyStepName][]string) func(args []string) string {
+// line for each test named for the bucket of fakeFullE2EBuckets whose command
+// runs; every other command, and a bucket with no test named, passes.
+func bucketFailureOutput(t *testing.T, failedByBucket map[verifyStepName][]string) func(args []string) string {
+	t.Helper()
+
+	buckets := fakeFullE2EBuckets(t)
 	return func(args []string) string {
-		for _, bucket := range fullE2EBuckets() {
+		for _, bucket := range buckets {
 			failed := failedByBucket[bucket.Name]
 			if len(failed) > 0 && (slices.Equal(args, fullE2EBucketCommandArgs(bucket)) ||
 				slices.Equal(args, fullE2EBucketJSONCommandArgs(bucket))) {
@@ -42,7 +45,7 @@ func runE2EFullForTest(t *testing.T, runner *fakeRunner, classify bool) (VerifyS
 	summaryPath := filepath.Join(t.TempDir(), "verify-summary.json")
 	stdout := &bytes.Buffer{}
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:           t.TempDir(),
+		RepoRoot:           newFakeE2ERepo(t),
 		Profile:            VerifyE2EFull,
 		E2ELogDir:          filepath.Join(t.TempDir(), "e2e-logs"),
 		SummaryJSONPath:    summaryPath,
@@ -65,17 +68,17 @@ func runE2EFullForTest(t *testing.T, runner *fakeRunner, classify bool) (VerifyS
 func TestRunVerifyE2EFullRunsEveryBucketAfterOneFails(t *testing.T) {
 	t.Parallel()
 
-	misc := fullE2EParallelMiscBucket()
+	misc := fakeFullE2EBucket(t, fullE2EParallelMiscBucketName)
 	runner := &fakeRunner{
 		runErrByKey:   map[string]error{goCommandKey(fullE2EBucketCommandArgs(misc)): assert.AnError},
-		runStdoutFunc: bucketFailureOutput(map[verifyStepName][]string{misc.Name: {"TestE2E_RapidFileChurn"}}),
+		runStdoutFunc: bucketFailureOutput(t, map[verifyStepName][]string{misc.Name: {"TestE2E_Edge_RapidFileChurn"}}),
 	}
 
 	summary, _, err := runE2EFullForTest(t, runner, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), string(misc.Name))
 
-	buckets := fullE2EBuckets()
+	buckets := fakeFullE2EBuckets(t)
 	require.Len(t, runner.runCommands, e2eFullCommandsBeforeBuckets+len(buckets))
 	for i, bucket := range buckets {
 		assert.Equal(t, fullE2EBucketCommandArgs(bucket), runner.runCommands[e2eFullCommandsBeforeBuckets+i].args)
@@ -86,7 +89,7 @@ func TestRunVerifyE2EFullRunsEveryBucketAfterOneFails(t *testing.T) {
 	assert.Equal(t,
 		[]string{verifySummaryStatusFail, verifySummaryStatusPass, verifySummaryStatusPass},
 		bucketStatuses(summary))
-	assert.Equal(t, []string{"TestE2E_RapidFileChurn"}, summary.E2EFullBuckets[0].FailedTests)
+	assert.Equal(t, []string{"TestE2E_Edge_RapidFileChurn"}, summary.E2EFullBuckets[0].FailedTests)
 }
 
 // Validates: R-6.10.26
@@ -97,7 +100,7 @@ func TestRunVerifyE2EFullRunsEveryBucketAfterOneFails(t *testing.T) {
 func TestRunVerifyE2EFullFailsASuiteThatRanNoTests(t *testing.T) {
 	t.Parallel()
 
-	serial := fullE2ESerialSyncBucket()
+	serial := fakeFullE2EBucket(t, fullE2ESerialSyncBucketName)
 	emptyRun := "testing: warning: no tests to run\nPASS\nok  \t" + testE2EPackage + "\t0.101s [no tests to run]\n"
 	runner := &fakeRunner{
 		runStdoutFunc: func(args []string) string {
@@ -122,15 +125,15 @@ func TestRunVerifyE2EFullFailsASuiteThatRanNoTests(t *testing.T) {
 func TestRunVerifyE2EFullReportsEveryFailingBucket(t *testing.T) {
 	t.Parallel()
 
-	misc := fullE2EParallelMiscBucket()
-	watch := fullE2ESerialWatchSharedBucket()
+	misc := fakeFullE2EBucket(t, fullE2EParallelMiscBucketName)
+	watch := fakeFullE2EBucket(t, fullE2ESerialWatchSharedBucketName)
 	runner := &fakeRunner{
 		runErrByKey: map[string]error{
 			goCommandKey(fullE2EBucketCommandArgs(misc)):  assert.AnError,
 			goCommandKey(fullE2EBucketCommandArgs(watch)): assert.AnError,
 		},
-		runStdoutFunc: bucketFailureOutput(map[verifyStepName][]string{
-			misc.Name:  {"TestE2E_RapidFileChurn", "TestE2E_InvalidFilenameRejection"},
+		runStdoutFunc: bucketFailureOutput(t, map[verifyStepName][]string{
+			misc.Name:  {"TestE2E_Edge_RapidFileChurn", "TestE2E_Edge_InvalidFilenameRejection"},
 			watch.Name: {"TestE2E_SyncWatch_PauseResume"},
 		}),
 	}
@@ -140,24 +143,25 @@ func TestRunVerifyE2EFullReportsEveryFailingBucket(t *testing.T) {
 	assert.Contains(t, err.Error(), string(misc.Name))
 	assert.Contains(t, err.Error(), string(watch.Name))
 
-	require.Len(t, summary.E2EFullBuckets, len(fullE2EBuckets()))
+	require.Len(t, summary.E2EFullBuckets, len(fullE2EBucketShapes()))
 	assert.Equal(t,
 		[]string{verifySummaryStatusFail, verifySummaryStatusPass, verifySummaryStatusFail},
 		bucketStatuses(summary))
 	assert.Equal(t,
-		[]string{"TestE2E_RapidFileChurn", "TestE2E_InvalidFilenameRejection"},
+		[]string{"TestE2E_Edge_RapidFileChurn", "TestE2E_Edge_InvalidFilenameRejection"},
 		summary.E2EFullBuckets[0].FailedTests)
 	assert.Empty(t, summary.E2EFullBuckets[1].FailedTests)
 	assert.Equal(t, []string{"TestE2E_SyncWatch_PauseResume"}, summary.E2EFullBuckets[2].FailedTests)
-	assert.Contains(t, stdout, "failed test: TestE2E_InvalidFilenameRejection")
+	assert.Contains(t, stdout, "failed test: TestE2E_Edge_InvalidFilenameRejection")
 	assert.Contains(t, stdout, "failed test: TestE2E_SyncWatch_PauseResume")
 }
 
 // Validates: R-6.10.26
 //
 // A preflight failure means the account or the fixtures are unusable, so the
-// buckets do not run; the summary still lists all three, as not run, so a
-// reader can tell "did not run" from "absent".
+// buckets do not run; the summary still lists all three, as not run and with
+// the tests discovery placed in each, so a reader can tell "did not run" from
+// "absent".
 func TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure(t *testing.T) {
 	t.Parallel()
 
@@ -180,10 +184,11 @@ func TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure(t *testing.T)
 			require.ErrorIs(t, err, errE2EPreflight)
 			require.Len(t, runner.runCommands, tc.commandsRun)
 
-			buckets := fullE2EBuckets()
+			buckets := fakeFullE2EBuckets(t)
 			require.Len(t, summary.E2EFullBuckets, len(buckets))
 			for i, bucket := range buckets {
 				assert.Equal(t, string(bucket.Name), summary.E2EFullBuckets[i].Name)
+				assert.Equal(t, fullE2EBucketRunPattern(bucket.TestNames), summary.E2EFullBuckets[i].RunPattern)
 				assert.Equal(t, verifySummaryStatusNotRun, summary.E2EFullBuckets[i].Status)
 				assert.Contains(t, summary.E2EFullBuckets[i].Error, "preflight")
 			}

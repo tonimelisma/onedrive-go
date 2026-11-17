@@ -163,7 +163,7 @@ func TestVerifyStepNamesSayWhetherTheyRunGoTest(t *testing.T) {
 		formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
 		readmeStatusStepName, specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
-		taggedVetStepName, coverageStepName, fullE2ECompileStepName,
+		taggedVetStepName, coverageStepName, fullE2ECompileStepName, fullE2EDiscoveryStepName,
 	}
 	assert.ElementsMatch(t, declaredVerifyStepNames(t), append(slices.Clone(goTestSteps), otherSteps...),
 		"every declared step name is in exactly one group")
@@ -230,7 +230,7 @@ func declaredVerifyStepNames(t *testing.T) []verifyStepName {
 func profileStepNames(t *testing.T, profile VerifyProfile) []verifyStepName {
 	t.Helper()
 
-	repoRoot := t.TempDir()
+	repoRoot := newFakeE2ERepo(t)
 	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")

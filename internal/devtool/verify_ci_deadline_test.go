@@ -51,7 +51,7 @@ func TestCIJobTimeoutsCoverEveryGoTestDeadline(t *testing.T) {
 		{job: nightlySeedsJob, event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifySeeds, false)},
 		{job: "integration", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyIntegration, false)},
 		{job: "e2e", event: ciEventPullRequest, deadlines: profileGoTestDeadlines(t, &fakeRunner{}, VerifyE2E, false)},
-		{job: "e2e", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, worstCaseE2EFullRunner(), VerifyE2EFull, true)},
+		{job: "e2e", event: ciEventSchedule, deadlines: profileGoTestDeadlines(t, worstCaseE2EFullRunner(t), VerifyE2EFull, true)},
 	}
 	for _, tc := range cases {
 		timeout := ciJobTimeout(t, string(workflow), tc.job, tc.event)
@@ -105,11 +105,14 @@ func TestCILintJobTimeoutCoversTheLintersDeadline(t *testing.T) {
 }
 
 // worstCaseE2EFullRunner fails each step that has a classified rerun with the
-// failure that triggers it, so the e2e-full run starts every rerun it can.
-func worstCaseE2EFullRunner() *fakeRunner {
+// failure that triggers it, so the e2e-full run over the fake e2e tree starts
+// every rerun it can.
+func worstCaseE2EFullRunner(t *testing.T) *fakeRunner {
+	t.Helper()
+
 	authKey := goCommandKey(authE2EPreflightArgs())
 	fastKey := goCommandKey(fastE2EJSONArgs())
-	watchKey := goCommandKey(fullE2EBucketJSONCommandArgs(fullE2ESerialWatchSharedBucket()))
+	watchKey := goCommandKey(fullE2EBucketJSONCommandArgs(fakeFullE2EBucket(t, fullE2ESerialWatchSharedBucketName)))
 
 	return &fakeRunner{
 		runErrSequenceByKey: map[string][]error{
@@ -139,7 +142,7 @@ func worstCaseE2EFullRunner() *fakeRunner {
 func profileGoTestDeadlines(t *testing.T, runner *fakeRunner, profile VerifyProfile, classify bool) time.Duration {
 	t.Helper()
 
-	repoRoot := t.TempDir()
+	repoRoot := newFakeE2ERepo(t)
 	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")

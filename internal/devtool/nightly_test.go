@@ -28,7 +28,7 @@ const (
 	nightlyTestOther   = "fix/other-agent"
 	nightlyTestE2EJob  = "e2e"
 	nightlyTestE2ELog  = "1"
-	nightlyTestTest    = "TestE2E_RapidFileChurn"
+	nightlyTestTest    = "TestE2E_Edge_RapidFileChurn"
 	nightlyTestKey     = "e2e." + nightlyTestTest
 	nightlyTestStale   = "TestOldStyle"
 )

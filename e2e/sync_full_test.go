@@ -22,9 +22,9 @@ import (
 // Comprehensive sync E2E tests (slow — run only with -tags=e2e,e2e_full)
 // ---------------------------------------------------------------------------
 
-// TestE2E_EdgeCases covers edge cases: large files (resumable upload),
+// TestE2E_Sync_EdgeCases covers edge cases: large files (resumable upload),
 // unicode filenames, spaces in filenames, and concurrent uploads.
-func TestE2E_EdgeCases(t *testing.T) {
+func TestE2E_Sync_EdgeCases(t *testing.T) {
 	registerLogDump(t)
 	opsCfgPath := writeMinimalConfig(t)
 	testFolderPrefix := fmt.Sprintf("onedrive-go-e2e-edge-%d", time.Now().UnixNano())
