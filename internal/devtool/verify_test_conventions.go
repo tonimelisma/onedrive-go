@@ -10,16 +10,14 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-const allowedDirectSleepTestFile = "e2e/sleep_test_helpers_test.go"
-
-const timePackageName = "time"
-
+// testConventionViolation is a test the integration tier would never run.
+// The other test conventions (testify for failures, no wall-clock sleep) are
+// lint rules: forbidigo in .golangci.yml.
 type testConventionViolation struct {
 	Path    string
 	Line    int
@@ -80,33 +78,6 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 			return fmt.Errorf("parse %s: %w", rel, parseErr)
 		}
 		violations = append(violations, integrationTestNameViolations(fset, rel, file)...)
-
-		imports := importedPackageNames(file)
-		ast.Inspect(file, func(node ast.Node) bool {
-			selector, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-
-			ident, ok := selector.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-
-			message, blocked := testConventionSelectorMessage(rel, imports[ident.Name], ident.Name, selector.Sel.Name)
-			if !blocked {
-				return true
-			}
-
-			position := fset.Position(selector.Pos())
-			violations = append(violations, testConventionViolation{
-				Path:    rel,
-				Line:    position.Line,
-				Message: message,
-			})
-
-			return true
-		})
 
 		return nil
 	})
@@ -216,19 +187,6 @@ func shouldSkipTestConventionDir(name string) bool {
 	default:
 		return false
 	}
-}
-
-func testConventionSelectorMessage(rel string, importPath string, receiver string, selector string) (string, bool) {
-	if receiver == "t" && slices.Contains([]string{"Fatal", "Fatalf", "Error", "Errorf"}, selector) {
-		return "direct t." + selector + " bypasses the testify assertion convention; use assert or require", true
-	}
-
-	if importPath == timePackageName && selector == "Sleep" && rel != allowedDirectSleepTestFile {
-		return "direct " + receiver + ".Sleep in tests hides synchronization contracts; use explicit synchronization " +
-			"or the centralized live E2E sleep helper", true
-	}
-
-	return "", false
 }
 
 func formatTestConventionViolations(violations []testConventionViolation) string {

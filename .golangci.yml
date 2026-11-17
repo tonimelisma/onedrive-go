@@ -183,6 +183,19 @@ linters:
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
               desc: fsroot imports no internal package but localpath, for its directory-sync errno test and its one-line join of two failures
+        # The verification tool, tests included, imports no product package:
+        # the allow entry is longer than the deny, so lax mode passes
+        # internal/devtool, which cmd/devtool runs, and that alone.
+        devtool-no-product:
+          list-mode: lax
+          files:
+            - "**/internal/devtool/**"
+            - "**/cmd/devtool/**"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/devtool$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/
+              desc: the verification tool must not link product packages
 
     forbidigo:
       analyze-types: true
@@ -201,6 +214,24 @@ linters:
         - pattern: ^synctree\.Root\.(WithoutNoReplaceFlagOrHardLinks|WithoutNoReplaceFlagAndUnremovableName)$
           pkg: ^github\.com/tonimelisma/onedrive-go/internal/synctree$
           msg: this synctree.Root models another system and is for tests only
+        # A method matches as <package>.<receiver type>.<method>, so this
+        # holds for a *testing.T in a struct field or passed as testing.TB,
+        # whatever the variable is called. Nothing is exempt from it.
+        - pattern: ^testing\.(T|B|F|TB)\.(Fatal|Fatalf|Error|Errorf)$
+          pkg: ^testing$
+          msg: use testify assert or require instead of direct testing failures
+        # Product code prints through the writers internal/cli/root.go and
+        # format.go own and logs through an injected *slog.Logger; one
+        # exclusion rule below names the files these three rules do not bind.
+        - pattern: ^slog\.(Debug|Info|Warn|Error)$
+          pkg: ^log/slog$
+          msg: pass an injected *slog.Logger instead of the package-level slog logger
+        - pattern: ^os\.(Stdout|Stderr)$
+          pkg: ^os$
+          msg: write through the CLI-owned output and status writers
+        - pattern: ^log\.Print(f|ln)?$
+          pkg: ^log$
+          msg: use the CLI-owned logger
 
     gocyclo:
       min-complexity: 15
@@ -370,9 +401,19 @@ linters:
         linters:
           - forbidigo
         text: models another system and is for tests only
+      # The filesystem boundary packages make the raw os.* calls; every other
+      # forbidigo rule holds in them.
       - path: internal/(fsroot|synctree|localpath)/
         linters:
           - forbidigo
+        text: use fsroot, synctree, or localpath filesystem boundaries instead of raw os\.\* calls
+      # The output rules bind product code: not tests, the verification tool,
+      # the live suite or testutil, and not the two files of internal/cli that
+      # own the output and status writers.
+      - path: (_test\.go|^internal/cli/(root|format)\.go)$|^(cmd/devtool|internal/devtool|e2e|testutil)/
+        linters:
+          - forbidigo
+        text: (pass an injected \*slog\.Logger instead of the package-level slog logger|write through the CLI-owned output and status writers|use the CLI-owned logger)
       # The JSON output rule binds internal/cli alone, and there neither its
       # tests (they build fixtures and decode output) nor json_output.go, which
       # owns the encoder. control_request.go holds the one other encode in the

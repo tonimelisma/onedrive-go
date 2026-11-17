@@ -143,7 +143,6 @@ func profileGoTestDeadlines(t *testing.T, runner *fakeRunner, profile VerifyProf
 	t.Helper()
 
 	repoRoot := newFakeE2ERepo(t)
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
 	runner.outputs = map[string][]byte{

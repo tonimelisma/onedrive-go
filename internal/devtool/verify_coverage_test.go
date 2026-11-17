@@ -135,7 +135,6 @@ func TestRunVerifyZeroCoverageThresholdUsesRequirement(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
 	writeCoverageRequirement(t, repoRoot, "80.0")
 
 	runner := &fakeRunner{
@@ -165,8 +164,6 @@ func TestRunVerifyCoverageThresholdFailure(t *testing.T) {
 	const explicitThreshold = 90.0
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
-
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
 			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t89.9%\n"),
@@ -194,8 +191,6 @@ func TestRunVerifyNegativeCoverageThresholdReportsWithoutGating(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	writeRequirementsBackedReadme(t, repoRoot)
-
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
 			"go tool cover -func=" + filepath.Join(repoRoot, "cover.out"): []byte("total:\t(statements)\t12.3%\n"),
