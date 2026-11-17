@@ -12,19 +12,27 @@ const minColumnWidth = 20
 
 // driveListJSONOutput is `drive list --json`. Configured and available drives
 // sit under keys of their own, so a script need not filter on "source".
+// SitesUnlisted and SiteSearchError say what SharePoint did not answer; empty
+// (SiteSearchError left out), the listing is complete (R-3.3.14).
 type driveListJSONOutput struct {
 	Configured            []driveListEntry         `json:"configured"`
 	Available             []driveListEntry         `json:"available"`
 	AccountsRequiringAuth []accountAuthRequirement `json:"accounts_requiring_auth"`
 	AccountsDegraded      []accountDegradedNotice  `json:"accounts_degraded,omitempty"`
+	SitesUnlisted         []unlistedSite           `json:"sites_unlisted"`
+	SiteSearchError       string                   `json:"site_search_error,omitempty"`
 }
 
-func (out driveListJSONOutput) withEmptyLists() driveListJSONOutput {
-	out.Configured = emptyIfNil(out.Configured)
-	out.Available = emptyIfNil(out.Available)
-	out.AccountsRequiringAuth = emptyIfNil(out.AccountsRequiringAuth)
+// withEmptyLists takes a pointer, as the document is larger than a value
+// receiver should copy, and returns the filled copy.
+func (out *driveListJSONOutput) withEmptyLists() driveListJSONOutput {
+	filled := *out
+	filled.Configured = emptyIfNil(filled.Configured)
+	filled.Available = emptyIfNil(filled.Available)
+	filled.AccountsRequiringAuth = emptyIfNil(filled.AccountsRequiringAuth)
+	filled.SitesUnlisted = emptyIfNil(filled.SitesUnlisted)
 
-	return out
+	return filled
 }
 
 func printDriveListJSON(
@@ -32,15 +40,30 @@ func printDriveListJSON(
 	configured, available []driveListEntry,
 	authRequired []accountAuthRequirement,
 	degraded []accountDegradedNotice,
+	gaps sharePointGaps,
 ) error {
 	out := driveListJSONOutput{
 		Configured:            configured,
 		Available:             available,
 		AccountsRequiringAuth: authRequired,
 		AccountsDegraded:      degraded,
+		SitesUnlisted:         gaps.UnlistedSites,
+		SiteSearchError:       siteSearchErrorText(gaps.FailedSiteSearches),
 	}
 
 	return writeJSONDocument(w, out.withEmptyLists())
+}
+
+// siteSearchErrorText is site_search_error: each failed site search as
+// "<account>: <reason>", joined by "; ", or "" (the field left out) when
+// every search answered.
+func siteSearchErrorText(failed []failedSiteSearch) string {
+	parts := make([]string, 0, len(failed))
+	for _, search := range failed {
+		parts = append(parts, search.Account+": "+search.Reason)
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 // driveLabel returns a human-readable label for a drive list entry.

@@ -37,6 +37,13 @@ command-line mistake (exit 2); none ignores it.
   `null`.
 - `accounts_requiring_auth` is always present, as a list, in `shared`,
   `drive list` and `drive search`.
+- `drive list` and `drive search` name in `sites_unlisted` each SharePoint
+  site whose libraries could not be listed (`account`, `site_name`, `error`;
+  `[]` when every site answered), and put a failed site search in
+  `site_search_error` as `<account>: <reason>` (left out when every search
+  answered; in `drive search` only beside another account's results, as a
+  search with no result to show fails). Such a listing is incomplete, stderr
+  says so, under `--quiet` too, and the command still exits 0.
 
 Earlier builds differed in three ways a script may have relied on: `&`, `<`
 and `>` printed as `\u0026`, `\u003c` and `\u003e` everywhere; `shared`

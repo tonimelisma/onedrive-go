@@ -464,7 +464,7 @@ func TestPrintDriveListText_EmptySyncDir_ShowsNotSet(t *testing.T) {
 
 func TestPrintDriveListJSON_Empty(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil))
+	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil, sharePointGaps{}))
 
 	var output driveListJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
@@ -492,7 +492,7 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListJSON(&buf, configured, available, authRequired, nil))
+	require.NoError(t, printDriveListJSON(&buf, configured, available, authRequired, nil, sharePointGaps{}))
 
 	var output driveListJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
@@ -513,7 +513,7 @@ func TestPrintDriveListJSON_VerifyOutput(t *testing.T) {
 // Validates: R-3.3.10, R-6.6.33
 func TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil))
+	require.NoError(t, printDriveListJSON(&buf, nil, nil, nil, nil, sharePointGaps{}))
 
 	var output map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
@@ -612,7 +612,7 @@ func TestDriveListEntry_HasStateDB_OmittedWhenFalse(t *testing.T) {
 func TestPrintDriveSearchText_Empty(t *testing.T) {
 	// Should not panic with no results.
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, nil, "test query", nil))
+	require.NoError(t, printDriveSearchText(&buf, nil, "test query", nil, nil))
 }
 
 // Validates: R-3.3.9
@@ -628,7 +628,7 @@ func TestPrintDriveSearchText_AuthRequiredWithoutResultsStillExplainsNoMatches(t
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, nil, "marketing", authRequired))
+	require.NoError(t, printDriveSearchText(&buf, nil, "marketing", authRequired, nil))
 
 	output := buf.String()
 	assert.Contains(t, output, "Authentication required:")
@@ -642,7 +642,7 @@ func TestPrintDriveSearchText_WithResults(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Wiki", SiteName: "Marketing", LibraryName: "Wiki"},
 	}
 	var buf bytes.Buffer
-	assert.NotPanics(t, func() { require.NoError(t, printDriveSearchText(&buf, results, "marketing", nil)) })
+	assert.NotPanics(t, func() { require.NoError(t, printDriveSearchText(&buf, results, "marketing", nil, nil)) })
 }
 
 // Validates: R-3.3.9
@@ -652,7 +652,7 @@ func TestPrintDriveSearchText_MultipleSites(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:hr:Docs", SiteName: "HR", LibraryName: "Docs"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, results, "docs", nil))
+	require.NoError(t, printDriveSearchText(&buf, results, "docs", nil, nil))
 	output := buf.String()
 	// Verify alphabetical sort: HR should appear before Marketing.
 	hrIdx := strings.Index(output, "HR")
@@ -672,7 +672,7 @@ func TestPrintDriveSearchText_DoesNotMutateInput(t *testing.T) {
 	orig1 := results[1].SiteName
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchText(&buf, results, "docs", nil))
+	require.NoError(t, printDriveSearchText(&buf, results, "docs", nil, nil))
 
 	assert.Equal(t, orig0, results[0].SiteName, "input slice should not be mutated")
 	assert.Equal(t, orig1, results[1].SiteName, "input slice should not be mutated")
@@ -685,7 +685,7 @@ func TestPrintDriveSearchJSON_NoError(t *testing.T) {
 		{CanonicalID: "sharepoint:user@contoso.com:marketing:Docs", SiteName: "Marketing", LibraryName: "Docs"},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchJSON(&buf, results, nil))
+	require.NoError(t, printDriveSearchJSON(&buf, results, nil, sharePointGaps{}))
 
 	var output driveSearchJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))
@@ -709,7 +709,7 @@ func TestPrintDriveSearchJSON_IncludesAuthRequiredAccounts(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchJSON(&buf, results, authRequired))
+	require.NoError(t, printDriveSearchJSON(&buf, results, authRequired, sharePointGaps{}))
 
 	var decoded driveSearchJSONOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
@@ -724,7 +724,7 @@ func TestPrintDriveSearchJSON_IncludesAuthRequiredAccounts(t *testing.T) {
 // Validates: R-3.3.11, R-6.6.33
 func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, printDriveSearchJSON(&buf, nil, nil))
+	require.NoError(t, printDriveSearchJSON(&buf, nil, nil, sharePointGaps{}))
 
 	var output map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &output))

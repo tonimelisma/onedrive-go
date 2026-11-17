@@ -99,9 +99,52 @@ Resolution order: exact canonical ID â†’ exact display_name (case-insensitive) â
 
 ## CLI Drive Command (`drive.go`, `drive_*.go`)
 
-Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
+Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-3.3.14 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
 
 `drive list`, `drive add`, `drive remove`, `drive search`. `internal/cli/drive.go` owns Cobra wiring and flag parsing; sibling `drive_*.go` files own catalog discovery, shared-target normalization, add/remove workflows, and output rendering. Drive add enrolls the drive through `config.AddDrive`, one transaction that writes the catalog record and then the config section with its sync_dir (and a shared folder's display_name) in one write; a failure leaves config and catalog as they were (a sync directory already created stays, empty), and an existing section that lacks something is completed and reported as completed (`spec/design/config.md`, Persisted Facts And Lifecycle). `drive_add.go` keeps only the token precondition, the shared folder's display-name lookup and the output; it rolls nothing back. It accepts canonical drive IDs, shared selectors, raw shared-folder URLs, and shared-folder name search terms; raw URLs and selectors are normalized to canonical shared drive IDs before config writes. Shared-folder name search uses the same shared-discovery projection as `shared` and the shared-folder portion of `drive list`, and it honors `--account` when present. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout. A purge removes the config section, tells a running watch, and only then deletes the state DB's whole file family (`purge.go` `deleteStateDB`) under the engine's own locks (`syncengine.LockDriveForOfflineChange`); a store an engine still has open is kept, the command fails naming `drive remove --purge --drive <id>` as the finish, and the drive's catalog record stays until then (cli.md, Control Socket; `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestDeleteStateDB_RemovesTheWholeFamily`).
+
+`drive list` and `drive search` name every SharePoint source that did not
+answer (R-3.3.14). A site whose `SiteDrives` call fails goes into
+`sites_unlisted` with the account that asked, the site's display name (its
+URL name when it has none) and a reason `sharePointGapReason` chooses from a
+closed set by the kind of failure: a sign-in, a read-only window, access
+denied, not found, throttled, a server problem, `OneDrive answered HTTP <n>`
+for any other status, a timeout, a failed connection, or "the request failed".
+No text of the answer (its body, message, code or request id) or of the
+request (a URL) reaches the reason; the log lines keep the whole error. A
+failed site search goes into `site_search_error` as `<account>: <reason>`, in
+`drive list`, which goes on with the drives that need no site search, and in
+`drive search` beside another account's results. A `drive search` whose
+searches found no result fails on the first search failure and exits 1; with
+several business accounts it first prints the note of each failed search and
+of each site another account could not list, sorted by account, then site,
+but no incomplete-listing note, as it prints no listing. Both commands sort
+the gaps by account, then site, print one stderr note per source and one
+saying the listing is incomplete, in the form `status` uses for an account
+whose live details did not arrive, in text and `--json` mode alike and under
+`--quiet`, which keeps them as it keeps warnings, list what did answer, and
+exit 0. When no matching site could be listed, `drive search` says so instead
+of "No SharePoint sites found". With every source answering the output is as
+before, with `sites_unlisted` `[]` and no `site_search_error`. A stop
+(Ctrl-C, SIGTERM) during discovery is not a source that did not answer: the
+site loops stop asking, nothing is named or printed, and the command ends with
+the cancellation, which exits 130. The Debug and Warn log lines stay at their
+levels, and the Warn line is not written for a stop
+(`TestDriveList_NamesASiteWhoseLibrariesCouldNotBeListed`,
+`TestDriveSearch_NamesASiteWhoseLibrariesCouldNotBeListed`,
+`TestDriveList_SaysAFailedSiteSearchAndListsTheOtherDrives`,
+`TestDriveSearch_NamesAFailedSearchBesideAnotherAccountsResults`,
+`TestDriveSearch_FailingStillNamesEverySourceThatDidNotAnswer`,
+`TestDriveSearch_NoSiteListedIsNotNoSiteFound`,
+`TestDriveListAndSearch_AnUnrecognizedAnswerIsNamedByItsStatusAlone`,
+`TestSharePointGapReason_SaysTheKindOfFailureInItsOwnWords`,
+`TestDriveListAndSearch_NameASiteWithoutADisplayNameByItsURLName`,
+`TestDriveListAndSearch_NameTheUnlistedSitesInOneOrder`,
+`TestSortSharePointGaps_OrdersByAccountThenSite`,
+`TestDriveListAndSearch_QuietKeepsTheNotes`,
+`TestDriveListAndSearch_AStopNamesNoSiteAndEndsWithTheCancellation`,
+`TestSharePointDiscovery_AStopIsNoGapAndEndsTheSiteLoop`,
+`TestDriveListAndSearch_EverySiteAnsweringPrintsWhatItDidBefore`).
 
 Shared-folder discovery is best-effort live search via
 `GET /me/drive/root/search(q='*')` to satisfy `R-3.6.2`. Search hits are only

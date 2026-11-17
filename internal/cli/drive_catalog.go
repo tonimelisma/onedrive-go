@@ -22,8 +22,8 @@ import (
 // drive list. Use "drive search" for targeted queries, or --all to lift this cap.
 const sharePointSiteLimit = 10
 
-// sharePointSiteUnlimited is used when --all is passed to drive list,
-// removing the SharePoint site discovery cap.
+// sharePointSiteUnlimited is the site limit drive list --all passes: a higher
+// cap, not none, as SearchSites stops at the limit it is given.
 const sharePointSiteUnlimited = 999
 
 const fallbackSharedItemName = "shared item"
@@ -117,7 +117,8 @@ func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[strin
 // discoverAvailableDrives queries the network for all drives accessible via
 // existing tokens. Filters out drives already in config. spSiteLimit controls
 // how many SharePoint sites are fetched (sharePointSiteLimit for default,
-// sharePointSiteUnlimited when --all is passed).
+// sharePointSiteUnlimited when --all is passed). The gaps are the SharePoint
+// sources that did not answer.
 func discoverAvailableDrives(
 	ctx context.Context,
 	cfg *config.Config,
@@ -126,27 +127,35 @@ func discoverAvailableDrives(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	runtime *driveops.SessionRuntime,
-) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
+) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice, sharePointGaps) {
 	tokens := accountViewTokenIDs(accounts)
 	if len(tokens) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, sharePointGaps{}
 	}
 
 	var (
-		mu           sync.Mutex // guards entries/authRequired/degraded while token workers append results
+		mu           sync.Mutex // guards entries/authRequired/degraded/gaps while token workers append results
 		entries      []driveListEntry
 		authRequired []accountAuthRequirement
 		degraded     []accountDegradedNotice
+		gaps         sharePointGaps
 	)
 	// record is the one holder of mu, and releases it with defer: a token
 	// worker's panic boundary records through it, and would wait forever on a
 	// lock a panic left held.
-	record := func(tokenEntries []driveListEntry, tokenAuthRequired []accountAuthRequirement, tokenDegraded []accountDegradedNotice) {
+	record := func(
+		tokenEntries []driveListEntry,
+		tokenAuthRequired []accountAuthRequirement,
+		tokenDegraded []accountDegradedNotice,
+		tokenGaps sharePointGaps,
+	) {
 		mu.Lock()
 		defer mu.Unlock()
 		entries = append(entries, tokenEntries...)
 		authRequired = append(authRequired, tokenAuthRequired...)
 		degraded = append(degraded, tokenDegraded...)
+		gaps.UnlistedSites = append(gaps.UnlistedSites, tokenGaps.UnlistedSites...)
+		gaps.FailedSiteSearches = append(gaps.FailedSiteSearches, tokenGaps.FailedSiteSearches...)
 	}
 
 	var wg sync.WaitGroup
@@ -161,7 +170,7 @@ func discoverAvailableDrives(
 				if r := recover(); r != nil {
 					//nolint:errcheck // The degraded notice is the account's report; the error is only logged.
 					panicguard.Recovered(logger, "while listing the drives of "+tokenCID.Email(), r)
-					record(nil, nil, []accountDegradedNotice{tokenDriveCatalogDegradedNotice(accounts, tokenCID, logger)})
+					record(nil, nil, []accountDegradedNotice{tokenDriveCatalogDegradedNotice(accounts, tokenCID, logger)}, sharePointGaps{})
 				}
 			}()
 
@@ -183,8 +192,10 @@ func discoverAvailableDrives(
 	slices.SortFunc(entries, func(a, b driveListEntry) int {
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
 	})
+	// Token workers record in the order they finish.
+	sortSharePointGaps(&gaps)
 
-	return entries, mergeAuthRequirements(authRequired), mergeDegradedNotices(degraded)
+	return entries, mergeAuthRequirements(authRequired), mergeDegradedNotices(degraded), gaps
 }
 
 // discoverDrivesForToken discovers all available drives for a single token.
@@ -197,17 +208,17 @@ func discoverDrivesForToken(
 	logger *slog.Logger,
 	recorder *authProofRecorder,
 	runtime *driveops.SessionRuntime,
-) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice) {
+) ([]driveListEntry, []accountAuthRequirement, []accountDegradedNotice, sharePointGaps) {
 	tokenPath := config.DriveTokenPath(tokenCID)
 	if tokenPath == "" {
-		return nil, nil, nil
+		return nil, nil, nil, sharePointGaps{}
 	}
 
 	client, err := runtime.BootstrapClient(tokenPath)
 	if err != nil {
 		logger.Debug("skipping token for drive discovery", "token", tokenCID.String(), "error", err)
 
-		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
+		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil, sharePointGaps{}
 	}
 	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-list")
 
@@ -220,16 +231,18 @@ func discoverDrivesForToken(
 		logger,
 	)
 	if len(authRequired) > 0 {
-		return nil, authRequired, nil
+		return nil, authRequired, nil, sharePointGaps{}
 	}
 
 	// For business accounts, discover SharePoint sites.
+	var gaps sharePointGaps
 	if tokenCID.DriveType() == driveid.DriveTypeBusiness {
-		spEntries := discoverSharePointDrives(ctx, client, cfg, tokenCID.Email(), spSiteLimit, logger)
+		var spEntries []driveListEntry
+		spEntries, gaps = discoverSharePointDrives(ctx, client, cfg, tokenCID.Email(), spSiteLimit, logger)
 		entries = append(entries, spEntries...)
 	}
 
-	return entries, nil, degraded
+	return entries, nil, degraded, gaps
 }
 
 type accessibleDriveCatalogClient interface {
@@ -360,8 +373,137 @@ func tokenAuthRequirement(
 	)
 }
 
+// unlistedSite is a SharePoint site whose document libraries could not be
+// listed: the account that asked, the site's name (newUnlistedSite), and why,
+// in the words sharePointGapReason chooses.
+type unlistedSite struct {
+	Account  string `json:"account"`
+	SiteName string `json:"site_name"`
+	Error    string `json:"error"`
+}
+
+// newUnlistedSite names the site by its display name, as the commands print
+// sites, or by its URL name when it has none, so a note never names an empty
+// site.
+func newUnlistedSite(email string, site graph.Site, err error) unlistedSite {
+	name := site.DisplayName
+	if name == "" {
+		name = site.Name
+	}
+
+	return unlistedSite{Account: email, SiteName: name, Error: sharePointGapReason(err)}
+}
+
+// failedSiteSearch is an account whose SharePoint site search failed while
+// the command went on with what else answered.
+type failedSiteSearch struct {
+	Account string
+	Reason  string
+}
+
+// sharePointGaps are the SharePoint sources a listing could not read. drive
+// list and drive search name each of them, so a listing that missed one never
+// reads as complete (R-3.3.14).
+type sharePointGaps struct {
+	UnlistedSites      []unlistedSite
+	FailedSiteSearches []failedSiteSearch
+}
+
+// sortSharePointGaps puts the gaps in one order every run, whatever order
+// they were found in: by account, then by site.
+func sortSharePointGaps(gaps *sharePointGaps) {
+	slices.SortFunc(gaps.UnlistedSites, func(a, b unlistedSite) int {
+		return cmp.Or(cmp.Compare(a.Account, b.Account), cmp.Compare(a.SiteName, b.SiteName), cmp.Compare(a.Error, b.Error))
+	})
+	slices.SortFunc(gaps.FailedSiteSearches, func(a, b failedSiteSearch) int {
+		return cmp.Or(cmp.Compare(a.Account, b.Account), cmp.Compare(a.Reason, b.Reason))
+	})
+}
+
+// The reasons sharePointGapReason chooses from.
+const (
+	gapReasonSignIn         = "sign-in required"
+	gapReasonReadOnly       = "OneDrive is temporarily read-only"
+	gapReasonDenied         = "access denied"
+	gapReasonNotFound       = "not found"
+	gapReasonThrottled      = "OneDrive is limiting requests"
+	gapReasonServerProblem  = "OneDrive had a temporary server problem"
+	gapReasonStatusFormat   = "OneDrive answered HTTP %d"
+	gapReasonTimeoutFormat  = "%s did not answer in time"
+	gapReasonNetworkFormat  = "the connection to %s failed"
+	gapReasonRequestFailure = "the request failed"
+)
+
+// sharePointGapReason says why a SharePoint source did not answer in words of
+// its own, chosen by the kind of failure: a sign-in, the answer's status, a
+// timeout, the network. No text of the answer (its body, OneDrive's message
+// or code, the request id) or of the request (a URL) reaches them, so a note
+// or a JSON entry never prints a response, whatever OneDrive answered. The
+// log lines keep the whole error.
+func sharePointGapReason(err error) string {
+	var graphErr *graph.GraphError
+	switch {
+	case authErrorMessage(err) != "":
+		return gapReasonSignIn
+	// A read-only window arrives as 403 accessDenied, so it goes first.
+	case errors.Is(err, graph.ErrProviderReadOnly):
+		return gapReasonReadOnly
+	case errors.Is(err, graph.ErrForbidden):
+		return gapReasonDenied
+	case errors.Is(err, graph.ErrNotFound):
+		return gapReasonNotFound
+	case errors.Is(err, graph.ErrThrottled):
+		return gapReasonThrottled
+	case errors.Is(err, graph.ErrServerError):
+		return gapReasonServerProblem
+	case errors.As(err, &graphErr):
+		return fmt.Sprintf(gapReasonStatusFormat, graphErr.StatusCode)
+	case errors.Is(err, context.DeadlineExceeded), isTimeout(err):
+		return fmt.Sprintf(gapReasonTimeoutFormat, failedService(err))
+	case networkErrorReason(err) != "":
+		return fmt.Sprintf(gapReasonNetworkFormat, failedService(err))
+	default:
+		return gapReasonRequestFailure
+	}
+}
+
+// The stderr notes for the gaps, in the form status gives an account whose
+// live details did not arrive.
+const (
+	failedSiteSearchNoteFormat = "Note: could not search the SharePoint sites of %s: %s.\n"
+	unlistedSiteNoteFormat     = "Note: could not list the libraries of SharePoint site %s of %s: %s.\n"
+	incompleteListingNote      = "Note: this listing is incomplete.\n"
+)
+
+// printSharePointGapNotes writes one stderr note per source that did not
+// answer and one that says the listing is incomplete, in text and --json mode
+// alike, so --json stdout stays one document. --quiet keeps them, as it keeps
+// warnings: without them the listing would read as complete. It writes
+// nothing when every source answered.
+func printSharePointGapNotes(cc *CLIContext, gaps sharePointGaps) {
+	printSharePointSourceNotes(cc, gaps)
+	if len(gaps.FailedSiteSearches) > 0 || len(gaps.UnlistedSites) > 0 {
+		writeWarningf(cc.Status(), "%s", incompleteListingNote)
+	}
+}
+
+// printSharePointSourceNotes writes the stderr note of each source that did
+// not answer: each failed site search, then each unlisted site.
+func printSharePointSourceNotes(cc *CLIContext, gaps sharePointGaps) {
+	status := cc.Status()
+	for _, failed := range gaps.FailedSiteSearches {
+		writeWarningf(status, failedSiteSearchNoteFormat, failed.Account, failed.Reason)
+	}
+	for _, site := range gaps.UnlistedSites {
+		writeWarningf(status, unlistedSiteNoteFormat, site.SiteName, site.Account, site.Error)
+	}
+}
+
 // discoverSharePointDrives queries SharePoint sites and their document libraries.
-// spSiteLimit controls how many sites are fetched from the API.
+// spSiteLimit controls how many sites are fetched from the API. A failed site
+// search, and each site whose libraries could not be listed, is a gap the
+// command names; the logs keep their levels. A stop is neither: discovery
+// ends with what it has, and the command with the cancellation.
 func discoverSharePointDrives(
 	ctx context.Context,
 	client *graph.Client,
@@ -369,20 +511,30 @@ func discoverSharePointDrives(
 	email string,
 	spSiteLimit int,
 	logger *slog.Logger,
-) []driveListEntry {
+) ([]driveListEntry, sharePointGaps) {
 	sites, err := client.SearchSites(ctx, "*", spSiteLimit)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, sharePointGaps{}
+		}
 		logger.Warn("SharePoint site search failed", "error", err)
 
-		return nil
+		return nil, sharePointGaps{FailedSiteSearches: []failedSiteSearch{{Account: email, Reason: sharePointGapReason(err)}}}
 	}
 
-	var entries []driveListEntry
+	var (
+		entries []driveListEntry
+		gaps    sharePointGaps
+	)
 
 	for _, site := range sites {
 		siteDrives, driveErr := client.SiteDrives(ctx, site.ID)
 		if driveErr != nil {
 			logger.Debug("failed to list drives for site", "site", site.Name, "error", driveErr)
+			if ctx.Err() != nil {
+				return entries, gaps
+			}
+			gaps.UnlistedSites = append(gaps.UnlistedSites, newUnlistedSite(email, site, driveErr))
 
 			continue
 		}
@@ -411,7 +563,7 @@ func discoverSharePointDrives(
 		}
 	}
 
-	return entries
+	return entries, gaps
 }
 
 // sharedFoldersToEntries converts validated shared folders to drive list entries.
