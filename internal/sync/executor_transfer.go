@@ -806,7 +806,7 @@ func (e *executor) finishIntoPlaceholder(
 	opts.IfMatch = item.ETag
 	result, err = e.transferMgr.UploadFileToItem(ctx, driveID, itemID, localPath, opts)
 
-	return result, true, err //nolint:wrapcheck // driveops names the file
+	return result, true, err //nolint:wrapcheck // the action's outcome names the file
 }
 
 // claimLostCreate finishes the create that an earlier attempt asked for and

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // folderTransferReport turns the events of a folder get or put into what the
@@ -32,9 +33,16 @@ func (r *folderTransferReport) add(event driveops.TreeEvent) {
 		}
 		r.cc.Progressf("%s %s", r.verb, countOf(r.filesDone, "file"))
 	case driveops.TreeFileFailed, driveops.TreeFolderFailed:
-		r.failures = append(r.failures, event.Err.Error())
+		r.failures = append(r.failures, failureLine(&event))
 	case driveops.TreeFolderCreated:
 	}
+}
+
+// failureLine is how a folder transfer names one failed file or folder: the
+// local path the walk found it under, then the cause with every local path
+// left out, so the path is named once whatever the cause held.
+func failureLine(event *driveops.TreeEvent) string {
+	return event.LocalPath + ": " + localpath.WithoutPath(event.Err)
 }
 
 // finish prints the result once the transfer has returned: under --json the

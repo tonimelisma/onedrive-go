@@ -120,7 +120,7 @@ func uploadHashMismatchError(opts UploadOpts, localPath, actualHash string) erro
 		return opts.HashMismatchError(localPath, opts.ExpectedHash, actualHash)
 	}
 
-	return fmt.Errorf("upload source hash changed for %s: expected %s got %s", localPath, opts.ExpectedHash, actualHash)
+	return fmt.Errorf("upload source hash changed: expected %s got %s", opts.ExpectedHash, actualHash)
 }
 
 func validateUploadSourceBeforeRead(opts UploadOpts) error {
@@ -208,7 +208,7 @@ func (tm *TransferManager) uploadedItemOrError(localPath string, item *graph.Ite
 		return mtimeErr.Item, nil
 	}
 
-	return nil, fmt.Errorf("uploading %s: %w", localPath, err)
+	return nil, fmt.Errorf("sending the file: %w", err)
 }
 
 // recordUploadPerf counts one finished upload, a create or an overwrite, of
@@ -235,13 +235,14 @@ type uploadSource struct {
 // prepareUploadSource stats localPath, checks the source and the size limit,
 // hashes the file, checks the expected hash and the source again, and opens
 // the file for the upload, in that order. A create and an overwrite share it.
-// The caller closes the returned file.
+// The caller closes the returned file. localpath names the path in a failure
+// of the file; no failure here names it again.
 func (tm *TransferManager) prepareUploadSource(
 	ctx context.Context, localPath string, opts UploadOpts,
 ) (*uploadSource, error) {
 	info, err := localpath.Stat(localPath)
 	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", localPath, err)
+		return nil, err //nolint:wrapcheck // localpath names the stat and the path
 	}
 	if validationErr := validateUploadSourceBeforeRead(opts); validationErr != nil {
 		return nil, validationErr
@@ -249,7 +250,7 @@ func (tm *TransferManager) prepareUploadSource(
 
 	size := info.Size()
 	if size > MaxOneDriveFileSize {
-		return nil, fileTooLargeForOneDriveError(localPath, size)
+		return nil, fileTooLargeForOneDriveError(size)
 	}
 
 	// Hash the file first (opens, reads, closes internally). The hash is
@@ -272,7 +273,7 @@ func (tm *TransferManager) prepareUploadSource(
 
 	f, err := localpath.OpenRegular(localPath)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s for upload: %w", localPath, err)
+		return nil, err //nolint:wrapcheck // localpath names the open and the path
 	}
 
 	return &uploadSource{file: f, size: size, hash: localHash, mtime: mtime}, nil
@@ -431,7 +432,7 @@ func (tm *TransferManager) uploadExistingItem(
 	}
 
 	if !hasItemUploader {
-		return nil, fmt.Errorf("uploading %s: uploader does not support item-ID overwrite", localPath)
+		return nil, errors.New("sending the file: the uploader does not support item-ID overwrite")
 	}
 
 	item, err := itemUploader.UploadToItem(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
@@ -451,8 +452,9 @@ func (tm *TransferManager) deleteSession(driveID, localPath string) {
 	}
 }
 
-// fileTooLargeForOneDriveError names the file and its size in human units;
-// the sentinel supplies the limit, so the limit is stated once.
-func fileTooLargeForOneDriveError(localPath string, size int64) error {
-	return fmt.Errorf("%s is %s: %w", localPath, formatSize(size), ErrFileExceedsOneDriveLimit)
+// fileTooLargeForOneDriveError gives the file's size in human units; the
+// sentinel supplies the limit, so the limit is stated once, and the caller
+// names the file.
+func fileTooLargeForOneDriveError(size int64) error {
+	return fmt.Errorf("the file is %s: %w", formatSize(size), ErrFileExceedsOneDriveLimit)
 }

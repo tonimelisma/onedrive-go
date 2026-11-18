@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
@@ -93,6 +95,30 @@ func TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose(t *testing.T) {
 	errOut.Reset()
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
 	assert.Equal(t, "Could not upload busy.txt, will retry: throttled\n", errOut.String())
+}
+
+// A sync failure that a local file's error caused names the file once: the
+// activity line names it, below the sync folder, and the reason is the
+// error's innermost text, which holds no path.
+//
+// Validates: R-6.6.18, R-6.6.26
+func TestSyncConsole_ALocalFileFailureNamesTheFileOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	t.Parallel()
+
+	locked := filepath.Join(t.TempDir(), "locked.txt")
+	require.NoError(t, os.WriteFile(locked, nil, 0o000))
+	_, openErr := localpath.OpenRegular(locked)
+	require.Error(t, openErr)
+	c, _, errOut := testSyncConsole()
+
+	c.Activity(mountActivity(&syncengine.Activity{
+		Kind: syncengine.ActivityUpload, Path: "Docs/locked.txt", Err: fmt.Errorf("hashing: %w", openErr),
+	}))
+
+	assert.Equal(t, "Failed to upload Docs/locked.txt: permission denied\n", errOut.String())
 }
 
 // Validates: R-6.6.18

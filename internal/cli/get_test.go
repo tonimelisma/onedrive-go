@@ -2,15 +2,21 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -107,6 +113,157 @@ func TestRunGet_FileReportedUnderAnUnsafeNameIsNotWritten(t *testing.T) {
 	named := runFileCommand(t, getCommand, cc, false, "/report.txt")
 	require.NoError(t, named.err)
 	assertFileHolds(t, filepath.Join(workDir, "report.txt"), "hello")
+}
+
+// readOnlyFolder creates the folder name in dir, which no file can be
+// created in, and makes it writable again when the test ends so it can be
+// removed.
+func readOnlyFolder(t *testing.T, dir, name string) {
+	t.Helper()
+
+	folder := filepath.Join(dir, name)
+	require.NoError(t, os.Mkdir(folder, 0o500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(folder, 0o700)) }) //nolint:gosec // restores the private test folder
+}
+
+// A folder get names a file it cannot write once, as the folder the user
+// typed names it, and not the partial file it could not create; under
+// --json the failure is the same string.
+//
+// Validates: R-6.6.26, R-1.2.1, R-6.6.33
+func TestRunGet_FolderNamesAnUnwritableFileOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	cc.Logger = slog.New(slog.DiscardHandler)
+	addFakeItem(fake, addFakeItem(fake, fakeGraphRootID, "Docs", true, ""), "a.txt", false, "hello")
+	parent := t.TempDir()
+	readOnlyFolder(t, parent, "Docs")
+	t.Chdir(parent)
+	failure := filepath.Join("Docs", "a.txt") + ": creating the partial file: opening: permission denied"
+
+	text := runFileCommand(t, getCommand, cc, false, "/Docs", "Docs")
+
+	require.EqualError(t, text.err, "1 item failed to download")
+	assert.Equal(t, "Downloaded 0 files, 0 folders (0 B)\nFailed: "+failure+"\n", text.stderr)
+
+	asJSON := runFileCommand(t, getCommand, cc, true, "/Docs", "Docs")
+
+	require.EqualError(t, asJSON.err, "1 item failed to download")
+	var doc folderTransferJSONOutput[getJSONOutput]
+	require.NoError(t, json.Unmarshal([]byte(asJSON.stdout), &doc), asJSON.stdout)
+	assert.Equal(t, []string{failure}, doc.Errors)
+}
+
+// A single get that cannot write its file says so in one sentence, and its
+// details name the remote file once, as the user typed it, and the partial
+// file once, below the folder the user typed, with no other local path.
+//
+// Validates: R-6.6.26
+func TestRunGet_AnUnwritableFileIsNamedOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	addFakeItem(fake, fakeGraphRootID, "b.txt", false, "world")
+	parent := t.TempDir()
+	readOnlyFolder(t, parent, "ro")
+	t.Chdir(parent)
+
+	run := runFileCommand(t, getCommand, cc, false, "/b.txt", filepath.Join("ro", "b.txt"))
+
+	require.ErrorIs(t, run.err, os.ErrPermission)
+	plain, details, found := strings.Cut(commandErrorText(run.err, true), "\nDetails: ")
+	require.True(t, found)
+	assert.Equal(t, "Error: Permission denied for "+filepath.Join(parent, "ro")+". Check its file permissions.", plain,
+		"the sentence names the folder the hidden partial file could not be made in")
+	assert.Regexp(t,
+		`^downloading "/b\.txt": creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`,
+		details)
+	assert.Equal(t, 1, strings.Count(details, `"/b.txt"`), details)
+	assert.NotContains(t, details, parent, "the absolute path is not printed")
+}
+
+// A single get whose partial file is already there and cannot be written, as
+// one another user's run left or one made read-only, names that partial file:
+// its folder is writable, and the partial is what the user has to fix.
+//
+// Validates: R-6.6.26
+func TestDownloadOneFile_AnExistingPartialItCannotWriteIsNamed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	setTestDriveHome(t)
+	cc, _ := jsonContractFileContext(t)
+	tm := driveops.NewTransferManager(failingDownloader{body: "hello"}, nil, nil, slog.New(slog.DiscardHandler))
+	target := filepath.Join(t.TempDir(), "notes.txt")
+	item := &graph.Item{ID: "item1", Name: "notes.txt", Size: 5}
+	partial := driveops.DownloadPartialPath(target, driveops.DownloadOptsForItem(item))
+	require.NoError(t, os.WriteFile(partial, []byte("x"), 0o400))
+
+	err := downloadOneFile(t.Context(), cc, tm, driveid.New("0123456789abcdef"), "item1", item, "/Docs/notes.txt", target)
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	assert.Equal(t, "Error: Permission denied for "+partial+". Check its file permissions.", commandErrorText(err, false))
+}
+
+// failingDownloader is a download that hands over body and ends, or fails
+// with err before it hands over anything.
+type failingDownloader struct {
+	body string
+	err  error
+}
+
+func (d failingDownloader) Download(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+	if d.err != nil {
+		return 0, d.err
+	}
+	n, err := io.WriteString(w, d.body)
+
+	return int64(n), err
+}
+
+// A single get whose download fails for a reason that is not local, an
+// integrity mismatch or a transport error, names the remote file it was
+// working on once, the way a single put names its remote path, and no local
+// path at all.
+//
+// Validates: R-6.6.26
+func TestDownloadOneFile_AFailureThatIsNotLocalNamesTheRemotePathOnce(t *testing.T) {
+	setTestDriveHome(t)
+	cc, _ := jsonContractFileContext(t)
+
+	for _, tc := range []struct {
+		name  string
+		files failingDownloader
+		size  int64
+		want  string
+	}{
+		{
+			name: "integrity", files: failingDownloader{body: "hello"}, size: 99,
+			want: `Error: downloading "/Docs/notes.txt": the downloaded file doesn't match OneDrive's copy (received 5 B, OneDrive reports 99 B)`,
+		},
+		{
+			name: "transport", files: failingDownloader{err: errors.New("stream reset by the server")}, size: 5,
+			want: `Error: downloading "/Docs/notes.txt": receiving the file: stream reset by the server`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tm := driveops.NewTransferManager(tc.files, nil, nil, slog.New(slog.DiscardHandler))
+			target := filepath.Join(t.TempDir(), "notes.txt")
+			item := &graph.Item{ID: "item1", Name: "notes.txt", Size: tc.size, QuickXorHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAA="}
+
+			err := downloadOneFile(t.Context(), cc, tm, driveid.New("0123456789abcdef"), "item1", item, "/Docs/notes.txt", target)
+
+			require.Error(t, err)
+			text := commandErrorText(err, true)
+			assert.Equal(t, tc.want, text)
+			assert.NotContains(t, text, target, "the remote path names the file; the local one is not repeated")
+		})
+	}
 }
 
 // A folder download with no failures prints "errors": [], and one that

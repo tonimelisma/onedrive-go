@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -137,11 +138,65 @@ func TestRunPut_FolderWithAFailingFileUploadsTheOthers(t *testing.T) {
 	run := runFileCommand(t, putCommand, cc, false, local, "/Backup")
 
 	require.EqualError(t, run.err, "1 item failed to upload")
-	assert.True(t, strings.HasPrefix(run.stderr, "Uploaded 1 file, 1 folder (0 B)\nFailed: "+locked+": "), run.stderr)
-	assert.Contains(t, run.stderr, "permission denied")
-	assert.Equal(t, 2, strings.Count(run.stderr, "\n"), "the summary and the one failure")
+	assert.Equal(t, "Uploaded 1 file, 1 folder (0 B)\nFailed: "+locked+": hashing: opening: permission denied\n", run.stderr,
+		"the summary and the one failure, which names the file once")
 	assert.NotEmpty(t, fakeItemID(fake, "Backup/kept.txt"))
 	assert.Empty(t, fakeItemID(fake, "Backup/locked.txt"))
+}
+
+// A folder put names a file it cannot read once, as the walk found it below
+// the folder the user typed, a relative one included, and never as the
+// absolute path the read reached; under --json the failure is the same
+// string.
+//
+// Validates: R-6.6.26, R-1.3.1, R-6.6.33
+func TestRunPut_FolderNamesAnUnreadableFileOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	setTestDriveHome(t)
+	cc, _ := jsonContractFileContext(t)
+	parent := t.TempDir()
+	writeEmptyLocalFiles(t, filepath.Join(parent, "Backup"), "kept.txt", "locked.txt")
+	require.NoError(t, os.Chmod(filepath.Join(parent, "Backup", "locked.txt"), 0o000))
+	t.Chdir(parent)
+	failure := filepath.Join("Backup", "locked.txt") + ": hashing: opening: permission denied"
+
+	text := runFileCommand(t, putCommand, cc, false, "Backup", "/Backup")
+
+	require.EqualError(t, text.err, "1 item failed to upload")
+	assert.Equal(t, "Uploaded 1 file, 1 folder (0 B)\nFailed: "+failure+"\n", text.stderr)
+	assert.NotContains(t, text.stderr, parent, "the absolute path is not printed")
+
+	asJSON := runFileCommand(t, putCommand, cc, true, "Backup", "/Copy")
+
+	require.EqualError(t, asJSON.err, "1 item failed to upload")
+	var doc folderTransferJSONOutput[putJSONOutput]
+	require.NoError(t, json.Unmarshal([]byte(asJSON.stdout), &doc), asJSON.stdout)
+	assert.Equal(t, []string{failure}, doc.Errors)
+}
+
+// A single put of a file it cannot read says so in one sentence, and its
+// details name the file once, as the user typed it.
+//
+// Validates: R-6.6.26
+func TestRunPut_AnUnreadableFileIsNamedOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	setTestDriveHome(t)
+	cc, _ := jsonContractFileContext(t)
+	parent := t.TempDir()
+	writeEmptyLocalFiles(t, parent, "locked.txt")
+	require.NoError(t, os.Chmod(filepath.Join(parent, "locked.txt"), 0o000))
+	t.Chdir(parent)
+
+	run := runFileCommand(t, putCommand, cc, false, "locked.txt", "/one.txt")
+
+	require.ErrorIs(t, run.err, os.ErrPermission)
+	assert.Equal(t, "Error: Permission denied for "+filepath.Join(parent, "locked.txt")+". Check its file permissions.\n"+
+		`Details: uploading "/one.txt": hashing: opening locked.txt: permission denied`,
+		commandErrorText(run.err, true))
 }
 
 // A folder put follows a symbolic link the user names as the folder to

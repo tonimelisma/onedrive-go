@@ -280,7 +280,9 @@ func TestUploadTree_FolderThatCannotBeCreatedIsReported(t *testing.T) {
 	failure := eventFor(t, run.events, "Bad")
 	assert.Equal(t, TreeFolderFailed, failure.Kind)
 	require.ErrorIs(t, failure.Err, errTreeTestRefused)
-	assert.Equal(t, filepath.Join(localRoot, "Bad")+": "+errTreeTestRefused.Error(), failure.Err.Error())
+	assert.Equal(t, filepath.Join(localRoot, "Bad"), failure.LocalPath)
+	require.EqualError(t, failure.Err, "creating the remote folder: "+errTreeTestRefused.Error(),
+		"the event names the folder, its error does not")
 	assert.Equal(t, []string{"Good/inner.txt"}, relPaths(eventsOf(run.events, TreeFileDone)))
 	assertSummaryCountsEvents(t, run)
 }
@@ -304,8 +306,8 @@ func TestUploadTree_TransferFailureIsReportedAndOthersContinue(t *testing.T) {
 	require.NoError(t, run.err)
 	failure := eventFor(t, run.events, "b.txt")
 	assert.Equal(t, TreeFileFailed, failure.Kind)
-	require.ErrorIs(t, failure.Err, errTreeTestRefused)
-	assert.Equal(t, filepath.Join(localRoot, "b.txt")+": "+errTreeTestRefused.Error(), failure.Err.Error())
+	assert.Equal(t, filepath.Join(localRoot, "b.txt"), failure.LocalPath)
+	require.EqualError(t, failure.Err, errTreeTestRefused.Error(), "the event names the file, its error does not")
 	assert.Empty(t, failure.ItemID)
 	for _, name := range []string{"a.txt", "c.txt"} {
 		done := eventFor(t, run.events, name)
@@ -452,7 +454,7 @@ func TestUploadTree_CancellationReportsEveryUnstartedFile(t *testing.T) {
 	assert.Len(t, failed, walkWaitsAt, "one file in each folder the walk reached")
 	for _, file := range failed {
 		require.ErrorIs(t, file.Err, context.Canceled)
-		assert.True(t, strings.HasPrefix(file.Err.Error(), file.LocalPath+": "), "%q names its file", file.Err)
+		assert.NotContains(t, file.Err.Error(), file.LocalPath, "the event names its file, its error does not")
 	}
 	assertEveryLocalFileAccounted(t, run, files)
 	cutShort := eventsOf(run.events, TreeFolderFailed)
