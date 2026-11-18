@@ -31,7 +31,7 @@ func TestClearAccountAuthRequirement_ClearsAuthRequirementAndPreservesInventory(
 		drive.PrimaryForAccount = true
 	})
 
-	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), accountCID.Email()))
+	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), accountCID))
 
 	account, found := loadCatalogAccount(t, accountCID)
 	require.True(t, found)

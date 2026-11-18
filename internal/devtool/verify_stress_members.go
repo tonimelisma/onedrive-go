@@ -323,6 +323,7 @@ func stressSyncShutdownAndCancellationMembers() []string {
 		"TestRunFullRemoteRefreshAsync_ShutdownAfterCommit",
 		"TestRunOnce_ACancelWhileTheRunGoesOnIsRetriedAndSaid",
 		"TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown",
+		"TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown",
 		"TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown",
 		"TestRunOnce_ContextCancellation",
 		"TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork",

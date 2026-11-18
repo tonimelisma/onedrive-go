@@ -24,6 +24,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		DriveID:                mount.remoteDriveID(),
 		DriveType:              mount.parentDriveType(),
 		AccountEmail:           mount.accountEmail(),
+		AccountCanonicalID:     mount.tokenOwnerCanonical(),
 		RemoteRootItemID:       mount.remoteRootItemID(),
 		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable(),
 		EnableWebsocket:        mount.enableWebsocket(),

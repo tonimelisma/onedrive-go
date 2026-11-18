@@ -27,7 +27,9 @@ import (
 //
 // A panic in the handler cancels the context with the panic as its cause, so
 // the command ends and exits 1 (commandPanicCause, R-6.3.10) instead of the
-// process dying with Go's exit status 2.
+// process dying with Go's exit status 2. The cause also answers to
+// context.Canceled (panicguard.AsCancelCause), so the work it interrupts
+// reads as stopped.
 func shutdownContext(parent context.Context, logger *slog.Logger) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancelCause(parent)
 
@@ -50,7 +52,7 @@ func shutdownContext(parent context.Context, logger *slog.Logger) (context.Conte
 		defer signal.Stop(sigCh)
 		defer func() {
 			if r := recover(); r != nil {
-				cancel(panicguard.Recovered(logger, "in the signal handler", r))
+				cancel(panicguard.AsCancelCause(panicguard.Recovered(logger, "in the signal handler", r)))
 			}
 		}()
 

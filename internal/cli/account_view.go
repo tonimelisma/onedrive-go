@@ -91,6 +91,13 @@ func ensureAccountView(byEmail map[string]*accountView, email string) *accountVi
 	return view
 }
 
+// populateStoredAccounts makes one view per address from the catalog's
+// accounts. A personal and a work or school account can share an address; the
+// view then speaks for the first of them by canonical ID, the account whose
+// saved login it checks and signs in with (representativeTokenID picks the
+// same one): its names, its drive type and its sign-in requirement. The other
+// account adds only its saved login, so its requirement is never shown as the
+// first one's, nor the first one's hidden behind it.
 func populateStoredAccounts(byEmail map[string]*accountView, stored *config.Catalog) {
 	for _, key := range stored.SortedAccountKeys() {
 		account := stored.Accounts[key]
@@ -98,11 +105,16 @@ func populateStoredAccounts(byEmail map[string]*accountView, stored *config.Cata
 			continue
 		}
 
+		_, described := byEmail[account.Email]
 		view := ensureAccountView(byEmail, account.Email)
-		if accountCID, hasID := account.ID(); hasID {
-			view.AccountCanonicalID = accountCID
+		accountCID, hasID := account.ID()
+		if hasID {
 			view.TokenDriveIDs = appendUniqueCanonicalID(view.TokenDriveIDs, accountCID)
 		}
+		if described {
+			continue
+		}
+		view.AccountCanonicalID = accountCID
 		view.DriveType = account.DriveType
 		view.UserID = account.UserID
 		view.DisplayName = account.DisplayName

@@ -31,6 +31,7 @@ func testEngineMountConfig(syncDir string) *EngineMountConfig {
 		DriveID:                driveid.New("mount-drive-id"),
 		DriveType:              driveid.MustCanonicalID("sharepoint:test@example.com:site:Documents").DriveType(),
 		AccountEmail:           "mount-user@example.com",
+		AccountCanonicalID:     driveid.MustCanonicalID("business:mount-user@example.com"),
 		RemoteRootItemID:       "mount-root-id",
 		RemoteRootDeltaCapable: false,
 		EnableWebsocket:        true,
@@ -91,6 +92,7 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 	assert.False(t, eng.enableWebsocket)
 	assert.False(t, eng.localRules.RejectSharePointRootForms)
 	assert.Equal(t, mountCfg.AccountEmail, eng.permHandler.accountEmail)
+	assert.Equal(t, mountCfg.AccountCanonicalID, eng.accountCanonicalID)
 	assert.Equal(t, mountCfg.TransferWorkers, eng.transferWorkers)
 	assert.Equal(t, mountCfg.CheckWorkers, eng.checkWorkers)
 	assert.Nil(t, eng.driveVerifier)

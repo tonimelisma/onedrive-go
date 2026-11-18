@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -385,4 +389,44 @@ func TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError(t *testing.T)
 	require.ErrorIs(t, commandPanicCause(ctx), panicguard.ErrPanic)
 	require.ErrorContains(t, commandPanicCause(ctx), "internal error in the signal handler: log call exploded")
 	assert.Equal(t, exitFailure, commandExitCode(withCommandPanic(ctx, ctx.Err()), true))
+}
+
+// A request the handler's panic interrupts carries the panic, the cause of
+// the cancel, in place of context.Canceled. It reads as stopped, as under any
+// other stop, and the command still ends with the panic and exits 1.
+//
+// Validates: R-6.3.10
+func TestShutdownContext_HandlerPanicStopsTheRequestInFlight(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	logger := slog.New(synctest.PanicOnMessage{
+		Message: "Stopping... (press Ctrl-C again to force quit)",
+		Next:    slog.DiscardHandler,
+	})
+	ctx, stop := shutdownContext(context.Background(), logger)
+	defer stop()
+
+	// The server stops the command once the request has reached it, and
+	// never answers.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT))
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, http.NoBody)
+	require.NoError(t, err)
+	client := graphtransport.InteractiveMetadataClient(slog.New(slog.DiscardHandler), nil, nil)
+	resp, err := client.Do(req)
+	if resp != nil {
+		require.NoError(t, resp.Body.Close())
+	}
+
+	require.ErrorIs(t, err, context.Canceled, "the interrupted request reads as stopped")
+	require.ErrorIs(t, err, panicguard.ErrPanic, "and still carries the panic")
+	assert.Equal(t, errclass.ClassFatal, classifyCommandError(withCommandPanic(ctx, err)))
+	assert.Equal(t, exitFailure, commandExitCode(withCommandPanic(ctx, err), true))
 }

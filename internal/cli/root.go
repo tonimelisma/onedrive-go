@@ -411,7 +411,8 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, erro
 	// Successful authenticated Graph calls prove the saved login still works.
 	// Attach a best-effort hook so live CLI commands clear stale catalog auth
 	// requirements without treating session construction itself as proof.
-	attachDriveAuthProof(session, newAuthProofRecorder(cc.Logger), "drive-session")
+	// The proof is the token owner's, the account the session signs in as.
+	attachDriveAuthProof(session, newAuthProofRecorder(cc.Logger), mountCfg.TokenOwnerCanonical, "drive-session")
 
 	return session, nil
 }

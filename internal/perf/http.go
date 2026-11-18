@@ -1,22 +1,35 @@
 package perf
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 )
 
+// RoundTripper records each request it sends on the collector the request's
+// context carries, then hands back what Inner answered. Inner is required:
+// the transport it names carries the client's timeouts and connection
+// settings, so there is no default to send through in its place.
 type RoundTripper struct {
 	Inner http.RoundTripper
 }
 
 func (rt RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	inner := rt.Inner
-	if inner == nil {
-		inner = http.DefaultTransport
+	if rt.Inner == nil {
+		err := errors.New("the performance transport has no inner transport to send the request through")
+		// The RoundTripper contract: the body is closed whatever the answer.
+		if req.Body != nil {
+			if closeErr := req.Body.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("closing the request body: %w", closeErr))
+			}
+		}
+
+		return nil, err
 	}
 
 	startedAt := time.Now()
-	resp, err := inner.RoundTrip(req)
+	resp, err := rt.Inner.RoundTrip(req)
 
 	statusCode := 0
 	if resp != nil {

@@ -74,6 +74,11 @@ type Engine struct {
 	protectedRootsMu stdsync.Mutex
 	protectedRoots   []ProtectedRoot
 
+	// accountCanonicalID names the catalog record of the account the engine
+	// syncs with, the one whose sign-in requirement a 401 marks and the
+	// startup proof clears; zero leaves the catalog alone.
+	accountCanonicalID driveid.CanonicalID
+
 	localRules            LocalObservationRules
 	shortcutNamespaceID   string
 	shortcutChildWorkSink ShortcutChildWorkSink
@@ -235,6 +240,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		recursiveLister:        cfg.RecursiveLister,
 		sessionStore:           sessionStore,
 		trash:                  trash,
+		accountCanonicalID:     cfg.AccountCanonicalID,
 		dataDir:                cfg.DataDir,
 		syncRoot:               cfg.SyncRoot,
 		syncTree:               syncTree,
@@ -535,8 +541,11 @@ func (e *Engine) logVerifiedDrive(proof driveIdentityProof) {
 	)
 }
 
+// hasPersistedAccountAuthRequirement reports whether the catalog record of
+// the engine's own account, found by its canonical ID, holds the requirement a
+// sync's 401 left: another account at the same address is not this one.
 func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
-	if e == nil || e.permHandler == nil || e.permHandler.accountEmail == "" {
+	if e == nil || e.accountCanonicalID.IsZero() {
 		return false, nil
 	}
 
@@ -545,7 +554,7 @@ func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
 		return false, fmt.Errorf("sync: loading catalog: %w", err)
 	}
 
-	accountEntry, found := stored.AccountByEmail(e.permHandler.accountEmail)
+	accountEntry, found := stored.AccountByCanonicalID(e.accountCanonicalID)
 	if !found {
 		return false, nil
 	}
@@ -561,7 +570,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if !required {
 		return nil
 	}
-	if e == nil || e.permHandler == nil || e.permHandler.accountEmail == "" {
+	if e == nil || e.accountCanonicalID.IsZero() {
 		return nil
 	}
 	if !proof.attempted {
@@ -570,12 +579,12 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if proofErr != nil {
 		return proofErr
 	}
-	if err := config.ClearAccountAuthRequirement(e.dataDir, e.permHandler.accountEmail); err != nil {
+	if err := config.ClearAccountAuthRequirement(e.dataDir, e.accountCanonicalID); err != nil {
 		return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 	}
 
 	e.logger.Info("released catalog auth requirement after successful startup proof",
-		slog.String("account", e.permHandler.accountEmail),
+		slog.String("account", e.accountCanonicalID.String()),
 		slog.String("source", string(config.AuthClearSourceSyncStartupProof)),
 	)
 
