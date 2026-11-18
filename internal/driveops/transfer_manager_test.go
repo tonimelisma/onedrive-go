@@ -1011,9 +1011,12 @@ func TestTransferManager_DiskCheckFailure_WarnsOnce(t *testing.T) {
 
 // Validates: R-6.6.26
 //
-// A failed download names the file the user asked for, not the internal
-// ".onedrive-go.<name>.partial" temp file.
-func TestTransferManager_DownloadError_NamesTargetNotPartial(t *testing.T) {
+// A failed download names no local path, neither the internal
+// ".onedrive-go.<name>.partial" temp file nor the target: the caller names
+// the file it asked for, a single get by its remote path, a folder get's
+// line by its local one and sync's activity line by its path below the sync
+// folder.
+func TestTransferManager_DownloadError_NamesNoLocalPath(t *testing.T) {
 	t.Parallel()
 
 	dl := &tmSimpleDownloader{
@@ -1026,9 +1029,30 @@ func TestTransferManager_DownloadError_NamesTargetNotPartial(t *testing.T) {
 	targetPath := filepath.Join(t.TempDir(), "report.pdf")
 
 	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), targetPath)
-	assert.NotContains(t, err.Error(), ".partial")
+	require.EqualError(t, err, "receiving the file: connection reset")
+}
+
+// A download whose partial file cannot be created names that file once,
+// through the open that failed, and not the target.
+//
+// Validates: R-6.6.26
+func TestTransferManager_DownloadIntoAReadOnlyFolderNamesThePartialOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "ro")
+	require.NoError(t, os.Mkdir(dir, 0o500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(dir, 0o700)) }) //nolint:gosec // restores the private test folder
+	tm := newTestTM(&tmSimpleDownloader{}, &tmMockUploader{}, nil)
+	targetPath := filepath.Join(dir, "report.pdf")
+	opts := DownloadOpts{}
+
+	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.EqualError(t, err, "creating the partial file: opening "+DownloadPartialPath(targetPath, opts)+": permission denied")
 }
 
 // ---------------------------------------------------------------------------
@@ -1266,11 +1290,36 @@ func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
 	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o600))
 
 	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "err-wrap.txt", localPath, UploadOpts{})
-	require.Error(t, err)
 
-	// Fix #13: simple upload errors should be wrapped with the local path.
-	assert.Contains(t, err.Error(), "uploading")
-	assert.Contains(t, err.Error(), localPath)
+	// The failure says what the upload was doing and names no local path:
+	// the caller names the file, a folder put's line and sync's activity
+	// line, so the path would be printed twice.
+	require.EqualError(t, err, "sending the file: server error")
+}
+
+// An upload of a file it cannot read names the file once, through the open
+// that failed, and sends nothing.
+//
+// Validates: R-6.6.26
+func TestTransferManager_UploadOfAnUnreadableFileNamesItOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	t.Parallel()
+
+	ul := &tmMockUploader{
+		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, errors.New("an unreadable file is never sent")
+		},
+	}
+	tm := newTestTM(&tmSimpleDownloader{}, ul, nil)
+	localPath := filepath.Join(t.TempDir(), "locked.txt")
+	require.NoError(t, os.WriteFile(localPath, []byte("data"), 0o000))
+
+	_, err := tm.UploadFile(t.Context(), driveid.New("d1"), "parent1", "locked.txt", localPath, UploadOpts{})
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.EqualError(t, err, "hashing: opening "+localPath+": permission denied")
 }
 
 // Validates: R-5.7.1
@@ -1707,10 +1756,11 @@ func TestDownloadToFile_RenameFailure_PreservesPartial(t *testing.T) {
 	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.Error(t, err)
 
-	assert.Contains(t, err.Error(), "renaming partial")
-
 	// .partial should still exist with correct content.
 	partialPath := DownloadPartialPath(targetPath, opts)
+	assert.True(t, strings.HasPrefix(err.Error(), "moving the download into place: renaming "+partialPath+" to "+targetPath+": "),
+		"the rename names the partial and the target once each: %q", err)
+	assert.Equal(t, 1, strings.Count(err.Error(), targetPath), err.Error())
 
 	got, readErr := localpath.ReadFile(partialPath)
 	require.NoError(t, readErr, "expected .partial to be preserved")

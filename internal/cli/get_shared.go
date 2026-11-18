@@ -38,5 +38,5 @@ func runSharedGet(cmd *cobra.Command, args []string, cc *CLIContext) error {
 		return err
 	}
 
-	return downloadOneFile(ctx, cc, tm, driveID, itemID, item, localPath)
+	return downloadOneFile(ctx, cc, tm, driveID, itemID, item, cc.SharedTarget.Selector(), localPath)
 }

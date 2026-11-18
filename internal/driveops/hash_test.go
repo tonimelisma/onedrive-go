@@ -144,7 +144,26 @@ func TestComputeQuickXorHashContext_CanceledContextDoesNotHashTheFile(t *testing
 
 	_, err := ComputeQuickXorHashContext(ctx, path)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Contains(t, err.Error(), "hashing "+path)
+	require.EqualError(t, err, "hashing: reading content to hash: context canceled")
+}
+
+// A file the hash cannot open is named once, by the open that failed; the
+// hash says what it was doing, not the path again.
+//
+// Validates: R-6.6.26
+func TestComputeQuickXorHashContext_AnUnreadableFileIsNamedOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "locked.txt")
+	require.NoError(t, os.WriteFile(path, nil, 0o000))
+
+	_, err := ComputeQuickXorHashContext(t.Context(), path)
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.EqualError(t, err, "hashing: opening "+path+": permission denied")
 }
 
 // Validates: R-5.5.1

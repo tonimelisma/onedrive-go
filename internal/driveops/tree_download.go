@@ -147,9 +147,9 @@ func (w *downloadWalk) walkPage(ctx context.Context, children []graph.Item, relP
 }
 
 // listingFailed reports a folder whose listing failed with err. The end of
-// ctx cuts the walk short; any other failure is one failure of the folder,
-// which names the remote folder and the local folder it would have filled,
-// and its siblings go on.
+// ctx cuts the walk short; any other failure is one failure of the folder:
+// the event names the local folder it would have filled, its error the
+// remote folder. Its siblings go on.
 func (w *downloadWalk) listingFailed(ctx context.Context, err error, relPath, localPath string) bool {
 	if ctx.Err() != nil {
 		w.pool.reportUnfinished(ctx, relPath, localPath)
@@ -158,7 +158,7 @@ func (w *downloadWalk) listingFailed(ctx context.Context, err error, relPath, lo
 
 	remoteFolder := path.Join(w.tree.RemoteRoot, relPath)
 	w.pool.reportWalked(TreeFolderFailed, relPath, localPath,
-		fmt.Errorf("listing the OneDrive folder %q to fill %s: %w", remoteFolder, localPath, err))
+		fmt.Errorf("listing the OneDrive folder %q: %w", remoteFolder, err))
 
 	return true
 }
@@ -172,7 +172,7 @@ func (w *downloadWalk) child(ctx context.Context, item *graph.Item, parentRel, p
 		if item.IsFolder {
 			kind = TreeFolderFailed
 		}
-		w.pool.reportWalked(kind, relPath, parentLocal, fmt.Errorf("%s: %w", parentLocal, refusal))
+		w.pool.reportWalked(kind, relPath, parentLocal, refusal)
 		return true
 	}
 
@@ -187,7 +187,7 @@ func (w *downloadWalk) child(ctx context.Context, item *graph.Item, parentRel, p
 		transfer: func(ctx context.Context, file *TreeEvent) error {
 			result, err := w.tree.Files.DownloadToFile(ctx, w.tree.DriveID, itemID, file.LocalPath, opts)
 			if err != nil {
-				return err //nolint:wrapcheck // the event puts the file's path in front of the downloader's error
+				return err //nolint:wrapcheck // the event names the file the downloader's error is about
 			}
 			file.Size, file.HashVerified = result.Size, result.HashVerified
 
@@ -211,14 +211,15 @@ func (w *downloadWalk) subfolder(ctx context.Context, folderID, relPath, localPa
 // createDownloadFolder creates a folder of a tree download, asking for
 // localpath.UserTreeDirPerm (0777 minus the umask), and reports whether this
 // call created it: an existing folder is used as it is, keeps its mode, and
-// is not counted as created. Every error names the path once.
+// is not counted as created. A failure of localpath names the path; the one
+// it makes itself names none, since the event names the folder.
 func createDownloadFolder(localPath string) (bool, error) {
 	info, err := localpath.Stat(localPath)
 	switch {
 	case err == nil && info.IsDir():
 		return false, nil
 	case err == nil:
-		return false, fmt.Errorf("creating directory %s: it is not a folder", localPath)
+		return false, errors.New("creating directory: it is not a folder")
 	case !errors.Is(err, os.ErrNotExist):
 		return false, err //nolint:wrapcheck // localpath already names the path
 	}

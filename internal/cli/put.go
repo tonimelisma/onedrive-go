@@ -33,10 +33,11 @@ type putJSONOutput struct {
 	Size int64  `json:"size"`
 }
 
-// putJSONPath is the one form in which put prints a remote path under
-// --json, for a single file and for each file of a folder: the cleaned path
-// with one leading slash, whatever form it was typed in.
-func putJSONPath(remotePath string) string {
+// putPrintedPath is the one form in which put prints a remote path, in its
+// text line and under --json, for a single file and for each file of a
+// folder: the cleaned path with one leading slash, whatever form it was typed
+// in.
+func putPrintedPath(remotePath string) string {
 	return "/" + driveops.CleanRemotePath(remotePath)
 }
 
@@ -125,13 +126,13 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	if cc.Flags.JSON {
 		return writeJSONDocument(cc.Output(), putJSONOutput{
-			Path: putJSONPath(remotePath),
+			Path: putPrintedPath(remotePath),
 			ID:   visibleItem.ID,
 			Size: fi.Size(),
 		})
 	}
 
-	cc.Statusf("Uploaded %s (%s)\n", remotePath, formatSize(fi.Size()))
+	cc.Statusf("Uploaded %s (%s)\n", putPrintedPath(remotePath), formatSize(fi.Size()))
 
 	return nil
 }
@@ -188,7 +189,7 @@ func uploadFolder(
 	remoteRoot := driveops.CleanRemotePath(remotePath)
 	var doc folderTransferJSONOutput[putJSONOutput]
 	report := &folderTransferReport{cc: cc, verb: "Uploaded", noun: "upload", keepFile: func(file *driveops.TreeEvent) {
-		doc.Files = append(doc.Files, putJSONOutput{Path: putJSONPath(remoteRoot + "/" + file.RelPath), ID: file.ItemID, Size: file.Size})
+		doc.Files = append(doc.Files, putJSONOutput{Path: putPrintedPath(remoteRoot + "/" + file.RelPath), ID: file.ItemID, Size: file.Size})
 	}}
 	summary, err := driveops.UploadTree(ctx, driveops.TreeUpload{
 		Folders: session,
@@ -229,7 +230,7 @@ func putFile(
 ) (*driveops.UploadResult, error) {
 	result, err := tm.UploadFile(ctx, driveID, parentID, name, localPath, opts)
 	if !errors.Is(err, graph.ErrConflict) {
-		return result, err //nolint:wrapcheck // driveops names the file
+		return result, err //nolint:wrapcheck // the caller names the file
 	}
 
 	existing, found, findErr := driveops.FindExistingChild(ctx, lookup, driveID, parentID, name)
@@ -243,5 +244,5 @@ func putFile(
 	}
 
 	opts.IfMatch = existing.ETag
-	return tm.UploadFileToItem(ctx, driveID, existing.ID, localPath, opts) //nolint:wrapcheck // driveops names the file
+	return tm.UploadFileToItem(ctx, driveID, existing.ID, localPath, opts) //nolint:wrapcheck // the caller names the file
 }

@@ -33,7 +33,7 @@ func absolutePath(path string) (string, error) {
 
 	abs, err := filepath.Abs(clean)
 	if err != nil {
-		return "", fmt.Errorf("resolving path %s: %w", clean, err)
+		return "", failure("resolving path", clean, err)
 	}
 
 	return abs, nil
@@ -41,7 +41,8 @@ func absolutePath(path string) (string, error) {
 
 // Open opens path for reading. Like every function in this package it
 // refuses an empty path, resolves a relative one against the working
-// directory and names the path as it was given in its error.
+// directory and names the path once in its error, as it was given
+// (callError).
 func Open(path string) (*os.File, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -51,7 +52,7 @@ func Open(path string) (*os.File, error) {
 	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	file, err := os.Open(abs)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", path, err)
+		return nil, failure("opening", path, err, abs)
 	}
 
 	return file, nil
@@ -74,15 +75,15 @@ func OpenRegular(path string) (*os.File, error) {
 	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	file, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", path, err)
+		return nil, failure("opening", path, err, abs)
 	}
 
 	info, err := file.Stat()
 	if err != nil {
-		return nil, closeAfterFailure(file, path, fmt.Errorf("stat %s: %w", path, err))
+		return nil, closeAfterFailure(file, failure("stat", path, err, abs))
 	}
 	if !info.Mode().IsRegular() {
-		return nil, closeAfterFailure(file, path, fmt.Errorf("opening %s: %w", path, ErrNotRegularFile))
+		return nil, closeAfterFailure(file, failure("opening", path, ErrNotRegularFile))
 	}
 
 	return file, nil
@@ -99,7 +100,7 @@ func OpenFile(path string, flag int, perm os.FileMode) (*os.File, error) {
 	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	file, err := os.OpenFile(abs, flag, perm)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", path, err)
+		return nil, failure("opening", path, err, abs)
 	}
 
 	return file, nil
@@ -119,22 +120,22 @@ func ReadFile(path string) ([]byte, error) {
 func readAndClose(file *os.File, path string) ([]byte, error) {
 	data, readErr := io.ReadAll(file)
 	if readErr != nil {
-		return nil, closeAfterFailure(file, path, fmt.Errorf("reading %s: %w", path, readErr))
+		return nil, closeAfterFailure(file, failure("reading", path, readErr, file.Name()))
 	}
 
 	if closeErr := file.Close(); closeErr != nil {
-		return nil, fmt.Errorf("closing %s: %w", path, closeErr)
+		return nil, failure("closing", path, closeErr, file.Name())
 	}
 
 	return data, nil
 }
 
-// closeAfterFailure closes file, opened from path, once cause has ended its
-// use, and returns cause joined with the close failure, if any, which names
-// path like every other step does.
-func closeAfterFailure(file *os.File, path string, cause error) error {
+// closeAfterFailure closes file once cause, a failure that named its path,
+// has ended its use, and returns cause joined with the close failure, if any,
+// which does not name the path again.
+func closeAfterFailure(file *os.File, cause error) error {
 	if closeErr := file.Close(); closeErr != nil {
-		return JoinOnOneLine(cause, fmt.Errorf("closing %s: %w", path, closeErr))
+		return JoinOnOneLine(cause, failure("closing", "", closeErr, file.Name()))
 	}
 
 	return cause
@@ -150,7 +151,7 @@ func Stat(path string) (os.FileInfo, error) {
 	// #nosec G703 -- localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	info, err := os.Stat(abs)
 	if err != nil {
-		return nil, fmt.Errorf("stating %s: %w", path, err)
+		return nil, failure("stating", path, err, abs)
 	}
 
 	return info, nil
@@ -166,7 +167,7 @@ func Lstat(path string) (os.FileInfo, error) {
 	// #nosec G703 -- localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	info, err := os.Lstat(abs)
 	if err != nil {
-		return nil, fmt.Errorf("lstating %s: %w", path, err)
+		return nil, failure("lstating", path, err, abs)
 	}
 
 	return info, nil
@@ -206,7 +207,7 @@ func MkdirAll(path string, perm os.FileMode) error {
 	}
 
 	if err := os.MkdirAll(abs, perm); err != nil {
-		return fmt.Errorf("creating directory %s: %w", path, err)
+		return failure("creating directory", path, err, abs)
 	}
 
 	return nil
@@ -220,7 +221,7 @@ func Chmod(path string, perm os.FileMode) error {
 	}
 
 	if err := os.Chmod(abs, perm); err != nil {
-		return fmt.Errorf("setting mode on %s: %w", path, err)
+		return failure("setting mode on", path, err, abs)
 	}
 
 	return nil
@@ -234,7 +235,7 @@ func Remove(path string) error {
 	}
 
 	if err := os.Remove(abs); err != nil {
-		return fmt.Errorf("removing %s: %w", path, err)
+		return failure("removing", path, err, abs)
 	}
 
 	return nil
@@ -253,7 +254,7 @@ func Rename(src, dst string) error {
 	}
 
 	if err := os.Rename(srcPath, dstPath); err != nil {
-		return fmt.Errorf("renaming %s to %s: %w", src, dst, err)
+		return failure("renaming", src+" to "+dst, err, srcPath, dstPath)
 	}
 
 	return nil
@@ -268,7 +269,7 @@ func ReadDir(path string) ([]os.DirEntry, error) {
 
 	entries, err := os.ReadDir(abs)
 	if err != nil {
-		return nil, fmt.Errorf("reading directory %s: %w", path, err)
+		return nil, failure("reading directory", path, err, abs)
 	}
 
 	return entries, nil
@@ -311,14 +312,14 @@ func (d *DirReader) Next(n int) ([]os.DirEntry, error) {
 	case errors.Is(err, io.EOF):
 		return entries, io.EOF
 	default:
-		return entries, fmt.Errorf("reading directory %s: %w", d.path, err)
+		return entries, failure("reading directory", d.path, err, d.file.Name())
 	}
 }
 
 // Close releases the directory.
 func (d *DirReader) Close() error {
 	if err := d.file.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", d.path, err)
+		return failure("closing", d.path, err, d.file.Name())
 	}
 
 	return nil
@@ -334,7 +335,7 @@ func EvalSymlinks(path string) (string, error) {
 
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return "", fmt.Errorf("resolving symlinks for %s: %w", path, err)
+		return "", failure("resolving symlinks for", path, err, abs)
 	}
 
 	return resolved, nil
@@ -348,7 +349,7 @@ func Chtimes(path string, atime, mtime time.Time) error {
 	}
 
 	if err := os.Chtimes(abs, atime, mtime); err != nil {
-		return fmt.Errorf("setting times on %s: %w", path, err)
+		return failure("setting times on", path, err, abs)
 	}
 
 	return nil
@@ -366,18 +367,18 @@ func SyncDir(path string) error {
 	//nolint:gosec // localpath is the explicit arbitrary-path boundary after clean+Abs validation.
 	dir, err := os.Open(abs)
 	if err != nil {
-		return fmt.Errorf("opening directory %s for sync: %w", path, err)
+		return failure("opening directory", path, err, abs)
 	}
 
 	syncErr := dir.Sync()
 	closeErr := dir.Close()
 
 	if syncErr != nil {
-		return fmt.Errorf("syncing directory %s: %w", path, syncErr)
+		return failure("syncing directory", path, syncErr, abs)
 	}
 
 	if closeErr != nil {
-		return fmt.Errorf("closing directory %s: %w", path, closeErr)
+		return failure("closing directory", path, closeErr, abs)
 	}
 
 	return nil
@@ -393,7 +394,7 @@ func CreateTemp(dir, pattern string) (*os.File, error) {
 
 	file, err := os.CreateTemp(abs, pattern)
 	if err != nil {
-		return nil, fmt.Errorf("creating temp file in %s: %w", dir, err)
+		return nil, failure("creating temp file in", dir, err, osErrorPath(err))
 	}
 
 	return file, nil
@@ -409,7 +410,7 @@ func MkdirTemp(dir, pattern string) (string, error) {
 
 	tempDir, err := os.MkdirTemp(abs, pattern)
 	if err != nil {
-		return "", fmt.Errorf("creating temp directory in %s: %w", dir, err)
+		return "", failure("creating temp directory in", dir, err, osErrorPath(err))
 	}
 
 	return tempDir, nil
@@ -424,7 +425,7 @@ func RemoveAll(path string) error {
 	}
 
 	if err := os.RemoveAll(abs); err != nil {
-		return fmt.Errorf("removing tree %s: %w", path, err)
+		return failure("removing tree", path, err, abs)
 	}
 
 	return nil
@@ -440,7 +441,7 @@ func WriteDisposableFile(path string, data []byte, perm os.FileMode) error {
 	}
 
 	if err := os.WriteFile(abs, data, perm); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
+		return failure("writing", path, err, abs)
 	}
 
 	return nil
@@ -505,12 +506,12 @@ func atomicWrite(
 
 	targetDir := filepath.Dir(abs)
 	if mkErr := os.MkdirAll(targetDir, dirPerm); mkErr != nil {
-		return fmt.Errorf("creating target directory %s: %w", targetDir, mkErr)
+		return failure("creating target directory", targetDir, mkErr, targetDir)
 	}
 
 	temp, err := os.CreateTemp(targetDir, pattern)
 	if err != nil {
-		return fmt.Errorf("creating temp file in %s: %w", targetDir, err)
+		return failure("creating temp file in", targetDir, err, osErrorPath(err))
 	}
 
 	tempPath := temp.Name()
@@ -519,7 +520,7 @@ func atomicWrite(
 			return
 		}
 		if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			err = JoinOnOneLine(err, fmt.Errorf("removing temp file %s: %w", tempPath, removeErr))
+			err = JoinOnOneLine(err, failure("removing temp file", tempPath, removeErr, tempPath))
 		}
 	}()
 
@@ -541,7 +542,7 @@ func atomicWrite(
 
 	// #nosec G703 -- tempPath is created in targetDir and abs is normalized by absolutePath.
 	if renameErr := os.Rename(tempPath, abs); renameErr != nil {
-		return fmt.Errorf("renaming temp file into %s: %w", path, renameErr)
+		return failure("renaming temp file into", path, renameErr, tempPath, abs)
 	}
 
 	// The rename has happened, so the new contents are visible; this makes

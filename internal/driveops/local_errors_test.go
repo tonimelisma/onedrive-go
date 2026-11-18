@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -14,7 +15,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
+
+// A failure localpath returns is classified as the os error it holds: the
+// failure prints the path once, and the errno beneath it still decides.
+//
+// Validates: R-2.10.62, R-6.6.26
+func TestClassifyLocalError_ReadsALocalpathFailureAsItsOSError(t *testing.T) {
+	t.Parallel()
+
+	tooLong := filepath.Join(t.TempDir(), strings.Repeat("n", maxNameBytes+1))
+	_, err := localpath.Open(tooLong)
+
+	require.ErrorIs(t, err, syscall.ENAMETOOLONG)
+	assert.Equal(t, LocalErrorNameTooLong, ClassifyLocalError(fmt.Errorf("hashing: %w", err)))
+	assert.Equal(t, 1, strings.Count(err.Error(), tooLong), err.Error())
+}
+
+// maxNameBytes is the longest name a Linux or macOS filesystem stores.
+const maxNameBytes = 255
 
 // Validates: R-2.10.60, R-2.10.61, R-2.10.62, R-2.11.8
 func TestClassifyLocalError_Table(t *testing.T) {

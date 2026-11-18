@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
 func newGetCmd() *cobra.Command {
@@ -80,12 +81,16 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return downloadOneFile(ctx, cc, tm, session.DriveID, item.ID, item, localPath)
+	return downloadOneFile(ctx, cc, tm, session.DriveID, item.ID, item, remotePath, localPath)
 }
 
 // downloadOneFile downloads one file to localPath and reports it, naming a
 // partial file the failure kept so the user can resume. itemID addresses the
 // file on driveID; item carries the metadata the download verifies against.
+// A failure names the file by subject, the remote path or selector the user
+// typed, as a put names its remote path: the download's own errors name no
+// local path but the one a failed filesystem call was given. A selector has
+// no parent folder a list could show.
 func downloadOneFile(
 	ctx context.Context,
 	cc *CLIContext,
@@ -93,7 +98,7 @@ func downloadOneFile(
 	driveID driveid.ID,
 	itemID string,
 	item *graph.Item,
-	localPath string,
+	subject, localPath string,
 ) error {
 	opts := driveops.DownloadOptsForItem(item)
 
@@ -105,7 +110,7 @@ func downloadOneFile(
 			cc.Statusf("Re-run the same command to resume.\n")
 		}
 
-		return fmt.Errorf("download file: %w", err)
+		return &remoteOpError{action: "downloading", path: subject, err: err, noParent: strings.HasPrefix(subject, sharedref.Prefix)}
 	}
 
 	cc.Logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)

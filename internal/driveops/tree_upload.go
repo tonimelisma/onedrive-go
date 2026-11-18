@@ -165,7 +165,7 @@ func (w *uploadWalk) subfolder(ctx context.Context, parentID, name, relPath, loc
 		w.pool.reportUnfinished(ctx, relPath, localPath)
 		return false
 	case err != nil:
-		w.pool.reportWalked(TreeFolderFailed, relPath, localPath, fmt.Errorf("%s: %w", localPath, err))
+		w.pool.reportWalked(TreeFolderFailed, relPath, localPath, fmt.Errorf("creating the remote folder: %w", err))
 		return true
 	}
 

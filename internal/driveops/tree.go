@@ -53,7 +53,10 @@ type TreeEvent struct {
 	// (TreeFileDone of a download).
 	HashVerified bool
 	// Err is why the file or folder failed (TreeFileFailed,
-	// TreeFolderFailed). Its text names the path, so it reads on its own.
+	// TreeFolderFailed). The event names the item, by RelPath and LocalPath;
+	// Err names no local path of its own, and a filesystem failure in it
+	// names the path the call was given (localpath), which a line that starts
+	// with the item's path prints through localpath.WithoutPath.
 	Err error
 }
 
@@ -104,7 +107,7 @@ type treeJob struct {
 // starts the pool owns its goroutines; finish waits for every one of them.
 type treePool struct {
 	logger *slog.Logger
-	// verb completes "Internal error while <verb> <path>" for a recovered
+	// verb completes "Internal error while <verb> a file" for a recovered
 	// panic, and noun names the run in the error of a canceled one.
 	verb, noun string
 	onEvent    func(TreeEvent)
@@ -196,7 +199,7 @@ func (p *treePool) reportWalked(kind TreeEventKind, relPath, localPath string, e
 // in it, and the folders below it, that the walk had not reached.
 func (p *treePool) reportUnfinished(ctx context.Context, relPath, localPath string) {
 	p.reportWalked(TreeFolderFailed, relPath, localPath,
-		fmt.Errorf("%s: stopped before the folder was finished: %w", localPath, ctx.Err()))
+		fmt.Errorf("stopped before the folder was finished: %w", ctx.Err()))
 }
 
 func (p *treePool) work(ctx context.Context) {
@@ -215,7 +218,8 @@ func (p *treePool) run(ctx context.Context, job treeJob) (event TreeEvent) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			event = failedFile(job.file, panicguard.Recovered(p.logger, "while "+p.verb+" "+job.file.LocalPath, r))
+			event = failedFile(job.file,
+				panicguard.Recovered(p.logger, "while "+p.verb+" a file", r, slog.String("path", job.file.LocalPath)))
 		}
 	}()
 
@@ -228,10 +232,10 @@ func (p *treePool) run(ctx context.Context, job treeJob) (event TreeEvent) {
 	return event
 }
 
-// failedFile is the failure of file, with err after its path.
+// failedFile is the failure of file with err, which the event's path names.
 func failedFile(file TreeEvent, err error) TreeEvent {
 	file.Kind = TreeFileFailed
-	file.Err = fmt.Errorf("%s: %w", file.LocalPath, err)
+	file.Err = err
 
 	return file
 }

@@ -51,11 +51,7 @@ type localTarget struct{}
 func LocalTarget() TargetFS { return localTarget{} }
 
 func (localTarget) PrepareParent(dir string) error {
-	if err := localpath.MkdirAll(dir, localpath.UserTreeDirPerm); err != nil {
-		return fmt.Errorf("creating parent dir %s: %w", dir, err)
-	}
-
-	return nil
+	return localpath.MkdirAll(dir, localpath.UserTreeDirPerm) //nolint:wrapcheck // localpath already names the path
 }
 
 func (localTarget) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
@@ -188,16 +184,18 @@ func (tm *TransferManager) downloadedFileMode(target TargetFS, targetName string
 }
 
 // hashTargetFile hashes a file through the target, for a resumed partial.
+// The target names the file in a failure to open it, and a read's os error
+// the file it read.
 func hashTargetFile(target TargetFS, name string) (string, error) {
 	f, err := target.Open(name)
 	if err != nil {
-		return "", fmt.Errorf("opening %s for hashing: %w", name, err)
+		return "", err //nolint:wrapcheck // the target names the open and the path
 	}
 	defer f.Close() //nolint:errcheck // read-only; nothing buffered to flush
 
 	h := quickxorhash.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("hashing %s: %w", name, err)
+		return "", fmt.Errorf("reading: %w", err)
 	}
 
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
