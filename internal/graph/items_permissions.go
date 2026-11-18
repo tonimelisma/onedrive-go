@@ -252,7 +252,7 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 		slog.String("item_id", itemID),
 	)
 
-	apiPath := fmt.Sprintf("/drives/%s/items/%s/permissions", driveID, itemID)
+	apiPath := itemRoute(driveID, itemID, "/permissions")
 
 	var permissions []Permission
 
@@ -329,7 +329,7 @@ func (c *Client) RestoreItem(
 		slog.String("item_id", itemID),
 	)
 
-	apiPath := fmt.Sprintf("/drives/%s/items/%s/restore", driveID, itemID)
+	apiPath := itemRoute(driveID, itemID, "/restore")
 
 	// Restore takes optional JSON options; it is sent with none, and declares
 	// JSON as it always has: the request has never been sent without the

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -112,16 +113,125 @@ func (c *Client) GetItem(ctx context.Context, driveID driveid.ID, itemID string)
 		slog.String("item_id", itemID),
 	)
 
-	return c.fetchItem(ctx, fmt.Sprintf("/drives/%s/items/%s", driveID, itemID))
+	return c.fetchItem(ctx, itemRoute(driveID, itemID, ""))
 }
 
-// GetItemByPath retrieves a drive item by its path relative to the drive root.
-// The path must NOT have a leading slash and must not be empty — these are caller
-// bugs that produce malformed API URLs. Returns ErrInvalidPath for both cases.
-// For root, callers should use GetItem with itemID "root" instead.
+// GetItemByPath retrieves the item at remotePath, relative to the drive root.
+// Graph's path query can answer an item from another path, so the answer is
+// placed before it is returned (readPlacedAtPath): by its own parent path, or,
+// when it carries none, by its name and the folder it sits in. An answer the
+// answers put elsewhere is ErrNotFound. Answers that do not show whether the
+// item is at the path are ErrPathAnswersDisagree, which is not ErrNotFound.
+// A read costs one request for each chunk of the path when its answer carries
+// its parent path, and at most twice that when it does not, at any depth: a
+// path is one chunk unless its escaped form is longer than
+// maxPathAddressedLength. The path must NOT have a leading slash and must not
+// be empty — these are caller bugs that produce malformed API URLs. Returns
+// ErrInvalidPath for both cases. A path holding a name the route cannot carry
+// is ErrNameNotPathAddressable, before any request. For root, callers should
+// use GetItem with itemID "root" instead.
 func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*Item, error) {
-	if err := validateRemotePath(remotePath); err != nil {
+	answer, err := c.readPlacedAtPath(ctx, driveID, remotePath)
+	if err != nil {
 		return nil, err
+	}
+	if !answer.place.atPath() {
+		return nil, fmt.Errorf("graph: requested path %q resolved to %s: %w", remotePath, answer.elsewhere, ErrNotFound)
+	}
+
+	return answer.item, nil
+}
+
+// ErrPathAnswersDisagree reports a read or a listing by path whose answers do
+// not agree on the folder at a path: the item sits in one folder, or the
+// listing lists one, and the read of that folder's path finds nothing, or
+// answers another folder that is held there by its name alone or is itself
+// at another place. Such answers do not show whether the item, or the listed
+// folder, is at the path. It is not ErrNotFound: a caller that takes
+// ErrNotFound as leave to look elsewhere, or to create, would act on one of
+// the answers. Answers like these can settle as OneDrive converges after a
+// change, so a wait for a path to become visible reads it again.
+var ErrPathAnswersDisagree = errors.New("graph: answers for one path disagree")
+
+// answerPlace is where the answers for a path put the item a read of the path
+// answered.
+type answerPlace int
+
+const (
+	// placedByItsPath: the answer's own parent path and name are the path.
+	placedByItsPath answerPlace = iota + 1
+	// placedInTheRoot: a top-level name, sitting in the drive root, which is
+	// read by its ID.
+	placedInTheRoot
+	// placedByItsName: the answer carries no parent path and its name is the
+	// path's last name; which folder holds it is still open.
+	placedByItsName
+	// placedInItsFolder: placedByItsName, and it sits in the folder the read of
+	// the parent's path answered, which that folder's own parent path holds
+	// there.
+	placedInItsFolder
+	// placedByFolderName: placedByItsName, and it sits in the folder the read
+	// of the parent's path answered, which carries no parent path and is held
+	// there by its name alone.
+	placedByFolderName
+	// placedElsewhere: the answers put it outside the path.
+	placedElsewhere
+)
+
+// atPath reports whether the answers put the item at the path.
+func (p answerPlace) atPath() bool {
+	return p.settled() || p == placedByFolderName
+}
+
+// settled reports whether the answers' own parent paths and IDs put the item
+// at the path, with no read by path whose answer is held by a name alone
+// behind it.
+func (p answerPlace) settled() bool {
+	return p == placedByItsPath || p == placedInTheRoot || p == placedInItsFolder
+}
+
+// pathAnswer is a read by path's answer and where the answers put it.
+type pathAnswer struct {
+	item  *Item
+	place answerPlace
+	// elsewhere says where the answers put the item, for placedElsewhere.
+	elsewhere string
+}
+
+// answeredElsewhere is item placedElsewhere, where says where.
+func answeredElsewhere(item *Item, where string) pathAnswer {
+	return pathAnswer{item: item, place: placedElsewhere, elsewhere: where}
+}
+
+// readPlacedAtPath reads remotePath and places its answer: by the answer
+// alone when it can (readItemAtPath), otherwise by the folder that holds the
+// path (placeByParent).
+func (c *Client) readPlacedAtPath(ctx context.Context, driveID driveid.ID, remotePath string) (pathAnswer, error) {
+	answer, err := c.readItemAtPath(ctx, driveID, remotePath)
+	if err != nil || answer.place != placedByItsName {
+		return answer, err
+	}
+
+	c.logger.Debug("path lookup missing exact parent path, placing the answer by its parent's ID",
+		slog.String("requested_path", remotePath),
+		slog.String("resolved_leaf", answer.item.Name),
+	)
+
+	return c.placeByParent(ctx, driveID, remotePath, answer.item)
+}
+
+// readItemAtPath reads the item at remotePath, one request for each chunk of
+// the path, and places the answer as far as the answer itself allows. When it
+// carries its parent path, that path plus its name is the asked one
+// (namekey.EqualPath, placedByItsPath) or another place (placedElsewhere).
+// When it does not, its name is the asked leaf (placedByItsName: which folder
+// holds it is still open) or another name (placedElsewhere).
+func (c *Client) readItemAtPath(ctx context.Context, driveID driveid.ID, remotePath string) (pathAnswer, error) {
+	if err := validateRemotePath(remotePath); err != nil {
+		return pathAnswer{}, err
+	}
+	if err := refuseUnaddressableNames(remotePath); err != nil {
+		return pathAnswer{}, err
 	}
 
 	c.logger.Debug("getting item by path",
@@ -131,27 +241,105 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 
 	item, err := c.fetchItemByPathChunks(ctx, driveID, remotePath)
 	if err != nil {
-		return nil, err
+		return pathAnswer{}, err
 	}
 
 	if exactPath, ok := itemExactRootRelativePath(item); ok {
 		if namekey.EqualPath(exactPath, remotePath) {
-			return item, nil
+			return pathAnswer{item: item, place: placedByItsPath}, nil
 		}
 
-		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, exactPath, ErrNotFound)
+		return answeredElsewhere(item, strconv.Quote(exactPath)), nil
 	}
-
-	c.logger.Debug("path lookup missing exact parent path, using leaf fallback",
-		slog.String("requested_path", remotePath),
-		slog.String("resolved_leaf", item.Name),
-	)
 
 	if !namekey.Equal(item.Name, pathLeaf(remotePath)) {
-		return nil, fmt.Errorf("graph: requested path %q resolved to %q: %w", remotePath, itemBestEffortRootRelativePath(item), ErrNotFound)
+		return answeredElsewhere(item, strconv.Quote(itemBestEffortRootRelativePath(item))), nil
 	}
 
-	return item, nil
+	return pathAnswer{item: item, place: placedByItsName}, nil
+}
+
+// placeByParent places item, the answer for remotePath that carries no parent
+// path and has the path's last name, by the folder that holds remotePath,
+// with one more read.
+//
+// For a top-level name that folder is the drive root, read by its alias (an
+// answer names its parent by the root's own ID, never by the alias): item is
+// placedInTheRoot when it sits there, and placedElsewhere when it does not.
+//
+// Below the root the folder is read once by its own path (readItemAtPath) and
+// not placed by its own parent in turn: that would cost a request for each
+// folder above it, on every read of a drive whose answers carry no parent
+// path. item is placedElsewhere when the answers put it outside the path:
+// the folder it sits in is answered at another place, or another folder is
+// answered at the parent's path by its own parent path. It sits in the folder
+// answered at the parent's path, held there by that folder's parent path
+// (placedInItsFolder) or, lacking one, its name (placedByFolderName). Any other
+// answers do not show whether item is at the path: the read of the parent's
+// path finds nothing, answers a folder of the parent's name that is not
+// item's, or answers another folder that is itself at another place. That is
+// ErrPathAnswersDisagree. When the folder's answer carries no parent path,
+// item is held by that folder's name alone, so where every answer agrees on a
+// folder of the right name in the wrong place two or more levels up (the path
+// route resolving the path into another folder's subtree), item is that
+// folder's item, and nothing here catches it.
+func (c *Client) placeByParent(ctx context.Context, driveID driveid.ID, remotePath string, item *Item) (pathAnswer, error) {
+	cut := strings.LastIndex(remotePath, "/")
+	if cut < 0 {
+		root, err := c.GetItem(ctx, driveID, driveRootAlias)
+		switch {
+		case err != nil:
+			return pathAnswer{}, fmt.Errorf("graph: reading the drive root that holds %q: %w", remotePath, err)
+		case root.ID == "":
+			return pathAnswer{}, fmt.Errorf("graph: the drive root that holds %q answered without an item ID", remotePath)
+		case !itemSitsIn(item, driveID, root.ID):
+			return answeredElsewhere(item, fmt.Sprintf("%q in folder %s, not in the drive root %s", item.Name, item.ParentID, root.ID)), nil
+		}
+
+		return pathAnswer{item: item, place: placedInTheRoot}, nil
+	}
+
+	if item.ParentID == "" {
+		return pathAnswer{}, fmt.Errorf("graph: the read of %q answered %q without its folder", remotePath, item.Name)
+	}
+
+	folderPath := remotePath[:cut]
+	folder, err := c.readItemAtPath(ctx, driveID, folderPath)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return pathAnswer{}, fmt.Errorf("graph: %q was read in folder %s, and the read of %q found nothing there (%s): %w",
+			remotePath, item.ParentID, folderPath, err.Error(), ErrPathAnswersDisagree)
+	case err != nil:
+		return pathAnswer{}, fmt.Errorf("graph: reading the folder of %q: %w", remotePath, err)
+	case folder.item.ID == "":
+		return pathAnswer{}, fmt.Errorf("graph: the folder of %q answered without an item ID", remotePath)
+	}
+
+	return placedByFolderAnswer(driveID, remotePath, folderPath, item, folder)
+}
+
+// placedByFolderAnswer is item, the answer for remotePath without a parent
+// path, placed by folder, the answer of the read at folderPath, the path's
+// parent (placeByParent).
+func placedByFolderAnswer(driveID driveid.ID, remotePath, folderPath string, item *Item, folder pathAnswer) (pathAnswer, error) {
+	inFolder := itemSitsIn(item, driveID, folder.item.ID)
+	switch {
+	case inFolder && folder.place == placedElsewhere:
+		return answeredElsewhere(item, fmt.Sprintf("%q in folder %s, which is at %s", item.Name, item.ParentID, folder.elsewhere)), nil
+	case inFolder && folder.place == placedByItsPath:
+		return pathAnswer{item: item, place: placedInItsFolder}, nil
+	case inFolder:
+		return pathAnswer{item: item, place: placedByFolderName}, nil
+	case folder.place == placedByItsPath:
+		return answeredElsewhere(item,
+			fmt.Sprintf("%q in folder %s, while folder %s is at %q", item.Name, item.ParentID, folder.item.ID, folderPath)), nil
+	case folder.place == placedElsewhere:
+		return pathAnswer{}, fmt.Errorf("graph: %q was read in folder %s, and the read of %q answered folder %s, which is at %s: %w",
+			remotePath, item.ParentID, folderPath, folder.item.ID, folder.elsewhere, ErrPathAnswersDisagree)
+	default:
+		return pathAnswer{}, fmt.Errorf("graph: %q was read in folder %s, and the read of %q answered folder %s: %w",
+			remotePath, item.ParentID, folderPath, folder.item.ID, ErrPathAnswersDisagree)
+	}
 }
 
 // driveRootAlias is the item ID Graph takes for a drive's root folder. It
@@ -159,11 +347,24 @@ func (c *Client) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePa
 const driveRootAlias = "root"
 
 // ErrNameNotPathAddressable reports a name a path-addressed request cannot
-// carry: one whose escaped form is longer than maxPathAddressedLength, or one
-// holding ':', which ends the path in a path route and which url.PathEscape
-// leaves as it is. A caller that must still find such a name lists its
+// carry: one holding ':', which ends the path in a path route and which
+// url.PathEscape leaves as it is (measured on a Personal drive: Graph answers
+// 400 "Resource not found for the segment" for the path cut at the colon), or,
+// for a read of one name, one whose escaped form is longer than
+// maxPathAddressedLength. A caller that must still find such a name lists its
 // folder.
 var ErrNameNotPathAddressable = errors.New("graph: name cannot be carried in a path-addressed request")
+
+// refuseUnaddressableNames is ErrNameNotPathAddressable for a path, or one
+// name, holding ':' in any of its names, and nil otherwise. Every read by
+// path or by name calls it before its first request.
+func refuseUnaddressableNames(remotePath string) error {
+	if strings.Contains(remotePath, ":") {
+		return fmt.Errorf("graph: reading %q: %w", remotePath, ErrNameNotPathAddressable)
+	}
+
+	return nil
+}
 
 // GetChildByName reads the item OneDrive holds under name directly in the
 // folder parentID, with one request (items/{parentID}:/{name}:) instead of a
@@ -178,8 +379,11 @@ func (c *Client) GetChildByName(ctx context.Context, driveID driveid.ID, parentI
 	if name == "" {
 		return nil, ErrInvalidPath
 	}
+	if err := refuseUnaddressableNames(name); err != nil {
+		return nil, err
+	}
 	encoded := url.PathEscape(name)
-	if len(encoded) > maxPathAddressedLength || strings.Contains(name, ":") {
+	if len(encoded) > maxPathAddressedLength {
 		return nil, fmt.Errorf("graph: reading %q: %w", name, ErrNameNotPathAddressable)
 	}
 
@@ -218,7 +422,13 @@ func itemSitsIn(item *Item, driveID driveid.ID, parentID string) bool {
 // childPathRoute is the route of the item at encodedPath, a path of escaped
 // segments, below the item parentID.
 func childPathRoute(driveID driveid.ID, parentID, encodedPath string) string {
-	return fmt.Sprintf("/drives/%s/items/%s:/%s:", driveID, url.PathEscape(parentID), encodedPath)
+	return itemRoute(driveID, parentID, ":/"+encodedPath+":")
+}
+
+// childrenRoute is the route of the first page of the folder parentID's
+// children.
+func childrenRoute(driveID driveid.ID, parentID string) string {
+	return itemRoute(driveID, parentID, fmt.Sprintf("/children?$top=%d", listChildrenPageSize))
 }
 
 // maxPathAddressedLength bounds the encoded path one path-addressed request
@@ -279,7 +489,7 @@ func pathAddressChunks(remotePath string, limit int) []string {
 func (c *Client) ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit ChildrenPageFunc) error {
 	return c.visitChildPages(
 		ctx,
-		fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, parentID, listChildrenPageSize),
+		childrenRoute(driveID, parentID),
 		"listing children",
 		"listed children complete",
 		[]slog.Attr{
@@ -300,34 +510,165 @@ func (c *Client) ListChildren(ctx context.Context, driveID driveid.ID, parentID 
 }
 
 // ListChildrenByPathPages is ListChildrenPages for a folder identified by
-// path. The path must NOT have a leading slash and must not be empty —
-// returns ErrInvalidPath for both cases, before any request. For root,
-// callers should use ListChildrenPages with parentID "root" instead.
+// path. Its route resolves the path as a read's does, and a read by path can
+// answer an item from another path, so the children are held to the path as
+// a read is. A path too long for one request is resolved by GetItemByPath and
+// its folder listed by ID. A shorter one is listed by path, and each page is
+// held to the path before it is handed on (heldToListedPath): a page whose
+// answers place a child in another folder, or do not place it, ends the
+// listing. The path must NOT have a leading slash and must not be empty —
+// returns ErrInvalidPath for both cases, and ErrNameNotPathAddressable for a
+// name the route cannot carry, before any request. For root, callers should
+// use ListChildrenPages with parentID "root" instead.
 func (c *Client) ListChildrenByPathPages(ctx context.Context, driveID driveid.ID, remotePath string, visit ChildrenPageFunc) error {
 	if err := validateRemotePath(remotePath); err != nil {
 		return err
 	}
+	if err := refuseUnaddressableNames(remotePath); err != nil {
+		return err
+	}
 
-	route := fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodePathSegments(remotePath), listChildrenPageSize)
-	if len(encodePathSegments(remotePath)) > maxPathAddressedLength {
-		folder, err := c.fetchItemByPathChunks(ctx, driveID, remotePath)
+	logAttrs := []slog.Attr{
+		slog.String("drive_id", driveID.String()),
+		slog.String("remote_path", remotePath),
+	}
+
+	encodedPath := encodePathSegments(remotePath)
+	if len(encodedPath) > maxPathAddressedLength {
+		folder, err := c.GetItemByPath(ctx, driveID, remotePath)
 		if err != nil {
 			return err
 		}
-		route = fmt.Sprintf("/drives/%s/items/%s/children?$top=%d", driveID, folder.ID, listChildrenPageSize)
+
+		return c.visitChildPages(ctx, childrenRoute(driveID, folder.ID),
+			"listing children by path", "listed children by path complete", logAttrs, visit)
 	}
 
-	return c.visitChildPages(
-		ctx,
-		route,
-		"listing children by path",
-		"listed children by path complete",
-		[]slog.Attr{
-			slog.String("drive_id", driveID.String()),
-			slog.String("remote_path", remotePath),
-		},
-		visit,
+	listed := listedPath{driveID: driveID, path: remotePath}
+	var misplaced error
+	err := c.visitChildPages(ctx,
+		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodedPath, listChildrenPageSize),
+		"listing children by path", "listed children by path complete", logAttrs,
+		func(page []Item) bool {
+			if misplaced = c.heldToListedPath(ctx, &listed, page); misplaced != nil {
+				return false
+			}
+
+			return visit(page)
+		})
+	if err != nil {
+		return err
+	}
+
+	return misplaced
+}
+
+// listedPath is the folder a listing by path asked for, and the answer of the
+// read at that path once a child without a parent path needed it.
+type listedPath struct {
+	driveID driveid.ID
+	path    string
+	folder  *pathAnswer
+}
+
+// heldToListedPath is nil when the answers place every child of page in the
+// folder at listed.path, and the error that ends the listing otherwise.
+//
+// A child that carries its parent path must name that path
+// (namekey.EqualPath); one that names another says the route listed another
+// folder, which is ErrNotFound for the folder at the path, as a read's answer
+// from another path is.
+//
+// A child that does not carry it is held by the read of the path
+// (readPlacedAtPath, as GetItemByPath places it), which is read on the first
+// such child and only then, once for the whole listing: a listing whose
+// children carry their parent path costs no request more. The child is in the
+// folder at the path when it sits in the folder that read answered and the
+// answers put that folder at the path. The answers put it elsewhere, and the
+// listing ends with ErrNotFound, when it sits in a folder they put at another
+// place, or the folder they put at the path by its own parent path and IDs is
+// another one. Any other answers do not show whether the route listed the
+// folder at the path: the read finds nothing there, or answers another folder
+// that is held there by a name alone or is itself at another place. That is
+// ErrPathAnswersDisagree. A child that names no folder at all cannot be
+// placed, which is an error too. When neither the children nor the folder's
+// answer carry a parent path, a listing and a read that agree on a folder of
+// the right name in the wrong place two or more levels up are not caught
+// (GetItemByPath).
+func (c *Client) heldToListedPath(ctx context.Context, listed *listedPath, page []Item) error {
+	for i := range page {
+		child := &page[i]
+		if child.ParentPathKnown {
+			if namekey.EqualPath(child.ParentPath, listed.path) {
+				continue
+			}
+
+			return fmt.Errorf("graph: listing %q answered %q in %q: %w", listed.path, child.Name, child.ParentPath, ErrNotFound)
+		}
+
+		if child.ParentID == "" {
+			return fmt.Errorf("graph: listing %q answered %q without its folder", listed.path, child.Name)
+		}
+		if listed.folder == nil {
+			folder, err := c.readListedFolder(ctx, listed, child)
+			if err != nil {
+				return err
+			}
+			listed.folder = &folder
+		}
+		if err := listedChildPlaced(listed, child); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// listedChildPlaced is nil when child, a child of the listing without a parent
+// path, is in the folder at listed.path by the answer of the read there, and
+// the error that ends the listing otherwise (heldToListedPath).
+func listedChildPlaced(listed *listedPath, child *Item) error {
+	folder := listed.folder
+	inFolder := itemSitsIn(child, listed.driveID, folder.item.ID)
+	switch {
+	case inFolder && folder.place.atPath():
+		return nil
+	case inFolder:
+		return fmt.Errorf("graph: listing %q answered %q in folder %s, which is at %s: %w",
+			listed.path, child.Name, child.ParentID, folder.elsewhere, ErrNotFound)
+	case folder.place.settled():
+		return fmt.Errorf("graph: listing %q answered %q in folder %s, while folder %s is at %q: %w",
+			listed.path, child.Name, child.ParentID, folder.item.ID, listed.path, ErrNotFound)
+	case folder.place == placedElsewhere:
+		return fmt.Errorf("graph: listing %q answered %q in folder %s, and its read answered folder %s, which is at %s: %w",
+			listed.path, child.Name, child.ParentID, folder.item.ID, folder.elsewhere, ErrPathAnswersDisagree)
+	default:
+		return fmt.Errorf("graph: listing %q answered %q in folder %s, and its read answered folder %s: %w",
+			listed.path, child.Name, child.ParentID, folder.item.ID, ErrPathAnswersDisagree)
+	}
+}
+
+// readListedFolder is the answer of the read at listed.path, placed as
+// GetItemByPath places it, for child, the first child of the listing that
+// carries no parent path. A read that finds nothing there disagrees with the
+// listing, which answered child at that path.
+func (c *Client) readListedFolder(ctx context.Context, listed *listedPath, child *Item) (pathAnswer, error) {
+	c.logger.Debug("listing by path answered a child without its parent path, reading the folder at the path",
+		slog.String("remote_path", listed.path),
 	)
+
+	folder, err := c.readPlacedAtPath(ctx, listed.driveID, listed.path)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return pathAnswer{}, fmt.Errorf("graph: listing %q answered %q, and the read of the path found nothing there (%s): %w",
+			listed.path, child.Name, err.Error(), ErrPathAnswersDisagree)
+	case err != nil:
+		return pathAnswer{}, fmt.Errorf("graph: reading the folder listed at %q: %w", listed.path, err)
+	case folder.item.ID == "":
+		return pathAnswer{}, fmt.Errorf("graph: the folder listed at %q answered without an item ID", listed.path)
+	}
+
+	return folder, nil
 }
 
 // ListChildrenByPath is ListChildren for a folder identified by path, with

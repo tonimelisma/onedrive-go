@@ -44,7 +44,7 @@ func TestResolveDest_ForceReturnsExistingID(t *testing.T) {
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ResolveItem("dest.txt") → returns existing file
-		writeTestResponsef(t, w, `{"id":"existing-file-id","name":"dest.txt","parentReference":{"id":"parent-folder-id"}}`)
+		writeTestResponsef(t, w, `{"id":"existing-file-id","name":"dest.txt","parentReference":{"id":"parent-folder-id","path":"/drive/root:"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "dest.txt", "source-id", "source.txt", true)
@@ -72,7 +72,7 @@ func TestResolveDest_NoForceFileExists(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeTestResponsef(t, w, `{"id":"file-id","name":"dest.txt","parentReference":{"id":"p1"}}`)
+		writeTestResponsef(t, w, `{"id":"file-id","name":"dest.txt","parentReference":{"id":"p1","path":"/drive/root:"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "dest.txt", "source-id", "source.txt", false)
@@ -85,7 +85,7 @@ func TestResolveDest_FolderDest(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeTestResponsef(t, w, `{"id":"folder-id","name":"destdir","folder":{}}`)
+		writeTestResponsef(t, w, `{"id":"folder-id","name":"destdir","folder":{},"parentReference":{"id":"root-id","path":"/drive/root:"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "destdir", "source-id", "source.txt", false)
@@ -110,7 +110,7 @@ func TestResolveDest_NotFound(t *testing.T) {
 			return
 		}
 		// parent exists
-		writeTestResponsef(t, w, `{"id":"parent-id","name":"parentdir","folder":{}}`)
+		writeTestResponsef(t, w, `{"id":"parent-id","name":"parentdir","folder":{},"parentReference":{"id":"root-id","path":"/drive/root:"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "parentdir/newname.txt", "source-id", "source.txt", false)
@@ -126,7 +126,7 @@ func TestResolveDest_SelfReferenceDetected(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeTestResponsef(t, w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1"}}`)
+		writeTestResponsef(t, w, `{"id":"item-1","name":"file.txt","parentReference":{"id":"parent-1","path":"/drive/root:"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "file.txt", "source-id", "file.txt", true)
@@ -258,7 +258,7 @@ func TestResolveDest_DestinationIsTheSourceRenamesInPlace(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeTestResponsef(t, w, `{"id":"item-1","name":"Report.txt","parentReference":{"id":"parent-1"}}`)
+		writeTestResponsef(t, w, `{"id":"item-1","name":"Report.txt","parentReference":{"id":"parent-1","path":"/drive/root:/Docs"}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "Docs/report.txt", "item-1", "Report.txt", false)
@@ -279,7 +279,7 @@ func TestResolveDest_FolderDestinationIsTheSourceRenamesInPlace(t *testing.T) {
 	t.Parallel()
 
 	session := makeTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeTestResponsef(t, w, `{"id":"dir-1","name":"Docs","parentReference":{"id":"root"},"folder":{}}`)
+		writeTestResponsef(t, w, `{"id":"dir-1","name":"Docs","parentReference":{"id":"root","path":"/drive/root:"},"folder":{}}`)
 	}))
 
 	dest, err := resolveDest(t.Context(), session, "docs", "dir-1", "Docs", false)

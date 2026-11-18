@@ -23,6 +23,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
@@ -95,6 +96,36 @@ func (m *tmMockUploader) ListChildren(ctx context.Context, driveID driveid.ID, p
 	}
 
 	return nil, fmt.Errorf("ListChildren not mocked")
+}
+
+// GetChildByName answers a read of one name from the folder listChildrenFn
+// holds, as Graph answers it: the child of that name under OneDrive's name
+// equivalence, or graph.ErrNotFound.
+func (m *tmMockUploader) GetChildByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	children, err := m.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range children {
+		if namekey.Equal(children[i].Name, name) {
+			return &children[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("reading %q: %w", name, graph.ErrNotFound)
+}
+
+// ListChildrenPages hands the folder listChildrenFn holds over as one page.
+func (m *tmMockUploader) ListChildrenPages(
+	ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc,
+) error {
+	children, err := m.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return err
+	}
+	visit(children)
+
+	return nil
 }
 
 func (m *tmMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
@@ -1189,7 +1220,7 @@ func TestTransferManager_Upload_CompletionWithoutItemIsLookedUp(t *testing.T) {
 		listChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
 			assert.Equal(t, "parent1", parentID)
 			return []graph.Item{
-				{ID: "folder", Name: "nil-item.txt", IsFolder: true},
+				{ID: "folder", Name: "other", IsFolder: true},
 				{ID: "found", Name: "nil-item.txt", Size: int64(len(data)), QuickXorHash: tmHashBytes(data)},
 			}, nil
 		},

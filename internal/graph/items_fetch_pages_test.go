@@ -20,9 +20,11 @@ import (
 // on each.
 const pagedFolderPages = 3
 
-// pagedChildJSON is one child of a pagedFolder, its ID and name the same.
+// pagedChildJSON is one child of a pagedFolder, its ID and name the same, in
+// the folder p at the path Documents.
 const pagedChildJSON = `{"id":%[1]q,"name":%[1]q,"createdDateTime":"2024-01-01T00:00:00Z",` +
-	`"lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"},"file":{"mimeType":"text/plain"}}`
+	`"lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d","path":"/drives/d/root:/Documents"},` +
+	`"file":{"mimeType":"text/plain"}}`
 
 // pagedFolder is a Graph server for one folder of pagedFolderPages pages. It
 // logs, in one order, every page asked for ("ask N") and every page handed to

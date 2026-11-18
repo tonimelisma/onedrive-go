@@ -32,7 +32,7 @@ func (c *Client) CreateUploadSessionForItem(
 		slog.Int64("size", size),
 	)
 
-	path := fmt.Sprintf("/drives/%s/items/%s/createUploadSession", driveID, itemID)
+	path := itemRoute(driveID, itemID, "/createUploadSession")
 
 	item := uploadSessionItem{ConflictBehavior: "replace", FileSystemInfo: c.newFileSystemInfo(mtime)}
 

@@ -53,6 +53,15 @@ func encodePathSegments(path string) string {
 	return strings.Join(segments, "/")
 }
 
+// itemRoute is the route of the item itemID of driveID, followed by rest: an
+// action ("/children", "/content"), a path below the item, or nothing. The
+// item ID goes in escaped as one path segment, as a name does: a Personal item
+// ID holds "!", and every route that names an item by its ID builds it here.
+// The drive ID goes in as it is.
+func itemRoute(driveID driveid.ID, itemID, rest string) string {
+	return "/drives/" + driveID.String() + "/items/" + url.PathEscape(itemID) + rest
+}
+
 // driveItemResponse mirrors the Graph API driveItem JSON exactly.
 // Unexported — callers use Item via toItem() normalization.
 type driveItemResponse struct {
