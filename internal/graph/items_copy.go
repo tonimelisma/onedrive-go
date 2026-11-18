@@ -42,7 +42,7 @@ func (c *Client) CopyItem(
 		slog.String("new_name", newName),
 	)
 
-	apiPath := fmt.Sprintf("/drives/%s/items/%s/copy", driveID, itemID)
+	apiPath := itemRoute(driveID, itemID, "/copy")
 
 	req := copyItemRequest{
 		ParentReference: &moveParentRef{ID: destParentID},

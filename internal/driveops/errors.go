@@ -23,24 +23,36 @@ var ErrFileExceedsOneDriveLimit = errors.New("larger than OneDrive's 250 GB maxi
 // no scope escalation — smaller files may still fit (R-2.10.44).
 var ErrFileTooLargeForSpace = errors.New("not enough disk space for this file")
 
-// ErrPathNotVisible is returned when Graph acknowledged a metadata-changing
-// mutation, but the destination path still is not readable after the bounded
-// post-success visibility wait. Callers surface this as a concrete degraded
-// mutation result instead of pretending the path settled immediately.
+// ErrPathNotVisible is returned when a path is still not readable after the
+// bounded visibility wait (MountSession.WaitPathVisible): after a mutation
+// Graph acknowledged, or before one, as put's wait for the folder it uploads
+// into. Callers surface this as a concrete degraded result instead of
+// pretending the path settled immediately.
 var ErrPathNotVisible = errors.New("remote path not yet visible")
 
 // PathNotVisibleError records which remote path exhausted the bounded
-// visibility budget while Graph still returned exact itemNotFound responses.
-// Callers can branch on this typed error for user-facing degraded-success
-// handling without weakening other visibility failures.
+// visibility budget while the path was still not found, or its answers still
+// disagreed (graph.ErrPathAnswersDisagree). Cause is that disagreement, and
+// nil for a path not found. Callers can branch on this typed error for
+// user-facing degraded-success handling without weakening other visibility
+// failures; it wraps both ErrPathNotVisible and Cause.
 type PathNotVisibleError struct {
-	Path string
+	Path  string
+	Cause error
 }
 
 func (e *PathNotVisibleError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %q: %v", ErrPathNotVisible, e.Path, e.Cause)
+	}
+
 	return fmt.Sprintf("%s: %q", ErrPathNotVisible, e.Path)
 }
 
-func (e *PathNotVisibleError) Unwrap() error {
-	return ErrPathNotVisible
+func (e *PathNotVisibleError) Unwrap() []error {
+	if e.Cause != nil {
+		return []error{ErrPathNotVisible, e.Cause}
+	}
+
+	return []error{ErrPathNotVisible}
 }

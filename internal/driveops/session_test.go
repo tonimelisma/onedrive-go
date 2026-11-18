@@ -44,6 +44,10 @@ const (
 	testNestedExactParent   = "/drives/abcdef0123456789/root:/Projects/Docs:"
 	testNestedAncestorPath  = "/drives/abcdef0123456789/root:/Projects:/children"
 	testNestedParentByID    = "/drives/abcdef0123456789/items/docs-id/children"
+
+	// testDeleteParentListing is the listing of Documents holding file.txt.
+	testDeleteParentListing = `{"value":[{"id":"retry-id","name":"file.txt",` +
+		`"parentReference":{"id":"documents-id","path":"/drive/root:/Documents"}}]}`
 )
 
 func newSimpleLaggedPathSession(t *testing.T) (*MountSession, *[]string) {
@@ -57,7 +61,7 @@ func newSimpleLaggedPathSession(t *testing.T) (*MountSession, *[]string) {
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging path route"}}`)
 		case testDeleteParentPath:
-			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
+			writeTestResponsef(t, w, testDeleteParentListing)
 		default:
 			http.Error(w, "unexpected request", http.StatusInternalServerError)
 		}
@@ -83,7 +87,8 @@ func newRecursiveLaggedPathSession(t *testing.T) (*MountSession, *[]string) {
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"lagging parent exact path"}}`)
 		case testNestedAncestorPath:
-			writeTestResponsef(t, w, `{"value":[{"id":"docs-id","name":"Docs","folder":{"childCount":1}}]}`)
+			writeTestResponsef(t, w, `{"value":[{"id":"docs-id","name":"Docs","folder":{"childCount":1},`+
+				`"parentReference":{"id":"projects-id","path":"/drive/root:/Projects"}}]}`)
 		case testNestedParentByID:
 			writeTestResponsef(t, w, `{"value":[{"id":"file-id","name":"file.txt"}]}`)
 		default:
@@ -107,6 +112,7 @@ func TestCleanRemotePath(t *testing.T) {
 		{"empty string", "", ""},
 		{"no slashes", "foo", "foo"},
 		{"double slashes", "//double//", "double"},
+		{"empty names inside", "/a//b///c/", "a/b/c"},
 	}
 
 	for _, tt := range tests {
@@ -624,7 +630,7 @@ func TestMountSession_ResolveItem_Path(t *testing.T) {
 
 	s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		writeTestResponsef(t, w, `{"id":"doc-id","name":"file.txt"}`)
+		writeTestResponsef(t, w, `{"id":"doc-id","name":"file.txt","parentReference":{"id":"docs-id","path":"/drive/root:/Documents"}}`)
 	}))
 
 	item, err := s.ResolveItem(t.Context(), "Documents/file.txt")
@@ -646,7 +652,7 @@ func TestMountSession_WaitPathVisible_TransientNotFoundThenSuccess(t *testing.T)
 			return
 		}
 
-		writeTestResponsef(t, w, `{"id":"doc-id","name":"file.txt"}`)
+		writeTestResponsef(t, w, `{"id":"doc-id","name":"file.txt","parentReference":{"id":"docs-id","path":"/drive/root:/Documents"}}`)
 	}))
 	s.visibilityWaitSchedule = []time.Duration{0, 0}
 
@@ -751,36 +757,6 @@ func TestMountSession_ResolveItem_SlashRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "root-id", item.ID)
 	assert.Equal(t, "/drives/abcdef0123456789/items/root", gotPath)
-}
-
-func TestMountSession_ResolveItem_MountRootRelativePath(t *testing.T) {
-	t.Parallel()
-
-	const mountedRemoteRootItemID = "mount-root-item"
-
-	var gotPaths []string
-
-	s := newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPaths = append(gotPaths, r.URL.Path)
-		switch r.URL.Path {
-		case "/drives/abcdef0123456789/items/" + mountedRemoteRootItemID + "/children":
-			writeTestResponsef(t, w, `{"value":[{"id":"folder-id","name":"Documents","folder":{"childCount":1}}]}`)
-		case "/drives/abcdef0123456789/items/folder-id/children":
-			writeTestResponsef(t, w, `{"value":[{"id":"file-id","name":"report.docx"}]}`)
-		default:
-			assert.Failf(t, "unexpected path", "%s", r.URL.Path)
-			http.Error(w, "unexpected path", http.StatusNotFound)
-		}
-	}))
-	mountSession := NewMountSession(s, mountedRemoteRootItemID)
-
-	item, err := mountSession.ResolveItem(t.Context(), "Documents/report.docx")
-	require.NoError(t, err)
-	assert.Equal(t, "file-id", item.ID)
-	assert.Equal(t, []string{
-		"/drives/abcdef0123456789/items/" + mountedRemoteRootItemID + "/children",
-		"/drives/abcdef0123456789/items/folder-id/children",
-	}, gotPaths)
 }
 
 // Validates: R-6.7.14
@@ -891,7 +867,8 @@ func TestMountSession_ListChildren(t *testing.T) {
 
 			s := newTestDriveRootMountSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotPath = r.URL.Path
-				writeTestResponsef(t, w, `{"value":[{"id":%q,"name":%q}]}`, tt.responseID, tt.responseName)
+				writeTestResponsef(t, w, `{"value":[{"id":%q,"name":%q,"parentReference":{"path":"/drive/root:/%s"}}]}`,
+					tt.responseID, tt.responseName, tt.path)
 			}))
 
 			items, err := s.ListChildren(t.Context(), tt.path)
@@ -937,7 +914,7 @@ func TestMountSession_DeleteResolvedPath_RetriesAfterTransientDeleteNotFound(t *
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"not ready"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteTargetPath:
-			writeTestResponsef(t, w, `{"id":"retry-id","name":"file.txt"}`)
+			writeTestResponsef(t, w, `{"id":"retry-id","name":"file.txt","parentReference":{"id":"docs-id","path":"/drive/root:/Documents"}}`)
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteRetryItemPath:
 			deleteCalls++
 			gotDeleteIDs = append(gotDeleteIDs, "retry-id")
@@ -972,7 +949,7 @@ func TestMountSession_DeleteResolvedPath_ExactPathFalseNegativeStillRetriesViaPa
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"transient false negative"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteParentPath:
-			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
+			writeTestResponsef(t, w, testDeleteParentListing)
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteRetryItemPath:
 			deleteCalls++
 			w.WriteHeader(http.StatusNoContent)
@@ -1046,7 +1023,7 @@ func TestMountSession_DeleteResolvedPath_StaleParentListingAfterExactPathMissing
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"false negative"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteParentPath:
-			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
+			writeTestResponsef(t, w, testDeleteParentListing)
 		case r.Method == http.MethodDelete && r.URL.Path == testDeleteRetryItemPath:
 			deleteCalls++
 			w.WriteHeader(http.StatusNotFound)
@@ -1084,7 +1061,7 @@ func TestMountSession_PermanentDeleteResolvedPath_UsesPermanentDeleteRoute(t *te
 			w.WriteHeader(http.StatusNotFound)
 			writeTestResponsef(t, w, `{"error":{"code":"itemNotFound","message":"transient false negative"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == testDeleteParentPath:
-			writeTestResponsef(t, w, `{"value":[{"id":"retry-id","name":"file.txt"}]}`)
+			writeTestResponsef(t, w, testDeleteParentListing)
 		case r.Method == http.MethodPost && r.URL.Path == testDeleteRetryItemPath+"/permanentDelete":
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -1154,6 +1131,7 @@ func TestSplitParentAndName(t *testing.T) {
 		{"single segment", "baz", "", "baz"},
 		{"empty string", "", "", ""},
 		{"trailing slash top-level", "/top/", "", "top"},
+		{"empty names", "a//b///c", "a/b", "c"},
 	}
 
 	for _, tt := range tests {
@@ -1413,23 +1391,39 @@ func TestEnsureFolder_ConflictNotFound(t *testing.T) {
 	}
 }
 
-// A listing that holds the name without an item ID is an error that says so:
-// nothing can be made in an item no request can name, and "not found" would
-// hide what OneDrive answered.
+// A read or a listing that holds the name without an item ID is an error
+// that says so: nothing can be made in an item no request can name, and "not
+// found" would hide what OneDrive answered.
 //
 // Validates: R-1.3.1
-func TestEnsureFolder_AListedFolderWithoutAnIDIsAnError(t *testing.T) {
+func TestEnsureFolder_AFolderWithoutAnIDIsAnError(t *testing.T) {
 	t.Parallel()
 
-	fake := &folderConflict{
-		children:   []folderConflictChild{{name: "docs", isFolder: true}},
-		readMisses: true,
-	}
+	for _, tc := range []struct {
+		label        string
+		readMisses   bool
+		want         string
+		wantListings int32
+	}{
+		{label: "read", want: `resolving existing folder "docs": the read of "docs" in its folder answered without an item ID`},
+		{
+			label: "listed", readMisses: true, wantListings: 1,
+			want: `resolving existing folder "docs": the listing of the folder holds "docs" without an item ID`,
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
-	require.EqualError(t, err,
-		`resolving existing folder "docs": the listing of the destination folder holds "docs" without an item ID`)
-	assert.Equal(t, int32(1), fake.listings.Load())
+			fake := &folderConflict{
+				children:   []folderConflictChild{{name: "docs", isFolder: true}},
+				readMisses: tc.readMisses,
+			}
+
+			_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
+			require.EqualError(t, err, tc.want)
+			assert.Equal(t, tc.wantListings, fake.listings.Load())
+		})
+	}
 }
 
 // A file that holds the folder's name is said to be a file: the folder cannot

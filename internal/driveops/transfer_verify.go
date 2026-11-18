@@ -11,7 +11,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // ErrUploadVerificationFailed reports an upload whose stored item does not
@@ -23,12 +22,12 @@ import (
 // as retry work without committing a converged baseline.
 var ErrUploadVerificationFailed = errors.New("OneDrive stored different content than was uploaded")
 
-// ItemReader reads remote items back after a transfer. Satisfied by
-// *graph.Client and type-asserted from the Uploader, like the other optional
-// transfer capabilities.
+// ItemReader reads remote items back after a transfer: by ID, or by name in
+// a folder (ChildLookup). Satisfied by *graph.Client and type-asserted from
+// the Uploader, like the other optional transfer capabilities.
 type ItemReader interface {
 	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	ChildLookup
 }
 
 // uploadTarget names where an upload's item lives: by item ID for an
@@ -277,8 +276,10 @@ func (tm *TransferManager) settleUploadedItem(
 		ErrUploadVerificationFailed, formatSize(sent.size), formatSize(item.Size))
 }
 
-// lookupUploadTarget reads the item an upload wrote: by ID, or by an exact
-// name match in the parent's listing for a create.
+// lookupUploadTarget reads the item an upload wrote: by ID, or, for a create,
+// by its name in the parent (FindExistingChild: one read of the name, the
+// parent's listing only when the read cannot settle it). A folder that holds
+// the name is not the upload's file.
 func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target uploadTarget) (*graph.Item, error) {
 	reader, ok := tm.uploads.(ItemReader)
 	if !ok {
@@ -294,16 +295,13 @@ func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target upload
 		return item, nil
 	}
 
-	children, err := reader.ListChildren(ctx, target.driveID, target.parentID)
-	if err != nil {
-		return nil, fmt.Errorf("listing parent %s: %w", target.parentID, err)
+	item, found, err := FindExistingChild(ctx, reader, target.driveID, target.parentID, target.name)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("looking %q up in parent %s: %w", target.name, target.parentID, err)
+	case !found || item.IsFolder:
+		return nil, fmt.Errorf("%q is not in its parent folder: %w", target.name, graph.ErrNotFound)
 	}
 
-	for i := range children {
-		if !children[i].IsFolder && namekey.Equal(children[i].Name, target.name) && children[i].ID != "" {
-			return &children[i], nil
-		}
-	}
-
-	return nil, fmt.Errorf("%q is not in its parent folder: %w", target.name, graph.ErrNotFound)
+	return item, nil
 }

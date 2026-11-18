@@ -628,13 +628,15 @@ folder forms of `get` and `put` print one generic document type,
 pin both documents byte for byte (`TestGetFolderJSONOutput_Golden`,
 `TestPutFolderJSONOutput_Golden`). A `put` to a drive path prints a remote
 path in one form, `putPrintedPath`: the cleaned path (`CleanRemotePath`, which
-trims leading and trailing slashes only, so `a//b` stays as it is) with one
-leading slash (`/Backup/a.txt`), whatever form it was typed in (`Backup`,
-`/Backup/`), for a single file and for each file of a folder alike, and in a
-single file's text line (`Uploaded /Backup/a.txt (3 B)`) as under `--json`
+drops the slashes at its ends and the empty names between doubled ones, so
+`a//b` prints as `/a/b`) with one leading slash (`/Backup/a.txt`), whatever
+form it was typed in (`Backup`, `/Backup/`), for a single file and for each
+file of a folder alike, and in a single file's text line
+(`Uploaded /Backup/a.txt (3 B)`) as under `--json`
 (R-1.3.4, `TestPut_JSONPrintsEachPathWithOneLeadingSlash`,
 `TestPut_TextNamesEachPathAsJSONDoes`,
-`TestRunPut_FolderReportsEveryFileAsTextAndJSON`); a `put` to a shared
+`TestRunPut_FolderReportsEveryFileAsTextAndJSON`,
+`TestFileCommands_OnASharedFolderAPathWithEmptyNamesIsThePathWithoutThem`); a `put` to a shared
 target prints the target's selector as `path`. A list tagged
 `omitempty` is still left out when empty, and a map or pointer absent by meaning keeps its `omitempty`.
 `accounts_requiring_auth` is always present, as a list, in every document

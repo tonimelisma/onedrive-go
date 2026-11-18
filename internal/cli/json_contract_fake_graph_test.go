@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -200,7 +201,11 @@ func (f *fakeGraphDrive) itemJSON(item *fakeGraphItem) map[string]any {
 		out["root"] = map[string]any{}
 	}
 	if item.ParentID != "" {
-		out["parentReference"] = map[string]any{"id": item.ParentID, "driveId": f.driveID}
+		parent := map[string]any{"id": item.ParentID, "driveId": f.driveID}
+		if parentPath, ok := f.parentPathOf(item.ParentID); ok {
+			parent["path"] = parentPath
+		}
+		out["parentReference"] = parent
 	}
 	if item.Folder {
 		out["folder"] = map[string]any{"childCount": len(f.childrenOf(item.ID))}
@@ -214,6 +219,24 @@ func (f *fakeGraphDrive) itemJSON(item *fakeGraphItem) map[string]any {
 	}
 
 	return out
+}
+
+// parentPathOf is the parentReference.path of an item in the folder folderID,
+// in the form a Personal drive answered reads by path with:
+// "/drives/{id}/root:" and the names of the folders down to it, or false when
+// folderID does not lead up to the root. The fake answers it in listings too,
+// where whether Graph carries it is unmeasured.
+func (f *fakeGraphDrive) parentPathOf(folderID string) (string, bool) {
+	names := []string{}
+	for id := folderID; id != fakeGraphRootID; id = f.items[id].ParentID {
+		if f.items[id] == nil || len(names) > len(f.items) {
+			return "", false
+		}
+		names = append(names, f.items[id].Name)
+	}
+	slices.Reverse(names)
+
+	return strings.Join(append([]string{"/drives/" + f.driveID + "/root:"}, names...), "/"), true
 }
 
 func (f *fakeGraphDrive) childrenOf(id string) []map[string]any {

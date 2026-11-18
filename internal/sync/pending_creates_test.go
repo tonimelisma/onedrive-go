@@ -921,9 +921,18 @@ func (u *creatingTestUploader) GetItem(_ context.Context, _ driveid.ID, itemID s
 	return u.getItem(itemID)
 }
 
-func (u *creatingTestUploader) ListChildren(context.Context, driveid.ID, string) ([]graph.Item, error) {
-	return nil, fmt.Errorf("a create's outcome is looked up by its item ID, never by listing its folder")
+// GetChildByName and ListChildrenPages make the uploader the transfer
+// manager's driveops.ItemReader; both refuse, as a create's outcome is looked
+// up by its item ID.
+func (u *creatingTestUploader) GetChildByName(context.Context, driveid.ID, string, string) (*graph.Item, error) {
+	return nil, fmt.Errorf("a create's outcome is looked up by its item ID, never by its name")
 }
+
+func (u *creatingTestUploader) ListChildrenPages(context.Context, driveid.ID, string, graph.ChildrenPageFunc) error {
+	return fmt.Errorf("a create's outcome is looked up by its item ID, never by listing its folder")
+}
+
+var _ driveops.ItemReader = (*creatingTestUploader)(nil)
 
 func (u *creatingTestUploader) RemoveEmptyItem(_ context.Context, _ driveid.ID, itemID string) (bool, error) {
 	u.removedEmpty = append(u.removedEmpty, itemID)
