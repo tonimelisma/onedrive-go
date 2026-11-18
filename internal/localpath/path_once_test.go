@@ -152,7 +152,11 @@ func TestFailures_NameEachPathOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			dir := t.TempDir()
+			// The folder is named by its resolved path, as macOS keeps temp
+			// folders below /var, a link to /private/var: a call that
+			// resolves links then reaches the very path it was given.
+			dir, resolveErr := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, resolveErr)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "file"), nil, 0o600))
 
 			err := tc.call(t, dir)
