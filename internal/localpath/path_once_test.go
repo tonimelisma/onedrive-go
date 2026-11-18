@@ -223,6 +223,23 @@ func TestFailures_AnswerAsTheOSErrorTheyHold(t *testing.T) {
 	assert.True(t, IsMissingName(notDirErr), "a file on the way is a missing name")
 }
 
+// An os error that names another path than the one the call was given, a
+// parent MkdirAll could not create, is printed whole after the failure: only
+// an os error on the very path the call reached gives up its path.
+//
+// Validates: R-6.6.26
+func TestFailures_KeepAnOSErrorThatNamesAnotherPath(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	sub := filepath.Join(file, "sub")
+
+	err := MkdirAll(sub, 0o700)
+
+	require.EqualError(t, err, "creating directory "+sub+": mkdir "+file+": not a directory")
+}
+
 // A file the user cannot read fails as permission denied, and names the
 // path once.
 //

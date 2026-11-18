@@ -639,11 +639,15 @@ builds the options from a Graph item for CLI `get`.
 A download's errors name no local path of their own, so neither the target,
 which the caller names, nor the internal `.onedrive-go.<name>.partial` temp
 file; only a filesystem call on the partial that failed names it, once,
-through `localpath` (Where a Local Path Enters an Error), and the plain
-sentence of a single `get` names the partial's folder in its place. Sizes are
-given in human units (`TestTransferManager_DownloadError_NamesNoLocalPath`,
+through `localpath` (Where a Local Path Enters an Error). The plain sentence
+of a single `get` names the partial's folder in its place where the sentence
+is about the folder (permission, a read-only filesystem, a file too large),
+and gives none for a partial that is missing, whose folder is there, so the
+error itself is printed. Sizes are given in human units
+(`TestTransferManager_DownloadError_NamesNoLocalPath`,
 `TestTransferManager_DownloadIntoAReadOnlyFolderNamesThePartialOnce`,
-`TestRunGet_AnUnwritableFileIsNamedOnce`).
+`TestRunGet_AnUnwritableFileIsNamedOnce`,
+`TestCommandErrorText_APartialFileIsNamedByItsFolderOnlyWhereThatIsTrue`).
 Housekeeping (expired or corrupt upload-session files, unreadable directories
 met by the partial-file cleanup walk) logs at Debug or Info: there is nothing
 for the user to do, and the walk runs at the end of every sync run that did
@@ -712,9 +716,16 @@ the call that failed (`TestComputeQuickXorHashContext_AnUnreadableFileIsNamedOnc
 `TestTransferManager_UploadOfAnUnreadableFileNamesItOnce`,
 `TestTransferManager_DownloadIntoAReadOnlyFolderNamesThePartialOnce`,
 `TestDownloadToFile_RenameFailure_PreservesPartial`), and a failure no local
-call caused, a Graph answer or an integrity mismatch, names none: the caller
-names the file (`TestTransferManager_DownloadError_NamesNoLocalPath`,
-`TestTransferManager_Upload_ErrorWrapping`). A tree event names its file or
+call caused, a Graph answer or an integrity mismatch, names none
+(`TestTransferManager_DownloadError_NamesNoLocalPath`,
+`TestTransferManager_Upload_ErrorWrapping`). An os error that names another
+path than the one the call was given, a parent `MkdirAll` could not create,
+is printed whole (`TestFailures_KeepAnOSErrorThatNamesAnotherPath`). The
+command names the file it was working on, so every failure names it once: a
+single `put` as `uploading "<remote>": …` and a single `get` as
+`downloading "<remote>": …`, by the drive path or the shared selector the
+user typed, whatever the cause (`TestDownloadOneFile_AFailureThatIsNotLocalNamesTheRemotePathOnce`,
+`TestRunGet_ASharedFileThatFailsNamesTheSelectorOnce`). A tree event names its file or
 folder by `LocalPath`, and its error names no local path of its own. A line
 that starts with the path prints the cause through `localpath.WithoutPath`,
 which leaves out every local path the cause's failures and os errors name and

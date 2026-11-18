@@ -238,7 +238,9 @@ func remoteFailureText(err error) string {
 // read-only filesystem, a file the filesystem cannot hold, and missing or
 // unreadable files. The errno meaning comes from driveops' shared table. A
 // download's hidden partial file is named by its folder, the one the user
-// knows.
+// knows, in the sentences that are about the folder; a partial that is
+// missing has no plain sentence, since its folder is there, and the error
+// itself is printed.
 func localFailureText(err error) string {
 	if syncengine.IsLocalDiskFull(err) {
 		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
@@ -250,6 +252,9 @@ func localFailureText(err error) string {
 	}
 	subject := pathErr.Path
 	if driveops.IsOwnedTransferArtifactName(filepath.Base(subject)) {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ""
+		}
 		subject = filepath.Dir(subject)
 	}
 

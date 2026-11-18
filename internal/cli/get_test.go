@@ -2,7 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -154,8 +158,8 @@ func TestRunGet_FolderNamesAnUnwritableFileOnce(t *testing.T) {
 }
 
 // A single get that cannot write its file says so in one sentence, and its
-// details name the partial file once, below the folder the user typed, with
-// no other local path.
+// details name the remote file once, as the user typed it, and the partial
+// file once, below the folder the user typed, with no other local path.
 //
 // Validates: R-6.6.26
 func TestRunGet_AnUnwritableFileIsNamedOnce(t *testing.T) {
@@ -176,9 +180,67 @@ func TestRunGet_AnUnwritableFileIsNamedOnce(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, "Error: Permission denied for "+filepath.Join(parent, "ro")+". Check its file permissions.", plain,
 		"the sentence names the folder the hidden partial file could not be made in")
-	assert.Regexp(t, `^download file: creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`,
+	assert.Regexp(t,
+		`^downloading "/b\.txt": creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`,
 		details)
+	assert.Equal(t, 1, strings.Count(details, `"/b.txt"`), details)
 	assert.NotContains(t, details, parent, "the absolute path is not printed")
+}
+
+// failingDownloader is a download that hands over body and ends, or fails
+// with err before it hands over anything.
+type failingDownloader struct {
+	body string
+	err  error
+}
+
+func (d failingDownloader) Download(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+	if d.err != nil {
+		return 0, d.err
+	}
+	n, err := io.WriteString(w, d.body)
+
+	return int64(n), err
+}
+
+// A single get whose download fails for a reason that is not local, an
+// integrity mismatch or a transport error, names the remote file it was
+// working on once, the way a single put names its remote path, and no local
+// path at all.
+//
+// Validates: R-6.6.26
+func TestDownloadOneFile_AFailureThatIsNotLocalNamesTheRemotePathOnce(t *testing.T) {
+	setTestDriveHome(t)
+	cc, _ := jsonContractFileContext(t)
+
+	for _, tc := range []struct {
+		name  string
+		files failingDownloader
+		size  int64
+		want  string
+	}{
+		{
+			name: "integrity", files: failingDownloader{body: "hello"}, size: 99,
+			want: `Error: downloading "/Docs/notes.txt": the downloaded file doesn't match OneDrive's copy (received 5 B, OneDrive reports 99 B)`,
+		},
+		{
+			name: "transport", files: failingDownloader{err: errors.New("stream reset by the server")}, size: 5,
+			want: `Error: downloading "/Docs/notes.txt": receiving the file: stream reset by the server`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tm := driveops.NewTransferManager(tc.files, nil, nil, slog.New(slog.DiscardHandler))
+			target := filepath.Join(t.TempDir(), "notes.txt")
+			item := &graph.Item{ID: "item1", Name: "notes.txt", Size: tc.size, QuickXorHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAA="}
+
+			err := downloadOneFile(t.Context(), cc, tm, driveid.New("0123456789abcdef"), "item1", item, "/Docs/notes.txt", target)
+
+			require.Error(t, err)
+			text := commandErrorText(err, true)
+			assert.Equal(t, tc.want, text)
+			assert.NotContains(t, text, target, "the remote path names the file; the local one is not repeated")
+		})
+	}
 }
 
 // A folder download with no failures prints "errors": [], and one that

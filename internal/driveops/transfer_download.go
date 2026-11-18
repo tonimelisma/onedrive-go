@@ -678,7 +678,7 @@ func (tm *TransferManager) freshDownload(
 			tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 		}
 
-		return "", 0, fmt.Errorf("downloading: %w", err)
+		return "", 0, fmt.Errorf("receiving the file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {

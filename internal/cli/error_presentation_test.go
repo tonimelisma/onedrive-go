@@ -109,6 +109,29 @@ func TestCommandErrorText_LocalFilesystemConditionsArePlain(t *testing.T) {
 	}
 }
 
+// A download's hidden partial file is named by its folder in the sentences
+// that are about the folder (permission, read-only, too large), and a partial
+// that is missing is not called a missing folder: the error itself is
+// printed, naming the partial once.
+//
+// Validates: R-6.6.26
+func TestCommandErrorText_APartialFileIsNamedByItsFolderOnlyWhereThatIsTrue(t *testing.T) {
+	t.Parallel()
+
+	const folder = "/home/u/Docs"
+	partial := folder + "/.onedrive-go.notes.txt~v0123456789ab.partial"
+	failed := func(errno syscall.Errno) error {
+		return fmt.Errorf("reopening the download: %w", &fs.PathError{Op: "open", Path: partial, Err: errno})
+	}
+
+	assert.Equal(t, "Error: Permission denied for "+folder+". Check its file permissions.", commandErrorText(failed(syscall.EACCES), false))
+	assert.Equal(t, "Error: "+folder+" is on a read-only filesystem. Remount it read-write, then run the command again.",
+		commandErrorText(failed(syscall.EROFS), false))
+	assert.Equal(t, "Error: The file is too large for the filesystem holding "+folder+".", commandErrorText(failed(syscall.EFBIG), false))
+	assert.Equal(t, "Error: reopening the download: open "+partial+": no such file or directory",
+		commandErrorText(failed(syscall.ENOENT), false))
+}
+
 // Validates: R-6.6.27
 func TestCommandErrorText_TimeoutIsReported(t *testing.T) {
 	t.Parallel()

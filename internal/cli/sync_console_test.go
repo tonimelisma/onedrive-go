@@ -90,6 +90,11 @@ func TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose(t *testing.T) {
 	assert.Empty(t, out.String())
 	assert.Equal(t, "Failed to download locked.txt: permission denied\n", errOut.String(),
 		"a retryable failure is not something the user must act on, so default output omits it")
+
+	c.verbose = true
+	errOut.Reset()
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
+	assert.Equal(t, "Could not upload busy.txt, will retry: throttled\n", errOut.String())
 }
 
 // A sync failure that a local file's error caused names the file once: the
@@ -114,11 +119,6 @@ func TestSyncConsole_ALocalFileFailureNamesTheFileOnce(t *testing.T) {
 	}))
 
 	assert.Equal(t, "Failed to upload Docs/locked.txt: permission denied\n", errOut.String())
-
-	c.verbose = true
-	errOut.Reset()
-	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "busy.txt", WillRetry: true, Err: errors.New("throttled")}))
-	assert.Equal(t, "Could not upload busy.txt, will retry: throttled\n", errOut.String())
 }
 
 // Validates: R-6.6.18

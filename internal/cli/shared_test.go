@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -598,6 +600,54 @@ func TestRunGet_SharedFileWithAnUnsafeNameIsRefused(t *testing.T) {
 		assertRefusedName(t, err, name, "name the local file to download to")
 		assertLocalDirHolds(t, workDir)
 	}
+}
+
+// A single get of a shared file that fails names the shared item once, by the
+// selector the user typed, and the partial file once, through the open that
+// failed.
+//
+// Validates: R-6.6.26
+func TestRunGet_ASharedFileThatFailsNamesTheSelectorOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	const selector = "shared:user@example.com:b!drive1234567891:source-item-file"
+	workDir := t.TempDir()
+	readOnlyFolder(t, workDir, "ro")
+	t.Chdir(workDir)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != testSharedFileGetItemPath {
+			assert.Fail(t, "unexpected request", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{"id": "source-item-file", "name": "b.txt", "size": 1, "file": {"mimeType": "text/plain"},
+			"parentReference": {"id": "parent", "driveId": "b!drive1234567891"}}`)
+	}))
+	defer srv.Close()
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+	}
+	cmd := newGetCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+
+	err := runGet(cmd, []string{selector, filepath.Join("ro", "b.txt")})
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	_, details, found := strings.Cut(commandErrorText(err, true), "\nDetails: ")
+	require.True(t, found)
+	assert.Regexp(t, `^downloading "`+regexp.QuoteMeta(selector)+
+		`": creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`, details)
+	assert.Equal(t, 1, strings.Count(details, selector), details)
 }
 
 func createTempFile(t *testing.T, name, content string) string {

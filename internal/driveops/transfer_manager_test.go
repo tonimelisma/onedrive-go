@@ -1013,7 +1013,9 @@ func TestTransferManager_DiskCheckFailure_WarnsOnce(t *testing.T) {
 //
 // A failed download names no local path, neither the internal
 // ".onedrive-go.<name>.partial" temp file nor the target: the caller names
-// the file it asked for, a folder get's line and sync's activity line.
+// the file it asked for, a single get by its remote path, a folder get's
+// line by its local one and sync's activity line by its path below the sync
+// folder.
 func TestTransferManager_DownloadError_NamesNoLocalPath(t *testing.T) {
 	t.Parallel()
 
@@ -1027,7 +1029,7 @@ func TestTransferManager_DownloadError_NamesNoLocalPath(t *testing.T) {
 	targetPath := filepath.Join(t.TempDir(), "report.pdf")
 
 	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, DownloadOpts{})
-	require.EqualError(t, err, "downloading: connection reset")
+	require.EqualError(t, err, "receiving the file: connection reset")
 }
 
 // A download whose partial file cannot be created names that file once,
