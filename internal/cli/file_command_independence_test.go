@@ -100,7 +100,8 @@ func TestRunRm_SucceedsWithoutSurfacingBrokenSyncDBWarnings(t *testing.T) {
 					"size":1,
 					"createdDateTime":"2026-04-03T00:00:00Z",
 					"lastModifiedDateTime":"2026-04-03T00:00:00Z",
-					"eTag":"etag"
+					"eTag":"etag",
+					"parentReference":{"id":"root-id","path":"/drive/root:"}
 				}`)
 			case r.Method == http.MethodDelete && r.URL.Path == "/drives/0000000drive-123/items/item-123":
 				w.WriteHeader(http.StatusNoContent)

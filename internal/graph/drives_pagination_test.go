@@ -202,8 +202,9 @@ func TestPagedListings_ThePageCapCountsThePagesAskedFor(t *testing.T) {
 }
 
 // loopedEntryJSON is the one entry on each page of a loopingListing, named
-// after its page; every listing reads an ID and a name from it.
-const loopedEntryJSON = `{"id":%[1]q,"name":%[1]q}`
+// after its page; every listing reads an ID and a name from it, and the
+// listing by path of Docs its parent path.
+const loopedEntryJSON = `{"id":%[1]q,"name":%[1]q,"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`
 
 // loopingListing is a Graph server for a listing whose every page holds one
 // entry and links to the next, except the page linkFrom, which links back

@@ -28,7 +28,7 @@ func (c *Client) SimpleUploadToItem(
 		slog.Int64("size", size),
 	)
 
-	path := fmt.Sprintf("/drives/%s/items/%s/content", driveID, itemID)
+	path := itemRoute(driveID, itemID, "/content")
 
 	resp, err := c.doRawUpload(ctx, http.MethodPut, path, "application/octet-stream", content, size, ifMatch)
 	if err != nil {

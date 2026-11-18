@@ -783,12 +783,13 @@ func TestCreateFile_TokenFailureIsNotOutcomeUnknown(t *testing.T) {
 
 // Validates: R-5.6.15
 //
-// A parent ID that cannot form a URL (here a control character) fails while
-// the request is built, before anything is sent.
+// A drive ID that cannot form a URL (here a control character) fails while
+// the request is built, before anything is sent. A parent ID cannot: the
+// route escapes it.
 func TestCreateFile_RequestBuildFailureIsNotOutcomeUnknown(t *testing.T) {
 	srv, requests := countingCreateServer(t, http.StatusCreated, "")
 
-	item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d"), "parent\x7f", "a.txt")
+	item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d\x7f"), "parent", "a.txt")
 	require.ErrorContains(t, err, "invalid control character")
 	assert.Nil(t, item)
 	require.NotErrorIs(t, err, ErrCreateOutcomeUnknown, "a create that was never sent created nothing")
@@ -881,6 +882,165 @@ func TestCreateFile_UnsentRetryIsNotOutcomeUnknown(t *testing.T) {
 				require.ErrorIs(t, err, tc.also)
 			}
 			assert.Equal(t, int32(1), requests.Load())
+		})
+	}
+}
+
+// createdFileFolderPages is the number of listing pages of a createdFileFolder,
+// one child on each.
+const createdFileFolderPages = 4
+
+// createdFileFolder is a Graph fake of the folder "parent" after a create that
+// answered 201 without its item. A read of one name answers the created file
+// (a folder of that name when nameIsFolder), or 404 when readMisses; a
+// listing serves createdFileFolderPages pages of one child each, the item of
+// the name the child of the page createdOnPage. It counts the reads and the
+// pages asked for.
+type createdFileFolder struct {
+	t             *testing.T
+	name          string
+	nameIsFolder  bool
+	readMisses    bool
+	createdOnPage int
+	reads, pages  atomic.Int32
+}
+
+func (f *createdFileFolder) serve(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch {
+	case r.Method == http.MethodPost:
+		w.WriteHeader(http.StatusCreated)
+	case strings.Contains(r.URL.Path, ":/"):
+		f.reads.Add(1)
+		if f.readMisses {
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(f.t, w, `{"error":{"code":"itemNotFound","message":"not yet"}}`)
+			return
+		}
+		writeTestResponse(f.t, w, f.named())
+	default:
+		page := int(f.pages.Add(1))
+		child := f.child(fmt.Sprintf("other-%d", page), fmt.Sprintf("other-%d.txt", page))
+		if page == f.createdOnPage {
+			child = f.named()
+		}
+		next := ""
+		if page < createdFileFolderPages {
+			next = fmt.Sprintf(`,"@odata.nextLink":"http://%s%s?$top=%d&page=%d"`, r.Host, r.URL.Path, listChildrenPageSize, page+1)
+		}
+		writeTestResponsef(f.t, w, `{"value":[%s]%s}`, child, next)
+	}
+}
+
+// child is a file of the folder as Graph answers it.
+func (f *createdFileFolder) child(id, name string) string {
+	return fmt.Sprintf(`{"id":%q,"name":%q,"file":{},"parentReference":{"id":"parent"}}`, id, name)
+}
+
+// named is the item the folder holds under the created name.
+func (f *createdFileFolder) named() string {
+	if f.nameIsFolder {
+		return fmt.Sprintf(`{"id":"created-id","name":%q,"folder":{},"parentReference":{"id":"parent"}}`, f.name)
+	}
+
+	return f.child("created-id", f.name)
+}
+
+// The listing that reads a created file back stops at the page that holds its
+// name as spelled, not at an earlier page holding another spelling OneDrive
+// treats as the same.
+//
+// Validates: R-5.6.15, R-2.12.3
+func TestCreateFile_TheReadBackPrefersTheNameAsSpelled(t *testing.T) {
+	t.Parallel()
+
+	const exactPage = 2
+
+	var pages atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+		case strings.Contains(r.URL.Path, ":/"):
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not yet"}}`)
+		case pages.Add(1) < exactPage:
+			writeTestResponsef(t, w, `{"value":[{"id":"folded-id","name":"A.TXT","file":{},"parentReference":{"id":"parent"}}],`+
+				`"@odata.nextLink":"http://%s%s?page=2"}`, r.Host, r.URL.Path)
+		default:
+			writeTestResponse(t, w, `{"value":[{"id":"created-id","name":"a.txt","file":{},"parentReference":{"id":"parent"}}]}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d"), "parent", "a.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "created-id", item.ID)
+	assert.Equal(t, int32(exactPage), pages.Load())
+}
+
+// A folder that holds the created name, found by the read or in the listing,
+// is not the file the create made: the read-back fails as an unknown outcome
+// instead of handing the folder on as the created file.
+//
+// Validates: R-5.6.15
+func TestCreateFile_AFolderOfTheNameIsNotTheCreatedFile(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		label      string
+		readMisses bool
+	}{
+		{label: "the read answers the folder"},
+		{label: "the listing holds the folder", readMisses: true},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			folder := &createdFileFolder{t: t, name: "a.txt", nameIsFolder: true, readMisses: tc.readMisses, createdOnPage: 1}
+			srv := httptest.NewServer(http.HandlerFunc(folder.serve))
+			t.Cleanup(srv.Close)
+
+			item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d"), "parent", "a.txt")
+			require.ErrorIs(t, err, ErrCreateOutcomeUnknown)
+			assert.Nil(t, item)
+		})
+	}
+}
+
+// A create answered without its item reads the file back by one read of its
+// name, and lists the folder only when that read cannot settle the name: then
+// a page at a time, stopping at the page that holds the file.
+//
+// Validates: R-5.6.15
+func TestCreateFile_ReadsTheCreatedFileBackByItsName(t *testing.T) {
+	t.Parallel()
+
+	const createdOnPage = 2
+
+	for _, tc := range []struct {
+		label, name string
+		readMisses  bool
+		wantReads   int32
+		wantPages   int32
+	}{
+		{label: "the read answers", name: "a.txt", wantReads: 1},
+		{label: "the read finds nothing yet", name: "a.txt", readMisses: true, wantReads: 1, wantPages: createdOnPage},
+		{label: "a name the read cannot carry", name: "a:b.txt", wantPages: createdOnPage},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			folder := &createdFileFolder{t: t, name: tc.name, readMisses: tc.readMisses, createdOnPage: createdOnPage}
+			srv := httptest.NewServer(http.HandlerFunc(folder.serve))
+			t.Cleanup(srv.Close)
+
+			item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d"), "parent", tc.name)
+			require.NoError(t, err)
+			assert.Equal(t, "created-id", item.ID)
+			assert.Equal(t, tc.wantReads, folder.reads.Load())
+			assert.Equal(t, tc.wantPages, folder.pages.Load())
 		})
 	}
 }

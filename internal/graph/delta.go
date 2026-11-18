@@ -36,7 +36,7 @@ func driveDeltaPath(driveID driveid.ID) deltaPathBuilder {
 // folderDeltaPath builds the initial path of a folder-scoped delta.
 func folderDeltaPath(driveID driveid.ID, folderID string) deltaPathBuilder {
 	return func() string {
-		return fmt.Sprintf("/drives/%s/items/%s/delta", driveID, folderID)
+		return itemRoute(driveID, folderID, "/delta")
 	}
 }
 

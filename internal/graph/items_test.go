@@ -1365,7 +1365,8 @@ func TestGetItemByPath_Success(t *testing.T) {
 			"lastModifiedDateTime": "2024-06-20T15:30:00Z",
 			"parentReference": {
 				"id": "documents-folder-id",
-				"driveId": "D"
+				"driveId": "D",
+				"path": "/drives/D/root:/Documents"
 			},
 			"file": {
 				"mimeType": "text/plain",
@@ -1518,14 +1519,17 @@ func TestGetItemByPath_EncodesSegmentsAndKeepsNamesVerbatim(t *testing.T) {
 		path       string
 		wantInURI  string
 		returnName string
+		parentPath string
 	}{
 		{
 			name: "special characters", path: "folder/my file#2.txt",
 			wantInURI: "/drives/000000000000000d/root:/folder/my%20file%232.txt:", returnName: "my file#2.txt",
+			parentPath: "/drives/d/root:/folder",
 		},
 		{
 			name: "percent sequences", path: "100%25 done/a%20b.txt",
 			wantInURI: "/root:/100%2525%20done/a%2520b.txt:", returnName: "a%20b.txt",
+			parentPath: "/drives/d/root:/100%25 done",
 		},
 	}
 
@@ -1539,7 +1543,7 @@ func TestGetItemByPath_EncodesSegmentsAndKeepsNamesVerbatim(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				writeTestResponsef(t, w, `{"id":"encoded-item","name":%q,
 					"createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z",
-					"parentReference":{"id":"folder-id","driveId":"d"}}`, tt.returnName)
+					"parentReference":{"id":"folder-id","driveId":"d","path":%q}}`, tt.returnName, tt.parentPath)
 			}))
 			defer srv.Close()
 
@@ -1695,9 +1699,9 @@ func TestListChildrenByPath_SinglePage(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		writeTestResponse(t, w, `{
 			"value": [
-				{"id":"a","name":"report.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"file":{"mimeType":"application/pdf"}},
-				{"id":"b","name":"notes.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"file":{"mimeType":"text/plain"}},
-				{"id":"c","name":"Images","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d"},"folder":{"childCount":12}}
+				{"id":"a","name":"report.pdf","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d","path":"/drives/d/root:/Documents"},"file":{"mimeType":"application/pdf"}},
+				{"id":"b","name":"notes.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d","path":"/drives/d/root:/Documents"},"file":{"mimeType":"text/plain"}},
+				{"id":"c","name":"Images","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"docs","driveId":"d","path":"/drives/d/root:/Documents"},"folder":{"childCount":12}}
 			]
 		}`)
 	}))
@@ -1729,7 +1733,7 @@ func TestListChildrenByPath_MultiPage(t *testing.T) {
 			// First page — includes nextLink
 			writeTestResponsef(t, w, `{
 				"value": [
-					{"id":"a","name":"first.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
+					{"id":"a","name":"first.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d","path":"/drives/d/root:/Documents"}}
 				],
 				"@odata.nextLink": "%s/drives/d/root:/Documents:/children?$top=200&page=2"
 			}`, srv.URL)
@@ -1737,7 +1741,7 @@ func TestListChildrenByPath_MultiPage(t *testing.T) {
 			// Second page — no nextLink
 			writeTestResponse(t, w, `{
 				"value": [
-					{"id":"b","name":"second.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d"}}
+					{"id":"b","name":"second.txt","createdDateTime":"2024-01-01T00:00:00Z","lastModifiedDateTime":"2024-01-01T00:00:00Z","parentReference":{"id":"p","driveId":"d","path":"/drives/d/root:/Documents"}}
 				]
 			}`)
 		}
@@ -2736,6 +2740,41 @@ func TestGetItemByPath_LongPathResolvesInChunks(t *testing.T) {
 	assert.True(t, strings.HasPrefix(routes[0], "/drives/000000000000000d/root:/"), routes[0])
 	assert.True(t, strings.HasPrefix(routes[1], "/drives/000000000000000d/items/item-1:/"), routes[1])
 	assert.Equal(t, "item-2", item.ID)
+}
+
+// A path too long for one request is listed by ID only once GetItemByPath has
+// held the folder its chunks resolve to at that path: an answer from another
+// path lists nothing and is not found, as for any read by path.
+//
+// Validates: R-2.11.7, R-6.7.22
+func TestListChildrenByPath_LongPathListsNoFolderAnsweredFromAnotherPath(t *testing.T) {
+	t.Parallel()
+
+	segment := strings.Repeat("x", 45)
+	segments := make([]string, 8)
+	for i := range segments {
+		segments[i] = segment
+	}
+	longPath := strings.Join(segments, "/")
+	require.Greater(t, len(longPath), maxPathAddressedLength)
+
+	var listings atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/children") {
+			listings.Add(1)
+			writeTestResponse(t, w, `{"value":[]}`)
+			return
+		}
+		elsewhere := "/drive/root:/elsewhere/" + strings.Join(segments[:len(segments)-1], "/")
+		writeTestResponse(t, w, `{"id":"folder","name":"`+segment+`","folder":{"childCount":0},
+			"parentReference":{"id":"p","driveId":"d","path":"`+elsewhere+`"}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := newTestClient(t, srv.URL).ListChildrenByPathPages(t.Context(), driveid.New("d"), longPath, func([]Item) bool { return true })
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.Zero(t, listings.Load(), "the folder answered from another path is not listed")
 }
 
 func TestPathAddressChunks(t *testing.T) {

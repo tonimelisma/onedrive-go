@@ -81,7 +81,7 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 		return nil, fmt.Errorf("graph: marshaling create file request: %w", err)
 	}
 
-	path := fmt.Sprintf("/drives/%s/items/%s/children", driveID, parentID)
+	path := itemRoute(driveID, parentID, "/children")
 
 	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   QuirkFileCreateTransient404,
@@ -141,26 +141,65 @@ func createOutcomeUnknown(err error) bool {
 	return graphErr.StatusCode >= http.StatusInternalServerError || graphErr.StatusCode == http.StatusRequestTimeout
 }
 
-// readCreatedFileByName finds a file the create answered without an item.
+// readCreatedFileByName finds a file the create answered without an item: one
+// read of its name (GetChildByName), and its folder's listing only when that
+// read cannot settle the name (readCannotSettleName), a page at a time up to
+// the page that holds it (listedChildNamed). A folder of the name is not the
+// created file.
 // The create itself succeeded, so every failure here wraps
 // ErrCreateOutcomeUnknown: the file exists and the caller has no ID for it.
-// A file the folder does not list yet is that failure too, and never
+// A file the folder does not show yet is that failure too, and never
 // ErrUploadCompletedWithoutItem: no content was sent, and the transfer layer
 // answers that error by looking the name up and checking the file against the
 // content, which fails an empty file as a bad upload and loses the mark.
 func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
-	children, err := c.ListChildren(ctx, driveID, parentID)
+	item, err := c.GetChildByName(ctx, driveID, parentID, name)
+	if err != nil && readCannotSettleName(err) {
+		item, err = c.listedChildNamed(ctx, driveID, parentID, name)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("graph: reading back created file %q: %w: %w", name, ErrCreateOutcomeUnknown, err)
 	}
-
-	for i := range children {
-		if !children[i].IsFolder && children[i].ID != "" && namekey.Equal(children[i].Name, name) {
-			return &children[i], nil
-		}
+	if item == nil || item.IsFolder || item.ID == "" {
+		return nil, fmt.Errorf("graph: created file %q is not in its folder: %w", name, ErrCreateOutcomeUnknown)
 	}
 
-	return nil, fmt.Errorf("graph: created file %q is not in its folder: %w", name, ErrCreateOutcomeUnknown)
+	return item, nil
+}
+
+// readCannotSettleName reports whether a failed GetChildByName leaves the
+// name to its folder's listing: the read found nothing (the path route can
+// lag behind the listing), the route cannot carry the name, or Graph answered
+// 400 (measured for a child named $value, which the listing holds).
+func readCannotSettleName(err error) bool {
+	return errors.Is(err, ErrNotFound) || errors.Is(err, ErrNameNotPathAddressable) || errors.Is(err, ErrBadRequest)
+}
+
+// listedChildNamed is the child of the folder parentID named name, read a
+// page at a time and no further than the page that holds it as spelled, or
+// nil when no page holds it. Failing that spelling, it is the first child of
+// a name OneDrive treats as the same (namekey.Equal): the listing then reads
+// every page, as a later one could hold the exact spelling.
+func (c *Client) listedChildNamed(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
+	var found *Item
+	err := c.ListChildrenPages(ctx, driveID, parentID, func(page []Item) bool {
+		for i := range page {
+			switch {
+			case page[i].Name == name:
+				found = &page[i]
+				return false
+			case found == nil && namekey.Equal(page[i].Name, name):
+				found = &page[i]
+			}
+		}
+
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return found, nil
 }
 
 // CreatedFunc is called after a new file's empty item exists and before any

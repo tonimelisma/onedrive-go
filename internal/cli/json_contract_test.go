@@ -764,3 +764,50 @@ func TestPut_TextNamesEachPathAsJSONDoes(t *testing.T) {
 		assert.Equal(t, "Uploaded "+tc.want+" (0 B)\n", run.stderr, strings.Join(tc.args[1:], " "))
 	}
 }
+
+// sharedFolderFileContext is jsonContractFileContext for a shared folder added
+// as a drive of its own: the session's paths start at the folder Shared of the
+// fake drive, and every name below it is read by name from there.
+func sharedFolderFileContext(t *testing.T) (*CLIContext, *fakeGraphDrive) {
+	t.Helper()
+
+	cc, fake := jsonContractFileContext(t)
+	shared := addFakeItem(fake, fakeGraphRootID, "Shared", true, "")
+	sharedCID := driveid.MustCanonicalID("shared:user@example.com:" + rootTestDrive123 + ":" + shared)
+	seedCatalogDrive(t, sharedCID, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = rootTestDrive123
+		drive.OwnerAccountCanonical = jsonContractDrive
+	})
+	cc.Cfg.CanonicalID = sharedCID
+	cc.Cfg.RemoteRootItemID = shared
+
+	return cc, fake
+}
+
+// On a shared folder, mkdir and put take a path holding empty names ("a//b")
+// as the path without them, as on a drive: mkdir creates each folder and
+// confirms the last, and put uploads into the folder the path names and
+// confirms the file. Both print the path without the empty names.
+//
+// Validates: R-1.5.2, R-1.3.6, R-1.3.4
+func TestFileCommands_OnASharedFolderAPathWithEmptyNamesIsThePathWithoutThem(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := sharedFolderFileContext(t)
+
+	made := runFileCommand(t, "onedrive-go mkdir", cc, true, "/Reports//2026/")
+	require.NoError(t, made.err, made.stderr)
+	var folder mkdirJSONOutput
+	require.NoError(t, json.Unmarshal([]byte(made.stdout), &folder), made.stdout)
+	assert.Equal(t, "/Reports/2026", folder.Created)
+	assert.Equal(t, fakeItemID(fake, "Shared/Reports/2026"), folder.ID)
+
+	local := filepath.Join(t.TempDir(), "notes.txt")
+	require.NoError(t, os.WriteFile(local, nil, 0o600))
+	put := runFileCommand(t, putCommand, cc, true, local, "Reports//2026//notes.txt")
+	require.NoError(t, put.err, put.stderr)
+	var file putJSONOutput
+	require.NoError(t, json.Unmarshal([]byte(put.stdout), &file), put.stdout)
+	assert.Equal(t, "/Reports/2026/notes.txt", file.Path)
+	assert.NotEmpty(t, file.ID)
+	assert.Equal(t, fakeItemID(fake, "Shared/Reports/2026/notes.txt"), file.ID)
+}

@@ -51,16 +51,13 @@ func runMkdir(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Walk path segments, creating each missing folder.
+	// Walk path segments, creating each missing folder. The cleaned path
+	// holds no empty name.
 	segments := strings.Split(remotePath, "/")
 	parentID := mkdirStartParentID(session)
 
 	created := ""
 	for _, seg := range segments {
-		if seg == "" {
-			continue
-		}
-
 		created += "/" + seg
 		item, createErr := session.EnsureFolder(ctx, parentID, seg)
 		if createErr != nil {

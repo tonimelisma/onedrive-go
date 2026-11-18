@@ -133,14 +133,61 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   (`session.go`): one read of the name under its parent
   (`graph.GetChildByName`, `items/{parent}:/{name}:`), whose answer counts
   only when it sits in that parent under an equal name. It lists the
-  parent, once, only when the read cannot settle the name: a name the path
+  parent only when the read cannot settle the name: a name the path
   route cannot carry (escaped longer than `maxPathAddressedLength`, or
   holding `:`), a read answered 400 (`graph.ErrBadRequest`; measured for a
   child named `$value`, see `graph-api-quirks.md`), or a read that finds
-  nothing equal although the create said the name exists. Any other failed
+  nothing equal, which the listing can still hold while the path route lags
+  behind it. The listing is read a page at a time and stops at the page that
+  holds the name as spelled; a page holding only another spelling OneDrive
+  treats as the same does not stop it, as a later page could hold the exact
+  one, which is then the item (`nameOnPage`,
+  `TestFindExistingChild_TheListingPrefersTheNameAsSpelled`). Any other failed
   read is the error. If the listing finds nothing either, the 409 stands for
-  a file; a folder reports that it was not found in its parent. A listed
-  item of the name that carries no ID is an error. A second
+  a file; a folder reports that it was not found in its parent. An item of
+  the name that carries no ID, read or listed, is an error
+  (`TestEnsureFolder_AFolderWithoutAnIDIsAnError`). The same lookup finds
+  the item of an upload whose answer did not carry it, where a folder of the
+  name is not the upload's file
+  (`TestLookupUploadTarget_AFolderOfTheNameIsNotTheUpload`), and each name of a
+  path below a mounted folder (`MountSession.resolveItemFromMountRoot`), so
+  neither lists a folder whose name one read answers
+  (`TestLookupUploadTarget_ReadsTheNameAndListsOnlyWhenTheReadCannotSettleIt`,
+  `TestMountSession_ResolveItem_MountRootReadsEachNameOnce`). Every path a
+  session is given is first cleaned by `CleanRemotePath`, which drops the
+  slashes at its ends and the empty names between doubled slashes (OneDrive
+  holds no empty name), so `a//b` is `a/b` below a mounted folder as on a
+  drive, and `mkdir` and `put` print it so
+  (`TestMountSession_APathWithEmptyNamesIsThePathWithoutThem`,
+  `TestFileCommands_OnASharedFolderAPathWithEmptyNamesIsThePathWithoutThem`).
+  The fallback of a delete or a visibility wait to the parent's listing
+  stops at the page that holds the name, and takes no item that the
+  listing's own answers place in another folder than the one at the parent's
+  path (`TestMountSession_ParentListingStopsAtThePageThatHoldsTheName`,
+  `TestMountSession_AFallbackTakesNoItemFromAListingThatNamesAnotherFolder`).
+  Where the answers for a path disagree (a read and the read of its folder,
+  or a listing and the read of its folder, do not agree on the folder at the
+  path: `graph.ErrPathAnswersDisagree`, `graph-client.md` rule (2)), the read
+  or the listing ends with that error, which is not "not found". A delete's
+  target is then refused at once, and no folder is listed because of it: a
+  delete, `rm -r` included, deletes nothing
+  (`TestMountSession_ADeleteTargetIsNotTakenWhereAnswersNameDifferentFolders`,
+  `TestMountSession_DeleteResolvedPathStopsWhereAnswersNameDifferentFolders`,
+  `TestRunRm_DeletesNothingWhereAnswersNameDifferentFolders`). A visibility
+  wait reads the path again on it, as on "not found", because such answers can
+  settle once OneDrive converges after a change, but it lists no folder
+  because of it; answers that still disagree when the wait runs out end it as
+  a path not visible yet (`PathNotVisibleError`), with the disagreement as
+  its cause. So `put` uploads nothing into a parent whose
+  answers disagree, and `rm` whose delete landed gives its note for a parent
+  not visible yet instead of failing
+  (`TestMountSession_AVisibilityWaitReadsAgainWhileAnswersNameDifferentFolders`,
+  `TestRunPut_UploadsNothingWhereAnswersNameDifferentFolders`,
+  `TestRunRm_NotesAParentWhoseAnswersStillDisagreeAfterTheDelete`). On a drive
+  whose answers carry no parent path, answers that agree with one another on
+  a folder of the right name in another subtree two or more levels up are not
+  caught: the read, and the fallback after it, take that folder's item
+  (`graph-client.md`, rule (2)). A second
   upload of a tree of n files in f folders therefore costs n + f one-item
   reads and no listing, apart from such names. Every
   file goes through the caller's `PutFile`, which is `putFile`: a file
@@ -223,8 +270,10 @@ read back by ID once, because server processing can briefly show pre-commit
 facts, and then fails with `ErrUploadVerificationFailed`: it used to be an
 Info line and a success, so the baseline recorded different bytes on each
 side as converged, forever (D-035). An upload completion without an item
-(`graph.ErrUploadCompletedWithoutItem`) is looked up by ID, or by an exact
-name in the parent listing for a create, through the optional `ItemReader`
+(`graph.ErrUploadCompletedWithoutItem`) is looked up by ID, or for a create
+by its name in the parent (`FindExistingChild`: one read of the name, the
+parent's listing only when the read cannot settle it; a folder holding the
+name is not the file), through the optional `ItemReader`
 capability, and a persisted session whose upload completed that way is
 deleted. A lookup that fails leaves the outcome unknown
 (`uploadOutcomeUnknownError`, the lookup's failure in its chain), and after a
