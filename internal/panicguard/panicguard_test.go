@@ -1,6 +1,7 @@
 package panicguard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -82,6 +83,28 @@ func TestRecovered_WithoutALoggerLogsThroughTheDefault(t *testing.T) {
 	record := onlyRecord(t, capture)
 	assert.Equal(t, "nil map", record.Attrs["panic"])
 	assert.Contains(t, record.Attrs["stack"], "explodingHelper")
+}
+
+// Validates: R-6.3.10, R-6.8.29
+//
+// A boundary that ends its work through a cancel hands the cancel the panic.
+// The work the cancel interrupts carries the cause in place of
+// context.Canceled, so the cause answers to both: the work reads as stopped,
+// and the panic is still found, with its text and its stack.
+func TestAsCancelCause_AnswersToThePanicAndToTheStop(t *testing.T) {
+	t.Parallel()
+
+	err := panicAndRecover(slog.New(slog.DiscardHandler), "boom")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(AsCancelCause(err))
+	interrupted := fmt.Errorf("request canceled: %w", context.Cause(ctx))
+
+	require.ErrorIs(t, interrupted, context.Canceled, "the interrupted work reads as stopped")
+	require.ErrorIs(t, interrupted, ErrPanic, "and still carries the panic")
+	require.NotErrorIs(t, interrupted, context.DeadlineExceeded)
+	assert.Equal(t, "request canceled: "+err.Error(), interrupted.Error())
+	assert.Equal(t, Stack(err), Stack(interrupted))
+	require.NoError(t, AsCancelCause(nil), "no error is a cancel without a cause")
 }
 
 // Validates: R-6.3.10

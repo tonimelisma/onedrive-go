@@ -475,15 +475,17 @@ func (flow *engineFlow) applyFatalAuthEffects(
 		ScopeKey{},
 	)
 
-	if flow.engine.permHandler != nil && flow.engine.permHandler.accountEmail != "" {
+	// The mark goes on the engine's own account, by canonical ID: another
+	// account at the same address keeps its own sign-in state.
+	if account := flow.engine.accountCanonicalID; !account.IsZero() {
 		if err := config.MarkAccountAuthRequired(
 			flow.engine.dataDir,
-			flow.engine.permHandler.accountEmail,
+			account,
 			authstate.ReasonSyncAuthRejected,
 		); err != nil {
 			fields := append([]any{}, logFields...)
 			fields = append(fields,
-				slog.String("account", flow.engine.permHandler.accountEmail),
+				slog.String("account", account.String()),
 				slog.Any("error", err),
 			)
 			flow.deps.logger.Warn("Could not record that sign-in is required; status may not show it until the next sync",

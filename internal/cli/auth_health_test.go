@@ -52,29 +52,38 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	}))
 }
 
+// A personal and a work or school account at one address, both needing a
+// sign-in: a clear ends the requirement of the account it names, whichever of
+// the two sorts first, and leaves the other's standing.
+//
 // Validates: R-2.10.47
 func TestClearAccountAuthScopes_ClearsPersistedAuthScope(t *testing.T) {
-	setTestDriveHome(t)
+	personal := driveid.MustCanonicalID("personal:user@example.com")
+	business := driveid.MustCanonicalID("business:user@example.com")
 
-	cids := []driveid.CanonicalID{
-		driveid.MustCanonicalID("personal:user@example.com"),
-		driveid.MustCanonicalID("business:user@example.com"),
+	for _, pair := range [][2]driveid.CanonicalID{{personal, business}, {business, personal}} {
+		proved, other := pair[0], pair[1]
+		t.Run(proved.DriveType(), func(t *testing.T) {
+			setTestDriveHome(t)
+			seedAuthScope(t, proved)
+			seedAuthScope(t, other)
+
+			cleared, err := clearAccountAuthRequirementWithCount(proved, config.AuthClearSourceCLIProof, testDriveLogger(t))
+			require.NoError(t, err)
+			assert.Equal(t, 1, cleared)
+			assert.False(t, hasPersistedAccountAuthRequirement(t, proved))
+			assert.True(t, hasPersistedAccountAuthRequirement(t, other), "the other account at the address still needs its sign-in")
+
+			cleared, err = clearAccountAuthRequirementWithCount(proved, config.AuthClearSourceCLIProof, testDriveLogger(t))
+			require.NoError(t, err)
+			assert.Zero(t, cleared, "a second proof finds nothing to end")
+		})
 	}
-	for _, cid := range cids {
-		seedAuthScope(t, cid)
-	}
-
-	require.True(t, hasPersistedAccountAuthRequirement(t, "user@example.com"))
-
-	cleared, err := clearAccountAuthRequirementWithCount("user@example.com", config.AuthClearSourceCLIProof, testDriveLogger(t))
-	require.NoError(t, err)
-	assert.Equal(t, 1, cleared)
-	assert.False(t, hasPersistedAccountAuthRequirement(t, "user@example.com"))
 }
 
 // hasPersistedAccountAuthRequirement reports whether the catalog under the
 // test's data directory records that account must sign in again.
-func hasPersistedAccountAuthRequirement(t *testing.T, account string) bool {
+func hasPersistedAccountAuthRequirement(t *testing.T, account driveid.CanonicalID) bool {
 	t.Helper()
 
 	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), account)
@@ -105,11 +114,11 @@ func TestAttachAccountAuthProof_ClearsOnAuthenticatedSuccess(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email(), "test")
+	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid, "test")
 
 	_, err := client.Me(t.Context())
 	require.NoError(t, err)
-	assert.False(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
+	assert.False(t, hasPersistedAccountAuthRequirement(t, cid))
 }
 
 // Validates: R-2.10.47
@@ -128,11 +137,11 @@ func TestAttachAccountAuthProof_DoesNotClearOnUnauthorized(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestGraphClient(t, srv.URL)
-	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid.Email(), "test")
+	attachAccountAuthProof(client, newAuthProofRecorder(testDriveLogger(t)), cid, "test")
 
 	_, err := client.Me(t.Context())
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
-	assert.True(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
+	assert.True(t, hasPersistedAccountAuthRequirement(t, cid))
 }
 
 // Validates: R-2.10.45, R-2.10.47
@@ -184,7 +193,7 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 	}
 
 	require.NoError(t, runStatusCommand(t.Context(), cc, false))
-	assert.True(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
+	assert.True(t, hasPersistedAccountAuthRequirement(t, cid))
 }
 
 // Validates: R-2.10.45

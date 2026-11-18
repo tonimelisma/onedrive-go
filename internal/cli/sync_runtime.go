@@ -242,10 +242,10 @@ func runSyncDaemonWithFactory(
 
 	console.Watching(standaloneSelection.Mounts, mode)
 
-	watchErr := orch.RunWatch(ctx, mode, opts)
-	if watchErr == nil {
-		watchErr = commandPanicCause(ctx)
-	}
+	// A keepalive's panic is the cause of this function's own context, which
+	// main cannot see: it replaces the stop it caused and joins any failure
+	// the watch ended with on its way out.
+	watchErr := withCommandPanic(ctx, orch.RunWatch(ctx, mode, opts))
 	if watchErr != nil {
 		// The terminal gets the message through main; the log file gets it
 		// here, so a watch that refuses to start (its sync folder missing,

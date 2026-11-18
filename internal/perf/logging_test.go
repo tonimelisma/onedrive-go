@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -86,6 +88,71 @@ func TestSession_UpdatePanicEndsTheCommandWithThePanic(t *testing.T) {
 	require.ErrorIs(t, context.Cause(ctx), panicguard.ErrPanic, "completing keeps the panic as the cause")
 }
 
+// panicOnUpdateAfter is a slog.Handler that panics on the first periodic
+// update once gate has closed, as a bug in the update's log call would, and
+// drops every other record.
+type panicOnUpdateAfter struct {
+	gate <-chan struct{}
+}
+
+func (panicOnUpdateAfter) Enabled(context.Context, slog.Level) bool { return true }
+
+//nolint:gocritic // slog.Handler fixes the by-value Record parameter.
+func (h panicOnUpdateAfter) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == "performance update" {
+		<-h.gate
+		panic("log call exploded")
+	}
+
+	return nil
+}
+
+func (h panicOnUpdateAfter) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h panicOnUpdateAfter) WithGroup(string) slog.Handler { return h }
+
+// A request the update's panic interrupts carries the panic, the cause of
+// the cancel, in place of context.Canceled. It reads as stopped, as under any
+// other stop, while the command's summary still reads as an error.
+//
+// Validates: R-6.3.10, R-6.8.29
+func TestSession_UpdatePanicStopsTheRequestInFlight(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	arrived := make(chan struct{})
+	var arrivedOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		arrivedOnce.Do(func() { close(arrived) })
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	session, ctx := NewSession(context.Background(), slog.New(panicOnUpdateAfter{gate: arrived}),
+		"command", "status", time.Millisecond, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, http.NoBody)
+	require.NoError(t, err)
+	client := &http.Client{Transport: RoundTripper{Inner: &http.Transport{}}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	resp, err := client.Do(req)
+	if resp != nil {
+		require.NoError(t, resp.Body.Close())
+	}
+
+	require.ErrorIs(t, err, context.Canceled, "the interrupted request reads as stopped")
+	require.ErrorIs(t, err, panicguard.ErrPanic, "and still carries the panic")
+	assert.Equal(t, 1, session.Collector().Snapshot().HTTPRequestCount)
+
+	summaryBuf := &lockedBuffer{}
+	session.SetLogger(newTestJSONLogger(summaryBuf))
+	session.Complete(err)
+	summary := decodeLogLine(t, strings.TrimSpace(summaryBuf.String()))
+	assert.Equal(t, "error", summary["result"], "a command a panic ended is no clean stop")
+}
+
 // Validates: R-6.6.14
 func TestSession_CompleteReleasesTheCommandContext(t *testing.T) {
 	t.Parallel()
@@ -97,6 +164,39 @@ func TestSession_CompleteReleasesTheCommandContext(t *testing.T) {
 
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.ErrorIs(t, context.Cause(ctx), context.Canceled, "a clean command ends without a cause")
+}
+
+// sessionEventWait bounds a test's wait for a session's goroutine.
+const sessionEventWait = 5 * time.Second
+
+// The periodic updates end when the command's context ends, also without
+// Complete: a command whose own goroutine panicked never reaches Complete,
+// and its updates would otherwise go on until the process exits. Complete
+// after that still writes the summary, once, and returns.
+//
+// Validates: R-6.6.14
+func TestSession_PeriodicUpdatesEndWithTheCommandContext(t *testing.T) {
+	t.Parallel()
+
+	logBuf := &lockedBuffer{}
+	parent, cancel := context.WithCancel(t.Context())
+	session, _ := NewSession(parent, newTestJSONLogger(logBuf), "command", "status", time.Hour, nil)
+
+	cancel()
+
+	select {
+	case <-session.doneCh:
+	case <-time.After(sessionEventWait):
+		require.FailNow(t, "the periodic updates outlived the command's context")
+	}
+
+	session.Complete(context.Canceled)
+	session.Complete(nil)
+	lines := splitLogLines(t, logBuf.String())
+	require.Len(t, lines, 1, "the summary is written once")
+	summary := decodeLogLine(t, lines[0])
+	assert.Equal(t, "performance summary", summary["msg"])
+	assert.Equal(t, "canceled", summary["result"])
 }
 
 // Validates: R-6.6.16

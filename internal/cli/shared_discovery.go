@@ -121,7 +121,6 @@ func discoverSharedTargetsForAccount(
 	}
 
 	var authRequired []accountAuthRequirement
-	degraded := false
 
 	for i := range tokenCandidates {
 		tokenCID := tokenCandidates[i]
@@ -130,7 +129,6 @@ func discoverSharedTargetsForAccount(
 			logger.Debug("shared discovery missing token path",
 				"account", tokenCID.String(),
 			)
-			degraded = true
 			continue
 		}
 
@@ -143,7 +141,7 @@ func discoverSharedTargetsForAccount(
 			authRequired = append(authRequired, tokenDiscoveryAuthRequirement(tokenCID, err, logger))
 			continue
 		}
-		attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID.Email(), "shared-discovery")
+		attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID, "shared-discovery")
 
 		targets, err := searchSharedTargets(ctx, client, tokenCID.Email(), logger)
 		if err != nil {
@@ -156,7 +154,6 @@ func discoverSharedTargetsForAccount(
 				"account", tokenCID.String(),
 				"error", err,
 			)
-			degraded = true
 			continue
 		}
 
@@ -166,12 +163,8 @@ func discoverSharedTargetsForAccount(
 	if len(authRequired) > 0 {
 		return nil, mergeAuthRequirements(authRequired), nil
 	}
-	if degraded {
-		return nil, nil, []accountDegradedNotice{
-			sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
-		}
-	}
 
+	// No sign-in answered the search: the account's shared items are unknown.
 	return nil, nil, []accountDegradedNotice{
 		sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
 	}
@@ -257,48 +250,71 @@ func searchSharedTargets(
 	return targets, nil
 }
 
+// discoveryConcurrency is how many lookups a discovery has under way at once:
+// the accounts drive list reads, and the shared items whose sharers it looks
+// up. Each lookup is Graph requests of its own, so the number of accounts or
+// shared items never sets how many requests are in flight.
+const discoveryConcurrency = 5
+
+// runBounded calls work for each index below count, at most
+// discoveryConcurrency at once, and returns when every call it started has
+// returned. Once ctx ends it starts no more; the caller reads the stop from
+// ctx. A panic in one call is that item's failure (R-6.3.10): it is logged,
+// where(i) completing "Internal error ...", failed(i) records it when failed
+// is set, and the other calls go on.
+func runBounded(
+	ctx context.Context,
+	logger *slog.Logger,
+	count int,
+	where func(i int) string,
+	work func(i int),
+	failed func(i int),
+) {
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, discoveryConcurrency)
+
+launch:
+	for i := range count {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			break launch
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			defer func() {
+				if r := recover(); r != nil {
+					//nolint:errcheck // failed records the item's failure; the error is only logged.
+					panicguard.Recovered(logger, where(i), r)
+					if failed != nil {
+						failed(i)
+					}
+				}
+			}()
+
+			work(i)
+		}()
+	}
+
+	wg.Wait()
+}
+
 func enrichSharedTargets(
 	ctx context.Context,
 	client *graph.Client,
 	targets []sharedDiscoveryTarget,
 	logger *slog.Logger,
 ) {
-	const enrichConcurrency = 5
-
-	var wg sync.WaitGroup
-	sema := make(chan struct{}, enrichConcurrency)
-
-launchEnrichment:
-	for i := range targets {
-		target := &targets[i]
-
-		select {
-		case sema <- struct{}{}:
-		case <-ctx.Done():
-			break launchEnrichment
-		}
-
-		wg.Add(1)
-		go func(target *sharedDiscoveryTarget) {
-			defer wg.Done()
-			defer func() {
-				<-sema
-			}()
-			// A panic leaves this item without its sharer's identity, as a
-			// failed lookup does, while the other items are looked up
-			// (R-6.3.10).
-			defer func() {
-				if r := recover(); r != nil {
-					//nolint:errcheck // An item left unenriched is the lookup's only result; the error is only logged.
-					panicguard.Recovered(logger, "while looking up who shared "+target.Name, r)
-				}
-			}()
-
-			enrichSharedTarget(ctx, client, target, logger)
-		}(target)
-	}
-
-	wg.Wait()
+	runBounded(ctx, logger, len(targets),
+		func(i int) string { return "while looking up who shared " + targets[i].Name },
+		func(i int) { enrichSharedTarget(ctx, client, &targets[i], logger) },
+		// A panic leaves the item without its sharer's identity, as a failed
+		// lookup does: nothing more to record.
+		nil,
+	)
 }
 
 func enrichSharedTarget(

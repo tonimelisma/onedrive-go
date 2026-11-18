@@ -148,6 +148,51 @@ func TestBuildAccountViews_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwiseUs
 	assert.Equal(t, authstate.ReasonMissingLogin, missing.AuthHealth.Reason)
 }
 
+// A personal and a work or school account at one address share one view. It
+// speaks for the first of them by canonical ID, the account whose saved login
+// it checks and signs in with: its name, its drive type and its sign-in
+// requirement, whichever of the two needs a sign-in. The other account adds
+// its saved login and nothing else.
+//
+// Validates: R-2.10.45, R-2.10.47
+func TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement(t *testing.T) {
+	business := driveid.MustCanonicalID("business:twin@example.com")
+	personal := driveid.MustCanonicalID("personal:twin@example.com")
+
+	for _, marked := range []driveid.CanonicalID{business, personal} {
+		t.Run(marked.DriveType(), func(t *testing.T) {
+			setTestDriveHome(t)
+			for _, account := range []driveid.CanonicalID{business, personal} {
+				writeTestTokenFile(t, config.DefaultDataDir(), "token_"+account.DriveType()+"_"+account.Email()+".json")
+				seedCatalogAccount(t, account, func(record *config.CatalogAccount) {
+					record.DisplayName = account.DriveType() + " user"
+				})
+			}
+			require.NoError(t, config.MarkAccountAuthRequired(config.DefaultDataDir(), marked, authstate.ReasonSyncAuthRejected))
+			stored, err := config.LoadCatalog()
+			require.NoError(t, err)
+
+			views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+			require.NoError(t, err)
+			require.Len(t, views, 1)
+			entry := views[0]
+
+			assert.Equal(t, business, entry.AccountCanonicalID)
+			assert.Equal(t, business, entry.RepresentativeTokenID, "the view signs in as the account it speaks for")
+			assert.Equal(t, driveid.DriveTypeBusiness, entry.DriveType)
+			assert.Equal(t, "business user", entry.DisplayName)
+			assert.Equal(t, []driveid.CanonicalID{business, personal}, entry.TokenDriveIDs)
+			if marked == business {
+				assert.Equal(t, authstate.ReasonSyncAuthRejected, entry.AuthRequirementReason)
+				assert.Equal(t, authstate.StateAuthenticationRequired, entry.AuthHealth.State)
+			} else {
+				assert.Empty(t, entry.AuthRequirementReason, "the personal account's requirement is not the work account's")
+				assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
+			}
+		})
+	}
+}
+
 func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 	t.Helper()
 

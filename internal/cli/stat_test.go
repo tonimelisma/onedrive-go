@@ -184,5 +184,5 @@ func TestRunStat_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedProof(t *te
 	cmd.SetArgs([]string{"/"})
 
 	require.NoError(t, cmd.Execute())
-	assert.False(t, hasPersistedAccountAuthRequirement(t, cid.Email()))
+	assert.False(t, hasPersistedAccountAuthRequirement(t, cid))
 }

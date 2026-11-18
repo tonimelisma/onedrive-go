@@ -123,7 +123,7 @@ func TestMarkAndClearAccountAuthRequirement(t *testing.T) {
 		account.DisplayName = validatedStateTestUser
 	})
 
-	require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), cid.Email(), authstate.ReasonSyncAuthRejected))
+	require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), cid, authstate.ReasonSyncAuthRejected))
 
 	stored, err := LoadCatalog()
 	require.NoError(t, err)
@@ -131,11 +131,45 @@ func TestMarkAndClearAccountAuthRequirement(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, account.AuthRequirementReason)
 
-	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), cid.Email()))
+	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), cid))
 
 	stored, err = LoadCatalog()
 	require.NoError(t, err)
 	account, found = stored.AccountByCanonicalID(cid)
 	require.True(t, found)
 	assert.Empty(t, account.AuthRequirementReason)
+}
+
+// A personal and a work or school account can share an address. Each one's
+// sign-in requirement is marked, read and cleared on its own record, whichever
+// of the two sorts first, and never on the other's.
+//
+// Validates: R-2.10.45, R-2.10.46, R-2.10.47
+func TestAccountAuthRequirement_TwoAccountsAtOneAddressAreMarkedReadAndClearedApart(t *testing.T) {
+	business := driveid.MustCanonicalID("business:user@example.com")
+	personal := driveid.MustCanonicalID("personal:user@example.com")
+
+	for _, pair := range [][2]driveid.CanonicalID{{business, personal}, {personal, business}} {
+		account, other := pair[0], pair[1]
+		t.Run(account.DriveType(), func(t *testing.T) {
+			setConfigTestHome(t)
+			seedCatalogAccount(t, account, nil)
+			seedCatalogAccount(t, other, nil)
+			required := func(cid driveid.CanonicalID) bool {
+				t.Helper()
+				has, err := LoadHasPersistedAccountAuthRequirement(DefaultDataDir(), cid)
+				require.NoError(t, err)
+				return has
+			}
+
+			require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), account, authstate.ReasonSyncAuthRejected))
+			assert.True(t, required(account), "the account whose sign-in was refused is marked")
+			assert.False(t, required(other), "the other account at the address is not")
+
+			require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), other, authstate.ReasonSyncAuthRejected))
+			require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), account))
+			assert.False(t, required(account), "the clear ends the account's own requirement")
+			assert.True(t, required(other), "and keeps the other account's")
+		})
+	}
 }

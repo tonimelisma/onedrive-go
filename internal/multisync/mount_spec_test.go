@@ -181,6 +181,8 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, mounts[0].remoteDriveID(), cfg.DriveID)
 	assert.Equal(t, mounts[0].parentDriveType(), cfg.DriveType)
 	assert.Equal(t, mounts[0].accountEmail(), cfg.AccountEmail)
+	assert.Equal(t, driveid.MustCanonicalID("business:owner@example.com"), cfg.AccountCanonicalID,
+		"the engine marks and clears the sign-in requirement of the token's owner")
 	assert.Equal(t, mounts[0].remoteRootItemID(), cfg.RemoteRootItemID)
 	assert.Equal(t, mounts[0].remoteRootDeltaCapable(), cfg.RemoteRootDeltaCapable)
 	assert.Equal(t, mounts[0].enableWebsocket(), cfg.EnableWebsocket)
@@ -230,6 +232,8 @@ func TestBuildRuntimeWork_AddsChildProjectionAfterParent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, driveid.New("remote-drive"), engineCfg.DriveID)
 	assert.Equal(t, "remote-root", engineCfg.RemoteRootItemID)
+	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), engineCfg.AccountCanonicalID,
+		"a shortcut child syncs with its parent's account")
 	assert.Empty(t, engineCfg.DriveType)
 	assert.False(t, engineCfg.LocalRules.RejectSharePointRootForms)
 }

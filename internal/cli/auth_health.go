@@ -36,45 +36,50 @@ type accountAuthRequirement struct {
 	StateDBs    int              `json:"state_dbs,omitempty"`
 }
 
+// authProofRecorder ends an account's sign-in requirement once a request made
+// with its saved login succeeded. Accounts are named by canonical ID, the
+// owner of the token the request used: a personal and a work or school
+// account can share an address, and a proof of one says nothing about the
+// other.
 type authProofRecorder struct {
 	logger  *slog.Logger
 	mu      sync.Mutex // guards cleared so one successful proof clears scopes once per account
-	cleared map[string]bool
+	cleared map[driveid.CanonicalID]bool
 }
 
 func newAuthProofRecorder(logger *slog.Logger) *authProofRecorder {
 	return &authProofRecorder{
 		logger:  logger,
-		cleared: make(map[string]bool),
+		cleared: make(map[driveid.CanonicalID]bool),
 	}
 }
 
-func (r *authProofRecorder) Hook(email, proofSource string) func(context.Context) {
+func (r *authProofRecorder) Hook(account driveid.CanonicalID, proofSource string) func(context.Context) {
 	return func(ctx context.Context) {
-		r.recordSuccess(email, proofSource)
+		r.recordSuccess(account, proofSource)
 	}
 }
 
-func (r *authProofRecorder) recordSuccess(email, proofSource string) {
-	if email == "" {
+func (r *authProofRecorder) recordSuccess(account driveid.CanonicalID, proofSource string) {
+	if account.IsZero() {
 		return
 	}
 
 	r.mu.Lock()
-	if r.cleared[email] {
+	if r.cleared[account] {
 		r.mu.Unlock()
 		return
 	}
-	r.cleared[email] = true
+	r.cleared[account] = true
 	r.mu.Unlock()
 
-	clearedCount, err := clearAccountAuthRequirementWithCount(email, config.AuthClearSourceCLIProof, r.logger)
+	clearedCount, err := clearAccountAuthRequirementWithCount(account, config.AuthClearSourceCLIProof, r.logger)
 	if err != nil {
 		// Auth-scope normalization is best-effort maintenance. Successful direct
 		// API commands must not surface stale auth proof cleanup failures to end
 		// users.
 		r.logger.Debug("clearing stale auth scopes after successful graph proof",
-			"account", email,
+			"account", account.String(),
 			"proof_source", proofSource,
 			"error", err,
 		)
@@ -83,36 +88,34 @@ func (r *authProofRecorder) recordSuccess(email, proofSource string) {
 
 	if clearedCount > 0 {
 		r.logger.Info("cleared stale auth scopes after successful graph proof",
-			"account", email,
+			"account", account.String(),
 			"proof_source", proofSource,
 			"state_dbs", clearedCount,
 		)
 	}
 }
 
-func attachAccountAuthProof(client *graph.Client, recorder *authProofRecorder, email, proofSource string) {
-	if client == nil || recorder == nil || email == "" {
+// attachAccountAuthProof makes every authenticated success of client a proof
+// for account, the owner of the token client signs in with.
+func attachAccountAuthProof(client *graph.Client, recorder *authProofRecorder, account driveid.CanonicalID, proofSource string) {
+	if client == nil || recorder == nil || account.IsZero() {
 		return
 	}
 
-	client.SetAuthenticatedSuccessHook(recorder.Hook(email, proofSource))
+	client.SetAuthenticatedSuccessHook(recorder.Hook(account, proofSource))
 }
 
+// attachDriveAuthProof is attachAccountAuthProof for both clients of a drive
+// session, whose token account owns.
 func attachDriveAuthProof(session interface {
-	AccountEmail() string
 	SetAuthenticatedSuccessHooks(func(context.Context))
-}, recorder *authProofRecorder, proofSource string,
+}, recorder *authProofRecorder, account driveid.CanonicalID, proofSource string,
 ) {
-	if session == nil || recorder == nil {
+	if session == nil || recorder == nil || account.IsZero() {
 		return
 	}
 
-	email := session.AccountEmail()
-	if email == "" {
-		return
-	}
-
-	session.SetAuthenticatedSuccessHooks(recorder.Hook(email, proofSource))
+	session.SetAuthenticatedSuccessHooks(recorder.Hook(account, proofSource))
 }
 
 func inspectSavedLogin(
@@ -171,24 +174,27 @@ func inspectSavedLogin(
 }
 
 func clearAccountAuthRequirementForSource(
-	email string,
+	account driveid.CanonicalID,
 	source config.AuthClearSource,
 	logger *slog.Logger,
 ) error {
-	_, err := clearAccountAuthRequirementWithCount(email, source, logger)
+	_, err := clearAccountAuthRequirementWithCount(account, source, logger)
 	return err
 }
 
+// clearAccountAuthRequirementWithCount ends the sign-in requirement of
+// account, named by canonical ID, and reports whether one stood. It reads the
+// catalog first so a proof that finds nothing to end writes nothing.
 func clearAccountAuthRequirementWithCount(
-	email string,
+	account driveid.CanonicalID,
 	source config.AuthClearSource,
 	logger *slog.Logger,
 ) (int, error) {
-	if email == "" {
+	if account.IsZero() {
 		return 0, nil
 	}
 
-	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), email)
+	required, err := config.LoadHasPersistedAccountAuthRequirement(config.DefaultDataDir(), account)
 	if err != nil {
 		return 0, fmt.Errorf("loading catalog: %w", err)
 	}
@@ -196,12 +202,12 @@ func clearAccountAuthRequirementWithCount(
 		return 0, nil
 	}
 
-	if err := config.ClearAccountAuthRequirement(config.DefaultDataDir(), email); err != nil {
+	if err := config.ClearAccountAuthRequirement(config.DefaultDataDir(), account); err != nil {
 		return 0, fmt.Errorf("clearing auth requirement: %w", err)
 	}
 
 	logger.Info("cleared catalog auth requirement",
-		"account", email,
+		"account", account.String(),
 		"source", source,
 	)
 	return 1, nil

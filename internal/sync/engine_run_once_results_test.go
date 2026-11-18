@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -9,6 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/authstate"
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
@@ -116,6 +120,70 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 	required, authErr := eng.hasPersistedAccountAuthRequirement()
 	require.NoError(t, authErr)
 	assert.True(t, required)
+}
+
+// signInRequirementOf is the sign-in requirement the catalog of eng's data
+// directory holds for account.
+func signInRequirementOf(t *testing.T, eng *testEngine, account driveid.CanonicalID) authstate.Reason {
+	t.Helper()
+
+	catalog, err := config.LoadCatalogForDataDir(eng.dataDir)
+	require.NoError(t, err)
+	record, found := catalog.AccountByCanonicalID(account)
+	require.True(t, found, "the catalog knows %s", account)
+
+	return record.AuthRequirementReason
+}
+
+// Validates: R-2.10.45, R-2.10.46
+//
+// A personal and a work or school account can share an address. A sync's 401
+// marks the account the engine syncs with, found by its canonical ID,
+// whichever of the two sorts first. The next startup proof ends that
+// account's requirement alone, and the other account's requirement neither
+// makes this engine revalidate nor ends with it.
+func TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress(t *testing.T) {
+	t.Parallel()
+
+	personal := testEngineAccountCanonicalID()
+	business := driveid.MustCanonicalID(driveid.DriveTypeBusiness + ":" + engineTestEmail)
+
+	for _, pair := range [][2]driveid.CanonicalID{{personal, business}, {business, personal}} {
+		synced, other := pair[0], pair[1]
+		t.Run(synced.DriveType(), func(t *testing.T) {
+			t.Parallel()
+
+			mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
+			upload := mock.uploadFn
+			mock.uploadFn = func(
+				context.Context, driveid.ID, string, string, io.ReaderAt, int64, time.Time, graph.ProgressFunc,
+			) (*graph.Item, error) {
+				return nil, graphStatusError(http.StatusUnauthorized, graph.ErrUnauthorized)
+			}
+			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
+				inputs.AccountCanonicalID = synced
+				inputs.DriveVerifier = mock
+			})
+			seedTestEngineAccount(t, eng.dataDir, other)
+			writeLocalFile(t, syncRoot, "local.txt", "local content\n")
+
+			_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			require.ErrorIs(t, err, graph.ErrUnauthorized)
+			assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, synced), "the 401 marks the synced account")
+			assert.Empty(t, signInRequirementOf(t, eng, other), "and not the other account at its address")
+
+			require.NoError(t, config.MarkAccountAuthRequired(eng.dataDir, other, authstate.ReasonSyncAuthRejected))
+			mock.uploadFn = upload
+			_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			require.NoError(t, err, "the startup proof revalidates the synced account")
+			assert.Empty(t, signInRequirementOf(t, eng, synced), "and ends its requirement")
+			assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, other), "the other account's stands")
+
+			required, err := eng.hasPersistedAccountAuthRequirement()
+			require.NoError(t, err)
+			assert.False(t, required, "the other account's requirement is not this engine's to revalidate")
+		})
+	}
 }
 
 // Validates: R-2.8.7, R-2.10.5

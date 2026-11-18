@@ -176,8 +176,9 @@ func firstLine(text string) string {
 // startSyncWatchdog runs the keepalive loop when the unit set WatchdogSec=.
 // The returned stop ends the goroutine and waits for it, so the caller owns
 // its whole lifetime. A panic in the loop ends the watch through fail, with
-// the panic as the cause: a watch that has stopped proving it is alive would
-// be killed by systemd at its next deadline anyway, without a word in the log
+// the panic as the cause (panicguard.AsCancelCause, so the work it interrupts
+// reads as stopped): a watch that has stopped proving it is alive would be
+// killed by systemd at its next deadline anyway, without a word in the log
 // (R-6.3.10).
 func startSyncWatchdog(ctx context.Context, s *syncNotifier, fail context.CancelCauseFunc) (stop func()) {
 	interval := s.notifier.WatchdogInterval()
@@ -192,7 +193,7 @@ func startSyncWatchdog(ctx context.Context, s *syncNotifier, fail context.Cancel
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				fail(panicguard.Recovered(s.logger, "in the systemd watchdog keepalive", r))
+				fail(panicguard.AsCancelCause(panicguard.Recovered(s.logger, "in the systemd watchdog keepalive", r)))
 			}
 		}()
 		s.runWatchdog(watchdogCtx, ticker.C)

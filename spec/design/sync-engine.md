@@ -1793,6 +1793,11 @@ Fatal authentication failures are not retry-owned. A `401` action completion
 marks the account auth requirement and stops the runtime; it must not create
 `retry_work`, activate `block_scopes`, or leave a timed trial path behind. The
 catalog auth requirement is the durable restart fact for that class of failure.
+It is the requirement of the engine's own account, its token owner
+(`EngineMountConfig.AccountCanonicalID`), found by canonical ID: another
+account at the same address is neither marked by this engine's 401 nor
+revalidated or cleared by its startup proof
+(`TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress`).
 The account is marked once per run, and the failure is returned, not logged:
 the CLI prints it once as a sign-in message, and the same 401 on other
 in-flight transfers adds nothing (`fatalCompletionError`).

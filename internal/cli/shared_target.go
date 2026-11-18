@@ -162,7 +162,7 @@ func (cc *CLIContext) sharedBootstrapMetaClient(
 	}
 
 	recorder := newAuthProofRecorder(cc.Logger)
-	attachAccountAuthProof(client, recorder, accountCID.Email(), "shared-bootstrap")
+	attachAccountAuthProof(client, recorder, accountCID, "shared-bootstrap")
 
 	return client, accountCID.Email(), nil
 }
@@ -185,8 +185,8 @@ func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref
 	}
 
 	recorder := newAuthProofRecorder(cc.Logger)
-	attachAccountAuthProof(clients.Meta, recorder, accountCID.Email(), "shared-meta")
-	attachAccountAuthProof(clients.Transfer, recorder, accountCID.Email(), "shared-transfer")
+	attachAccountAuthProof(clients.Meta, recorder, accountCID, "shared-meta")
+	attachAccountAuthProof(clients.Transfer, recorder, accountCID, "shared-transfer")
 
 	return clients, nil
 }
