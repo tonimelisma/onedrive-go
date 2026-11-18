@@ -97,7 +97,7 @@ func addDrive(
 	)
 	if result.EndedSignInRequirement {
 		logger.Info("cleared catalog auth requirement",
-			slog.String("account", req.Drive.Email()),
+			slog.String("account", req.Drive.String()),
 			slog.String("source", string(AuthClearSourceLogin)),
 		)
 	}

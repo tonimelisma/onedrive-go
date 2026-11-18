@@ -141,7 +141,7 @@ func discoverSharedTargetsForAccount(
 			authRequired = append(authRequired, tokenDiscoveryAuthRequirement(tokenCID, err, logger))
 			continue
 		}
-		attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID.Email(), "shared-discovery")
+		attachAccountAuthProof(client, newAuthProofRecorder(logger), tokenCID, "shared-discovery")
 
 		targets, err := searchSharedTargets(ctx, client, tokenCID.Email(), logger)
 		if err != nil {

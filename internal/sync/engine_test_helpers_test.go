@@ -370,23 +370,25 @@ func newTestEngineInDirWith(
 	logger := testLogger(t)
 	driveID := driveid.New(engineTestDriveID)
 	accountEmail := engineTestEmail
+	accountCID := testEngineAccountCanonicalID()
 
 	inputs := &engineInputs{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DataDir:         dataDir,
-		DriveID:         driveID,
-		AccountEmail:    accountEmail,
-		Fetcher:         mock,
-		SocketIOFetcher: mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		PathConvergence: &enginePathConvergenceStub{},
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          logger,
+		DBPath:             dbPath,
+		SyncRoot:           syncRoot,
+		DataDir:            dataDir,
+		DriveID:            driveID,
+		AccountEmail:       accountEmail,
+		AccountCanonicalID: accountCID,
+		Fetcher:            mock,
+		SocketIOFetcher:    mock,
+		Items:              mock,
+		Downloads:          mock,
+		Uploads:            mock,
+		PathConvergence:    &enginePathConvergenceStub{},
+		FolderDelta:        mock,
+		RecursiveLister:    mock,
+		PermChecker:        mock,
+		Logger:             logger,
 	}
 	if configure != nil {
 		configure(inputs)
@@ -400,21 +402,39 @@ func newTestEngineInDirWith(
 		Engine: eng,
 		flow:   flow,
 	}
-	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
-		account := config.CatalogAccount{
-			CanonicalID: fmt.Sprintf("personal:%s", accountEmail),
-			Email:       accountEmail,
-			DriveType:   "personal",
-		}
-		catalog.UpsertAccount(&account)
-		return nil
-	}))
+	seedTestEngineAccount(t, dataDir, inputs.AccountCanonicalID)
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
 	return testEng, syncRoot
+}
+
+// testEngineAccountCanonicalID is the personal account a test engine syncs
+// with, at engineTestEmail.
+func testEngineAccountCanonicalID() driveid.CanonicalID {
+	return driveid.MustCanonicalID(driveid.DriveTypePersonal + ":" + engineTestEmail)
+}
+
+// seedTestEngineAccount records the test engine's account in the catalog of
+// dataDir, without a sign-in requirement; an engine with no account records
+// none.
+func seedTestEngineAccount(t *testing.T, dataDir string, account driveid.CanonicalID) {
+	t.Helper()
+
+	if account.IsZero() {
+		return
+	}
+	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
+		record := config.CatalogAccount{
+			CanonicalID: account.String(),
+			Email:       account.Email(),
+			DriveType:   account.DriveType(),
+		}
+		catalog.UpsertAccount(&record)
+		return nil
+	}))
 }
 
 // newTestEngineWithLogger is like newTestEngine but accepts a custom logger
@@ -440,23 +460,25 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 
 	driveID := driveid.New(engineTestDriveID)
 	accountEmail := "sync-user@example.com"
+	accountCID := testEngineAccountCanonicalID()
 
 	eng, err := newEngine(ctx, &engineInputs{
-		DBPath:          dbPath,
-		SyncRoot:        syncRoot,
-		DataDir:         dataDir,
-		DriveID:         driveID,
-		AccountEmail:    accountEmail,
-		Fetcher:         mock,
-		SocketIOFetcher: mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		PathConvergence: &enginePathConvergenceStub{},
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          logger,
+		DBPath:             dbPath,
+		SyncRoot:           syncRoot,
+		DataDir:            dataDir,
+		DriveID:            driveID,
+		AccountEmail:       accountEmail,
+		AccountCanonicalID: accountCID,
+		Fetcher:            mock,
+		SocketIOFetcher:    mock,
+		Items:              mock,
+		Downloads:          mock,
+		Uploads:            mock,
+		PathConvergence:    &enginePathConvergenceStub{},
+		FolderDelta:        mock,
+		RecursiveLister:    mock,
+		PermChecker:        mock,
+		Logger:             logger,
 	})
 	require.NoError(t, err, "NewEngine")
 	eng.assertInvariants = true
@@ -466,15 +488,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 		Engine: eng,
 		flow:   flow,
 	}
-	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
-		account := config.CatalogAccount{
-			CanonicalID: fmt.Sprintf("personal:%s", accountEmail),
-			Email:       accountEmail,
-			DriveType:   "personal",
-		}
-		catalog.UpsertAccount(&account)
-		return nil
-	}))
+	seedTestEngineAccount(t, dataDir, accountCID)
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")

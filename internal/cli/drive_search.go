@@ -142,7 +142,7 @@ func searchAccountSharePoint(
 
 		return nil, nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil
 	}
-	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-search")
+	attachAccountAuthProof(client, recorder, tokenCID, "drive-search")
 
 	sites, err := client.SearchSites(ctx, query, sharePointSearchLimit)
 	if err != nil {

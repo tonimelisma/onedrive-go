@@ -132,6 +132,7 @@ type engineInputs struct {
 	DriveID                  driveid.ID
 	DriveType                string
 	AccountEmail             string
+	AccountCanonicalID       driveid.CanonicalID
 	RemoteRootItemID         string
 	RemoteRootDeltaCapable   bool
 	ExpectedSyncRootIdentity *synctree.FileIdentity

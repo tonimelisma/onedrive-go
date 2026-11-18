@@ -111,11 +111,11 @@ func executeLogout(
 		result.Drives = append(result.Drives, cid.String())
 	}
 
-	removed, err := removeLogoutToken(w, stored, account, affected, purge, logger)
+	removedToken, err := removeLogoutToken(w, stored, account, affected, purge, logger)
 	if err != nil {
 		return result, err
 	}
-	result.TokenRemoved = removed
+	result.TokenRemoved = !removedToken.IsZero()
 
 	// Each drive's folder as its engine locked it, read before the config
 	// forgets it, for the listing below and the purge's lock.
@@ -142,7 +142,7 @@ func executeLogout(
 		return result, fmt.Errorf("removing drive configs: %w", configErr)
 	}
 
-	return result, executePlainLogout(w, account, logger)
+	return result, executePlainLogout(w, removedToken, logger)
 }
 
 // logoutPurgeCommand is the command that finishes a purge logout whose
@@ -152,8 +152,9 @@ func logoutPurgeCommand(account string) string {
 	return "onedrive-go logout --purge --account " + account
 }
 
-// removeLogoutToken deletes the account's saved login, reporting whether
-// there was one to delete.
+// removeLogoutToken deletes the account's saved login. It returns the
+// canonical ID the token was found by, a drive of the account or the account
+// itself, or zero when there was no token to delete.
 func removeLogoutToken(
 	w io.Writer,
 	stored *config.Catalog,
@@ -161,12 +162,12 @@ func removeLogoutToken(
 	affected []driveid.CanonicalID,
 	purge bool,
 	logger *slog.Logger,
-) (bool, error) {
+) (driveid.CanonicalID, error) {
 	tokenCanonicalID := canonicalIDForToken(account, affected)
 	if tokenCanonicalID.IsZero() {
 		storedCID, err := config.AccountCanonicalIDByEmail(stored, account)
 		if err != nil {
-			return false, fmt.Errorf("finding the saved login of %s: %w", account, err)
+			return driveid.CanonicalID{}, fmt.Errorf("finding the saved login of %s: %w", account, err)
 		}
 		tokenCanonicalID = storedCID
 	}
@@ -174,20 +175,20 @@ func removeLogoutToken(
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
 	if tokenPath != "" {
 		if err := graph.Logout(tokenPath, logger); err != nil {
-			return false, fmt.Errorf("remove token file: %w", err)
+			return driveid.CanonicalID{}, fmt.Errorf("remove token file: %w", err)
 		}
-		return true, writef(w, "Token removed for %s.\n", account)
+		return tokenCanonicalID, writef(w, "Token removed for %s.\n", account)
 	}
 
 	if !purge {
-		return false, fmt.Errorf(
+		return driveid.CanonicalID{}, fmt.Errorf(
 			"no saved login was found for %s — run 'onedrive-go logout --purge --account %s' to remove retained state",
 			account,
 			account,
 		)
 	}
 
-	return false, writef(w, "Token already removed for %s.\n", account)
+	return driveid.CanonicalID{}, writef(w, "Token already removed for %s.\n", account)
 }
 
 // executePurgeLogout deletes the state databases of a logged-out account:
@@ -233,14 +234,21 @@ func executePurgeLogout(
 }
 
 // executePlainLogout finishes a logout without --purge, after the drives'
-// config sections were removed: their state databases are kept.
-func executePlainLogout(w io.Writer, account string, logger *slog.Logger) error {
+// config sections were removed: their state databases are kept. removedToken
+// is what removeLogoutToken found the deleted token by.
+func executePlainLogout(w io.Writer, removedToken driveid.CanonicalID, logger *slog.Logger) error {
 	if err := writeln(w, "\nState databases kept. Run 'onedrive-go login' to re-authenticate."); err != nil {
 		return err
 	}
 
 	// Clearing the persisted auth requirement has one owner, so logout goes
 	// through the same path as every other clear and is logged with its source.
+	// It clears the account whose token was deleted, by canonical ID: another
+	// account at the same address keeps its sign-in and its requirement.
+	account, err := config.TokenAccountCanonicalID(removedToken)
+	if err != nil {
+		return fmt.Errorf("updating catalog after logout: %w", err)
+	}
 	if err := clearAccountAuthRequirementForSource(account, config.AuthClearSourceLogout, logger); err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}

@@ -24,8 +24,7 @@ func runLoginWithContext(ctx context.Context, cc *CLIContext, useBrowser bool) e
 	tempPath := pendingTokenPath()
 	ts, err := authenticateLogin(ctx, cc, useBrowser, tempPath)
 	if err != nil {
-		cleanupPendingToken(cc, tempPath, "login failure")
-		return fmt.Errorf("authenticate account: %w", err)
+		return withPendingTokenRemoved(fmt.Errorf("authenticate account: %w", err), tempPath)
 	}
 
 	return completeLogin(ctx, cc, ts, tempPath)
@@ -42,25 +41,21 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 
 	canonicalID, user, orgName, primaryDriveID, err := discoverAccount(ctx, ts, tempPath, logger, cc.runtime())
 	if err != nil {
-		cleanupPendingToken(cc, tempPath, "discovery failure")
-		return fmt.Errorf("discovering account: %w", err)
+		return withPendingTokenRemoved(fmt.Errorf("discovering account: %w", err), tempPath)
 	}
 
 	if _, reconcileErr := cc.reconcileGraphUser(ctx, canonicalID, user); reconcileErr != nil {
-		cleanupPendingToken(cc, tempPath, "reconciliation failure")
-		return reconcileErr
+		return withPendingTokenRemoved(reconcileErr, tempPath)
 	}
 
 	finalTokenPath := config.DriveTokenPath(canonicalID)
 	if finalTokenPath == "" {
-		cleanupPendingToken(cc, tempPath, "path resolution failure")
-		return fmt.Errorf("cannot determine token path for drive %q", canonicalID.String())
+		return withPendingTokenRemoved(fmt.Errorf("cannot determine token path for drive %q", canonicalID.String()), tempPath)
 	}
 
 	restoreToken, err := installLoginToken(tempPath, finalTokenPath)
 	if err != nil {
-		cleanupPendingToken(cc, tempPath, "token install failure")
-		return err
+		return withPendingTokenRemoved(err, tempPath)
 	}
 
 	enrolled, err := config.AddDrive(&config.AddDriveRequest{
@@ -205,10 +200,16 @@ func authenticateLogin(
 	return ts, nil
 }
 
-func cleanupPendingToken(cc *CLIContext, path string, reason string) {
+// withPendingTokenRemoved is err, the failure that ends a login before its
+// token was installed, after the pending sign-in at path is removed. A pending
+// sign-in that could not be removed joins err rather than going unsaid: the
+// next login overwrites it, but until then a saved sign-in is left on disk.
+func withPendingTokenRemoved(err error, path string) error {
 	if cleanupErr := removePathIfExists(path); cleanupErr != nil {
-		cc.Logger.Warn("failed to remove pending token", "reason", reason, "path", path, "error", cleanupErr)
+		return errors.Join(err, fmt.Errorf("remove the pending sign-in: %w", cleanupErr))
 	}
+
+	return err
 }
 
 func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error {

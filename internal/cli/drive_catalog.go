@@ -200,7 +200,7 @@ func discoverDrivesForToken(
 
 		return nil, []accountAuthRequirement{tokenDiscoveryAuthRequirement(tokenCID, err, logger)}, nil, sharePointGaps{}
 	}
-	attachAccountAuthProof(client, recorder, tokenCID.Email(), "drive-list")
+	attachAccountAuthProof(client, recorder, tokenCID, "drive-list")
 
 	entries, authRequired, degraded := discoverAccessibleDrives(
 		ctx,

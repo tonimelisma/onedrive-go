@@ -236,12 +236,14 @@ error):
   own context in `runSyncDaemonWithFactory`) and the performance logger (the
   context `perf.NewSession` returned). `withCommandPanic` makes the cause the
   command's error, in place of the cancellation it caused or the nil of a
-  command that finished regardless, and `runSyncDaemonWithFactory` returns it
-  from a watch that drained on that cancellation, so the watch logs it and
-  sets its failure `STATUS=`
+  command that finished regardless, and `runSyncDaemonWithFactory` does the
+  same for its own context, which main cannot see: a watch that drained on
+  that cancellation returns the panic, and one that also failed on its way
+  out returns both, so the watch logs it and sets its failure `STATUS=`
   (`TestWithCommandPanic_AHelpersPanicIsTheCommandsError`,
   `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`,
   `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`,
+  `TestRunSyncDaemon_WatchdogPanicJoinsTheFailureTheWatchEndsWith`,
   `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`). Each hands
   the cancel `panicguard.AsCancelCause` of the panic's error: a request or a
   wait the cancel interrupts carries the cause in place of `context.Canceled`,
@@ -251,7 +253,9 @@ error):
   (`TestAsCancelCause_AnswersToThePanicAndToTheStop`,
   `TestShutdownContext_HandlerPanicStopsTheRequestInFlight`,
   `TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight`,
-  `TestSession_UpdatePanicStopsTheRequestInFlight`).
+  `TestSession_UpdatePanicStopsTheRequestInFlight`; for a sync action,
+  `TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown`:
+  no failure and no retry work, and the next sync redoes it).
 - A command's one-shot helpers recover into their unit's existing result: a
   drive listing that panicked is that account's degraded notice
   (`TestDiscoverAvailableDrives_APanicIsThatAccountsDegradedNotice`), a `get`

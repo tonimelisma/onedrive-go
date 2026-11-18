@@ -173,27 +173,24 @@ func LoadAccountCanonicalIDByEmail(dataDir, email string) (driveid.CanonicalID, 
 }
 
 // HasPersistedAccountAuthRequirement reports whether the catalog currently
-// marks the account as requiring re-authentication.
-func HasPersistedAccountAuthRequirement(catalog *Catalog, email string) bool {
-	if catalog == nil || email == "" {
-		return false
-	}
-
-	account, found := catalog.AccountByEmail(email)
+// marks the account, named by its canonical ID (see MarkAccountAuthRequired),
+// as requiring re-authentication.
+func HasPersistedAccountAuthRequirement(catalog *Catalog, account driveid.CanonicalID) bool {
+	record, found := catalog.AccountByCanonicalID(account)
 	if !found {
 		return false
 	}
 
-	return account.AuthRequirementReason != ""
+	return record.AuthRequirementReason != ""
 }
 
-func LoadHasPersistedAccountAuthRequirement(dataDir, email string) (bool, error) {
+func LoadHasPersistedAccountAuthRequirement(dataDir string, account driveid.CanonicalID) (bool, error) {
 	catalog, err := LoadCatalogForDataDir(dataDir)
 	if err != nil {
 		return false, err
 	}
 
-	return HasPersistedAccountAuthRequirement(catalog, email), nil
+	return HasPersistedAccountAuthRequirement(catalog, account), nil
 }
 
 // AuthenticatedAccountEmails returns known catalog accounts that still have a

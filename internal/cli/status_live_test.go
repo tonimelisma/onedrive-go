@@ -257,7 +257,7 @@ func TestStatus_ASignInFailureStillMarksTheAccount(t *testing.T) {
 		require.NoError(t, run.status(t, t.Context()))
 		assert.Contains(t, run.stdout.String(), "Sign-in required: ")
 		assert.Empty(t, run.notes())
-		assert.True(t, hasPersistedAccountAuthRequirement(t, statusLiveTestEmailA))
+		assert.True(t, hasPersistedAccountAuthRequirement(t, driveid.MustCanonicalID("personal:"+statusLiveTestEmailA)))
 	})
 
 	t.Run("json", func(t *testing.T) {

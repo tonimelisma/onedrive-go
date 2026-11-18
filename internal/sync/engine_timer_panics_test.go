@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,68 @@ func TestRunWatch_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown(t *testin
 		require.FailNow(t, "the timer's panic did not end the watch")
 	}
 	assertNoFailureRecorded(t, eng.Engine)
+}
+
+// panicInACommandHelper is a helper goroutine of the command, such as the
+// CLI's signal handler or systemd keepalive: its boundary recovers the panic
+// and cancels the command with panicguard.AsCancelCause of the panic's error,
+// then closes done.
+func panicInACommandHelper(cancelCommand context.CancelCauseFunc, done chan<- struct{}) {
+	defer close(done)
+	defer func() {
+		if r := recover(); r != nil {
+			cancelCommand(panicguard.AsCancelCause(
+				panicguard.Recovered(slog.New(slog.DiscardHandler), "in the signal handler", r)))
+		}
+	}()
+
+	panic("handler exploded")
+}
+
+// Validates: R-6.3.10, R-6.8.29
+//
+// A panic in a helper goroutine of the command cancels the command's context
+// with a cause that answers to context.Canceled as well as to the panic. The
+// download that cancel interrupts fails the way the transports fail a
+// canceled request, with that cause in place of context.Canceled, and ends as
+// at any other stop: nothing counted as failed, no retry work, no blocked
+// scope, and the next sync downloads the file. A cause that answered only to
+// the panic would leave the download as a failure kept for retry.
+func TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown(t *testing.T) {
+	t.Parallel()
+
+	mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
+	downloadContent := mock.downloadFn
+	eng, syncRoot := newTestEngine(t, mock)
+	commandCtx, cancelCommand := context.WithCancelCause(t.Context())
+	defer cancelCommand(nil)
+	helperDone := make(chan struct{})
+	var helperStarted atomic.Bool
+	mock.downloadFn = func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+		if helperStarted.CompareAndSwap(false, true) {
+			go panicInACommandHelper(cancelCommand, helperDone)
+		}
+		<-ctx.Done()
+
+		return 0, fmt.Errorf("request canceled: %w", context.Cause(ctx))
+	}
+
+	report, err := eng.RunOnce(commandCtx, SyncBidirectional, RunOptions{})
+	require.True(t, helperStarted.Load(), "the download ran")
+	<-helperDone
+
+	require.ErrorIs(t, err, context.Canceled, "the run ends as stopped")
+	require.ErrorIs(t, context.Cause(commandCtx), panicguard.ErrPanic, "the command keeps the panic")
+	require.NotNil(t, report, "RunOnce returns the report it has beside the error")
+	assert.Zero(t, report.Failed, "errors: %v", report.Errors)
+	assert.Zero(t, report.Succeeded)
+	assertNoFailureRecorded(t, eng.Engine)
+
+	mock.downloadFn = downloadContent
+	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Succeeded, "the next sync redoes the action the stop interrupted")
+	assert.FileExists(t, filepath.Join(syncRoot, "remote.txt"))
 }
 
 // panicThroughTheBoundary panics inside clock's timer boundary, as a timer

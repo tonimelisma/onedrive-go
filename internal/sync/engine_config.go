@@ -31,6 +31,10 @@ type EngineMountConfig struct {
 	TransferWorkers          int
 	CheckWorkers             int
 	MinFreeSpace             int64
+	// AccountCanonicalID is the account whose sign-in the engine syncs with,
+	// the owner of its token. Its catalog record carries the sign-in
+	// requirement the engine marks, checks at startup and clears.
+	AccountCanonicalID driveid.CanonicalID
 }
 
 // NewMountEngine constructs an Engine directly from the authenticated session
@@ -72,6 +76,7 @@ func NewMountEngine(
 		DriveID:                  mountCfg.DriveID,
 		DriveType:                mountCfg.DriveType,
 		AccountEmail:             mountCfg.AccountEmail,
+		AccountCanonicalID:       mountCfg.AccountCanonicalID,
 		RemoteRootItemID:         mountCfg.RemoteRootItemID,
 		RemoteRootDeltaCapable:   mountCfg.RemoteRootDeltaCapable,
 		ExpectedSyncRootIdentity: shortcutRootIdentityToFileIdentity(mountCfg.ExpectedSyncRootIdentity),

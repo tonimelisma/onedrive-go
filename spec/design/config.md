@@ -4,10 +4,13 @@ GOVERNS: internal/config/account_owner.go, internal/config/catalog.go, internal/
 
 Implements: R-3.7 [verified], R-4.1 [verified], R-4.1.5 [verified], R-4.2 [verified], R-4.3 [verified], R-4.4 [verified], R-4.8.1 [verified], R-4.8.2 [verified], R-4.8.3 [verified], R-4.8.4 [verified], R-4.8.5 [verified], R-4.8.6 [verified], R-4.9.1 [verified], R-4.9.2 [verified], R-4.9.3 [verified], R-4.9.4 [verified], R-6.3.4 [verified], R-6.6.31 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.10.13 [verified]
 
-## Clearing The Account Auth Requirement Has One Owner
+## Clearing The Account Auth Requirement Has One Owner Outside A Login
 
-`ClearAccountAuthRequirement` is the single writer of that field's cleared
-state. It used to accept an `AuthClearSource` and ignore it, which advertised
+`ClearAccountAuthRequirement` is the one writer of that field's cleared state
+outside a login. A login ends the requirement in the catalog write of its
+enrollment transaction (`recordLogin`, see "Transition Summary"), so it never
+depends on a second step that could fail alone. `ClearAccountAuthRequirement`
+used to accept an `AuthClearSource` and ignore it, which advertised
 a boundary the catalog does not have: the catalog records whether a
 requirement stands, never how it ended. The parameter is gone, and callers name
 the reason in their own logging instead, so the log is where the source lives
@@ -19,6 +22,32 @@ also means a logout-driven clear is logged with its source like every other
 clear; previously it was the one clear that happened silently. That is what
 `AuthClearSourceLogout` was for -- it existed but nothing used it, which was
 the visible end of this duplication.
+
+The requirement belongs to one account record, named by canonical ID.
+`MarkAccountAuthRequired`, `ClearAccountAuthRequirement`,
+`HasPersistedAccountAuthRequirement` and the sync engine's startup check find
+it with `AccountByCanonicalID`, never by email: a personal and a work or school
+account can share an address, and a lookup by email lands on whichever record
+sorts first. Every caller passes the account whose sign-in it used. The sync
+engine passes its token owner (`EngineMountConfig.AccountCanonicalID`), a CLI
+proof the owner of the token its client signed in with, `status` the owner of
+the token it asked OneDrive with, logout the owner of the token it deleted, and
+a login its own account
+(`TestAccountAuthRequirement_TwoAccountsAtOneAddressAreMarkedReadAndClearedApart`,
+`TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress`,
+`TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn`,
+`TestLogout_EndsTheSignInRequirementOfTheAccountWhoseTokenItDeleted`,
+`TestExecutePlainLogout_ClearsPersistedAuthRequirement`).
+
+CLI account views are one per address, however. With two accounts at one
+address, the view (and so the `status` row, `drive list`'s
+`accounts_requiring_auth` and logout's account choice) speaks for the first of
+them by canonical ID, the account whose saved login it checks and signs in
+with: its names, its drive type and its requirement
+(`TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement`).
+The second account's requirement is written and cleared on its own record,
+but no account surface shows it, and `--account` cannot choose between the
+two, since it takes an email (R-3.5.2).
 
 ## Overview
 

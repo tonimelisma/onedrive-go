@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
 // ValidatedState is the config-owned durable snapshot used by CLI inventory
@@ -134,40 +135,45 @@ func validatePrimaryDriveOwnership(stored *Catalog) error {
 
 // MarkAccountAuthRequired records that the account must sign in again, for
 // the reason given. An account the catalog does not know is left alone.
-func MarkAccountAuthRequired(dataDir, email string, reason authstate.Reason) error {
-	if email == "" {
+//
+// The account is named by its canonical ID, never its email: a personal and a
+// work or school account can share an address, and the requirement belongs to
+// the one whose sign-in was refused. The same holds for every reader and
+// clear of it.
+func MarkAccountAuthRequired(dataDir string, account driveid.CanonicalID, reason authstate.Reason) error {
+	if account.IsZero() {
 		return nil
 	}
 
 	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
-		account, found := catalog.AccountByEmail(email)
+		record, found := catalog.AccountByCanonicalID(account)
 		if !found {
 			return nil
 		}
-		account.AuthRequirementReason = reason
-		catalog.UpsertAccount(&account)
+		record.AuthRequirementReason = reason
+		catalog.UpsertAccount(&record)
 		return nil
 	})
 }
 
-// ClearAccountAuthRequirement clears the persisted account-auth requirement.
-// It is the one writer of that field's cleared state outside a login, whose
-// enrollment ends the requirement in the catalog write that records the login
-// (recordLogin). Callers name the reason they are clearing it in their own
-// logging, because the catalog records only whether a requirement stands, not
-// how it ended.
-func ClearAccountAuthRequirement(dataDir, email string) error {
-	if email == "" {
+// ClearAccountAuthRequirement clears the account's persisted auth
+// requirement. It is the one writer of that field's cleared state outside a
+// login, whose enrollment ends the requirement in the catalog write that
+// records the login (recordLogin). Callers name the reason they are clearing
+// it in their own logging, because the catalog records only whether a
+// requirement stands, not how it ended.
+func ClearAccountAuthRequirement(dataDir string, account driveid.CanonicalID) error {
+	if account.IsZero() {
 		return nil
 	}
 
 	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
-		account, found := catalog.AccountByEmail(email)
+		record, found := catalog.AccountByCanonicalID(account)
 		if !found {
 			return nil
 		}
-		account.AuthRequirementReason = ""
-		catalog.UpsertAccount(&account)
+		record.AuthRequirementReason = ""
+		catalog.UpsertAccount(&record)
 		return nil
 	})
 }

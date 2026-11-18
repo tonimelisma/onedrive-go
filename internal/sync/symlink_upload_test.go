@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
@@ -30,36 +29,30 @@ func newFollowSymlinksTestEngine(t *testing.T, mock *engineMockClient) (*testEng
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 	require.NoError(t, os.MkdirAll(dataDir, 0o750))
 
+	accountCID := testEngineAccountCanonicalID()
 	eng, err := newEngine(ctx, &engineInputs{
-		DBPath:          filepath.Join(tmpDir, "test.db"),
-		SyncRoot:        syncRoot,
-		DataDir:         dataDir,
-		DriveID:         driveid.New(engineTestDriveID),
-		AccountEmail:    engineTestEmail,
-		Fetcher:         mock,
-		SocketIOFetcher: mock,
-		Items:           mock,
-		Downloads:       mock,
-		Uploads:         mock,
-		PathConvergence: &enginePathConvergenceStub{},
-		FolderDelta:     mock,
-		RecursiveLister: mock,
-		PermChecker:     mock,
-		Logger:          testLogger(t),
-		ContentFilter:   ContentFilterConfig{FollowSymlinks: true},
+		DBPath:             filepath.Join(tmpDir, "test.db"),
+		SyncRoot:           syncRoot,
+		DataDir:            dataDir,
+		DriveID:            driveid.New(engineTestDriveID),
+		AccountEmail:       engineTestEmail,
+		AccountCanonicalID: accountCID,
+		Fetcher:            mock,
+		SocketIOFetcher:    mock,
+		Items:              mock,
+		Downloads:          mock,
+		Uploads:            mock,
+		PathConvergence:    &enginePathConvergenceStub{},
+		FolderDelta:        mock,
+		RecursiveLister:    mock,
+		PermChecker:        mock,
+		Logger:             testLogger(t),
+		ContentFilter:      ContentFilterConfig{FollowSymlinks: true},
 	})
 	require.NoError(t, err)
 	eng.assertInvariants = true
 	testEng := &testEngine{Engine: eng, flow: newEngineFlow(eng)}
-	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
-		account := config.CatalogAccount{
-			CanonicalID: fmt.Sprintf("personal:%s", engineTestEmail),
-			Email:       engineTestEmail,
-			DriveType:   "personal",
-		}
-		catalog.UpsertAccount(&account)
-		return nil
-	}))
+	seedTestEngineAccount(t, dataDir, accountCID)
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)))
 	})

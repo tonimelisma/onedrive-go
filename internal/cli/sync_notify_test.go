@@ -296,6 +296,37 @@ func TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight(t *testing.T) {
 	assert.Equal(t, exitFailure, commandExitCode(err, false))
 }
 
+// errWatchDrainFailed is a failure of its own a watch ends with while it
+// stops, such as a drain that did not finish.
+var errWatchDrainFailed = errors.New("the drain did not finish")
+
+// failingStopOrchestrator is a watch that runs until its context ends and
+// then fails on its way out with a failure of its own.
+type failingStopOrchestrator struct{}
+
+func (failingStopOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+	<-ctx.Done()
+	return errWatchDrainFailed
+}
+
+// A watch the keepalive's panic stopped, that then fails on its way out, ends
+// with both: the panic, which only this function's context carries, and the
+// failure. The command exits 1 and prints the panic.
+//
+// Validates: R-6.3.10, R-6.6.32
+func TestRunSyncDaemon_WatchdogPanicJoinsTheFailureTheWatchEndsWith(t *testing.T) {
+	if !synctest.InChild(t) {
+		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		return
+	}
+
+	err := runWatchWithPanickingKeepalive(t, failingStopOrchestrator{})
+
+	require.ErrorIs(t, err, panicguard.ErrPanic, "the panic is not lost behind the watch's own failure")
+	require.ErrorIs(t, err, errWatchDrainFailed)
+	assert.Equal(t, exitFailure, commandExitCode(err, false))
+}
+
 // Validates: R-6.6.32, R-6.6.31
 func TestRunSyncDaemon_NoDrivesIsAConfigFailure(t *testing.T) {
 	t.Parallel()

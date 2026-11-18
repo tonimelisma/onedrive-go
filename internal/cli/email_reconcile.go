@@ -36,7 +36,7 @@ func (cc *CLIContext) probeAccountIdentity(
 		return zero, fmt.Errorf("load sign-in for %s: %w", accountCID, err)
 	}
 
-	attachAccountAuthProof(client, newAuthProofRecorder(cc.Logger), accountCID.Email(), scope)
+	attachAccountAuthProof(client, newAuthProofRecorder(cc.Logger), accountCID, scope)
 
 	user, err := client.Me(ctx)
 	if err != nil {
