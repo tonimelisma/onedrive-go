@@ -1,7 +1,9 @@
 package sync
 
 import (
+	"log/slog"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -89,16 +91,16 @@ func TestComposeMoves_DestinationFreeUnderNameFolding(t *testing.T) {
 		composeNode("p", ItemTypeFile, "", "d/50%.Txt", ""),
 		composeNode("q", ItemTypeFile, "", "d/a+b.txt", ""),
 	} {
-		held[foldMovePath(n.paths[moveCoordLocal])] = n.key
+		held[pathNameKey(n.paths[moveCoordLocal])] = n.key
 	}
 	for _, move := range c.moves {
 		if move.side != moveCoordLocal {
 			continue
 		}
-		occupant, taken := held[foldMovePath(move.newPath)]
+		occupant, taken := held[pathNameKey(move.newPath)]
 		assert.False(t, taken && occupant != move.key, "%s -> %s lands on %s's name", move.oldPath, move.newPath, occupant)
-		delete(held, foldMovePath(move.oldPath))
-		held[foldMovePath(move.newPath)] = move.key
+		delete(held, pathNameKey(move.oldPath))
+		held[pathNameKey(move.newPath)] = move.key
 	}
 	assert.NotEmpty(t, c.moves)
 }
@@ -483,7 +485,7 @@ func TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource(t *testing.T)
 			if tc.subWork[0].Type == ActionRemoteDelete {
 				assert.Contains(t, buildDependencies(actions)[3], 1, "the delete of docs/sub waits for inner.txt to leave it")
 			}
-			kept, _ := isolateDependencyCycles(actions, nil)
+			kept, _, _ := isolateDependencyCycles(actions, nil)
 			assert.Len(t, kept, tc.wantKept)
 		})
 	}
@@ -522,7 +524,7 @@ func TestComposeMoves_EntryBelowARenamedSubfolderKeepsItsSource(t *testing.T) {
 	assert.Empty(t, c.deferred)
 
 	actions := append(composedMoveActions(&c, nodes), Action{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateRemote})
-	kept, _ := isolateDependencyCycles(actions, nil)
+	kept, _, _ := isolateDependencyCycles(actions, nil)
 	assert.Len(t, kept, len(actions))
 }
 
@@ -624,7 +626,7 @@ func TestComposeMoves_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathWaits(
 			assert.Equal(t, map[string]bool{"b": true}, c.deferred)
 
 			actions := append(composedMoveActions(&c, nodes), newFolders...)
-			kept, _ := isolateDependencyCycles(actions, nil)
+			kept, _, _ := isolateDependencyCycles(actions, nil)
 			assert.Len(t, kept, len(actions))
 		})
 	}
@@ -664,7 +666,7 @@ func TestComposeMoves_FileMovedBackWaitsForAFolderDecidedAfterIt(t *testing.T) {
 	actions := append(composedMoveActions(&c, nodes),
 		Action{Type: ActionFolderCreate, Path: "c", CreateSide: CreateRemote},
 		Action{Type: ActionFolderCreate, Path: "p", CreateSide: CreateRemote})
-	kept, _ := isolateDependencyCycles(actions, nil)
+	kept, _, _ := isolateDependencyCycles(actions, nil)
 	assert.Len(t, kept, len(actions))
 }
 
@@ -685,9 +687,13 @@ func TestComposeMoves_FileMovedBackWaitsForAFolderDecidedAfterIt(t *testing.T) {
 // other's path, where waiting for the other's decision would never end. A
 // file x cannot carry f, nor can a frozen x, below which nothing moves this
 // pass, so f waits for it although f is decided first. A new folder X, whose
-// name folds to x as OneDrive compares names, is held as x is. One level
-// down, inside a folder OneDrive also moved, c's move into the new P/A/new
-// waits for new's move away from that path.
+// name folds to x as OneDrive compares names, is held as x is, and so is a
+// chain of new folders x/sub
+// (TestRunOnce_FolderMovedOnOneDriveIntoAChainOfNewFoldersConverges), whose
+// deepest folder no synced item holds: the item is found at the first path
+// above it that one holds. One level down, inside a folder OneDrive also
+// moved, c's move into the new P/A/new waits for new's move away from that
+// path.
 func TestComposeMoves_FolderMovedIntoAFolderMadeWhereAnotherFolderLeftWaits(t *testing.T) {
 	t.Parallel()
 
@@ -745,6 +751,10 @@ func TestComposeMoves_FolderMovedIntoAFolderMadeWhereAnotherFolderLeftWaits(t *t
 			wantLocal: []string{"x->x2"}, wantDeferred: bothWait,
 		},
 		{
+			name: "a chain of new folders", nodes: moved("x/sub", "x2", "f/d.txt"), made: []string{"x", "x/sub", "f"},
+			wantLocal: []string{"x->x2"}, wantDeferred: bothWait,
+		},
+		{
 			name: "inside a folder OneDrive moved", nodes: nested, made: []string{"P2/A/new"},
 			wantLocal: []string{"P->P2", "P/A/new->P/A/new2"}, wantDeferred: map[string]bool{"c": true},
 		},
@@ -763,8 +773,405 @@ func TestComposeMoves_FolderMovedIntoAFolderMadeWhereAnotherFolderLeftWaits(t *t
 			assert.Equal(t, tc.wantDeferred, c.deferred)
 
 			actions := composedMoveActions(&c, tc.nodes)
-			kept, _ := isolateDependencyCycles(actions, nil)
+			kept, _, _ := isolateDependencyCycles(actions, nil)
 			assert.Len(t, kept, len(actions))
+		})
+	}
+}
+
+// heldRemoteLandingCase is one row of
+// TestComposeMoves_MoveIntoAFolderMadeHereWaitsWhileOneDriveKeepsAnItemAtItsPath.
+type heldRemoteLandingCase struct {
+	name  string
+	nodes []moveNode
+	// made lists the folders made here, onOneDrive an entry made on OneDrive.
+	made       []string
+	onOneDrive string
+	frozen     map[string]bool
+	wantRemote []string
+	// wantDeferred is nil for none; creates are the OneDrive folder creates
+	// the plan makes with the moves.
+	wantDeferred map[string]bool
+	creates      []string
+}
+
+func heldRemoteLandingCases() []heldRemoteLandingCase {
+	return slices.Concat(keptOrMovedLandingCases(), takenBackLandingCases(), partnerLandingCases())
+}
+
+// landingNodes holds x moved to x2 here and f moved into the new folder into.
+func landingNodes(x2, into string, xType ItemType) []moveNode {
+	return []moveNode{
+		composeNode("x", xType, "x", x2, "x"),
+		composeNode("f", ItemTypeFolder, "f", into+"/f", "f"),
+		composeNode("c", ItemTypeFile, "f/c.txt", into+"/f/c.txt", "f/c.txt"),
+		composeNode("zz", ItemTypeFolder, "zz", "zz", "zz"),
+		composeNode("a", ItemTypeFolder, "zz/a", "zz/a", "zz/a"),
+	}
+}
+
+// keptOrMovedLandingCases are the rows where x stays where OneDrive has it,
+// moves away there, or is a file or frozen.
+func keptOrMovedLandingCases() []heldRemoteLandingCase {
+	folder, chain := ItemTypeFolder, []string{"x", "x/sub"}
+	bothWait := map[string]bool{"x": true, "f": true}
+
+	return []heldRemoteLandingCase{
+		{
+			name: "x kept where OneDrive has it", nodes: landingNodes("x2", "x", folder), made: []string{"x"},
+			onOneDrive: "X2", wantDeferred: bothWait,
+		},
+		{
+			name: "a chain, x kept", nodes: landingNodes("x2", "x/sub", folder), made: chain,
+			onOneDrive: "X2", wantDeferred: bothWait,
+		},
+		{
+			name: "x moved away", nodes: landingNodes("x2", "x", folder), made: []string{"x"},
+			wantRemote: []string{"x->x2", "f->x/f"}, creates: []string{"x"},
+		},
+		{
+			name: "a chain, x moved away", nodes: landingNodes("x2", "x/sub", folder), made: chain,
+			wantRemote: []string{"x->x2", "f->x/sub/f"}, creates: chain,
+		},
+		{
+			name: "x moved deeper, decided after f", nodes: landingNodes("zz/a/x2", "x", folder), made: []string{"x"},
+			wantRemote: []string{"f->x/f", "x->zz/a/x2"}, creates: []string{"x"},
+		},
+		{
+			name: "a file x moved deeper", nodes: landingNodes("zz/a/x2", "x", ItemTypeFile), made: []string{"x"},
+			wantRemote: []string{"x->zz/a/x2"}, wantDeferred: map[string]bool{"f": true}, creates: []string{"x"},
+		},
+		{
+			name: "a frozen x moved deeper", nodes: landingNodes("zz/a/x2", "x", folder), made: []string{"x"},
+			frozen: map[string]bool{"x": true}, wantDeferred: bothWait,
+		},
+		{
+			name: "a new X, x kept where OneDrive has it", made: []string{"X"}, onOneDrive: "X2",
+			nodes: []moveNode{
+				composeNode("x", ItemTypeFolder, "x", "x2", "x"),
+				composeNode("f", ItemTypeFolder, "f", "X/f", "f"),
+			},
+			wantDeferred: bothWait,
+		},
+		{
+			name: "a new X, x moved away", made: []string{"X"},
+			nodes: []moveNode{
+				composeNode("x", ItemTypeFolder, "x", "x2", "x"),
+				composeNode("f", ItemTypeFolder, "f", "X/f", "f"),
+			},
+			wantRemote: []string{"x->x2", "f->X/f"}, creates: []string{"X"},
+		},
+		{
+			name: "f's destination held by an item that swaps with f, x kept where OneDrive has it",
+			made: []string{"x"}, onOneDrive: "X2",
+			nodes: []moveNode{
+				composeNode("x", ItemTypeFolder, "x", "x2", "x"),
+				composeNode("f", ItemTypeFolder, "f", "x/f", "f"),
+				composeNode("p", ItemTypeFolder, "x/f", "f", "x/f"),
+			},
+			wantDeferred: map[string]bool{"x": true, "f": true, "p": true},
+		},
+	}
+}
+
+// takenBackLandingCases are the rows where f's move is planned and then
+// taken back, as x ends the composition without an OneDrive move.
+func takenBackLandingCases() []heldRemoteLandingCase {
+	folder, bothWait := ItemTypeFolder, map[string]bool{"x": true, "f": true}
+
+	return []heldRemoteLandingCase{
+		{
+			name: "x held in a new b, decided first", made: []string{"b", "x"}, onOneDrive: "B2",
+			nodes:        append(landingNodes("b/x", "x", folder), composeNode("b", ItemTypeFolder, "b", "b2", "b")),
+			wantDeferred: map[string]bool{"b": true, "x": true, "f": true},
+		},
+		{
+			name: "x held in a new y, decided after f", made: []string{"y", "x"}, onOneDrive: "Y2",
+			nodes:        append(landingNodes("y/x", "x", folder), composeNode("y", ItemTypeFolder, "y", "y2", "y")),
+			wantDeferred: map[string]bool{"y": true, "x": true, "f": true},
+		},
+		{
+			name: "x waiting for a file deleted in a renamed a, deferred after f", made: []string{"x"},
+			nodes: []moveNode{
+				composeNode("a", ItemTypeFolder, "a", "b", "a"),
+				composeNode("w", ItemTypeFile, "a/x", "", "a/x"),
+				composeNode("x", ItemTypeFolder, "x", "b/x", "x"),
+				composeNode("f", ItemTypeFolder, "f", "x/f", "f"),
+			},
+			wantRemote: []string{"a->b"}, wantDeferred: bothWait,
+		},
+		{
+			name: "m into a new b, b into a new c, c waiting for a file deleted in a renamed p", made: []string{"c", "b"},
+			nodes: []moveNode{
+				composeNode("p", ItemTypeFolder, "p", "q", "p"),
+				composeNode("w", ItemTypeFile, "p/c", "", "p/c"),
+				composeNode("c", ItemTypeFolder, "c", "q/c", "c"),
+				composeNode("b", ItemTypeFolder, "b", "c/b", "b"),
+				composeNode("m", ItemTypeFolder, "m", "b/m", "m"),
+			},
+			wantRemote: []string{"p->q"}, wantDeferred: map[string]bool{"c": true, "b": true, "m": true},
+		},
+		{
+			name: "f's destination held by an item that swaps with f, x held in a new b",
+			made: []string{"b", "x"}, onOneDrive: "B2",
+			nodes: []moveNode{
+				composeNode("b", ItemTypeFolder, "b", "b2", "b"),
+				composeNode("x", ItemTypeFolder, "x", "b/x", "x"),
+				composeNode("f", ItemTypeFolder, "f", "x/f", "f"),
+				composeNode("p", ItemTypeFolder, "x/f", "f", "x/f"),
+			},
+			wantDeferred: map[string]bool{"b": true, "x": true, "f": true, "p": true},
+		},
+	}
+}
+
+// partnerLandingCases are the rows of items each moved into a new folder at
+// the path of the next.
+func partnerLandingCases() []heldRemoteLandingCase {
+	return []heldRemoteLandingCase{
+		{
+			name: "each into a new folder at the other's path", made: []string{"x", "f"},
+			nodes: []moveNode{
+				composeNode("x", ItemTypeFolder, "x", "f/x", "x"),
+				composeNode("f", ItemTypeFolder, "f", "x/f", "f"),
+			},
+			wantRemote: []string{"x->f/x"}, wantDeferred: map[string]bool{"f": true}, creates: []string{"x"},
+		},
+		{
+			name: "each into a new folder at the other's path, and g into the new f", made: []string{"x", "f"},
+			nodes: []moveNode{
+				composeNode("x", ItemTypeFolder, "x", "f/x", "x"),
+				composeNode("f", ItemTypeFolder, "f", "x/f", "f"),
+				composeNode("g", ItemTypeFolder, "g", "f/g", "g"),
+			},
+			wantRemote: []string{"x->f/x"}, wantDeferred: map[string]bool{"f": true, "g": true}, creates: []string{"x"},
+		},
+		{
+			name: "a file a into a new f, f into a new a, f decided first", made: []string{"a", "f"},
+			nodes: []moveNode{
+				composeNode("a", ItemTypeFile, "a", "f/a", "a"),
+				composeNode("f", ItemTypeFolder, "f", "a/f", "f"),
+			},
+			wantRemote: []string{"a->f/a"}, wantDeferred: map[string]bool{"f": true}, creates: []string{"a"},
+		},
+		{
+			name: "x into a new f/sub, f into a new x", made: []string{"x", "f", "f/sub"},
+			nodes: []moveNode{
+				composeNode("x", ItemTypeFolder, "x", "f/sub/x", "x"),
+				composeNode("f", ItemTypeFolder, "f", "x/f", "f"),
+			},
+			wantRemote: []string{"f->x/f"}, wantDeferred: map[string]bool{"x": true}, creates: []string{"f", "f/sub"},
+		},
+		{
+			name: "a ring of three, and g into the new b", made: []string{"a", "b", "c"},
+			nodes: []moveNode{
+				composeNode("a", ItemTypeFolder, "a", "b/a", "a"),
+				composeNode("b", ItemTypeFolder, "b", "c/b", "b"),
+				composeNode("c", ItemTypeFolder, "c", "a/c", "c"),
+				composeNode("g", ItemTypeFolder, "g", "b/g", "g"),
+			},
+			wantRemote: []string{"c->a/c", "a->b/a"}, wantDeferred: map[string]bool{"b": true, "g": true},
+			creates: []string{"a", "c"},
+		},
+		{
+			name: "a ring of four", made: []string{"a", "b", "c", "d"},
+			nodes: []moveNode{
+				composeNode("a", ItemTypeFolder, "a", "b/a", "a"),
+				composeNode("b", ItemTypeFolder, "b", "c/b", "b"),
+				composeNode("c", ItemTypeFolder, "c", "d/c", "c"),
+				composeNode("d", ItemTypeFolder, "d", "a/d", "d"),
+			},
+			wantRemote: []string{"d->a/d", "a->b/a", "b->c/b"}, wantDeferred: map[string]bool{"c": true},
+			creates: []string{"a", "b", "d"},
+		},
+		{
+			name: "two files each into a new folder at the other's path", made: []string{"a", "b"},
+			nodes: []moveNode{
+				composeNode("a", ItemTypeFile, "a", "b/a", "a"),
+				composeNode("b", ItemTypeFile, "b", "a/b", "b"),
+			},
+			wantDeferred: map[string]bool{"a": true, "b": true},
+		},
+		{
+			name: "a ring through a file: b into a new a, a into a new g, g into a new b", made: []string{"a", "g", "b"},
+			nodes: []moveNode{
+				composeNode("b", ItemTypeFile, "b", "a/b", "b"),
+				composeNode("a", ItemTypeFile, "a", "g/a", "a"),
+				composeNode("g", ItemTypeFolder, "g", "b/g", "g"),
+			},
+			wantDeferred: map[string]bool{"a": true, "b": true, "g": true},
+		},
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// The OneDrive twin of the rows above, made here: x moved to x2, deeper to
+// zz/a/x2 or into a new folder, a new x or X made, alone or with x/sub in it,
+// and f moved into it. On OneDrive the folder made here is created only once
+// x has left its path there, by x's own move of the plan, so f's move into it
+// waits while OneDrive keeps x at that path this pass: when x's rename
+// collides with X2, made on OneDrive, and x stays where OneDrive has it (the
+// composition inputs of
+// TestRunOnce_MoveIntoAFolderMadeHereWaitsWhileOneDriveKeepsTheOldFolderThere),
+// whether f lands in x, X or x/sub; while x is a file still to be decided,
+// even one that then moves, or frozen. When x waits in a new folder whose
+// rename collides with B2 or Y2 (the composition inputs of
+// TestRunOnce_MoveIntoAFolderMadeHereWaitsWhileTheOldFolderWaitsInANewFolder),
+// or for a file deleted here at its destination below a renamed a (those of
+// TestRunOnce_MoveIntoAFolderMadeHereWhileTheOldFolderWaitsForADeleteConverges),
+// f's move is planned and then taken back, whichever is decided first, and in
+// a chain of such folders, m into a new b and b into a new c, each move is
+// taken back in turn. A move that waits so is deferred at once: p, which
+// swaps with f through x's rename, is not parked to free f's destination. Of
+// two items each moved into a new folder at the other's path, the one decided
+// second waits, as its holder's move lands at its own path, and so does a
+// folder decided before the file it waits for: the move of the other lands in
+// the old folder of the one that waits, which carries it along the next pass,
+// and rings of three and four converge the same way. A folder g moved into
+// the same new folder is not one of them and waits. Where the item that waits
+// is a file, two files each into a new folder at the other's path or a ring
+// through a file, nothing moves: the move of the other would land in the file
+// OneDrive keeps at that path, which refuses it on every pass. Run anyway,
+// f's move would land in the old x on OneDrive, or the moves would wait for
+// each other, a cycle dropped on every pass. Where x moves away, f's move is
+// planned with it, whichever composition decides first, and runs after it and
+// the new folders.
+func TestComposeMoves_MoveIntoAFolderMadeHereWaitsWhileOneDriveKeepsAnItemAtItsPath(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range heldRemoteLandingCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			occupancy := composeOccupancy(tc.nodes)
+			for _, made := range tc.made {
+				occupancy.local[made] = true
+			}
+			if tc.onOneDrive != "" {
+				occupancy.remote[tc.onOneDrive] = true
+			}
+			c := composeMoves(tc.nodes, occupancy, tc.frozen)
+
+			assert.Equal(t, tc.wantRemote, composedMovesBySide(&c, moveCoordRemote))
+			assert.Empty(t, composedMovesBySide(&c, moveCoordLocal))
+			if tc.wantDeferred == nil {
+				tc.wantDeferred = map[string]bool{}
+			}
+			assert.Equal(t, tc.wantDeferred, c.deferred)
+
+			actions := composedMoveActions(&c, tc.nodes)
+			for _, made := range tc.creates {
+				actions = append(actions, Action{Type: ActionFolderCreate, Path: made, CreateSide: CreateRemote})
+			}
+			kept, _, _ := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions), "every action of the plan has an order")
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// An item moved into a new folder made at its own path on the other side, a
+// file or a folder with a file in it, holds that path itself: the folder can
+// take the path only once the item has left it, and the item's move lands in
+// the folder. The item moves aside to a free name beside its source, on
+// OneDrive when the folder was made here and here when OneDrive made it,
+// carrying what is in it, and waits for the next pass, which makes the folder
+// at the path it left and moves the item into it. Waiting for itself, a file
+// stayed where it was on every pass, and a folder's move and the create of
+// the folder it lands in waited for each other, a cycle dropped on every
+// pass. When a folder above the item moves on OneDrive in the same plan, the
+// item waits for the next pass instead, which finds it at its new path: its
+// parent's move, or that of a folder above an unmoved parent. Either way the
+// item is deferred, and the folder's path, as the plan names it, is held
+// (ownLandings) with everything below it, compared as OneDrive compares
+// names: nothing is made there this pass. The rows with a folder moving above
+// the item move it on OneDrive; on this computer such a folder hides the item
+// from the lookup, and nothing is held (a known limit, holdOwnLandings).
+func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		nodes []moveNode
+		// madeHere and madeOnOneDrive are the new folders.
+		madeHere, madeOnOneDrive []string
+		wantLocal, wantRemote    []string
+		wantDeferred             map[string]bool
+		// landing is the path of the folder at the item's own path on the
+		// side the item moves on, held with what lies below it.
+		landing string
+	}{
+		{
+			name:     "a file moved here into a new folder at its own path",
+			nodes:    []moveNode{composeNode("f", ItemTypeFile, "f", "f/f", "f")},
+			madeHere: []string{"f"}, wantRemote: []string{"f->f.swap-1"}, wantDeferred: map[string]bool{"f": true},
+			landing: "f",
+		},
+		{
+			name: "a folder moved here into a new folder at its own path",
+			nodes: []moveNode{
+				composeNode("k", ItemTypeFolder, "k", "k/k", "k"),
+				composeNode("c", ItemTypeFile, "k/c.txt", "k/k/c.txt", "k/c.txt"),
+			},
+			madeHere: []string{"k"}, wantRemote: []string{"k->k.swap-1"}, wantDeferred: map[string]bool{"k": true},
+			landing: "k",
+		},
+		{
+			name:           "a file moved on OneDrive into a new folder at its own path",
+			nodes:          []moveNode{composeNode("f", ItemTypeFile, "f", "f", "f/f")},
+			madeOnOneDrive: []string{"f"}, wantLocal: []string{"f->f.swap-1"}, wantDeferred: map[string]bool{"f": true},
+			landing: "f",
+		},
+		{
+			name: "the folder above it renamed on OneDrive too",
+			nodes: []moveNode{
+				composeNode("P", ItemTypeFolder, "P", "Q", "P"),
+				composeNode("f", ItemTypeFile, "P/f", "Q/f/f", "P/f"),
+			},
+			madeHere: []string{"Q/f"}, wantRemote: []string{"P->Q"}, wantDeferred: map[string]bool{"f": true},
+			landing: "Q/f",
+		},
+		{
+			name: "a folder above its unmoved parent renamed on OneDrive too",
+			nodes: []moveNode{
+				composeNode("Y", ItemTypeFolder, "Y", "Z", "Y"),
+				composeNode("P", ItemTypeFolder, "Y/P", "Z/P", "Y/P"),
+				composeNode("f", ItemTypeFile, "Y/P/f", "Z/P/f/f", "Y/P/f"),
+			},
+			madeHere: []string{"Z/P/f"}, wantRemote: []string{"Y->Z"}, wantDeferred: map[string]bool{"f": true},
+			landing: "Z/P/f",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			occupancy := composeOccupancy(tc.nodes)
+			for _, made := range tc.madeHere {
+				occupancy.local[made] = true
+			}
+			for _, made := range tc.madeOnOneDrive {
+				occupancy.remote[made] = true
+			}
+			c := composeMoves(tc.nodes, occupancy, nil)
+
+			assert.Equal(t, tc.wantLocal, composedMovesBySide(&c, moveCoordLocal))
+			assert.Equal(t, tc.wantRemote, composedMovesBySide(&c, moveCoordRemote))
+			assert.Equal(t, tc.wantDeferred, c.deferred)
+			side, other := moveCoordRemote, moveCoordLocal
+			if len(tc.madeOnOneDrive) > 0 {
+				side, other = moveCoordLocal, moveCoordRemote
+			}
+			for _, held := range []string{tc.landing, tc.landing + "/a", tc.landing + "/a/f", strings.ToUpper(tc.landing) + "/a"} {
+				assert.True(t, atOrBelowOwnLanding(held, c.ownLandings[side]), "nothing is made at %s", held)
+			}
+			assert.False(t, atOrBelowOwnLanding(tc.landing+".swap-1", c.ownLandings[side]), "the parking name is free")
+			assert.Empty(t, c.ownLandings[other], "nothing is held on the other side")
+
+			actions := composedMoveActions(&c, tc.nodes)
+			kept, _, _ := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions), "every action of the plan has an order")
 		})
 	}
 }
@@ -798,7 +1205,7 @@ func TestComposeMoves_FolderAMoveLandsInIsNotParkedToBreakASwap(t *testing.T) {
 	assert.Equal(t, map[string]bool{"z": true, "h": true}, c.deferred)
 
 	actions := composedMoveActions(&c, nodes)
-	kept, deps := isolateDependencyCycles(actions, nil)
+	kept, deps, _ := isolateDependencyCycles(actions, nil)
 	assert.Len(t, kept, len(actions))
 	assert.Contains(t, deps[1], 0, "m's move waits for Q's")
 }
@@ -864,6 +1271,500 @@ func TestDropReconciliationOfComposedMoves_HeldMoveKeepsItsBaselineRow(t *testin
 	assert.Equal(t, []Action{update, other},
 		dropReconciliationOfComposedMoves([]Action{update, other}, held, SyncDownloadOnly),
 		"download-only never moves the item on OneDrive")
+}
+
+// heldSourceDeleteCase is one row of
+// TestPlanBuiltActions_ADeleteAboveAMoveHeldForTheNextPassWaitsWithIt.
+type heldSourceDeleteCase struct {
+	name string
+	node moveNode
+	// held is the moves composition holds for the next pass, nil for none;
+	// moved is the move it composes, built as composed.
+	held     []actionType
+	moved    []composedMove
+	composed []Action
+	// waiting is the creates that wait with a held move, built aside.
+	waiting []Action
+	actions []Action
+	mode    SyncMode
+	// want lists the actions the plan keeps, as "type path".
+	want                []string
+	dropped, unfinished int
+	deferredByMode      DeferredCounts
+}
+
+func heldSourceDeleteCases() []heldSourceDeleteCase {
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	remoteDelete := func(p string, view *pathView) Action { return Action{Type: ActionRemoteDelete, Path: p, View: view} }
+	localDelete := func(p string, view *pathView) Action { return Action{Type: ActionLocalDelete, Path: p, View: view} }
+	remoteMove := func(from, to string, view *pathView) Action {
+		return Action{Type: ActionRemoteMove, ItemID: "item-" + from, OldPath: from, Path: to, View: view}
+	}
+	madeHere := func(p string) Action {
+		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{ItemType: ItemTypeFile}}}
+	}
+	onOneDrive, here := []actionType{ActionRemoteMove}, []actionType{ActionLocalMove}
+	heldInP := composeNode("f", ItemTypeFolder, "P/f", "x/f", "P/f")
+
+	return append([]heldSourceDeleteCase{
+		{
+			name: "P deleted here holds f, whose OneDrive move waits", node: heldInP, held: onOneDrive,
+			actions: []Action{
+				remoteDelete("P", folder), remoteDelete("P/old.txt", file), remoteDelete("Pa", folder),
+				remoteMove("P/g", "y/g", file),
+			},
+			want:    []string{"remote_delete P/old.txt", "remote_delete Pa", "remote_move y/g"},
+			dropped: 1, unfinished: 2,
+		},
+		{
+			name: "P and P/Q deleted here hold f", held: onOneDrive,
+			node:    composeNode("f", ItemTypeFolder, "P/Q/f", "x/f", "P/Q/f"),
+			actions: []Action{remoteDelete("P/Q", folder), remoteDelete("P", folder), remoteDelete("R", folder)},
+			want:    []string{"remote_delete R"}, dropped: 2, unfinished: 3,
+		},
+		{
+			name: "P deleted on OneDrive holds f here, whose local move waits", held: here,
+			node:    composeNode("f", ItemTypeFolder, "P/f", "P/f", "x/f"),
+			actions: []Action{localDelete("P", folder), localDelete("P/gone.txt", file)},
+			want:    []string{"local_delete P/gone.txt"}, dropped: 1, unfinished: 2,
+		},
+		{
+			name: "a file made here at P's path waits with P's delete", node: heldInP, held: onOneDrive,
+			actions: []Action{remoteDelete("P", folder), madeHere("P")},
+			dropped: 2, unfinished: 3,
+		},
+		{
+			name: "a file made here at p, the same name as P on OneDrive, waits with P's delete", node: heldInP, held: onOneDrive,
+			actions: []Action{remoteDelete("P", folder), madeHere("p")},
+			dropped: 2, unfinished: 3,
+		},
+		{
+			name: "download-only holds P's delete back itself", node: heldInP, held: onOneDrive, mode: SyncDownloadOnly,
+			actions:        []Action{remoteDelete("P", folder)},
+			deferredByMode: DeferredCounts{RemoteDeletes: 1},
+		},
+		{
+			name:  "f's move into a folder made here where OneDrive edited the file K, trimmed below the keep-both K",
+			node:  composeNode("f", ItemTypeFolder, "P/f", "K/f", "P/f"),
+			moved: []composedMove{{key: "f", side: moveCoordRemote, oldPath: "P/f", newPath: "K/f", localPath: "K/f"}},
+			composed: []Action{{
+				Type: ActionRemoteMove, ItemID: "f", OldPath: "P/f", Path: "K/f", View: folder,
+			}},
+			actions: []Action{
+				{Type: ActionConflictCopy, Path: "K", View: &pathView{
+					Local: &localState{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFile},
+				}},
+				remoteDelete("P", folder),
+			},
+			want: []string{"conflict_copy K"}, dropped: 2, unfinished: 2,
+		},
+		{
+			name: "f's move planned: P's delete runs after it", node: heldInP,
+			moved:    []composedMove{{key: "f", side: moveCoordRemote, oldPath: "P/f", newPath: "x/f", localPath: "x/f"}},
+			composed: []Action{{Type: ActionRemoteMove, ItemID: "f", OldPath: "P/f", Path: "x/f", View: folder}},
+			actions:  []Action{remoteDelete("P", folder), madeHere("P")},
+			want:     []string{"remote_delete P", "upload P", "remote_move x/f"},
+		},
+	}, slices.Concat(
+		carriedHeldDeleteCases(folder, file), heldWriteDeleteCases(folder), cycledWriteDeleteCases(folder),
+		aheadOfContentDeleteCases())...)
+}
+
+// heldWriteDeleteCases are the rows of heldSourceDeleteCases in which a held
+// create writes the content of a synced item another delete removes.
+func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
+	synced := func(inode uint64, itemID string) *pathView {
+		return &pathView{Baseline: &BaselineEntry{
+			ItemType: ItemTypeFile, ItemID: itemID, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+		}}
+	}
+	uploadOf := func(p string, inode uint64) Action {
+		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{
+			ItemType: ItemTypeFile, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+		}}}
+	}
+	heldInP := composeNode("f", ItemTypeFolder, "P/f", "x/f", "P/f")
+
+	return []heldSourceDeleteCase{
+		{
+			name: "z renamed here onto P/f, which f's waiting move leaves: OneDrive's delete of z waits with z's upload",
+			node: heldInP, held: []actionType{ActionRemoteMove},
+			waiting: []Action{uploadOf("P/f", 7)},
+			actions: []Action{
+				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
+				{Type: ActionRemoteDelete, Path: "y", View: synced(8, "item-y")},
+			},
+			want: []string{"remote_delete y"}, dropped: 1, unfinished: 2,
+		},
+		{
+			name: "z renamed here onto P, deleted here: z's delete waits with the upload at P, which waits with P's delete",
+			node: heldInP, held: []actionType{ActionRemoteMove},
+			actions: []Action{
+				{Type: ActionRemoteDelete, Path: "P", View: folder},
+				uploadOf("P", 7),
+				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
+			},
+			dropped: 3, unfinished: 4,
+		},
+		{
+			name: "y moved on OneDrive onto a path here that f's waiting move leaves: the delete of y here waits with its download",
+			node: composeNode("f", ItemTypeFolder, "P/f", "P/f", "x/f"), held: []actionType{ActionLocalMove},
+			waiting: []Action{{Type: ActionDownload, Path: "P/f", ItemID: "item-y", View: &pathView{}}},
+			actions: []Action{{Type: ActionLocalDelete, Path: "y", View: synced(8, "item-y")}},
+			dropped: 1, unfinished: 2,
+		},
+		{
+			name: "g made on OneDrive in P, whose move into x here waits: g's download, rebased below x, waits with it",
+			node: composeNode("P", ItemTypeFolder, "P", "x/P", "P"), held: []actionType{ActionRemoteMove},
+			actions: []Action{
+				{Type: ActionDownload, Path: "P/g", ItemID: "item-g", View: &pathView{
+					Path: "P/g", Remote: &remoteState{ItemType: ItemTypeFile},
+				}},
+				{Type: ActionDownload, Path: "y/h", ItemID: "item-h", View: &pathView{
+					Path: "y/h", Remote: &remoteState{ItemType: ItemTypeFile},
+				}},
+			},
+			want: []string{"download y/h"}, dropped: 1, unfinished: 2,
+		},
+		{
+			name: "a waiting upload of another file holds no delete",
+			node: heldInP, held: []actionType{ActionRemoteMove},
+			waiting: []Action{uploadOf("P/f", 9)},
+			actions: []Action{{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")}},
+			want:    []string{"remote_delete z"}, unfinished: 1,
+		},
+		{
+			name: "z renamed here onto P/f, which f still holds on OneDrive this pass: the upload there waits, and so does z's delete",
+			node: heldInP, held: []actionType{ActionRemoteMove},
+			actions: []Action{
+				uploadOf("P/f", 7),
+				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
+			},
+			dropped: 2, unfinished: 3,
+		},
+		{
+			name: "z renamed here into the folder made at K, where OneDrive edited the file K: the upload trimmed below the keep-both K holds z's delete",
+			node: composeNode("y", ItemTypeFile, "y", "y", "y"),
+			actions: []Action{
+				{Type: ActionConflictCopy, Path: "K", View: &pathView{
+					Local: &localState{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFile},
+				}},
+				uploadOf("K/z", 7),
+				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
+			},
+			want: []string{"conflict_copy K"}, dropped: 2, unfinished: 2,
+		},
+	}
+}
+
+// aheadOfContentDeleteCases are the rows of heldSourceDeleteCases in which a
+// create writes a deleted file's content but waits for that delete, so the
+// delete cannot wait for it in the plan.
+func aheadOfContentDeleteCases() []heldSourceDeleteCase {
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}}
+	elsewhere := composeNode("y", ItemTypeFile, "y", "y", "y")
+	renamed := func(from, to string) Action {
+		return Action{Type: ActionRemoteMove, ItemID: "item-" + from, OldPath: from, Path: to, View: folder}
+	}
+	movedUpOntoP := []Action{
+		renamed("P", "Q"),
+		{Type: ActionRemoteDelete, Path: "P/f", View: syncedFileView(7, "item-f")},
+		uploadOfIdentity("P", 7),
+	}
+
+	return []heldSourceDeleteCase{
+		{
+			name: "f moved up to P, the path its folder left as it was renamed Q: P/f's delete waits a pass, carried along",
+			node: elsewhere, actions: slices.Clone(movedUpOntoP),
+			want: []string{"remote_move Q", "upload P"}, dropped: 1, unfinished: 1,
+		},
+		{
+			name: "the same in download-only: P/f's delete is left to the mode, which holds back all three",
+			node: elsewhere, actions: slices.Clone(movedUpOntoP), mode: SyncDownloadOnly,
+			deferredByMode: DeferredCounts{Moves: 1, Uploads: 1, RemoteDeletes: 1},
+		},
+		{
+			name: "a1.txt edited in A renamed B: the upload where A's move carries a1.txt needs its old copy deleted first",
+			node: elsewhere,
+			actions: []Action{
+				renamed("A", "B"),
+				{Type: ActionRemoteDelete, Path: "A/a1.txt", View: syncedFileView(7, "item-a1")},
+				uploadOfIdentity("B/a1.txt", 7),
+			},
+			want: []string{"remote_move B", "remote_delete A/a1.txt", "upload B/a1.txt"},
+		},
+		{
+			name: "x moved up onto its folder P's path, P deleted: the upload waits for P's delete, which waits for P/x's",
+			node: elsewhere,
+			actions: []Action{
+				{Type: ActionRemoteDelete, Path: "P", View: folder},
+				{Type: ActionRemoteDelete, Path: "P/x", View: syncedFileView(8, "item-x")},
+				uploadOfIdentity("P", 8),
+			},
+			want: []string{"remote_delete P", "remote_delete P/x", "upload P"},
+		},
+	}
+}
+
+// cycledWriteDeleteCases are the rows of heldSourceDeleteCases in which the
+// create that writes a deleted file's content is caught in a dependency
+// cycle, planned as such: a folder's move into a new folder made at its own
+// path, whose create waits for the move and the move for the create, or a
+// move into a new folder whose create waits for an item at a name OneDrive
+// takes for the same to move into that move's destination.
+func cycledWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
+	synced := &pathView{Baseline: &BaselineEntry{
+		ItemType: ItemTypeFile, ItemID: "item-z", LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+	}}
+	uploadOfZ := func(p string) Action {
+		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{
+			ItemType: ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+		}}}
+	}
+	cycle := []Action{
+		{Type: ActionRemoteMove, ItemID: "item-x", OldPath: "x", Path: "x/x2", View: folder},
+		{Type: ActionFolderCreate, Path: "x", CreateSide: CreateRemote},
+	}
+	elsewhere := composeNode("y", ItemTypeFile, "y", "y", "y")
+
+	return []heldSourceDeleteCase{
+		{
+			name: "z renamed here into x/x2: its upload waits for x's move, and z's delete for the upload",
+			node: elsewhere,
+			actions: slices.Concat(cycle, []Action{
+				uploadOfZ("x/x2/z"), {Type: ActionRemoteDelete, Path: "z", View: synced},
+			}),
+			dropped: 4, unfinished: 4,
+		},
+		{
+			name: "x/z renamed here onto x/x2/w: z's delete, which x's move waits for, waits with the upload after that move",
+			node: elsewhere,
+			actions: slices.Concat(cycle, []Action{
+				{Type: ActionRemoteDelete, Path: "x/z", View: synced}, uploadOfZ("x/x2/w"),
+			}),
+			dropped: 4, unfinished: 4,
+		},
+		{
+			name: "z moved up onto its folder P's path, P deleted, P/y's move out of P in a cycle: the upload after P's delete holds z's delete",
+			node: elsewhere,
+			actions: []Action{
+				// P/y into a new k, whose create waits for K, which OneDrive
+				// takes for k, to move away, into P/y's destination.
+				{Type: ActionRemoteMove, ItemID: "item-y", OldPath: "P/y", Path: "k/y", View: folder},
+				{Type: ActionFolderCreate, Path: "k", CreateSide: CreateRemote},
+				{Type: ActionRemoteMove, ItemID: "item-K", OldPath: "K", Path: "k/y/K", View: folder},
+				{Type: ActionRemoteDelete, Path: "P", View: &pathView{
+					Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder},
+				}},
+				{Type: ActionRemoteDelete, Path: "P/z", View: synced},
+				uploadOfZ("P"),
+			},
+			dropped: 6, unfinished: 6,
+		},
+	}
+}
+
+// carriedHeldDeleteCases are the rows of heldSourceDeleteCases in which a
+// folder's move has a held action below its source.
+func carriedHeldDeleteCases(folder, file *pathView) []heldSourceDeleteCase {
+	heldInAP := composeNode("f", ItemTypeFolder, "A/P/f", "x/f", "A/P/f")
+	renameA := composedMove{key: "A", side: moveCoordRemote, oldPath: "A", newPath: "B", localPath: "B"}
+	madeHere := func(p string) Action {
+		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{ItemType: ItemTypeFile}}}
+	}
+
+	return []heldSourceDeleteCase{
+		{
+			name: "A renamed B here carries P, which holds f, and B/a1.txt edited is uploaded after it",
+			node: heldInAP, held: []actionType{ActionRemoteMove},
+			moved:    []composedMove{renameA},
+			composed: []Action{{Type: ActionRemoteMove, ItemID: "A", OldPath: "A", Path: "B", View: folder}},
+			actions: []Action{
+				{Type: ActionRemoteDelete, Path: "A/P", View: folder},
+				{Type: ActionRemoteDelete, Path: "A/a1.txt", View: file},
+				madeHere("B/a1.txt"), madeHere("B/new.txt"),
+			},
+			want:    []string{"remote_delete A/a1.txt", "upload B/a1.txt", "upload B/new.txt", "remote_move B"},
+			dropped: 1, unfinished: 2,
+		},
+		{
+			name: "A renamed B on OneDrive carries P here, which holds f",
+			node: composeNode("f", ItemTypeFolder, "A/P/f", "A/P/f", "x/f"), held: []actionType{ActionLocalMove},
+			moved: []composedMove{{key: "A", side: moveCoordLocal, oldPath: "A", newPath: "B", localPath: "A"}},
+			composed: []Action{{
+				Type: ActionLocalMove, ItemID: "A", OldPath: "A", Path: "B", View: folder,
+			}},
+			actions: []Action{
+				{Type: ActionLocalDelete, Path: "A/P", View: folder},
+				{Type: ActionDownload, Path: "B/new.txt", View: &pathView{Remote: &remoteState{ItemType: ItemTypeFile}}},
+			},
+			want:    []string{"download B/new.txt", "local_move B"},
+			dropped: 1, unfinished: 2,
+		},
+		{
+			name: "A moved into p/A, where c leaves A for p, the same name as P on OneDrive, waits with c's move",
+			node: composeNode("f", ItemTypeFolder, "P/f", "x/f", "P/f"), held: []actionType{ActionRemoteMove},
+			actions: []Action{
+				{Type: ActionRemoteDelete, Path: "P", View: folder},
+				{Type: ActionRemoteMove, ItemID: "c", OldPath: "A/c", Path: "p", View: folder},
+				{Type: ActionRemoteMove, ItemID: "A", OldPath: "A", Path: "p/A", View: folder},
+			},
+			dropped: 3, unfinished: 4,
+		},
+	}
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// A folder holds an item whose move composition holds for the next pass: on
+// the side the move waits on, the delete of that folder, and of every folder
+// above the item, waits with it, and so does what waits for that delete, such
+// as the upload of a file made at the folder's path or at a name OneDrive
+// takes for it, and a move of c onto such a name with the move of A into c,
+// which would land in the folder OneDrive keeps there. So does the delete of
+// a folder that holds an item whose composed move the plan no longer holds:
+// the move of f into a folder made here at K, where OneDrive edited the file
+// K, is trimmed below the keep-both path K. Run, a delete on OneDrive took the
+// item with it into the recycle bin, and a delete here failed on a folder
+// that is not empty. Deletes of other paths, P/old.txt below the folder and
+// Pa beside it, and the move of P/g out of it run, and the plan counts what it
+// holds as work for the next pass. A move of a folder above the held delete,
+// A renamed B on either side, runs and carries the folder and the item
+// along, with what waits for it, such as the upload of a1.txt edited in it;
+// held with the delete, it left the delete of a1.txt's old copy, which it
+// waits for, to run alone. A create held for the next pass holds the delete of
+// the synced item whose content it writes: z renamed here onto a path f's
+// waiting move leaves, its upload waiting with that move, keeps z on OneDrive,
+// whether the upload waits as the new entry at f's old path, behind P's
+// delete, or as a create onto the path f still holds there, and so do the
+// delete here of an item whose download waits and an upload of z's content
+// trimmed below a keep-both path; a held upload of another file holds
+// nothing. So does a create caught in a dependency cycle (a folder's move into
+// a new folder at its own path, planned as such): one after the cycle takes
+// the delete with it, as the delete waits for it; one that waits for the
+// delete through x's move, which carries the file, leaves the delete waiting a
+// pass anyway; and one that waits for it through P's delete, so the two have
+// no edge, holds it as held work. A create that waits for the delete only
+// through the move of a folder above the file, and lands elsewhere than where
+// that move carries it, makes the delete wait a pass: P renamed Q here and
+// Q/f moved up to P. One at the carried path, a1.txt edited in A renamed B,
+// and one behind a folder's delete, x moved up onto P's path with P deleted,
+// keep the delete first. A download
+// rebased through a folder whose OneDrive move waits, g made on OneDrive in P
+// while P waits to move into x here, waits with that move. A mode that holds
+// the delete back itself, as download-only does on OneDrive, defers it as
+// before, and once the item's move is in the plan the delete runs after it.
+func TestPlanBuiltActions_ADeleteAboveAMoveHeldForTheNextPassWaitsWithIt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range heldSourceDeleteCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			composition := &moveComposition{moves: tc.moved, deferred: map[string]bool{}, deferredMoves: map[string][]actionType{}}
+			if tc.held != nil {
+				composition.deferred[tc.node.key] = true
+				composition.deferredMoves[tc.node.key] = tc.held
+			}
+			inputs := &moveInputs{nodes: []moveNode{tc.node}}
+			plan, err := newPlanner(nil).planBuiltActions(
+				tc.actions, tc.composed, tc.waiting, composition, inputs, plannerMountContext{}, tc.mode)
+			require.NoError(t, err)
+
+			var kept []string
+			for i := range plan.Actions {
+				kept = append(kept, plan.Actions[i].Type.String()+" "+plan.Actions[i].Path)
+			}
+			assert.Equal(t, tc.want, kept)
+			assert.Equal(t, tc.dropped, plan.FollowUp.Dropped, "dropped")
+			assert.Equal(t, tc.unfinished, plan.FollowUp.Unfinished, "unfinished")
+			assert.Equal(t, tc.deferredByMode, plan.DeferredByMode)
+		})
+	}
+}
+
+// Validates: R-2.17.2
+//
+// Each delete the plan holds back for work held for the next pass logs, at
+// Debug, the delete and the path of the work it waits for, so a pass that
+// leaves work names the folder that waits: the deletes of P/Q and P name f,
+// whose move out of them waits, the delete of S/g, moved here up to S as S
+// was renamed T, names the upload at S that writes its content, and the
+// delete of R, which runs, logs nothing.
+func TestPlanBuiltActions_AHeldDeleteLogsTheItemItWaitsFor(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	composition := &moveComposition{
+		deferred:      map[string]bool{"f": true},
+		deferredMoves: map[string][]actionType{"f": {ActionRemoteMove}},
+	}
+	inputs := &moveInputs{nodes: []moveNode{composeNode("f", ItemTypeFolder, "P/Q/f", "x/f", "P/Q/f")}}
+	actions := []Action{
+		{Type: ActionRemoteDelete, Path: "P/Q", View: folder},
+		{Type: ActionRemoteDelete, Path: "P", View: folder},
+		{Type: ActionRemoteDelete, Path: "R", View: folder},
+		{
+			Type: ActionRemoteMove, ItemID: "item-S", OldPath: "S", Path: "T",
+			View: &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}},
+		},
+		{Type: ActionRemoteDelete, Path: "S/g", View: syncedFileView(7, "item-g")},
+		uploadOfIdentity("S", 7),
+	}
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	_, err := newPlanner(logger).planBuiltActions(actions, nil, nil, composition, inputs, plannerMountContext{}, SyncBidirectional)
+	require.NoError(t, err)
+
+	var held []string
+	for line := range strings.Lines(logs.String()) {
+		if _, fields, found := strings.Cut(line, `msg="delete waits for work held for the next pass" `); found {
+			held = append(held, strings.TrimSpace(fields))
+		}
+	}
+	assert.Equal(t, []string{
+		"action=remote_delete path=P/Q held_path=P/Q/f",
+		"action=remote_delete path=P held_path=P/Q/f",
+		"action=remote_delete path=S/g held_path=S",
+	}, held)
+}
+
+// Validates: R-2.17.6
+//
+// Each create here that waits for the move on OneDrive of the folder it was
+// rebased through logs, at Debug, the create and the folder's path here and
+// on OneDrive, so a file that does not arrive names the folder it waits
+// for: g, made on OneDrive in P while P waits to move into x here, names x/P
+// and P, and h, made in y, which no move holds, logs nothing.
+func TestPlanBuiltActions_AHeldRebasedCreateLogsTheFolderItWaitsFor(t *testing.T) {
+	t.Parallel()
+
+	composition := &moveComposition{
+		deferred:      map[string]bool{"P": true},
+		deferredMoves: map[string][]actionType{"P": {ActionRemoteMove}},
+	}
+	inputs := &moveInputs{nodes: []moveNode{composeNode("P", ItemTypeFolder, "P", "x/P", "P")}}
+	madeOnOneDrive := func(p, itemID string) Action {
+		return Action{Type: ActionDownload, Path: p, ItemID: itemID, View: &pathView{
+			Path: p, Remote: &remoteState{ItemType: ItemTypeFile},
+		}}
+	}
+	actions := []Action{madeOnOneDrive("P/g", "item-g"), madeOnOneDrive("y/h", "item-h")}
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	plan, err := newPlanner(logger).planBuiltActions(actions, nil, nil, composition, inputs, plannerMountContext{}, SyncBidirectional)
+	require.NoError(t, err)
+	require.Len(t, plan.Actions, 1)
+	assert.Equal(t, "y/h", plan.Actions[0].Path)
+
+	var held []string
+	for line := range strings.Lines(logs.String()) {
+		if _, fields, found := strings.Cut(line, `msg="create waits for its folder's move on OneDrive" `); found {
+			held = append(held, strings.TrimSpace(fields))
+		}
+	}
+	assert.Equal(t, []string{"action=download path=x/P/g folder=x/P folder_on_onedrive=P"}, held)
 }
 
 // Validates: R-2.17.6
@@ -1002,7 +1903,7 @@ func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			kept, deps := isolateDependencyCycles(tc.actions, nil)
+			kept, deps, _ := isolateDependencyCycles(tc.actions, nil)
 			assert.Len(t, kept, len(tc.actions), "no action is dropped as a cycle")
 			require.NoError(t, detectDependencyCycle(deps))
 			assert.Equal(t, tc.wantDeps, deps)
@@ -1018,9 +1919,11 @@ func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder
 // f's move would land in the old x if it ran first, which x's move would
 // then carry to x2/f, and would find no x if it ran second. On OneDrive the
 // plan also creates the new x, which waits for x's move, and f's move waits
-// for both. A move from below the vacated path (a rename inside x) is not
-// held: x's move waits for it to leave first. A move of the other side is not
-// held either.
+// for both. Paths are compared as OneDrive compares names, so a move into a
+// new X waits for x's move, and on OneDrive for the create of X too. A move
+// from below the vacated path (a rename inside x, named x or X) is not held:
+// x's move waits for it to leave first. A move of the other side is not held
+// either.
 func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testing.T) {
 	t.Parallel()
 
@@ -1044,9 +1947,22 @@ func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testin
 			move(ActionRemoteMove, "f", "x/f", folder),
 			{Type: ActionFolderCreate, Path: "x", CreateSide: CreateRemote},
 		}, wantDeps: [][]int{nil, {0, 2}, {0}}},
+		{name: "into a new X", actions: []Action{
+			move(ActionLocalMove, "x", "x2", folder),
+			move(ActionLocalMove, "f", "X/f", folder),
+		}, wantDeps: [][]int{nil, {0}}},
+		{name: "on OneDrive, with the new X", actions: []Action{
+			move(ActionRemoteMove, "x", "x2", folder),
+			move(ActionRemoteMove, "f", "X/f", folder),
+			{Type: ActionFolderCreate, Path: "X", CreateSide: CreateRemote},
+		}, wantDeps: [][]int{nil, {0, 2}, {0}}},
 		{name: "a rename inside the vacated path", actions: []Action{
 			move(ActionLocalMove, "x", "x2", folder),
 			move(ActionLocalMove, "x/a.txt", "x/b.txt", file),
+		}, wantDeps: [][]int{{1}, nil}},
+		{name: "a rename inside the vacated path, named X", actions: []Action{
+			move(ActionLocalMove, "x", "x2", folder),
+			move(ActionLocalMove, "x/a.txt", "X/b.txt", file),
 		}, wantDeps: [][]int{{1}, nil}},
 		{name: "a move of the other side", actions: []Action{
 			move(ActionLocalMove, "x", "x2", folder),
@@ -1056,9 +1972,39 @@ func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			kept, deps := isolateDependencyCycles(tc.actions, nil)
+			kept, deps, _ := isolateDependencyCycles(tc.actions, nil)
 			assert.Len(t, kept, len(tc.actions), "no action is dropped as a cycle")
 			assert.Equal(t, tc.wantDeps, deps)
+		})
+	}
+}
+
+// Validates: R-2.17.6
+//
+// A folder deleted on OneDrive while a folder is made here at its path, x
+// again, X or x/sub below a deleted x/sub, and f moved into the new folder:
+// the create waits for the delete and f's move for the create, so the move
+// never lands in the folder the delete removes.
+func TestBuildDependencies_MoveIntoAFolderMadeAtADeletedPathWaitsForTheDeleteAndTheCreate(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	for _, tc := range []struct{ deleted, made string }{
+		{deleted: "x", made: "x"},
+		{deleted: "x", made: "X"},
+		{deleted: "x/sub", made: "x/sub"},
+	} {
+		t.Run(tc.deleted+" deleted, "+tc.made+" made", func(t *testing.T) {
+			t.Parallel()
+
+			actions := []Action{
+				{Type: ActionRemoteDelete, Path: tc.deleted, View: folder},
+				{Type: ActionFolderCreate, Path: tc.made, CreateSide: CreateRemote},
+				{Type: ActionRemoteMove, OldPath: "f", Path: tc.made + "/f", View: folder},
+			}
+			kept, deps, _ := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions), "no action is dropped as a cycle")
+			assert.Equal(t, [][]int{nil, {0}, {1}}, deps)
 		})
 	}
 }
@@ -1190,7 +2136,7 @@ func assertDependencyRows(t *testing.T, rows []dependencyRow) {
 			t.Parallel()
 
 			assert.Equal(t, tc.wantDeps, buildDependencies(tc.actions))
-			kept, _ := isolateDependencyCycles(tc.actions, nil)
+			kept, _, _ := isolateDependencyCycles(tc.actions, nil)
 			assert.Len(t, kept, tc.wantKept)
 		})
 	}
@@ -1254,7 +2200,7 @@ func TestIsolateDependencyCycles_KeepsUnrelatedWork(t *testing.T) {
 	}
 	require.Error(t, detectDependencyCycle(buildDependencies(actions)), "the fixture must contain a cycle")
 
-	kept, deps := isolateDependencyCycles(actions, nil)
+	kept, deps, _ := isolateDependencyCycles(actions, nil)
 
 	require.Len(t, kept, 1)
 	assert.Equal(t, "unrelated.txt", kept[0].Path)

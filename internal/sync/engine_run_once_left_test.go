@@ -324,7 +324,7 @@ func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testi
 	require.Error(t, detectDependencyCycle(buildDependencies(cycle)), "the fixture must contain a cycle")
 
 	plan, err := newPlanner(logger).planBuiltActions(
-		cycle, nil, &moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
+		cycle, nil, nil, &moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
 	require.NoError(t, err)
 	require.Empty(t, plan.Actions, "both moves are dropped")
 

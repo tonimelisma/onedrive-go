@@ -278,21 +278,23 @@ func countByType(actions []Action) map[actionType]int {
 // (D-059c). A cycle is a planner bug, but it used to abort the whole plan, so
 // one bad pair of actions stopped every other change from syncing. The rest
 // of the plan runs; the next pass replans the removed work from current truth.
-func isolateDependencyCycles(actions []Action, logger *slog.Logger) ([]Action, [][]int) {
+// It also returns the removed actions.
+func isolateDependencyCycles(actions []Action, logger *slog.Logger) (kept []Action, deps [][]int, removed []Action) {
 	for {
-		deps := buildDependencies(actions)
+		deps = buildDependencies(actions)
 		onCycle := dependencyCycleMembers(deps)
 		if len(onCycle) == 0 {
-			return actions, deps
+			return actions, deps, removed
 		}
 
 		dropped := withDependents(onCycle, deps)
-		kept := make([]Action, 0, len(actions)-len(dropped))
+		kept = make([]Action, 0, len(actions)-len(dropped))
 		for i := range actions {
 			if !dropped[i] {
 				kept = append(kept, actions[i])
 				continue
 			}
+			removed = append(removed, actions[i])
 			if logger != nil && onCycle[i] {
 				logger.Error("planner dropped an action caught in a dependency cycle; it is replanned next pass",
 					slog.String("action", actions[i].Type.String()),
@@ -307,17 +309,29 @@ func isolateDependencyCycles(actions []Action, logger *slog.Logger) ([]Action, [
 
 // dependencyCycleMembers returns the actions on a dependency cycle: members of
 // a strongly connected component with more than one action, or depending on
-// themselves (Tarjan's algorithm).
+// themselves.
 func dependencyCycleMembers(deps [][]int) map[int]bool {
+	_, members := dependencyComponents(deps)
+
+	return members
+}
+
+// dependencyComponents numbers the strongly connected components of deps
+// (Tarjan's algorithm): two actions share a number exactly when each waits
+// for the other, directly or through others, so an edge lies on a cycle
+// exactly when its ends share one. It also returns the actions on a cycle, as
+// dependencyCycleMembers does.
+func dependencyComponents(deps [][]int) (component []int, members map[int]bool) {
 	index := make([]int, len(deps))
 	low := make([]int, len(deps))
 	onStack := make([]bool, len(deps))
+	component = make([]int, len(deps))
 	for i := range index {
 		index[i] = -1
 	}
 	var stack []int
-	next := 0
-	members := map[int]bool{}
+	next, components := 0, 0
+	members = map[int]bool{}
 
 	var visit func(v int)
 	visit = func(v int) {
@@ -339,18 +353,20 @@ func dependencyCycleMembers(deps [][]int) map[int]bool {
 		if low[v] != index[v] {
 			return
 		}
-		var component []int
+		var scc []int
 		for {
 			w := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			onStack[w] = false
-			component = append(component, w)
+			component[w] = components
+			scc = append(scc, w)
 			if w == v {
 				break
 			}
 		}
-		if len(component) > 1 {
-			for _, w := range component {
+		components++
+		if len(scc) > 1 {
+			for _, w := range scc {
 				members[w] = true
 			}
 		}
@@ -361,7 +377,7 @@ func dependencyCycleMembers(deps [][]int) map[int]bool {
 		}
 	}
 
-	return members
+	return component, members
 }
 
 // withDependents extends roots with every action that depends on one of them,

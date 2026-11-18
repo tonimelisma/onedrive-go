@@ -14,10 +14,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
-// The index-based buildDependencies must produce exactly the edges the
-// scanning implementation it replaced produced. That implementation is kept
-// here as the oracle: every rule compared each action with every other
-// action, which is unambiguous and quadratic.
+// The index-based buildDependencies must find every pair of actions a rule
+// accepts. The oracle here scans for them: every rule compares each action
+// with every other action, which is unambiguous and quadratic. For moves both
+// apply the same pair predicates (movePrecedes, underMoveSource, ...), so
+// there the comparison proves the indexes complete, not what a predicate
+// accepts; the rows of each rule hold that.
 
 // Validates: R-2.17.6, R-2.12.1, R-2.17.1
 //
@@ -25,14 +27,15 @@ import (
 // files with work under their sources and destinations, moves onto vacated
 // paths, folder deletes with child deletes and moves out of them, creates at
 // vacated paths, case-, Unicode- and emoji-variant names, type-change
-// replacements, conflict copies) build the same dependency lists under the
-// indexed builder as under the scanning oracle, duplicates included.
+// replacements, conflict copies, deletes and creates of the same content)
+// build the same dependency lists under the indexed builder as under the
+// scanning oracle, duplicates included.
 func TestBuildDependencies_MatchesScanningOracle(t *testing.T) {
 	t.Parallel()
 
 	// The generator must reach every rule family, or the comparison proves
 	// nothing about it; the counters say which edges the seeds produced.
-	var edges, edgesOnMoves, edgesOnDeletes, edgesOnCaseVariants, edgesBelowFolderDeletes int
+	var edges, edgesOnMoves, edgesOnDeletes, edgesOnCaseVariants, edgesBelowFolderDeletes, edgesOnContent int
 
 	const seeds = 400
 	for seed := range seeds {
@@ -62,6 +65,9 @@ func TestBuildDependencies_MatchesScanningOracle(t *testing.T) {
 					edgesBelowFolderDeletes++
 				case isDeleteAction(dep):
 					edgesOnDeletes++
+				case isDeleteAction(&actions[i]):
+					// Only the content rule makes a delete wait for a create.
+					edgesOnContent++
 				}
 				if dep.Path != actions[i].Path && namekey.EqualPath(dep.Path, actions[i].Path) {
 					edgesOnCaseVariants++
@@ -70,12 +76,224 @@ func TestBuildDependencies_MatchesScanningOracle(t *testing.T) {
 		}
 	}
 
-	t.Logf("edges %d: on moves %d, below folder deletes %d, on other deletes %d, on case variants %d",
-		edges, edgesOnMoves, edgesBelowFolderDeletes, edgesOnDeletes, edgesOnCaseVariants)
+	t.Logf("edges %d: on moves %d, below folder deletes %d, on other deletes %d, on case variants %d, on content %d",
+		edges, edgesOnMoves, edgesBelowFolderDeletes, edgesOnDeletes, edgesOnCaseVariants, edgesOnContent)
 	assert.Positive(t, edgesOnMoves)
 	assert.Positive(t, edgesBelowFolderDeletes)
 	assert.Positive(t, edgesOnDeletes)
 	assert.Positive(t, edgesOnCaseVariants)
+	assert.Positive(t, edgesOnContent)
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// A delete waits for the create on its side that writes the deleted file's
+// content at another path: OneDrive's delete of z for the upload of the file
+// here that has z's local identity (z renamed onto P/f, a rename SQLite could
+// not pair), and the delete here of y for the download of y's item at q/y.
+// So a create that fails, or fails to get what it waits for, keeps the delete
+// from running and the content on its side. A delete waits for no create of
+// other content, nor for one on the other side, nor for the create at its own
+// path, which the same-path rule orders after it: that create is no content
+// edge at all, not even one left out as closing a cycle.
+func TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent(t *testing.T) {
+	t.Parallel()
+
+	downloadOf := func(p, itemID string) Action {
+		return Action{Type: ActionDownload, Path: p, ItemID: itemID, View: &pathView{}}
+	}
+	actions := []Action{
+		{Type: ActionRemoteDelete, Path: "z", View: syncedFileView(7, "item-z")},
+		uploadOfIdentity("P/f", 7),
+		{Type: ActionLocalDelete, Path: "y", View: syncedFileView(8, "item-y")},
+		downloadOf("q/y", "item-y"),
+		{Type: ActionRemoteDelete, Path: "w", View: syncedFileView(9, "item-w")},
+		uploadOfIdentity("v", 10),
+		downloadOf("w2", "item-w"),
+		uploadOfIdentity("y2", 8),
+		{Type: ActionRemoteDelete, Path: "e", View: syncedFileView(11, "item-e")},
+		uploadOfIdentity("e", 11),
+	}
+
+	deps, leftOut := buildDependencyGraph(actions)
+
+	assert.Equal(t, []int{1}, deps[0], "OneDrive's delete of z waits for the upload at P/f of z's file")
+	assert.Equal(t, []int{3}, deps[2],
+		"the delete of y here waits for the download of y's item, not for the upload of y's file at y2")
+	assert.Empty(t, deps[4], "the upload of v carries other content, the download at w2 is on the other side")
+	assert.Empty(t, deps[8])
+	assert.Equal(t, []int{8}, deps[9], "the same-path rule orders the upload at e after e's delete")
+	assert.Empty(t, leftOut, "no content edge closes a cycle")
+	require.NoError(t, detectDependencyCycle(deps))
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// Where the create that writes a deleted file's content waits for the delete
+// through the other rules, the delete does not wait for it: the edge would
+// close a cycle, and both would be dropped on every pass. The upload of
+// a1.txt, edited in a folder A renamed B here, waits for A's move, which
+// waits for the delete of A/a1.txt below its source; the upload of x, moved
+// here up onto the path of its folder P, which is deleted, waits for P's
+// delete, which waits for the delete of P/x. In the same plan the delete of
+// z, renamed here into B, still waits for its upload.
+func TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}}
+	actions := []Action{
+		{Type: ActionRemoteMove, OldPath: "A", Path: "B", View: folder},
+		{Type: ActionRemoteDelete, Path: "A/a1.txt", View: syncedFileView(7, "item-a1")},
+		uploadOfIdentity("B/a1.txt", 7),
+		{Type: ActionRemoteDelete, Path: "P", View: folder},
+		{Type: ActionRemoteDelete, Path: "P/x", View: syncedFileView(8, "item-x")},
+		uploadOfIdentity("P", 8),
+		{Type: ActionRemoteDelete, Path: "z", View: syncedFileView(9, "item-z")},
+		uploadOfIdentity("B/z", 9),
+	}
+
+	deps := buildDependencies(actions)
+
+	assert.Equal(t, []int{1}, deps[0], "A's move waits for the delete below its source")
+	assert.Empty(t, deps[1], "a1.txt's old copy does not wait for the upload after A's move")
+	assert.Equal(t, []int{0}, deps[2])
+	assert.Equal(t, []int{4}, deps[3])
+	assert.Empty(t, deps[4], "P/x does not wait for the upload after P's delete")
+	assert.Equal(t, []int{3}, deps[5])
+	assert.Equal(t, []int{7}, deps[6], "z's delete waits for its upload")
+	assert.Equal(t, []int{0}, deps[7])
+	require.NoError(t, detectDependencyCycle(deps))
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// Two content edges can close a cycle only together: OneDrive deletes a.txt
+// and b.txt while each one's content is uploaded at the other's name in
+// another case (B.txt, A.txt), and each upload waits for the delete of the
+// name it takes. The edges are decided one at a time, so the first, which
+// closes no cycle alone, is kept: a.txt's delete waits for the upload of its
+// content, and only b.txt's edge, whose upload then waits for b.txt's delete
+// through it, is left out. Left out together, neither upload reached its
+// delete, so both deletes waited for the next pass, and with them the
+// uploads: the plan withheld all four actions on every pass. Now the plan
+// keeps all four.
+func TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept(t *testing.T) {
+	t.Parallel()
+
+	actions := []Action{
+		{Type: ActionRemoteDelete, Path: "a.txt", View: syncedFileView(1, "item-a")},
+		uploadOfIdentity("B.txt", 1),
+		{Type: ActionRemoteDelete, Path: "b.txt", View: syncedFileView(2, "item-b")},
+		uploadOfIdentity("A.txt", 2),
+	}
+
+	deps, leftOut := buildDependencyGraph(actions)
+
+	assert.Equal(t, []int{1}, deps[0], "a.txt's delete waits for the upload of its content")
+	assert.Equal(t, []int{2}, deps[1], "B.txt's upload waits for b.txt's delete")
+	assert.Empty(t, deps[2], "b.txt's delete waits for nothing")
+	assert.Equal(t, []int{0}, deps[3], "A.txt's upload waits for a.txt's delete")
+	assert.Equal(t, []contentEdge{{deleteIdx: 2, createIdx: 3}}, leftOut)
+	require.NoError(t, detectDependencyCycle(deps))
+
+	kept, withheld, _ := withholdDeletesOfHeldWork(nil, slices.Clone(actions), nil, &moveInputs{}, &moveComposition{}, SyncBidirectional)
+	assert.Len(t, kept, len(actions), "the plan keeps every action")
+	assert.Zero(t, withheld)
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// carriedPath follows the plan's moves on the delete's side from the deleted
+// entry's path: the move of the nearest folder above it, then the nearest
+// move above where that one puts it that runs after it. On OneDrive a
+// subfolder's move is rebased below its folder's new path and runs after the
+// folder's; here a subfolder moves first, from below the folder's old path. A
+// subfolder leaving its folder first is the nearest move; a folder whose path
+// another move takes moved first and carries the entry nowhere; a move on the
+// other side carries nothing.
+func TestCarriedPath_FollowsTheMovesThatCarryTheDeletedEntry(t *testing.T) {
+	t.Parallel()
+
+	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}}
+	remoteMove := func(from, to string) Action {
+		return Action{Type: ActionRemoteMove, OldPath: from, Path: to, View: folder}
+	}
+	localMove := func(from, to string) Action {
+		return Action{Type: ActionLocalMove, OldPath: from, Path: to, View: folder}
+	}
+	for _, tc := range []struct {
+		name    string
+		moves   []Action
+		deleted Action
+		want    string
+	}{
+		{
+			name:    "no move above it",
+			moves:   []Action{remoteMove("x", "y")},
+			deleted: Action{Type: ActionRemoteDelete, Path: "P/f"},
+			want:    "P/f",
+		},
+		{
+			name:    "its folder renamed on OneDrive",
+			moves:   []Action{remoteMove("P", "Q")},
+			deleted: Action{Type: ActionRemoteDelete, Path: "P/f"},
+			want:    "Q/f",
+		},
+		{
+			name:    "a renamed subfolder of a renamed folder on OneDrive",
+			moves:   []Action{remoteMove("P", "Q"), remoteMove("Q/S", "Q/T")},
+			deleted: Action{Type: ActionRemoteDelete, Path: "P/S/f"},
+			want:    "Q/T/f",
+		},
+		{
+			name:    "a renamed subfolder of a renamed folder here",
+			moves:   []Action{localMove("P", "Q"), localMove("P/S", "P/T")},
+			deleted: Action{Type: ActionLocalDelete, Path: "P/S/f"},
+			want:    "Q/T/f",
+		},
+		{
+			name:    "a subfolder leaving its renamed folder first",
+			moves:   []Action{remoteMove("P", "Q"), remoteMove("P/S", "R/S")},
+			deleted: Action{Type: ActionRemoteDelete, Path: "P/S/f"},
+			want:    "R/S/f",
+		},
+		{
+			name:    "a folder moved to the path a renamed folder leaves",
+			moves:   []Action{remoteMove("P", "Q"), remoteMove("X", "P")},
+			deleted: Action{Type: ActionRemoteDelete, Path: "X/f"},
+			want:    "P/f",
+		},
+		{
+			name:    "a subfolder moved on the other side",
+			moves:   []Action{remoteMove("P", "Q"), localMove("P/S", "P/U")},
+			deleted: Action{Type: ActionRemoteDelete, Path: "P/S/f"},
+			want:    "Q/S/f",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			actions := append(slices.Clone(tc.moves), tc.deleted)
+			deps := buildDependencies(actions)
+			got := carriedPath(actions, deps, movesBySource(actions), &actions[len(actions)-1])
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// syncedFileView is the view of a synced file with a local identity on
+// device 1.
+func syncedFileView(inode uint64, itemID string) *pathView {
+	return &pathView{Baseline: &BaselineEntry{
+		ItemType: ItemTypeFile, ItemID: itemID, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+	}}
+}
+
+// uploadOfIdentity uploads the file here at p that has inode on device 1.
+func uploadOfIdentity(p string, inode uint64) Action {
+	return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{
+		ItemType: ItemTypeFile, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+	}}}
 }
 
 // Validates: R-2.17.6
@@ -169,24 +387,54 @@ func (pool *dependencyPathPool) pickItemType() ItemType {
 	return ItemTypeFile
 }
 
+// dependencyContentPool is how many local identities and item IDs the
+// generator shares out, so deletes and creates of the same content are
+// frequent.
+const dependencyContentPool = 4
+
 // pickView draws a view with any combination of sides present, each of
-// either type, so deletedItemType and movedItemIsFolder see every case.
+// either type, so deletedItemType and movedItemIsFolder see every case. The
+// baseline and the local side may carry an identity, and the baseline an
+// item ID, drawn from a small pool (addContentCarrierDeps).
 func (pool *dependencyPathPool) pickView(path string) *pathView {
 	if pool.rng.IntN(4) == 0 {
 		return nil
 	}
 	view := &pathView{Path: path}
 	if pool.rng.IntN(3) > 0 {
-		view.Baseline = &BaselineEntry{Path: path, ItemType: pool.pickItemType()}
+		inode, hasIdentity := pool.pickIdentity()
+		view.Baseline = &BaselineEntry{
+			Path: path, ItemType: pool.pickItemType(), ItemID: pool.pickItemID(),
+			LocalInode: inode, LocalHasIdentity: hasIdentity,
+		}
 	}
 	if pool.rng.IntN(3) > 0 {
-		view.Local = &localState{ItemType: pool.pickItemType()}
+		inode, hasIdentity := pool.pickIdentity()
+		view.Local = &localState{ItemType: pool.pickItemType(), LocalInode: inode, LocalHasIdentity: hasIdentity}
 	}
 	if pool.rng.IntN(3) > 0 {
 		view.Remote = &remoteState{ItemType: pool.pickItemType()}
 	}
 
 	return view
+}
+
+// pickIdentity draws a local inode from the pool, or none.
+func (pool *dependencyPathPool) pickIdentity() (uint64, bool) {
+	if pool.rng.IntN(2) == 0 {
+		return 0, false
+	}
+
+	return 1 + pool.rng.Uint64N(dependencyContentPool), true
+}
+
+// pickItemID draws an item ID from the pool, or none.
+func (pool *dependencyPathPool) pickItemID() string {
+	if pool.rng.IntN(2) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("item-%d", pool.rng.IntN(dependencyContentPool))
 }
 
 // pickOldPath draws a move source: usually another pool path, sometimes the
@@ -221,7 +469,9 @@ func randomDependencyActions(rng *rand.Rand, actionCount int) []Action {
 			action.CreateSide = sides[rng.IntN(len(sides))]
 		case ActionLocalMove, ActionRemoteMove:
 			action.OldPath = pool.pickOldPath(path)
-		case ActionUpload, ActionDownload, ActionLocalDelete, ActionRemoteDelete,
+		case ActionDownload:
+			action.ItemID = pool.pickItemID()
+		case ActionUpload, ActionLocalDelete, ActionRemoteDelete,
 			ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		}
 		actions = append(actions, action)
@@ -296,6 +546,16 @@ func oracleBuildDependencies(actions []Action) [][]int {
 		deps[i] = oracleAddRemoteCaseVariantDeps(deps[i], i, &actions[i], actions)
 		sort.Ints(deps[i])
 	}
+
+	var contentEdges []contentEdge
+	for deleteIdx := range actions {
+		for createIdx := range actions {
+			if carriesContentOf(&actions[createIdx], &actions[deleteIdx]) {
+				contentEdges = append(contentEdges, contentEdge{deleteIdx: deleteIdx, createIdx: createIdx})
+			}
+		}
+	}
+	addContentEdges(deps, contentEdges)
 
 	return deps
 }
