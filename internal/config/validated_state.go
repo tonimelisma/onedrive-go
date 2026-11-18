@@ -27,21 +27,19 @@ const (
 	AuthClearSourceSyncStartupProof AuthClearSource = "sync_startup_proof"
 )
 
-// LoadValidatedState loads config plus catalog and validates cross-file
-// invariants before returning a durable snapshot. Lenient config loading is
-// intended for informational CLI surfaces that must preserve warnings.
-func LoadValidatedState(cfgPath string, lenient bool, logger *slog.Logger) (ValidatedState, []ConfigWarning, error) {
-	var (
-		cfg      *Config
-		warnings []ConfigWarning
-		err      error
-	)
-
-	if lenient {
-		cfg, warnings, err = LoadOrDefaultLenient(cfgPath, logger)
-	} else {
-		cfg, err = LoadOrDefault(cfgPath, logger)
-	}
+// LoadValidatedState loads the config leniently (LoadOrDefaultLenient) plus
+// the catalog and validates cross-file invariants before returning a durable
+// snapshot, for the informational CLI surfaces that must show what they can
+// and preserve the config's warnings.
+//
+// Its warnings also cover each drive that sets no sync_dir and whose default
+// folder meets a folder the client keeps for itself, in the words sync
+// refuses that drive with. The check runs here, not in LoadOrDefaultLenient:
+// the default comes from the catalog's account names, and this load computes
+// it from the catalog it has just validated, while LoadOrDefaultLenient reads
+// the config file alone and also serves commands that discard its warnings.
+func LoadValidatedState(cfgPath string, logger *slog.Logger) (ValidatedState, []ConfigWarning, error) {
+	cfg, warnings, err := LoadOrDefaultLenient(cfgPath, logger)
 	if err != nil {
 		return ValidatedState{}, warnings, err
 	}
@@ -61,6 +59,8 @@ func LoadValidatedState(cfgPath string, lenient bool, logger *slog.Logger) (Vali
 		return ValidatedState{}, warnings, err
 	}
 
+	warnings = appendWarnings(warnings, checkDefaultSyncDirsMeetNoManagedFolder(cfg, stored))
+
 	return ValidatedState{
 		Config:  cfg,
 		Catalog: stored,
@@ -68,14 +68,7 @@ func LoadValidatedState(cfgPath string, lenient bool, logger *slog.Logger) (Vali
 }
 
 func validateConfiguredDrivesInCatalog(cfg *Config, stored *Catalog) error {
-	if cfg == nil {
-		cfg = DefaultConfig()
-	}
-	if stored == nil {
-		stored = DefaultCatalog()
-	}
-
-	for cid := range cfg.Drives {
+	for _, cid := range sortedDriveIDs(cfg) {
 		if _, found := stored.DriveByCanonicalID(cid); !found {
 			return fmt.Errorf("drive %s is in config.toml but not in onedrive-go's drive inventory (catalog.json); "+
 				"run 'onedrive-go drive add %s' to complete it, or remove its section from config.toml",
@@ -87,10 +80,6 @@ func validateConfiguredDrivesInCatalog(cfg *Config, stored *Catalog) error {
 }
 
 func validateCatalogDriveOwners(stored *Catalog) error {
-	if stored == nil {
-		stored = DefaultCatalog()
-	}
-
 	for _, key := range stored.SortedDriveKeys() {
 		drive := stored.Drives[key]
 		ownerCID, hasOwner := drive.Owner()
@@ -106,10 +95,6 @@ func validateCatalogDriveOwners(stored *Catalog) error {
 }
 
 func validatePrimaryDriveOwnership(stored *Catalog) error {
-	if stored == nil {
-		stored = DefaultCatalog()
-	}
-
 	for _, key := range stored.SortedAccountKeys() {
 		account := stored.Accounts[key]
 		primaryCID, hasPrimary := account.PrimaryDrive()

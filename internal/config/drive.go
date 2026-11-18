@@ -337,17 +337,32 @@ func EffectiveSyncDir(
 		return configuredSyncDir
 	}
 
-	orgName, displayName := ResolveAccountNames(canonicalID, logger)
-	otherDirs := CollectOtherSyncDirs(cfg, canonicalID, logger)
-	syncDir := expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherDirs))
+	catalog, err := LoadCatalog()
+	if err != nil {
+		// An unreadable catalog (nil here) only costs the default the names
+		// it records.
+		logger.Debug("could not load catalog for the default sync_dir",
+			"canonical_id", canonicalID.String(), "error", err)
+	}
+	syncDir := defaultSyncDir(cfg, catalog, canonicalID)
 
 	logger.Debug("using default sync_dir",
 		"sync_dir", syncDir,
 		"canonical_id", canonicalID.String(),
-		"org_name", orgName,
 	)
 
 	return syncDir
+}
+
+// defaultSyncDir is the folder a drive whose section sets no sync_dir syncs
+// into, tilde expanded: DefaultSyncDir from the account's names and the other
+// drives' folders, over a catalog already in hand (nil for none).
+// EffectiveSyncDir reads the catalog for it; LoadValidatedState passes the one
+// it has validated.
+func defaultSyncDir(cfg *Config, catalog *Catalog, canonicalID driveid.CanonicalID) string {
+	orgName, displayName := accountNames(catalog, canonicalID)
+
+	return expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherSyncDirs(cfg, catalog, canonicalID)))
 }
 
 // ResolveAccountNames returns org_name and display_name for a drive's parent

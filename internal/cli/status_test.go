@@ -2173,6 +2173,47 @@ func TestBuildConfiguredStatusDrive_PrefersConfiguredSyncDir(t *testing.T) {
 	assert.Equal(t, "/explicit/path", got.Folder)
 }
 
+// Validates: R-4.8.3, R-4.8.4
+//
+// A drive whose sync folder holds the data folder is refused by sync, and
+// status says so before sync runs: one warning on the console naming the
+// config file, the drive and both folders, whether the sync folder is the
+// drive's default (~/OneDrive here) or configured.
+func TestStatusCommand_WarnsOnceAboutASyncDirHoldingTheDataFolder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		section string // the drive's keys in config.toml
+	}{
+		{name: "default sync_dir"},
+		{name: "configured sync_dir", section: "sync_dir = \"~/OneDrive\"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestDriveHome(t)
+			home, err := os.UserHomeDir()
+			require.NoError(t, err)
+			t.Setenv("XDG_DATA_HOME", filepath.Join(home, "OneDrive", "data"))
+			cid := driveid.MustCanonicalID("personal:status-warning@example.com")
+			seedCatalogAccount(t, cid, nil)
+			seedCatalogDrive(t, cid, nil)
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(t, os.WriteFile(cfgPath, []byte("[\""+cid.String()+"\"]\n"+tc.section), 0o600))
+			resolvedHome, err := filepath.EvalSymlinks(home)
+			require.NoError(t, err)
+			dataDir, err := filepath.EvalSymlinks(config.DefaultDataDir())
+			require.NoError(t, err)
+
+			var out, console bytes.Buffer
+			cc := newCommandContext(&out, cfgPath)
+			cc.Logger = slog.New(newConsoleLogHandler(&console, slog.LevelWarn, consoleLogHuman))
+			require.NoError(t, runStatusCommand(t.Context(), cc, false))
+
+			warning := "Warning: " + cfgPath + `: drive "` + cid.String() + `" sync_dir ` +
+				filepath.Join(resolvedHome, "OneDrive") + " contains " + dataDir + ", "
+			assert.Equal(t, 1, strings.Count(console.String(), warning), console.String())
+		})
+	}
+}
+
 // Validates: R-3.1.6
 //
 // mount_ref is the only identity status JSON publishes. It must identify a

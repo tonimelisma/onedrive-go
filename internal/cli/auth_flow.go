@@ -215,7 +215,7 @@ func withPendingTokenRemoved(err error, path string) error {
 func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error {
 	logger := cc.Logger
 
-	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
+	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, logger)
 	if err == nil {
 		if outcome := config.ClassifyLoadOutcome(err, warnings); outcome.Class == errclass.ClassActionable {
 			config.LogWarnings(cc.CfgPath, warnings, logger)
