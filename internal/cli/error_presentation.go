@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -235,7 +236,9 @@ func remoteFailureText(err error) string {
 // localFailureText recognizes local filesystem failures a user can fix: a
 // full disk (including the sync state database failing with SQLITE_FULL), a
 // read-only filesystem, a file the filesystem cannot hold, and missing or
-// unreadable files. The errno meaning comes from driveops' shared table.
+// unreadable files. The errno meaning comes from driveops' shared table. A
+// download's hidden partial file is named by its folder, the one the user
+// knows.
 func localFailureText(err error) string {
 	if syncengine.IsLocalDiskFull(err) {
 		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
@@ -245,12 +248,16 @@ func localFailureText(err error) string {
 	if !errors.As(err, &pathErr) {
 		return ""
 	}
+	subject := pathErr.Path
+	if driveops.IsOwnedTransferArtifactName(filepath.Base(subject)) {
+		subject = filepath.Dir(subject)
+	}
 
 	switch driveops.ClassifyLocalError(err) {
 	case driveops.LocalErrorReadOnly:
-		return pathErr.Path + " is on a read-only filesystem. Remount it read-write, then run the command again."
+		return subject + " is on a read-only filesystem. Remount it read-write, then run the command again."
 	case driveops.LocalErrorFileTooLarge:
-		return "The file is too large for the filesystem holding " + pathErr.Path + "."
+		return "The file is too large for the filesystem holding " + subject + "."
 	case driveops.LocalErrorOther,
 		driveops.LocalErrorNoSpace,
 		driveops.LocalErrorBusy,
@@ -260,9 +267,9 @@ func localFailureText(err error) string {
 
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return pathErr.Path + " does not exist."
+		return subject + " does not exist."
 	case errors.Is(err, fs.ErrPermission):
-		return "Permission denied for " + pathErr.Path + ". Check its file permissions."
+		return "Permission denied for " + subject + ". Check its file permissions."
 	default:
 		return ""
 	}

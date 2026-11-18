@@ -147,8 +147,9 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   already there is overwritten by ID, conditionally, as a single `put`
   overwrites it (R-1.3.8).
 - **Failures and the returned error.** The failure of one file or folder is
-  an event, counted, and the walk goes on with its siblings; its error text
-  names the path. The returned error is a `TreeRootError` when the root's
+  an event, counted, and the walk goes on with its siblings; the event names
+  the path and its error does not (Where a Local Path Enters an Error). The
+  returned error is a `TreeRootError` when the root's
   first page cannot be read (download) or the root cannot be opened or made
   on OneDrive (upload), before anything is reported, which the command
   returns as one error that names the remote path (`listing "<remote>": …`
@@ -635,9 +636,14 @@ with no version to bind is downloaded afresh. Evidence:
 `TestDownloadRange_RejectsUnboundOrMisalignedAnswers`. `DownloadOptsForItem`
 builds the options from a Graph item for CLI `get`.
 
-Errors and warnings at default verbosity name the file the caller asked for,
-never the internal `.onedrive-go.<name>.partial` temp file, and give sizes in
-human units (`TestTransferManager_DownloadError_NamesTargetNotPartial`).
+A download's errors name no local path of their own, so neither the target,
+which the caller names, nor the internal `.onedrive-go.<name>.partial` temp
+file; only a filesystem call on the partial that failed names it, once,
+through `localpath` (Where a Local Path Enters an Error), and the plain
+sentence of a single `get` names the partial's folder in its place. Sizes are
+given in human units (`TestTransferManager_DownloadError_NamesNoLocalPath`,
+`TestTransferManager_DownloadIntoAReadOnlyFolderNamesThePartialOnce`,
+`TestRunGet_AnUnwritableFileIsNamedOnce`).
 Housekeeping (expired or corrupt upload-session files, unreadable directories
 met by the partial-file cleanup walk) logs at Debug or Info: there is nothing
 for the user to do, and the walk runs at the end of every sync run that did
@@ -684,6 +690,46 @@ same thing whichever call (download, mkdir, rename, conflict copy) hit it
 
 `EACCES`/`EPERM` are deliberately not in the table: `os.ErrPermission` already
 names them and the sync permission probe owns their boundary decision.
+
+## Where a Local Path Enters an Error
+
+What a user sees names a local path once. The call that touched the
+filesystem names it: every failure of `internal/localpath` reads
+`<verb> <path as given>: <reason>` (`opening Backup/a.txt: permission
+denied`), and the os error beneath it, whose `*fs.PathError` or
+`*os.LinkError` holds the absolute path the call reached, is kept whole for
+`errors.Is` and `errors.As` but not printed again, so `ClassifyLocalError`,
+`localpath.IsMissingName` and the CLI's sentence for a missing or unreadable
+file answer as they would on the os error itself
+(`TestFailures_NameEachPathOnce`,
+`TestFailures_NameARelativePathAsItWasGiven`,
+`TestFailures_AnswerAsTheOSErrorTheyHold`,
+`TestClassifyLocalError_ReadsALocalpathFailureAsItsOSError`). No wrap in
+`driveops` names a local path: it says what the transfer was doing
+(`hashing`, `creating the partial file`, `moving the download into place`,
+`sending the file`), so a single file's error names the path once, through
+the call that failed (`TestComputeQuickXorHashContext_AnUnreadableFileIsNamedOnce`,
+`TestTransferManager_UploadOfAnUnreadableFileNamesItOnce`,
+`TestTransferManager_DownloadIntoAReadOnlyFolderNamesThePartialOnce`,
+`TestDownloadToFile_RenameFailure_PreservesPartial`), and a failure no local
+call caused, a Graph answer or an integrity mismatch, names none: the caller
+names the file (`TestTransferManager_DownloadError_NamesNoLocalPath`,
+`TestTransferManager_Upload_ErrorWrapping`). A tree event names its file or
+folder by `LocalPath`, and its error names no local path of its own. A line
+that starts with the path prints the cause through `localpath.WithoutPath`,
+which leaves out every local path the cause's failures and os errors name and
+keeps their verbs and reasons (`TestWithoutPath_LeavesOutEveryLocalPath`):
+a folder `get` or `put` prints `Failed: <LocalPath>: <cause>`, the path as
+the walk found it below the folder the user typed, and its `--json` `errors`
+hold the same string (`TestRunPut_FolderNamesAnUnreadableFileOnce`,
+`TestRunPut_FolderWithAFailingFileUploadsTheOthers`,
+`TestRunGet_FolderNamesAnUnwritableFileOnce`). A single `put` or `get` prints
+the error itself, whose `--verbose` details name the path once
+(`TestRunPut_AnUnreadableFileIsNamedOnce`,
+`TestRunGet_AnUnwritableFileIsNamedOnce`), and sync's activity line names the
+path below the sync folder and then only the innermost reason
+(`TestSyncConsole_ALocalFileFailureNamesTheFileOnce`). A log line may carry a
+`path` attribute beside the error.
 
 ## Recursive Transfer Concurrency
 

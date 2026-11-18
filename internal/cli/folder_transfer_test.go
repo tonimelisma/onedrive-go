@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -250,7 +249,7 @@ func TestFolderTransferReport_ACanceledRunReportsThenEndsWithTheCancellation(t *
 	events := []driveops.TreeEvent{
 		{Kind: driveops.TreeFolderCreated, LocalPath: "Docs"},
 		{Kind: driveops.TreeFileDone, RelPath: "a.txt", LocalPath: "Docs/a.txt", Size: 3},
-		{Kind: driveops.TreeFileFailed, RelPath: "b.txt", LocalPath: "Docs/b.txt", Err: errors.New("Docs/b.txt: context canceled")},
+		{Kind: driveops.TreeFileFailed, RelPath: "b.txt", LocalPath: "Docs/b.txt", Err: context.Canceled},
 	}
 	for i := range events {
 		report.add(events[i])

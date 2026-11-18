@@ -83,7 +83,7 @@ const (
 func hasISOBMFFSignature(target TargetFS, name string) (bool, error) {
 	f, err := target.Open(name)
 	if err != nil {
-		return false, fmt.Errorf("opening %s to inspect it: %w", name, err)
+		return false, err //nolint:wrapcheck // the target names the open and the path
 	}
 	defer f.Close() //nolint:errcheck // read-only; nothing buffered to flush
 
@@ -93,7 +93,7 @@ func hasISOBMFFSignature(target TargetFS, name string) (bool, error) {
 			return false, nil
 		}
 
-		return false, fmt.Errorf("reading the start of %s: %w", name, err)
+		return false, fmt.Errorf("reading the start: %w", err)
 	}
 
 	return string(header[isoBMFFBoxTypeOffset:]) == isoBMFFFileTypeBox, nil
@@ -282,7 +282,7 @@ func (tm *TransferManager) downloadToFile(
 	}
 
 	if err := target.PrepareParent(parentDir); err != nil {
-		return nil, fmt.Errorf("preparing the folder of %s: %w", targetPath, err)
+		return nil, fmt.Errorf("preparing the folder: %w", err)
 	}
 
 	partialPath := DownloadPartialPath(targetPath, opts)
@@ -344,7 +344,7 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 	// intentionally preserved so the next attempt can resume from it rather
 	// than re-downloading the entire file (B-207).
 	if err := target.Rename(partialPath, targetPath); err != nil {
-		return fmt.Errorf("renaming partial to %s: %w", targetPath, err)
+		return fmt.Errorf("moving the download into place: %w", err)
 	}
 
 	// The rename is only durable once the directory entry is: without this
@@ -353,7 +353,7 @@ func (tm *TransferManager) publishPartial(target TargetFS, partialPath, targetPa
 	// rather than undone.
 	if err := target.SyncDir(parentDir); err != nil {
 		if !localpath.IsDirSyncUnsupported(err) {
-			return fmt.Errorf("syncing the folder of %s: %w", targetPath, err)
+			return fmt.Errorf("syncing the folder: %w", err)
 		}
 
 		// Some filesystems (FUSE, SMB, some network mounts) cannot fsync a
@@ -382,19 +382,19 @@ func (tm *TransferManager) finalizePartial(target TargetFS, partialPath, targetP
 
 	f, err := target.OpenFile(partialPath, os.O_WRONLY, 0)
 	if err != nil {
-		return fmt.Errorf("reopening the download of %s: %w", targetPath, err)
+		return fmt.Errorf("reopening the download: %w", err)
 	}
 
 	if err := f.Chmod(mode); err != nil {
-		return errors.Join(fmt.Errorf("setting the mode of the download of %s: %w", targetPath, err), f.Close())
+		return errors.Join(fmt.Errorf("setting the mode of the download: %w", err), f.Close())
 	}
 
 	if err := tm.syncFile(f); err != nil {
-		return errors.Join(fmt.Errorf("flushing the download of %s to disk: %w", targetPath, err), f.Close())
+		return errors.Join(fmt.Errorf("flushing the download to disk: %w", err), f.Close())
 	}
 
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("closing the download of %s: %w", targetPath, err)
+		return fmt.Errorf("closing the download: %w", err)
 	}
 
 	return nil
@@ -439,7 +439,7 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 		if isHEICServedSmaller(targetPath, opts.RemoteSize, size) {
 			servedHEIF, err = hasISOBMFFSignature(opts.target(), partialPath)
 			if err != nil {
-				return nil, fmt.Errorf("inspecting the download of %s: %w", targetPath, err)
+				return nil, fmt.Errorf("inspecting the download: %w", err)
 			}
 		}
 
@@ -500,7 +500,7 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 		tm.removePartial(opts.target(), partialPath)
 	}
 
-	return nil, fmt.Errorf("downloading %s: %w (%s)", targetPath, ErrDownloadIntegrity, describeMismatches(opts, mismatches))
+	return nil, fmt.Errorf("%w (%s)", ErrDownloadIntegrity, describeMismatches(opts, mismatches))
 }
 
 // describeMismatches says in plain words why the download was refused.
@@ -653,7 +653,7 @@ func (tm *TransferManager) freshDownload(
 ) (string, int64, error) {
 	f, err := opts.target().OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
 	if err != nil {
-		return "", 0, fmt.Errorf("creating partial file %s: %w", partialPath, err)
+		return "", 0, fmt.Errorf("creating the partial file: %w", err)
 	}
 
 	h := quickxorhash.New()
@@ -678,15 +678,14 @@ func (tm *TransferManager) freshDownload(
 			tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 		}
 
-		// Name the file the caller asked for, not the internal partial file.
-		return "", 0, fmt.Errorf("downloading %s: %w", targetPathForPartial(partialPath), err)
+		return "", 0, fmt.Errorf("downloading: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
 		// Close failure is always an error regardless of context — the file is corrupt.
-		baseErr := fmt.Errorf("closing partial file %s: %w", partialPath, err)
+		baseErr := fmt.Errorf("closing the partial file: %w", err)
 		if removeErr := opts.target().Remove(partialPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return "", 0, errors.Join(baseErr, fmt.Errorf("removing corrupt partial file %s: %w", partialPath, removeErr))
+			return "", 0, errors.Join(baseErr, fmt.Errorf("removing the corrupt partial file: %w", removeErr))
 		}
 
 		return "", 0, baseErr
@@ -727,7 +726,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 			// and let the retry resume again. Starting over here threw away
 			// every resumed byte, so a link that stalls before a file
 			// finishes never finished it.
-			return "", 0, fmt.Errorf("resuming the download of %s: %w", targetPathForPartial(partialPath), err)
+			return "", 0, fmt.Errorf("resuming the download: %w", err)
 		}
 
 		// Debug only: a handled fallback. If the fresh download fails too,
@@ -746,7 +745,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 	if err != nil {
 		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
-		return "", 0, fmt.Errorf("hashing resumed partial file %s: %w", partialPath, err)
+		return "", 0, fmt.Errorf("hashing the resumed download: %w", err)
 	}
 
 	return localHash, totalSize, nil
@@ -784,7 +783,7 @@ func (tm *TransferManager) checkDiskSpace(ctx context.Context, target TargetFS, 
 	// Check the filesystem containing the target's parent directory.
 	absTarget, err := target.Abs(targetPath)
 	if err != nil {
-		return fmt.Errorf("resolving %s for the free-space check: %w", targetPath, err)
+		return fmt.Errorf("checking free space: %w", err)
 	}
 	checkPath := filepath.Dir(absTarget)
 
@@ -822,22 +821,4 @@ func (tm *TransferManager) checkDiskSpace(ctx context.Context, target TargetFS, 
 	}
 
 	return nil
-}
-
-// targetPathForPartial recovers the file a namespaced partial download stands
-// for, so errors name the file the user asked for rather than the internal
-// ".onedrive-go.<name>.partial" temp file.
-func targetPathForPartial(partialPath string) string {
-	base := filepath.Base(partialPath)
-	if !IsOwnedTransferArtifactName(base) {
-		return partialPath
-	}
-
-	name := strings.TrimSuffix(strings.TrimPrefix(base, downloadPartialPrefix), downloadPartialSuffix)
-	if tagAt := strings.LastIndex(name, partialVersionTagPrefix); tagAt >= 0 &&
-		len(name)-tagAt == len(partialVersionTagPrefix)+partialVersionTagHexLen {
-		name = name[:tagAt]
-	}
-
-	return filepath.Join(filepath.Dir(partialPath), name)
 }

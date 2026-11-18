@@ -36,17 +36,18 @@ func SelectHash(item *graph.Item) string {
 // ctx.Err() once ctx is canceled, checked between chunks, so a shutdown or a
 // canceled upload does not wait for a whole-file read to finish. Every caller
 // that hashes on a worker, on the watch event loop or in a scan uses this
-// form.
+// form. Its failure names no path of its own: the open names the path, and a
+// read's os error the file it read.
 func ComputeQuickXorHashContext(ctx context.Context, fsPath string) (string, error) {
 	f, err := localpath.OpenRegular(fsPath)
 	if err != nil {
-		return "", fmt.Errorf("opening %s for hashing: %w", fsPath, err)
+		return "", fmt.Errorf("hashing: %w", err)
 	}
 	defer f.Close() //nolint:errcheck // the file is opened read-only for hashing; there is nothing buffered to flush
 
 	hash, err := ComputeQuickXorHashFromReaderContext(ctx, f)
 	if err != nil {
-		return "", fmt.Errorf("hashing %s: %w", fsPath, err)
+		return "", fmt.Errorf("hashing: %w", err)
 	}
 
 	return hash, nil

@@ -735,3 +735,32 @@ func TestPut_JSONPrintsEachPathWithOneLeadingSlash(t *testing.T) {
 		assert.Equal(t, "/"+strings.Trim(remote, "/")+"/a.txt", doc.Files[0].Path, remote)
 	}
 }
+
+// The text line of a single put names the remote path in the form --json
+// prints it, the cleaned path with one leading slash, whatever form it was
+// typed in.
+//
+// Validates: R-1.3.4
+func TestPut_TextNamesEachPathAsJSONDoes(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	addFakeItem(fake, fakeGraphRootID, "Docs", true, "")
+	local := t.TempDir()
+	writeEmptyLocalFiles(t, local, "one.txt")
+	file := filepath.Join(local, "one.txt")
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{file}, want: "/one.txt"},
+		{args: []string{file, "two.txt"}, want: "/two.txt"},
+		{args: []string{file, "/three.txt"}, want: "/three.txt"},
+		{args: []string{file, "Docs/"}, want: "/Docs/one.txt"},
+		{args: []string{file, "Docs"}, want: "/Docs/one.txt"},
+	} {
+		run := runFileCommand(t, putCommand, cc, false, tc.args...)
+		require.NoError(t, run.err, run.stderr)
+		assert.Equal(t, "Uploaded "+tc.want+" (0 B)\n", run.stderr, strings.Join(tc.args[1:], " "))
+	}
+}

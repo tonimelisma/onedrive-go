@@ -236,7 +236,7 @@ func (tm *TransferManager) settleUploadedItem(
 	if item == nil || item.ID == "" {
 		looked, err := tm.lookupUploadTarget(ctx, target)
 		if err != nil {
-			answer := fmt.Sprintf("uploading %s: the upload completed without the item", localPath)
+			const answer = "sending the file: the upload completed without the item"
 			return nil, keepCreateMark(created, outcomeUnknownAfter(answer, err))
 		}
 
@@ -273,8 +273,8 @@ func (tm *TransferManager) settleUploadedItem(
 		slog.String("remote_hash", item.QuickXorHash),
 	)
 
-	return nil, fmt.Errorf("uploading %s: %w (sent %s, OneDrive has %s)",
-		localPath, ErrUploadVerificationFailed, formatSize(sent.size), formatSize(item.Size))
+	return nil, fmt.Errorf("%w (sent %s, OneDrive has %s)",
+		ErrUploadVerificationFailed, formatSize(sent.size), formatSize(item.Size))
 }
 
 // lookupUploadTarget reads the item an upload wrote: by ID, or by an exact

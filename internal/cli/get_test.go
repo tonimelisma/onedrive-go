@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -107,6 +109,76 @@ func TestRunGet_FileReportedUnderAnUnsafeNameIsNotWritten(t *testing.T) {
 	named := runFileCommand(t, getCommand, cc, false, "/report.txt")
 	require.NoError(t, named.err)
 	assertFileHolds(t, filepath.Join(workDir, "report.txt"), "hello")
+}
+
+// readOnlyFolder creates the folder name in dir, which no file can be
+// created in, and makes it writable again when the test ends so it can be
+// removed.
+func readOnlyFolder(t *testing.T, dir, name string) {
+	t.Helper()
+
+	folder := filepath.Join(dir, name)
+	require.NoError(t, os.Mkdir(folder, 0o500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(folder, 0o700)) }) //nolint:gosec // restores the private test folder
+}
+
+// A folder get names a file it cannot write once, as the folder the user
+// typed names it, and not the partial file it could not create; under
+// --json the failure is the same string.
+//
+// Validates: R-6.6.26, R-1.2.1, R-6.6.33
+func TestRunGet_FolderNamesAnUnwritableFileOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	cc.Logger = slog.New(slog.DiscardHandler)
+	addFakeItem(fake, addFakeItem(fake, fakeGraphRootID, "Docs", true, ""), "a.txt", false, "hello")
+	parent := t.TempDir()
+	readOnlyFolder(t, parent, "Docs")
+	t.Chdir(parent)
+	failure := filepath.Join("Docs", "a.txt") + ": creating the partial file: opening: permission denied"
+
+	text := runFileCommand(t, getCommand, cc, false, "/Docs", "Docs")
+
+	require.EqualError(t, text.err, "1 item failed to download")
+	assert.Equal(t, "Downloaded 0 files, 0 folders (0 B)\nFailed: "+failure+"\n", text.stderr)
+
+	asJSON := runFileCommand(t, getCommand, cc, true, "/Docs", "Docs")
+
+	require.EqualError(t, asJSON.err, "1 item failed to download")
+	var doc folderTransferJSONOutput[getJSONOutput]
+	require.NoError(t, json.Unmarshal([]byte(asJSON.stdout), &doc), asJSON.stdout)
+	assert.Equal(t, []string{failure}, doc.Errors)
+}
+
+// A single get that cannot write its file says so in one sentence, and its
+// details name the partial file once, below the folder the user typed, with
+// no other local path.
+//
+// Validates: R-6.6.26
+func TestRunGet_AnUnwritableFileIsNamedOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores folder modes")
+	}
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	addFakeItem(fake, fakeGraphRootID, "b.txt", false, "world")
+	parent := t.TempDir()
+	readOnlyFolder(t, parent, "ro")
+	t.Chdir(parent)
+
+	run := runFileCommand(t, getCommand, cc, false, "/b.txt", filepath.Join("ro", "b.txt"))
+
+	require.ErrorIs(t, run.err, os.ErrPermission)
+	plain, details, found := strings.Cut(commandErrorText(run.err, true), "\nDetails: ")
+	require.True(t, found)
+	assert.Equal(t, "Error: Permission denied for "+filepath.Join(parent, "ro")+". Check its file permissions.", plain,
+		"the sentence names the folder the hidden partial file could not be made in")
+	assert.Regexp(t, `^download file: creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`,
+		details)
+	assert.NotContains(t, details, parent, "the absolute path is not printed")
 }
 
 // A folder download with no failures prints "errors": [], and one that

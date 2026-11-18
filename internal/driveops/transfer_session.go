@@ -215,7 +215,7 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 	session, err := create()
 	if err != nil {
 		tm.recordItemOfFailedSession(up, err)
-		return nil, fmt.Errorf("creating upload session for %s: %w", up.localPath, err)
+		return nil, fmt.Errorf("creating upload session: %w", err)
 	}
 	if session.CreatedETag == "" || session.ItemID == "" {
 		return session, nil
@@ -229,7 +229,7 @@ func (tm *TransferManager) openSessionForUpload(ctx context.Context, up *persist
 			removed := tm.removePlaceholder(ctx, up.target.driveID, session.ItemID)
 			return nil, &graph.CreatedItemError{
 				Item:    up.createdItem,
-				Err:     fmt.Errorf("recording the new file %s: %w", up.localPath, hookErr),
+				Err:     fmt.Errorf("recording the new file: %w", hookErr),
 				Removed: removed,
 			}
 		}
@@ -316,7 +316,7 @@ func (tm *TransferManager) persistedSessionUploadOnce(ctx context.Context, up *p
 		if lookupErr != nil {
 			// Unknown outcome: keep the record, the next attempt resumes
 			// or looks again.
-			return nil, outcomeUnknownAfter(fmt.Sprintf("uploading %s: %s", up.localPath, err), lookupErr)
+			return nil, outcomeUnknownAfter("sending the file: "+err.Error(), lookupErr)
 		}
 		if adopted {
 			tm.deleteSession(driveStr, up.key)
@@ -324,16 +324,16 @@ func (tm *TransferManager) persistedSessionUploadOnce(ctx context.Context, up *p
 		}
 		if errors.Is(err, graph.ErrNotFound) {
 			tm.deleteSession(driveStr, up.key)
-			return nil, fmt.Errorf("uploading %s: %w", up.localPath, ErrUploadSessionInvalidated)
+			return nil, fmt.Errorf("sending the file: %w", ErrUploadSessionInvalidated)
 		}
 	case errors.Is(err, graph.ErrNotFound):
 		// A fragment's session vanished mid-upload: invalidated (L-02).
 		tm.deleteSession(driveStr, up.key)
-		return nil, fmt.Errorf("uploading %s: %w", up.localPath, ErrUploadSessionInvalidated)
+		return nil, fmt.Errorf("sending the file: %w", ErrUploadSessionInvalidated)
 	}
 
 	// Otherwise the session file persists for the next attempt to resume.
-	return nil, fmt.Errorf("uploading %s: %w", up.localPath, err)
+	return nil, fmt.Errorf("sending the file: %w", err)
 }
 
 // resumePersistedSession resumes a recorded session. done is false when the
@@ -354,7 +354,7 @@ func (tm *TransferManager) resumePersistedSession(
 
 	if ctx.Err() != nil {
 		// Shutting down: keep the record so the next run resumes.
-		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, resumeErr)
+		return nil, true, fmt.Errorf("resuming the upload: %w", resumeErr)
 	}
 
 	switch {
@@ -368,20 +368,20 @@ func (tm *TransferManager) resumePersistedSession(
 	case errors.Is(resumeErr, graph.ErrNotFound):
 		// A fragment answered 404 mid-upload: invalidated (L-02).
 		tm.deleteSession(driveStr, up.key)
-		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, ErrUploadSessionInvalidated)
+		return nil, true, fmt.Errorf("resuming the upload: %w", ErrUploadSessionInvalidated)
 	default:
 		// Any other resume failure drops the session (canceled on the
 		// server) and the next attempt starts fresh, preventing an endless
 		// resume loop (B-208).
 		tm.dropSession(ctx, driveStr, up.key, session.UploadURL)
-		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, resumeErr)
+		return nil, true, fmt.Errorf("resuming the upload: %w", resumeErr)
 	}
 
 	landed, adopted, lookupErr := tm.adoptLandedUpload(ctx, up.target, sent)
 	if lookupErr != nil {
 		// Unknown outcome: keep the record and retry; never conclude
 		// "invalidated" from a lookup that failed.
-		return nil, true, outcomeUnknownAfter(fmt.Sprintf("resuming upload of %s: %s", up.localPath, resumeErr), lookupErr)
+		return nil, true, outcomeUnknownAfter("resuming the upload: "+resumeErr.Error(), lookupErr)
 	}
 
 	if adopted {
@@ -401,7 +401,7 @@ func (tm *TransferManager) resumePersistedSession(
 	tm.deleteSession(driveStr, up.key)
 
 	if !rec.ExpiresAt.IsZero() && time.Now().Before(rec.ExpiresAt) {
-		return nil, true, fmt.Errorf("resuming upload of %s: %w", up.localPath, ErrUploadSessionInvalidated)
+		return nil, true, fmt.Errorf("resuming the upload: %w", ErrUploadSessionInvalidated)
 	}
 
 	tm.logger.Info("upload session expired, creating fresh session", slog.String("path", up.localPath))

@@ -243,7 +243,7 @@ func TestDownloadTree_CancellationReportsEveryUnstartedFile(t *testing.T) {
 	failedPaths := map[string]bool{}
 	for _, file := range failed {
 		require.ErrorIs(t, file.Err, context.Canceled)
-		assert.True(t, strings.HasPrefix(file.Err.Error(), file.LocalPath+": "), "%q names its file", file.Err)
+		assert.NotContains(t, file.Err.Error(), file.LocalPath, "the event names its file, its error does not")
 		failedPaths[file.LocalPath] = true
 	}
 	for _, started := range transfers.transferred() {
@@ -338,8 +338,9 @@ func TestDownloadTree_ListFailureIsReportedAndSiblingsContinue(t *testing.T) {
 	failure := eventFor(t, run.events, "Bad")
 	assert.Equal(t, TreeFolderFailed, failure.Kind)
 	require.ErrorIs(t, failure.Err, errTreeTestRefused)
-	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`/Bad" to fill `+filepath.Join(localRoot, "Bad")+
-		": "+errTreeTestRefused.Error(), failure.Err.Error())
+	assert.Equal(t, filepath.Join(localRoot, "Bad"), failure.LocalPath)
+	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`/Bad": `+errTreeTestRefused.Error(), failure.Err.Error(),
+		"the event names the local folder, its error the remote one")
 	assert.NoDirExists(t, filepath.Join(localRoot, "Bad"), "a folder that could not be listed is not created")
 	assert.Equal(t, TreeFileDone, eventFor(t, run.events, "Good/g.txt").Kind)
 	assert.Equal(t, TreeFileDone, eventFor(t, run.events, "top.txt").Kind)
@@ -368,7 +369,8 @@ func TestDownloadTree_TransferFailureIsReportedAndOthersContinue(t *testing.T) {
 	failure := eventFor(t, run.events, "b.txt")
 	assert.Equal(t, TreeFileFailed, failure.Kind)
 	require.ErrorIs(t, failure.Err, errTreeTestRefused)
-	assert.Equal(t, filepath.Join(localRoot, "b.txt")+": "+errTreeTestRefused.Error(), failure.Err.Error())
+	assert.Equal(t, filepath.Join(localRoot, "b.txt"), failure.LocalPath)
+	require.EqualError(t, failure.Err, errTreeTestRefused.Error(), "the event names the file, its error does not")
 	for _, name := range []string{"a.txt", "c.txt"} {
 		done := eventFor(t, run.events, name)
 		assert.Equal(t, TreeFileDone, done.Kind)
@@ -458,10 +460,9 @@ func TestDownloadTree_AFailedLaterPageFailsOnlyItsFolder(t *testing.T) {
 	failed := eventsOf(run.events, TreeFolderFailed)
 	assert.Equal(t, []string{"Sub", ""}, relPaths(failed))
 	require.Len(t, failed, 2)
-	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`/Sub" to fill `+filepath.Join(localRoot, "Sub")+
-		": "+errTreeTestRefused.Error(), failed[0].Err.Error())
-	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`" to fill `+localRoot+
-		": "+errTreeTestRefused.Error(), failed[1].Err.Error())
+	assert.Equal(t, []string{filepath.Join(localRoot, "Sub"), localRoot}, []string{failed[0].LocalPath, failed[1].LocalPath})
+	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`/Sub": `+errTreeTestRefused.Error(), failed[0].Err.Error())
+	assert.Equal(t, `listing the OneDrive folder "`+treeRemoteRoot+`": `+errTreeTestRefused.Error(), failed[1].Err.Error())
 	assertSummaryCountsEvents(t, run)
 }
 
@@ -527,7 +528,8 @@ func TestDownloadTree_CancellationAtALaterPageCutsItsFolderShort(t *testing.T) {
 	failed := eventsOf(run.events, TreeFolderFailed)
 	require.Len(t, failed, 1)
 	assert.Empty(t, failed[0].RelPath, "the root is the folder cut short")
-	assert.Equal(t, localRoot+": stopped before the folder was finished: "+context.Canceled.Error(), failed[0].Err.Error())
+	assert.Equal(t, localRoot, failed[0].LocalPath)
+	require.EqualError(t, failed[0].Err, "stopped before the folder was finished: "+context.Canceled.Error())
 	assertSummaryCountsEvents(t, run)
 }
 
@@ -590,8 +592,8 @@ func TestDownloadTree_CountsOnlyTheFoldersItCreates(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), "an existing folder keeps its mode")
 }
 
-// A file where the download needs a folder is reported once, naming the
-// path, and nothing is walked below it.
+// A file where the download needs a folder is reported once, the event
+// naming the path, and nothing is walked below it.
 //
 // Validates: R-1.2.1
 func TestDownloadTree_FileWhereAFolderBelongsIsReported(t *testing.T) {
@@ -605,7 +607,8 @@ func TestDownloadTree_FileWhereAFolderBelongsIsReported(t *testing.T) {
 	require.NoError(t, run.err)
 	failure := eventFor(t, run.events, "")
 	assert.Equal(t, TreeFolderFailed, failure.Kind)
-	assert.Equal(t, "creating directory "+target+": it is not a folder", failure.Err.Error())
+	assert.Equal(t, target, failure.LocalPath)
+	require.EqualError(t, failure.Err, "creating directory: it is not a folder")
 	assert.Equal(t, TreeSummary{Failed: 1}, run.summary)
 }
 
@@ -656,6 +659,7 @@ func TestDownloadTree_APanickingTransferFailsOnlyThatFile(t *testing.T) {
 	boom := eventFor(t, run.events, "boom.txt")
 	assert.Equal(t, TreeFileFailed, boom.Kind)
 	require.ErrorIs(t, boom.Err, panicguard.ErrPanic)
+	assert.NotContains(t, boom.Err.Error(), boom.LocalPath, "the event names the file, the panic's error does not")
 	assert.Equal(t, TreeFileDone, eventFor(t, run.events, "fine.txt").Kind)
 }
 
