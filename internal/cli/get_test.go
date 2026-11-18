@@ -187,6 +187,29 @@ func TestRunGet_AnUnwritableFileIsNamedOnce(t *testing.T) {
 	assert.NotContains(t, details, parent, "the absolute path is not printed")
 }
 
+// A single get whose partial file is already there and cannot be written, as
+// one another user's run left or one made read-only, names that partial file:
+// its folder is writable, and the partial is what the user has to fix.
+//
+// Validates: R-6.6.26
+func TestDownloadOneFile_AnExistingPartialItCannotWriteIsNamed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the superuser ignores file modes")
+	}
+	setTestDriveHome(t)
+	cc, _ := jsonContractFileContext(t)
+	tm := driveops.NewTransferManager(failingDownloader{body: "hello"}, nil, nil, slog.New(slog.DiscardHandler))
+	target := filepath.Join(t.TempDir(), "notes.txt")
+	item := &graph.Item{ID: "item1", Name: "notes.txt", Size: 5}
+	partial := driveops.DownloadPartialPath(target, driveops.DownloadOptsForItem(item))
+	require.NoError(t, os.WriteFile(partial, []byte("x"), 0o400))
+
+	err := downloadOneFile(t.Context(), cc, tm, driveid.New("0123456789abcdef"), "item1", item, "/Docs/notes.txt", target)
+
+	require.ErrorIs(t, err, os.ErrPermission)
+	assert.Equal(t, "Error: Permission denied for "+partial+". Check its file permissions.", commandErrorText(err, false))
+}
+
 // failingDownloader is a download that hands over body and ends, or fails
 // with err before it hands over anything.
 type failingDownloader struct {

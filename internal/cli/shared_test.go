@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
@@ -648,6 +649,51 @@ func TestRunGet_ASharedFileThatFailsNamesTheSelectorOnce(t *testing.T) {
 	assert.Regexp(t, `^downloading "`+regexp.QuoteMeta(selector)+
 		`": creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`, details)
 	assert.Equal(t, 1, strings.Count(details, selector), details)
+}
+
+// A single get of a shared file whose download OneDrive answers with not
+// found names the shared item by its selector and suggests no folder to
+// list: a selector has none.
+//
+// Validates: R-6.6.26
+func TestRunGet_ASharedFileNotFoundSuggestsNoFolderToList(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	const selector = "shared:user@example.com:b!drive1234567891:source-item-file"
+	const contentPath = "/content/report"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testSharedFileGetItemPath:
+			w.Header().Set("Content-Type", "application/json")
+			writeTestResponsef(t, w, `{"id": "source-item-file", "name": "report.txt", "size": 1, "eTag": "etag-1",
+				"file": {"mimeType": "text/plain"}, "parentReference": {"id": "parent", "driveId": "b!drive1234567891"},
+				"@microsoft.graph.downloadUrl": %q}`, "http://"+r.Host+contentPath)
+		case contentPath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error": {"code": "itemNotFound", "message": "Item not found"}}`)
+		default:
+			assert.Fail(t, "unexpected request", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: &bytes.Buffer{},
+		StatusWriter: &bytes.Buffer{},
+		CfgPath:      config.DefaultConfigPath(),
+		GraphBaseURL: srv.URL,
+		SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+	}
+	cmd := newGetCmd()
+	cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, cc))
+
+	err := runGet(cmd, []string{selector, t.TempDir()})
+
+	require.ErrorIs(t, err, graph.ErrNotFound)
+	assert.Equal(t, "Error: "+selector+" was not found on OneDrive.", commandErrorText(err, false))
 }
 
 func createTempFile(t *testing.T, name, content string) string {

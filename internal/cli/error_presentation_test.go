@@ -110,9 +110,9 @@ func TestCommandErrorText_LocalFilesystemConditionsArePlain(t *testing.T) {
 }
 
 // A download's hidden partial file is named by its folder in the sentences
-// that are about the folder (permission, read-only, too large), and a partial
-// that is missing is not called a missing folder: the error itself is
-// printed, naming the partial once.
+// that are about the folder (permission denied for a partial that does not
+// exist, read-only, too large), and a partial that is missing is not called
+// a missing folder: the error itself is printed, naming the partial once.
 //
 // Validates: R-6.6.26
 func TestCommandErrorText_APartialFileIsNamedByItsFolderOnlyWhereThatIsTrue(t *testing.T) {

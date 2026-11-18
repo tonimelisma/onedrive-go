@@ -17,6 +17,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -43,11 +44,14 @@ func newPresentedError(message string, err error) error {
 // remoteOpError names the OneDrive path a command was working on when it
 // failed, so main can say "/docs/a.txt was not found on OneDrive" instead of
 // printing the whole wrapped chain. Error() keeps the familiar
-// `<action> "<path>": <cause>` text for --verbose details and logs.
+// `<action> "<path>": <cause>` text for --verbose details and logs. noParent
+// marks a path with no parent folder a list could show, such as a shared
+// file's selector.
 type remoteOpError struct {
-	action string
-	path   string
-	err    error
+	action   string
+	path     string
+	err      error
+	noParent bool
 }
 
 func (e *remoteOpError) Error() string {
@@ -182,7 +186,7 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	}
 
 	hint := ""
-	if parent := path.Dir(op.path); parent != op.path {
+	if parent := path.Dir(op.path); parent != op.path && !op.noParent {
 		hint = " Run 'onedrive-go ls " + parent + "' to see what is there."
 	}
 
@@ -238,9 +242,11 @@ func remoteFailureText(err error) string {
 // read-only filesystem, a file the filesystem cannot hold, and missing or
 // unreadable files. The errno meaning comes from driveops' shared table. A
 // download's hidden partial file is named by its folder, the one the user
-// knows, in the sentences that are about the folder; a partial that is
-// missing has no plain sentence, since its folder is there, and the error
-// itself is printed.
+// knows, where the folder is at fault: a read-only filesystem, a file too
+// large for it, or a permission denied while the partial does not exist. A
+// partial that exists and denies permission is itself at fault and is named.
+// A partial that is missing has no plain sentence, since its folder is
+// there, and the error itself is printed.
 func localFailureText(err error) string {
 	if syncengine.IsLocalDiskFull(err) {
 		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
@@ -255,7 +261,9 @@ func localFailureText(err error) string {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ""
 		}
-		subject = filepath.Dir(subject)
+		if _, statErr := localpath.Lstat(subject); statErr != nil || !errors.Is(err, fs.ErrPermission) {
+			subject = filepath.Dir(subject)
+		}
 	}
 
 	switch driveops.ClassifyLocalError(err) {

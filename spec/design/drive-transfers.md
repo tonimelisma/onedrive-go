@@ -641,12 +641,14 @@ which the caller names, nor the internal `.onedrive-go.<name>.partial` temp
 file; only a filesystem call on the partial that failed names it, once,
 through `localpath` (Where a Local Path Enters an Error). The plain sentence
 of a single `get` names the partial's folder in its place where the sentence
-is about the folder (permission, a read-only filesystem, a file too large),
-and gives none for a partial that is missing, whose folder is there, so the
-error itself is printed. Sizes are given in human units
-(`TestTransferManager_DownloadError_NamesNoLocalPath`,
+is about the folder (permission denied for a partial that does not exist, a
+read-only filesystem, a file too large), names the partial itself when it
+exists and denies permission, and gives none for a partial that is missing,
+whose folder is there, so the error itself is printed. Sizes are given in
+human units (`TestTransferManager_DownloadError_NamesNoLocalPath`,
 `TestTransferManager_DownloadIntoAReadOnlyFolderNamesThePartialOnce`,
 `TestRunGet_AnUnwritableFileIsNamedOnce`,
+`TestDownloadOneFile_AnExistingPartialItCannotWriteIsNamed`,
 `TestCommandErrorText_APartialFileIsNamedByItsFolderOnlyWhereThatIsTrue`).
 Housekeeping (expired or corrupt upload-session files, unreadable directories
 met by the partial-file cleanup walk) logs at Debug or Info: there is nothing
@@ -725,7 +727,10 @@ command names the file it was working on, so every failure names it once: a
 single `put` as `uploading "<remote>": …` and a single `get` as
 `downloading "<remote>": …`, by the drive path or the shared selector the
 user typed, whatever the cause (`TestDownloadOneFile_AFailureThatIsNotLocalNamesTheRemotePathOnce`,
-`TestRunGet_ASharedFileThatFailsNamesTheSelectorOnce`). A tree event names its file or
+`TestRunGet_ASharedFileThatFailsNamesTheSelectorOnce`). A selector has no
+parent folder, so a single `get` of a shared file that OneDrive does not find
+suggests no folder to list (`TestRunGet_ASharedFileNotFoundSuggestsNoFolderToList`).
+A tree event names its file or
 folder by `LocalPath`, and its error names no local path of its own. A line
 that starts with the path prints the cause through `localpath.WithoutPath`,
 which leaves out every local path the cause's failures and os errors name and
