@@ -34,7 +34,7 @@ type driveListSnapshot struct {
 func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSnapshot, error) {
 	logger := cc.Logger
 
-	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, true, logger)
+	validated, warnings, err := config.LoadValidatedState(cc.CfgPath, logger)
 	outcome := config.ClassifyLoadOutcome(err, warnings)
 	if err != nil {
 		return accountViewSnapshot{}, fmt.Errorf("loading config and catalog: %w", err)
@@ -69,7 +69,7 @@ func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 
 	// Config warnings are reported by the loadAccountViewSnapshot call below;
 	// reporting them here too printed every warning twice.
-	validated, _, err := config.LoadValidatedState(cc.CfgPath, true, logger)
+	validated, _, err := config.LoadValidatedState(cc.CfgPath, logger)
 	if err != nil {
 		return accountViewSnapshot{}, fmt.Errorf("loading config and catalog: %w", err)
 	}

@@ -14,9 +14,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-// validateDrives checks all drive-level constraints: required fields,
-// per-drive setting validity, and sync_dir uniqueness. Canonical ID format
-// is already validated at parse time (driveSectionDecoder).
+// validateDrives checks all drive-level constraints on the configured values:
+// per-drive setting validity, sync_dir uniqueness and overlap, and a sync_dir
+// that meets a folder the client keeps for itself. Canonical ID format is
+// already validated at parse time (driveSectionDecoder).
 func validateDrives(cfg *Config) []error {
 	if len(cfg.Drives) == 0 {
 		return nil // no drives is valid (user hasn't logged in yet)
@@ -297,6 +298,39 @@ func checkSyncDirsMeetNoManagedFolder(syncDirs map[string]string) []error {
 	}
 
 	return errs
+}
+
+// checkDefaultSyncDirsMeetNoManagedFolder runs checkSyncDirMeetsNoManagedFolder
+// on the default folder (defaultSyncDir, from catalog) of every drive whose
+// section sets no sync_dir; checkSyncDirsMeetNoManagedFolder checks the
+// configured ones, so each drive is checked once. A default that is not an
+// absolute path, as when the home folder is unknown, could not be computed and
+// is not checked.
+func checkDefaultSyncDirsMeetNoManagedFolder(cfg *Config, catalog *Catalog) []error {
+	var errs []error
+
+	for _, cid := range sortedDriveIDs(cfg) {
+		if cfg.Drives[cid].SyncDir != "" {
+			continue
+		}
+
+		syncDir := defaultSyncDir(cfg, catalog, cid)
+		if !filepath.IsAbs(syncDir) {
+			continue
+		}
+
+		errs = append(errs, checkSyncDirMeetsNoManagedFolder(cid.String(), canonicalSyncDirPath(syncDir))...)
+	}
+
+	return errs
+}
+
+// sortedDriveIDs returns the config's drive IDs in canonical ID order, so a
+// check over several drives reports them in the same order on every run.
+func sortedDriveIDs(cfg *Config) []driveid.CanonicalID {
+	return slices.SortedFunc(maps.Keys(cfg.Drives), func(a, b driveid.CanonicalID) int {
+		return strings.Compare(a.String(), b.String())
+	})
 }
 
 // checkSyncDirMeetsNoManagedFolder refuses syncDir, the resolved path

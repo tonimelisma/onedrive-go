@@ -74,8 +74,10 @@ func (v resolvedDriveValidator) validateForSync(rd *ResolvedDrive) error {
 	}
 
 	// The folder a drive syncs into, configured or its default, never meets
-	// a folder the client keeps for itself. Config load checks configured
-	// sync_dirs only; a default exists only once the drive is resolved.
+	// a folder the client keeps for itself. Config load refuses a configured
+	// sync_dir that does. The config holds no default, so sync refuses a
+	// default here, on the resolved drive; LoadValidatedState computes the
+	// same default (defaultSyncDir) and warns about it.
 	if errs := checkSyncDirMeetsNoManagedFolder(rd.CanonicalID.String(), canonicalSyncDirPath(rd.SyncDir)); len(errs) > 0 {
 		return errors.Join(errs...)
 	}
