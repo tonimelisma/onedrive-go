@@ -831,3 +831,19 @@ func TestTrash_UncheckableItemIsNeverPurged(t *testing.T) {
 	assert.Zero(t, removed)
 	assert.FileExists(t, placement.ItemPath, "an entry whose file cannot be checked is never purged as empty")
 }
+
+// An entry whose folder is gone, removed after its reservation, holds no
+// file: abandoning it succeeds instead of refusing as if it held its item.
+//
+// Validates: R-6.4.9
+func TestPlacement_AbandonOfAnEntryWhoseFolderIsGoneSucceeds(t *testing.T) {
+	t.Parallel()
+
+	trash := Open(t.TempDir(), nil)
+	placement, err := trash.Reserve(t.TempDir(), "a.txt", ReasonDeleted)
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(filepath.Dir(placement.ItemPath)))
+
+	require.NoError(t, placement.Abandon())
+	assert.NoDirExists(t, filepath.Dir(placement.ItemPath))
+}

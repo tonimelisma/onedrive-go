@@ -162,6 +162,27 @@ type Trash struct {
 	// seam so tests can put an emulated filesystem under it
 	// (synctree.Root.Interpose).
 	openTree func(dir string) (*synctree.Root, error)
+	// writeRecord writes an entry's record atomically; a seam so tests in
+	// other packages can make a reservation fail (WithRecordWriteFailing).
+	writeRecord func(path string, data []byte) error
+}
+
+// writeRecordAtomically writes the record at path through a synced temporary
+// sibling, creating the entry's folder if it is missing.
+func writeRecordAtomically(path string, data []byte) error {
+	return localpath.AtomicWrite(path, data, entryFilePerm, entryDirPerm, entryTempGlob) //nolint:wrapcheck // writeEntry names the record
+}
+
+// WithRecordWriteFailing returns a Trash over the same directory whose entry
+// records cannot be written: each write fails with err. A reservation then
+// fails as one does whose entry folder is removed while its record is being
+// written, when err matches os.ErrNotExist. It is exported for tests in other
+// packages, as synctree.Root.Interpose is.
+func (t *Trash) WithRecordWriteFailing(err error) *Trash {
+	failing := *t
+	failing.writeRecord = func(string, []byte) error { return err }
+
+	return &failing
 }
 
 // IsRestoreArtifactName reports whether name is a temporary copy a restore
@@ -189,12 +210,13 @@ func Open(dir string, now func() time.Time) *Trash {
 		now = time.Now
 	}
 	return &Trash{
-		dir:      dir,
-		now:      now,
-		moveIn:   (*synctree.Root).MoveInNoReplace,
-		renameIn: (*synctree.Root).RenameNoReplace,
-		syncDir:  (*synctree.Root).SyncDir,
-		openTree: synctree.Open,
+		dir:         dir,
+		now:         now,
+		moveIn:      (*synctree.Root).MoveInNoReplace,
+		renameIn:    (*synctree.Root).RenameNoReplace,
+		syncDir:     (*synctree.Root).SyncDir,
+		openTree:    synctree.Open,
+		writeRecord: writeRecordAtomically,
 	}
 }
 
@@ -259,7 +281,7 @@ func (p *Placement) writeEntry() error {
 	if err != nil {
 		return fmt.Errorf("encoding trash entry: %w", err)
 	}
-	if err := localpath.AtomicWrite(filepath.Join(p.entryDir, entryFileName), data, entryFilePerm, entryDirPerm, entryTempGlob); err != nil {
+	if err := p.trash.writeRecord(filepath.Join(p.entryDir, entryFileName), data); err != nil {
 		return fmt.Errorf("recording trash entry: %w", err)
 	}
 	return nil
@@ -303,16 +325,19 @@ type heldFile struct {
 
 // heldFileIn returns the file an entry directory holds: the item, or, when
 // there is none, any other regular file but the record. nil means definitely
-// none. Only a definite "nothing there" is nothing: an entry whose contents
-// cannot be checked is reported as holding its item, so it is never purged
-// as empty.
+// none. Only a definite "nothing there" is nothing, an entry directory that
+// is gone included: an entry whose contents cannot be checked is reported as
+// holding its item, so it is never purged as empty.
 func heldFileIn(entryDir string) *heldFile {
 	itemPath := filepath.Join(entryDir, itemName)
 	if _, err := localpath.Lstat(itemPath); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return &heldFile{path: itemPath}
 	}
 	dirEntries, err := localpath.ReadDir(entryDir)
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
 		return &heldFile{path: itemPath}
 	}
 	for _, dirEntry := range dirEntries {

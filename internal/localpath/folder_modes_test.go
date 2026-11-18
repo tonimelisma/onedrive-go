@@ -53,7 +53,6 @@ func classifiedFolderModes() map[string]folderKind {
 		"internal/perf.captureDirPerm":            managedStateFolder,
 		"internal/sync.engineLocksDirPerm":        managedStateFolder,
 		"internal/sync.syncStoreDirPerm":          managedStateFolder,
-		"internal/synctree.detachDirectoryPerm":   managedStateFolder,
 		"internal/tokenfile.DirPerms":             managedStateFolder,
 	}
 }

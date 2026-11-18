@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,10 +19,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-func localDeleteActionFor(t *testing.T, path, content string) *Action {
+// syncedContent is what the file a local delete test removes holds, as its
+// baseline records it.
+const syncedContent = "synced\n"
+
+// localDeleteActionFor is the local delete of path, a file whose baseline
+// records syncedContent.
+func localDeleteActionFor(t *testing.T, path string) *Action {
 	t.Helper()
 
-	hash := hashContentQuickXor(t, content)
+	hash := hashContentQuickXor(t, syncedContent)
 	return &Action{
 		Type:    ActionLocalDelete,
 		Path:    path,
@@ -32,7 +39,7 @@ func localDeleteActionFor(t *testing.T, path, content string) *Action {
 			Baseline: &BaselineEntry{
 				Path: path, ItemID: "item-" + path, ItemType: ItemTypeFile,
 				LocalHash: hash, RemoteHash: hash,
-				LocalSize: int64(len(content)), LocalSizeKnown: true,
+				LocalSize: int64(len(syncedContent)), LocalSizeKnown: true,
 			},
 		},
 	}
@@ -45,9 +52,9 @@ func TestDeleteLocalFile_MovesTheFileToTheTrash(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 	cfg.SetTrash(trash)
-	writeExecTestFile(t, syncRoot, "docs/a.txt", "synced\n")
+	writeExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt", "synced\n"))
+	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
 
 	requireOutcomeSuccess(t, &outcome)
 	assert.NoFileExists(t, filepath.Join(syncRoot, "docs", "a.txt"))
@@ -56,7 +63,7 @@ func TestDeleteLocalFile_MovesTheFileToTheTrash(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "docs/a.txt", entries[0].Path)
 	assert.Equal(t, localtrash.ReasonDeleted, entries[0].Reason)
-	assert.Equal(t, int64(len("synced\n")), entries[0].Size)
+	assert.Equal(t, int64(len(syncedContent)), entries[0].Size)
 }
 
 // The user saves a new version (an editor's write-then-rename) while sync is
@@ -77,7 +84,7 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 				trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 				cfg.SetTrash(trash)
 			}
-			target := writeExecTestFile(t, syncRoot, "a.txt", "synced\n")
+			target := writeExecTestFile(t, syncRoot, "a.txt", syncedContent)
 			cfg.hashReader = func(ctx context.Context, r io.Reader) (string, error) {
 				hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
 				replacement := writeExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
@@ -88,7 +95,7 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 				return hash, nil
 			}
 
-			outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt", "synced\n"))
+			outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt"))
 
 			requireOutcomeFailure(t, &outcome)
 			require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
@@ -133,14 +140,14 @@ func TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone(t *testing
 	trashDir := filepath.Join(t.TempDir(), "trash")
 	cfg.SetTrash(localtrash.Open(trashDir, nil))
 	cfg.hashReader = hashRemovingTrash(t, trashDir)
-	writeExecTestFile(t, syncRoot, "docs/a.txt", "synced\n")
+	writeExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt", "synced\n"))
+	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
 
 	requireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, synctree.ErrDestinationFailed)
 	require.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
-	requireExecFileContent(t, syncRoot, "docs/a.txt", "synced\n")
+	requireExecFileContent(t, syncRoot, "docs/a.txt", syncedContent)
 }
 
 // A replacing local move whose trash fails fails: when the trash entry's
@@ -173,6 +180,70 @@ func TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove(t *testing.T) {
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, synctree.ErrDestinationFailed)
 	require.NotErrorIs(t, o.Error, errActionPreconditionChanged)
+	requireExecFileContent(t, syncRoot, "b.txt", "bravo\n")
+	requireExecFileContent(t, syncRoot, "a.txt", "moving\n")
+}
+
+// reservationLosingItsFolder is a trash whose reservations fail as one does
+// whose entry folder is removed while its record is written: with an error
+// that matches os.ErrNotExist.
+func reservationLosingItsFolder(t *testing.T) *localtrash.Trash {
+	t.Helper()
+
+	lost := &os.PathError{Op: "rename", Path: filepath.Join(t.TempDir(), "entry", "entry.json"), Err: syscall.ENOENT}
+	return localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil).WithRecordWriteFailing(lost)
+}
+
+// A local delete whose trash entry cannot be reserved is a failed delete,
+// not a file already gone: the reservation's not-exist is the trash's, so
+// the delete fails instead of being superseded as one whose file is already
+// absent, and the file stays in the sync folder.
+//
+// Validates: R-6.4.9
+func TestDeleteLocalFile_AReservationThatFailsIsAFailureNotAFileAlreadyGone(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	cfg.SetTrash(reservationLosingItsFolder(t))
+	writeExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
+
+	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
+
+	requireOutcomeFailure(t, &outcome)
+	require.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, outcome.Error, os.ErrNotExist)
+	require.ErrorContains(t, outcome.Error, "reserving a trash entry")
+	requireExecFileContent(t, syncRoot, "docs/a.txt", syncedContent)
+}
+
+// A replacing local move whose trash entry cannot be reserved fails: the
+// reservation's not-exist is not read as a destination that left on its own,
+// to be superseded when the move's rename finds the name taken. Both files
+// stay where they are.
+//
+// Validates: R-6.4.9, R-2.17.9
+func TestExecutor_LocalMove_AReservationThatFailsFailsTheReplacingMove(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	cfg.SetTrash(reservationLosingItsFolder(t))
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "a.txt", "moving\n")
+	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
+	planned := plannedDestination(t, e, syncRoot, "b.txt")
+
+	o := e.ExecuteMove(t.Context(), &Action{
+		Type: ActionLocalMove, Path: "b.txt", OldPath: "a.txt", ReplaceLocalTarget: true,
+		View: &pathView{
+			Path: "b.txt", Local: planned,
+			Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
+		},
+	})
+
+	requireOutcomeFailure(t, &o)
+	require.NotErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, o.Error, os.ErrNotExist)
+	require.ErrorContains(t, o.Error, "reserving a trash entry")
 	requireExecFileContent(t, syncRoot, "b.txt", "bravo\n")
 	requireExecFileContent(t, syncRoot, "a.txt", "moving\n")
 }

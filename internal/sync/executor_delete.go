@@ -327,7 +327,10 @@ func (e *executor) takeOutVerifiedLocalFile(
 
 	placement, err := e.trash.Reserve(e.syncTree.Path(), rel, reason)
 	if err != nil {
-		return fmt.Errorf("reserving a trash entry: %w", err)
+		// Named as text, as synctree.ErrDestinationFailed names its cause: a
+		// reservation whose entry folder went missing is the trash failing,
+		// never the file at rel already gone or left on its own.
+		return fmt.Errorf("reserving a trash entry: %s", err.Error())
 	}
 	if err := e.syncTree.DetachRegularFile(rel, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {

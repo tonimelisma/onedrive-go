@@ -150,7 +150,7 @@ func TestPreserveRegularFile_CopiesWhenTheLinkCannotBeMade(t *testing.T) {
 			source := filepath.Join(dir, "docs", "a.txt")
 			before, err := os.Lstat(source)
 			require.NoError(t, err)
-			root.ops.linkOut = func(*os.File, string, string) error { return tt.errno }
+			root.ops.link = func(*os.File, string, *os.File, string) error { return tt.errno }
 			dest := filepath.Join(t.TempDir(), "item")
 
 			err = root.PreserveRegularFile("docs/a.txt", nil, dest)
@@ -215,12 +215,295 @@ func TestDetachRegularFile_ADestinationThatFailsIsNotAFileThatIsGone(t *testing.
 }
 
 // detachOrPreserve runs operation (opDetach or opPreserve) on docs/a.txt.
-func detachOrPreserve(root *Root, operation, dest string) error {
+func detachOrPreserve(root *Root, operation string, verify VerifyFunc, dest string) error {
 	if operation == opDetach {
-		return root.DetachRegularFile("docs/a.txt", nil, dest)
+		return root.DetachRegularFile("docs/a.txt", verify, dest)
 	}
 
-	return root.PreserveRegularFile("docs/a.txt", nil, dest)
+	return root.PreserveRegularFile("docs/a.txt", verify, dest)
+}
+
+// takeOutCase is one way a file leaves the tree for a place outside it, or is
+// kept there: taken out or preserved, on the tree's filesystem or across two.
+type takeOutCase struct {
+	name              string
+	operation         string
+	acrossFilesystems bool
+}
+
+func takeOutCases() []takeOutCase {
+	return []takeOutCase{
+		{name: "detach", operation: opDetach},
+		{name: "detach by copy", operation: opDetach, acrossFilesystems: true},
+		{name: "preserve", operation: opPreserve},
+		{name: "preserve by copy", operation: opPreserve, acrossFilesystems: true},
+	}
+}
+
+// tree returns a new detach tree (newDetachTree) whose take-outs cross
+// filesystems when the case does (acrossFilesystems).
+func (c takeOutCase) tree(t *testing.T) (*Root, string) {
+	t.Helper()
+
+	root, dir := newDetachTree(t)
+	if c.acrossFilesystems {
+		acrossFilesystems(root)
+	}
+
+	return root, dir
+}
+
+// acrossFilesystems makes every rename and link of root between two different
+// folders fail with EXDEV, as when the place a file is taken or copied out to
+// is on another filesystem than the tree: a detach's move out and a
+// preserve's link then copy. A rename or link within one folder, the set-aside
+// and the copy's rename to its final name among them, is made as before.
+func acrossFilesystems(root *Root) {
+	renameExclusive, link := root.ops.renameExclusive, root.ops.link
+	root.ops.renameExclusive = func(fromDir *os.File, from string, toDir *os.File, to string) (bool, error) {
+		if fromDir != toDir {
+			return false, unix.EXDEV
+		}
+		return renameExclusive(fromDir, from, toDir, to)
+	}
+	root.ops.link = func(fromDir *os.File, from string, toDir *os.File, to string) error {
+		if fromDir != toDir {
+			return unix.EXDEV
+		}
+		return link(fromDir, from, toDir, to)
+	}
+}
+
+// swapFolderForLink is a verify function that removes folder, the empty
+// folder a destination lies in, and puts a symbolic link to target in its
+// place: the trash entry swapped for a link after the destination was checked
+// and before the file moves.
+func swapFolderForLink(t *testing.T, folder, target string) VerifyFunc {
+	t.Helper()
+
+	return func(*os.File, os.FileInfo) error {
+		require.NoError(t, os.Remove(folder))
+		require.NoError(t, os.Symlink(target, folder))
+		return nil
+	}
+}
+
+// Validates: R-6.4.8
+//
+// The folder a file is taken or copied out to is opened once, and every step
+// is made on that descriptor: the trash entry swapped for a link into the
+// sync folder after the check sends nothing through the link, by rename,
+// link or copy. The take-out or copy-out fails as a destination that failed,
+// and the file is at its name with its content.
+func TestDetachRegularFile_ADestinationFolderSwappedForALinkIsNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range takeOutCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := tc.tree(t)
+			folder := filepath.Join(t.TempDir(), "entry")
+			require.NoError(t, os.Mkdir(folder, 0o700))
+
+			err := detachOrPreserve(root, tc.operation, swapFolderForLink(t, folder, filepath.Join(dir, "docs")), filepath.Join(folder, "item"))
+
+			require.ErrorIs(t, err, ErrDestinationFailed)
+			require.NotErrorIs(t, err, os.ErrNotExist)
+			requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+			assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")),
+				"nothing reaches the sync folder through the link, and no set-aside file is left")
+		})
+	}
+}
+
+// Validates: R-6.4.8
+//
+// The destination's folder is opened without following a symbolic link in
+// its own name: a destination whose folder is a link, whether it leads out of
+// the sync folder or into it, is a destination that failed, and nothing
+// moves.
+func TestDetachRegularFile_ADestinationFolderThatIsALinkIsNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	for _, operation := range []string{opDetach, opPreserve} {
+		for _, leadsIntoTheTree := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/into the sync folder %t", operation, leadsIntoTheTree), func(t *testing.T) {
+				t.Parallel()
+
+				root, dir := newDetachTree(t)
+				target := t.TempDir()
+				if leadsIntoTheTree {
+					target = filepath.Join(dir, "docs")
+				}
+				folder := filepath.Join(t.TempDir(), "entry")
+				require.NoError(t, os.Symlink(target, folder))
+
+				err := detachOrPreserve(root, operation, nil, filepath.Join(folder, "item"))
+
+				require.ErrorIs(t, err, ErrDestinationFailed)
+				requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+				assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
+				if !leadsIntoTheTree {
+					assert.Empty(t, entryNames(t, target), "nothing is taken out through the link")
+				}
+			})
+		}
+	}
+}
+
+// Validates: R-6.4.9
+//
+// A take-out or copy-out never replaces what it finds at the destination's
+// name: the rename, the copy's rename and the link all refuse a name that is
+// taken, the entry there is left as it was, and the file is at its own name
+// with its content.
+func TestDetachRegularFile_ANameTakenAtTheDestinationIsNotReplaced(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range takeOutCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := tc.tree(t)
+			dest := filepath.Join(t.TempDir(), "item")
+			require.NoError(t, os.WriteFile(dest, []byte("already here\n"), 0o600))
+
+			err := detachOrPreserve(root, tc.operation, nil, dest)
+
+			require.ErrorIs(t, err, ErrDestinationFailed)
+			requireFileContent(t, dest, "already here\n")
+			assert.Equal(t, []string{"item"}, entryNames(t, filepath.Dir(dest)), "no copy is left beside it")
+			requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+			assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
+		})
+	}
+}
+
+// Validates: R-6.4.9
+//
+// Across filesystems a detach copies the file through its verified descriptor
+// into the destination's folder, gives the copy the destination's name, and
+// only then removes the file from the tree.
+func TestDetachRegularFile_CopiesAcrossFilesystems(t *testing.T) {
+	t.Parallel()
+
+	root, dir := newDetachTree(t)
+	acrossFilesystems(root)
+	before, err := os.Lstat(filepath.Join(dir, "docs", "a.txt"))
+	require.NoError(t, err)
+	dest := filepath.Join(t.TempDir(), "item")
+
+	require.NoError(t, root.DetachRegularFile("docs/a.txt", nil, dest))
+
+	assert.Empty(t, entryNames(t, filepath.Join(dir, "docs")), "the file and its set-aside name are gone from the tree")
+	requireFileContent(t, dest, "synced\n")
+	kept, err := os.Lstat(dest)
+	require.NoError(t, err)
+	assert.False(t, os.SameFile(before, kept), "the file taken out is a copy")
+	assert.Equal(t, []string{"item"}, entryNames(t, filepath.Dir(dest)), "no temporary copy is left beside it")
+}
+
+// Validates: R-6.4.9
+//
+// A preserve removes only its own link: an entry another program put at the
+// destination's name between the link and the check that the link names the
+// verified file is left as it is, and the preserve reports the race.
+func TestPreserveRegularFile_LeavesAnEntryThatReplacedItsLink(t *testing.T) {
+	t.Parallel()
+
+	root, dir := newDetachTree(t)
+	dest := filepath.Join(t.TempDir(), "item")
+	link := root.ops.link
+	root.ops.link = func(fromDir *os.File, from string, toDir *os.File, to string) error {
+		if err := link(fromDir, from, toDir, to); err != nil {
+			return err
+		}
+		replacement := dest + ".new"
+		require.NoError(t, os.WriteFile(replacement, []byte("another program's file\n"), 0o600))
+		require.NoError(t, os.Rename(replacement, dest))
+		return nil
+	}
+
+	err := root.PreserveRegularFile("docs/a.txt", nil, dest)
+
+	require.ErrorIs(t, err, ErrDetachRaced)
+	requireFileContent(t, dest, "another program's file\n")
+	requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
+}
+
+// writtenInPlaceOnceSetAside makes root's set-aside rename append to the file
+// right after it, in folder, the tree folder that holds it: an in-place write
+// that lands between setting the file aside and the check that it is still
+// the verified file.
+func writtenInPlaceOnceSetAside(t *testing.T, root *Root, folder string) {
+	t.Helper()
+
+	renameAt := root.ops.renameAt
+	root.ops.renameAt = func(fromDir *os.File, from string, toDir *os.File, to string) error {
+		if err := renameAt(fromDir, from, toDir, to); err != nil || !IsDetachArtifactName(to) {
+			return err
+		}
+		f, err := os.OpenFile(filepath.Join(folder, to), os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // the test writes a file it created
+		require.NoError(t, err)
+		_, err = f.WriteString("appended by the user\n")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		return nil
+	}
+}
+
+// Validates: R-6.4.9
+//
+// On a filesystem without hard links a set-aside file goes back to its name
+// by a rename that replaces nothing, so a file written while it was set
+// aside, or one whose destination failed, is back at its name with its
+// content instead of staying under its temporary one.
+func TestDetachRegularFile_PutsTheFileBackWithoutHardLinks(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name      string
+		operation string
+		// destinationFails removes the destination's folder during the
+		// check; otherwise the file is written in place once it is set aside.
+		destinationFails bool
+	}{
+		{name: "written once set aside, detach", operation: opDetach},
+		{name: "written once set aside, remove", operation: opRemove},
+		{name: "destination failed", operation: opDetach, destinationFails: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, dir := newDetachTree(t)
+			root = root.WithoutNoReplaceFlagOrHardLinks()
+			folder := filepath.Join(t.TempDir(), "entry")
+			require.NoError(t, os.Mkdir(folder, 0o700))
+			var verify VerifyFunc
+			want, wantErr := "synced\nappended by the user\n", ErrDetachRaced
+			if tt.destinationFails {
+				verify = func(*os.File, os.FileInfo) error {
+					require.NoError(t, os.Remove(folder))
+					return nil
+				}
+				want, wantErr = "synced\n", ErrDestinationFailed
+			} else {
+				writtenInPlaceOnceSetAside(t, root, filepath.Join(dir, "docs"))
+			}
+
+			var err error
+			if tt.operation == opRemove {
+				err = root.RemoveVerifiedRegularFile("docs/a.txt", verify)
+			} else {
+				err = root.DetachRegularFile("docs/a.txt", verify, filepath.Join(folder, "item"))
+			}
+
+			require.ErrorIs(t, err, wantErr)
+			requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), want)
+			assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")), "no set-aside file is left")
+		})
+	}
 }
 
 // Validates: R-6.4.8
@@ -243,7 +526,7 @@ func TestDetachRegularFile_RefusesADestinationInsideTheSyncFolder(t *testing.T) 
 					dest = dir
 				}
 
-				require.ErrorIs(t, detachOrPreserve(root, operation, dest), ErrUnsafePath)
+				require.ErrorIs(t, detachOrPreserve(root, operation, nil, dest), ErrUnsafePath)
 				requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
 				assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
 				assert.Equal(t, []string{"docs"}, entryNames(t, dir))
@@ -255,10 +538,10 @@ func TestDetachRegularFile_RefusesADestinationInsideTheSyncFolder(t *testing.T) 
 // Validates: R-6.4.8
 //
 // Whether a destination lies in the sync folder is decided by the folder it
-// resolves to, not by its text: a destination below a link in the folder
-// that leads outside it is taken, and the file lands outside, while one below
-// a link outside that leads into the folder is refused before anything
-// moves.
+// resolves to, not by its text: a destination whose folder lies below a link
+// in the sync folder that leads outside it is taken, and the file lands
+// outside, while one whose folder lies below a link outside that leads into
+// the sync folder is refused before anything moves.
 func TestDetachRegularFile_DecidesTheDestinationByTheFolderItResolvesTo(t *testing.T) {
 	t.Parallel()
 
@@ -268,12 +551,13 @@ func TestDetachRegularFile_DecidesTheDestinationByTheFolderItResolvesTo(t *testi
 
 			root, dir := newDetachTree(t)
 			outside := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(outside, "entry"), 0o700))
 			require.NoError(t, os.Symlink(outside, filepath.Join(dir, "elsewhere")))
 
-			dest := filepath.Join(dir, "elsewhere", "taken-out")
+			dest := filepath.Join(dir, "elsewhere", "entry", "taken-out")
 
-			require.NoError(t, detachOrPreserve(root, operation, dest))
-			requireFileContent(t, filepath.Join(outside, filepath.Base(dest)), "synced\n")
+			require.NoError(t, detachOrPreserve(root, operation, nil, dest))
+			requireFileContent(t, filepath.Join(outside, "entry", filepath.Base(dest)), "synced\n")
 			if operation == opPreserve {
 				requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
 			} else {
@@ -285,9 +569,9 @@ func TestDetachRegularFile_DecidesTheDestinationByTheFolderItResolvesTo(t *testi
 
 			root, dir := newDetachTree(t)
 			intoTheTree := filepath.Join(t.TempDir(), "into-the-tree")
-			require.NoError(t, os.Symlink(filepath.Join(dir, "docs"), intoTheTree))
+			require.NoError(t, os.Symlink(dir, intoTheTree))
 
-			require.ErrorIs(t, detachOrPreserve(root, operation, filepath.Join(intoTheTree, "moved.txt")), ErrUnsafePath)
+			require.ErrorIs(t, detachOrPreserve(root, operation, nil, filepath.Join(intoTheTree, "docs", "moved.txt")), ErrUnsafePath)
 			requireFileContent(t, filepath.Join(dir, "docs", "a.txt"), "synced\n")
 			assert.Equal(t, []string{"a.txt"}, entryNames(t, filepath.Join(dir, "docs")))
 		})
@@ -463,11 +747,26 @@ func TestCopyVerified_WriteDuringCopyDiscardsTheCopy(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(path, []byte("rewritten in place\n"), 0o600))
-	dest := filepath.Join(t.TempDir(), "item")
+	root, _ := openTestRoot(t)
+	out, dest := openTestDestination(t, root)
 
-	err = copyVerified(file, stamp, dest, syncDirectory)
+	err = root.copyVerified(file, stamp, out)
 	require.ErrorIs(t, err, ErrDetachRaced)
 	assert.NoFileExists(t, dest)
+}
+
+// openTestDestination opens, as a take-out does, the destination named item
+// in a new folder outside root, and returns it with its path.
+func openTestDestination(t *testing.T, root *Root) (*destination, string) {
+	t.Helper()
+
+	dest := filepath.Join(t.TempDir(), "entry", "item")
+	require.NoError(t, os.Mkdir(filepath.Dir(dest), 0o700))
+	out, err := root.openDestination(dest)
+	require.NoError(t, err)
+	t.Cleanup(out.close)
+
+	return out, dest
 }
 
 // openVerifiedCopySource writes a file and opens it the way the detach path
@@ -495,19 +794,20 @@ func TestCopyVerified_SyncsTheDestinationFolder(t *testing.T) {
 	t.Parallel()
 
 	file, stamp := openVerifiedCopySource(t)
-	dest := filepath.Join(t.TempDir(), "entry", "item")
+	root, _ := openTestRoot(t)
+	out, dest := openTestDestination(t, root)
 
 	var synced []string
-	recordingSync := func(dir string) error {
-		synced = append(synced, dir)
+	root.ops.syncDirFile = func(dir *os.File) error {
+		synced = append(synced, dir.Name())
 		// The sync comes after the rename: it is the rename it makes durable.
 		data, err := os.ReadFile(dest) //nolint:gosec // the test reads the copy it made
 		require.NoError(t, err)
 		assert.Equal(t, "synced\n", string(data))
-		return syncDirectory(dir)
+		return dir.Sync()
 	}
 
-	require.NoError(t, copyVerified(file, stamp, dest, recordingSync))
+	require.NoError(t, root.copyVerified(file, stamp, out))
 	assert.Equal(t, []string{filepath.Dir(dest)}, synced, "the entry directory is synced once, after the rename")
 }
 
@@ -516,10 +816,11 @@ func TestCopyVerified_DirectorySyncFailureLeavesNothingAtTheDestination(t *testi
 	t.Parallel()
 
 	file, stamp := openVerifiedCopySource(t)
-	dest := filepath.Join(t.TempDir(), "entry", "item")
-	failingSync := func(string) error { return fmt.Errorf("syncing directory: %w", unix.EIO) }
+	root, _ := openTestRoot(t)
+	out, dest := openTestDestination(t, root)
+	root.ops.syncDirFile = func(*os.File) error { return fmt.Errorf("syncing directory: %w", unix.EIO) }
 
-	err := copyVerified(file, stamp, dest, failingSync)
+	err := root.copyVerified(file, stamp, out)
 	require.ErrorIs(t, err, ErrDestinationFailed)
 	require.ErrorContains(t, err, unix.EIO.Error())
 	assert.NoFileExists(t, dest, "a copy whose placement is not durable is not left for the caller to unlink the source over")
@@ -533,10 +834,11 @@ func TestCopyVerified_ToleratesUnsupportedDirectorySync(t *testing.T) {
 	t.Parallel()
 
 	file, stamp := openVerifiedCopySource(t)
-	dest := filepath.Join(t.TempDir(), "entry", "item")
-	unsupportedSync := func(string) error { return fmt.Errorf("syncing directory: %w", unix.ENOTSUP) }
+	root, _ := openTestRoot(t)
+	out, dest := openTestDestination(t, root)
+	root.ops.syncDirFile = func(*os.File) error { return fmt.Errorf("syncing directory: %w", unix.ENOTSUP) }
 
-	require.NoError(t, copyVerified(file, stamp, dest, unsupportedSync))
+	require.NoError(t, root.copyVerified(file, stamp, out))
 	assert.FileExists(t, dest)
 }
 
