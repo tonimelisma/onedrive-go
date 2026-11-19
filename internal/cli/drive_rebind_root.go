@@ -28,9 +28,15 @@ Run this after moving, restoring, or re-pointing the sync folder on purpose.
 Sync state is kept, and the next sync takes files missing from the folder as
 deleted: it deletes them on OneDrive too, holding the deletes for
 confirmation only when the folder is empty or they are many (over 50 and
-30 % of what is synced). The rebind also forgets every recorded mount point
-inside the folder, so the content of a disk that is not mounted now is
-deleted on OneDrive the same way. Copy what you need from OneDrive first.
+30 % of what is synced). Copy what you need from OneDrive first.
+
+The rebind keeps every recorded mount point inside the folder. A disk that is
+not mounted now stays "Disk not mounted" in status while its empty folder is
+there, and none of its content is deleted. If that folder is missing from the
+folder you rebind, sync holds every delete of the disk's content on OneDrive,
+however few, until you run 'onedrive-go sync --confirm-deletes'. To let go of
+a disk that is gone for good, remove its empty folder and confirm those
+deletes.
 
 It shows how many files the sync state remembers and how many are in the
 folder now. Type REBIND to confirm, or use --yes for non-interactive use.`,

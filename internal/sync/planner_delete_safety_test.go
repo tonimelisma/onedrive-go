@@ -60,6 +60,60 @@ func TestDeleteSafetyHold_FolderDeletesCountTowardThreshold(t *testing.T) {
 	assert.Len(t, plan.HeldDeletes, 55)
 }
 
+// A delete toward OneDrive of a recorded mount point whose folder is gone
+// from the sync folder, or of anything below it, is held whatever the count:
+// letting go of a disk sync crossed into takes one confirmation. The plan's
+// other deletes are judged as usual, and a mount point whose folder is still
+// there (a mounted disk the user emptied) is an ordinary delete. A file put
+// in place of the mount point's folder does not count as the folder.
+//
+// Validates: R-6.2.5, R-6.2.15
+func TestDeleteSafetyHold_DeletesOfAMissingMountPointAreHeldWhateverTheirNumber(t *testing.T) {
+	t.Parallel()
+
+	actions := func() []Action {
+		return []Action{
+			remoteDeleteAction("nas/a.txt", ItemTypeFile),
+			remoteDeleteAction("nas", ItemTypeFolder),
+			remoteDeleteAction("usb/b.txt", ItemTypeFile),
+			remoteDeleteAction("disk/c.txt", ItemTypeFile),
+			remoteDeleteAction("disk", ItemTypeFolder),
+			remoteDeleteAction("nasty.txt", ItemTypeFile),
+			remoteDeleteAction("other.txt", ItemTypeFile),
+		}
+	}
+	input := &deleteSafetyInput{
+		Baseline: baselineWithItems(t, 100, 0),
+		LocalRows: []localStateRow{
+			{Path: "keep.txt", ItemType: ItemTypeFile},
+			{Path: "usb", ItemType: ItemTypeFolder},
+			{Path: "disk", ItemType: ItemTypeFile},
+		},
+		MountBoundaries: []string{"nas", "usb", "disk"},
+	}
+	plan := planOf(actions()...)
+	require.NoError(t, applyDeleteSafetyHold(plan, input))
+
+	var kept []string
+	for i := range plan.Actions {
+		kept = append(kept, plan.Actions[i].Path)
+	}
+	assert.ElementsMatch(t, []string{"usb/b.txt", "nasty.txt", "other.txt"}, kept,
+		"a mounted disk's delete and deletes outside the mount point run")
+	require.Len(t, plan.HeldDeletes, 4)
+	for _, held := range plan.HeldDeletes {
+		assert.Contains(t, []string{"nas", "nas/a.txt", "disk", "disk/c.txt"}, held.Path)
+		assert.Equal(t, deleteSafetySideRemote, held.Side)
+		assert.Equal(t, deleteSafetyReasonMountPointGone, held.Reason)
+	}
+
+	input.Approved = plan.HeldDeletes
+	confirmed := planOf(actions()...)
+	require.NoError(t, applyDeleteSafetyHold(confirmed, input))
+	assert.Len(t, confirmed.Actions, 7, "confirmed, the held deletes run")
+	assert.Empty(t, confirmed.HeldDeletes)
+}
+
 // Validates: R-6.2.5
 func TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty(t *testing.T) {
 	t.Parallel()

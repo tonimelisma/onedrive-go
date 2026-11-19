@@ -73,11 +73,12 @@ func TestBuildSyncStateInfo_RootReadFailureSaysWhatTheRootIs(t *testing.T) {
 // A folder sync crossed into as the mount point of another filesystem, found
 // not mounted now, is its own condition: status says what happened, that the
 // synced content is kept and nothing is deleted on OneDrive, what clears it
-// without losing anything (TestRunOnce_ADiskMountedAgainLosesNothing), and
-// what `drive rebind-root` leads to: it forgets every disk listed that is not
-// mounted, and sync then deletes each such folder's content on OneDrive too,
-// holding the deletes for confirmation only when they are many
-// (TestRunOnce_ARebindAfterADiskIsGoneDeletesItsContentOnOneDrive). It does
+// without losing anything (TestRunOnce_ADiskMountedAgainLosesNothing), that
+// `drive rebind-root` does not clear it
+// (TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted), and how a disk gone
+// for good is let go of: removing the empty folder, whose deletes on OneDrive
+// sync then holds until they are confirmed
+// (TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved). It does
 // not suggest cross_filesystems, the setting that made sync cross it.
 func TestBuildSyncStateInfo_AMountPointNotMountedSaysWhatClearsIt(t *testing.T) {
 	t.Parallel()
@@ -97,10 +98,10 @@ func TestBuildSyncStateInfo_AMountPointNotMountedSaysWhatClearsIt(t *testing.T) 
 	assert.Equal(t, "Disk not mounted", condition.Title)
 	assert.Equal(t, "This folder was the mount point of another disk or filesystem, and that disk is not mounted now. "+
 		"Its synced content is kept, and nothing is deleted on OneDrive.", condition.Reason)
-	assert.Equal(t, "Mount the disk again; that clears it and loses nothing. If the disk is gone for good, copy what "+
-		"you need from this folder on OneDrive first: 'onedrive-go drive rebind-root' forgets every disk listed "+
-		"here that is not mounted, and sync then deletes each such folder's content on OneDrive too, holding the "+
-		"deletes for confirmation only when they are many. Mount every disk you still use before you rebind.",
+	assert.Equal(t, "Mount the disk again; that clears it and loses nothing. 'onedrive-go drive rebind-root' does "+
+		"not clear it: a rebind keeps every disk listed here. If the disk is gone for good, copy what you need "+
+		"from this folder on OneDrive first, then remove the empty folder: sync holds the deletes of its "+
+		"content on OneDrive until you run 'onedrive-go sync --confirm-deletes'.",
 		condition.Action)
 	assert.NotContains(t, condition.Reason+condition.Action, "cross_filesystems")
 	assert.Equal(t, []string{"nas"}, condition.Paths)

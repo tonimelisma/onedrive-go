@@ -22,6 +22,10 @@ const (
 	deleteSafetyReasonSideVanished deleteSafetyReason = "side_vanished"
 	// deleteSafetyReasonTooMany: the proportional threshold was exceeded.
 	deleteSafetyReasonTooMany deleteSafetyReason = "too_many"
+	// deleteSafetyReasonMountPointGone: the delete removes a recorded mount
+	// point whose folder is gone from the sync folder, or something below
+	// it, so it is held however few such deletes there are.
+	deleteSafetyReasonMountPointGone deleteSafetyReason = "mount_point_gone"
 )
 
 // deleteSafetyWindow is how long an executed, unconfirmed delete keeps
