@@ -18,16 +18,26 @@ import (
 // (addMoveDeps), (4) a folder delete waits for same-side moves that carry
 // descendants out of it, (5) the create half of a type-change replacement
 // waits for the delete at the same path, (6) a remote create waits for the
-// remote delete or move-away of a sibling whose name differs only in case.
+// remote delete or move-away of a sibling whose name differs only in case,
+// (7) a delete waits for the create on its side that writes the deleted
+// file's content at another path, unless that closes a cycle
+// (addContentCarrierDeps).
 //
 // Every rule relates an action to actions at its own path, at the folders
-// above it, or at the OneDrive name key of its path, so the partners are
-// found through indexes built once (dependencyIndex) and each rule costs the
-// path's depth, not the plan's size. The rules used to scan the whole list
-// per action, which was 91 % of a 34-minute first plan of 154k actions
-// (spec/design/performance-benchmarking.md).
+// above it, at the OneDrive name keys of its path and of those folders, or
+// with the content it writes or removes, so the partners are found through
+// indexes built once (dependencyIndex) and each rule costs the path's depth,
+// not the plan's size (spec/design/performance-benchmarking.md).
 func buildDependencies(actions []Action) [][]int {
-	deps := make([][]int, len(actions))
+	deps, _ := buildDependencyGraph(actions)
+
+	return deps
+}
+
+// buildDependencyGraph is buildDependencies, and it also returns the content
+// edges rule 7 leaves out as they would close a cycle (addContentCarrierDeps).
+func buildDependencyGraph(actions []Action) (deps [][]int, leftOut []contentEdge) {
+	deps = make([][]int, len(actions))
 	index := newDependencyIndex(actions)
 
 	for i := range actions {
@@ -41,8 +51,9 @@ func buildDependencies(actions []Action) [][]int {
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
 	}
+	leftOut = addContentCarrierDeps(deps, actions, index)
 
-	return deps
+	return deps, leftOut
 }
 
 // dependencyIndex locates the actions a dependency rule relates an action
@@ -59,7 +70,11 @@ type dependencyIndex struct {
 
 	movesByPath    map[string][]int // moves by destination
 	movesByOldPath map[string][]int // moves by source
-	actionsByPath  map[string][]int
+	// movesByOldNameKey lists the moves by the name key of their source: a
+	// move into a folder below the path another move vacates finds that move
+	// under OneDrive's name folding (movesIntoVacatedPath).
+	movesByOldNameKey map[string][]int
+	actionsByPath     map[string][]int
 
 	// childDeletes lists, per folder delete, the deletes below its path.
 	childDeletes map[int][]int
@@ -73,6 +88,11 @@ type dependencyIndex struct {
 	// remote moves by the name key of their source: the actions that free a
 	// OneDrive name (addRemoteCaseVariantDeps).
 	vacatedByNameKey map[string][]int
+	// contentCarriers lists the uploads and downloads by the content they
+	// write, and contentDeletes the deletes of a synced file, the two ends
+	// of addContentCarrierDeps.
+	contentCarriers map[contentKey][]int
+	contentDeletes  []int
 }
 
 func newDependencyIndex(actions []Action) *dependencyIndex {
@@ -82,11 +102,13 @@ func newDependencyIndex(actions []Action) *dependencyIndex {
 		deleteIdx:              make(map[string]int),
 		movesByPath:            make(map[string][]int),
 		movesByOldPath:         make(map[string][]int),
+		movesByOldNameKey:      make(map[string][]int),
 		actionsByPath:          make(map[string][]int),
 		childDeletes:           make(map[int][]int),
 		movesBelowFolderDelete: make(map[int][]int),
 		workBelowMoveSource:    make(map[int][]int),
 		vacatedByNameKey:       make(map[string][]int),
+		contentCarriers:        make(map[contentKey][]int),
 	}
 	folderDeletesByPath := make(map[string][]int)
 	for i := range actions {
@@ -108,12 +130,21 @@ func (index *dependencyIndex) indexByPath(i int, a *Action, folderDeletesByPath 
 	case ActionLocalMove, ActionRemoteMove:
 		index.movesByPath[a.Path] = append(index.movesByPath[a.Path], i)
 		index.movesByOldPath[a.OldPath] = append(index.movesByOldPath[a.OldPath], i)
+		oldKey := pathNameKey(a.OldPath)
+		index.movesByOldNameKey[oldKey] = append(index.movesByOldNameKey[oldKey], i)
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
 		index.deleteIdx[a.Path] = i
 		if isSubtreeDelete(a) {
 			folderDeletesByPath[a.Path] = append(folderDeletesByPath[a.Path], i)
 		}
-	case ActionDownload, ActionUpload, ActionBaselineUpdate:
+		if _, removes := deletedContentKey(a); removes {
+			index.contentDeletes = append(index.contentDeletes, i)
+		}
+	case ActionDownload, ActionUpload:
+		if key, writes := carriedContentKey(a); writes {
+			index.contentCarriers[key] = append(index.contentCarriers[key], i)
+		}
+	case ActionBaselineUpdate:
 	default:
 		panic(outsideTheEnum(a.Type))
 	}
@@ -374,6 +405,183 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 	return true
 }
 
+// addContentCarrierDeps makes a delete wait for each create on its side that
+// writes the content of the synced file it deletes at another path
+// (carriesContentOf): on OneDrive the upload of the file here that has the
+// file's local identity, which SQLite plans when it cannot pair a rename
+// because OneDrive keeps another item at the new path, and here the download
+// of the file's item. Run before the create, the delete left that side
+// without the content until a later pass whenever the create, or what it
+// waits for, failed; run after it, the delete is skipped with the failed
+// chain and planned again with it. An edge that would close a dependency
+// cycle is left out (addContentEdges) and returned: there the create waits
+// for the delete through the other rules, as the upload of a file edited in a
+// folder renamed here waits for the folder's move, which waits for the delete
+// of the file's old copy, and no order of this plan keeps the content
+// (deletesAheadOfTheirContent holds some such deletes for the next pass).
+func addContentCarrierDeps(deps [][]int, actions []Action, index *dependencyIndex) []contentEdge {
+	if len(index.contentDeletes) == 0 || len(index.contentCarriers) == 0 {
+		return nil
+	}
+
+	var edges []contentEdge
+	for _, deleteIdx := range index.contentDeletes {
+		key, _ := deletedContentKey(&actions[deleteIdx])
+		for _, createIdx := range index.contentCarriers[key] {
+			if carriesContentOf(&actions[createIdx], &actions[deleteIdx]) {
+				edges = append(edges, contentEdge{deleteIdx: deleteIdx, createIdx: createIdx})
+			}
+		}
+	}
+
+	return addContentEdges(deps, edges)
+}
+
+// contentEdge is a delete that waits for a create carrying its content.
+type contentEdge struct {
+	deleteIdx, createIdx int
+}
+
+// addContentEdges adds each edge to deps, except one the delete already has
+// and one whose create already waits for its delete, which would close a
+// cycle, and returns the edges it leaves out. Edges are decided one at a time,
+// each against the plan's other edges and the content edges kept before it:
+// of two edges that close a cycle only together, the first is kept, so one
+// of the deletes still waits for its content. Only an edge whose ends share a
+// strongly connected component (dependencyComponents) once every edge is in
+// can close a cycle, so the others are kept without a walk, and none at all
+// is walked in a plan whose content edges lie on no cycle.
+func addContentEdges(deps [][]int, edges []contentEdge) (leftOut []contentEdge) {
+	added := edges[:0:0]
+	for _, edge := range edges {
+		if !slices.Contains(deps[edge.deleteIdx], edge.createIdx) {
+			deps[edge.deleteIdx] = append(deps[edge.deleteIdx], edge.createIdx)
+			added = append(added, edge)
+		}
+	}
+	if len(added) == 0 {
+		return nil
+	}
+	for _, edge := range added {
+		sort.Ints(deps[edge.deleteIdx])
+	}
+
+	component, _ := dependencyComponents(deps)
+	var onCycles []contentEdge
+	for _, edge := range added {
+		if component[edge.deleteIdx] == component[edge.createIdx] {
+			deps[edge.deleteIdx] = withoutDep(deps[edge.deleteIdx], edge.createIdx)
+			onCycles = append(onCycles, edge)
+		}
+	}
+	for _, edge := range onCycles {
+		if waitsFor(deps, edge.createIdx, edge.deleteIdx) {
+			leftOut = append(leftOut, edge)
+			continue
+		}
+		at, _ := slices.BinarySearch(deps[edge.deleteIdx], edge.createIdx)
+		deps[edge.deleteIdx] = slices.Insert(deps[edge.deleteIdx], at, edge.createIdx)
+	}
+
+	return leftOut
+}
+
+// withoutDep removes dep from the sorted list deps.
+func withoutDep(deps []int, dep int) []int {
+	if at, found := slices.BinarySearch(deps, dep); found {
+		return slices.Delete(deps, at, at+1)
+	}
+
+	return deps
+}
+
+// waitsFor reports whether action from waits for action to in deps, directly
+// or through others. Each list of deps is sorted, so an action is asked for
+// to before what it waits for is walked: through a folder's move, which waits
+// for every delete below its source, the answer costs the depth of the walk,
+// not the size of the folder.
+func waitsFor(deps [][]int, from, to int) bool {
+	seen := map[int]bool{from: true}
+	stack := []int{from}
+	for len(stack) > 0 {
+		v := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, found := slices.BinarySearch(deps[v], to); found {
+			return true
+		}
+		for _, w := range deps[v] {
+			if !seen[w] {
+				seen[w] = true
+				stack = append(stack, w)
+			}
+		}
+	}
+
+	return false
+}
+
+// contentKey names the synced content a create writes and a delete removes:
+// a local identity on OneDrive's side, an item ID on this computer's.
+type contentKey struct {
+	itemID        string
+	device, inode uint64
+}
+
+// carriedContentKey reports the content an upload or a download writes: the
+// local identity of the file an upload reads, the item a download fetches.
+func carriedContentKey(create *Action) (contentKey, bool) {
+	switch create.Type {
+	case ActionUpload:
+		if create.View == nil || create.View.Local == nil || !create.View.Local.LocalHasIdentity {
+			return contentKey{}, false
+		}
+
+		return contentKey{device: create.View.Local.LocalDevice, inode: create.View.Local.LocalInode}, true
+	case ActionDownload:
+		return contentKey{itemID: create.ItemID}, create.ItemID != ""
+	case ActionLocalMove, ActionRemoteMove, ActionLocalDelete, ActionRemoteDelete, ActionFolderCreate,
+		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return contentKey{}, false
+	default:
+		panic(outsideTheEnum(create.Type))
+	}
+}
+
+// deletedContentKey reports the synced file a delete removes from its side,
+// under the key a create of that content on the same side carries: its
+// synced local identity on OneDrive, its item ID here.
+func deletedContentKey(deleted *Action) (contentKey, bool) {
+	if deleted.View == nil || deleted.View.Baseline == nil || deleted.View.Baseline.ItemType != ItemTypeFile {
+		return contentKey{}, false
+	}
+	synced := deleted.View.Baseline
+	switch deleted.Type {
+	case ActionRemoteDelete:
+		return contentKey{device: synced.LocalDevice, inode: synced.LocalInode}, synced.LocalHasIdentity
+	case ActionLocalDelete:
+		return contentKey{itemID: synced.ItemID}, synced.ItemID != ""
+	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove, ActionFolderCreate,
+		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
+		return contentKey{}, false
+	default:
+		panic(outsideTheEnum(deleted.Type))
+	}
+}
+
+// carriesContentOf reports whether create writes, at another path on the
+// delete's side, the content of the synced file the delete deleted removes:
+// an upload of the file here that has the file's local identity for a delete
+// on OneDrive, a download of the file's item for a delete here.
+func carriesContentOf(create, deleted *Action) bool {
+	if create.Path == deleted.Path {
+		return false
+	}
+	carried, writes := carriedContentKey(create)
+	removed, removes := deletedContentKey(deleted)
+
+	return writes && removes && carried == removed
+}
+
 // addMoveDeps orders moves (D-054). Move composition emits a move only when
 // these rules give it a consistent place in the plan
 // (planner_move_composition.go), and every rule is expressed in the paths the
@@ -382,10 +590,10 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 //     parent must exist, and a move composed into a folder an earlier move
 //     places waits for it;
 //   - a move onto the path another move of the same side vacates waits for it,
-//     and so does a move into a folder below that path from a source outside
-//     it (movesIntoVacatedPath): that folder is a new one, which takes the
-//     path only after the move, so the order holds whether or not the plan
-//     creates it;
+//     and so does a move into a folder below that path, compared as OneDrive
+//     compares names, from a source outside it (movesIntoVacatedPath): that
+//     folder is a new one, which takes the path only after the move, so the
+//     order holds whether or not the plan creates it;
 //   - a move waits for the work under its source that does not follow it to
 //     its destination (children leave first, and writes addressed at the old
 //     path land before the folder moves away), except a same-side move from
@@ -398,9 +606,10 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 //     through the folder's move nor holds for the next pass (vacatingFolder).
 //
 // The partners of these rules are the moves at or above a's path and source,
-// the moves vacating a's path, and, for a move, the work below its source
-// and the old occupant of its destination; moveDepCandidates gathers them
-// and moveOrderDependency decides each pair.
+// the moves vacating a's path, and, for a move, the moves whose source's name
+// key lies above its path's, the work below its source and the old occupant
+// of its destination; moveDepCandidates gathers them and moveOrderDependency
+// decides each pair.
 func addMoveDeps(deps []int, idx int, a *Action, actions []Action, index *dependencyIndex) []int {
 	candidates := moveDepCandidates(idx, a, index)
 	slices.Sort(candidates)
@@ -453,6 +662,11 @@ func moveDepCandidates(idx int, a *Action, index *dependencyIndex) []int {
 
 	for parent := range pathAncestors(a.OldPath) {
 		candidates = append(candidates, index.movesByPath[parent]...)
+	}
+	// A name key's segments are its path's, so the keys above it are the
+	// keys of the folders above the path.
+	for parentKey := range pathAncestors(pathNameKey(a.Path)) {
+		candidates = append(candidates, index.movesByOldNameKey[parentKey]...)
 	}
 	candidates = append(candidates, index.workBelowMoveSource[idx]...)
 	candidates = append(candidates, index.actionsByPath[a.Path]...)
@@ -522,14 +736,16 @@ func movePrecedes(move, a *Action) bool {
 // runs after move, whether or not the plan also creates that folder.
 // Unordered, a would land, run first, in the item move carries away, and find
 // no folder, run second. A move from below the path is work that leaves first
-// (underMoveSource).
+// (underMoveSource). Both paths are compared as OneDrive compares names
+// (pathNameKey): a new folder X takes the path x leaves there and on a volume
+// that folds case.
 func movesIntoVacatedPath(a, move *Action) bool {
 	if move.OldPath == "" {
 		return false
 	}
-	vacated := move.OldPath + "/"
+	vacated := pathNameKey(move.OldPath) + "/"
 
-	return strings.HasPrefix(a.Path, vacated) && !strings.HasPrefix(a.OldPath, vacated)
+	return strings.HasPrefix(pathNameKey(a.Path), vacated) && !strings.HasPrefix(pathNameKey(a.OldPath), vacated)
 }
 
 // underMoveDestination reports whether a works at or below move's

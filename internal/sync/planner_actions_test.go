@@ -802,6 +802,14 @@ func planCurrentStateForStore(t *testing.T, store *SyncStore) *actionPlan {
 func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncMode) *actionPlan {
 	t.Helper()
 
+	return planCurrentStateForStoreWithLogger(t, store, mode, testLogger(t))
+}
+
+// planCurrentStateForStoreWithLogger plans what store holds, as the engine
+// reads it at the start of a pass, logging to logger.
+func planCurrentStateForStoreWithLogger(t *testing.T, store *SyncStore, mode SyncMode, logger *slog.Logger) *actionPlan {
+	t.Helper()
+
 	ctx := t.Context()
 	bl, err := store.Load(ctx)
 	require.NoError(t, err)
@@ -848,7 +856,7 @@ func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncM
 	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	require.NoError(t, err)
 
-	planner := newPlanner(testLogger(t))
+	planner := newPlanner(logger)
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -73,21 +74,26 @@ func (p *planner) PlanCurrentState(
 
 		reconciled = append(reconciled, actions...)
 	}
-	composed := buildComposedMoveActions(&composition, &inputs, views, baseline)
+	composed, waiting := buildComposedMoveActions(&composition, &inputs, views, baseline)
 
-	return p.planBuiltActions(reconciled, composed, &composition, &inputs, mount, mode)
+	return p.planBuiltActions(reconciled, composed, waiting, &composition, &inputs, mount, mode)
 }
 
 // planBuiltActions turns the actions PlanCurrentState built, from the
 // reconciliation rows (reconciled) and by move composition (composed), into
 // the plan: it drops the reconciliation work composition replaces, normalizes,
-// admits by mode (and, for a mount that releases its local tree, by
-// leaveOutNewLocalItems) and orders. Every one of those steps decides by
-// action type, so the built actions are checked against the enums first
-// (validatePlannedActions): an action outside them fails the plan, as a row
-// outside the decision table does, before any step can answer it.
+// holds back the deletes that work held for a later pass still needs
+// (withholdDeletesOfHeldWork), admits by mode (and, for a mount that
+// releases its local tree, by leaveOutNewLocalItems) and orders, without the
+// actions caught in a dependency cycle or the deletes they hold
+// (admitWithoutCycles). waiting is the creates that wait with a move held for
+// a later pass, built aside (recreatedSourceCreates). Every one of
+// those steps decides by action type, so the built actions are checked against
+// the enums first (validatePlannedActions): an action outside them fails the
+// plan, as a row outside the decision table does, before any step can answer
+// it.
 func (p *planner) planBuiltActions(
-	reconciled, composed []Action,
+	reconciled, composed, waiting []Action,
 	composition *moveComposition,
 	inputs *moveInputs,
 	mount plannerMountContext,
@@ -102,21 +108,23 @@ func (p *planner) planBuiltActions(
 	allActions := dropReconciliationOfComposedMoves(reconciled, composition, mode)
 	allActions = append(allActions, composed...)
 
-	normalizedActions, trimmed, trimmedInMode := normalizeCurrentPlanActions(
+	normalizedActions, trimmedActions, trimmedInMode := normalizeCurrentPlanActions(
 		allActions, remoteToLocalFolderPrefixes(inputs.nodes), mode)
-	beforeDrop, beforeDropInMode := len(normalizedActions), countActionsAllowedInMode(normalizedActions, mode)
-	normalizedActions = dropCreatesOntoComposedItems(normalizedActions, inputs, composition)
-	droppedCreates := beforeDrop - len(normalizedActions)
-	droppedCreatesInMode := max(0, beforeDropInMode-countActionsAllowedInMode(normalizedActions, mode))
+	trimmed := len(trimmedActions)
+	normalizedActions, droppedCreateActions := dropCreatesOntoComposedItems(p.logger, normalizedActions, inputs, composition)
+	droppedCreates, droppedCreatesInMode := len(droppedCreateActions), countActionsAllowedInMode(droppedCreateActions, mode)
+	held := slices.Concat(waiting, trimmedActions, droppedCreateActions)
+	normalizedActions, withheld, withheldInMode := withholdDeletesOfHeldWork(
+		p.logger, normalizedActions, held, inputs, composition, mode)
 	if mount.ReleasesLocalTree {
 		normalizedActions = p.leaveOutNewLocalItems(normalizedActions, mode)
 	}
 	admitted, deferred := partitionCurrentActionsForMode(normalizedActions, mode)
 	bindMountContext(admitted, mount)
 
-	beforeCycles := len(admitted)
-	admitted, deps := isolateDependencyCycles(admitted, p.logger)
-	inCycles := beforeCycles - len(admitted)
+	admitted, deps, inCycles, withheldWithCycles := p.admitWithoutCycles(admitted, held, inputs, composition, mode)
+	withheld += withheldWithCycles
+	withheldInMode += withheldWithCycles
 
 	plan := &actionPlan{
 		Actions:        admitted,
@@ -125,14 +133,43 @@ func (p *planner) planBuiltActions(
 		FollowUp: planFollowUp{
 			Renames:    countRenames(admitted),
 			Deferred:   len(composition.deferred),
-			Dropped:    trimmed + droppedCreates + inCycles,
-			Unfinished: composition.deferredRelocationsInMode(mode) + trimmedInMode + droppedCreatesInMode + inCycles,
+			Dropped:    trimmed + droppedCreates + withheld + inCycles,
+			Unfinished: composition.deferredRelocationsInMode(mode) + trimmedInMode + droppedCreatesInMode + withheldInMode + inCycles,
 		},
 	}
 
 	logActionPlanSummary(p.logger, "sqlite actionable-set plan complete", plan)
 
 	return plan, nil
+}
+
+// admitWithoutCycles removes the admitted actions caught in a dependency cycle
+// (isolateDependencyCycles), with what waits for them, and, as they are work
+// held for the next pass too, the deletes they hold (withholdDeletesOfHeldWork)
+// that wait for none of them: the delete of a file whose content a create in
+// the cycle writes, when that create itself waits for the delete, so the two
+// have no edge (addContentCarrierDeps). It repeats until neither removes more,
+// and returns the dependencies of what it keeps and how many actions the
+// cycles and the deletes removed; every one of them is admitted, so the mode
+// runs it.
+func (p *planner) admitWithoutCycles(
+	admitted, held []Action, inputs *moveInputs, composition *moveComposition, mode SyncMode,
+) (kept []Action, deps [][]int, inCycles, withheld int) {
+	kept, deps, cycled := isolateDependencyCycles(admitted, p.logger)
+	inCycles = len(cycled)
+	for len(cycled) > 0 {
+		held = slices.Concat(held, cycled)
+		var more int
+		kept, more, _ = withholdDeletesOfHeldWork(p.logger, kept, held, inputs, composition, mode)
+		if more == 0 {
+			break
+		}
+		withheld += more
+		kept, deps, cycled = isolateDependencyCycles(kept, p.logger)
+		inCycles += len(cycled)
+	}
+
+	return kept, deps, inCycles, withheld
 }
 
 // normalizeCurrentPlanActions keeps SQL as structural authority, then applies
@@ -143,16 +180,15 @@ func (p *planner) planBuiltActions(
 // reconciled them at, which are consistent with each other; the rebases then
 // move whole subtrees, preserved parents included, to where they execute.
 //
-// It also reports how many actions the keep-both trim left for the next pass,
-// in all and among those the mode runs.
+// It also returns the actions the keep-both trim left for the next pass, and
+// how many of them the mode runs.
 func normalizeCurrentPlanActions(
 	actions []Action,
 	remoteToLocal []graphFolderMoveBoundary,
 	mode SyncMode,
-) (normalized []Action, trimmed, trimmedInMode int) {
-	before, beforeInMode := len(actions), countActionsAllowedInMode(actions, mode)
-	actions = trimKeepBothDescendants(actions)
-	trimmed = before - len(actions)
+) (normalized, trimmed []Action, trimmedInMode int) {
+	beforeInMode := countActionsAllowedInMode(actions, mode)
+	actions, trimmed = trimKeepBothDescendants(actions)
 	trimmedInMode = max(0, beforeInMode-countActionsAllowedInMode(actions, mode))
 	actions = preserveParentFoldersForRunnableDescendants(actions, mode)
 	actions = rebaseLocalWritesToLocalFolderPositions(actions, remoteToLocal)
@@ -518,14 +554,15 @@ func buildKeepBothActions(view *pathView) []Action {
 // conflict copy moves away: uploads and local deletes of its children would run
 // against paths that no longer hold them, and remote deletes of children the
 // local side "lost" would delete OneDrive content the keep-both keeps. The next
-// pass plans the conflict copy's content as new.
-func trimKeepBothDescendants(actions []Action) []Action {
+// pass plans the conflict copy's content as new. It returns the actions it
+// keeps and those it removes.
+func trimKeepBothDescendants(actions []Action) (kept, trimmed []Action) {
 	keepBoth := keepBothPaths(actions)
 	if len(keepBoth) == 0 {
-		return actions
+		return actions, nil
 	}
 
-	kept := actions[:0:0]
+	kept = actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
 		remoteIsFolder, under := keepBothAncestor(action.Path, keepBoth)
@@ -535,10 +572,12 @@ func trimKeepBothDescendants(actions []Action) []Action {
 		}
 		if replacement, keep := keepBothDescendantAction(action, remoteIsFolder); keep {
 			kept = append(kept, replacement)
+			continue
 		}
+		trimmed = append(trimmed, *action)
 	}
 
-	return kept
+	return kept, trimmed
 }
 
 // keepBothPaths maps each keep-both path (a conflict copy between entries of

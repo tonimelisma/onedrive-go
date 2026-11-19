@@ -458,7 +458,7 @@ func TestPlanCurrentState_UnlistedActionTypeFailsThePlan(t *testing.T) {
 	)
 	listed := Action{Type: ActionUpload, Path: "docs/listed.txt", View: &pathView{Path: "docs/listed.txt"}}
 	plan := func(reconciled, composed []Action) (*actionPlan, error) {
-		return newPlanner(testLogger(t)).planBuiltActions(reconciled, composed,
+		return newPlanner(testLogger(t)).planBuiltActions(reconciled, composed, nil,
 			&moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
 	}
 
