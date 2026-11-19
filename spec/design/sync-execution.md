@@ -221,7 +221,17 @@ path's row before it records the attempt's own intent, so it knows whether an
 earlier attempt left one (`priorCreateIntent`: no item ID, within
 `pendingCreateIntentTTL`).
 
-A 409 on the create is resolved, not retried as is (`resolveCreateConflict`):
+A 409 on the create is resolved, not retried as is (`resolveCreateConflict`).
+One function reads the folder's listing and says what holds the name
+(`classifyCreateConflict`, by `namekey.Find`; a child without an item ID is
+no candidate and a repeated child counts once): the item the create wanted
+(the same OneDrive name and the same stored form), a rival (the same OneDrive
+name in another stored form), or nothing it can name. A sibling that only
+shares the stored form is another name for OneDrive and is never the wanted
+item (R-2.12.3, `TestClassifyCreateConflict_NeverAdoptsATwin`). Two rivals are
+a rival, the first listed named in the message; two children of the wanted
+tier, which OneDrive never lists, are nothing. By that answer the 409 is
+resolved:
 
 - into our own placeholder from an interrupted attempt: upload by ID with
   If-Match on the eTag just read while it is still an empty live file (a
@@ -271,9 +281,11 @@ lookup's error only, so a final fragment's 409 or 412 before it does not make
 `uploadTransferError` read it as stale
 (`TestUploadTransferError_AFailedOutcomeLookupIsNotAStalePrecondition`).
 
-A remote folder create resolves its 409 the same way: an
-existing folder of the same spelling is adopted, a differently spelled
-sibling is the same durable collision (as a stale precondition it was
+A remote folder create resolves its 409 the same way (`adoptExistingRemoteFolder`): a
+folder of the wanted name is adopted, a twin never is (beside a rival the name
+is taken, alone it is a stale precondition;
+`TestExecutor_CreateRemoteFolder_ConflictBesideATwinAdoptsNothing`), a rival
+is the same durable collision (as a stale precondition it was
 replanned and refused on every pass;
 `TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`,
 `TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision`),
@@ -292,7 +304,11 @@ entries are compared, and a different file is not the source
 `TestExecutor_RenameLocal_SpellingRenameOntoAnotherFileKeepsBoth`). On a volume
 that tells the spellings apart, two hard links of one file named in both
 spellings pass that check too, and the plain rename leaves both names. When
-the directory still holds the old spelling after the rename, the move goes
+the directory still holds the old spelling after the rename (the entry
+spelled as the move asks, else the only entry of that OneDrive name, by
+`namekey.Find`; two such entries and none spelled so fail the move with an
+error naming the folder, which the user sees, instead of renaming one of them
+by listing order: `TestExecutor_StoredNameSpelling_TwoKeyEqualEntriesAreAnError`), the move goes
 through a temporary sibling with two renames that never replace; the sibling
 is named `.onedrive-go.spelling.<name>`, which local observation always
 excludes and cleanup never deletes, so a crash between the two renames

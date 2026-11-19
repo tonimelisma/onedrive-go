@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 func composeNode(key string, itemType ItemType, baseline, local, remote string) moveNode {
@@ -86,21 +88,21 @@ func TestComposeMoves_DestinationFreeUnderNameFolding(t *testing.T) {
 		composeNode("q", ItemTypeFile, "d/a+b.txt", "d/a+b.txt", "d/50%.txt"),
 	)
 
-	held := map[string]string{}
+	held := map[namekey.PathKey]string{}
 	for _, n := range []moveNode{
 		composeNode("p", ItemTypeFile, "", "d/50%.Txt", ""),
 		composeNode("q", ItemTypeFile, "", "d/a+b.txt", ""),
 	} {
-		held[pathNameKey(n.paths[moveCoordLocal])] = n.key
+		held[namekey.OfPath(n.paths[moveCoordLocal])] = n.key
 	}
 	for _, move := range c.moves {
 		if move.side != moveCoordLocal {
 			continue
 		}
-		occupant, taken := held[pathNameKey(move.newPath)]
+		occupant, taken := held[namekey.OfPath(move.newPath)]
 		assert.False(t, taken && occupant != move.key, "%s -> %s lands on %s's name", move.oldPath, move.newPath, occupant)
-		delete(held, pathNameKey(move.oldPath))
-		held[pathNameKey(move.newPath)] = move.key
+		delete(held, namekey.OfPath(move.oldPath))
+		held[namekey.OfPath(move.newPath)] = move.key
 	}
 	assert.NotEmpty(t, c.moves)
 }

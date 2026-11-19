@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -102,7 +103,7 @@ func nfcLocalTree(t *testing.T, syncRoot string) map[string]string {
 
 	out := map[string]string{}
 	for p, content := range harnessLocalTree(t, syncRoot) {
-		out[nfcNormalize(p)] = content
+		out[namekey.StoredPath(p)] = content
 	}
 
 	return out

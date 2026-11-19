@@ -980,6 +980,65 @@ func TestCreateFile_TheReadBackPrefersTheNameAsSpelled(t *testing.T) {
 	assert.Equal(t, int32(exactPage), pages.Load())
 }
 
+// Two files of names OneDrive treats as the created one, neither spelled as
+// asked, are not taken for the created file: the read-back fails as an
+// unknown outcome and says why.
+//
+// Validates: R-5.6.15, R-2.12.3
+func TestReadCreatedFileByName_PrefersExactSpelling(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		label  string
+		pages  []string
+		wantID string
+	}{
+		{
+			label:  "the exact spelling between two others",
+			pages:  []string{`{"id":"upper-id","name":"A.TXT"`, `{"id":"created-id","name":"a.txt"`, `{"id":"title-id","name":"A.txt"`},
+			wantID: "created-id",
+		},
+		{
+			label: "two other spellings",
+			pages: []string{`{"id":"upper-id","name":"A.TXT"`, `{"id":"title-id","name":"A.txt"`},
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			var pages atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPost:
+					w.WriteHeader(http.StatusCreated)
+				case strings.Contains(r.URL.Path, ":/"):
+					w.WriteHeader(http.StatusNotFound)
+					writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not yet"}}`)
+				default:
+					page := int(pages.Add(1))
+					next := ""
+					if page < len(tc.pages) {
+						next = fmt.Sprintf(`,"@odata.nextLink":"http://%s%s?page=%d"`, r.Host, r.URL.Path, page+1)
+					}
+					writeTestResponsef(t, w, `{"value":[%s,"file":{},"parentReference":{"id":"parent"}}]%s}`, tc.pages[page-1], next)
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			item, err := newNoRetryTestClient(t, srv.URL).CreateFile(t.Context(), driveid.New("d"), "parent", "a.txt")
+			if tc.wantID == "" {
+				require.ErrorIs(t, err, ErrCreateOutcomeUnknown)
+				require.ErrorContains(t, err, "more than one item")
+				assert.Nil(t, item)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantID, item.ID)
+		})
+	}
+}
+
 // A folder that holds the created name, found by the read or in the listing,
 // is not the file the create made: the read-back fails as an unknown outcome
 // instead of handing the folder on as the created file.

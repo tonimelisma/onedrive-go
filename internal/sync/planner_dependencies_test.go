@@ -314,22 +314,6 @@ func TestPathAncestors_InvertsHasPrefix(t *testing.T) {
 	}
 }
 
-// Validates: R-2.12.1
-func TestPathNameKey_EqualPathsShareAKey(t *testing.T) {
-	t.Parallel()
-
-	variants := []string{"a/edit.txt", "A/EDIT.txt", "a/é.txt", "a/é.txt", "a/É.txt", "a/x😀.txt", "a/x.txt", "a/b/c", "ab/c", "a/b"}
-	for _, x := range variants {
-		for _, y := range variants {
-			if namekey.EqualPath(x, y) {
-				assert.Equal(t, pathNameKey(x), pathNameKey(y), "%q and %q are one OneDrive path", x, y)
-			}
-		}
-	}
-	assert.NotEqual(t, pathNameKey("a/b/c"), pathNameKey("ab/c"))
-	assert.NotEqual(t, pathNameKey("a/b"), pathNameKey("a/b/c"))
-}
-
 // dependencyPathPool is a small, deeply related set of paths: children of
 // earlier paths and name-folded twins of them are frequent, so the move,
 // delete and case-variant rules all fire.

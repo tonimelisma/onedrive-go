@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	slashpath "path"
@@ -14,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -584,19 +586,19 @@ func (e *executor) hasRegularFileAncestor(relPath string) bool {
 	return false
 }
 
+// exactLocalNameExists reports whether relPath's folder holds an entry of
+// relPath's stored form (namekey.FindStored). Two such entries, a local
+// name collision, are an entry there too.
 func (e *executor) exactLocalNameExists(relPath string) bool {
 	entries, err := e.syncTree.ReadDir(filepath.Dir(relPath))
 	if err != nil {
 		// Unknown: keep the conservative answer that the path is occupied.
 		return true
 	}
-	want := nfcNormalize(filepath.Base(relPath))
-	for _, entry := range entries {
-		if nfcNormalize(entry.Name()) == want {
-			return true
-		}
-	}
-	return false
+	match := namekey.FindStored(entries, namekey.Stored(filepath.Base(relPath)),
+		func(entry *fs.DirEntry) string { return (*entry).Name() })
+
+	return match.Found() || match.Ambiguous
 }
 
 // remoteFolderDeleteListLimit bounds the live listing a folder delete makes

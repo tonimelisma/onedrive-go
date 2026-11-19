@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -306,7 +307,7 @@ func (w *releaseSurveyWalk) dir(stored, onDisk string) error {
 }
 
 func (w *releaseSurveyWalk) entry(stored, onDisk, name string) error {
-	storedPath := slashpath.Join(stored, nfcNormalize(name))
+	storedPath := slashpath.Join(stored, namekey.Stored(name))
 	diskPath := filepath.Join(onDisk, name)
 	info, err := w.engine.syncTree.Lstat(diskPath)
 	if err != nil {
@@ -699,7 +700,7 @@ func (e *Engine) emptyReleasedRoot(bl *Baseline) (releaseSurvey, error) {
 			junk = append(junk, entry)
 			continue
 		}
-		survey.notOnOneDrive = append(survey.notOnOneDrive, nfcNormalize(name))
+		survey.notOnOneDrive = append(survey.notOnOneDrive, namekey.Stored(name))
 	}
 	err = exec.removeDisposableChildren("", junk)
 	// Every drain of a folder whose junk stays fails the same way: one Warn
@@ -713,7 +714,7 @@ func (e *Engine) emptyReleasedRoot(bl *Baseline) (releaseSurvey, error) {
 	}, err)
 	if err != nil {
 		for _, entry := range junk {
-			survey.notOnOneDrive = append(survey.notOnOneDrive, nfcNormalize(entry.Name()))
+			survey.notOnOneDrive = append(survey.notOnOneDrive, namekey.Stored(entry.Name()))
 		}
 	}
 

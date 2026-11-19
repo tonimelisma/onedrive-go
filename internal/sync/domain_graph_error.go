@@ -141,9 +141,10 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 		return serverAnswerUnsupported
 	case status == http.StatusBadRequest &&
 		(strings.Contains(message, graphMessageNameTooLong) || strings.Contains(message, graphMessagePathLimit)):
-		// OneDrive counts more than the drive-relative path toward its 400
-		// limit (a 364-character path was accepted and 365 refused), so the
-		// scanner cannot catch every case, and a bare 400 would retry forever.
+		// OneDrive accepted a path below the drive root of 364 UTF-16 units
+		// and refused one of 365 (L-36; why below its stated 400 is not
+		// known), so the scanner's 400 cannot catch every case, and a bare
+		// 400 would retry forever.
 		return serverAnswerPathTooLong
 	case status == http.StatusConflict && hasGraphErr && graphErr.HasCode(graphCodeResourceModified):
 		return serverAnswerTransientConflict

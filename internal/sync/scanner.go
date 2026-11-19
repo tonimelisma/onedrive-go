@@ -58,13 +58,13 @@ type scanResult struct {
 
 // Constants for the local scanner.
 const (
-	maxComponentLength     = 255
 	deviceNameWithDigitLen = 4 // COM0-COM9, LPT0-LPT9 have exactly 4 characters
 
-	// maxOneDrivePathLength is the maximum total path length OneDrive allows,
-	// in characters as oneDrivePathLength counts them. The server is still the
-	// authority: it counts more than the drive-relative path, and its refusal
-	// maps to path_too_long (R-2.11.7).
+	// maxOneDrivePathLength is the maximum total path length OneDrive states,
+	// in characters as oneDrivePathLength counts them. It is the only length
+	// limit on a name: OneDrive has none for a single name (R-2.11.12). The
+	// server is still the authority: it refused a path of 365 units below the
+	// drive root (L-36), and its refusal maps to path_too_long (R-2.11.7).
 	maxOneDrivePathLength = 400
 	// maxOneDriveFileSize is the maximum file size OneDrive allows (250 GB).
 	maxOneDriveFileSize = driveops.MaxOneDriveFileSize
@@ -413,7 +413,7 @@ func (o *localObserver) makeWalkFunc(
 			// read boundary: an I/O error must not make content look deleted
 			// any more than a permission error does.
 			if relPath, err := tree.Rel(fsPath); err == nil {
-				recordUnreadableObservedBoundary(skipped, nfcNormalize(filepath.ToSlash(relPath)), walkErr, unreadableDirectoryDetail)
+				recordUnreadableObservedBoundary(skipped, storedPathOf(relPath), walkErr, unreadableDirectoryDetail)
 			}
 			skippedEntries.Add(1)
 			return skipEntry(d)
@@ -434,8 +434,8 @@ func (o *localObserver) makeWalkFunc(
 		}
 
 		// Normalize: forward slashes for cross-platform consistency + NFC Unicode.
-		dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
-		name := nfcNormalize(d.Name())
+		dbRelPath := storedPathOf(relPath)
+		name := namekey.Stored(d.Name())
 
 		if d.Type()&fs.ModeSymlink != 0 {
 			if !newContentFilter(o.filterConfig).ShouldFollowSymlinks() {
@@ -836,7 +836,7 @@ func detectCaseCollisions(
 	// Unicode form and ignored emoji all make two local names one remote one.
 	groups := make(map[caseGroupKey][]int, len(events))
 	for i := range events {
-		key := caseGroupKey{dir: filepath.Dir(events[i].Path), nameKey: namekey.Key(filepath.Base(events[i].Path))}
+		key := caseGroupKey{dir: filepath.Dir(events[i].Path), nameKey: namekey.Of(filepath.Base(events[i].Path))}
 		groups[key] = append(groups[key], i)
 	}
 
@@ -878,7 +878,7 @@ func detectCaseCollisions(
 // caseGroupKey groups events by (directory, namespace key) for collision detection.
 type caseGroupKey struct {
 	dir     string
-	nameKey string
+	nameKey namekey.Key
 }
 
 // crossCheckBaseline flags single-event groups that collide with already-synced
@@ -1320,8 +1320,9 @@ func dirEntryKind(d fs.DirEntry) observedKind {
 // backslash in it.
 //
 // Checks (ordered by specificity): empty name, trailing dot/space, leading
-// space, component length > 255, reserved device names, reserved patterns,
-// invalid characters.
+// space, reserved device names, reserved patterns, invalid characters. A
+// name is never refused for its length: OneDrive limits the path, which
+// counts the name (oneDrivePathLength, R-2.11.12).
 func validateOneDriveName(name string) (reason IssueType, detail string) {
 	return validateOneDriveNameFor(name, false)
 }
@@ -1354,10 +1355,6 @@ func validateOneDriveNameFor(name string, personal bool) (reason IssueType, deta
 
 	if name[0] == ' ' {
 		return IssueInvalidFilename, "the name starts with a space"
-	}
-
-	if len(name) > maxComponentLength {
-		return IssueInvalidFilename, fmt.Sprintf("the name is longer than %d characters", maxComponentLength)
 	}
 
 	lower := strings.ToLower(name)

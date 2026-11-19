@@ -758,22 +758,64 @@ func (e *executor) resolveCreateConflict(
 		return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: listing its folder: %w",
 			action.Path, listErr)
 	}
-	for i := range children {
-		child := &children[i]
-		if child.ID == "" || !namekey.Equal(child.Name, name) {
-			continue
-		}
-		if nfcNormalize(child.Name) != nfcNormalize(name) {
-			return nil, false, &remoteNameTakenError{localName: name, remoteName: child.Name, err: conflictErr}
-		}
+	child, found := classifyCreateConflict(children, name)
+	switch found {
+	case createConflictRival:
+		return nil, false, &remoteNameTakenError{localName: name, remoteName: child.Name, err: conflictErr}
+	case createConflictWanted:
 		if priorIntent && isEmptyLiveFile(child) {
 			return e.claimLostCreate(ctx, action, driveID, parentID, source, localPath, child, conflictErr)
 		}
 
 		return nil, false, conflictErr
+	case createConflictNothing:
 	}
 
 	return nil, priorIntent, conflictErr
+}
+
+// createConflictFound is what a refused create's folder holds under the
+// create's name (classifyCreateConflict).
+type createConflictFound uint8
+
+const (
+	// createConflictNothing: no child this client can name holds it.
+	createConflictNothing createConflictFound = iota
+	// createConflictWanted: the item the create wanted, of the same OneDrive
+	// name and the same stored form (namekey.Identical or SameStored).
+	createConflictWanted
+	// createConflictRival: a child of the same OneDrive name in another
+	// stored form (namekey.SameName), such as STRASSE.txt for stra\u00dfe.txt.
+	createConflictRival
+)
+
+// classifyCreateConflict reads the listing of the folder a create was refused
+// in (409: the name is taken) and says what holds the name, by namekey.Find:
+// the item the create wanted, a rival, or nothing it can name. A child
+// without an item ID is no candidate, and a child the listing repeats counts
+// once. A sibling that only shares the stored form is another name for
+// OneDrive (namekey.Twin) and is never the wanted item. Two rivals are still
+// a rival, and the child returned is the first listed: the choice only names
+// one in the message. Two children of the wanted tier, which OneDrive never
+// lists, are nothing: neither is adopted or claimed.
+func classifyCreateConflict(children []graph.Item, name string) (*graph.Item, createConflictFound) {
+	children = graph.WithoutRepeats(children)
+	candidate := func(child *graph.Item) (string, bool) { return child.Name, child.ID != "" }
+	match := namekey.Find(children, name, candidate)
+	switch {
+	case match.Found() && match.Relation == namekey.SameName:
+		return &children[match.Index], createConflictRival
+	case match.Found():
+		return &children[match.Index], createConflictWanted
+	case match.Ambiguous && match.Relation == namekey.SameName:
+		for i := range children {
+			if children[i].ID != "" && namekey.Relate(children[i].Name, name) == namekey.SameName {
+				return &children[i], createConflictRival
+			}
+		}
+	}
+
+	return nil, createConflictNothing
 }
 
 // finishIntoPlaceholder uploads action's content into the empty item itemID,
@@ -848,7 +890,7 @@ func (e *executor) claimLostCreate(
 // create in the drive root is placed by remoteItemIsAt, and only a location
 // it knows to be elsewhere refuses it.
 func (e *executor) placeholderIsAtCreate(item *graph.Item, relPath, parentID string) bool {
-	if nfcNormalize(item.Name) != nfcNormalize(slashpath.Base(relPath)) {
+	if namekey.Stored(item.Name) != namekey.Stored(slashpath.Base(relPath)) {
 		return false
 	}
 	if parentID != "" && parentID != graphRootID {

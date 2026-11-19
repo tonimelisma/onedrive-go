@@ -141,8 +141,15 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   behind it. The listing is read a page at a time and stops at the page that
   holds the name as spelled; a page holding only another spelling OneDrive
   treats as the same does not stop it, as a later page could hold the exact
-  one, which is then the item (`nameOnPage`,
-  `TestFindExistingChild_TheListingPrefersTheNameAsSpelled`). Any other failed
+  one, which is then the item (`graph.NameSeek`,
+  `TestFindExistingChild_TheListingPrefersTheNameAsSpelled`). Failing that
+  spelling, the item is the one child of a name OneDrive treats as the same:
+  two such children are not found and none is taken, and a child the pages
+  repeat counts once (`namekey.Find`, R-2.12.3,
+  `TestFindExistingChild_TwoFoldedCandidatesIsNotFound`,
+  `TestLookupUploadTarget_PrefersExactSpelling`); `put` then answers the 409
+  instead of overwriting one of them
+  (`TestPutFile_PrefersExactSpellingOverCaseVariant`). Any other failed
   read is the error. If the listing finds nothing either, the 409 stands for
   a file; a folder reports that it was not found in its parent. An item of
   the name that carries no ID, read or listed, is an error
@@ -453,8 +460,8 @@ upload as a stale plan, and the upload was looked up a second time
 `TestSessionUpload_FailedLookupAfterAnUncertainResumeIsAnUnknownOutcome`).
 A failure after a create made its item still names that item. A fragment 404, final
 or not, on a fresh or resumed upload is an invalidation unless the item is
-adopted. Names are matched case-insensitively after NFC normalization until
-the WS2 namespace key replaces it; the encapsulated small-file session gets
+adopted. The item is found by name as every lookup among siblings finds it
+(`lookupUploadTarget`, `namekey.Find`, R-2.12.3); the encapsulated small-file session gets
 the same adoption through `settleUploadedItem`. A session gone before its
 expiry while the item holds other bytes, or a fragment answered 404, is
 `ErrUploadSessionInvalidated`: another writer changed the item (live probe

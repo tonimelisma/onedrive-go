@@ -73,7 +73,7 @@ type dependencyIndex struct {
 	// movesByOldNameKey lists the moves by the name key of their source: a
 	// move into a folder below the path another move vacates finds that move
 	// under OneDrive's name folding (movesIntoVacatedPath).
-	movesByOldNameKey map[string][]int
+	movesByOldNameKey map[namekey.PathKey][]int
 	actionsByPath     map[string][]int
 
 	// childDeletes lists, per folder delete, the deletes below its path.
@@ -87,7 +87,7 @@ type dependencyIndex struct {
 	// vacatedByNameKey lists remote deletes by the name key of their path and
 	// remote moves by the name key of their source: the actions that free a
 	// OneDrive name (addRemoteCaseVariantDeps).
-	vacatedByNameKey map[string][]int
+	vacatedByNameKey map[namekey.PathKey][]int
 	// contentCarriers lists the uploads and downloads by the content they
 	// write, and contentDeletes the deletes of a synced file, the two ends
 	// of addContentCarrierDeps.
@@ -102,12 +102,12 @@ func newDependencyIndex(actions []Action) *dependencyIndex {
 		deleteIdx:              make(map[string]int),
 		movesByPath:            make(map[string][]int),
 		movesByOldPath:         make(map[string][]int),
-		movesByOldNameKey:      make(map[string][]int),
+		movesByOldNameKey:      make(map[namekey.PathKey][]int),
 		actionsByPath:          make(map[string][]int),
 		childDeletes:           make(map[int][]int),
 		movesBelowFolderDelete: make(map[int][]int),
 		workBelowMoveSource:    make(map[int][]int),
-		vacatedByNameKey:       make(map[string][]int),
+		vacatedByNameKey:       make(map[namekey.PathKey][]int),
 		contentCarriers:        make(map[contentKey][]int),
 	}
 	folderDeletesByPath := make(map[string][]int)
@@ -130,7 +130,7 @@ func (index *dependencyIndex) indexByPath(i int, a *Action, folderDeletesByPath 
 	case ActionLocalMove, ActionRemoteMove:
 		index.movesByPath[a.Path] = append(index.movesByPath[a.Path], i)
 		index.movesByOldPath[a.OldPath] = append(index.movesByOldPath[a.OldPath], i)
-		oldKey := pathNameKey(a.OldPath)
+		oldKey := namekey.OfPath(a.OldPath)
 		index.movesByOldNameKey[oldKey] = append(index.movesByOldNameKey[oldKey], i)
 	case ActionLocalDelete, ActionRemoteDelete, ActionCleanup:
 		index.deleteIdx[a.Path] = i
@@ -193,10 +193,10 @@ func (index *dependencyIndex) indexVacatedNames(actions []Action) {
 		a := &actions[i]
 		switch a.Type {
 		case ActionRemoteDelete:
-			key := pathNameKey(a.Path)
+			key := namekey.OfPath(a.Path)
 			index.vacatedByNameKey[key] = append(index.vacatedByNameKey[key], i)
 		case ActionRemoteMove:
-			key := pathNameKey(a.OldPath)
+			key := namekey.OfPath(a.OldPath)
 			index.vacatedByNameKey[key] = append(index.vacatedByNameKey[key], i)
 		case ActionDownload, ActionUpload, ActionLocalDelete, ActionLocalMove,
 			ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
@@ -209,27 +209,14 @@ func (index *dependencyIndex) indexVacatedNames(actions []Action) {
 // pathAncestors yields every prefix p of path such that path lies below p,
 // that is path has the prefix p + "/": the folders above the path, nearest
 // last. It is the exact inverse of strings.HasPrefix(path, p+"/").
-func pathAncestors(path string) iter.Seq[string] {
-	return func(yield func(string) bool) {
+func pathAncestors[P ~string](path P) iter.Seq[P] {
+	return func(yield func(P) bool) {
 		for i := range len(path) {
 			if path[i] == '/' && !yield(path[:i]) {
 				return
 			}
 		}
 	}
-}
-
-// pathNameKey is the key under which OneDrive's namespace holds a path: the
-// name key of each segment (namekey.Key). Two paths that namekey.EqualPath
-// reports equal have the same key, so a lookup by key finds every candidate
-// and the rule then applies EqualPath itself.
-func pathNameKey(path string) string {
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		segments[i] = namekey.Key(segment)
-	}
-
-	return strings.Join(segments, "/")
 }
 
 // isSubtreeDelete reports a local or remote delete of a folder: the deletes
@@ -364,7 +351,7 @@ func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action, 
 		return deps
 	}
 
-	for _, otherIdx := range index.vacatedByNameKey[pathNameKey(a.Path)] {
+	for _, otherIdx := range index.vacatedByNameKey[namekey.OfPath(a.Path)] {
 		if otherIdx != idx && vacatesCaseVariantOf(&actions[otherIdx], a) {
 			deps = append(deps, otherIdx)
 		}
@@ -665,7 +652,7 @@ func moveDepCandidates(idx int, a *Action, index *dependencyIndex) []int {
 	}
 	// A name key's segments are its path's, so the keys above it are the
 	// keys of the folders above the path.
-	for parentKey := range pathAncestors(pathNameKey(a.Path)) {
+	for parentKey := range pathAncestors(namekey.OfPath(a.Path)) {
 		candidates = append(candidates, index.movesByOldNameKey[parentKey]...)
 	}
 	candidates = append(candidates, index.workBelowMoveSource[idx]...)
@@ -737,15 +724,21 @@ func movePrecedes(move, a *Action) bool {
 // Unordered, a would land, run first, in the item move carries away, and find
 // no folder, run second. A move from below the path is work that leaves first
 // (underMoveSource). Both paths are compared as OneDrive compares names
-// (pathNameKey): a new folder X takes the path x leaves there and on a volume
+// (namekey.OfPath): a new folder X takes the path x leaves there and on a volume
 // that folds case.
 func movesIntoVacatedPath(a, move *Action) bool {
 	if move.OldPath == "" {
 		return false
 	}
-	vacated := pathNameKey(move.OldPath) + "/"
+	vacated := namekey.OfPath(move.OldPath)
 
-	return strings.HasPrefix(pathNameKey(a.Path), vacated) && !strings.HasPrefix(pathNameKey(a.OldPath), vacated)
+	return belowPathKey(namekey.OfPath(a.Path), vacated) && !belowPathKey(namekey.OfPath(a.OldPath), vacated)
+}
+
+// belowPathKey reports whether the path of k lies below the path of root,
+// not at it.
+func belowPathKey(k, root namekey.PathKey) bool {
+	return k != root && k.HasPrefix(root)
 }
 
 // underMoveDestination reports whether a works at or below move's

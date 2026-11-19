@@ -74,11 +74,11 @@ func (o *localObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name str
 	}
 
 	match := ""
-	for _, existing := range cache[namekey.Key(name)] {
+	for _, existing := range cache[namekey.Of(name)] {
 		if existing == name {
 			return name
 		}
-		if nfcNormalize(existing) == name {
+		if namekey.Stored(existing) == name {
 			if match != "" {
 				return name
 			}
@@ -101,7 +101,7 @@ func (o *localObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name str
 // Single-goroutine (watchLoop) access — no mutex needed.
 func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name, dbDir string) (string, bool) {
 	if o.DirNameCache == nil {
-		o.DirNameCache = make(map[string]map[string][]string)
+		o.DirNameCache = make(map[string]map[namekey.Key][]string)
 	}
 
 	cache, ok := o.DirNameCache[dirPath]
@@ -111,10 +111,10 @@ func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, nam
 			return "", false
 		}
 
-		cache = make(map[string][]string, len(entries))
+		cache = make(map[namekey.Key][]string, len(entries))
 
 		for _, e := range entries {
-			key := namekey.Key(e.Name())
+			key := namekey.Of(e.Name())
 			cache[key] = append(cache[key], e.Name())
 		}
 
@@ -126,8 +126,8 @@ func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, nam
 	// collision, and so is a second on-disk spelling of name itself (an NFC
 	// and an NFD twin, one name on OneDrive).
 	sameSpellings := 0
-	for _, existing := range cache[namekey.Key(name)] {
-		if nfcNormalize(existing) != name {
+	for _, existing := range cache[namekey.Of(name)] {
+		if namekey.Stored(existing) != name {
 			return existing, true
 		}
 		sameSpellings++
@@ -185,8 +185,8 @@ func (o *localObserver) updateDirNameCache(dirPath, name string) {
 		return // not cached yet — will be populated lazily on next check
 	}
 
-	key := namekey.Key(name)
-	if slices.ContainsFunc(cache[key], func(existing string) bool { return nfcNormalize(existing) == nfcNormalize(name) }) {
+	key := namekey.Of(name)
+	if slices.ContainsFunc(cache[key], func(existing string) bool { return namekey.Stored(existing) == namekey.Stored(name) }) {
 		return // already present, possibly in its on-disk spelling
 	}
 
@@ -201,11 +201,11 @@ func (o *localObserver) removeDirNameCache(dirPath, name string) {
 		return
 	}
 
-	key := namekey.Key(name)
+	key := namekey.Of(name)
 	names := cache[key]
 
 	for i, n := range names {
-		if nfcNormalize(n) == nfcNormalize(name) {
+		if namekey.Stored(n) == namekey.Stored(name) {
 			cache[key] = append(names[:i], names[i+1:]...)
 
 			if len(cache[key]) == 0 {
@@ -222,13 +222,13 @@ func (o *localObserver) removeDirNameCache(dirPath, name string) {
 // to avoid a redundant filesystem read in HasCaseCollisionCached.
 func (o *localObserver) populateDirNameCache(dirPath string, entries []os.DirEntry) {
 	if o.DirNameCache == nil {
-		o.DirNameCache = make(map[string]map[string][]string)
+		o.DirNameCache = make(map[string]map[namekey.Key][]string)
 	}
 
-	cache := make(map[string][]string, len(entries))
+	cache := make(map[namekey.Key][]string, len(entries))
 
 	for _, e := range entries {
-		key := namekey.Key(e.Name())
+		key := namekey.Of(e.Name())
 		cache[key] = append(cache[key], e.Name())
 	}
 

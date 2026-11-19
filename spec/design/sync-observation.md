@@ -276,7 +276,7 @@ results do not create these read-denied findings.
 
 It owns:
 
-- NFC normalization
+- the stored (NFC) form of each name (`namekey.Stored`, R-2.13.1)
 - drive/item identity handling
 - best-effort item-by-ID enrich for sparse delta items missing `ParentID`
   or known shortcut target fields

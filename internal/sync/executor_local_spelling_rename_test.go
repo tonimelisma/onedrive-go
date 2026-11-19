@@ -143,3 +143,61 @@ func TestExecutor_RenameLocal_SpellingRenameThatLeavesItsTemporaryNameIsDone(t *
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0].Message, "could not remove a name it was renamed from")
 }
+
+// Validates: R-2.12.3, R-2.12.4
+//
+// The spelling a folder holds for a name is the entry spelled so, else the
+// only entry OneDrive treats as that name; two such entries and none spelled
+// so are an error naming the folder, and neither is renamed onto the name.
+func TestExecutor_StoredNameSpelling_TwoKeyEqualEntriesAreAnError(t *testing.T) {
+	t.Parallel()
+	skipUnlessNamesCoexist(t, "Docs.txt", "DOCS.txt")
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+	writeExecTestFile(t, syncRoot, "Docs.txt", "first")
+
+	stored, err := e.storedNameSpelling("docs.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "Docs.txt", stored, "the one entry of the name")
+
+	writeExecTestFile(t, syncRoot, "DOCS.txt", "second")
+	_, err = e.storedNameSpelling("docs.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "holds more than one entry OneDrive treats as that name")
+	require.NotErrorIs(t, err, errActionPreconditionChanged, "a collision the user sees, not a replan")
+
+	require.Error(t, e.respellLocal("docs.txt"))
+	requireExecFileContent(t, syncRoot, "Docs.txt", "first")
+	requireExecFileContent(t, syncRoot, "DOCS.txt", "second")
+	assert.ElementsMatch(t, []string{"Docs.txt", "DOCS.txt"}, localNames(t, syncRoot))
+
+	writeExecTestFile(t, syncRoot, "docs.txt", "exact")
+	stored, err = e.storedNameSpelling("docs.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "docs.txt", stored, "the entry spelled so wins over the others")
+}
+
+// Validates: R-2.13.2
+//
+// A folder holding two entries of a path's stored form (its NFC and NFD
+// spellings, which a byte-exact filesystem keeps apart) holds the name: the
+// answer stays "exists", and one entry alone is found by either spelling.
+func TestExecutor_ExactLocalNameExists_TwoEntriesOfOneStoredForm(t *testing.T) {
+	t.Parallel()
+	const (
+		nfc = "caf\u00e9.txt"  // LATIN SMALL LETTER E WITH ACUTE
+		nfd = "cafe\u0301.txt" // e and COMBINING ACUTE ACCENT
+	)
+	skipUnlessNamesCoexist(t, nfc, nfd)
+
+	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
+	e := newExecution(cfg, emptyBaseline())
+
+	assert.False(t, e.exactLocalNameExists(nfc), "no entry")
+	writeExecTestFile(t, syncRoot, nfd, "decomposed")
+	assert.True(t, e.exactLocalNameExists(nfc), "the NFD entry holds the NFC path")
+	assert.False(t, e.exactLocalNameExists("CAF\u00c9.txt"), "another stored form is another name here")
+	writeExecTestFile(t, syncRoot, nfc, "composed")
+	assert.True(t, e.exactLocalNameExists(nfc), "two entries of the stored form")
+}

@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/loglevel"
@@ -963,12 +961,6 @@ func classifyItemType(item *graph.Item) ItemType {
 	default:
 		return ItemTypeFile
 	}
-}
-
-// nfcNormalize applies Unicode NFC normalization to a string. Applied to
-// each name segment individually, not to joined paths.
-func nfcNormalize(s string) string {
-	return norm.NFC.String(s)
 }
 
 // deltaPageRetryAfterLimit bounds the Retry-After a page fetch waits out in

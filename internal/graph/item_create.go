@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -154,11 +153,16 @@ func createOutcomeUnknown(err error) bool {
 // content, which fails an empty file as a bad upload and loses the mark.
 func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	item, err := c.GetChildByName(ctx, driveID, parentID, name)
+	ambiguous := false
 	if err != nil && readCannotSettleName(err) {
-		item, err = c.listedChildNamed(ctx, driveID, parentID, name)
+		item, ambiguous, err = c.listedChildNamed(ctx, driveID, parentID, name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("graph: reading back created file %q: %w: %w", name, ErrCreateOutcomeUnknown, err)
+	}
+	if ambiguous {
+		return nil, fmt.Errorf("graph: reading back created file %q: its folder holds more than one item of that name: %w",
+			name, ErrCreateOutcomeUnknown)
 	}
 	if item == nil || item.IsFolder || item.ID == "" {
 		return nil, fmt.Errorf("graph: created file %q is not in its folder: %w", name, ErrCreateOutcomeUnknown)
@@ -175,31 +179,19 @@ func readCannotSettleName(err error) bool {
 	return errors.Is(err, ErrNotFound) || errors.Is(err, ErrNameNotPathAddressable) || errors.Is(err, ErrBadRequest)
 }
 
-// listedChildNamed is the child of the folder parentID named name, read a
-// page at a time and no further than the page that holds it as spelled, or
-// nil when no page holds it. Failing that spelling, it is the first child of
-// a name OneDrive treats as the same (namekey.Equal): the listing then reads
-// every page, as a later one could hold the exact spelling.
-func (c *Client) listedChildNamed(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
-	var found *Item
-	err := c.ListChildrenPages(ctx, driveID, parentID, func(page []Item) bool {
-		for i := range page {
-			switch {
-			case page[i].Name == name:
-				found = &page[i]
-				return false
-			case found == nil && namekey.Equal(page[i].Name, name):
-				found = &page[i]
-			}
-		}
-
-		return true
-	})
-	if err != nil {
-		return nil, err
+// listedChildNamed is the child of the folder parentID that holds name, read
+// a page at a time and no further than the page that holds it as spelled
+// (NameSeek), or nil when no page holds it. ambiguous reports that more than
+// one child holds a name OneDrive treats as the same and none is spelled as
+// asked: none of them is taken for the created file.
+func (c *Client) listedChildNamed(ctx context.Context, driveID driveid.ID, parentID, name string) (item *Item, ambiguous bool, err error) {
+	seek := NewNameSeek(name)
+	if err := c.ListChildrenPages(ctx, driveID, parentID, seek.Visit); err != nil {
+		return nil, false, err
 	}
+	found, match := seek.Match()
 
-	return found, nil
+	return found, match.Ambiguous, nil
 }
 
 // CreatedFunc is called after a new file's empty item exists and before any

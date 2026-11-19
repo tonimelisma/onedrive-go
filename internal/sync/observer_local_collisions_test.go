@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // isCaseSensitiveFS returns true if the filesystem at dir distinguishes
@@ -579,7 +580,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		DirNameCache:   make(map[string]map[string][]string),
+		DirNameCache:   make(map[string]map[namekey.Key][]string),
 		TickCh:         safetyTickCh,
 		AfterSafetyScan: func() {
 			select {
@@ -592,7 +593,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 
 	// Pre-populate collision peers and dir name cache.
 	obs.AddCollisionPeer("a.txt", "A.txt")
-	obs.DirNameCache[dir] = map[string][]string{
+	obs.DirNameCache[dir] = map[namekey.Key][]string{
 		"a.txt": {"a.txt", "A.txt"},
 	}
 
