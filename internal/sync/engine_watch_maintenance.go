@@ -102,9 +102,10 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 		return fmt.Errorf("sync: reading observation state for remote refresh timer: %w", err)
 	}
 
+	refreshCh, now := rt.resources.refreshCh, rt.deps.now
 	rt.resetRefreshTimer(rt.deps.clock.AfterFunc(delay, func() {
 		select {
-		case rt.resources.refreshCh <- rt.deps.now():
+		case refreshCh <- now():
 		default:
 		}
 	}))
@@ -129,12 +130,12 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Basel
 	rt.resources.refreshActive = true
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshStarted})
 
-	go func() {
+	rt.resources.goroutines.start(ctx, watchGoroutineFullRefresh, func(ctx context.Context) {
 		defer rt.recoverFullRemoteRefreshPanic(ctx)
 
 		result := rt.performFullRemoteRefresh(ctx, bl)
 		rt.finishFullRemoteRefresh(ctx, &result)
-	}()
+	})
 }
 
 // recoverFullRemoteRefreshPanic is the panic boundary of the refresh

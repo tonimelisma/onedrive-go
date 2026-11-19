@@ -118,16 +118,15 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	work RetryWorkKey,
 	resolutionSource string,
 ) error {
-	row, found, err := flow.deps.store.ResolveRetryWork(ctx, work)
+	row, found, err := flow.retryWork.resolve(ctx, flow.deps.store, work)
 	if err != nil {
-		return fmt.Errorf("resolve retry work %s: %w", work.Path, err)
+		return err
 	}
+	// The work succeeded: whatever the store had, nothing holds it any more.
+	flow.retries.releaseHeldAction(work)
 	if !found || row == nil {
 		return nil
 	}
-
-	delete(flow.retries.rowsByKey, work)
-	flow.retries.releaseHeldAction(work)
 
 	flow.deps.logger.Debug("retry_work resolved",
 		slog.String("path", row.Path),

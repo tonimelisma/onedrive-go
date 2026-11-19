@@ -96,11 +96,9 @@ func (o *Orchestrator) startWatchRunner(
 		return nil, engineErr
 	}
 
+	// The engine puts mountCollector, which rolls up to the owner aggregate
+	// and the command collector, on its own run context.
 	mountCtx, mountCancel := context.WithCancel(ctx)
-	// HTTP requests and retries, store transactions and transfers are recorded
-	// on the collector the context carries. The mount's collector rolls up to
-	// the owner aggregate and the command collector, so nothing is lost there.
-	mountCtx = perf.WithCollector(mountCtx, mountCollector)
 	done := make(chan struct{})
 
 	wr := &watchRunner{

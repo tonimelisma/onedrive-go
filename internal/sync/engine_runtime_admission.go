@@ -107,7 +107,7 @@ func (flow *engineFlow) decideAdmission(
 		}
 
 		decision := flow.newAdmissionDecision(ta)
-		flow.retries.applyPersistedRetryAdmission(now, ta, &decision)
+		flow.retries.applyPersistedRetryAdmission(now, ta, &decision, &flow.retryWork)
 		flow.applyActiveScopeAdmission(ta, &decision)
 		decisions = append(decisions, decision)
 	}
@@ -194,14 +194,7 @@ func (flow *engineFlow) applyAdmissionScopeClear(
 		return nil
 	}
 
-	if err := flow.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey); err != nil {
-		return err
-	}
-	if row, ok := flow.retries.rowsByKey[decision.RetryWorkKey]; ok && row.Blocked && row.ScopeKey == decision.ClearScopeKey {
-		delete(flow.retries.rowsByKey, decision.RetryWorkKey)
-	}
-
-	return nil
+	return flow.clearBlockedRetryWorkForScope(ctx, decision.RetryWorkKey, decision.ClearScopeKey)
 }
 
 func (flow *engineFlow) persistHeldScopeDecision(
@@ -213,7 +206,7 @@ func (flow *engineFlow) persistHeldScopeDecision(
 		return nil
 	}
 
-	row, ok := flow.retries.rowsByKey[decision.RetryWorkKey]
+	row, ok := flow.retryWork.row(decision.RetryWorkKey)
 	if ok && row.Blocked && row.ScopeKey == decision.ScopeKey {
 		return nil
 	}

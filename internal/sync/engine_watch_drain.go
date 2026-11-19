@@ -89,6 +89,15 @@ func (rt *watchRuntime) takeDrainStep(
 		return true, nil
 	}
 
+	// Once every completion is in, the drain waits only for the observers'
+	// exits and a refresh's result. That wait is bounded like the stop's:
+	// when the bound passes, the drain ends and the stop names what is still
+	// running (watchGoroutines.stop).
+	var goroutinesDue <-chan struct{}
+	if p.completions == nil {
+		goroutinesDue = rt.resources.goroutines.deadline(rt.deps.clock)
+	}
+
 	select {
 	case completion, ok := <-p.completions:
 		return rt.handleDrainingCompletion(ctx, p, &completion, ok)
@@ -96,6 +105,8 @@ func (rt *watchRuntime) takeDrainStep(
 		return rt.handleDrainingRefreshResult(ctx, p, ok)
 	case obsErr, ok := <-rt.resources.observerErrs:
 		return rt.handleDrainingObserverError(ctx, p, obsErr, ok)
+	case <-goroutinesDue:
+		return true, nil
 	}
 }
 

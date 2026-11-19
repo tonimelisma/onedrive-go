@@ -452,7 +452,7 @@ func TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope(t *testing.T)
 	movedKey := testRetryWorkKey("moved.txt", "", ActionDownload)
 	moved, err := eng.baseline.RecordBlockedRetryWork(t.Context(), movedKey, SKService())
 	require.NoError(t, err)
-	flow.retries.rowsByKey[movedKey] = *moved
+	flow.retryWork.rows[movedKey] = *moved
 	_, err = eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("other.txt", "", ActionDownload), testThrottleScope())
 	require.NoError(t, err)
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
@@ -602,7 +602,7 @@ func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t 
 			held := rt.sched.graph.Add(&Action{Type: ActionUpload, Path: "retry.txt", DriveID: eng.driveID}, 1, nil)
 			require.NotNil(t, held)
 			work := retryWorkKeyForAction(&held.Action)
-			flow.retries.rowsByKey[work] = RetryWorkRow{
+			flow.retryWork.rows[work] = RetryWorkRow{
 				Path:         work.Path,
 				ActionType:   work.ActionType,
 				AttemptCount: 1,
@@ -631,15 +631,16 @@ func TestRetryLedger_ADelayedRowTimedBefore1970IsHeldUntilItsTime(t *testing.T) 
 	ledger := newRetryLedger()
 	held := &trackedAction{Action: Action{Type: ActionUpload, Path: "moon.txt"}}
 	work := retryWorkKeyForAction(&held.Action)
-	ledger.rowsByKey[work] = RetryWorkRow{
+	var rows retryWork
+	rows.install([]RetryWorkRow{{
 		Path:         work.Path,
 		ActionType:   work.ActionType,
 		AttemptCount: 1,
 		NextRetryAt:  storedTimeNano(due),
-	}
+	}})
 	decision := admissionDecision{Action: held, RetryWorkKey: work}
 
-	ledger.applyPersistedRetryAdmission(now, held, &decision)
+	ledger.applyPersistedRetryAdmission(now, held, &decision, &rows)
 
 	assert.Equal(t, admissionHoldRetry, decision.Kind, "held as delayed work, not dispatched at once")
 	assert.True(t, decision.NextRetryAt.Equal(due))

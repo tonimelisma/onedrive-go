@@ -1,10 +1,8 @@
 package sync
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
@@ -68,10 +66,15 @@ type watchFollowUpState struct {
 	streak int
 }
 
+// watchTimerState has no lock: only the watch loop's goroutine arms, stops
+// and reads the timers. Timer callbacks run on goroutines of their own and
+// touch nothing but the channel they were handed when the timer was armed
+// (and the debug event sink, which has its own lock).
 type watchTimerState struct {
-	// timerMu guards trialTimer and retryTimer pointers. Timer callbacks only
-	// signal channels; they never mutate loop-owned state directly.
-	timerMu sync.RWMutex
+	// ownerCheck, when set, runs at the top of every timer accessor; nil in
+	// production. Tests install a check that fails when a timer is armed or
+	// read from a goroutine other than the loop's (installOwnerCheck).
+	ownerCheck func()
 
 	// Trial and retry timers are armed by the watch loop. The channels stay
 	// persistent so timer callbacks only signal the loop; they never mutate
@@ -120,10 +123,10 @@ type watchResources struct {
 	remoteObs *remoteObserver
 	localObs  *localObserver
 
-	// Socket.IO wake source lifecycle, when enabled for full-drive watch: the
-	// cancel of its context, and a channel its goroutine closes on return.
-	socketIOWakeCancel context.CancelFunc
-	socketIOWakeDone   chan struct{}
+	// goroutines owns the observers, the full remote refresh and the
+	// socket.io wake source: the pipeline's cleanup cancels them and waits
+	// for them before the watch returns.
+	goroutines watchGoroutines
 
 	// Full remote refresh is started by the watch loop and hands one loop-applied
 	// remote observation batch back over refreshResults. These channels stay
@@ -166,6 +169,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			lastRemoteBlocked: make(map[ScopeKey]string),
 		},
 		timers: watchTimerState{
+			ownerCheck:   engine.runOwnerCheck,
 			trialCh:      make(chan struct{}, 1),
 			retryTimerCh: make(chan struct{}, 1),
 			admitCh:      make(chan struct{}, 1),
@@ -433,9 +437,27 @@ func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {
 	return earliest, found
 }
 
+// checkOwner runs the timers' owner check, if a test installed one.
+func (t *watchTimerState) checkOwner() {
+	if t.ownerCheck != nil {
+		t.ownerCheck()
+	}
+}
+
+// signalTimerChannel is what a timer callback does: a non-blocking send on
+// the buffered(1) channel it was handed. A signal already pending absorbs
+// this one; the loop handles everything due when it takes the signal.
+func signalTimerChannel(ch chan<- struct{}) bool {
+	select {
+	case ch <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
 func (rt *watchRuntime) resetTrialTimer(next syncTimer) {
-	rt.timers.timerMu.Lock()
-	defer rt.timers.timerMu.Unlock()
+	rt.timers.checkOwner()
 
 	if rt.timers.trialTimer != nil {
 		rt.timers.trialTimer.Stop()
@@ -446,15 +468,13 @@ func (rt *watchRuntime) resetTrialTimer(next syncTimer) {
 }
 
 func (rt *watchRuntime) hasTrialTimer() bool {
-	rt.timers.timerMu.RLock()
-	defer rt.timers.timerMu.RUnlock()
+	rt.timers.checkOwner()
 
 	return rt.timers.trialTimer != nil
 }
 
 func (rt *watchRuntime) resetRetryTimer(next syncTimer) {
-	rt.timers.timerMu.Lock()
-	defer rt.timers.timerMu.Unlock()
+	rt.timers.checkOwner()
 
 	if rt.timers.retryTimer != nil {
 		rt.timers.retryTimer.Stop()
@@ -465,8 +485,7 @@ func (rt *watchRuntime) resetRetryTimer(next syncTimer) {
 }
 
 func (rt *watchRuntime) hasRetryTimer() bool {
-	rt.timers.timerMu.RLock()
-	defer rt.timers.timerMu.RUnlock()
+	rt.timers.checkOwner()
 
 	return rt.timers.retryTimer != nil
 }
@@ -475,8 +494,7 @@ func (rt *watchRuntime) hasRetryTimer() bool {
 // entry becomes due; the zero time stops the timer. A timer already armed
 // for that instant is kept.
 func (rt *watchRuntime) armAdmitTimer(at time.Time) {
-	rt.timers.timerMu.Lock()
-	defer rt.timers.timerMu.Unlock()
+	rt.timers.checkOwner()
 
 	if rt.timers.admitTimer != nil && rt.timers.admitTimerAt.Equal(at) {
 		return
@@ -489,11 +507,9 @@ func (rt *watchRuntime) armAdmitTimer(at time.Time) {
 	if at.IsZero() {
 		return
 	}
+	admitCh := rt.timers.admitCh
 	rt.timers.admitTimer = rt.deps.clock.AfterFunc(at.Sub(rt.deps.now()), func() {
-		select {
-		case rt.timers.admitCh <- struct{}{}:
-		default:
-		}
+		signalTimerChannel(admitCh)
 	})
 }
 
@@ -502,8 +518,7 @@ func (rt *watchRuntime) stopAdmitTimer() {
 }
 
 func (rt *watchRuntime) hasAdmitTimer() bool {
-	rt.timers.timerMu.RLock()
-	defer rt.timers.timerMu.RUnlock()
+	rt.timers.checkOwner()
 
 	return rt.timers.admitTimer != nil
 }
@@ -515,8 +530,7 @@ func (rt *watchRuntime) admitTimerChan() <-chan struct{} {
 }
 
 func (rt *watchRuntime) resetRefreshTimer(next syncTimer) {
-	rt.timers.timerMu.Lock()
-	defer rt.timers.timerMu.Unlock()
+	rt.timers.checkOwner()
 
 	if rt.resources.refreshTimer != nil {
 		rt.resources.refreshTimer.Stop()

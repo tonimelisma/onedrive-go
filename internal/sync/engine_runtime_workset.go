@@ -6,11 +6,7 @@ import (
 )
 
 func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
-	flow.retries.rowsByKey = make(map[RetryWorkKey]RetryWorkRow, len(runtime.RetryRows))
-	for i := range runtime.RetryRows {
-		row := runtime.RetryRows[i]
-		flow.retries.rowsByKey[row.WorkKey()] = row
-	}
+	flow.retryWork.install(runtime.RetryRows)
 
 	flow.retries.heldByKey = make(map[RetryWorkKey]*heldAction)
 	flow.retries.heldByScope = make(map[ScopeKey][]RetryWorkKey)

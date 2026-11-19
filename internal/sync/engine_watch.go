@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	stdsync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
@@ -195,6 +194,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// plan's. Active scope state is loaded from the persisted block_scopes
 	// table into watch-owned runtime state.
 	rt.sched.graph = newDepGraph(rt.deps.logger)
+	rt.sched.graph.ownerCheck = rt.engine.runOwnerCheck
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
@@ -237,12 +237,7 @@ func (rt *watchRuntime) initWatchInfra(
 	}
 
 	pipe.cleanup = func() {
-		if rt.resources.socketIOWakeCancel != nil {
-			rt.resources.socketIOWakeCancel()
-			<-rt.resources.socketIOWakeDone
-			rt.resources.socketIOWakeCancel = nil
-			rt.resources.socketIOWakeDone = nil
-		}
+		rt.resources.goroutines.stop(rt.deps.clock, rt.deps.logger)
 
 		stopTicker(maintenanceTicker)
 		rt.resetRefreshTimer(nil)
@@ -355,26 +350,53 @@ func (rt *watchRuntime) startObservers(
 	protectedRootEvents := make(chan protectedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
-
-	var obsWg stdsync.WaitGroup
-
-	count := 0
-
-	obsWg.Add(1)
-	count++
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
-	rt.startRemoteObserver(ctx, &obsWg, bl, remoteBatches, errs, opts)
-
 	// Carries each watch-mode full scan's finding set (TrySendScanFindings).
 	// Each set is the whole set, so a set dropped on a full buffer costs
 	// nothing the next scan does not resend; two sets cover a scan finishing
 	// while the loop has not yet taken the previous one.
 	skippedCh := make(chan []skippedItem, 2)
 
+	// Every step that can fail runs before the first goroutine starts, so a
+	// start that fails leaves nothing running.
+	localObs, err := rt.buildWatchLocalObserver(ctx, bl, localBatches, protectedRootEvents, skippedCh)
+	if err != nil {
+		return err
+	}
+
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverRemote})
+	rt.startRemoteObserver(ctx, bl, remoteBatches, errs, opts)
+
+	rt.resources.localObs = localObs
+	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
+	rt.startLocalObserver(ctx, localObs, localBatches, protectedRootEvents, errs)
+
+	rt.resources.observerErrs = errs
+	rt.resources.activeObservers = watchObserverCount
+	rt.resources.skippedItems = skippedCh
+	rt.resources.localBatches = localBatches
+	rt.resources.protectedRootEvents = protectedRootEvents
+	rt.resources.remoteBatches = remoteBatches
+	return nil
+}
+
+// watchObserverCount is how many observers startObservers starts, the remote
+// and the local one, each sending one exit error.
+const watchObserverCount = 2
+
+// buildWatchLocalObserver builds the watch's local observer, reading what it
+// needs from the store: the hash cache and the mount boundaries. It starts
+// nothing.
+func (rt *watchRuntime) buildWatchLocalObserver(
+	ctx context.Context,
+	bl *Baseline,
+	localBatches chan<- localObservationBatch,
+	protectedRootEvents chan<- protectedRootEvent,
+	skippedCh chan<- []skippedItem,
+) (*localObserver, error) {
 	localObs := rt.engine.buildLocalObserver(bl, rt.deps.logger)
 	hashCache, err := rt.engine.baseline.newLocalHashCache(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	localObs.SetLocalHashCache(hashCache)
 	localObs.SetFilterConfig(rt.engine.contentFilter)
@@ -383,7 +405,7 @@ func (rt *watchRuntime) startObservers(
 	localObs.SetSyncRootIdentity(rt.engine.syncRootIdentity)
 	mountFlags, err := rt.engine.baseline.listMountBoundaries(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	localObs.SetMountBoundaryFlags(mountFlags)
 	localObs.SetProtectedRootEventSink(func(event protectedRootEvent) {
@@ -407,42 +429,26 @@ func (rt *watchRuntime) startObservers(
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
 	}
 
-	rt.resources.localObs = localObs
-
-	obsWg.Add(1)
-	count++
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
-
-	rt.startLocalObserver(ctx, &obsWg, localObs, localBatches, protectedRootEvents, errs)
-
-	rt.resources.observerErrs = errs
-	rt.resources.activeObservers = count
-	rt.resources.skippedItems = skippedCh
-	rt.resources.localBatches = localBatches
-	rt.resources.protectedRootEvents = protectedRootEvents
-	rt.resources.remoteBatches = remoteBatches
-	return nil
+	return localObs, nil
 }
 
 // startLocalObserver owns the local observer goroutine, mirroring
 // startRemoteObserver so both observers are launched through one shape.
 func (rt *watchRuntime) startLocalObserver(
 	ctx context.Context,
-	obsWg *stdsync.WaitGroup,
 	localObs *localObserver,
 	localBatches chan<- localObservationBatch,
 	protectedRootEvents chan<- protectedRootEvent,
 	errs chan<- error,
 ) {
-	go func() {
-		defer obsWg.Done()
+	rt.resources.goroutines.start(ctx, watchGoroutineLocalObserver, func(ctx context.Context) {
 		defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverLocal})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
 		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
 
 		errs <- rt.watchLocalWithFallback(ctx, localObs)
-	}()
+	})
 }
 
 // watchLocalWithFallback runs the local watcher and, while the operating
@@ -506,14 +512,13 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *lo
 
 func (rt *watchRuntime) startRemoteObserver(
 	ctx context.Context,
-	obsWg *stdsync.WaitGroup,
 	bl *Baseline,
 	remoteBatches chan<- remoteObservationBatch,
 	errs chan<- error,
 	opts WatchOptions,
 ) {
 	pollInterval := rt.engine.resolvePollInterval(opts)
-	rt.startPrimaryRootWatch(ctx, obsWg, bl, remoteBatches, errs, pollInterval)
+	rt.startPrimaryRootWatch(ctx, bl, remoteBatches, errs, pollInterval)
 }
 
 func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {
@@ -526,13 +531,6 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	)
 
 	wakeCh := make(chan struct{}, 1)
-
-	// The runtime's cleanup cancels wakeCtx and waits for done.
-	//nolint:gosec // G118: the cancel is kept in socketIOWakeCancel, which the runtime's cleanup calls.
-	wakeCtx, wakeCancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	rt.resources.socketIOWakeCancel = wakeCancel
-	rt.resources.socketIOWakeDone = done
 	wakeSource := rt.engine.socketIOWakeSourceFactory(
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
@@ -543,13 +541,15 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		},
 	)
 
-	go rt.runSocketIOWakeSource(wakeCtx, wakeSource, wakeCh, done)
+	rt.resources.goroutines.start(ctx, watchGoroutineWakeSource, func(ctx context.Context) {
+		rt.runSocketIOWakeSource(ctx, wakeSource, wakeCh)
+	})
 
 	return wakeCh
 }
 
-// runSocketIOWakeSource runs the wake source until ctx ends and closes done,
-// and is the panic boundary of its goroutine. A panic takes the goroutine's
+// runSocketIOWakeSource runs the wake source until ctx ends, and is the panic
+// boundary of its goroutine. A panic takes the goroutine's
 // ordinary failure path: the wake source is an accelerator, so losing it
 // leaves watch polling on its interval and nothing else changes. The panic
 // itself is still logged at Error with its stack, because it is a bug.
@@ -558,9 +558,7 @@ func (rt *watchRuntime) runSocketIOWakeSource(
 	ctx context.Context,
 	wakeSource socketIOWakeSourceRunner,
 	wakeCh chan<- struct{},
-	done chan<- struct{},
 ) {
-	defer close(done)
 	defer func() {
 		if r := recover(); r != nil {
 			rt.reportSocketIOWakeSourceStop(panicguard.Recovered(rt.deps.logger, "in the socket.io wake source", r,

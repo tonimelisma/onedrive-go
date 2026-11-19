@@ -209,7 +209,7 @@ func (flow *engineFlow) releaseScopeBatch(
 	allowance := nextReleaseAllowance(flow.engine.transferWorkers, scope.ReleaseAllowance, scope.SlowStartThreshold)
 	batchKeys := flow.heldScopeBatch(key, allowance)
 
-	removed, err := flow.deps.store.ReleaseScopeWork(ctx, key, batchKeys, now)
+	_, removed, err := flow.retryWork.releaseScope(ctx, flow.deps.store, key, batchKeys, now)
 	if err != nil {
 		return nil, fmt.Errorf("sync: releasing %d blocked actions under %s: %w", len(batchKeys), key.String(), err)
 	}
@@ -219,11 +219,6 @@ func (flow *engineFlow) releaseScopeBatch(
 		ta := flow.retries.releaseHeldAction(work)
 		if ta == nil {
 			continue
-		}
-		if row, ok := flow.retries.rowsByKey[work]; ok {
-			row.Blocked = false
-			row.NextRetryAt = storedTimeNano(now)
-			flow.retries.rowsByKey[work] = row
 		}
 		ta.IsTrial = true
 		ta.TrialScopeKey = key

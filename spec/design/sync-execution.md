@@ -66,6 +66,11 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 - which dependencies remain unsatisfied
 - which dependents become ready after completion
 
+The graph has no lock: only the goroutine running the engine's `RunOnce` or
+`RunWatch` calls it. Workers report outcomes on the completion channel and
+never call the graph (`TestWorker_NeverCallsComplete`); a test-installed owner
+check on every method fails a call from another goroutine (R-6.3.4).
+
 Workers run independent actions concurrently up to the configured worker limit.
 The engine owns the worker pool lifecycle and completion drain. In watch mode,
 the worker dispatch channel is intentionally unbuffered so not-yet-started

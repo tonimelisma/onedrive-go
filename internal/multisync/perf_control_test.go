@@ -97,12 +97,14 @@ func assertContextPerfMetricsAtEveryLevel(
 
 // A watch runner's work must be counted for its mount. The HTTP transport,
 // the sync store and the transfer manager record on the collector their
-// context carries, so the runner's context has to carry the mount's collector;
-// otherwise `status --perf` shows a mount with no requests, no transactions
-// and no transfers while it is plainly syncing. The run starts under a context
-// that already carries the command collector, as the CLI's does, so the test
-// also proves the mount collector replacing it loses nothing and counts
-// nothing twice.
+// context carries, and the engine puts the collector it was built with on its
+// run context; the owner hands it the mount's collector. Otherwise `status
+// --perf` shows a mount with no requests, no transactions and no transfers
+// while it is plainly syncing. The run starts under a context that already
+// carries the command collector, as the CLI's does, so the test also proves
+// the mount collector replacing it loses nothing and counts nothing twice.
+// The mock stands in for the engine's own wrap with the collector the factory
+// received; the engine's half is held in internal/sync.
 //
 // Validates: R-6.6.15
 func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
@@ -116,10 +118,10 @@ func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 
 	recorded := make(chan error, 1)
-	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
-				recorded <- recordContextPerfMetrics(ctx)
+				recorded <- recordContextPerfMetrics(perf.WithCollector(ctx, req.PerfCollector))
 				<-ctx.Done()
 				return ctx.Err()
 			},
@@ -139,8 +141,8 @@ func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
 	assertContextPerfMetricsAtEveryLevel(t, rd.CanonicalID.String(), mounts, orch.perfRuntime, commandCollector)
 }
 
-// The one-shot path runs each mount's pass through its own work function, so
-// it needs the same wrap as the watch runner.
+// The one-shot path runs each mount's pass through its own work function, and
+// hands each engine its mount's collector as the watch runner does.
 //
 // Validates: R-6.6.15
 func TestOrchestrator_OneShotMountPerfIncludesContextRecordedMetrics(t *testing.T) {
@@ -156,10 +158,10 @@ func TestOrchestrator_OneShotMountPerfIncludesContextRecordedMetrics(t *testing.
 	// mount's engine, so the per-mount view exists only while the pass runs,
 	// which is when `status --perf` can read it. The pass captures it.
 	mountsDuringPass := make(chan map[string]perf.Snapshot, 1)
-	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
 			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
-				if err := recordContextPerfMetrics(ctx); err != nil {
+				if err := recordContextPerfMetrics(perf.WithCollector(ctx, req.PerfCollector)); err != nil {
 					return nil, err
 				}
 				mountsDuringPass <- orch.perfRuntime.SnapshotByMount()

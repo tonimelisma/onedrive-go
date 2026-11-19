@@ -44,6 +44,9 @@ func goroutineBoundaryExceptions() map[string]string {
 			"that makes a panic that action's failure (R-6.3.8); the loop around it only receives from the dispatch channel",
 		"internal/sync.closeCompletionsWhenWorkersExit": "it waits for the workers and closes the completions " +
 			"channel through a sync.Once; neither can panic",
+		"internal/sync.runWatchGoroutine": "it only runs a watch goroutine's function and closes its done channel; " +
+			"every function the watch starts there (the observers, the full remote refresh, the socket.io wake source) " +
+			"defers a recover that hands the panic to Recovered and reports it to the watch",
 	}
 }
 

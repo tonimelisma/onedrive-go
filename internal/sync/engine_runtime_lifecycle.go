@@ -58,7 +58,7 @@ func (flow *engineFlow) normalizePersistedScopes(
 	// persisted has nothing that will ever trial or release it (R-2.10.33).
 	// Earlier builds wrote such rows for a 507 below the quota window; a
 	// store that still holds them gets the work back as due retry work.
-	released, err := flow.deps.store.ReleaseOrphanBlockedRetryWork(ctx, flow.deps.now())
+	released, err := flow.retryWork.releaseOrphans(ctx, flow.deps.store, flow.deps.now())
 	if err != nil {
 		return fmt.Errorf("sync: releasing blocked retry_work without a scope: %w", err)
 	}
@@ -330,15 +330,8 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 			if err := flow.rearmScopeTrial(ctx, from); err != nil {
 				return fmt.Errorf("transition blocked scope %s -> %s: rearm old scope: %w", from.String(), to.String(), err)
 			}
-		} else {
-			if err := flow.deps.store.DiscardScope(ctx, from); err != nil {
-				return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
-			}
-			flow.scopes.removeActiveScope(from)
-			flow.deps.emit(engineDebugEvent{
-				Type:     engineDebugEventScopeDiscarded,
-				ScopeKey: from,
-			})
+		} else if err := flow.discardScope(ctx, from); err != nil {
+			return fmt.Errorf("transition blocked scope %s -> %s: discard old scope: %w", from.String(), to.String(), err)
 		}
 	}
 
@@ -461,15 +454,28 @@ func pausedScopeLine(key ScopeKey, conditionType IssueType, retryIn string) stri
 		"); checking again in " + retryIn
 }
 
-// discardScope atomically removes the block scope and deletes blocked retry
-// work tied to it. Used when the blocked subtree itself disappears.
+// discardScope atomically removes the block scope and deletes the retry work
+// blocked under it; work that only names the scope keeps its row. A held
+// action whose row the store deleted goes back to admission. Used when the
+// blocked subtree itself disappears, and when a scope's last blocked work
+// moved under another scope.
 func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
-	if err := flow.deps.store.DiscardScope(ctx, key); err != nil {
-		return fmt.Errorf("sync: discarding scope %s: %w", key.String(), err)
+	deleted, err := flow.retryWork.discardScope(ctx, flow.deps.store, key)
+	if err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+	now := flow.deps.now()
+	for _, work := range deleted {
+		if ta := flow.retries.releaseHeldAction(work); ta != nil {
+			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, now)
+		}
 	}
 
 	flow.scopes.removeActiveScope(key)
 	flow.signals.armTrialTimer()
+	if len(deleted) > 0 {
+		flow.signals.armRetryTimer()
+	}
 	flow.deps.emit(engineDebugEvent{
 		Type:     engineDebugEventScopeDiscarded,
 		ScopeKey: key,
@@ -490,20 +496,8 @@ func (flow *engineFlow) persistBlockedRetryWork(
 		return fmt.Errorf("persist blocked retry_work for %s: missing scope key", work.Path)
 	}
 
-	row, err := flow.deps.store.RecordBlockedRetryWork(ctx, work, scopeKey)
-	if err != nil {
-		return fmt.Errorf("persist blocked retry_work for %s under %s: %w", work.Path, scopeKey.String(), err)
-	}
-	if row == nil {
-		return fmt.Errorf(
-			"persist blocked retry_work for %s under %s: missing persisted row",
-			work.Path,
-			scopeKey.String(),
-		)
-	}
-
-	flow.retries.rowsByKey[row.WorkKey()] = *row
-	return nil
+	_, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey)
+	return err
 }
 
 func (flow *engineFlow) clearBlockedRetryWorkForScope(
@@ -515,14 +509,7 @@ func (flow *engineFlow) clearBlockedRetryWorkForScope(
 		return nil
 	}
 
-	if err := flow.deps.store.ClearBlockedRetryWork(ctx, work, scopeKey); err != nil {
-		return fmt.Errorf("clear blocked retry_work for %s under %s: %w", work.Path, scopeKey.String(), err)
-	}
-	if row, ok := flow.retries.rowsByKey[work]; ok && row.Blocked && row.ScopeKey == scopeKey {
-		delete(flow.retries.rowsByKey, work)
-	}
-
-	return nil
+	return flow.retryWork.clearBlocked(ctx, flow.deps.store, work, scopeKey)
 }
 
 // recordBlockedRetryWork records retry_work for an action that is currently
@@ -540,7 +527,7 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 		return nil
 	}
 
-	row, ok := flow.retries.rowsByKey[work]
+	row, ok := flow.retryWork.row(work)
 	if !ok {
 		return fmt.Errorf("hold action %s from persisted retry state: missing retry_work row", work.Path)
 	}

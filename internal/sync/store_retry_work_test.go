@@ -115,10 +115,15 @@ func TestRetryWorkScopeReadyAndDeleteHelpers(t *testing.T) {
 		Path:       "delete-me.txt",
 		ActionType: ActionUpload,
 	}))
-	require.NoError(t, markRetryWorkReadyTx(ctx, store.db, SKService().String(), []RetryWorkKey{
+	released, err := markRetryWorkReadyTx(ctx, store.db, SKService().String(), []RetryWorkKey{
 		{Path: "blocked-a.txt", ActionType: ActionRemoteDelete},
 		{Path: "not-blocked.txt", ActionType: ActionUpload},
-	}, now))
+	}, now)
+	require.NoError(t, err)
+	require.Len(t, released, 1, "only the row blocked under the scope is released and returned")
+	assert.Equal(t, "blocked-a.txt", released[0].Path)
+	assert.False(t, released[0].Blocked, "returned as it is after the release")
+	assert.Equal(t, now, released[0].NextRetryAt)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -134,11 +139,15 @@ func TestRetryWorkScopeReadyAndDeleteHelpers(t *testing.T) {
 		assert.Zero(t, row.NextRetryAt)
 	}
 
-	require.NoError(t, deleteRetryWorkByScopeTx(ctx, store.db, SKService().String()))
+	deleted, err := deleteBlockedRetryWorkByScopeTx(ctx, store.db, SKService().String())
+	require.NoError(t, err)
+	assert.Equal(t, []RetryWorkKey{{Path: "blocked-b.txt", ActionType: ActionRemoteDelete}}, deleted,
+		"only the row still blocked under the scope is deleted")
 
 	rows, err = store.ListRetryWork(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, rows)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "blocked-a.txt", rows[0].Path, "the released row naming the scope stays")
 }
 
 // Validates: R-2.10.33
@@ -262,10 +271,18 @@ func TestClearBlockedRetryWork_RemovesOnlyMatchingScopedWork(t *testing.T) {
 	other = *testBlockedRetryWorkRow(other.Path, other.OldPath, other.ActionType, SKService(), 2)
 	require.NoError(t, store.UpsertRetryWork(ctx, &other))
 
-	require.NoError(t, store.ClearBlockedRetryWork(ctx, RetryWorkKey{
+	cleared, err := store.ClearBlockedRetryWork(ctx, RetryWorkKey{
 		Path:       "blocked.txt",
 		ActionType: ActionUpload,
-	}, SKService()))
+	}, SKService())
+	require.NoError(t, err)
+	assert.True(t, cleared, "the blocked row was cleared")
+	cleared, err = store.ClearBlockedRetryWork(ctx, RetryWorkKey{
+		Path:       "blocked.txt",
+		ActionType: ActionUpload,
+	}, SKService())
+	require.NoError(t, err)
+	assert.False(t, cleared, "nothing is left to clear")
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)

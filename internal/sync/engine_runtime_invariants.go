@@ -197,6 +197,9 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing retry_work rows: %w", err)
 	}
+	if cacheErr := flow.retryWork.matchesStore(retryWork); cacheErr != nil {
+		return cacheErr
+	}
 	links := summarizePersistedScopeLinks(retryWork)
 
 	seenBlocks := make(map[ScopeKey]struct{}, len(blocks))
@@ -335,8 +338,8 @@ func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key ScopeKey) 
 		return fmt.Errorf("listing retry_work rows: %w", err)
 	}
 	for i := range retryWork {
-		if retryWork[i].ScopeKey == key {
-			return fmt.Errorf("discarded scope %s still has retry_work %s", key.String(), retryWork[i].Path)
+		if retryWork[i].Blocked && retryWork[i].ScopeKey == key {
+			return fmt.Errorf("discarded scope %s still has blocked retry_work %s", key.String(), retryWork[i].Path)
 		}
 	}
 

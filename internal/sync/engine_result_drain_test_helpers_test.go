@@ -9,8 +9,11 @@ import (
 )
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
-// dispatchCh, dirty scheduler, and retry/trial timers.
-func startDrainLoop(t *testing.T) (chan actionCompletion, context.CancelFunc, *testEngine) {
+// dispatchCh, dirty scheduler, and retry/trial timers. The returned stop
+// cancels the loop and waits for it to return; only the loop's goroutine
+// owns the scope ledger, so a test reads the ledger after stop. Calling stop
+// again does nothing.
+func startDrainLoop(t *testing.T) (chan actionCompletion, func(), *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
@@ -22,13 +25,23 @@ func startDrainLoop(t *testing.T) (chan actionCompletion, context.CancelFunc, *t
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	cancel, _ := runInBackground(t, t.Context(), func(ctx context.Context) error {
+	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
 		defer rt.stopTrialTimer()
 		runResultDrainLoopForTest(ctx, rt, bl, results)
 		return nil
 	})
 
-	return results, cancel, eng
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		cancel()
+		<-done
+	}
+
+	return results, stop, eng
 }
 
 func runResultDrainLoopForTest(
