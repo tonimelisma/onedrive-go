@@ -53,9 +53,12 @@ func (rt *watchRuntime) armRetryTimer() {
 		Type:  engineDebugEventRetryTimerArmed,
 		Delay: delay,
 	})
+	retryCh, emit := rt.timers.retryTimerCh, rt.deps.emit
 	rt.resetRetryTimer(rt.deps.clock.AfterFunc(delay, func() {
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
-		rt.kickRetryHeldReleaseNow()
+		emit(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
+		if signalTimerChannel(retryCh) {
+			emit(engineDebugEvent{Type: engineDebugEventRetryKicked})
+		}
 	}))
 }
 
@@ -73,10 +76,8 @@ func (rt *watchRuntime) stopRetryTimer() {
 // retry timer ownership explicit and avoids scattering direct channel writes
 // across the engine.
 func (rt *watchRuntime) kickRetryHeldReleaseNow() {
-	select {
-	case rt.timers.retryTimerCh <- struct{}{}:
+	if signalTimerChannel(rt.timers.retryTimerCh) {
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryKicked})
-	default:
 	}
 }
 
@@ -287,12 +288,10 @@ func (rt *watchRuntime) armTrialTimer() {
 		Type:  engineDebugEventTrialTimerArmed,
 		Delay: delay,
 	})
+	trialCh, emit := rt.timers.trialCh, rt.deps.emit
 	rt.resetTrialTimer(rt.deps.clock.AfterFunc(delay, func() {
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
-		select {
-		case rt.timers.trialCh <- struct{}{}:
-		default:
-		}
+		emit(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
+		signalTimerChannel(trialCh)
 	}))
 }
 

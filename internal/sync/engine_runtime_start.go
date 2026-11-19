@@ -22,6 +22,7 @@ func (flow *engineFlow) startRuntimeStage(
 
 	flow.initializeRuntimeState(runtime)
 	flow.sched.graph = newDepGraph(flow.deps.logger)
+	flow.sched.graph.ownerCheck = flow.engine.runOwnerCheck
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil

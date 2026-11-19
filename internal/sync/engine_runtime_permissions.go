@@ -358,7 +358,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	conditionType IssueType,
 	errMsg string,
 ) error {
-	row, err := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+	row, err := flow.retryWork.recordFailure(ctx, flow.deps.store, &RetryWorkFailure{
 		Work:          work,
 		ScopeKey:      scopeKey,
 		ConditionType: conditionType,
@@ -366,10 +366,6 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	if err != nil {
 		return err
 	}
-	if row == nil {
-		return errors.New("sync store returned no retry_work row")
-	}
-	flow.retries.rowsByKey[row.WorkKey()] = *row
 	if row.AttemptCount == 1 {
 		flow.deps.logger.Warn("Not syncing "+work.Path+": "+errMsg,
 			slog.String("condition_type", string(conditionType)),
@@ -392,14 +388,9 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	work RetryWorkKey,
 	scopeKey ScopeKey,
 ) error {
-	row, err := flow.deps.store.RecordBlockedRetryWork(ctx, work, scopeKey)
-	if err != nil {
+	if _, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey); err != nil {
 		return err
 	}
-	if row == nil {
-		return errors.New("sync store returned no retry_work row")
-	}
-	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields := append(flow.summaryLogFields(
 		errclass.ClassScopeBlockingTransient,
 		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),

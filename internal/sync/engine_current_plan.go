@@ -73,7 +73,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	}
 	observation, err := rt.loadCommittedCurrentObservation(ctx, pendingRemoteObservation)
 	if err != nil {
-		return nil, fmt.Errorf("reading sync state: %w", err)
+		return nil, err
 	}
 	rt.engine.collector().RecordObserve(observation.observedPaths, rt.deps.since(observeStart))
 
@@ -95,7 +95,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 ) (*runtimePlan, error) {
 	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading sync state: %w", err)
+		return nil, err
 	}
 
 	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
@@ -406,6 +406,11 @@ func (flow *engineFlow) commitCurrentLocalSnapshot(
 	return flow.engine.commitLocalSnapshot(ctx, buildLocalStateRows(localResult), localResult.CrossedMounts)
 }
 
+// errReadingPlanningState is the one wrap of a planning-state load error,
+// the same in a one-shot pass, a dry run and every watch replan: the store's
+// own error under it names the read that failed.
+const errReadingPlanningState = "sync: reading sync state: %w"
+
 func (flow *engineFlow) loadDryRunCurrentObservation(
 	ctx context.Context,
 	bl *Baseline,
@@ -454,7 +459,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 
 	inputs, err := flow.loadCurrentInputs(ctx, scratchStore, flow.engine.driveID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(errReadingPlanningState, err)
 	}
 
 	return &currentObservation{
@@ -469,11 +474,11 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 ) (*currentObservation, error) {
 	inputs, err := flow.loadCurrentInputs(ctx, flow.deps.store, flow.engine.driveID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(errReadingPlanningState, err)
 	}
 	childPublication, err := flow.currentShortcutChildPublication(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(errReadingPlanningState, err)
 	}
 
 	return &currentObservation{
@@ -595,7 +600,7 @@ func (flow *engineFlow) queryPlannerRowsTx(
 		plannerVisibleRemoteStateTable,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: querying comparison state: %w", err)
+		return nil, nil, err
 	}
 	reconciliationQuery := sqlQueryReconciliationState
 	if flow.engine.reconciliationQueryOverride != "" {
@@ -607,7 +612,7 @@ func (flow *engineFlow) queryPlannerRowsTx(
 		plannerVisibleRemoteStateTable,
 	))
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+		return nil, nil, err
 	}
 	first := firstUnclassifiedRow(reconciliations)
 	if first < 0 {
@@ -746,7 +751,7 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionP
 	if err := flow.deps.store.ReplaceHeldDeletes(ctx, plan.HeldDeletes); err != nil {
 		return fmt.Errorf("sync: recording held deletes: %w", err)
 	}
-	if err := flow.deps.store.PruneRetryWorkToCurrentActions(ctx, retryWorkKeysForActions(plan.Actions)); err != nil {
+	if err := flow.retryWork.prune(ctx, flow.deps.store, retryWorkKeysForActions(plan.Actions)); err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
 

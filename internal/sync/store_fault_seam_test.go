@@ -229,6 +229,20 @@ func (t *faultTx) Commit() error {
 func newFaultStore(t *testing.T) (*SyncStore, *sqlFault) {
 	t.Helper()
 
+	registerFaultDriver(t)
+	dbPath := filepath.Join(t.TempDir(), "fault.db")
+	store, err := openSyncStoreWithDriver(synctest.TestContext(t), dbPath, synctest.TestLogger(t), true, faultDriverName)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close(context.Background())) })
+
+	return store, faultForPath(dbPath)
+}
+
+// registerFaultDriver registers the fault driver under faultDriverName, once
+// per test binary.
+func registerFaultDriver(t *testing.T) {
+	t.Helper()
+
 	faultDriverOnce.Do(func() {
 		probe, err := sql.Open(sqliteDriverName, ":memory:")
 		require.NoError(t, err)
@@ -236,13 +250,25 @@ func newFaultStore(t *testing.T) (*SyncStore, *sqlFault) {
 		require.NoError(t, probe.Close())
 		sql.Register(faultDriverName, &faultDriver{inner: inner})
 	})
+}
 
-	dbPath := filepath.Join(t.TempDir(), "fault.db")
-	store, err := openSyncStoreWithDriver(synctest.TestContext(t), dbPath, synctest.TestLogger(t), true, faultDriverName)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, store.Close(context.Background())) })
+// newTestEngineOnFaultStore is newTestEngine with the engine's store opened
+// through the fault driver, and the fault that governs its connections.
+func newTestEngineOnFaultStore(
+	t *testing.T, mock *engineMockClient, configure func(*engineInputs),
+) (*testEngine, *sqlFault) {
+	t.Helper()
 
-	return store, faultForPath(dbPath)
+	registerFaultDriver(t)
+	tmpDir := t.TempDir()
+	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, tmpDir, func(inputs *engineInputs) {
+		inputs.storeDriver = faultDriverName
+		if configure != nil {
+			configure(inputs)
+		}
+	})
+
+	return eng, faultForPath(filepath.Join(tmpDir, "test.db"))
 }
 
 func faultSeedOutcome(path, itemID, localHash string) *BaselineMutation {

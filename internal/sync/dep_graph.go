@@ -2,8 +2,6 @@ package sync
 
 import (
 	"log/slog"
-	stdsync "sync"
-	"sync/atomic"
 )
 
 // trackedNode is an internal wrapper around *trackedAction that adds
@@ -12,7 +10,7 @@ import (
 // workers and the engine never need to touch directly.
 type trackedNode struct {
 	*trackedAction
-	depsLeft   atomic.Int32
+	depsLeft   int32
 	dependents []*trackedNode
 }
 
@@ -23,13 +21,24 @@ type trackedNode struct {
 // Methods return data — callers decide what to do with ready actions (dispatch
 // to channels, run active-scope admission, etc.). This separation keeps
 // dependency tracking independent from scope admission.
+//
+// The graph has no lock: only the goroutine that runs the engine's RunOnce
+// or RunWatch calls its methods. Workers report outcomes on the completion
+// channel and never touch it.
 type depGraph struct {
-	// mu guards actions. Only the runtime goroutine that owns the run calls
-	// the graph's methods; workers report outcomes on the completion channel
-	// and never touch it.
-	mu      stdsync.Mutex
 	actions map[int64]*trackedNode
 	logger  *slog.Logger
+	// ownerCheck, when set, runs at the top of every method; nil in
+	// production. Tests install a check that fails when the graph is called
+	// from a goroutine other than the run's (installOwnerCheck).
+	ownerCheck func()
+}
+
+// checkOwner runs the graph's owner check, if a test installed one.
+func (g *depGraph) checkOwner() {
+	if g.ownerCheck != nil {
+		g.ownerCheck()
+	}
 }
 
 // newDepGraph creates a new dependency graph.
@@ -60,8 +69,7 @@ func (g *depGraph) Add(action *Action, id int64, depIDs []int64) *trackedAction 
 		},
 	}
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.checkOwner()
 
 	g.actions[id] = node
 
@@ -78,7 +86,7 @@ func (g *depGraph) Add(action *Action, id int64, depIDs []int64) *trackedAction 
 		depsRemaining++
 	}
 
-	node.depsLeft.Store(depsRemaining)
+	node.depsLeft = depsRemaining
 
 	if depsRemaining == 0 {
 		return node.trackedAction
@@ -100,15 +108,14 @@ func (g *depGraph) Register(action *Action, id int64) {
 		},
 	}
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.checkOwner()
 
 	g.actions[id] = node
 
 	// Set depsLeft to 1 to prevent premature readiness. WireDeps will
 	// set the correct value. This sentinel ensures that if WireDeps is
 	// never called, the action stays blocked rather than executing.
-	node.depsLeft.Store(1)
+	node.depsLeft = 1
 }
 
 // WireDeps resolves dependency edges for a previously-registered action.
@@ -116,8 +123,7 @@ func (g *depGraph) Register(action *Action, id int64) {
 // the Register-all-first pattern). Returns the trackedAction if the
 // action is immediately ready (no unresolved deps), nil otherwise.
 func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.checkOwner()
 
 	node, ok := g.actions[id]
 	if !ok {
@@ -146,7 +152,7 @@ func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
 		depsRemaining++
 	}
 
-	node.depsLeft.Store(depsRemaining)
+	node.depsLeft = depsRemaining
 
 	if depsRemaining == 0 {
 		return node.trackedAction
@@ -159,8 +165,7 @@ func (g *depGraph) WireDeps(id int64, depIDs []int64) *trackedAction {
 // the graph. Callers must treat the returned action as graph-owned runtime
 // state and must not mutate dependency bookkeeping fields directly.
 func (g *depGraph) Get(id int64) (*trackedAction, bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.checkOwner()
 
 	node, ok := g.actions[id]
 	if !ok {
@@ -178,34 +183,29 @@ func (g *depGraph) Get(id int64) (*trackedAction, bool) {
 // is returned. The bool distinguishes "unknown ID" from "known ID with no
 // dependents" (which returns a non-nil empty slice).
 func (g *depGraph) Complete(id int64) ([]*trackedAction, bool) {
-	g.mu.Lock()
+	g.checkOwner()
 
 	node, ok := g.actions[id]
 	if !ok {
-		g.mu.Unlock()
 		g.logger.Debug("dep_graph: Complete called with unknown ID",
 			slog.Int64("id", id),
 		)
 		return nil, false
 	}
 
-	// Copy dependents under the lock; the walk below runs after it is
-	// released.
-	dependents := make([]*trackedNode, len(node.dependents))
-	copy(dependents, node.dependents)
+	dependents := node.dependents
 
 	// Delete the completed action so future Add/Register callers treat the ID
 	// as already satisfied instead of wiring new dependents to a stale node.
 	delete(g.actions, id)
-
-	g.mu.Unlock()
 
 	// Collect ready dependents, converting internal trackedNode to the
 	// *trackedAction that callers (engine, tests) expect.
 	ready := make([]*trackedAction, 0, len(dependents))
 
 	for _, dep := range dependents {
-		if dep.depsLeft.Add(-1) == 0 {
+		dep.depsLeft--
+		if dep.depsLeft == 0 {
 			ready = append(ready, dep.trackedAction)
 		}
 	}
@@ -216,8 +216,7 @@ func (g *depGraph) Complete(id int64) ([]*trackedAction, bool) {
 // InFlightCount returns the number of actions currently in the graph that have
 // not yet completed.
 func (g *depGraph) InFlightCount() int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.checkOwner()
 
 	return len(g.actions)
 }

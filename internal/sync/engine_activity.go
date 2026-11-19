@@ -159,7 +159,7 @@ func (e *Engine) activitySaysConditionStarts(decision *resultDecision, r *action
 // in between, starts it again. Read before the failure is recorded, the
 // activity feed and the log line of the failure read one answer.
 func (flow *engineFlow) conditionStartsWith(decision *resultDecision, r *actionCompletion) bool {
-	row, held := flow.retries.rowsByKey[retryWorkKeyForCompletion(r)]
+	row, held := flow.retryWork.row(retryWorkKeyForCompletion(r))
 	return !held || row.Blocked || row.ConditionType != decision.ConditionType
 }
 

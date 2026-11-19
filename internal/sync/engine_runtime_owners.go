@@ -1,7 +1,6 @@
 package sync
 
 import (
-	stdsync "sync"
 	"time"
 )
 
@@ -41,10 +40,9 @@ func newActionScheduler() actionScheduler {
 	}
 }
 
-// retryLedger owns exact held work: the durable retry rows loaded for this run,
-// the actions currently held, and their release ordering.
+// retryLedger owns exact held work: the actions currently held and their
+// release ordering. The durable retry rows they follow are retryWork's.
 type retryLedger struct {
-	rowsByKey     map[RetryWorkKey]RetryWorkRow
 	heldByKey     map[RetryWorkKey]*heldAction
 	heldByScope   map[ScopeKey][]RetryWorkKey
 	nextHeldOrder uint64
@@ -52,22 +50,31 @@ type retryLedger struct {
 
 func newRetryLedger() retryLedger {
 	return retryLedger{
-		rowsByKey:   make(map[RetryWorkKey]RetryWorkRow),
 		heldByKey:   make(map[RetryWorkKey]*heldAction),
 		heldByScope: make(map[ScopeKey][]RetryWorkKey),
 	}
 }
 
 // scopeLedger owns the active shared blockers for this run.
+//
+// The ledger has no lock: only the goroutine that runs the engine's RunOnce
+// or RunWatch reads and writes it, admission checks and snapshots included.
 type scopeLedger struct {
-	// mu guards active and nothing else. Only the runtime goroutine that owns
-	// the run reads and writes active, admission checks and snapshots
-	// included.
-	mu     stdsync.RWMutex
 	active []activeScope
 
-	// state is owned by the runtime goroutine alone and is never taken under mu.
 	state *scopeState
+
+	// ownerCheck, when set, runs at the top of every accessor of active; nil
+	// in production. Tests install a check that fails when the ledger is
+	// used from a goroutine other than the run's (installOwnerCheck).
+	ownerCheck func()
+}
+
+// checkOwner runs the ledger's owner check, if a test installed one.
+func (l *scopeLedger) checkOwner() {
+	if l.ownerCheck != nil {
+		l.ownerCheck()
+	}
 }
 
 // runResults owns what the run will report when it finishes.
@@ -226,12 +233,13 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 	now time.Time,
 	ta *trackedAction,
 	decision *admissionDecision,
+	work *retryWork,
 ) {
 	if ta == nil || decision == nil {
 		return
 	}
 
-	row, ok := l.rowsByKey[decision.RetryWorkKey]
+	row, ok := work.row(decision.RetryWorkKey)
 	if !ok || (!decision.ClearScopeKey.IsZero() && row.ScopeKey == decision.ClearScopeKey) {
 		return
 	}
@@ -251,37 +259,32 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 }
 
 func (l *scopeLedger) replaceActiveScopes(blocks []activeScope) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.checkOwner()
 
 	l.active = l.active[:0]
 	l.active = append(l.active, blocks...)
 }
 
 func (l *scopeLedger) upsertActiveScope(block *activeScope) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.checkOwner()
 
 	l.active = upsertScope(l.active, block)
 }
 
 func (l *scopeLedger) removeActiveScope(key ScopeKey) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.checkOwner()
 
 	l.active = removeScope(l.active, key)
 }
 
 func (l *scopeLedger) lookupActiveScope(key ScopeKey) (activeScope, bool) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.checkOwner()
 
 	return lookupScope(l.active, key)
 }
 
 func (l *scopeLedger) hasActiveScope(key ScopeKey) bool {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.checkOwner()
 
 	return hasScope(l.active, key)
 }
@@ -291,8 +294,7 @@ func (l *scopeLedger) hasActiveScope(key ScopeKey) bool {
 // the service scope (503), with no release allowance yet. Permission and
 // quota scopes are not pauses: waiting does not clear them.
 func (l *scopeLedger) earliestPauseTrialAt() (time.Time, bool) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.checkOwner()
 
 	var earliest time.Time
 	found := false
@@ -317,15 +319,13 @@ func isPauseScope(key ScopeKey) bool {
 }
 
 func (l *scopeLedger) findBlockingScope(ta *trackedAction) ScopeKey {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.checkOwner()
 
 	return findBlockingScope(l.active, ta)
 }
 
 func (l *scopeLedger) snapshotActiveScopes() []activeScope {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.checkOwner()
 
 	blocks := make([]activeScope, len(l.active))
 	copy(blocks, l.active)

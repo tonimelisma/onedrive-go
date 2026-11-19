@@ -82,7 +82,16 @@ func (r stateStoreIncompatibleReason) Description() string {
 // missing DBs bootstrap normally via NewSyncStore, while unreadable or
 // incompatible existing DBs surface a typed store-incompatible error.
 func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
-	store, err := NewSyncStore(ctx, dbPath, logger)
+	return openEngineSyncStoreWithDriver(ctx, dbPath, logger, sqliteDriverName)
+}
+
+// openEngineSyncStoreWithDriver is openEngineSyncStore through the named
+// database/sql driver; tests open an engine's store through a fault-injecting
+// driver with it.
+func openEngineSyncStoreWithDriver(
+	ctx context.Context, dbPath string, logger *slog.Logger, driverName string,
+) (*SyncStore, error) {
+	store, err := openSyncStoreWithDriver(ctx, dbPath, logger, true, driverName)
 	if err == nil {
 		checkErr := checkStoreIntegrity(ctx, store)
 		if checkErr == nil {

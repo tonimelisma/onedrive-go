@@ -147,6 +147,8 @@ func parentTestName(name string) string {
 //nolint:funlen // one scenario per line
 func runOnceScenarios() []func(*testing.T) {
 	return []func(*testing.T){
+		TestRunOnce_UsesRunStateOnlyFromItsGoroutine,
+		TestRunOnce_CountsOnTheEngineCollectorWithoutAnOwnerWrap,
 		TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup,
 		TestRunOnce_AQuotaRefusalBelowTheWindowIsTimedRetryWorkNotABlock,
 		TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain,

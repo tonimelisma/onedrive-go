@@ -430,7 +430,7 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial(t *testing.T) {
 	setTestBlockScope(t, eng, &BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
 	blocked := &RetryWorkRow{Path: trialPath, ActionType: ActionUpload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
-	flow.retries.rowsByKey[blocked.WorkKey()] = *blocked
+	flow.retryWork.rows[blocked.WorkKey()] = *blocked
 	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: trialPath, View: &pathView{Path: trialPath}}, 1, nil)
 	refused := actionCompletion{
 		ActionID: 1, Path: trialPath, ActionType: ActionUpload, RunEnded: true,
@@ -512,7 +512,7 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolderForATrial(t *testing.T) {
 	setTestBlockScope(t, eng, &BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
 	blocked := &RetryWorkRow{Path: trialPath, ActionType: ActionDownload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
-	flow.retries.rowsByKey[blocked.WorkKey()] = *blocked
+	flow.retryWork.rows[blocked.WorkKey()] = *blocked
 	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: trialPath, View: &pathView{Path: trialPath}}, 1, nil)
 	refused := actionCompletion{
 		ActionID: 1, Path: trialPath, ActionType: ActionDownload, RunEnded: true,

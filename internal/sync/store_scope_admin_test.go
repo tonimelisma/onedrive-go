@@ -58,10 +58,12 @@ func TestSyncStore_ClearBlockedRetryWork(t *testing.T) {
 	_, err := store.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("blocked.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ClearBlockedRetryWork(t.Context(), RetryWorkKey{
+	cleared, err := store.ClearBlockedRetryWork(t.Context(), RetryWorkKey{
 		Path:       "blocked.txt",
 		ActionType: ActionUpload,
-	}, scopeKey))
+	}, scopeKey)
+	require.NoError(t, err)
+	assert.True(t, cleared)
 	assert.Zero(t, retryWorkRowCountForStoreScopeTest(t, store, "blocked.txt"))
 }
 
@@ -269,9 +271,14 @@ func TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows(t *tes
 		require.NoError(t, err)
 	}
 
-	removed, err := store.ReleaseScopeWork(ctx, scopeKey, work[:2], now)
+	released, removed, err := store.ReleaseScopeWork(ctx, scopeKey, work[:2], now)
 	require.NoError(t, err)
 	assert.False(t, removed, "a blocked row remains, so the scope stays")
+	require.Len(t, released, 2, "the two named rows are returned as released")
+	for _, row := range released {
+		assert.False(t, row.Blocked)
+		assert.Equal(t, now.UnixNano(), row.NextRetryAt)
+	}
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -291,9 +298,11 @@ func TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows(t *tes
 	}
 
 	later := now.Add(time.Minute)
-	removed, err = store.ReleaseScopeWork(ctx, scopeKey, work[2:], later)
+	released, removed, err = store.ReleaseScopeWork(ctx, scopeKey, append([]RetryWorkKey{work[0]}, work[2:]...), later)
 	require.NoError(t, err)
 	assert.True(t, removed, "the last blocked row released removes the scope")
+	require.Len(t, released, 1, "a named row released before is not released again")
+	assert.Equal(t, "Shared/Docs/c.txt", released[0].Path)
 
 	blocks, err = store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -324,9 +333,10 @@ func TestSyncStore_ReleaseScopeWork_EmptyBatchRemovesAScopeWithoutBlockedWork(t 
 	now := time.Date(2026, 4, 19, 9, 30, 0, 0, time.UTC)
 	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(SKService(), 5*time.Second, now)))
 
-	removed, err := store.ReleaseScopeWork(ctx, SKService(), nil, now)
+	released, removed, err := store.ReleaseScopeWork(ctx, SKService(), nil, now)
 	require.NoError(t, err)
 	assert.True(t, removed)
+	assert.Empty(t, released)
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -373,8 +383,21 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIs
 	seedObservationIssueForTest(t, store, "keep.txt", IssueInvalidFilename, ScopeKey{})
 	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
 	require.NoError(t, err)
+	evidence, err := store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Work:     testRetryWorkKey("Shared/Docs/evidence.txt", "", ActionUpload),
+		ScopeKey: scopeKey,
+	}, func(int) time.Duration { return time.Minute })
+	require.NoError(t, err)
+	evidence, err = store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{
+		Work:     evidence.WorkKey(),
+		ScopeKey: scopeKey,
+	}, func(int) time.Duration { return time.Minute })
+	require.NoError(t, err)
+	require.Equal(t, 2, evidence.AttemptCount)
 
-	require.NoError(t, store.DiscardScope(ctx, scopeKey))
+	deleted, err := store.DiscardScope(ctx, scopeKey)
+	require.NoError(t, err)
+	assert.Equal(t, []RetryWorkKey{testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload)}, deleted)
 
 	blocks, err := store.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -387,7 +410,10 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIs
 
 	retryRows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, retryRows)
+	require.Len(t, retryRows, 1, "the unblocked row that names the scope survives")
+	assert.Equal(t, "Shared/Docs/evidence.txt", retryRows[0].Path)
+	assert.Equal(t, 2, retryRows[0].AttemptCount, "with its attempt count")
+	assert.Equal(t, evidence.NextRetryAt, retryRows[0].NextRetryAt, "and its next retry time")
 }
 
 func TestSyncStore_DiscardScope_RejectsZeroScopeKey(t *testing.T) {
@@ -395,7 +421,32 @@ func TestSyncStore_DiscardScope_RejectsZeroScopeKey(t *testing.T) {
 
 	store := newTestStore(t)
 
-	err := store.DiscardScope(t.Context(), ScopeKey{})
+	_, err := store.DiscardScope(t.Context(), ScopeKey{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing scope key")
+}
+
+// A discard reads only the rows blocked under its own scope: a blocked row
+// whose stored scope key no longer parses, under another scope, neither
+// fails the discard nor is deleted by it.
+//
+// Validates: R-2.5.2
+func TestSyncStore_DiscardScope_IgnoresRowsOfOtherScopes(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	scopeKey := SKService()
+	require.NoError(t, store.UpsertBlockScope(ctx, testBlockScope(scopeKey, time.Minute, time.Unix(160, 0))))
+	_, err := store.RecordBlockedRetryWork(ctx, testRetryWorkKey("mine.txt", "", ActionUpload), scopeKey)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO retry_work
+		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at)
+		VALUES ('other.txt', '', ?, 'unknown:scope', 1, 1, 0)`, ActionUpload.String())
+	require.NoError(t, err)
+
+	deleted, err := store.DiscardScope(ctx, scopeKey)
+	require.NoError(t, err)
+	assert.Equal(t, []RetryWorkKey{testRetryWorkKey("mine.txt", "", ActionUpload)}, deleted)
+	assert.Equal(t, 1, retryWorkRowCountForStoreScopeTest(t, store, "other.txt"), "the other scope's row stays")
 }
