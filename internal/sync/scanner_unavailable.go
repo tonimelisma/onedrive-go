@@ -204,9 +204,8 @@ func vanishedMountSkippedItem(dbRelPath string) skippedItem {
 		Path:   dbRelPath,
 		Reason: issueLocalMountMissing,
 		Detail: "this folder was a mount point for another filesystem that is no longer mounted; " +
-			"its synced content is kept until the disk is back (if the disk is gone for good, " +
-			"'onedrive-go drive rebind-root' forgets every recorded mount point, and sync then deletes " +
-			"on OneDrive the content of this folder and of every other one whose disk is not mounted)",
+			"its synced content is kept until the disk is back, and 'onedrive-go drive rebind-root' keeps it " +
+			"(if the disk is gone for good, remove this empty folder: sync then deletes its content on OneDrive)",
 		BlocksReadBoundary: true,
 	}
 }

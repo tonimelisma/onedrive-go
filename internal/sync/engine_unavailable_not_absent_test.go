@@ -213,13 +213,7 @@ func TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted(t *testing.T) {
 
 	assert.Empty(t, remote.deletes, "an unmounted disk's synced files must not be deleted on OneDrive")
 	assert.Zero(t, report.RemoteDeletes)
-	issues, err := eng.baseline.ListObservationIssues(t.Context())
-	require.NoError(t, err)
-	found := false
-	for i := range issues {
-		found = found || (issues[i].Path == "nas" && issues[i].IssueType == issueLocalMountMissing)
-	}
-	assert.True(t, found, "the vanished mount is reported: %+v", issues)
+	requireIssueOfType(t, eng, "nas", issueLocalMountMissing)
 }
 
 // diskFile is a file a disk held, by its path under the sync folder, with
@@ -300,62 +294,149 @@ func remountDisk(t *testing.T, eng *testEngine, syncRoot, disk string, held []di
 	require.NoError(t, err)
 }
 
-// `status` tells a crossed mount point that is not mounted as "Disk not
-// mounted", and its action says what `drive rebind-root` leads to: it forgets
-// every recorded mount point, and sync then deletes the synced content of
-// every folder whose disk is not mounted on OneDrive too, holding the deletes
-// for confirmation only when they are many (describeStatusCondition); the
-// scan's warning says the first half. This runs the planner after the rebind
-// for a disk below and one above the delete-safety hold's threshold, and for
-// two disks that are not mounted.
+// `drive rebind-root` accepts the sync folder as it is now and keeps every
+// recorded mount point: a disk that is not mounted stays "Disk not mounted"
+// after the rebind, so the next sync deletes none of its content on OneDrive
+// and holds nothing for confirmation, however few files it held and however
+// many disks are not mounted. Once each disk is mounted again, the next pass
+// transfers, deletes and moves nothing and the condition clears. The scan's
+// warning says what clears the condition and that the rebind is not it.
 //
 // Validates: R-6.2.15
-func TestRunOnce_ARebindAfterADiskIsGoneDeletesItsContentOnOneDrive(t *testing.T) {
+func TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, vanishedMountSkippedItem("nas").Detail,
-		"'onedrive-go drive rebind-root' forgets every recorded mount point, and sync then deletes on OneDrive "+
-			"the content of this folder and of every other one whose disk is not mounted")
+	detail := vanishedMountSkippedItem("nas").Detail
+	assert.Contains(t, detail, "its synced content is kept until the disk is back")
+	assert.Contains(t, detail, "'onedrive-go drive rebind-root' keeps it")
+	assert.Contains(t, detail, "remove this empty folder")
 
 	for _, tc := range []struct {
 		name  string
 		disks []string
 		files int
-		held  bool
 	}{
 		{name: "a few files", disks: []string{"nas"}, files: 3},
-		{name: "more files than the hold lets through", disks: []string{"nas"}, files: deleteSafetyMinItems + 1, held: true},
+		{name: "more files than the hold lets through", disks: []string{"nas"}, files: deleteSafetyMinItems + 1},
 		{name: "every disk that is not mounted", disks: []string{"nas", "usb"}, files: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote, eng, _, _ := syncedCrossedDisksNowUnmounted(t, tc.files, tc.disks...)
-			deletes := tc.files * len(tc.disks)
+			remote, eng, syncRoot, held := syncedCrossedDisksNowUnmounted(t, tc.files, tc.disks...)
 			_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			require.Empty(t, remote.deletes, "while the disk is not mounted nothing is deleted")
+			uploads, downloads := remote.uploads, remote.downloads
 
 			require.NoError(t, eng.baseline.ClearSyncRootIdentity(t.Context()))
 			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
+			assert.Empty(t, remote.deletes, "a rebind deletes nothing of a disk that is not mounted")
+			assert.Zero(t, report.RemoteDeletes+report.HeldRemoteDeletes+report.LocalDeletes, "%+v", report)
+			for _, disk := range tc.disks {
+				requireIssueOfType(t, eng, disk, issueLocalMountMissing)
+			}
+
+			for _, disk := range tc.disks {
+				remountDisk(t, eng, syncRoot, disk, held)
+			}
+			report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			require.NoError(t, err)
+			assert.Empty(t, remote.deletes)
+			assert.Empty(t, remote.moves)
+			assert.Equal(t, uploads, remote.uploads, "nothing is uploaded")
+			assert.Equal(t, downloads, remote.downloads, "nothing is downloaded")
+			assert.Zero(t, report.LocalDeletes+report.RemoteDeletes+report.ConflictCopies+report.Failed, "%+v", report)
 			for _, disk := range tc.disks {
 				requireNoIssueOfType(t, eng, disk, issueLocalMountMissing)
 			}
-
-			if !tc.held {
-				assert.Len(t, remote.deletes, deletes, "a few deletes run without confirmation")
-				assert.Zero(t, report.HeldRemoteDeletes)
-				return
+			for _, f := range held {
+				requireScenarioLocalFile(t, syncRoot, f.relPath, string(f.content))
 			}
-			assert.Empty(t, remote.deletes, "many deletes are held for confirmation")
-			assert.Equal(t, deletes, report.HeldRemoteDeletes)
-
-			report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
-			require.NoError(t, err)
-			assert.Len(t, remote.deletes, deletes, "confirmed, they are deleted on OneDrive")
-			assert.Zero(t, report.HeldRemoteDeletes)
 		})
+	}
+}
+
+// A disk gone for good is let go of by removing its empty mount point: the
+// next sync takes its content as deleted and holds every one of those deletes
+// toward OneDrive for confirmation, however few. Once confirmed they run, the
+// sync after that forgets the recorded mount point, and a folder made at that
+// path again is an ordinary folder that syncs.
+//
+// Validates: R-6.2.5, R-6.2.15
+func TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved(t *testing.T) {
+	t.Parallel()
+
+	remote, eng, syncRoot, _ := syncedCrossedDisksNowUnmounted(t, 3, "nas")
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	require.Empty(t, remote.deletes, "while the disk is not mounted nothing is deleted")
+
+	require.NoError(t, os.Remove(filepath.Join(syncRoot, "nas")))
+	requireMissingMountPointDeletesHeldThenConfirmed(t, remote, eng, "nas", 3)
+
+	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	flags, err := eng.baseline.listMountBoundaries(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, flags, "the mount point of a removed folder is forgotten")
+
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "nas"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "nas", "new.txt"), []byte("new\n"), 0o600))
+	uploads := remote.uploads
+	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	assert.Greater(t, remote.uploads, uploads, "a folder made there again syncs as an ordinary folder")
+	requireNoIssueOfType(t, eng, "nas", issueLocalMountMissing)
+}
+
+// A rebind onto a folder that lacks a recorded mount point's folder (a
+// restored or re-pointed sync folder without the empty mount point) deletes
+// nothing of that disk on OneDrive unconfirmed: its deletes are held,
+// however few, until `sync --confirm-deletes`.
+//
+// Validates: R-6.2.5, R-6.2.15
+func TestRunOnce_ARebindOntoAFolderWithoutAMountPointHoldsItsDeletes(t *testing.T) {
+	t.Parallel()
+
+	remote, eng, syncRoot, _ := syncedCrossedDisksNowUnmounted(t, 3, "nas")
+	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(syncRoot, "nas")))
+	require.NoError(t, eng.baseline.ClearSyncRootIdentity(t.Context()))
+
+	requireMissingMountPointDeletesHeldThenConfirmed(t, remote, eng, "nas", 3)
+}
+
+// requireMissingMountPointDeletesHeldThenConfirmed runs a sync whose local
+// side lacks the folder of the disk mounted at disk, which held files files:
+// every delete of the disk's folder and files toward OneDrive is held, a
+// second sync still holds them, and a sync with --confirm-deletes runs them.
+func requireMissingMountPointDeletesHeldThenConfirmed(
+	t *testing.T,
+	remote *moveScenarioRemote,
+	eng *testEngine,
+	disk string,
+	files int,
+) {
+	t.Helper()
+
+	deletes := files + 1
+	for range 2 {
+		report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		require.NoError(t, err)
+		assert.Empty(t, remote.deletes, "a missing mount point's deletes are held, however few")
+		assert.Equal(t, deletes, report.HeldRemoteDeletes)
+	}
+
+	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+	require.NoError(t, err)
+	assert.Zero(t, report.HeldRemoteDeletes)
+	assert.Len(t, remote.deletes, deletes, "confirmed, they are deleted on OneDrive")
+	assert.Contains(t, remote.deletes, "item-"+disk)
+	for i := range files {
+		assert.Contains(t, remote.deletes, diskFileItemID(disk, i))
 	}
 }
 
@@ -481,8 +562,12 @@ func TestFlaggedMountIsGone_MountedButEmptiedDiskIsNotABoundary(t *testing.T) {
 		"the disk is mounted (its own device); its emptied content is deleted like any other")
 }
 
-// Validates: R-6.2.15
-func TestClearSyncRootIdentity_ForgetsRecordedMountPoints(t *testing.T) {
+// A rebind clears the sync-folder fingerprint and nothing else: the recorded
+// mount points stay, so a disk that is not mounted is still told apart from
+// deleted content (TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted).
+//
+// Validates: R-6.2.12, R-6.2.15
+func TestClearSyncRootIdentity_KeepsRecordedMountPoints(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -493,8 +578,7 @@ func TestClearSyncRootIdentity_ForgetsRecordedMountPoints(t *testing.T) {
 
 	flags, err := eng.baseline.listMountBoundaries(t.Context())
 	require.NoError(t, err)
-	assert.Empty(t, flags, "a rebind accepts the folder as it is now")
-	assert.Contains(t, vanishedMountSkippedItem("nas").Detail, "drive rebind-root")
+	assert.Equal(t, []string{"nas"}, flags, "a rebind keeps every recorded mount point")
 }
 
 // Validates: R-6.4.9
@@ -513,6 +597,19 @@ func TestCountSyncFolderFiles_MissingFolderHoldsNoFiles(t *testing.T) {
 	count, err := CountSyncFolderFiles(filepath.Join(t.TempDir(), "missing"))
 	require.NoError(t, err)
 	assert.Zero(t, count)
+}
+
+func requireIssueOfType(t *testing.T, eng *testEngine, path string, issueType IssueType) {
+	t.Helper()
+
+	issues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	for i := range issues {
+		if issues[i].Path == path && issues[i].IssueType == issueType {
+			return
+		}
+	}
+	require.Failf(t, "missing issue", "no %s issue at %s: %+v", issueType, path, issues)
 }
 
 func requireNoIssueOfType(t *testing.T, eng *testEngine, path string, issueType IssueType) {

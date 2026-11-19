@@ -1020,7 +1020,18 @@ enumeration). So, per direction (product decision P-1):
   `recentUnconfirmedDeletes` at plan time). Each plan used to be judged alone,
   so a process removing files below the threshold per pass (a failing disk, a
   misbehaving app, a cron job) emptied the drive one small batch at a time and
-  was never held.
+  was never held;
+- **mount point gone**: a delete toward OneDrive of a recorded mount point
+  (`mount_boundaries`, R-6.2.15) whose folder is not in the local snapshot,
+  or of anything below it, is held however few such deletes there are; the
+  plan's other deletes are judged by the two rules above. While the folder is
+  there, a disk that is not mounted is a read boundary and plans no deletes,
+  and a mounted disk the user emptied is an ordinary delete; a folder that is
+  missing is either the user letting go of a disk that is gone for good or a
+  restored or re-pointed sync folder without it (after `drive rebind-root`),
+  and only a confirmation tells the two apart
+  (`TestDeleteSafetyHold_DeletesOfAMissingMountPointAreHeldWhateverTheirNumber`,
+  `TestRunOnce_ARebindOntoAFolderWithoutAMountPointHoldsItsDeletes`).
 
 Moves never count. A held delete is removed from the plan together with
 every action that depends on it, directly or transitively (the create half of

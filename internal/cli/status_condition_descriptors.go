@@ -197,16 +197,16 @@ func describeStatusCondition(key syncengine.ConditionKey) statusConditionDescrip
 			"Disk not mounted",
 			"This folder was the mount point of another disk or filesystem, and that disk is not mounted now. "+
 				"Its synced content is kept, and nothing is deleted on OneDrive.",
-			"Mount the disk again; that clears it and loses nothing. If the disk is gone for good, copy what you "+
-				"need from this folder on OneDrive first: 'onedrive-go drive rebind-root' forgets every disk listed "+
-				"here that is not mounted, and sync then deletes each such folder's content on OneDrive too, holding "+
-				"the deletes for confirmation only when they are many. Mount every disk you still use before you rebind.",
+			"Mount the disk again; that clears it and loses nothing. 'onedrive-go drive rebind-root' does not "+
+				"clear it: a rebind keeps every disk listed here. If the disk is gone for good, copy what you need "+
+				"from this folder on OneDrive first, then remove the empty folder: sync holds the deletes of its "+
+				"content on OneDrive until you run 'onedrive-go sync --confirm-deletes'.",
 		)
 	case syncengine.ConditionDeletesHeld:
 		return newStatusConditionDescriptor(
 			"Deletes held for confirmation",
-			"More was deleted than looks intended (a whole side is empty, or more than 30% of synced files and "+
-				"at least 50), so sync held these deletes. Everything else keeps syncing.",
+			"More was deleted than looks intended (a whole side is empty, more than 30% of synced files and at least "+
+				"50, or the folder of a disk sync crossed into is gone), so sync held these deletes. Everything else keeps syncing.",
 			"Check the sync folder and OneDrive. If the deletes are intended, run 'onedrive-go sync --confirm-deletes'; "+
 				"otherwise restore the missing files.",
 		)
