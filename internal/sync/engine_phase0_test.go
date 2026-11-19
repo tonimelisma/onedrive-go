@@ -489,6 +489,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventTrialTimerArmed
 	}, "trial timer re-armed after trial failure")
+	cancel()
 
 	block, ok := getTestBlockScope(eng, SKService())
 	require.True(t, ok, "service scope should remain blocked after trial failure")
@@ -569,13 +570,15 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
 		return event.Type == engineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
 	}, "trial success released blocked scope")
-	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
-		"trial success should clear the block scope")
 
 	retried := readReadyAction(t, rt.sched.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
 		"trial success should re-dispatch blocked retry work without external observation")
 	assert.Equal(t, ActionDownload, retried.Action.Type)
+
+	cancel()
+	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
+		"trial success should clear the block scope")
 }
 
 // Validates: R-2.10.2, R-2.10.10
@@ -668,6 +671,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	default:
 	}
+	cancel()
 	assert.True(t, isTestBlockScopeed(eng, testThrottleScope()),
 		"block scope should be activated from the action completion")
 

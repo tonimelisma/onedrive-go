@@ -89,36 +89,74 @@ func deleteRetryWorkByWorkTx(ctx context.Context, runner sqlTxRunner, work Retry
 	return nil
 }
 
-func deleteRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) error {
-	if _, err := runner.ExecContext(ctx, `DELETE FROM retry_work WHERE scope_key = ?`, scopeKey); err != nil {
-		return fmt.Errorf("sync: deleting retry_work for scope %s: %w", scopeKey, err)
+// deleteBlockedRetryWorkByScopeTx deletes the rows blocked under scopeKey
+// and returns their keys. It reads only those rows, so a row stored under
+// another scope never takes part.
+func deleteBlockedRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) ([]RetryWorkKey, error) {
+	rows, err := runner.QueryContext(ctx, `SELECT `+sqlSelectRetryWorkCols+`
+		FROM retry_work
+		WHERE scope_key = ? AND blocked = 1
+		ORDER BY path, old_path, action_type`, scopeKey)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing blocked retry_work for scope %s: %w", scopeKey, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+	blocked, err := scanRetryWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading blocked retry_work for scope %s: %w", scopeKey, err)
+	}
+	deleted := make([]RetryWorkKey, 0, len(blocked))
+	for i := range blocked {
+		deleted = append(deleted, blocked[i].WorkKey())
+	}
+	if _, err := runner.ExecContext(ctx,
+		`DELETE FROM retry_work WHERE scope_key = ? AND blocked = 1`, scopeKey,
+	); err != nil {
+		return nil, fmt.Errorf("sync: deleting blocked retry_work for scope %s: %w", scopeKey, err)
 	}
 
-	return nil
+	return deleted, nil
 }
 
 // markRetryWorkReadyTx makes the named rows, blocked under scopeKey, ready
 // at nowNano: one ramp batch of a scope release (R-6.8.24). A key that is not
-// blocked under the scope any more is left alone.
+// blocked under the scope any more is left alone. It returns the rows it
+// made ready, as they are afterwards.
 func markRetryWorkReadyTx(
 	ctx context.Context,
 	runner sqlTxRunner,
 	scopeKey string,
 	work []RetryWorkKey,
 	nowNano int64,
-) error {
+) ([]RetryWorkRow, error) {
+	var released []RetryWorkRow
 	for i := range work {
-		if _, err := runner.ExecContext(ctx,
+		result, err := runner.ExecContext(ctx,
 			`UPDATE retry_work
 			SET blocked = 0, next_retry_at = ?
 			WHERE path = ? AND old_path = ? AND action_type = ? AND scope_key = ? AND blocked = 1`,
 			nowNano, work[i].Path, work[i].OldPath, work[i].ActionType.String(), scopeKey,
-		); err != nil {
-			return fmt.Errorf("sync: setting retry_work ready for %s under %s: %w", work[i].Path, scopeKey, err)
+		)
+		if err != nil {
+			return nil, fmt.Errorf("sync: setting retry_work ready for %s under %s: %w", work[i].Path, scopeKey, err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("sync: counting retry_work set ready for %s: %w", work[i].Path, err)
+		}
+		if changed == 0 {
+			continue
+		}
+		row, found, err := loadRetryWorkByWorkTx(ctx, runner, work[i])
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			released = append(released, *row)
 		}
 	}
 
-	return nil
+	return released, nil
 }
 
 // ReleaseOrphanBlockedRetryWork makes every blocked row whose scope has no
@@ -313,35 +351,42 @@ func (s *SyncStore) ResolveRetryWork(
 	return row, found, nil
 }
 
+// ClearBlockedRetryWork deletes work's row when it is blocked under
+// scopeKey, and reports whether it deleted one.
 func (s *SyncStore) ClearBlockedRetryWork(
 	ctx context.Context,
 	work RetryWorkKey,
 	scopeKey ScopeKey,
-) (err error) {
+) (cleared bool, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin clear blocked retry_work tx for %s: %w", work.Path, err)
+		return false, fmt.Errorf("sync: begin clear blocked retry_work tx for %s: %w", work.Path, err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback clear blocked retry_work tx for %s", work.Path))
 	}()
 
-	if _, execErr := tx.ExecContext(ctx,
+	result, execErr := tx.ExecContext(ctx,
 		`DELETE FROM retry_work
 			WHERE path = ? AND old_path = ? AND action_type = ? AND scope_key = ? AND blocked = 1`,
 		work.Path,
 		work.OldPath,
 		work.ActionType.String(),
 		scopeKey.String(),
-	); execErr != nil {
-		return fmt.Errorf("sync: deleting blocked retry_work for %s: %w", work.Path, execErr)
+	)
+	if execErr != nil {
+		return false, fmt.Errorf("sync: deleting blocked retry_work for %s: %w", work.Path, execErr)
+	}
+	deleted, countErr := result.RowsAffected()
+	if countErr != nil {
+		return false, fmt.Errorf("sync: counting deleted blocked retry_work for %s: %w", work.Path, countErr)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit clear blocked retry_work for %s: %w", work.Path, err)
+		return false, fmt.Errorf("sync: commit clear blocked retry_work for %s: %w", work.Path, err)
 	}
 
-	return nil
+	return deleted > 0, nil
 }
 
 func (s *SyncStore) ListRetryWork(ctx context.Context) ([]RetryWorkRow, error) {

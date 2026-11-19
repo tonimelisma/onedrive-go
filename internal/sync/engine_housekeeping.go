@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -28,10 +27,28 @@ func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
 // streakReport names one repeated step's failure streak and the three lines
 // it can log.
 type streakReport struct {
-	failing   *atomic.Bool
+	failing   streakFlag
 	warn      string // the first failure of a streak
 	repeat    string // every later failure of the streak, at Debug
 	recovered string // the first success after a streak, at Info
+}
+
+// streakFlag is whether a repeating step is in a failure streak. Swap sets
+// it and returns what it was. A flag that one goroutine owns is an
+// ownedStreak; one that two goroutines write is an atomic.Bool.
+type streakFlag interface {
+	Swap(failing bool) bool
+}
+
+// ownedStreak is a streakFlag that only one goroutine reads and writes.
+type ownedStreak bool
+
+// Swap sets the flag to failing and returns what it was.
+func (f *ownedStreak) Swap(failing bool) bool {
+	was := bool(*f)
+	*f = ownedStreak(failing)
+
+	return was
 }
 
 // reportStreakOutcome keeps the failure of a step that repeats to one Warn
@@ -143,10 +160,10 @@ func (e *Engine) purgeExpiredTrash(force bool) {
 		return
 	}
 	now := e.nowFunc()
-	if last := e.trashPurgedAt.Load(); !force && last != 0 && now.Sub(time.Unix(0, last)) < trashPurgeInterval {
+	if last := e.trashPurgedAt; !force && last != 0 && now.Sub(time.Unix(0, last)) < trashPurgeInterval {
 		return
 	}
-	e.trashPurgedAt.Store(now.UnixNano())
+	e.trashPurgedAt = now.UnixNano()
 
 	removed, err := e.trash.Purge()
 	e.reportStreakOutcome(streakReport{

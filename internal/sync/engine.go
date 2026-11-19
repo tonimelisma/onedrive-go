@@ -55,9 +55,11 @@ type Engine struct {
 	perfCollector          *perf.Collector
 	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
 	trash                  *localtrash.Trash      // local deletes and replaced files (R-6.4.9)
-	// trashPurgedAt is when housekeeping last purged expired trash entries;
-	// watch maintenance purges at most once per trashPurgeInterval.
-	trashPurgedAt   atomic.Int64
+	// trashPurgedAt is when housekeeping last purged expired trash entries,
+	// in Unix nanoseconds; watch maintenance purges at most once per
+	// trashPurgeInterval. Only the goroutine running the engine's RunOnce or
+	// RunWatch reads and writes it.
+	trashPurgedAt   int64
 	transferWorkers int // goroutine count for the worker pool
 	checkWorkers    int // goroutine limit for parallel file hashing
 	contentFilter   ContentFilterConfig
@@ -78,6 +80,19 @@ type Engine struct {
 	// syncs with, the one whose sign-in requirement a 401 marks and the
 	// startup proof clears; zero leaves the catalog alone.
 	accountCanonicalID driveid.CanonicalID
+	// ownerCheckFactory, when set, is called on the goroutine that starts a
+	// run (beginRun) and returns the owner check of that run, which the run's
+	// scope ledger, watch timers and every dependency graph it builds carry;
+	// nil in production. Test-only: a test proves the run touches them from
+	// its own goroutine alone.
+	ownerCheckFactory func() func()
+	// runOwnerCheck is the current run's owner check, nil outside a run and
+	// in production. Written by beginRun on the run's goroutine.
+	runOwnerCheck func()
+	// clearAccountAuthRequirement replaces config.ClearAccountAuthRequirement
+	// for the startup proof's clear; nil in production. Tests return a held
+	// catalog lock through it without waiting out the lock's timeout.
+	clearAccountAuthRequirement func(dataDir string, account driveid.CanonicalID) error
 
 	localRules            LocalObservationRules
 	shortcutNamespaceID   string
@@ -135,7 +150,9 @@ type Engine struct {
 	// racily-clean window on the run's clock (observeLocal). Its timer panics
 	// carry a timer callback's panic to the run it ends (beginRun).
 	wallClock realClock
-	nextRunID atomic.Int64
+	// nextRunID numbers the engine's runs. One engine runs one RunOnce or
+	// RunWatch at a time, and that run's goroutine alone takes the next.
+	nextRunID int64
 
 	// mountRootDeltaFallbackReported is set once the engine has reported, at
 	// Info, that folder delta is unavailable for its shared-folder root and
@@ -150,10 +167,10 @@ type Engine struct {
 	// Each clears when its operation succeeds again, so the next streak is
 	// reported once more. Only the goroutine running the engine's RunOnce or
 	// RunWatch reads and writes them.
-	protectedRootRefreshFailing atomic.Bool
-	partialCleanupFailing       atomic.Bool
-	sessionCleanupFailing       atomic.Bool
-	trashPurgeFailing           atomic.Bool
+	protectedRootRefreshFailing ownedStreak
+	partialCleanupFailing       ownedStreak
+	sessionCleanupFailing       ownedStreak
+	trashPurgeFailing           ownedStreak
 	// releasedRootJunkFailing and releaseRefusalFailing keep the same one Warn
 	// per streak for a removed shared folder's release that cannot remove the
 	// junk left in its emptied sync folder (emptyReleasedRoot) or a synced
@@ -192,7 +209,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	storeOwnedByEngine := false
 	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
-	bm, err := openEngineSyncStore(ctx, cfg.DBPath, cfg.Logger)
+	bm, err := openEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.storeDriverName())
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -456,6 +473,16 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, 
 	return nil
 }
 
+// storeDriverName is the database/sql driver the engine opens its store
+// through: the SQLite driver unless a test named another.
+func (cfg *engineInputs) storeDriverName() string {
+	if cfg.storeDriver == "" {
+		return sqliteDriverName
+	}
+
+	return cfg.storeDriver
+}
+
 func (e *Engine) collector() *perf.Collector {
 	if e == nil {
 		return nil
@@ -464,8 +491,26 @@ func (e *Engine) collector() *perf.Collector {
 	return e.perfCollector
 }
 
+// withOwnCollector puts the engine's perf collector on ctx, so what the HTTP
+// transports, the store and the transfers record on the collector their
+// context carries counts on this engine's, whatever its caller's context
+// carries. RunOnce and RunWatch (through beginRun) and Close call it first. A
+// context that already carries the engine's collector is returned as it is,
+// so nothing is counted twice; one that carries another collector has it
+// replaced, since the engine's collector rolls up to its parent. An engine
+// without a collector leaves ctx alone.
+func (e *Engine) withOwnCollector(ctx context.Context) context.Context {
+	own := e.collector()
+	if own == nil || perf.FromContext(ctx) == own {
+		return ctx
+	}
+
+	return perf.WithCollector(ctx, own)
+}
+
 func (e *Engine) nextRuntimeRunID() string {
-	return fmt.Sprintf("run-%d", e.nextRunID.Add(1))
+	e.nextRunID++
+	return fmt.Sprintf("run-%d", e.nextRunID)
 }
 
 // Close releases resources held by the engine. Nil-safe for observer
@@ -473,6 +518,8 @@ func (e *Engine) nextRuntimeRunID() string {
 // database connection, and only then releases the store and folder locks.
 // Safe to call more than once.
 func (e *Engine) Close(ctx context.Context) error {
+	ctx = e.withOwnCollector(ctx)
+
 	// Clean stale upload session files. A failure does not stop the close, but
 	// it is reported at Warn with the count removed, as after a sync pass: a
 	// session file that cannot be removed would otherwise go unseen.
@@ -579,8 +626,23 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if proofErr != nil {
 		return proofErr
 	}
-	if err := config.ClearAccountAuthRequirement(e.dataDir, e.accountCanonicalID); err != nil {
-		return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
+	clearRequirement := e.clearAccountAuthRequirement
+	if clearRequirement == nil {
+		clearRequirement = config.ClearAccountAuthRequirement
+	}
+	if err := clearRequirement(e.dataDir, e.accountCanonicalID); err != nil {
+		if !errors.Is(err, config.ErrConfigLocked) {
+			return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
+		}
+		// Another onedrive-go process holds the catalog. The proof has
+		// passed, so the sync starts; the stored requirement stands until a
+		// start that can take the lock clears it.
+		e.logger.Warn("Could not clear the stored sign-in requirement; the next start clears it",
+			slog.String("account", e.accountCanonicalID.String()),
+			slog.Any("error", err),
+		)
+
+		return nil
 	}
 
 	e.logger.Info("released catalog auth requirement after successful startup proof",

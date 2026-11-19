@@ -125,6 +125,12 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | The local findings batch manages every issue type a local scan reports, held to the scanner's source by a test, so a full scan clears a finding it no longer reports (an interrupted removal's leftover the user deleted) and keeps one it reports again; while watching is unavailable the periodic fallback scan (`runFallbackScan`) hands its finding set over like a safety scan, the empty set included (R-6.4.9, R-2.8.22). | `TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover`, `TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone`, `TestWatchRuntime_FallbackScanRecordsAndClearsFindings` |
 | A rescan that changes no committed truth schedules no replan and leaves the admitted plan dispatchable. | `TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan`, `TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
+| `RunOnce`, `RunWatch` and `Close` put the engine's own perf collector on their context (`withOwnCollector`), so what the transports, the store and the transfers record counts on the mount's collector without its owner wrapping the context; a context that already carries it is left as it is (R-6.6.15). | `TestRunOnce_CountsOnTheEngineCollectorWithoutAnOwnerWrap`, `TestRunWatch_CountsOnTheEngineCollectorWithoutAnOwnerWrap`, `TestEngine_WithOwnCollectorWrapsOnceAndReplacesAnother` |
+| A startup proof that cannot clear a stored sign-in requirement because another process holds the catalog logs one Warn, keeps the requirement and starts; the next start clears it (R-2.10.46). | `TestEngineStartup_LockedCatalogWarnsAndStarts` |
+| A planning-state load error reads the same in a one-shot pass, the watch bootstrap and a watch replan, and names the failed query once (R-6.2.16). | `TestPlanningLoadError_SameTextInOneShotAndWatch` |
+| A watch starts no observer before its fallible set-up has succeeded, returns only after the goroutines it started beside its loop have exited, and names, after one bound on the engine clock, a goroutine that ignores its context (R-6.3.4, R-6.3.9). | `TestStartObservers_LocalSetupFailureStartsNoObserver`, `TestRunWatch_ReturnsOnlyAfterObserversHaveExited`, `TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound`, `TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree` |
+| The scope ledger, the watch timers and the dependency graph are owned by the run's goroutine without a lock; each accessor runs a test-installed owner check, and timer callbacks touch only their channels (R-6.3.4). | `TestOwnerCheck_DependencyGraphCatchesASecondGoroutine`, `TestOwnerCheck_ScopeLedgerCatchesASecondGoroutine`, `TestOwnerCheck_WatchTimersCatchASecondGoroutine`, `TestWatchRuntime_TimerCallbacksTouchOnlyChannels`, `TestRunOnce_UsesRunStateOnlyFromItsGoroutine`, `TestRunWatch_UsesRunStateOnlyFromItsGoroutine` |
+| The run's retry cache is written only from store results, in `engine_retry_work.go`: it equals the store after every completion, a scope discard deletes only the rows blocked under the scope and drops their cached rows, a release batch caches exactly what the store released, and a resolve clears the cached row and the hold whether or not the store had a row (R-2.10.33). | `TestEngineFlow_RetryCacheMatchesStoreAfterEveryCompletion`, `TestEngineFlow_DiscardScope_LeavesNoCachedRowTheStoreDeleted`, `TestEngineFlow_ReleaseScopeBatch_CacheEqualsStore`, `TestEngineFlow_ResolveWithoutStoreRow_ClearsTheCachedRow`, `TestRetryWork_IsTheOnlyEngineWriterOfRetryWork` |
 
 ## The Engine Clock Is One Capability
 
@@ -245,14 +251,31 @@ D-092):
 about a run:
 
 - `actionScheduler` -- which actions exist, which are queued, which are running
-- `retryLedger` -- the durable retry rows for this run, what is held, and in
-  what order it releases
+- `retryLedger` -- what is held, and in what order it releases
 - `scopeLedger` -- the active shared blockers
 - `runResults` -- what the run will report when it finishes
 
-This does not change the concurrency model. One goroutine still owns all four,
-and `scopeLedger.mu` still guards only the slice that admission checks and
-status snapshots read concurrently. What changes is that the compiler now shows
+Beside them, `retryWork` (`engine_retry_work.go`) is the run's one path to the
+`retry_work` table: the only engine code that calls a `retry_work` mutator of
+the store, holding a cache of the table that it writes only from what a store
+call returned (R-2.10.33). The table is the one authority; the cache is
+compared with it after every completion when invariant checks are on, and a
+test holds the sources to the one write path
+(`TestRetryWork_IsTheOnlyEngineWriterOfRetryWork`).
+
+One goroutine, the one running `RunOnce` or `RunWatch`, owns all of them, and
+none has a lock -- the scope ledger, the watch timers and the dependency graph
+included -- so the race detector reports the first access from a second
+goroutine (R-6.3.4). Each carries an `ownerCheck` hook, nil in
+production; a test sets `Engine.ownerCheckFactory`, which `beginRun` calls on
+the run's goroutine, and the run's scope ledger, timers and every dependency
+graph it builds carry the check it returns, which counts a call from another
+goroutine. The
+engine's housekeeping streak flags, its trash purge time and its run counter
+are plain fields for the same reason; the release streak flags stay atomic
+because the orchestrator's final-drain acknowledgement writes them too, and
+`protectedRoots` keeps its mutex for the goroutines its comment names. What
+changes is that the compiler now shows
 which owner a method touches, so "this decision is about scheduling" or "this
 decision is about retry timing" is visible in the code rather than inferred
 from field names on a struct that carried several dozen of them.
@@ -272,8 +295,9 @@ question about what the runtime does, not about where its fields live.
 
 `watchRuntime` holds its mutable state in three named fields: `loop` (phase,
 outbox, pending replan), `resources` (observer streams, refresh channels,
-websocket lifecycle), and `timers` (the retry and trial timers plus the mutex
-guarding them).
+the goroutines the watch starts beside its loop), and `timers` (the retry,
+trial and admit timers; the loop alone arms and reads them, and each timer
+callback only signals the channel it was handed when it was armed).
 
 Two of the three were embedded. Embedding grouped the declarations but promoted
 every field back to the top level, so any of the type's methods could still
@@ -714,9 +738,9 @@ mode from the config-resolved capability surface:
 - action completion drain
 - retry and trial timer scheduling
 - periodic maintenance ticks and full remote refresh
-- graceful shutdown: in-flight actions are canceled, not waited for to
-  complete, and the drain phase consumes their completions until every worker
-  has stopped
+- shutdown: the loop cancels in-flight actions, not waited for to complete,
+  and the drain phase consumes their completions until every worker has
+  stopped
 
 `RunWatch` starts with the same shared startup boundary one-shot uses.
 That startup boundary owns persisted-scope normalization, account-auth
@@ -748,7 +772,21 @@ named runtime phase boundary before starting observers. Bootstrap may use loop
 termination to mean "bootstrap quiesced"; the observer-backed loop may only
 terminate through drain completion or a fatal runtime error. Starting observers
 while draining or while another observer set is still active is an engine
-invariant violation and fails before new goroutines are admitted.
+invariant violation and fails before new goroutines are admitted. Every step
+of the observer start that can fail (the local hash cache and the mount
+boundaries read from the store) runs before the first observer starts, so a
+start that fails leaves nothing running.
+The goroutines the watch starts beside its loop that can write the store or
+the engine's state -- the remote and local observers, the full remote refresh
+and the socket.io wake source -- are owned by one `watchGoroutines` value:
+each runs under a context of its own, and the pipeline's cleanup cancels them
+and waits for each before `RunWatch` returns (R-6.3.4). The wait, and the
+drain's wait for the observers' exits and a refresh's result once every
+completion is in, share one bound on the engine clock,
+`watchGoroutineStopTimeout` (5 s): when it passes, one Warn names the kinds
+still running and the watch returns (R-6.3.9). The bound plus the drain's one
+detached store write (`OutcomeCommitTimeout`, 30 s) stays under the multisync
+runner stop bound (45 s), so the engine names its own slow goroutine first.
 Cancellation wins over non-draining intake, including a dirty-buffer
 `replanReady` channel that closes because its context was canceled. The watch
 loop must enter drain and emit `shutdown_started` before it accepts any
@@ -1641,9 +1679,10 @@ that same rule; recovery happens through normal timed trials or successful
 writes, not through a separate maintenance loop. A scope row may still share a
 `scope_key` with observation or ready retry rows for reporting/history, but
 the engine keeps a blocker active only while blocked `retry_work` still
-exists. Scope release updates both authorities in one logical step: store-side
-blocked rows become ready immediately, and the current runtime flips the
-matching held entries into due retry-held work so one-shot and watch can
+exists. Scope release changes the one authority and its cache together: the store
+makes the batch's blocked rows ready and returns them, the run's retry cache
+takes exactly those rows, and the current runtime flips the matching held
+entries into due retry-held work so one-shot and watch can
 continue without waiting for a replan. Trial-driven reclassification from one
 blocked scope to another follows that same ownership rule: the newly
 reclassified exact work moves to the new scope immediately, but the old scope is

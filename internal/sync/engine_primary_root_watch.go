@@ -3,13 +3,11 @@ package sync
 import (
 	"context"
 	"log/slog"
-	stdsync "sync"
 	"time"
 )
 
 func (rt *watchRuntime) startPrimaryRootWatch(
 	ctx context.Context,
-	obsWg *stdsync.WaitGroup,
 	bl *Baseline,
 	batches chan<- remoteObservationBatch,
 	errs chan<- error,
@@ -17,14 +15,13 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 ) {
 	if rt.engine.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
-		go func() {
-			defer obsWg.Done()
+		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
 			defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 			defer close(batches)
 			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
 			errs <- observerExitError(observerNameRemote, rt.watchMountRootRemote(ctx, bl, batches, pollInterval))
-		}()
+		})
 		return
 	}
 
@@ -58,8 +55,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		savedToken = state.Cursor
 	}
 
-	go func() {
-		defer obsWg.Done()
+	rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
 		defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
 		defer close(batches)
 		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
@@ -80,7 +76,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			},
 		)
 		errs <- observerExitError(observerNameRemote, watchErr)
-	}()
+	})
 }
 
 func (rt *watchRuntime) warnMountRootWebsocketFallback() {

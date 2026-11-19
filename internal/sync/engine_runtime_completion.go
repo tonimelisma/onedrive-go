@@ -623,7 +623,7 @@ func (flow *engineFlow) recordRetryWork(
 	var row *RetryWorkRow
 	var recErr error
 	if blocked {
-		row, recErr = flow.deps.store.RecordBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
+		row, recErr = flow.retryWork.recordBlocked(ctx, flow.deps.store, retryWorkKeyForCompletion(r), scopeKey)
 	} else {
 		failure := &RetryWorkFailure{
 			Work:     retryWorkKeyForCompletion(r),
@@ -632,12 +632,12 @@ func (flow *engineFlow) recordRetryWork(
 		if actionable {
 			failure.ConditionType = decision.ConditionType
 		}
-		row, recErr = flow.deps.store.RecordRetryWorkFailure(ctx, failure, delayFn)
+		row, recErr = flow.retryWork.recordFailure(ctx, flow.deps.store, failure, delayFn)
 	}
 	if recErr != nil {
 		return fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)
 	}
-	if actionable && !blocked && row != nil && row.AttemptCount == 1 {
+	if actionable && !blocked && row.AttemptCount == 1 {
 		// Said once, when the condition starts (R-6.6.30): the retries that
 		// follow are on the durable curve and change nothing the user can
 		// see. Status keeps listing the path under the condition meanwhile.
@@ -659,10 +659,6 @@ func (flow *engineFlow) recordRetryWork(
 		slog.String("scope_evidence", scopeKey.String()),
 		slog.Bool("blocked", blocked),
 	)
-	if row == nil {
-		return fmt.Errorf("record retry_work for %s: missing persisted row", r.Path)
-	}
-	flow.retries.rowsByKey[row.WorkKey()] = *row
 	fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	flow.deps.logger.Debug("retry_work recorded", fields...)
 
@@ -847,15 +843,8 @@ func (flow *engineFlow) parkWedgedAction(ctx context.Context, r *actionCompletio
 	if current != nil {
 		work = retryWorkKeyForAction(&current.Action)
 	}
-	row, err := flow.deps.store.RecordRetryWorkFailure(ctx, &RetryWorkFailure{Work: work}, supersedeParkDelay)
-	if err != nil {
+	if _, err := flow.retryWork.recordFailure(ctx, flow.deps.store, &RetryWorkFailure{Work: work}, supersedeParkDelay); err != nil {
 		return fmt.Errorf("park wedged action %s: %w", r.Path, err)
-	}
-	if row == nil {
-		return fmt.Errorf("park wedged action %s: missing persisted row", r.Path)
-	}
-	if flow.retries.rowsByKey != nil {
-		flow.retries.rowsByKey[row.WorkKey()] = *row
 	}
 	flow.signals.armRetryTimer()
 

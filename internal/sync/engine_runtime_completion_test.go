@@ -293,7 +293,7 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 		NextRetryAt:  eng.nowFunc().UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
-	flow.retries.rowsByKey[row.WorkKey()] = row
+	flow.retryWork.rows[row.WorkKey()] = row
 
 	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
@@ -656,7 +656,7 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToR
 		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
-	flow.retries.rowsByKey[blockedRow.WorkKey()] = *blockedRow
+	flow.retryWork.rows[blockedRow.WorkKey()] = *blockedRow
 
 	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,
@@ -919,7 +919,7 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 		AttemptCount: 1,
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
-	flow.retries.rowsByKey[row.WorkKey()] = row
+	flow.retryWork.rows[row.WorkKey()] = row
 
 	current := rt.sched.graph.Add(&Action{
 		Type:    ActionUpload,

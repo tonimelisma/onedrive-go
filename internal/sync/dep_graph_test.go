@@ -1,8 +1,6 @@
 package sync
 
 import (
-	"fmt"
-	stdsync "sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,101 +164,6 @@ func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrent Complete
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.4
-func TestDepGraph_ConcurrentComplete(t *testing.T) {
-	t.Parallel()
-
-	dg := newDepGraph(synctest.TestLogger(t))
-
-	// Fan-out: action 0 has no deps; actions 1-49 depend on action 0.
-	dg.Add(&Action{
-		Type: ActionFolderCreate, Path: "root",
-		DriveID: driveid.New("d"), ItemID: "i0",
-	}, 0, nil)
-
-	for i := int64(1); i <= 49; i++ {
-		dg.Add(&Action{
-			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
-			DriveID: driveid.New("d"), ItemID: "i",
-		}, i, []int64{0})
-	}
-
-	// Complete action 0 — should return 49 dependents.
-	ready, ok := dg.Complete(0)
-	require.True(t, ok)
-	require.Len(t, ready, 49, "completing root should release 49 dependents")
-
-	// Concurrently complete all dependents.
-	var wg stdsync.WaitGroup
-	for _, ta := range ready {
-		wg.Add(1)
-		go func(ta *trackedAction) {
-			defer wg.Done()
-			dg.Complete(ta.ID)
-		}(ta)
-	}
-	wg.Wait()
-
-	assert.Equal(t, 0, dg.InFlightCount(), "all actions should be completed")
-}
-
-// ---------------------------------------------------------------------------
-// Concurrent Add and Complete
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.4
-func TestDepGraph_ConcurrentAddAndComplete(t *testing.T) {
-	t.Parallel()
-
-	dg := newDepGraph(synctest.TestLogger(t))
-
-	// Root action with no deps.
-	dg.Add(&Action{
-		Type: ActionFolderCreate, Path: "root",
-		DriveID: driveid.New("d"), ItemID: "i0",
-	}, 0, nil)
-
-	// Seed some initial dependents.
-	for i := int64(1); i <= 20; i++ {
-		dg.Add(&Action{
-			Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
-			DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
-		}, i, []int64{0})
-	}
-
-	// Concurrently: Complete root (iterates dependents) while Add
-	// appends more dependents to the root action's dependents slice.
-	var wg stdsync.WaitGroup
-	wg.Add(2)
-
-	var readyFromComplete []*trackedAction
-
-	go func() {
-		defer wg.Done()
-		readyFromComplete, _ = dg.Complete(0)
-	}()
-
-	go func() {
-		defer wg.Done()
-		for i := int64(21); i <= 40; i++ {
-			dg.Add(&Action{
-				Type: ActionDownload, Path: fmt.Sprintf("file-%d", i),
-				DriveID: driveid.New("d"), ItemID: fmt.Sprintf("i%d", i),
-			}, i, []int64{0})
-		}
-	}()
-
-	wg.Wait()
-
-	// At least the initial 20 dependents should have been returned.
-	require.GreaterOrEqual(t, len(readyFromComplete), 20,
-		"expected at least 20 dependents from Complete")
-}
-
-// ---------------------------------------------------------------------------
 // SkipCompletedDeps — dependency not in actions map
 // ---------------------------------------------------------------------------
 
@@ -313,43 +216,6 @@ func TestDepGraph_InFlightCount(t *testing.T) {
 
 	dg.Complete(2)
 	assert.Equal(t, 0, dg.InFlightCount(), "should be zero when all completed")
-}
-
-// ---------------------------------------------------------------------------
-// Concurrent multi-add (race detector coverage)
-// ---------------------------------------------------------------------------
-
-// Validates: R-6.4
-func TestDepGraph_ConcurrentMultiAdd(t *testing.T) {
-	t.Parallel()
-
-	dg := newDepGraph(synctest.TestLogger(t))
-
-	// 10 goroutines each add 50 independent actions (unique IDs).
-	var wg stdsync.WaitGroup
-
-	for g := range 10 {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			for i := range 50 {
-				id := int64(g*100 + i)
-				dg.Add(&Action{
-					Type:    ActionDownload,
-					Path:    fmt.Sprintf("file-%d-%d", g, i),
-					DriveID: driveid.New("d"),
-					ItemID:  fmt.Sprintf("i%d", id),
-				}, id, nil)
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	assert.Equal(t, 500, dg.InFlightCount(),
-		"all 500 actions should be in-flight after concurrent adds")
 }
 
 // ---------------------------------------------------------------------------

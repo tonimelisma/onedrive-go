@@ -73,19 +73,23 @@ func stressSyncRunWatchMembers() []string {
 		"TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare",
 		"TestRunWatch_CancellationWinsOverFinalObserverExit",
 		"TestRunWatch_ContextCancel",
+		"TestRunWatch_CountsOnTheEngineCollectorWithoutAnOwnerWrap",
 		"TestRunWatch_DownloadOnly_StartsLocalObserver",
 		"TestRunWatch_FallbackSleepHonorsCancellation",
 		"TestRunWatch_FinishesTheRemoteEditBehindARekey",
 		"TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass",
 		"TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing",
 		"TestRunWatch_MountRootKeepsPollingOnly",
+		"TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound",
 		"TestRunWatch_ProcessBatch_EmptyPlan",
 		"TestRunWatch_RecordsTheCancelOfItsRun",
+		"TestRunWatch_ReturnsOnlyAfterObserversHaveExited",
 		"TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch",
 		"TestRunWatch_ShutdownStopsRetryAndTrialTimers",
 		"TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning",
 		"TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns",
 		"TestRunWatch_UploadOnly_StartsRemoteObserver",
+		"TestRunWatch_UsesRunStateOnlyFromItsGoroutine",
 		"TestRunWatch_WatchFallbackRetriesTheWatcher",
 		"TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval",
 		"TestRunWatch_WatchLimitExhausted_FallsBackToPolling",
@@ -148,6 +152,7 @@ func stressSyncWatchRuntimeMembers() []string {
 		"TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan",
 		"TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks",
 		"TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange",
+		"TestWatchRuntime_TimerCallbacksTouchOnlyChannels",
 	}
 }
 
@@ -155,6 +160,7 @@ func stressSyncWatchRuntimeMembers() []string {
 // scenarios.
 func stressSyncWatchMembers() []string {
 	return []string{
+		"TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree",
 		"TestHandleWrite_DeleteClearsTimer",
 		"TestHandleWrite_DifferentPathsNotCoalesced",
 		"TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash",
@@ -294,9 +300,6 @@ func stressSyncShutdownAndCancellationMembers() []string {
 		"TestClassifyResult_StalledTransferIsRetryableNotShutdown",
 		"TestClassifyResult_SuccessAndShutdown",
 		"TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker",
-		"TestDepGraph_ConcurrentAddAndComplete",
-		"TestDepGraph_ConcurrentComplete",
-		"TestDepGraph_ConcurrentMultiAdd",
 		"TestDrainAfterCanceledStepError_AlreadyDrainingReportsTheError",
 		"TestDrainAfterCanceledStepError_CanceledStepFailureStartsTheDrain",
 		"TestDrainAfterCanceledStepError_LiveContextReportsTheError",

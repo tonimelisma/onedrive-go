@@ -65,7 +65,7 @@ func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) 
 		supersedeStreaks: make(map[string]int),
 		signals:          signals,
 	}
-	flow.retries.rowsByKey = map[RetryWorkKey]RetryWorkRow{}
+	flow.retryWork.rows = map[RetryWorkKey]RetryWorkRow{}
 	stale := &actionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
 
 	for range supersedeParkThreshold - 1 {

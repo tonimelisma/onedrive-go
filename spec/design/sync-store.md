@@ -433,7 +433,14 @@ Supporting outcome mutations should stay separate by owner:
   carry `next_retry_at = 0`, so there is nothing store-side to order by);
   the store marks exactly those rows ready now and deletes the scope row in
   the same transaction when no blocked row remains under it, so a
-  probationary scope is never persisted without blocked work (R-6.8.24)
+  probationary scope is never persisted without blocked work (R-6.8.24). It
+  returns the rows it released, as they are afterwards, beside whether the
+  scope row went. A discard (`DiscardScope`) deletes the rows blocked under
+  the scope, then the scope row, and returns the deleted keys; a row that only
+  names the scope (released work, or work that recorded it as evidence) keeps
+  its attempt count and next retry time. `ClearBlockedRetryWork` reports
+  whether it deleted a row. The engine's retry cache is written from these
+  results alone (`engine_retry_work.go`, sync-engine.md)
 - retry-resolution helpers that delete exact `retry_work` and return the
   resolved `retry_work` row for engine-owned cleanup decisions
 

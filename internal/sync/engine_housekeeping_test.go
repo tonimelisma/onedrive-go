@@ -128,7 +128,7 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 
 	for range rounds {
 		seedRemovedSharedFolders(t, eng.Engine, syncRoot)
-		eng.protectedRootRefreshFailing.Store(true)
+		eng.protectedRootRefreshFailing = true
 		eng.flow.postSyncHousekeeping(t.Context())
 		require.NoError(t, receiveWithin[error](t, acked,
 			"the final-drain acknowledgement, which starts when housekeeping logs its refresh recovery line"))

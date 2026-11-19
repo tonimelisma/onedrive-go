@@ -37,7 +37,9 @@ type engineFlow struct {
 	sched   actionScheduler
 	retries retryLedger
 	scopes  scopeLedger
-	results runResults
+	// retryWork is the run's one path to the retry_work table and its cache.
+	retryWork retryWork
+	results   runResults
 
 	runID string
 
@@ -64,14 +66,16 @@ type engineFlow struct {
 
 func newEngineFlow(engine *Engine) *engineFlow {
 	flow := &engineFlow{
-		engine:   engine,
-		deps:     newRuntimeDeps(engine),
-		signals:  noRuntimeSignals{},
-		inspect:  noWatchInspector{},
-		admitted: noAdmittedWork{},
-		runID:    engine.nextRuntimeRunID(),
-		sched:    newActionScheduler(),
-		retries:  newRetryLedger(),
+		engine:    engine,
+		deps:      newRuntimeDeps(engine),
+		signals:   noRuntimeSignals{},
+		inspect:   noWatchInspector{},
+		admitted:  noAdmittedWork{},
+		runID:     engine.nextRuntimeRunID(),
+		sched:     newActionScheduler(),
+		retries:   newRetryLedger(),
+		scopes:    scopeLedger{ownerCheck: engine.runOwnerCheck},
+		retryWork: retryWork{rows: make(map[RetryWorkKey]RetryWorkRow)},
 
 		supersedeStreaks: make(map[string]int),
 		stopBound:        OutcomeCommitTimeout,

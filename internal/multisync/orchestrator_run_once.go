@@ -12,7 +12,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
-	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
@@ -274,12 +273,9 @@ func (o *Orchestrator) buildEngineWork(
 		mount:     mount,
 		engine:    engine,
 		parentAck: shortcutParentAckHandleForMount(mount, engine),
+		// The engine puts mountCollector, which rolls up to the owner
+		// aggregate and the command collector, on its own run context.
 		fn: func(c context.Context) (*syncengine.Report, error) {
-			// HTTP requests and retries, store transactions and transfers are
-			// recorded on the collector the context carries. The mount's
-			// collector rolls up to the owner aggregate and the command
-			// collector, so nothing is lost there.
-			c = perf.WithCollector(c, mountCollector)
 			runMode := mode
 			runOpts := opts
 			if mount.isFinalDrainChild() {
