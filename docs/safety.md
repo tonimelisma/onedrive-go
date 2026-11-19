@@ -102,7 +102,9 @@ still kept as two files rather than resolved in the direction of the mode.
   side, those deletes (and anything that depends on them) are held. Deletes
   that already went through in the last 24 hours count too, so a slow trickle
   of deletions (a failing disk, a misbehaving app, a scheduled cleanup) is
-  held once it adds up, not only a single large batch. Everything
+  held once it adds up, not only a single large batch. Deletes on OneDrive of
+  a disk sync crossed into (`cross_filesystems`) whose folder is gone are
+  held however few they are. Everything
   else keeps syncing. `status` lists them as "Deletes held for confirmation",
   the sync summary says "Held N deletes on OneDrive for confirmation" (or "on
   this computer"), and
@@ -138,8 +140,12 @@ still kept as two files rather than resolved in the direction of the mode.
 - **A disk mounted inside the sync folder.** A folder that is the mount point
   of another filesystem is not entered (unless `cross_filesystems = true`),
   and a disk that was synced and is later not mounted reads as unavailable,
-  not as deleted. A folder that stops being a mount point syncs again on the
-  next sync, as does a disk that is mounted again.
+  not as deleted, also after a `drive rebind-root`. A folder that stops being
+  a mount point syncs again on the next sync, as does a disk that is mounted
+  again. When the empty folder of such a disk is missing (you removed it
+  because the disk is gone for good, or a restored sync folder lacks it), every
+  delete of its content on OneDrive is held, however few, until you run
+  `onedrive-go sync --confirm-deletes`.
 - **An item missing from a full listing.** Before an item that a full listing
   did not return is deleted locally, OneDrive is asked for it by ID; only a
   definite "gone" answer deletes it.
@@ -220,10 +226,14 @@ given, because files it created would be owned by root.
   state is kept, and the next sync takes files missing from the folder as
   deleted: it deletes them on OneDrive too, holding the deletes for
   confirmation only when the folder is empty or they are many (see
-  [Deletes](#deletes)). It also forgets every recorded mount point inside the
-  folder, so the content of a disk that is not mounted now is deleted on
-  OneDrive the same way. Copy what you need from OneDrive before you rebind a
-  folder that is missing files.
+  [Deletes](#deletes)). Copy what you need from OneDrive before you rebind a
+  folder that is missing files. The rebind keeps every recorded mount point
+  inside the folder, so a disk that is not mounted now still reads as
+  unavailable, not as deleted, while its empty folder is there. If that
+  folder is missing from the folder you rebind, every delete of the disk's
+  content on OneDrive is held, however few, until you run
+  `onedrive-go sync --confirm-deletes`. To let go of a disk that is gone for
+  good, remove its empty folder and confirm those deletes.
 
 ## Known gaps
 

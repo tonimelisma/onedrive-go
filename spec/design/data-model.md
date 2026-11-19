@@ -305,7 +305,7 @@ local snapshot prunes rows whose folder is gone, moved or replaced.
 
 `held_deletes` lists the deletes the delete-safety hold kept out of the most
 recent live plan: `path`, `side` (`local` or `remote`, where the delete would
-remove content), `reason` (`side_vanished` or `too_many`), `item_type` and
+remove content), `reason` (`side_vanished`, `too_many` or `mount_point_gone`), `item_type` and
 `item_id`. `sync --confirm-deletes` releases exactly these rows.
 It is replaced on every live plan; the planner re-derives the hold from
 current truth and reads the table only as the set a confirmation approves.

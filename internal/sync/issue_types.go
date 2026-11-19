@@ -82,7 +82,8 @@ const (
 	// issueLocalMountMissing marks a folder sync crossed into as the mount
 	// point of another filesystem (cross_filesystems) that is not mounted
 	// now. Its synced content is unavailable truth, never deleted, until the
-	// disk is back or `drive rebind-root` forgets the mount point (R-6.2.15).
+	// disk is back or the user removes the folder; `drive rebind-root` keeps
+	// the mount point (R-6.2.15).
 	// Every per-type decision treats it as issueLocalMountBoundary; only what
 	// the user is told differs.
 	issueLocalMountMissing IssueType = "local_mount_missing"

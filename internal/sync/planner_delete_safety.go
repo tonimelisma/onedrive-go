@@ -27,6 +27,14 @@ import (
 //     before them, so a deletion spread over many small passes is judged as
 //     the one deletion it is.
 //
+// A third rule holds single deletes rather than a direction: a delete toward
+// OneDrive of a recorded mount point whose folder is missing locally, or of
+// anything below it, is held however few such deletes there are. While that
+// folder is there, a disk that is not mounted plans no deletes (a read
+// boundary) and a mounted disk the user emptied is an ordinary delete; a
+// missing folder is either a disk the user lets go of or a restored or
+// re-pointed sync folder without it, and only a confirmation tells them apart.
+//
 // Moves never count: a reorganization is not data loss. Everything else in
 // the plan continues. A held delete, and any action that depends on one, is
 // left out of this plan and recorded as held; it stays pending while the
@@ -54,6 +62,10 @@ type deleteSafetyInput struct {
 	// toward that side within deleteSafetyWindow before this plan (the
 	// store's delete ledger). They count toward the proportional rule.
 	RecentDeletes map[deleteSafetySide]int
+	// MountBoundaries are the folders recorded as crossed mount points
+	// (mount_boundaries). A delete toward OneDrive of one whose folder is not
+	// in LocalRows, or of anything below it, is held whatever the count.
+	MountBoundaries []string
 }
 
 // applyDeleteSafetyHold removes held deletes, and every action that depends
@@ -86,11 +98,12 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 	); held {
 		reasons[ActionLocalDelete] = reason
 	}
-	if len(reasons) == 0 {
+	seeds := heldDeleteSeeds(plan.Actions, approved, reasons, missingMountPoints(input))
+	if len(seeds) == 0 {
 		return nil
 	}
 
-	heldIdx := heldDeleteClosure(plan, reasons, approved)
+	heldIdx := heldDeleteClosure(plan, seeds)
 	kept := make([]Action, 0, len(plan.Actions)-len(heldIdx))
 	var held []heldDelete
 	for i := range plan.Actions {
@@ -100,7 +113,7 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 			continue
 		}
 		side, isDelete := deleteSafetySideOf(action.Type)
-		if reason, isHeldType := reasons[action.Type]; isDelete && isHeldType {
+		if reason, isSeed := seeds[i]; isDelete && isSeed {
 			held = append(held, heldDelete{
 				Path:     action.Path,
 				Side:     side,
@@ -127,6 +140,63 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 	plan.HeldDeletes = held
 
 	return nil
+}
+
+// heldDeleteSeeds returns the unapproved deletes the hold keeps, with the
+// rule that holds each: every delete of a direction a rule held, and every
+// delete toward OneDrive under a missing mount point.
+func heldDeleteSeeds(
+	actions []Action,
+	approved map[int]struct{},
+	reasons map[actionType]deleteSafetyReason,
+	missingMounts []string,
+) map[int]deleteSafetyReason {
+	seeds := make(map[int]deleteSafetyReason)
+	for i := range actions {
+		if _, isApproved := approved[i]; isApproved {
+			continue
+		}
+		if reason, ok := reasons[actions[i].Type]; ok {
+			seeds[i] = reason
+			continue
+		}
+		if actions[i].Type == ActionRemoteDelete && underAnyFolder(actions[i].Path, missingMounts) {
+			seeds[i] = deleteSafetyReasonMountPointGone
+		}
+	}
+	return seeds
+}
+
+// missingMountPoints returns the recorded mount points whose folder the
+// local snapshot does not hold. A file at a mount point's path does not
+// count as its folder.
+func missingMountPoints(input *deleteSafetyInput) []string {
+	if len(input.MountBoundaries) == 0 {
+		return nil
+	}
+	present := make(map[string]struct{}, len(input.LocalRows))
+	for i := range input.LocalRows {
+		if input.LocalRows[i].ItemType == ItemTypeFolder {
+			present[input.LocalRows[i].Path] = struct{}{}
+		}
+	}
+	var missing []string
+	for _, boundary := range input.MountBoundaries {
+		if _, ok := present[boundary]; !ok {
+			missing = append(missing, boundary)
+		}
+	}
+	return missing
+}
+
+// underAnyFolder reports whether itemPath is one of folders or lies below one.
+func underAnyFolder(itemPath string, folders []string) bool {
+	for _, folder := range folders {
+		if itemPath == folder || strings.HasPrefix(itemPath, folder+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // approvedDeleteIndexes returns the delete actions the user's confirmation
@@ -215,11 +285,7 @@ func deleteSafetyThreshold(baselineItems int) int {
 // safely alone: the create half of a type-change replacement would land on
 // the item the held delete was to remove, and an upload waiting on the delete
 // of a case variant would overwrite it in place.
-func heldDeleteClosure(
-	plan *actionPlan,
-	reasons map[actionType]deleteSafetyReason,
-	approved map[int]struct{},
-) map[int]struct{} {
+func heldDeleteClosure(plan *actionPlan, seeds map[int]deleteSafetyReason) map[int]struct{} {
 	deps := plan.Deps
 	if len(deps) != len(plan.Actions) {
 		deps = buildDependencies(plan.Actions)
@@ -234,10 +300,7 @@ func heldDeleteClosure(
 	held := make(map[int]struct{})
 	var queue []int
 	for i := range plan.Actions {
-		if _, isApproved := approved[i]; isApproved {
-			continue
-		}
-		if _, ok := reasons[plan.Actions[i].Type]; ok {
+		if _, ok := seeds[i]; ok {
 			held[i] = struct{}{}
 			queue = append(queue, i)
 		}

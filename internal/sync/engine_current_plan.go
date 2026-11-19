@@ -660,12 +660,17 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading the recent deletes the hold counts: %w", err)
 	}
+	mountBoundaries, err := flow.engine.baseline.listMountBoundaries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading the recorded mount points the hold guards: %w", err)
+	}
 	if err := applyDeleteSafetyHold(plan, &deleteSafetyInput{
-		Baseline:      planningBaseline(&observation.inputs, bl),
-		LocalRows:     observation.inputs.localRows,
-		RemoteRows:    observation.inputs.remoteRows,
-		Approved:      approved,
-		RecentDeletes: recentDeletes,
+		Baseline:        planningBaseline(&observation.inputs, bl),
+		LocalRows:       observation.inputs.localRows,
+		RemoteRows:      observation.inputs.remoteRows,
+		Approved:        approved,
+		RecentDeletes:   recentDeletes,
+		MountBoundaries: mountBoundaries,
 	}); err != nil {
 		return nil, fmt.Errorf("sync: holding unconfirmed deletes: %w", err)
 	}
