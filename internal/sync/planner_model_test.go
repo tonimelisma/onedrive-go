@@ -148,6 +148,14 @@ func (s *pmState) remoteParentID(p string) string {
 
 // plan writes the model into a fresh store and plans it.
 func (s *pmState) plan() *actionPlan {
+	s.writeStore()
+
+	return planCurrentStateForStore(s.t, s.store)
+}
+
+// writeStore writes the model into the store, emptied first: OneDrive's
+// items, the baseline and the local tree.
+func (s *pmState) writeStore() {
 	t := s.t
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
@@ -203,8 +211,6 @@ func (s *pmState) plan() *actionPlan {
 		})
 	}
 	require.NoError(t, store.ReplaceLocalState(ctx, local))
-
-	return planCurrentStateForStore(t, store)
 }
 
 // actionLine renders an action for logs and the golden matrix.

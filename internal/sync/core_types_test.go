@@ -112,6 +112,7 @@ func TestActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 		"createsAtVacatedSource":              func() { createsAtVacatedSource(upload("docs"), outside()) },
 		"pathsVacatedByPlan":                  func() { pathsVacatedByPlan([]Action{*outside()}) },
 		"createSide":                          func() { createSide(outside()) },
+		"deleteSide":                          func() { deleteSide(outside()) },
 		"dropReconciliationOfComposedMoves":   func() { dropReconciliationOfComposedMoves([]Action{*outside()}, movedLocally, mode) },
 		"DeferredCounts.AddAction":            func() { (&DeferredCounts{}).AddAction(outside()) },
 		"evaluateMoveEndpointFreshness":       func() { evaluateMoveEndpointFreshness(outside(), actionFreshnessInputs{}) },

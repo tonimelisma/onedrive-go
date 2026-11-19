@@ -93,6 +93,11 @@ type moveScenarioRemote struct {
 	// invalidRequest for a path OneDrive counts as too long did (live,
 	// 2026-11-02). It runs without the remote's lock.
 	refuseCreate func(parentID, name string) error
+	// refuseMove, when set, answers every move (a rename too) of the item
+	// itemID before anything changes, with newName as the engine sends it
+	// (empty when the name stays); a non-nil error refuses it. It runs
+	// without the remote's lock.
+	refuseMove func(itemID, newName string) error
 	// invisibleFor hides the item at a root-relative path from path reads
 	// and child listings for that many such reads, as Graph's path and
 	// children routes lag behind a create (LI-20260405-07, LI-20260405-09).
@@ -114,6 +119,10 @@ type moveScenarioRemote struct {
 	folderCreates       []string
 	deletes             []string
 	moves               []string
+	// afterDelete, when set, sees the drive as tree returns it after each
+	// delete the engine sends, for a test of what a delete leaves at the
+	// moment it runs. It runs under the remote's lock.
+	afterDelete func(live map[string]string)
 }
 
 type deletedScenarioItem struct {
@@ -330,6 +339,11 @@ func (r *moveScenarioRemote) itemAt(remotePath string) (*graph.Item, bool) {
 func (r *moveScenarioRemote) tree() map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	return r.treeLocked()
+}
+
+func (r *moveScenarioRemote) treeLocked() map[string]string {
 	out := make(map[string]string, len(r.items))
 	for id, item := range r.items {
 		if id == strRoot {
@@ -677,6 +691,14 @@ func scenarioRenameTime() time.Time {
 
 func (r *moveScenarioRemote) moveItem(itemID, newParentID, newName string, opts graph.MoveOptions) (*graph.Item, error) {
 	r.mu.Lock()
+	refuse := r.refuseMove
+	r.mu.Unlock()
+	if refuse != nil {
+		if refusal := refuse(itemID, newName); refusal != nil {
+			return nil, refusal
+		}
+	}
+	r.mu.Lock()
 	defer r.mu.Unlock()
 	item, ok := r.items[itemID]
 	if !ok {
@@ -755,6 +777,9 @@ func (r *moveScenarioRemote) deleteItem(itemID, ifMatch string) error {
 	}
 	r.remove(itemID)
 	r.deletes = append(r.deletes, itemID)
+	if r.afterDelete != nil {
+		r.afterDelete(r.treeLocked())
+	}
 	return nil
 }
 
