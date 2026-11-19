@@ -135,9 +135,11 @@ func (h *osRootHandle) Close() error {
 //
 // lstatAbs is the deliberate exception for the root itself. It answers
 // questions about the sync root directory, which by definition sits outside
-// any root handle, and must never be used for paths beneath the root. linkOut
-// and syncDir take an absolute path only for the place outside the root a
-// file is linked or copied to, which the detach refuses inside the root.
+// any root handle, and must never be used for paths beneath the root. A
+// place outside the root (the trash entry a file is taken or copied out to,
+// the folder a restored file comes from) reaches the hooks as its folder's
+// descriptor plus a base name too, the folder opened once and checked to lie
+// outside the root by what it is.
 type rootOps struct {
 	openRoot  func(dir string) (rootHandle, error)
 	mkdirAll  func(root rootHandle, name string, perm os.FileMode) error
@@ -147,11 +149,14 @@ type rootOps struct {
 	rename    func(root rootHandle, oldname, newname string) error
 	chtimes   func(root rootHandle, name string, atime time.Time, mtime time.Time) error
 	// renameExclusive, link, unlink and renameAt are the descriptor calls of
-	// a no-replace rename and its fallbacks (rename_noreplace_unix.go); seams
-	// so tests can model a system without the no-replace flag, a filesystem
-	// without hard links, a source that cannot be removed, or a destination
-	// taken between the check and the plain rename. renameExclusive reports
-	// refused when the flag is not offered.
+	// a no-replace rename and its fallbacks (rename_noreplace_unix.go), and
+	// of a detach's set-aside and move out, a preserve's link, and the
+	// put-back of a set-aside file (detach_unix.go); seams so tests can model
+	// a system without the no-replace flag, a filesystem without hard links,
+	// a move or link across filesystems, a write that lands right after a
+	// rename, a source that cannot be removed, or a destination taken
+	// between the check and the plain rename. renameExclusive reports refused
+	// when the flag is not offered.
 	renameExclusive func(fromDir *os.File, from string, toDir *os.File, to string) (refused bool, err error)
 	link            func(fromDir *os.File, from string, toDir *os.File, to string) error
 	unlink          func(dir *os.File, name string) error
@@ -166,18 +171,11 @@ type rootOps struct {
 	// without extended attributes.
 	getRootMark func(dir *os.File) (string, error)
 	setRootMark func(dir *os.File, token string) error
-	// linkOut links an entry of a folder opened through the root to dest, an
-	// absolute path outside the root: how PreserveRegularFile keeps a file
-	// (detach_unix.go); a seam so tests can model a link the filesystem
-	// refuses.
-	linkOut func(dir *os.File, name string, dest string) error
-	// syncDir flushes a directory outside the root, the trash entry a
-	// detached file is copied into (detach_unix.go); a seam because an fsync
-	// has no observable effect to test.
-	syncDir func(path string) error
-	// syncDirFile flushes a folder already open, the destination folder of
-	// MoveInNoReplace's exclusive copy (rename_noreplace_unix.go); a seam
-	// for the same reason as syncDir.
+	// syncDirFile flushes a folder already open: the destination folder of
+	// MoveInNoReplace's exclusive copy (rename_noreplace_unix.go), and the
+	// folder outside the root a detached file is copied into
+	// (detach_unix.go); a seam because an fsync has no observable effect to
+	// test.
 	syncDirFile func(dir *os.File) error
 }
 
@@ -220,30 +218,8 @@ func defaultRootOps() rootOps {
 		lstatAbs:        os.Lstat,
 		getRootMark:     getRootMarkXattr,
 		setRootMark:     setRootMarkXattr,
-		linkOut:         linkatOut,
-		syncDir:         syncDirectory,
 		syncDirFile:     (*os.File).Sync,
 	}
-}
-
-// syncDirectory flushes a directory's entries to stable storage, so a rename
-// into it survives a power cut. It takes an absolute path because the trash
-// lies outside the sync root.
-func syncDirectory(path string) error {
-	dir, err := os.Open(path) //nolint:gosec // the trash entry directory this package just created
-	if err != nil {
-		return fmt.Errorf("opening %s to sync it: %w", path, err)
-	}
-
-	syncErr := dir.Sync()
-	closeErr := dir.Close()
-	if syncErr != nil {
-		return fmt.Errorf("syncing %s: %w", path, syncErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("closing %s after syncing it: %w", path, closeErr)
-	}
-	return nil
 }
 
 // Root is a rooted capability for sync-runtime filesystem operations.

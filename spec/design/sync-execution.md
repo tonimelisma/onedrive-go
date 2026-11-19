@@ -707,23 +707,53 @@ setting the file aside under a hidden `.onedrive-go.<random>.detach` sibling,
 proves the sibling is the verified inode with the same size and mtime (the
 rename itself changes ctime), and only then moves it out. A file replaced or
 written in place while it was being checked is put back with a no-replace link
-and the delete is superseded, so the new content survives. A cross-filesystem
-move copies through the verified descriptor and re-checks the stamp after the
-copy, discarding a copy a concurrent write may have torn. That copy is made
-durable before the set-aside original is unlinked: the temporary sibling is
-fsynced, renamed to `item`, and the entry directory is fsynced too
-(`copyThroughDescriptor`, through the `rootOps.syncDir` seam), because the
-rename is a directory update that is not durable until the directory is;
-unlinking the original first left a power cut with a trash entry holding only
-a `.copy-*` file and no original anywhere. A directory sync the filesystem
-cannot do (`localpath.IsDirSyncUnsupported`) is tolerated; any other failure
-discards the copy and is reported, and the original is linked back. A trash
-that fails, its entry's folder gone (the trash emptied meanwhile) or the move
-or copy into it refused, is `synctree.ErrDestinationFailed`, its cause named
-as text, and never reads as a file already gone: the delete fails and the
-file stays, instead of the delete being superseded as one whose file is
-already absent (`TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone`,
-`TestDetachRegularFile_ADestinationThatFailsIsNotAFileThatIsGone`). The
+and the delete is superseded, so the new content survives; on a filesystem
+that cannot make the link (`localpath.IsLinkUnsupported`) the put-back is a
+rename that replaces nothing, with the system's no-replace flag or a check that
+the name is free and a plain rename, instead of leaving the file under its
+hidden name (`TestDetachRegularFile_PutsTheFileBackWithoutHardLinks`).
+
+The trash side of a take-out is reached the way the sync folder is: through
+one descriptor. Before the file is opened, the folder of the trash entry's
+`item` is opened once, as a folder and without following a symbolic link in
+its own name (`openDestination`), and whether it lies outside the sync folder
+is decided on that descriptor, by the device and inode of the folder and of
+each folder above it reached by `..` (`refuseFolderWithinRoot`, R-6.4.8),
+never by a path's text. The move out, a preserve's link, a copy's create and
+rename, and the removal of a stale or torn copy are all made on that
+descriptor and the base name `item`, and none replaces an entry there: the
+move and the copy's rename take the system's no-replace flag, or where the
+filesystem refuses it a check that the name is free and a plain rename, and a
+link fails on a taken name. A folder swapped for a link into the sync folder
+after the check is therefore never followed: the step is made in the folder
+that was opened, which is gone, the take-out fails as a destination that
+failed, and the file is at its name with its content
+(`TestDetachRegularFile_ADestinationFolderSwappedForALinkIsNotFollowed`,
+`TestDetachRegularFile_ADestinationFolderThatIsALinkIsNotFollowed`,
+`TestDetachRegularFile_ANameTakenAtTheDestinationIsNotReplaced`). A
+cross-filesystem move copies through the verified descriptor and re-checks
+the stamp after the copy, discarding a copy a concurrent write may have torn
+(`TestDetachRegularFile_CopiesAcrossFilesystems`). That copy is made durable
+before the set-aside original is unlinked: the temporary `.copy-*` sibling is
+created exclusively, fsynced, renamed to `item`, and the entry directory is
+fsynced too (`copyThroughDescriptor`, through the `rootOps.syncDirFile` seam),
+because the rename is a directory update that is not durable until the
+directory is; unlinking the original first left a power cut with a trash entry
+holding only a `.copy-*` file and no original anywhere. A directory sync the
+filesystem cannot do (`localpath.IsDirSyncUnsupported`) is tolerated; any
+other failure discards the copy and is reported, and the original is linked
+back. A trash that fails, its entry's folder gone (the trash emptied
+meanwhile) or a link, or the move or copy into it refused or finding `item`
+taken, is `synctree.ErrDestinationFailed`, its cause named as text, and never
+reads as a file already gone: the delete fails and the file stays, instead of
+the delete being superseded as one whose file is already absent
+(`TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone`,
+`TestDetachRegularFile_ADestinationThatFailsIsNotAFileThatIsGone`). A trash
+entry that cannot be reserved is named as text the same way, so a reservation
+whose folder went missing never reads as a file already gone in a delete, or
+as a destination that left on its own in a replacing local move
+(`TestDeleteLocalFile_AReservationThatFailsIsAFailureNotAFileAlreadyGone`,
+`TestExecutor_LocalMove_AReservationThatFailsFailsTheReplacingMove`). The
 in-place check
 after the set-aside rests on size and mtime alone (the rename changes ctime):
 a writer that keeps both, such as `rsync --inplace -t` or a write through an
@@ -736,7 +766,10 @@ moved and as committed after, so a crash in between leaves a pending entry
 that `trash list` shows and `trash restore` puts back; an entry holding a file
 but no readable record is listed as an orphan with the file's location. An
 entry directory holds a file when it has `item` or, failing that, any regular
-file other than `entry.json` (`heldFileIn`): a `.copy-*` left by a
+file other than `entry.json` (`heldFileIn`), and an entry directory that is
+gone holds nothing, so abandoning a reservation whose folder was removed
+succeeds (`TestPlacement_AbandonOfAnEntryWhoseFolderIsGoneSucceeds`). A
+`.copy-*` left by a
 cross-filesystem placement an earlier build or a crash interrupted is listed
 at its own path, is never purged or expired, blocks `Placement.Abandon`, and
 is refused by `trash restore`, because it may be torn and the original was
@@ -789,7 +822,13 @@ no longer finds it clears the report.
 The previous version of a file a download replaces is kept the same way: just
 before the finished download is renamed over its target,
 `validateDownloadTargetBeforeReplace` verifies the target through the
-descriptor it hard-links (or copies) into the trash. One-shot housekeeping and
+descriptor it hard-links (or copies) into the trash, made on the entry
+folder's one descriptor as a take-out is. The link is by name, so the
+preserve then proves it names the verified inode, and removes only its own
+link: an entry another program put at `item` meanwhile is left as it is, and
+the preserve reports the race
+(`TestPreserveRegularFile_LeavesAnEntryThatReplacedItsLink`). One-shot
+housekeeping and
 the watch maintenance tick (at most hourly) purge, and `onedrive-go trash
 list/restore/empty` exposes the trash. Without a trash (executor-only tests)
 the verified inode is removed with `RemoveVerifiedRegularFile` instead.
