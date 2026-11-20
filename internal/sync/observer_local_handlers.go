@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fsnotify/fsnotify"
 
@@ -1221,13 +1222,17 @@ func (o *localObserver) watchIdentityIndex() *scanAvailability {
 	return o.watchIdentityLookup
 }
 
-// localPathStillPresent reports whether the exact name at fsPath exists. On a
-// case-insensitive volume Lstat also finds a differently-cased sibling, which
-// is the other half of a case-only rename, so the parent listing decides.
+// localPathStillPresent reports whether the stored path of the entry at
+// fsPath still names an entry: the exact name, or another spelling of it in
+// Unicode form. On a case-insensitive volume Lstat also finds a
+// differently-cased sibling, which is the other half of a case-only rename,
+// so the parent listing decides.
 //
 // The event's own path is the one looked up, not the stored NFC dbRelPath:
 // on a byte-exact filesystem an NFD-named file is absent under its NFC
-// spelling, and an atomic save of it read as a delete (R-2.13.2).
+// spelling, and an atomic save of it read as a delete (R-2.13.2). A removed
+// Unicode-form twin leaves the other spelling, which still holds the stored
+// path's row, so its delete is no delete of that path.
 func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 	if tree == nil {
 		return false
@@ -1236,7 +1241,11 @@ func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 	if err != nil {
 		rel = tree.Spelling(dbRelPath)
 	}
-	if _, statErr := tree.Lstat(rel); statErr != nil {
+	if _, statErr := tree.Lstat(rel); statErr != nil && isASCIIName(filepath.Base(fsPath)) {
+		// An ASCII name has no other Unicode form a twin could carry, apart
+		// from canonical singletons such as KELVIN SIGN for K, which this
+		// accepts missing: a missing ASCII name is gone, and a bulk delete
+		// lists no folder per removed file.
 		return false
 	}
 	entries, err := tree.ReadDir(filepath.Dir(rel))
@@ -1251,6 +1260,17 @@ func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 		}
 	}
 	return false
+}
+
+// isASCIIName reports whether name holds only ASCII characters.
+func isASCIIName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if name[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+
+	return true
 }
 
 // forgetWatchedSubtree removes the watch on a deleted or renamed-away
@@ -1341,10 +1361,10 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 	)
 }
 
-// runSafetyScan performs a full filesystem scan as a safety net, sending any
-// detected changes to the events channel. This catches events that fsnotify
-// may have missed. Its finding set goes to the engine (TrySendScanFindings),
-// which records new findings and clears the ones this scan no longer
+// runSafetyScan performs a full filesystem scan as a safety net for events
+// fsnotify may have missed, and sends it to the runtime as one snapshot
+// (TrySendFullLocalSnapshot): its rows, and its finding set, from which the
+// engine records new findings and clears the ones this scan no longer
 // reports. It reports whether the scan ran.
 //
 // While the runtime has not taken the observations already sent (its loop
@@ -1398,11 +1418,6 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 			return true
 		}
 	}
-
-	// The empty set too: forwarding only a non-empty set kept the last
-	// finding (a leftover the user deleted, a name since fixed) until the
-	// next restart.
-	o.TrySendScanFindings(result.Skipped)
 
 	// Clear directory name cache, collision peers, and recent deletes —
 	// safety scan rebuilds state from scratch, so any cached state may be stale.

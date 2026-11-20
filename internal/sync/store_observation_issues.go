@@ -43,6 +43,24 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation findings reconcile")
 	}()
 
+	if changed, err = s.reconcileObservationFindingsTx(ctx, tx, batch); err != nil {
+		return false, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("sync: commit observation findings reconcile: %w", err)
+	}
+
+	return changed, nil
+}
+
+// reconcileObservationFindingsTx reconciles the batch inside tx and reports
+// whether the persisted issue set changed.
+func (s *SyncStore) reconcileObservationFindingsTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	batch *ObservationFindingsBatch,
+) (bool, error) {
 	state, err := loadObservationReconcileStoreStateTx(ctx, tx)
 	if err != nil {
 		return false, err
@@ -54,10 +72,6 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 
 	if applyErr := s.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
 		return false, applyErr
-	}
-
-	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("sync: commit observation findings reconcile: %w", err)
 	}
 
 	return plan.changesIssues, nil

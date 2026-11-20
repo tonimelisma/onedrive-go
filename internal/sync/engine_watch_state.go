@@ -105,10 +105,9 @@ type watchResources struct {
 	// directly; the watch loop nils channels as sources close and tracks how many
 	// observer goroutines still own the shared error stream.
 	observerErrs        <-chan error
-	localBatches        <-chan localObservationBatch
+	localBatches        <-chan localObservation
 	protectedRootEvents <-chan protectedRootEvent
 	remoteBatches       <-chan remoteObservationBatch
-	skippedItems        <-chan []skippedItem
 	activeObservers     int
 
 	// lastObserverErr is the most recent error an observer exited with while

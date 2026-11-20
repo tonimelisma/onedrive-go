@@ -521,7 +521,9 @@ func TestIsForeignMountPoint_CrossingRecordsTheBoundary(t *testing.T) {
 	assert.False(t, obs.isForeignMountPoint(availability, "nas", synctree.FileIdentity{Device: 11, Inode: 3}, true))
 	assert.Equal(t, []string{"nas"}, availability.crossedMounts)
 
+	// A scan copies the recorded flags into its availability when it starts.
 	obs.SetMountBoundaryFlags([]string{"usb"})
+	availability.mountBoundaryFlags = *obs.mountBoundaryFlags.Load()
 	assert.False(t, obs.isForeignMountPoint(availability, "usb", synctree.FileIdentity{Device: 10, Inode: 4}, true))
 	assert.True(t, obs.flaggedMountIsGone(availability, "usb"), "a flagged mount point back on its parent's device is not mounted")
 }

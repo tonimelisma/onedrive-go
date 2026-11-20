@@ -489,9 +489,11 @@ type localObserver struct {
 	// watchIdentityLookup caches the identity index the watch handlers use
 	// to recognize a synced item renamed to a skipped name; rebuilt every
 	// watchIdentityIndexMaxAge. Touched only by the goroutine running Watch.
-	// mountBoundaryFlags are the folders recorded as crossed mount points;
-	// set by the engine before a scan (SetMountBoundaryFlags).
-	mountBoundaryFlags   map[string]struct{}
+	// mountBoundaryFlags are the folders recorded as crossed mount points:
+	// set by the engine before a scan, and by the watch runtime after each
+	// snapshot it commits (SetMountBoundaryFlags). A scan reads the set once,
+	// at its start; the set is replaced whole, never changed in place.
+	mountBoundaryFlags   atomic.Pointer[map[string]struct{}]
 	watchIdentityLookup  *scanAvailability
 	watchIdentityBuiltAt time.Time
 	protectedRootEvents  protectedRootEventSink
@@ -554,17 +556,10 @@ type localObserver struct {
 	writeCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
 	startupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
 
-	// skippedCh carries the finding set of every watch-mode full scan (safety,
-	// recovery and fallback scans) to the engine, which persists it as the
-	// observation issues of the local scan (TrySendScanFindings). When nil,
-	// the sets are only logged at Debug and nothing is persisted. Set via
-	// SetSkippedChannel before Watch.
-	skippedCh chan<- []skippedItem
-
 	// localBatchCh forwards engine-applied local observation batches. The
 	// observer never writes SQLite directly; the watch runtime owns durable
 	// application of these batches.
-	localBatchCh chan<- localObservationBatch
+	localBatchCh chan<- localObservation
 
 	// localWatchState owns all watch-loop mutable state. It is embedded so
 	// same-package tests can still reach the existing fields directly while the
@@ -596,16 +591,10 @@ func newLocalObserver(baseline *Baseline, logger *slog.Logger, checkWorkers int)
 	}
 }
 
-// SetSkippedChannel sets the channel that carries each watch-mode full scan's
-// finding set to the engine (see skippedCh). Must be called before Watch.
-func (o *localObserver) SetSkippedChannel(ch chan<- []skippedItem) {
-	o.skippedCh = ch
-}
-
 // SetLocalObservationBatchChannel sets the channel that carries local
 // observation batches to the watch runtime (see localBatchCh). Must be called
 // before Watch.
-func (o *localObserver) SetLocalObservationBatchChannel(ch chan<- localObservationBatch) {
+func (o *localObserver) SetLocalObservationBatchChannel(ch chan<- localObservation) {
 	o.localBatchCh = ch
 }
 
@@ -653,10 +642,11 @@ func (o *localObserver) SetLocalHashCache(cache localHashCache) {
 // SetMountBoundaryFlags installs the folders previously recorded as crossed
 // mount points.
 func (o *localObserver) SetMountBoundaryFlags(paths []string) {
-	o.mountBoundaryFlags = make(map[string]struct{}, len(paths))
+	flags := make(map[string]struct{}, len(paths))
 	for _, flagged := range paths {
-		o.mountBoundaryFlags[flagged] = struct{}{}
+		flags[flagged] = struct{}{}
 	}
+	o.mountBoundaryFlags.Store(&flags)
 }
 
 // SetExpectedRootIdentity validates scans against one fixed identity.
@@ -711,7 +701,8 @@ func (o *localObserver) SetWatcherFactory(fn func() (fsWatcher, error)) {
 // (every 5 minutes) catches any dropped events, providing eventual consistency.
 func (o *localObserver) TrySend(ctx context.Context, events chan<- changeEvent, ev *changeEvent) {
 	if ev != nil {
-		o.TrySendLocalObservationBatch(ctx, localObservationBatchForEvent(ev))
+		batch := localObservationBatchForEvent(ev)
+		o.TrySendLocalObservationBatch(ctx, &batch)
 	}
 	o.TrySendChangeEventOnly(ctx, events, ev)
 }
@@ -737,20 +728,20 @@ func (o *localObserver) TrySendChangeEventOnly(ctx context.Context, events chan<
 	}
 }
 
-func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch localObservationBatch) {
+func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch *localObservation) {
 	if o.localBatchCh == nil {
 		return
 	}
 
 	select {
-	case o.localBatchCh <- batch:
+	case o.localBatchCh <- *batch:
 		o.recordActivity()
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
 		o.requestRecoveryScan()
 		o.logger.Debug("local observation batch channel full, marking local truth suspect on maintenance",
-			slog.Bool("full_snapshot", batch.fullSnapshot),
+			slog.String("kind", batch.kind.String()),
 			slog.Int("rows", len(batch.rows)),
 			slog.Int("deleted_paths", len(batch.deletedPaths)),
 			slog.Int("deleted_prefixes", len(batch.deletedPrefixes)),
@@ -759,49 +750,32 @@ func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 }
 
 func (o *localObserver) TrySendLocalTruthSuspect(ctx context.Context, reason string) {
-	o.TrySendLocalObservationBatch(ctx, localObservationBatch{
-		markSuspect:    true,
+	o.TrySendLocalObservationBatch(ctx, &localObservation{
+		kind:           localTruthSuspect,
 		recoveryReason: reason,
 	})
 }
 
-// TrySendFullLocalSnapshot hands a full scan's rows to the runtime. The batch
-// carries no dirty hint of its own: the runtime replans when the snapshot
-// changes committed local truth (R-2.8.17), and the scan's skipped findings
-// reach it separately and replan when they change the persisted issue set.
-// The scan's events are relative to the baseline, not to local_state, so
-// they count every change already committed and planned. Treating them as a
-// dirty hint retired the admitted plan at every safety scan during a backlog
+// TrySendFullLocalSnapshot hands a full scan to the runtime as one snapshot:
+// its rows, its whole finding set (the empty set too, because a scan that
+// skipped nothing has proven every earlier finding gone) and the mount points
+// it crossed, which the runtime commits together. A snapshot dropped on a
+// full channel asks for a recovery scan, as every dropped observation does.
+//
+// The snapshot carries no dirty hint of its own: the runtime replans when the
+// commit changes local truth (R-2.8.17) or the persisted finding set. The
+// scan's events are relative to the baseline, not to local_state, so they
+// count every change already committed and planned. Treating them as a dirty
+// hint retired the admitted plan at every safety scan during a backlog
 // (R-2.8.21) and, with a replan slower than the safety interval, starved
 // dispatch entirely.
 func (o *localObserver) TrySendFullLocalSnapshot(ctx context.Context, result scanResult) {
-	o.TrySendLocalObservationBatch(ctx, localObservationBatch{
-		fullSnapshot: true,
-		rows:         buildLocalStateRows(result),
+	o.TrySendLocalObservationBatch(ctx, &localObservation{
+		kind:          localSnapshot,
+		rows:          buildLocalStateRows(result),
+		findings:      result.Skipped,
+		crossedMounts: result.CrossedMounts,
 	})
-}
-
-// TrySendScanFindings hands a full scan's finding set to the engine, which
-// reconciles it as the whole set of local findings: it records the new ones
-// and clears every earlier one the set lacks. The set goes even when it is
-// empty, because a full scan that skipped nothing has proven every earlier
-// finding gone. It never blocks: a set dropped on a full channel is replaced
-// by the next full scan's, which is again the whole set.
-func (o *localObserver) TrySendScanFindings(skipped []skippedItem) {
-	if o.skippedCh == nil {
-		if len(skipped) > 0 {
-			o.logger.Debug("full scan: skipped items", slog.Int("count", len(skipped)))
-		}
-
-		return
-	}
-
-	select {
-	case o.skippedCh <- skipped:
-	default:
-		o.logger.Debug("skipped items channel full, will catch on next scan",
-			slog.Int("count", len(skipped)))
-	}
 }
 
 // localBatchChannelFull reports whether the runtime has not taken the

@@ -394,3 +394,123 @@ func TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded(t *testing.T) {
 	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
 	assert.Empty(t, deleted, "a file that is back locally must not be deleted on OneDrive")
 }
+
+// Validates: R-2.13.2
+//
+// A second local file beside a synced one, whose name differs only in Unicode
+// form, is a name collision in which neither file is chosen: no pass uploads
+// the twin over the synced file, the collision is reported for the stored
+// path, and once the twin is removed the synced file syncs as before.
+func TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing(t *testing.T) {
+	t.Parallel()
+	skipUnlessBothUnicodeFormsCoexist(t)
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	h := newSyncHarness(t, remote)
+	writeLocalFile(t, h.syncRoot, twinSyncedName, twinSyncedContent)
+	h.beginRound(t)
+	require.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
+
+	writeLocalFile(t, h.syncRoot, twinSecondName, "twin content, longer\n")
+	for pass := range 2 {
+		report := runScenarioPass(t, h.eng)
+		assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes,
+			"pass %d acts on neither file: %+v", pass+1, report)
+	}
+	assert.Equal(t, map[string]string{twinSyncedName: twinSyncedContent}, remote.tree())
+
+	issues, err := h.eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, twinSyncedName, issues[0].Path)
+	assert.Equal(t, issueCaseCollision, issues[0].IssueType)
+
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, twinSecondName)))
+	writeLocalFile(t, h.syncRoot, twinSyncedName, "edited after the twin went\n")
+	assert.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
+	assert.Equal(t, map[string]string{twinSyncedName: "edited after the twin went\n"}, remote.tree())
+	issues, err = h.eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+// syncedFileWithRemovedTwin syncs the synced file, records its Unicode-form
+// twin as a collision, then removes the twin from disk and returns the
+// harness. The twin's delete event is still to be handled.
+func syncedFileWithRemovedTwin(t *testing.T) *syncHarness {
+	t.Helper()
+	skipUnlessBothUnicodeFormsCoexist(t)
+
+	h := newSyncHarness(t, newMoveScenarioRemote(driveid.New(engineTestDriveID)))
+	writeLocalFile(t, h.syncRoot, twinSyncedName, twinSyncedContent)
+	require.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
+	writeLocalFile(t, h.syncRoot, twinSecondName, "twin content, longer\n")
+	runScenarioPass(t, h.eng)
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, twinSecondName)))
+
+	return h
+}
+
+// handleTwinDelete runs the watch observer's delete of the removed twin and
+// returns the observations it sent.
+func handleTwinDelete(t *testing.T, h *syncHarness) []localObservation {
+	t.Helper()
+
+	bl, err := h.eng.baseline.Load(t.Context())
+	require.NoError(t, err)
+	obs := newLocalObserver(bl, h.eng.logger, 0)
+	obs.PendingTimers = make(map[string]syncTimer)
+	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
+	batches := make(chan localObservation, 1)
+	obs.SetLocalObservationBatchChannel(batches)
+
+	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), h.eng.syncTree,
+		filepath.Join(h.syncRoot, twinSecondName), twinSyncedName, twinSyncedName, make(chan changeEvent, 1))
+
+	var sent []localObservation
+	for len(batches) > 0 {
+		sent = append(sent, <-batches)
+	}
+
+	return sent
+}
+
+// Validates: R-2.8.8, R-2.13.2
+//
+// Removing the Unicode-form twin of a synced file is no delete of the synced
+// file, whose stored path the twin shared: the watch observer sends nothing,
+// and the synced file's row stays.
+func TestHandleDelete_UnicodeFormTwinKeepsTheSyncedFilesRow(t *testing.T) {
+	t.Parallel()
+
+	h := syncedFileWithRemovedTwin(t)
+
+	assert.Empty(t, handleTwinDelete(t, h), "the stored path still names the synced file")
+	_, found, err := h.eng.baseline.GetLocalStateByPath(t.Context(), twinSyncedName)
+	require.NoError(t, err)
+	assert.True(t, found)
+}
+
+// Validates: R-2.13.2
+func TestRunOnce_UnicodeFormFolderTwinOfSyncedFileFailsNothing(t *testing.T) {
+	t.Parallel()
+	skipUnlessBothUnicodeFormsCoexist(t)
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	h := newSyncHarness(t, remote)
+	writeLocalFile(t, h.syncRoot, twinSyncedName, twinSyncedContent)
+	require.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
+
+	writeLocalFile(t, h.syncRoot, filepath.Join(twinSecondName, "child.txt"), "child\n")
+	for pass := range 2 {
+		report := runScenarioPass(t, h.eng)
+		assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes,
+			"pass %d acts on neither entry: %+v", pass+1, report)
+	}
+	assert.Equal(t, map[string]string{twinSyncedName: twinSyncedContent}, remote.tree())
+
+	issues, err := h.eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, issueCaseCollision, issues[0].IssueType)
+}

@@ -56,90 +56,133 @@ func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
 	rows []localStateRow,
 ) error {
-	_, _, err := s.replaceLocalState(ctx, rows, nil, nil)
+	_, err := s.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: rows})
 	return err
 }
 
-// ReplaceLocalStateReportingChange is ReplaceLocalState for callers that need
-// to know whether the snapshot differed from the stored one: the watch
-// runtime replans only when a periodic safety scan found a difference.
-func (s *SyncStore) ReplaceLocalStateReportingChange(
-	ctx context.Context,
-	rows []localStateRow,
-) (bool, error) {
-	changed, _, err := s.replaceLocalState(ctx, rows, nil, nil)
-	return changed, err
+// localSnapshotCommit is what one full local scan commits.
+type localSnapshotCommit struct {
+	rows []localStateRow
+	// findings, when not nil, is the scan's whole finding set; it is
+	// reconciled before the rows are replaced.
+	findings *ObservationFindingsBatch
+	// bind, when not nil, is recorded as the sync folder's identity.
+	bind *synctree.RootIdentity
+	// crossedMounts are the mount points the scan crossed.
+	crossedMounts []string
 }
 
-// ReplaceLocalStateBindingRoot replaces local_state and, when bind is not
-// nil, records it as the sync folder's identity in the same transaction: the
-// binding and the first snapshot taken of that folder land together or not
-// at all (D-001).
-func (s *SyncStore) ReplaceLocalStateBindingRoot(
-	ctx context.Context,
-	rows []localStateRow,
-	bind *synctree.RootIdentity,
-	crossedMounts []string,
-) (bound *synctree.RootIdentity, err error) {
-	_, bound, err = s.replaceLocalState(ctx, rows, bind, crossedMounts)
-	return bound, err
+// localSnapshotCommitResult reports what a snapshot commit changed.
+type localSnapshotCommitResult struct {
+	rowsChanged     bool
+	findingsChanged bool
+	// bound is the identity the store holds after a bind.
+	bound *synctree.RootIdentity
+	// mountBoundaries are the folders recorded as crossed mount points
+	// after the commit.
+	mountBoundaries []string
 }
 
-func (s *SyncStore) replaceLocalState(
+// CommitLocalSnapshot commits one full local scan in one transaction: its
+// findings, then its rows, its root binding and its crossed mounts. A failure
+// anywhere stores none of them (D-001), so a scan's rows never land without
+// its findings or its mounts. Only the rows that differ are written: watch
+// mode commits a snapshot at every five-minute safety scan, and rewriting an
+// idle 100k-file tree each time was gigabytes a day of SSD wear (D-081a).
+func (s *SyncStore) CommitLocalSnapshot(
 	ctx context.Context,
-	rows []localStateRow,
-	bind *synctree.RootIdentity,
-	crossedMounts []string,
-) (changed bool, bound *synctree.RootIdentity, err error) {
+	commit *localSnapshotCommit,
+) (result localSnapshotCommitResult, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return false, nil, fmt.Errorf("sync: beginning local_state transaction: %w", err)
+		return result, fmt.Errorf("sync: beginning local_state transaction: %w", err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
 	}()
 
-	changed, err = replaceLocalStateTx(ctx, tx, rows)
+	backfilled, err := s.commitLocalSnapshotTx(ctx, tx, commit, &result)
 	if err != nil {
-		return false, nil, err
-	}
-	if pruneErr := pruneKeptLocalFoldersTx(ctx, tx); pruneErr != nil {
-		return false, nil, pruneErr
-	}
-	if pruneErr := pruneLocalHashCacheTx(ctx, tx); pruneErr != nil {
-		return false, nil, pruneErr
-	}
-	backfilled, backfillErr := backfillBaselineIdentityTx(ctx, tx)
-	if backfillErr != nil {
-		return false, nil, backfillErr
-	}
-	becameComplete, markErr := markLocalTruthCompleteTx(ctx, tx)
-	if markErr != nil {
-		return false, nil, markErr
-	}
-	// Restoring complete local truth is a change even when no row moved:
-	// work held or superseded while truth was suspect needs a replan.
-	changed = changed || becameComplete
-	if bind != nil {
-		if bound, err = bindSyncRootIdentityTx(ctx, tx, *bind); err != nil {
-			return false, nil, err
-		}
-	}
-	if err := recordMountBoundariesTx(ctx, tx, crossedMounts); err != nil {
-		return false, nil, err
+		return result, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return false, nil, fmt.Errorf("sync: committing local_state transaction: %w", err)
+	if err = tx.Commit(); err != nil {
+		return result, fmt.Errorf("sync: committing local_state transaction: %w", err)
 	}
 
 	if backfilled > 0 {
-		if err := s.reloadBaselineCache(ctx); err != nil {
-			return false, nil, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+		if err = s.reloadBaselineCache(ctx); err != nil {
+			return result, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
 		}
 	}
 
-	return changed, bound, nil
+	return result, nil
+}
+
+// commitLocalSnapshotTx writes one snapshot inside tx, in the order
+// CommitLocalSnapshot names, fills result, and returns how many baseline
+// rows got their filesystem identity backfilled.
+func (s *SyncStore) commitLocalSnapshotTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	commit *localSnapshotCommit,
+	result *localSnapshotCommitResult,
+) (int64, error) {
+	var err error
+	if commit.findings != nil {
+		if result.findingsChanged, err = s.reconcileObservationFindingsTx(ctx, tx, commit.findings); err != nil {
+			return 0, err
+		}
+	}
+	changed, backfilled, err := replaceLocalTruthTx(ctx, tx, commit.rows)
+	if err != nil {
+		return 0, err
+	}
+	result.rowsChanged = changed
+	if commit.bind != nil {
+		if result.bound, err = bindSyncRootIdentityTx(ctx, tx, *commit.bind); err != nil {
+			return 0, err
+		}
+	}
+	if recordErr := recordMountBoundariesTx(ctx, tx, commit.crossedMounts); recordErr != nil {
+		return 0, recordErr
+	}
+	if result.mountBoundaries, err = listMountBoundariesTx(ctx, tx); err != nil {
+		return 0, err
+	}
+
+	return backfilled, nil
+}
+
+// replaceLocalTruthTx writes the snapshot's rows and what follows from them:
+// the prunes, the identity backfill and the complete-truth mark. It reports
+// whether anything changed and how many baseline rows were backfilled.
+func replaceLocalTruthTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	rows []localStateRow,
+) (bool, int64, error) {
+	changed, err := replaceLocalStateTx(ctx, tx, rows)
+	if err != nil {
+		return false, 0, err
+	}
+	if pruneErr := pruneKeptLocalFoldersTx(ctx, tx); pruneErr != nil {
+		return false, 0, pruneErr
+	}
+	if pruneErr := pruneLocalHashCacheTx(ctx, tx); pruneErr != nil {
+		return false, 0, pruneErr
+	}
+	backfilled, err := backfillBaselineIdentityTx(ctx, tx)
+	if err != nil {
+		return false, 0, err
+	}
+	becameComplete, err := markLocalTruthCompleteTx(ctx, tx)
+	if err != nil {
+		return false, 0, err
+	}
+	// Restoring complete local truth is a change even when no row moved:
+	// work held or superseded while truth was suspect needs a replan.
+	return changed || becameComplete, backfilled, nil
 }
 
 // backfillBaselineIdentityTx attaches the full snapshot's filesystem identity
@@ -357,17 +400,23 @@ func deleteLocalStatePathTx(ctx context.Context, tx sqlTxRunner, path string) er
 	return nil
 }
 
+// sqlDeleteLocalStateSubtree removes a path and every row below it. Every
+// path below p sorts between p + "/" and p + "0" under the primary key's
+// BINARY collation ('0' follows '/'), so the delete is two seeks on the
+// primary key instead of a scan of the table, and no character of the path
+// is a pattern. Its arguments are localStateSubtreeArgs.
+const sqlDeleteLocalStateSubtree = `DELETE FROM local_state
+	WHERE path = ? OR (path >= ? AND path < ?)`
+
+// localStateSubtreeArgs are the arguments of sqlDeleteLocalStateSubtree for
+// the subtree at prefix.
+func localStateSubtreeArgs(prefix string) []any {
+	return []any{prefix, prefix + "/", prefix + "0"}
+}
+
+// deleteLocalStatePrefixTx removes the row of prefix and every row below it.
 func deleteLocalStatePrefixTx(ctx context.Context, tx sqlTxRunner, prefix string) error {
-	descendantPrefix := prefix + "/"
-	if _, err := tx.ExecContext(
-		ctx,
-		`DELETE FROM local_state
-			WHERE path = ? COLLATE BINARY
-			   OR substr(path, 1, length(?)) = ? COLLATE BINARY`,
-		prefix,
-		descendantPrefix,
-		descendantPrefix,
-	); err != nil {
+	if _, err := tx.ExecContext(ctx, sqlDeleteLocalStateSubtree, localStateSubtreeArgs(prefix)...); err != nil {
 		return fmt.Errorf("sync: deleting local_state prefix for %s: %w", prefix, err)
 	}
 
@@ -512,22 +561,32 @@ func recordMountBoundariesTx(ctx context.Context, tx sqlTxRunner, crossed []stri
 
 // listMountBoundaries returns the folders recorded as crossed mount points.
 func (s *SyncStore) listMountBoundaries(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT path FROM mount_boundaries ORDER BY path`)
+	return listMountBoundariesTx(ctx, s.db)
+}
+
+func listMountBoundariesTx(ctx context.Context, runner sqlTxRunner) ([]string, error) {
+	return queryPathsTx(ctx, runner, `SELECT path FROM mount_boundaries ORDER BY path`, "mount boundaries")
+}
+
+// queryPathsTx runs a query whose one column is a path and returns the
+// paths in the query's order. what names the rows in its errors.
+func queryPathsTx(ctx context.Context, runner sqlTxRunner, query, what string) ([]string, error) {
+	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing mount boundaries: %w", err)
+		return nil, fmt.Errorf("sync: listing %s: %w", what, err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
 	var paths []string
 	for rows.Next() {
-		var boundary string
-		if err := rows.Scan(&boundary); err != nil {
-			return nil, fmt.Errorf("sync: scanning mount boundary: %w", err)
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("sync: reading %s: %w", what, err)
 		}
-		paths = append(paths, boundary)
+		paths = append(paths, path)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating mount boundaries: %w", err)
+		return nil, fmt.Errorf("sync: listing %s: %w", what, err)
 	}
 	return paths, nil
 }

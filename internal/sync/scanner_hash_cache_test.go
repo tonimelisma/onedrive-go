@@ -185,11 +185,10 @@ func TestLocalHashCache_StoreRoundTripAndPrune(t *testing.T) {
 	// a.txt gets a baseline row; the snapshot still lists a.txt and b.txt,
 	// gone.txt is no longer on disk.
 	require.NoError(t, store.CommitMutation(ctx, faultSeedOutcomeForCache("a.txt", "item-a")))
-	_, err = store.ReplaceLocalStateBindingRoot(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
 		{Path: "a.txt", ItemType: ItemTypeFile, Hash: "hash-a", Size: 1, Mtime: 10},
 		{Path: "b.txt", ItemType: ItemTypeFile, Hash: "hash-b", Size: 2, Mtime: 20},
-	}, nil, nil)
-	require.NoError(t, err)
+	}))
 
 	pruned, err := store.newLocalHashCache(ctx)
 	require.NoError(t, err)

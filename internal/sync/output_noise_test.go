@@ -471,11 +471,12 @@ func TestFolderNotEmptyError_NamesAFewBlockersAndTheAction(t *testing.T) {
 		folderNotEmptyError([]string{"a.txt"}).Error())
 }
 
-// requireReconcileSkipped persists skipped findings, failing the test on
-// error; the change report is not what these tests observe.
+// requireReconcileSkipped commits a scan of no rows with the skipped
+// findings, failing the test on error; the change report is not what these
+// tests observe.
 func requireReconcileSkipped(t *testing.T, flow *engineFlow, skipped []skippedItem) {
 	t.Helper()
 
-	_, err := flow.reconcileSkippedObservationFindings(t.Context(), skipped)
+	_, err := flow.commitLocalScan(t.Context(), nil, skipped, nil)
 	require.NoError(t, err)
 }

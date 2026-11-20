@@ -7,21 +7,30 @@ import (
 	"strings"
 )
 
-// reconcileSkippedObservationFindings persists a full scan's skipped-file
-// findings as the whole local finding set, clearing earlier findings the set
-// lacks, and reports whether the persisted issue set changed.
-func (flow *engineFlow) reconcileSkippedObservationFindings(
+// commitLocalScan commits one full local scan, a watch snapshot or the
+// replan's own, through the one snapshot commit (Engine.commitLocalSnapshot):
+// its finding set as the whole set of local findings (clearing earlier ones
+// the set lacks), its rows and the mounts it crossed, in one transaction. A
+// newly skipped file is reported first. It reports what the commit changed.
+func (flow *engineFlow) commitLocalScan(
 	ctx context.Context,
+	rows []localStateRow,
 	skipped []skippedItem,
-) (bool, error) {
+	crossedMounts []string,
+) (localSnapshotCommitResult, error) {
+	eng := flow.engine
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
-	batch := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, skipped)
-	return flow.applyObservationFindingsBatch(
-		ctx,
-		&batch,
-		"record skipped local files",
-		engineDebugNoteLocalSkipped,
-	)
+	findings := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
+	eng.emitDebugEvent(engineDebugEvent{
+		Type: engineDebugEventObservationFindingsReconcileStarted,
+		Note: engineDebugNoteLocalSkipped,
+	})
+
+	return eng.commitLocalSnapshot(ctx, localSnapshotCommit{
+		rows:          rows,
+		findings:      &findings,
+		crossedMounts: crossedMounts,
+	})
 }
 
 // observationIssueKey identifies one persisted skipped-file finding.
@@ -142,27 +151,25 @@ func skippedItemReasonText(item *skippedItem) string {
 	return strings.ReplaceAll(string(item.Reason), "_", " ")
 }
 
-// applyObservationFindingsBatch persists one findings batch and reports
-// whether the persisted issue set changed.
+// applyObservationFindingsBatch persists one findings batch.
 func (flow *engineFlow) applyObservationFindingsBatch(
 	ctx context.Context,
 	batch *ObservationFindingsBatch,
 	failureMessage string,
 	reconcileNote string,
-) (bool, error) {
+) error {
 	eng := flow.engine
 	if batch == nil {
-		return false, nil
+		return nil
 	}
 
 	eng.emitDebugEvent(engineDebugEvent{
 		Type: engineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
-	changed, err := eng.baseline.ReconcileObservationFindingsReportingChange(ctx, batch)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", failureMessage, err)
+	if err := eng.baseline.ReconcileObservationFindings(ctx, batch); err != nil {
+		return fmt.Errorf("%s: %w", failureMessage, err)
 	}
 
-	return changed, nil
+	return nil
 }

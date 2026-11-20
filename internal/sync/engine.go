@@ -412,34 +412,30 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 	return syncTree, nil
 }
 
-// commitLocalSnapshot replaces local_state and, while a primary engine still
-// has to bind its sync folder, records the folder's identity in the same
-// transaction. Binding first writes a fresh token on the folder (an extended
-// attribute) so later starts recognize it by name rather than by inode; a
-// filesystem without extended attributes binds on inode and fsid alone.
-// Mark-and-bind is serialized: two commits racing would otherwise write two
-// tokens, and the folder would keep the one the store did not record.
-func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, crossedMounts []string) error {
+// commitLocalSnapshot commits one full local scan in one transaction (its
+// findings, its rows and the mounts it crossed) and, while a primary engine
+// still has to bind its sync folder, records the folder's identity in the
+// same transaction. Binding first writes a fresh token on the folder (an
+// extended attribute) so later starts recognize it by name rather than by
+// inode; a filesystem without extended attributes binds on inode and fsid
+// alone. Mark-and-bind is serialized: two commits racing would otherwise
+// write two tokens, and the folder would keep the one the store did not
+// record. It reports what the commit changed and marks nothing itself.
+func (e *Engine) commitLocalSnapshot(ctx context.Context, commit localSnapshotCommit) (localSnapshotCommitResult, error) {
 	identity := e.syncRootIdentity
 	if identity == nil || !identity.bindPending.Load() {
-		if _, err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, nil, crossedMounts); err != nil {
-			return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
-		}
-		return nil
+		return e.commitLocalSnapshotUnbound(ctx, &commit)
 	}
 
 	identity.bindMu.Lock()
 	defer identity.bindMu.Unlock()
 	if !identity.bindPending.Load() {
-		if _, err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, nil, crossedMounts); err != nil {
-			return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
-		}
-		return nil
+		return e.commitLocalSnapshotUnbound(ctx, &commit)
 	}
 
 	expected := identity.Expected()
 	if expected == nil {
-		return fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
+		return localSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
 	bind.Token = ""
@@ -451,18 +447,20 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, 
 		e.logger.Debug("sync folder cannot carry a bind token; binding on inode and filesystem id",
 			slog.Any("error", err))
 	default:
-		return fmt.Errorf("sync: binding sync folder: %w", err)
+		return localSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: %w", err)
 	}
 
-	bound, err := e.baseline.ReplaceLocalStateBindingRoot(ctx, rows, &bind, crossedMounts)
+	commit.bind = &bind
+	result, err := e.baseline.CommitLocalSnapshot(ctx, &commit)
 	if err != nil {
-		return fmt.Errorf("sync: replacing local_state snapshot: %w", err)
+		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
+	bound := result.bound
 	if bound != nil && bound.Token != bind.Token && bound.Token != "" {
 		// Another binding won in the store; the folder must carry the token
 		// the store recorded, not the one just written.
 		if markErr := e.syncTree.SetRootMark(bound.Token); markErr != nil {
-			return fmt.Errorf("sync: restoring the recorded sync folder marker: %w", markErr)
+			return result, fmt.Errorf("sync: restoring the recorded sync folder marker: %w", markErr)
 		}
 	}
 	if bound == nil {
@@ -470,7 +468,17 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, rows []localStateRow, 
 	}
 	identity.current.Store(bound)
 	identity.bindPending.Store(false)
-	return nil
+	return result, nil
+}
+
+func (e *Engine) commitLocalSnapshotUnbound(
+	ctx context.Context, commit *localSnapshotCommit,
+) (localSnapshotCommitResult, error) {
+	result, err := e.baseline.CommitLocalSnapshot(ctx, commit)
+	if err != nil {
+		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
+	}
+	return result, nil
 }
 
 // storeDriverName is the database/sql driver the engine opens its store

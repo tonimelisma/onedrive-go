@@ -331,7 +331,7 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 			return noopSyncTimer{}
 		},
 	})
-	batches := make(chan localObservationBatch, 8)
+	batches := make(chan localObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
@@ -339,7 +339,7 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	watcher.errs <- fsnotify.ErrEventOverflow
 
 	suspect := receiveWithin(t, batches, "suspect marker")
-	assert.True(t, suspect.markSuspect)
+	assert.Equal(t, localTruthSuspect, suspect.kind)
 
 	// Before the fix nothing rescanned until the five-minute safety scan.
 	var timer capturedTimer
@@ -353,7 +353,7 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	timer.fn()
 
 	snapshot := receiveWithin(t, batches, "recovery full snapshot")
-	require.True(t, snapshot.fullSnapshot, "the recovery scan replaces local truth with a full snapshot")
+	require.Equal(t, localSnapshot, snapshot.kind, "the recovery scan replaces local truth with a full snapshot")
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"), "the change the kernel dropped is observed")
 	stopWatch(t, cancel, done)
 }
@@ -387,9 +387,9 @@ func TestTrySendLocalObservationBatch_DropRequestsRecoveryScan(t *testing.T) {
 	t.Parallel()
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetLocalObservationBatchChannel(make(chan localObservationBatch)) // unbuffered, nobody reading
+	obs.SetLocalObservationBatchChannel(make(chan localObservation)) // unbuffered, nobody reading
 
-	obs.TrySendLocalObservationBatch(t.Context(), localObservationBatch{deletedPaths: []string{"x"}})
+	obs.TrySendLocalObservationBatch(t.Context(), &localObservation{deletedPaths: []string{"x"}})
 
 	assert.Equal(t, int64(1), obs.DroppedEvents())
 	assert.Len(t, obs.recoveryScanRequests, 1, "a dropped batch asks for a recovery rescan")
@@ -592,7 +592,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 		},
 	})
 	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
-	batches := make(chan localObservationBatch, 8)
+	batches := make(chan localObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, &watcher.mockFsWatcher, dir, make(chan changeEvent, 10))
@@ -602,7 +602,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 	require.NoError(t, os.MkdirAll(filepath.Join(missed, "inner"), 0o700))
 	watcher.errs <- fsnotify.ErrEventOverflow
 
-	assert.True(t, receiveWithin(t, batches, "suspect marker").markSuspect)
+	assert.Equal(t, localTruthSuspect, receiveWithin(t, batches, "suspect marker").kind)
 	var timer capturedTimer
 	select {
 	case timer = <-timers:
@@ -610,7 +610,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 		require.Fail(t, "an overflow must arm a recovery rescan")
 	}
 	timer.fn()
-	require.True(t, receiveWithin(t, batches, "recovery snapshot").fullSnapshot)
+	require.Equal(t, localSnapshot, receiveWithin(t, batches, "recovery snapshot").kind)
 
 	// Before the fix the directory stayed unwatched for the whole session.
 	assert.Contains(t, watcher.addedPaths(), missed, "the recovery scan watches the directory it found")
