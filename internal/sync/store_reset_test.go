@@ -71,7 +71,7 @@ func TestRemoveStateDBFiles_RemovesALeftoverJournal(t *testing.T) {
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a database"), 0o600))
 	require.NoError(t, os.WriteFile(dbPath+"-journal", []byte("journal of the old file"), 0o600))
 
-	require.NoError(t, removeStateDBFiles(dbPath))
+	require.NoError(t, RemoveStateDBFiles(dbPath))
 
 	assert.NoFileExists(t, dbPath+"-journal")
 	assert.NoFileExists(t, dbPath)
@@ -88,7 +88,7 @@ func walDonor(t *testing.T, dir string) string {
 	t.Helper()
 
 	donorPath := filepath.Join(dir, "donor.db")
-	donor, err := sql.Open(sqliteDriverName,
+	donor, err := sql.Open(SqliteDriverName,
 		sqliteFileURI(donorPath, url.Values{sqlitePragmaParam: {"journal_mode(WAL)", "wal_autocheckpoint(0)"}}))
 	require.NoError(t, err)
 	donor.SetMaxOpenConns(1)
@@ -127,7 +127,7 @@ func sqliteHasTable(t *testing.T, db *sql.DB, name string) bool {
 func openPlainSQLite(t *testing.T, dbPath string) *sql.DB {
 	t.Helper()
 
-	db, err := sql.Open(sqliteDriverName, sqliteFileURI(dbPath, nil))
+	db, err := sql.Open(SqliteDriverName, sqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Close())
@@ -138,7 +138,7 @@ func openPlainSQLite(t *testing.T, dbPath string) *sql.DB {
 
 // SQLite pairs a write-ahead log with a database by file name alone, and the
 // rules for a store's file family rest on what it then does
-// (config.StateDBFamily, moveStateDBFamily). A log left without its database
+// (config.StateDBFamily, MoveStateDBFamily). A log left without its database
 // is deleted when a database is created at that name, so a store created
 // where an older delete left sidecars starts empty. A log beside a database
 // that did not write it is replayed into that database, which is why a new
@@ -207,7 +207,7 @@ func TestMoveStateDBFamily_ResumeAfterSidecarsMovedKeepsTheLog(t *testing.T) {
 	copyStateFile(t, donorPath, from)
 	copyStateFile(t, donorPath+"-wal", to+"-wal")
 
-	require.NoError(t, moveStateDBFamily(from, to))
+	require.NoError(t, MoveStateDBFamily(from, to))
 
 	assert.NoFileExists(t, from)
 	assert.True(t, sqliteHasTable(t, openPlainSQLite(t, to), staleMarkerTable),

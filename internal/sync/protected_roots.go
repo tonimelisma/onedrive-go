@@ -24,11 +24,11 @@ func (e *Engine) refreshProtectedRootsFromStore(ctx context.Context) error {
 		e.setProtectedRoots(nil)
 		return nil
 	}
-	records, err := e.baseline.listShortcutRoots(ctx)
+	records, err := e.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return err
 	}
-	e.setProtectedRoots(protectedRootsForShortcutRoots(records, e.shortcutNamespaceID))
+	e.setProtectedRoots(ProtectedRootsForShortcutRoots(records, e.shortcutNamespaceID))
 	return nil
 }
 
@@ -51,7 +51,7 @@ func (e *Engine) currentProtectedRoots() []ProtectedRoot {
 	return append([]ProtectedRoot(nil), e.protectedRoots...)
 }
 
-func normalizedProtectedRootPath(value string) string {
+func NormalizedProtectedRootPath(value string) string {
 	normalized := filepath.ToSlash(value)
 	normalized = path.Clean("/" + normalized)
 	normalized = normalized[1:]
@@ -62,14 +62,14 @@ func normalizedProtectedRootPath(value string) string {
 	return normalized
 }
 
-func protectedRootPathReservation(observedPath string, protectedRoots []ProtectedRoot) (ProtectedRoot, bool) {
-	normalized := normalizedProtectedRootPath(observedPath)
+func ProtectedRootPathReservation(observedPath string, protectedRoots []ProtectedRoot) (ProtectedRoot, bool) {
+	normalized := NormalizedProtectedRootPath(observedPath)
 	if normalized == "" {
 		return ProtectedRoot{}, false
 	}
 
 	for _, protectedRoot := range protectedRoots {
-		reservedPath := normalizedProtectedRootPath(protectedRoot.Path)
+		reservedPath := NormalizedProtectedRootPath(protectedRoot.Path)
 		if reservedPath == "" {
 			continue
 		}
@@ -82,7 +82,7 @@ func protectedRootPathReservation(observedPath string, protectedRoots []Protecte
 	return ProtectedRoot{}, false
 }
 
-func protectedRootIdentityReservation(
+func ProtectedRootIdentityReservation(
 	observedPath string,
 	info fs.FileInfo,
 	protectedRoots []ProtectedRoot,
@@ -95,7 +95,7 @@ func protectedRootIdentityReservation(
 		return ProtectedRoot{}, false
 	}
 
-	normalized := normalizedProtectedRootPath(observedPath)
+	normalized := NormalizedProtectedRootPath(observedPath)
 	if normalized == "" {
 		return ProtectedRoot{}, false
 	}
@@ -103,12 +103,12 @@ func protectedRootIdentityReservation(
 	for _, protectedRoot := range protectedRoots {
 		if !protectedRoot.HasIdentity ||
 			!synctree.SameIdentity(
-				protectedRoot.fileIdentity(),
+				protectedRoot.FileIdentity(),
 				identity,
 			) {
 			continue
 		}
-		reservedPath := normalizedProtectedRootPath(protectedRoot.Path)
+		reservedPath := NormalizedProtectedRootPath(protectedRoot.Path)
 		if reservedPath == "" || reservedPath == normalized {
 			continue
 		}

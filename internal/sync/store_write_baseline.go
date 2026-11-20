@@ -94,7 +94,7 @@ func baselineRowArgs(e *BaselineEntry) []any {
 // upsertBaselineRowTx inserts e as the baseline row of its item, or replaces
 // every column of the row the item already has. Callers wrap the error with
 // what they were recording.
-func upsertBaselineRowTx(ctx context.Context, tx sqlTxRunner, e *BaselineEntry) error {
+func upsertBaselineRowTx(ctx context.Context, tx SqlTxRunner, e *BaselineEntry) error {
 	_, err := tx.ExecContext(ctx, sqlUpsertBaseline, baselineRowArgs(e)...)
 
 	return err //nolint:wrapcheck // every caller names the path it was recording
@@ -147,7 +147,7 @@ func (s *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 		return nil, fmt.Errorf("sync: loading content drive for baseline: %w", err)
 	}
 
-	b, err := loadBaselineWithRunner(ctx, s.db, contentDriveID)
+	b, err := LoadBaselineWithRunner(ctx, s.db, contentDriveID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,10 +158,10 @@ func (s *SyncStore) Load(ctx context.Context) (*Baseline, error) {
 	return b, nil
 }
 
-// loadBaselineWithRunner builds a Baseline from the rows runner sees. Inside a
+// LoadBaselineWithRunner builds a Baseline from the rows runner sees. Inside a
 // read transaction it is the baseline of that transaction's snapshot, which is
 // what planning must use alongside SQL comparison rows from the same snapshot.
-func loadBaselineWithRunner(ctx context.Context, runner sqlTxRunner, contentDriveID driveid.ID) (*Baseline, error) {
+func LoadBaselineWithRunner(ctx context.Context, runner SqlTxRunner, contentDriveID driveid.ID) (*Baseline, error) {
 	rows, err := runner.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
@@ -183,7 +183,7 @@ func loadBaselineWithRunner(ctx context.Context, runner sqlTxRunner, contentDriv
 		b.ByPath[entry.Path] = entry
 		b.ByID[entry.ItemID] = entry
 
-		dnk := dirNameKeyFromPath(entry.Path)
+		dnk := DirNameKeyFromPath(entry.Path)
 		b.ByDirNameKey[dnk] = append(b.ByDirNameKey[dnk], entry)
 	}
 
@@ -270,7 +270,7 @@ func publicationDriveIDForAction(action *Action, defaultDriveID driveid.ID) driv
 	return defaultDriveID
 }
 
-func actionItemType(action *Action) ItemType {
+func ActionItemType(action *Action) ItemType {
 	if action == nil {
 		return ItemTypeFile
 	}
@@ -322,7 +322,7 @@ func fillMutationFromBaselineDefaults(mutation *BaselineMutation, baseline *Base
 		mutation.LocalBirthTime = baseline.LocalBirthTime
 		mutation.LocalHasIdentity = baseline.LocalHasIdentity
 	}
-	if !storedTimeIsSet(mutation.RemoteMtime) && !remoteObserved {
+	if !StoredTimeIsSet(mutation.RemoteMtime) && !remoteObserved {
 		mutation.RemoteMtime = baseline.RemoteMtime
 	}
 	if mutation.ETag == "" && !remoteObserved {
@@ -349,11 +349,11 @@ func fillMutationContentFromBaseline(mutation *BaselineMutation, baseline *Basel
 	}
 }
 
-func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*BaselineMutation, error) {
+func PublicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*BaselineMutation, error) {
 	if action == nil {
 		return nil, fmt.Errorf("sync: building publication mutation: nil action")
 	}
-	if !action.Type.isMember() || !isPublicationOnlyActionType(action.Type) {
+	if !action.Type.IsMember() || !IsPublicationOnlyActionType(action.Type) {
 		return nil, fmt.Errorf("sync: building publication mutation: %s is not publication-only", action.Type.String())
 	}
 
@@ -364,7 +364,7 @@ func publicationMutationFromAction(action *Action, defaultDriveID driveid.ID) (*
 		OldPath:  action.OldPath,
 		DriveID:  publicationDriveIDForAction(action, defaultDriveID),
 		ItemID:   action.ItemID,
-		ItemType: actionItemType(action),
+		ItemType: ActionItemType(action),
 	}
 
 	if action.View != nil {
@@ -425,7 +425,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 		}
 	}
 
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning commit outcome transaction: %w", err)
 	}
@@ -433,7 +433,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback outcome transaction for %s", outcome.Path))
 	}()
 
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -447,7 +447,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 	if applyErr := s.applyOutcomeTx(ctx, tx, outcome); applyErr != nil {
 		return applyErr
 	}
-	if crashErr := s.reachCrashPoint(crashPointCommitOutcome); crashErr != nil {
+	if crashErr := s.reachCrashPoint(CrashPointCommitOutcome); crashErr != nil {
 		err = crashErr
 		return err
 	}
@@ -468,7 +468,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *BaselineMutatio
 // remote_state rows, its delete-ledger entry, and the end of the
 // pending-create records it settles (store_pending_creates.go), which goes
 // with the outcome, before the commit's crash point.
-func (s *SyncStore) applyOutcomeTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation) error {
+func (s *SyncStore) applyOutcomeTx(ctx context.Context, tx SqlTxRunner, outcome *BaselineMutation) error {
 	before, err := readBaselineBeforeOutcomeTx(ctx, tx, outcome)
 	if err != nil {
 		return err
@@ -523,7 +523,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		entry.ETag = existing.ETag
 	}
 
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning refresh local baseline transaction: %w", err)
 	}
@@ -531,7 +531,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback refresh local baseline transaction for %s", refresh.Path))
 	}()
 
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -589,7 +589,7 @@ func classifyMutation(o *BaselineMutation) (baselineMutationKind, error) {
 	return classifyBaselineMutation(o.Action)
 }
 
-func classifyBaselineMutation(action actionType) (baselineMutationKind, error) {
+func classifyBaselineMutation(action ActionType) (baselineMutationKind, error) {
 	switch action {
 	case ActionConflictCopy:
 		return baselineMutationNoop, nil
@@ -602,7 +602,7 @@ func classifyBaselineMutation(action actionType) (baselineMutationKind, error) {
 	default:
 		// The plan and the retry_work rows cannot carry one; refused before
 		// any write of the mutation's transaction.
-		return 0, fmt.Errorf("sync: classifying baseline mutation: %s", outsideTheEnum(action))
+		return 0, fmt.Errorf("sync: classifying baseline mutation: %s", OutsideTheEnum(action))
 	}
 }
 
@@ -611,7 +611,7 @@ func classifyBaselineMutation(action actionType) (baselineMutationKind, error) {
 var errMutationWithoutItemID = errors.New("mutation outcome has no item ID")
 
 // applySingleMutation dispatches a single mutation to the appropriate DB helper.
-func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+func applySingleMutation(ctx context.Context, tx SqlTxRunner, o *BaselineMutation) error {
 	mutation, err := classifyMutation(o)
 	if err != nil {
 		return err
@@ -710,7 +710,7 @@ func (s *SyncStore) reloadBaselineCache(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sync: loading content drive for baseline reload: %w", err)
 	}
-	fresh, err := loadBaselineWithRunner(ctx, s.db, contentDriveID)
+	fresh, err := LoadBaselineWithRunner(ctx, s.db, contentDriveID)
 	if err != nil {
 		return fmt.Errorf("sync: loading baseline after cache invalidation: %w", err)
 	}
@@ -721,7 +721,7 @@ func (s *SyncStore) reloadBaselineCache(ctx context.Context) error {
 		s.baseline = fresh
 		return nil
 	}
-	s.baseline.replaceContents(fresh)
+	s.baseline.ReplaceContents(fresh)
 
 	return nil
 }
@@ -751,7 +751,7 @@ func mutationToEntry(o *BaselineMutation) *BaselineEntry {
 	}
 }
 
-func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
+func MutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 	if o == nil {
 		return nil
 	}
@@ -792,7 +792,7 @@ func mutationFromActionOutcome(o *actionOutcome) *BaselineMutation {
 // folder create, and update-synced outcomes. Handles the case where a
 // server-side delete+recreate assigns a new item_id for an existing path
 // by removing the stale row first (prevents UNIQUE constraint violation on path).
-func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+func commitUpsert(ctx context.Context, tx SqlTxRunner, o *BaselineMutation) error {
 	// A folder rebound to a new item at the same path (R-2.10.49) takes its
 	// children with it: their parent_id named the dead item.
 	if o.ItemType == ItemTypeFolder {
@@ -833,7 +833,7 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) erro
 // planner does not create a kept folder online again while it is the same
 // folder and holds nothing sync sees (R-2.17.2). A folder without filesystem
 // identity cannot be told from a new one at the path, so it is not kept.
-func recordKeptLocalFolderTx(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+func recordKeptLocalFolderTx(ctx context.Context, tx SqlTxRunner, o *BaselineMutation) error {
 	if !o.LocalHasIdentity {
 		return nil
 	}
@@ -853,7 +853,7 @@ func recordKeptLocalFolderTx(ctx context.Context, tx sqlTxRunner, o *BaselineMut
 }
 
 // commitDelete removes a baseline entry for delete and cleanup outcomes.
-func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
+func commitDelete(ctx context.Context, tx SqlTxRunner, path string) error {
 	_, err := tx.ExecContext(ctx, sqlDeleteBaseline, path)
 	if err != nil {
 		return fmt.Errorf("sync: deleting baseline for %s: %w", path, err)
@@ -865,7 +865,7 @@ func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 // commitMove atomically updates the path for move outcomes. With the ID-based
 // PK, a move is a single UPDATE (not DELETE+INSERT) — the row identity
 // (item_id) doesn't change, only the path does.
-func commitMove(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+func commitMove(ctx context.Context, tx SqlTxRunner, o *BaselineMutation) error {
 	// The baseline row is the item, keyed by item_id; where it sat before is
 	// read from it, not from OldPath. OldPath is the moving side's path, and
 	// for a local copy moved to OneDrive's name after a divergent rename it is
@@ -913,7 +913,7 @@ func isFolderPathMove(o *BaselineMutation) bool {
 // newPath. Prefix matching uses SQLite's own length() on the bound prefix so
 // multi-byte names cut at the same character boundary they are matched on.
 // table is always a fixed internal table name, never input.
-func repathSubtreeTx(ctx context.Context, tx sqlTxRunner, table, oldPath, newPath string) error {
+func repathSubtreeTx(ctx context.Context, tx SqlTxRunner, table, oldPath, newPath string) error {
 	oldPrefix := oldPath + "/"
 	newPrefix := newPath + "/"
 	query := `UPDATE ` + table + `
@@ -928,7 +928,7 @@ func repathSubtreeTx(ctx context.Context, tx sqlTxRunner, table, oldPath, newPat
 
 // updateRemoteStateOnOutcome updates the remote mirror when execution produces
 // authoritative new remote truth.
-func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *BaselineMutation) error {
+func updateRemoteStateOnOutcome(ctx context.Context, tx SqlTxRunner, o *BaselineMutation) error {
 	if o.ItemID == "" || o.DriveID.IsZero() {
 		return nil
 	}
@@ -999,7 +999,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *Baseline
 		return nil
 	default:
 		// classifyMutation refuses this first, inside the same transaction.
-		return fmt.Errorf("sync: updating remote_state for %s: %s", o.Path, outsideTheEnum(o.Action))
+		return fmt.Errorf("sync: updating remote_state for %s: %s", o.Path, OutsideTheEnum(o.Action))
 	}
 
 	return nil
@@ -1116,19 +1116,19 @@ func baselineEntriesEqual(a, b *BaselineEntry) bool {
 // but either may also have edited it; recording that content as synced would
 // lose the edit silently, so a side whose content differs from the baseline
 // keeps the baseline's content facts and the next pass transfers it.
-func keepPendingContentAcrossRekey(mutation *BaselineMutation, view *pathView) {
+func keepPendingContentAcrossRekey(mutation *BaselineMutation, view *PathView) {
 	baseline := view.Baseline
 	if baseline == nil {
 		return
 	}
-	if remoteContentDiffersFromBaseline(view.Remote, baseline) {
+	if RemoteContentDiffersFromBaseline(view.Remote, baseline) {
 		mutation.ETag = baseline.ETag
 		mutation.RemoteHash = baseline.RemoteHash
 		mutation.RemoteSize = baseline.RemoteSize
 		mutation.RemoteSizeKnown = baseline.RemoteSizeKnown
 		mutation.RemoteMtime = baseline.RemoteMtime
 	}
-	if localFileDiffersFromBaseline(view.Local, baseline) {
+	if LocalFileDiffersFromBaseline(view.Local, baseline) {
 		mutation.LocalHash = baseline.LocalHash
 		mutation.LocalSize = baseline.LocalSize
 		mutation.LocalSizeKnown = baseline.LocalSizeKnown

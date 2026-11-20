@@ -15,7 +15,7 @@ import (
 
 // A stored time is written by one of two encodings and read back by name.
 // Times compared by order and remote modification times go through
-// storedTimeNano, which saturates; local modification, change and birth
+// StoredTimeNano, which saturates; local modification, change and birth
 // times keep UnixNano, are compared only with themselves and are never turned
 // back into a time. These tests read the product source: a new conversion
 // fails them until it is declared below with what it is, so a new stored time
@@ -28,7 +28,7 @@ const (
 	decodesRangeBound    = "a bound of the stored range"
 
 	// What a plain t.UnixNano() call encodes.
-	encodesThroughTheSaturatingEncoder = "storedTimeNano itself"
+	encodesThroughTheSaturatingEncoder = "StoredTimeNano itself"
 	encodesLocalTimeForEquality        = "a local time compared for equality"
 
 	// A value that lives in memory only, either way: a clock reading, an
@@ -75,7 +75,7 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 
 	found := countProductCalls(t, isPlainUnixNano, "internal/sync")
 	assert.Equal(t, declaredTotals(declared), found,
-		"every plain UnixNano() in internal/sync is declared with what it encodes; a stored ordered or remote time uses storedTimeNano")
+		"every plain UnixNano() in internal/sync is declared with what it encodes; a stored ordered or remote time uses StoredTimeNano")
 }
 
 func declaredTotals(declared map[string]map[string]int) map[string]int {

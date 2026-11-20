@@ -88,7 +88,7 @@ func assertOwnerCheckFires(t *testing.T, install func(func()), access func()) {
 func TestOwnerCheck_DependencyGraphCatchesASecondGoroutine(t *testing.T) {
 	t.Parallel()
 
-	graph := newDepGraph(synctest.TestLogger(t))
+	graph := NewDepGraph(synctest.TestLogger(t))
 	assertOwnerCheckFires(t,
 		func(check func()) { graph.ownerCheck = check },
 		func() { graph.InFlightCount() },
@@ -137,7 +137,7 @@ func TestWatchRuntime_TimerCallbacksTouchOnlyChannels(t *testing.T) {
 	installOwnerCheck(t, rt)
 	due := clock.Now().Add(time.Minute)
 
-	rt.scopes.upsertActiveScope(&activeScope{Key: SKService(), TrialInterval: time.Minute, NextTrialAt: due})
+	rt.scopes.upsertActiveScope(&ActiveScope{Key: SKService(), TrialInterval: time.Minute, NextTrialAt: due})
 	rt.retries.heldByScope[SKService()] = []RetryWorkKey{{Path: "scoped.txt"}}
 	rt.armTrialTimer()
 	rt.retries.heldByKey[RetryWorkKey{Path: "held.txt"}] = &heldAction{Reason: heldReasonRetry, NextRetry: due}
@@ -151,7 +151,7 @@ func TestWatchRuntime_TimerCallbacksTouchOnlyChannels(t *testing.T) {
 	fired := make(chan struct{})
 	go func() {
 		defer close(fired)
-		clock.Advance(fullRemoteRefreshInterval + time.Minute)
+		clock.Advance(FullRemoteRefreshInterval + time.Minute)
 	}()
 	receiveWithin(t, fired, "the second goroutine to fire the timers")
 
@@ -177,7 +177,7 @@ func ownerOfCheck() string {
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(ownerCheckCallerSkip, pcs)])
 	for {
 		frame, more := frames.Next()
-		for _, owner := range []string{"(*depGraph)", "(*scopeLedger)", "(*watchTimerState)"} {
+		for _, owner := range []string{"(*DepGraph)", "(*scopeLedger)", "(*watchTimerState)"} {
 			if strings.Contains(frame.Function, owner) {
 				return owner
 			}
@@ -248,7 +248,7 @@ func TestRunOnce_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Downloads)
-	ownership.assertRunOwned(t, "(*depGraph)", "(*scopeLedger)")
+	ownership.assertRunOwned(t, "(*DepGraph)", "(*scopeLedger)")
 }
 
 // A watch whose bootstrap downloads a file uses the scope ledger, its timers
@@ -271,9 +271,9 @@ func TestRunWatch_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 	recorder := attachDebugEventRecorder(eng)
 
 	cancel, done := runWatchInBackground(t, eng, SyncBidirectional, quietWatchOptions())
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	stopWatch(t, cancel, done)
-	ownership.assertRunOwned(t, "(*depGraph)", "(*scopeLedger)", "(*watchTimerState)")
+	ownership.assertRunOwned(t, "(*DepGraph)", "(*scopeLedger)", "(*watchTimerState)")
 }

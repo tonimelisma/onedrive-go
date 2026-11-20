@@ -31,7 +31,7 @@ func TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile(t *testing.T
 
 	assert.Zero(t, remote.uploads, "the variant must be held as a collision, not uploaded")
 	assert.Equal(t, map[string]string{"straße.txt": "original\n"}, remote.tree())
-	requireScenarioIssue(t, eng, "STRASSE.txt", issueCaseCollision)
+	requireScenarioIssue(t, eng, "STRASSE.txt", IssueCaseCollision)
 }
 
 // Validates: R-2.12.3
@@ -51,7 +51,7 @@ func TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict(t *testing.T) 
 
 	assert.Zero(t, remote.uploads)
 	assert.Equal(t, map[string]string{"a\U0001F600.txt": "emoji\n"}, remote.tree())
-	requireScenarioIssue(t, eng, "a.txt", issueCaseCollision)
+	requireScenarioIssue(t, eng, "a.txt", IssueCaseCollision)
 }
 
 func requireScenarioIssue(t *testing.T, eng *testEngine, path string, issueType IssueType) {
@@ -74,8 +74,8 @@ func TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded(t *testing.T) {
 	// A crash between the two renames of a spelling-only rename must not
 	// leave a file that syncs under the temporary name, whatever the filter
 	// settings (junk filtering and dotfile filtering both off here).
-	filter := newContentFilter(ContentFilterConfig{})
-	assert.False(t, filter.Visible(spellingRenameArtifactPrefix+"EDIT.txt", ItemTypeFile))
-	assert.False(t, filter.Visible("docs/"+spellingRenameArtifactPrefix+"EDIT.txt-1", ItemTypeFile))
+	filter := NewContentFilter(ContentFilterConfig{})
+	assert.False(t, filter.Visible(SpellingRenameArtifactPrefix+"EDIT.txt", ItemTypeFile))
+	assert.False(t, filter.Visible("docs/"+SpellingRenameArtifactPrefix+"EDIT.txt-1", ItemTypeFile))
 	assert.True(t, filter.Visible("docs/EDIT.txt", ItemTypeFile))
 }

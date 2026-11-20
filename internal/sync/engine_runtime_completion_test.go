@@ -25,13 +25,13 @@ func TestEngineFlow_ProcessNormalDecision_InvalidTerminatesAndRecordsRetryWork(t
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:         errclass.ClassInvalid,
 		ConditionKey:  ConditionInvalidFilename,
-		Persistence:   persistRetryWork,
+		Persistence:   PersistRetryWork,
 		ConditionType: IssueInvalidFilename,
-		TrialHint:     trialHintReclassify,
-	}, nil, &actionCompletion{
+		TrialHint:     TrialHintReclassify,
+	}, nil, &ActionCompletion{
 		Path:       "invalid.txt",
 		ActionType: ActionUpload,
 		ErrMsg:     "invalid filename",
@@ -54,10 +54,10 @@ func TestEngineFlow_ProcessNormalDecision_ShutdownReturnsWithoutPersistence(t *t
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:     errclass.ClassShutdown,
-		TrialHint: trialHintShutdown,
-	}, nil, &actionCompletion{
+		TrialHint: TrialHintShutdown,
+	}, nil, &ActionCompletion{
 		Path:       "shutdown.txt",
 		ActionType: ActionUpload,
 	}, nil)
@@ -75,11 +75,11 @@ func TestEngineFlow_ProcessNormalDecision_FatalTerminatesWithFatalResultError(t 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:        errclass.ClassFatal,
 		ConditionKey: ConditionAuthenticationRequired,
-		TrialHint:    trialHintFatal,
-	}, nil, &actionCompletion{
+		TrialHint:    TrialHintFatal,
+	}, nil, &ActionCompletion{
 		Path:       "auth.txt",
 		ActionType: ActionUpload,
 	}, nil)
@@ -100,15 +100,15 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:             errclass.ClassRetryableTransient,
 		ConditionKey:      ConditionServiceOutage,
 		ScopeEvidence:     SKService(),
-		Persistence:       persistRetryWork,
+		Persistence:       PersistRetryWork,
 		RunScopeDetection: true,
-		TrialHint:         trialHintExtendOnMatchingScope,
-		ConditionType:     issueServiceOutage,
-	}, nil, &actionCompletion{
+		TrialHint:         TrialHintExtendOnMatchingScope,
+		ConditionType:     IssueServiceOutage,
+	}, nil, &ActionCompletion{
 		Path:       "retry.txt",
 		ActionType: ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
@@ -140,7 +140,7 @@ func TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWo
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	completion := &actionCompletion{
+	completion := &ActionCompletion{
 		Path:       "outage.txt",
 		ActionType: ActionUpload,
 		HTTPStatus: http.StatusServiceUnavailable,
@@ -178,14 +178,14 @@ func TestEngineFlow_ProcessNormalDecision_BlockedRowFollowsTheActivatedScope(t *
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	_, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	_, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:         errclass.ClassScopeBlockingTransient,
 		ScopeKey:      SKDiskLocal(),
 		ScopeEvidence: SKService(),
-		Persistence:   persistRetryWork,
-		TrialHint:     trialHintExtendOnMatchingScope,
-		ConditionType: issueDiskFull,
-	}, nil, &actionCompletion{Path: "full.bin", ActionType: ActionDownload, ErrMsg: "no space"}, nil)
+		Persistence:   PersistRetryWork,
+		TrialHint:     TrialHintExtendOnMatchingScope,
+		ConditionType: IssueDiskFull,
+	}, nil, &ActionCompletion{Path: "full.bin", ActionType: ActionDownload, ErrMsg: "no space"}, nil)
 	require.NoError(t, err)
 
 	assert.True(t, rt.scopes.hasActiveScope(SKDiskLocal()))
@@ -208,7 +208,7 @@ func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *
 	flow := testEngineFlow(t, eng)
 
 	for i := range serviceWindowThreshold {
-		completion := &actionCompletion{
+		completion := &ActionCompletion{
 			Path:       fmt.Sprintf("outage-%d.txt", i),
 			ActionType: ActionUpload,
 			HTTPStatus: http.StatusBadGateway,
@@ -259,11 +259,11 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 		Path:    "next.txt",
 		DriveID: eng.driveID,
 		ItemID:  "next-item",
-		View:    &pathView{Path: "next.txt"},
+		View:    &PathView{Path: "next.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	dispatched, err := flow.applyCompletionSuccess(t.Context(), current, &actionCompletion{
+	dispatched, err := flow.applyCompletionSuccess(t.Context(), current, &ActionCompletion{
 		ActionID:   1,
 		Path:       "sync.txt",
 		ActionType: ActionDownload,
@@ -283,7 +283,7 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
 
 	row := RetryWorkRow{
@@ -312,12 +312,12 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	decision := classifyResult(&actionCompletion{Err: errActionPreconditionChanged})
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, current, &actionCompletion{
+	decision := classifyResult(&ActionCompletion{Err: ErrActionPreconditionChanged})
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, current, &ActionCompletion{
 		ActionID:   current.ID,
 		Path:       "stale.txt",
 		ActionType: ActionUpload,
-		Err:        errActionPreconditionChanged,
+		Err:        ErrActionPreconditionChanged,
 		ErrMsg:     "source changed",
 	}, nil)
 
@@ -350,23 +350,23 @@ func TestEngineFlow_ProcessNormalDecision_StaleCompletionIsNeverProbedForPermiss
 	const remoteRootItemID = "mount-root-id"
 	testCases := []struct {
 		name       string
-		completion actionCompletion
+		completion ActionCompletion
 	}{
 		{
 			name: "local permission denial",
-			completion: actionCompletion{
+			completion: ActionCompletion{
 				Path:       "accessible/file.txt",
 				ActionType: ActionDownload,
-				Err:        fmt.Errorf("%w: %w", errActionPreconditionChanged, os.ErrPermission),
+				Err:        fmt.Errorf("%w: %w", ErrActionPreconditionChanged, os.ErrPermission),
 			},
 		},
 		{
 			name: "remote 403",
-			completion: actionCompletion{
+			completion: ActionCompletion{
 				Path:       "Shared/file.txt",
 				ActionType: ActionUpload,
 				HTTPStatus: http.StatusForbidden,
-				Err: fmt.Errorf("%w: %w", errActionPreconditionChanged,
+				Err: fmt.Errorf("%w: %w", ErrActionPreconditionChanged,
 					&graph.GraphError{StatusCode: http.StatusForbidden, Err: graph.ErrForbidden}),
 			},
 		},
@@ -413,8 +413,8 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 
 	testCases := []struct {
 		name              string
-		actionType        actionType
-		failureCapability permissionCapability
+		actionType        ActionType
+		failureCapability PermissionCapability
 	}{
 		{
 			name:       "local read denied",
@@ -423,7 +423,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 		{
 			name:              "local write denied",
 			actionType:        ActionUpload,
-			failureCapability: permissionCapabilityLocalWrite,
+			failureCapability: PermissionCapabilityLocalWrite,
 		},
 	}
 
@@ -437,7 +437,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 
 			require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 
-			r := &actionCompletion{
+			r := &ActionCompletion{
 				Path:              "accessible/file.txt",
 				ActionType:        tc.actionType,
 				FailureCapability: tc.failureCapability,
@@ -474,7 +474,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 
-	r := &actionCompletion{
+	r := &ActionCompletion{
 		Path:       "accessible/file.txt",
 		ActionType: ActionDownload,
 		Err:        os.ErrPermission,
@@ -519,14 +519,14 @@ func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetr
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	r := &actionCompletion{
+	r := &ActionCompletion{
 		Path:       "Shared/file.txt",
 		ActionType: ActionUpload,
 		HTTPStatus: http.StatusForbidden,
 		ErrMsg:     "folder is read-only",
 	}
 
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
@@ -566,14 +566,14 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 		NextTrialAt:   eng.nowFunc(),
 	}))
 
-	r := &actionCompletion{
+	r := &ActionCompletion{
 		Path:       "Shared/file.txt",
 		ActionType: ActionUpload,
 		HTTPStatus: http.StatusForbidden,
 		ErrMsg:     "still read-only",
 	}
 
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &resultDecision{
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &ResultDecision{
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
@@ -599,13 +599,13 @@ func TestEngineFlow_ProcessTrialDecision_RearmOrDiscardRecordsFailureWithoutTerm
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKService()
 
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), scopeKey, &resultDecision{
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), scopeKey, &ResultDecision{
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionInvalidFilename,
 		ConditionType: IssueInvalidFilename,
-		Persistence:   persistRetryWork,
-		TrialHint:     trialHintReclassify,
-	}, nil, &actionCompletion{
+		Persistence:   PersistRetryWork,
+		TrialHint:     TrialHintReclassify,
+	}, nil, &ActionCompletion{
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
 		TrialScopeKey: scopeKey,
@@ -668,13 +668,13 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToR
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), scopeKey, &resultDecision{
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), scopeKey, &ResultDecision{
 		Class:         errclass.ClassActionable,
 		ConditionKey:  ConditionRemoteWriteDenied,
 		ConditionType: IssueRemoteWriteDenied,
-		Persistence:   persistRetryWork,
-		TrialHint:     trialHintReclassify,
-	}, current, &actionCompletion{
+		Persistence:   PersistRetryWork,
+		TrialHint:     TrialHintReclassify,
+	}, current, &ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    ActionUpload,
@@ -729,16 +729,16 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 	}, 1, nil)
 	require.NotNil(t, current)
 
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &resultDecision{
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &ResultDecision{
 		Class:             errclass.ClassScopeBlockingTransient,
 		ConditionKey:      ConditionRateLimited,
-		ConditionType:     issueRateLimited,
+		ConditionType:     IssueRateLimited,
 		ScopeKey:          throttleScopeKey,
 		ScopeEvidence:     throttleScopeKey,
-		Persistence:       persistRetryWork,
+		Persistence:       PersistRetryWork,
 		RunScopeDetection: true,
-		TrialHint:         trialHintExtendOnMatchingScope,
-	}, current, &actionCompletion{
+		TrialHint:         TrialHintExtendOnMatchingScope,
+	}, current, &ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    ActionUpload,
@@ -790,7 +790,7 @@ func TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork
 	current := rt.sched.graph.Add(&Action{Type: ActionDownload, Path: "file.txt", DriveID: eng.driveID}, 1, nil)
 	require.NotNil(t, current)
 
-	completion := &actionCompletion{
+	completion := &ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    ActionDownload,
@@ -849,16 +849,16 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	}, 2, nil)
 	require.NotNil(t, current)
 
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &resultDecision{
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &ResultDecision{
 		Class:             errclass.ClassScopeBlockingTransient,
 		ConditionKey:      ConditionRateLimited,
-		ConditionType:     issueRateLimited,
+		ConditionType:     IssueRateLimited,
 		ScopeKey:          throttleScopeKey,
 		ScopeEvidence:     throttleScopeKey,
-		Persistence:       persistRetryWork,
+		Persistence:       PersistRetryWork,
 		RunScopeDetection: true,
-		TrialHint:         trialHintExtendOnMatchingScope,
-	}, current, &actionCompletion{
+		TrialHint:         TrialHintExtendOnMatchingScope,
+	}, current, &ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    ActionUpload,
@@ -876,7 +876,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 		"trial retry fallback should activate the newly classified blocked scope")
 	assert.True(t, rt.scopes.hasActiveScope(trialScopeKey),
 		"the original scope must stay active while unrelated blocked work still remains under it")
-	assert.Contains(t, rt.retries.heldByKey, retryWorkKeyForAction(&other.Action),
+	assert.Contains(t, rt.retries.heldByKey, RetryWorkKeyForAction(&other.Action),
 		"existing blocked work under the original scope must remain held in the runtime")
 
 	rowsByPath := retryRowsByPathForTest(t, eng)
@@ -901,7 +901,7 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
 	trialScopeKey := SKService()
 
@@ -929,12 +929,12 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 	require.NotNil(t, current)
 	rt.sched.markRunning(current)
 
-	decision := classifyResult(&actionCompletion{Err: errActionPreconditionChanged})
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, &actionCompletion{
+	decision := classifyResult(&ActionCompletion{Err: ErrActionPreconditionChanged})
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, &ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "trial-stale.txt",
 		ActionType:    ActionUpload,
-		Err:           errActionPreconditionChanged,
+		Err:           ErrActionPreconditionChanged,
 		ErrMsg:        "source changed",
 		IsTrial:       true,
 		TrialScopeKey: trialScopeKey,
@@ -1020,11 +1020,11 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 		Path:    "dependent.txt",
 		DriveID: eng.driveID,
 		ItemID:  "dependent-item",
-		View:    &pathView{Path: "dependent.txt"},
+		View:    &PathView{Path: "dependent.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	ready, err := rt.applyRuntimeCompletionStage(t.Context(), &actionCompletion{
+	ready, err := rt.applyRuntimeCompletionStage(t.Context(), &ActionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -1049,9 +1049,9 @@ func TestEngineFlow_ProcessTrialDecision_ShutdownCompletesWithoutTerminating(t *
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), SKService(), &resultDecision{
-		TrialHint: trialHintShutdown,
-	}, nil, &actionCompletion{
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), SKService(), &ResultDecision{
+		TrialHint: TrialHintShutdown,
+	}, nil, &ActionCompletion{
 		Path:       "trial-shutdown.txt",
 		ActionType: ActionUpload,
 	}, nil)
@@ -1067,11 +1067,11 @@ func TestEngineFlow_ProcessTrialDecision_FatalTerminatesWithFatalResultError(t *
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), SKService(), &resultDecision{
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), SKService(), &ResultDecision{
 		Class:        errclass.ClassFatal,
 		ConditionKey: ConditionAuthenticationRequired,
-		TrialHint:    trialHintFatal,
-	}, nil, &actionCompletion{
+		TrialHint:    TrialHintFatal,
+	}, nil, &ActionCompletion{
 		Path:       "trial-auth.txt",
 		ActionType: ActionUpload,
 	}, nil)
@@ -1096,7 +1096,7 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &actionCompletion{
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &ActionCompletion{
 		ActionID:   1,
 		Path:       "retry.txt",
 		ActionType: ActionUpload,
@@ -1128,7 +1128,7 @@ func TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletio
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &actionCompletion{
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &ActionCompletion{
 		ActionID:   1,
 		Path:       "Shared/file.txt",
 		ActionType: ActionUpload,
@@ -1161,7 +1161,7 @@ func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &actionCompletion{
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &ActionCompletion{
 		ActionID:      1,
 		Path:          "Shared/file.txt",
 		ActionType:    ActionUpload,
@@ -1195,7 +1195,7 @@ func TestEngineFlow_Quota403OnSharedMountIsQuotaNotPermission(t *testing.T) {
 	flow := testEngineFlow(t, eng)
 
 	for _, path := range []string{"Shared/a.txt", "Shared/b.txt", "Shared/c.txt"} {
-		r := &actionCompletion{
+		r := &ActionCompletion{
 			Path:       path,
 			ActionType: ActionUpload,
 			DriveID:    driveid.New(engineTestDriveID),

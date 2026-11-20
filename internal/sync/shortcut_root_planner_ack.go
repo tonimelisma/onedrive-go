@@ -2,14 +2,14 @@ package sync
 
 import "slices"
 
-func planShortcutRootDrainReleasePending(
+func PlanShortcutRootDrainReleasePending(
 	current []ShortcutRootRecord,
 	ack ShortcutChildDrainAck,
 ) shortcutRootDrainAckPlan {
 	records := make([]ShortcutRootRecord, 0, len(current))
 	changed := false
 	for i := range current {
-		record := normalizeShortcutRootRecord(&current[i])
+		record := NormalizeShortcutRootRecord(&current[i])
 		if record.BindingItemID != ack.Ref.bindingItemID {
 			records = append(records, record)
 			continue
@@ -35,14 +35,14 @@ func planShortcutRootDrainReleasePending(
 	return shortcutRootDrainAckPlan{Records: records, Changed: changed}
 }
 
-func planShortcutRootArtifactCleanupAck(
+func PlanShortcutRootArtifactCleanupAck(
 	current []ShortcutRootRecord,
 	ack ShortcutChildArtifactCleanupAck,
 ) shortcutRootArtifactCleanupAckPlan {
 	records := make([]ShortcutRootRecord, 0, len(current))
 	changed := false
 	for i := range current {
-		record := normalizeShortcutRootRecord(&current[i])
+		record := NormalizeShortcutRootRecord(&current[i])
 		if record.BindingItemID == ack.Ref.bindingItemID &&
 			record.State == ShortcutRootStateRemovedChildCleanupPending {
 			changed = true

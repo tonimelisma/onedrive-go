@@ -12,7 +12,7 @@ import (
 // EROFS and returns a file-level retry row or a boundary-scoped local block.
 func (ph *permissionHandler) handleLocalPermission(
 	_ context.Context,
-	r *actionCompletion,
+	r *ActionCompletion,
 ) permissionEvidence {
 	if driveops.ClassifyLocalError(r.Err) == driveops.LocalErrorReadOnly {
 		return ph.readOnlyFilesystemEvidence(r)
@@ -56,13 +56,13 @@ func (ph *permissionHandler) handleLocalPermission(
 	parentDir := filepath.Dir(absPath)
 
 	if isDirAccessible(ph.syncTree, parentDir) {
-		if issueType == issueLocalWriteDenied && !isDirWritable(parentDir) {
+		if issueType == IssueLocalWriteDenied && !isDirWritable(parentDir) {
 			// Listable but not writable: every write into this directory
 			// fails, so it is one boundary with a timed write trial, not a
 			// per-file denial that only the file's own retry revisits
 			// (R-2.10.13; live on 2026-11-03 with a chmod 555 folder).
 			if relParent, relErr := ph.syncTree.Rel(parentDir); relErr == nil {
-				return localDirectoryPermissionEvidence(storedPathOf(relParent), r.Path, issueType)
+				return localDirectoryPermissionEvidence(StoredPathOf(relParent), r.Path, issueType)
 			}
 		}
 
@@ -80,7 +80,7 @@ func (ph *permissionHandler) handleLocalPermission(
 		return localFilePermissionEvidence(r.Path, issueType, localFileNotAccessibleReason)
 	}
 
-	return localDirectoryPermissionEvidence(storedPathOf(relBoundary), r.Path, issueType)
+	return localDirectoryPermissionEvidence(StoredPathOf(relBoundary), r.Path, issueType)
 }
 
 // localFileNotAccessibleReason is the reason recorded for a file the local
@@ -123,14 +123,14 @@ func (ph *permissionHandler) deepestDeniedBoundary(parentDir string) string {
 	}
 }
 
-func localPermissionIssueType(r *actionCompletion) IssueType {
+func localPermissionIssueType(r *ActionCompletion) IssueType {
 	if r == nil {
-		return issueLocalReadDenied
+		return IssueLocalReadDenied
 	}
-	if r.FailureCapability == permissionCapabilityLocalWrite {
-		return issueLocalWriteDenied
+	if r.FailureCapability == PermissionCapabilityLocalWrite {
+		return IssueLocalWriteDenied
 	}
-	return issueLocalReadDenied
+	return IssueLocalReadDenied
 }
 
 // readOnlyFilesystemEvidence turns an EROFS write failure into one boundary
@@ -140,11 +140,11 @@ func localPermissionIssueType(r *actionCompletion) IssueType {
 // mount point, or the sync root itself when the whole folder is read-only.
 // The scope is revalidated by the normal timed write trial, so a remount
 // read-write resumes syncing without user action.
-func (ph *permissionHandler) readOnlyFilesystemEvidence(r *actionCompletion) permissionEvidence {
+func (ph *permissionHandler) readOnlyFilesystemEvidence(r *ActionCompletion) permissionEvidence {
 	fileEvidence := permissionEvidence{
 		Kind:        permissionEvidenceFileDenied,
 		TriggerPath: r.Path,
-		IssueType:   issueLocalReadOnly,
+		IssueType:   IssueLocalReadOnly,
 		LastError:   "the local filesystem is read-only",
 	}
 
@@ -185,9 +185,9 @@ func (ph *permissionHandler) readOnlyFilesystemEvidence(r *actionCompletion) per
 
 	return permissionEvidence{
 		Kind:         permissionEvidenceBoundaryDenied,
-		BoundaryPath: storedPathOf(relBoundary),
+		BoundaryPath: StoredPathOf(relBoundary),
 		TriggerPath:  r.Path,
-		IssueType:    issueLocalReadOnly,
+		IssueType:    IssueLocalReadOnly,
 		LastError:    "the local filesystem is read-only",
 	}
 }

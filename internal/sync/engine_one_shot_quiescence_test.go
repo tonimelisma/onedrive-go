@@ -144,7 +144,7 @@ func TestRunWatch_FinishesTheRemoteEditBehindARekey(t *testing.T) {
 
 // plannedFollowUp plans current truth without executing it and returns what
 // the plan leaves for the next pass.
-func plannedFollowUp(t *testing.T, eng *testEngine) planFollowUp {
+func plannedFollowUp(t *testing.T, eng *testEngine) PlanFollowUp {
 	t.Helper()
 
 	runner := newOneShotRunner(eng.Engine)
@@ -172,12 +172,12 @@ func TestPlanFollowUp_CountsWorkLeftForTheNextPass(t *testing.T) {
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
 
-	assert.Equal(t, planFollowUp{}, plannedFollowUp(t, h.eng), "a converged tree leaves nothing")
-	assert.False(t, planFollowUp{}.pending())
+	assert.Equal(t, PlanFollowUp{}, plannedFollowUp(t, h.eng), "a converged tree leaves nothing")
+	assert.False(t, PlanFollowUp{}.Pending())
 
 	remote.moveAt(t, "doc", "docs-renamed")
 	writeLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
-	assert.Equal(t, planFollowUp{Renames: 1}, plannedFollowUp(t, h.eng), "the folder move leaves the edit")
+	assert.Equal(t, PlanFollowUp{Renames: 1}, plannedFollowUp(t, h.eng), "the folder move leaves the edit")
 
 	remote.moveAt(t, "a.txt", "swap.txt")
 	remote.moveAt(t, "b.txt", "a.txt")
@@ -185,7 +185,7 @@ func TestPlanFollowUp_CountsWorkLeftForTheNextPass(t *testing.T) {
 	f := plannedFollowUp(t, h.eng)
 	assert.Equal(t, 1, f.Deferred, "the parked item finishes next pass")
 	assert.Equal(t, 3, f.Renames, "the folder move, the park and the move into the freed name")
-	assert.True(t, f.pending())
+	assert.True(t, f.Pending())
 }
 
 // Validates: R-2.1.7
@@ -235,7 +235,7 @@ func TestOneShotFollowUp_StopsWithoutProgressOnFailureAndAtTheBound(t *testing.T
 	t.Parallel()
 
 	eng := &Engine{logger: testLogger(t)}
-	leaves := planFollowUp{Renames: 1}
+	leaves := PlanFollowUp{Renames: 1}
 	ok := &Report{Succeeded: 1}
 	tests := []struct {
 		name     string

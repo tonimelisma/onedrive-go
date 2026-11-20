@@ -42,12 +42,12 @@ func TestStoredTimeNano_SaturatesAtBothEndsOfTheRange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			stored := storedTimeNano(tc.at)
+			stored := StoredTimeNano(tc.at)
 			assert.Equal(t, tc.want, stored)
-			assert.Equal(t, !tc.at.IsZero(), storedTimeIsSet(stored), "only the zero time stores no time")
+			assert.Equal(t, !tc.at.IsZero(), StoredTimeIsSet(stored), "only the zero time stores no time")
 			if !tc.at.IsZero() {
 				// Order against a time in range survives the round trip.
-				readBack := remoteModTime(stored)
+				readBack := RemoteModTime(stored)
 				assert.Equal(t, tc.at.Compare(inRange), readBack.Compare(inRange))
 			}
 		})
@@ -58,11 +58,11 @@ func TestStoredTimeNano_SaturatesAtBothEndsOfTheRange(t *testing.T) {
 func TestRemoteModTime_DecodesAStoredRemoteModificationTime(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, remoteModTime(0).IsZero(), "no time is known: the zero time, which nothing sets")
-	assert.True(t, remoteModTime(math.MaxInt64).Equal(time.Unix(0, math.MaxInt64)))
-	assert.True(t, remoteModTime(math.MinInt64).Equal(time.Unix(0, math.MinInt64)))
+	assert.True(t, RemoteModTime(0).IsZero(), "no time is known: the zero time, which nothing sets")
+	assert.True(t, RemoteModTime(math.MaxInt64).Equal(time.Unix(0, math.MaxInt64)))
+	assert.True(t, RemoteModTime(math.MinInt64).Equal(time.Unix(0, math.MinInt64)))
 	at := time.Date(2025, 6, 15, 12, 0, 0, 123456789, time.UTC)
-	assert.True(t, remoteModTime(storedTimeNano(at)).Equal(at))
+	assert.True(t, RemoteModTime(StoredTimeNano(at)).Equal(at))
 }
 
 // Every writer of a remote modification time stores the same value for the
@@ -82,12 +82,12 @@ func TestStoredTimeNano_RemoteModificationTimeWritersAgree(t *testing.T) {
 		time.Date(2025, 6, 15, 12, 0, 0, 123456789, time.UTC),
 	} {
 		item := graph.Item{ID: "item-f", Name: "f.txt", ParentID: "root", DriveID: driveID, ModifiedAt: modified}
-		converter := newPrimaryConverter(emptyBaseline(), driveID, synctest.TestLogger(t), nil, nil)
+		converter := NewPrimaryConverter(emptyBaseline(), driveID, synctest.TestLogger(t), nil, nil)
 		events := converter.ConvertItems(context.Background(), []graph.Item{
 			{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
 			item,
 		})
-		var observed *remoteItem
+		var observed *RemoteItem
 		for i := range events {
 			if events[i].ItemID == item.ID {
 				observed = &events[i]
@@ -95,11 +95,11 @@ func TestStoredTimeNano_RemoteModificationTimeWritersAgree(t *testing.T) {
 		}
 		require.NotNil(t, observed, "%s", modified)
 
-		uploaded := (&executor{}).uploadOutcome(&Action{Type: ActionUpload, Path: "f.txt"}, driveID, "root",
+		uploaded := (&Executor{}).uploadOutcome(&Action{Type: ActionUpload, Path: "f.txt"}, driveID, "root",
 			&driveops.UploadResult{Item: &item, Mtime: modified})
 		live := remoteStateRowFromGraphItem(&item)
 
-		want := storedTimeNano(modified)
+		want := StoredTimeNano(modified)
 		assert.Equal(t, want, observed.Mtime, "converter, %s", modified)
 		assert.Equal(t, want, uploaded.RemoteMtime, "upload outcome, %s", modified)
 		assert.Equal(t, want, live.Mtime, "live precondition row, %s", modified)

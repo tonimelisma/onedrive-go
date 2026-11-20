@@ -353,7 +353,7 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 		order = dispatchOrderShuffle(r.seed)
 	}
 	eng.serializeWorkers = true
-	eng.dispatchOrder = func(frontier []*trackedAction) []*trackedAction {
+	eng.dispatchOrder = func(frontier []*TrackedAction) []*TrackedAction {
 		frontier = order(frontier)
 		r.recordDispatch(frontier)
 		return frontier
@@ -419,7 +419,7 @@ func (r *modelRun) recordf(format string, args ...any) {
 	r.transcript = append(r.transcript, line)
 }
 
-func (r *modelRun) recordDispatch(frontier []*trackedAction) {
+func (r *modelRun) recordDispatch(frontier []*TrackedAction) {
 	for _, ta := range frontier {
 		r.recordf("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
 	}
@@ -564,7 +564,7 @@ const modelPassInterval = time.Hour + time.Minute
 
 // modelClock is the wall clock plus an offset the model advances.
 type modelClock struct {
-	realClock
+	RealClock
 	mu     stdsync.Mutex
 	offset time.Duration
 }

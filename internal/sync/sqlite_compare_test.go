@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func comparisonKindsByPath(rows []sQLiteComparisonRow) map[string]string {
+func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
 		out[rows[i].Path] = rows[i].ComparisonKind.String()
@@ -16,7 +16,7 @@ func comparisonKindsByPath(rows []sQLiteComparisonRow) map[string]string {
 	return out
 }
 
-func reconciliationKindsByPath(rows []sQLiteReconciliationRow) map[string]string {
+func reconciliationKindsByPath(rows []SQLiteReconciliationRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
 		out[rows[i].Path] = rows[i].ReconciliationKind.String()
@@ -546,7 +546,7 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 		born   = int64(1_700_000_000_000_000_001)
 		reborn = int64(1_700_000_000_000_000_002)
 	)
-	for _, itemType := range []string{strFolder, strFile} {
+	for _, itemType := range []string{StrFolder, StrFile} {
 		for _, tc := range []struct {
 			name          string
 			baselineBirth int64
@@ -564,7 +564,7 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 				store := newTestStore(t)
 				ctx := t.Context()
 				var hash any
-				if itemType == strFile {
+				if itemType == StrFile {
 					hash = "same-hash"
 				}
 				_, err := store.rawDB().ExecContext(ctx, `
@@ -598,7 +598,7 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 					return
 				}
 				assert.Equal(t, "remote_delete", got["old"])
-				if itemType == strFolder {
+				if itemType == StrFolder {
 					assert.Equal(t, "folder_create_remote", got["new"])
 				} else {
 					assert.Equal(t, "upload", got["new"])

@@ -174,17 +174,17 @@ func (tr *throttleScopeTrace) record(event DebugEvent) {
 		tr.batches = append(tr.batches, nil)
 	}
 	line, isBatch := "", false
-	if event.Type == engineDebugEventScopeReleased {
+	if event.Type == EngineDebugEventScopeReleased {
 		tr.releases++
 		line, isBatch = fmt.Sprintf("released(%d)", event.Count), true
 	}
-	if event.Type == engineDebugEventScopeBatchReleased {
+	if event.Type == EngineDebugEventScopeBatchReleased {
 		line, isBatch = fmt.Sprintf("batch(%d)", event.Count), true
 	}
-	if event.Type == engineDebugEventScopeActivated {
+	if event.Type == EngineDebugEventScopeActivated {
 		line = "activated"
 	}
-	if event.Type == engineDebugEventAdmittedWorkRetired {
+	if event.Type == EngineDebugEventAdmittedWorkRetired {
 		line = fmt.Sprintf("retired(%d)", event.Count)
 	}
 	if line == "" {

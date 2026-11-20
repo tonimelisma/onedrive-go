@@ -34,12 +34,12 @@ func seedHashlessDivergence(t *testing.T, store *SyncStore, localHash, remoteHas
 		ETag: "etag-1",
 	}))
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: localHash, Size: 100, Mtime: now.Add(time.Hour).UnixNano(),
 	}}))
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID: driveID, ItemID: "item-1", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: remoteHash, Size: remoteSize, Mtime: now.Add(2 * time.Hour).UnixNano(),
 		ETag: "etag-2",
@@ -109,11 +109,11 @@ func TestPlanCurrentState_HashlessZeroByteBothSidesIsEqual(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 	now := time.Now()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path: "empty.txt", ItemType: ItemTypeFile,
 		Hash: "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", Size: 0, Mtime: now.UnixNano(),
 	}}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID: driveID, ItemID: "item-empty", Path: "empty.txt", ItemType: ItemTypeFile,
 		Hash: "", Size: 0, Mtime: now.Add(time.Hour).UnixNano(), ETag: "etag-1",
 	}}, "token-1", driveID))
@@ -135,10 +135,10 @@ func TestPlanCurrentState_HashlessNonEmptyCreateIsStillAConflict(t *testing.T) {
 	driveID := driveid.New(engineTestDriveID)
 	now := time.Now()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path: "doc.txt", ItemType: ItemTypeFile, Hash: "LOCAL", Size: 3, Mtime: now.UnixNano(),
 	}}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID: driveID, ItemID: "item-doc", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: "", Size: 3, Mtime: now.UnixNano(), ETag: "etag-1",
 	}}, "token-1", driveID))
@@ -151,8 +151,8 @@ func TestPlanCurrentState_HashlessNonEmptyCreateIsStillAConflict(t *testing.T) {
 	assert.Contains(t, actionTypesOf(plan.Actions), ActionConflictCopy)
 }
 
-func actionTypesOf(actions []Action) []actionType {
-	types := make([]actionType, 0, len(actions))
+func actionTypesOf(actions []Action) []ActionType {
+	types := make([]ActionType, 0, len(actions))
 	for i := range actions {
 		types = append(types, actions[i].Type)
 	}
@@ -168,21 +168,21 @@ func actionTypesOf(actions []Action) []actionType {
 func TestBuildActionsForReconciliation_RefusesFolderTransfers(t *testing.T) {
 	t.Parallel()
 
-	views := map[string]*pathView{
-		"local-dir":  {Path: "local-dir", Local: &localState{ItemType: ItemTypeFolder}},
-		"remote-dir": {Path: "remote-dir", Remote: &remoteState{ItemID: "item-dir", ItemType: ItemTypeFolder}},
+	views := map[string]*PathView{
+		"local-dir":  {Path: "local-dir", Local: &LocalState{ItemType: ItemTypeFolder}},
+		"remote-dir": {Path: "remote-dir", Remote: &RemoteState{ItemID: "item-dir", ItemType: ItemTypeFolder}},
 	}
 
 	_, err := buildActionsForReconciliation(
-		&sQLiteReconciliationRow{Path: "local-dir", ReconciliationKind: reconcileUpload},
-		&sQLiteComparisonRow{Path: "local-dir"},
+		&SQLiteReconciliationRow{Path: "local-dir", ReconciliationKind: ReconcileUpload},
+		&SQLiteComparisonRow{Path: "local-dir"},
 		views,
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)
 
 	_, err = buildActionsForReconciliation(
-		&sQLiteReconciliationRow{Path: "remote-dir", ReconciliationKind: reconcileDownload},
-		&sQLiteComparisonRow{Path: "remote-dir"},
+		&SQLiteReconciliationRow{Path: "remote-dir", ReconciliationKind: ReconcileDownload},
+		&SQLiteComparisonRow{Path: "remote-dir"},
 		views,
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)

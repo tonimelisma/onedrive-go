@@ -7,7 +7,7 @@ import (
 
 func (rt *watchRuntime) handleWatchLocalObservationBatch(
 	ctx context.Context,
-	batch *localObservation,
+	batch *LocalObservation,
 ) error {
 	if batch == nil {
 		return nil
@@ -28,25 +28,25 @@ func (rt *watchRuntime) handleWatchLocalObservationBatch(
 // whether the runtime must replan.
 func (rt *watchRuntime) applyLocalObservationBatch(
 	ctx context.Context,
-	batch *localObservation,
+	batch *LocalObservation,
 ) (bool, error) {
-	switch batch.kind {
-	case localTruthSuspect:
-		reason := batch.recoveryReason
+	switch batch.Kind {
+	case LocalTruthSuspect:
+		reason := batch.RecoveryReason
 		if reason == "" {
-			reason = localTruthRecoveryWatcherError
+			reason = LocalTruthRecoveryWatcherError
 		}
 		if err := rt.deps.store.MarkLocalTruthSuspect(ctx, reason); err != nil {
 			return false, err
 		}
 		rt.engine.collector().RecordLocalObservationSuspect(reason)
 		return true, nil
-	case localSnapshot:
+	case LocalSnapshot:
 		return rt.applyLocalSnapshot(ctx, batch)
-	case localPatch:
+	case LocalPatch:
 		return rt.applyLocalPatch(ctx, batch)
 	default:
-		return false, fmt.Errorf("sync: applying local observation: unknown kind %d", batch.kind)
+		return false, fmt.Errorf("sync: applying local observation: unknown kind %d", batch.Kind)
 	}
 }
 
@@ -57,7 +57,7 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 // every safety scan re-reports does not (R-2.8.21). The observer's mount flags
 // are then set from what the store holds, so a disk mounted during the watch
 // is recognized when it is unmounted.
-func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *localObservation) (bool, error) {
+func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *LocalObservation) (bool, error) {
 	// A scan observed before a shutdown is still committed: detached from
 	// the cancellation, under the bound every detached store write has.
 	commitCtx := ctx
@@ -67,7 +67,7 @@ func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *localObse
 		commitCtx = detached
 	}
 
-	result, err := rt.commitLocalScan(commitCtx, batch.rows, batch.findings, batch.crossedMounts)
+	result, err := rt.commitLocalScan(commitCtx, batch.Rows, batch.Findings, batch.CrossedMounts)
 	if err != nil && isWatchShutdownError(ctx, err) {
 		return false, nil
 	}
@@ -76,33 +76,33 @@ func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *localObse
 	}
 	rt.engine.collector().RecordLocalObservationFullSnapshotReplacement()
 	if rt.resources.localObs != nil {
-		rt.resources.localObs.SetMountBoundaryFlags(result.mountBoundaries)
+		rt.resources.localObs.SetMountBoundaryFlags(result.MountBoundaries)
 	}
 
-	return result.rowsChanged || result.findingsChanged, nil
+	return result.RowsChanged || result.FindingsChanged, nil
 }
 
-func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *localObservation) (bool, error) {
-	changed := batch.dirty ||
-		len(batch.rows) > 0 ||
-		len(batch.deletedPaths) > 0 ||
-		len(batch.deletedPrefixes) > 0
+func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *LocalObservation) (bool, error) {
+	changed := batch.Dirty ||
+		len(batch.Rows) > 0 ||
+		len(batch.DeletedPaths) > 0 ||
+		len(batch.DeletedPrefixes) > 0
 	if !changed {
 		return false, nil
 	}
 
-	if err := rt.deps.store.applyLocalStatePatch(
+	if err := rt.deps.store.ApplyLocalStatePatch(
 		ctx,
-		batch.rows,
-		batch.deletedPaths,
-		batch.deletedPrefixes,
+		batch.Rows,
+		batch.DeletedPaths,
+		batch.DeletedPrefixes,
 	); err != nil {
 		return false, err
 	}
 	rt.engine.collector().RecordLocalObservationScopedCommit(
-		len(batch.rows),
-		len(batch.deletedPaths),
-		len(batch.deletedPrefixes),
+		len(batch.Rows),
+		len(batch.DeletedPaths),
+		len(batch.DeletedPrefixes),
 	)
 
 	return true, nil

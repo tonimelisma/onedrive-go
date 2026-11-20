@@ -44,8 +44,8 @@ func SKThrottleDrive(targetDriveID driveid.ID) ScopeKey {
 	return ScopeKey{Kind: ScopeThrottleTarget, Param: throttleDriveParam(targetDriveID)}
 }
 
-// sKPermLocalRead returns the scope key for a local read-denied directory.
-func sKPermLocalRead(dirPath string) ScopeKey {
+// SKPermLocalRead returns the scope key for a local read-denied directory.
+func SKPermLocalRead(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermDirRead, Param: dirPath}
 }
 
@@ -61,8 +61,8 @@ func SKLocalReadOnly(dirPath string) ScopeKey {
 	return ScopeKey{Kind: ScopeLocalReadOnly, Param: dirPath}
 }
 
-// sKPermRemoteRead returns the scope key for a remote read-denied boundary.
-func sKPermRemoteRead(boundaryPath string) ScopeKey {
+// SKPermRemoteRead returns the scope key for a remote read-denied boundary.
+func SKPermRemoteRead(boundaryPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermRemoteRead, Param: boundaryPath}
 }
 
@@ -71,9 +71,9 @@ func SKPermRemoteWrite(boundaryPath string) ScopeKey {
 	return ScopeKey{Kind: ScopePermRemoteWrite, Param: boundaryPath}
 }
 
-// sKDeleteSafety returns the scope key grouping deletes the delete-safety
+// SKDeleteSafety returns the scope key grouping deletes the delete-safety
 // hold kept for confirmation toward one side.
-func sKDeleteSafety(side deleteSafetySide) ScopeKey {
+func SKDeleteSafety(side DeleteSafetySide) ScopeKey {
 	return ScopeKey{Kind: ScopeDeleteSafety, Param: string(side)}
 }
 
@@ -83,7 +83,7 @@ func (sk ScopeKey) IsZero() bool {
 }
 
 // Wire-format strings for scope keys stored in SQLite scope_key columns.
-// Used by String() and parseScopeKey() — the only serialization boundary.
+// Used by String() and ParseScopeKey() — the only serialization boundary.
 const (
 	wireThrottleTarget  = "throttle:target:"
 	wireService         = "service"
@@ -98,7 +98,7 @@ const (
 )
 
 // String serializes to the wire format stored in SQLite scope_key columns.
-// parseScopeKey is the inverse.
+// ParseScopeKey is the inverse.
 func (sk ScopeKey) String() string {
 	switch sk.Kind {
 	case ScopeThrottleTarget:
@@ -126,9 +126,9 @@ func (sk ScopeKey) String() string {
 	}
 }
 
-// parseScopeKey deserializes a wire-format string into a ScopeKey.
+// ParseScopeKey deserializes a wire-format string into a ScopeKey.
 // Returns the zero-value ScopeKey for unknown formats.
-func parseScopeKey(s string) ScopeKey {
+func ParseScopeKey(s string) ScopeKey {
 	switch {
 	case strings.HasPrefix(s, wireThrottleTarget):
 		return ScopeKey{Kind: ScopeThrottleTarget, Param: strings.TrimPrefix(s, wireThrottleTarget)}
@@ -139,17 +139,17 @@ func parseScopeKey(s string) ScopeKey {
 	case s == wireDiskLocal:
 		return SKDiskLocal()
 	case strings.HasPrefix(s, wirePermDirRead):
-		return sKPermLocalRead(strings.TrimPrefix(s, wirePermDirRead))
+		return SKPermLocalRead(strings.TrimPrefix(s, wirePermDirRead))
 	case strings.HasPrefix(s, wirePermDirWrite):
 		return SKPermLocalWrite(strings.TrimPrefix(s, wirePermDirWrite))
 	case strings.HasPrefix(s, wirePermRemoteRead):
-		return sKPermRemoteRead(strings.TrimPrefix(s, wirePermRemoteRead))
+		return SKPermRemoteRead(strings.TrimPrefix(s, wirePermRemoteRead))
 	case strings.HasPrefix(s, wirePermRemoteWrite):
 		return SKPermRemoteWrite(strings.TrimPrefix(s, wirePermRemoteWrite))
 	case strings.HasPrefix(s, wireLocalReadOnly):
 		return SKLocalReadOnly(strings.TrimPrefix(s, wireLocalReadOnly))
 	case strings.HasPrefix(s, wireDeleteSafety):
-		return sKDeleteSafety(deleteSafetySide(strings.TrimPrefix(s, wireDeleteSafety)))
+		return SKDeleteSafety(DeleteSafetySide(strings.TrimPrefix(s, wireDeleteSafety)))
 	default:
 		return ScopeKey{}
 	}
@@ -197,13 +197,13 @@ func (sk ScopeKey) IsPermRemoteWrite() bool {
 // remain family-asserting helpers for callers that need to prove the scope
 // family before proceeding. Non-path scopes return the empty string.
 func (sk ScopeKey) CoveredPath() string {
-	return describeScopeKey(sk).ScopePath()
+	return DescribeScopeKey(sk).ScopePath()
 }
 
 // DirPath returns the directory path for a local directory permission scope key.
 // Panics if called on a non-local-permission key (defensive — caller bug).
 func (sk ScopeKey) DirPath() string {
-	descriptor := describeScopeKey(sk)
+	descriptor := DescribeScopeKey(sk)
 	if descriptor.Family != scopeFamilyPermDir {
 		panic("ScopeKey.DirPath() called on non-local-permission key")
 	}
@@ -214,7 +214,7 @@ func (sk ScopeKey) DirPath() string {
 // remote write block scope key.
 // Panics if called on a non-remote-permission key (defensive — caller bug).
 func (sk ScopeKey) RemotePath() string {
-	descriptor := describeScopeKey(sk)
+	descriptor := DescribeScopeKey(sk)
 	if descriptor.Family != scopeFamilyPermRemote {
 		panic("ScopeKey.RemotePath() called on non-remote-permission key")
 	}
@@ -224,7 +224,7 @@ func (sk ScopeKey) RemotePath() string {
 // PersistsInBlockScopes reports whether this scope is a timed blocked-work
 // scope that belongs in block_scopes.
 func (sk ScopeKey) PersistsInBlockScopes() bool {
-	return describeScopeKey(sk).PersistsInBlockScopes()
+	return DescribeScopeKey(sk).PersistsInBlockScopes()
 }
 
 // IsThrottleTarget returns true for target-scoped throttle keys.
@@ -249,14 +249,14 @@ func (sk ScopeKey) ThrottleTargetKey() string {
 // ConditionType returns the condition_type constant for this scope key's kind.
 // Used to derive a stable default condition type from a scope key.
 func (sk ScopeKey) ConditionType() IssueType {
-	return describeScopeKey(sk).DefaultConditionType
+	return DescribeScopeKey(sk).DefaultConditionType
 }
 
 // Humanize translates a scope key to a user-friendly description (R-2.10.22).
 // For directory- and subtree-scoped blocks, returns the stored local path. For
 // global scopes, returns a plain English description.
 func (sk ScopeKey) Humanize() string {
-	return describeScopeKey(sk).Humanize()
+	return DescribeScopeKey(sk).Humanize()
 }
 
 // BlocksAction returns true if this scope key blocks the given action.
@@ -264,9 +264,9 @@ func (sk ScopeKey) Humanize() string {
 func (sk ScopeKey) BlocksAction(
 	path string,
 	throttleTargetKey string,
-	actionType actionType,
+	actionType ActionType,
 ) bool {
-	return describeScopeKey(sk).BlocksAction(path, throttleTargetKey, actionType)
+	return DescribeScopeKey(sk).BlocksAction(path, throttleTargetKey, actionType)
 }
 
 func scopePathMatches(path, boundary string) bool {
@@ -280,34 +280,34 @@ func scopePathMatches(path, boundary string) bool {
 	return path == boundary || strings.HasPrefix(path, boundary+"/")
 }
 
-// scopeKeyForResult maps one action completion's server answer and target
+// ScopeKeyForResult maps one action completion's server answer and target
 // drive to a ScopeKey. Returns the zero value for answers that are not scope
 // evidence. This is the single source of truth for answer -> scope key.
 // Refusals (501, 505, notSupported) deliberately have no scope: they are
 // about one request, not about OneDrive being down.
-func scopeKeyForResult(answer serverAnswer, targetDriveID driveid.ID) ScopeKey {
+func ScopeKeyForResult(answer ServerAnswer, targetDriveID driveid.ID) ScopeKey {
 	switch answer {
-	case serverAnswerThrottled:
+	case ServerAnswerThrottled:
 		if targetDriveID.IsZero() {
 			return ScopeKey{}
 		}
 		return SKThrottleDrive(targetDriveID)
-	case serverAnswerQuota:
+	case ServerAnswerQuota:
 		return SKQuotaOwn()
-	case serverAnswerServiceOutage:
+	case ServerAnswerServiceOutage:
 		return SKService()
-	case serverAnswerNone,
-		serverAnswerUnauthorized,
-		serverAnswerForbidden,
-		serverAnswerUnsupported,
-		serverAnswerPathTooLong,
-		serverAnswerRequestTimeout,
-		serverAnswerTransientConflict,
-		serverAnswerTransientNotFound,
-		serverAnswerLocked,
-		serverAnswerTransferURLRejected,
-		serverAnswerMalware,
-		serverAnswerOther:
+	case ServerAnswerNone,
+		ServerAnswerUnauthorized,
+		ServerAnswerForbidden,
+		ServerAnswerUnsupported,
+		ServerAnswerPathTooLong,
+		ServerAnswerRequestTimeout,
+		ServerAnswerTransientConflict,
+		ServerAnswerTransientNotFound,
+		ServerAnswerLocked,
+		ServerAnswerTransferURLRejected,
+		ServerAnswerMalware,
+		ServerAnswerOther:
 		return ScopeKey{}
 	}
 

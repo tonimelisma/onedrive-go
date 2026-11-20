@@ -9,13 +9,13 @@ import (
 
 // planner is a deterministic decision engine that transforms SQLite-owned
 // comparison and reconciliation rows plus baseline state into an ordered
-// actionPlan. It performs no I/O apart from logging.
-type planner struct {
+// ActionPlan. It performs no I/O apart from logging.
+type Planner struct {
 	logger *slog.Logger
 }
 
-// plannerMountContext is what the plan knows of the mount it is for.
-type plannerMountContext struct {
+// PlannerMountContext is what the plan knows of the mount it is for.
+type PlannerMountContext struct {
 	DriveID driveid.ID
 	// ReleasesLocalTree is set for a removed shared folder's final drain
 	// (RunOptions.ReleaseLocalTree), whose run ends by releasing the local
@@ -23,9 +23,9 @@ type plannerMountContext struct {
 	ReleasesLocalTree bool
 }
 
-// newPlanner creates a planner with the given logger.
-func newPlanner(logger *slog.Logger) *planner {
-	return &planner{logger: logger}
+// NewPlanner creates a planner with the given logger.
+func NewPlanner(logger *slog.Logger) *Planner {
+	return &Planner{logger: logger}
 }
 
 // actionAllowedInMode lists every action a mode admits. A value outside the
@@ -48,12 +48,12 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 		return mode != SyncDownloadOnly
 	case ActionFolderCreate:
 		switch action.CreateSide {
-		case createLocal:
+		case CreateLocal:
 			return mode != SyncUploadOnly
 		case CreateRemote:
 			return mode != SyncDownloadOnly
 		default:
-			panic(outsideTheEnum(action.CreateSide))
+			panic(OutsideTheEnum(action.CreateSide))
 		}
 	case ActionConflictCopy:
 		// Conflict-copy is only safe when the paired remote-winner download
@@ -63,11 +63,11 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 	case ActionBaselineUpdate, ActionCleanup:
 		return true
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
-// resolveItemType determines the item type by checking Remote, Local,
+// ResolveItemType determines the item type by checking Remote, Local,
 // then Baseline. Defaults to ItemTypeFile if none provide a type.
 //
 // Special case: when the delta API reports a deleted item, it may strip
@@ -76,7 +76,7 @@ func actionAllowedInMode(action *Action, mode SyncMode) bool {
 // fall through to Baseline which has the correct type from when the item
 // was alive. This ensures folder deletes are correctly identified for
 // dependency ordering in buildDependencies/addChildDeleteDeps.
-func resolveItemType(view *pathView) ItemType {
+func ResolveItemType(view *PathView) ItemType {
 	if view == nil {
 		return ItemTypeFile
 	}
@@ -117,7 +117,7 @@ func resolveItemType(view *pathView) ItemType {
 //   - Empty DriveID for brand-new local work — planner fills this from the
 //     mounted engine drive before execution.
 //   - Empty ItemID for new items — assigned by the API on creation.
-func makeAction(actionType actionType, view *pathView) Action {
+func makeAction(actionType ActionType, view *PathView) Action {
 	a := Action{
 		Type: actionType,
 		Path: view.Path,
@@ -147,7 +147,7 @@ func makeAction(actionType actionType, view *pathView) Action {
 	return a
 }
 
-func bindMountContext(actions []Action, mount plannerMountContext) {
+func bindMountContext(actions []Action, mount PlannerMountContext) {
 	for i := range actions {
 		if actions[i].DriveID.IsZero() {
 			actions[i].DriveID = mount.DriveID
@@ -155,17 +155,17 @@ func bindMountContext(actions []Action, mount plannerMountContext) {
 	}
 }
 
-func makeConflictCopyAction(view *pathView) Action {
+func makeConflictCopyAction(view *PathView) Action {
 	return makeAction(ActionConflictCopy, view)
 }
 
-func makeDownloadAfterConflictCopyAction(view *pathView) Action {
+func makeDownloadAfterConflictCopyAction(view *PathView) Action {
 	action := makeAction(ActionDownload, view)
 	action.RequireMissingLocalTarget = true
 	return action
 }
 
-func makeCreateUploadAction(view *pathView) Action {
+func makeCreateUploadAction(view *PathView) Action {
 	action := makeAction(ActionUpload, view)
 	action.ItemID = ""
 	return action
@@ -173,7 +173,7 @@ func makeCreateUploadAction(view *pathView) Action {
 
 // makeFolderCreate constructs an ActionFolderCreate action with the
 // specified creation side (local or remote).
-func makeFolderCreate(view *pathView, side folderCreateSide) Action {
+func makeFolderCreate(view *PathView, side FolderCreateSide) Action {
 	a := makeAction(ActionFolderCreate, view)
 	a.CreateSide = side
 
@@ -192,7 +192,7 @@ func preserveParentFoldersForRunnableDescendants(actions []Action, mode SyncMode
 		case ActionLocalDelete:
 			preserved[i] = makeFolderCreate(action.View, CreateRemote)
 		case ActionRemoteDelete:
-			preserved[i] = makeFolderCreate(action.View, createLocal)
+			preserved[i] = makeFolderCreate(action.View, CreateLocal)
 		case ActionCleanup:
 		case ActionDownload,
 			ActionUpload,
@@ -202,7 +202,7 @@ func preserveParentFoldersForRunnableDescendants(actions []Action, mode SyncMode
 			ActionConflictCopy,
 			ActionBaselineUpdate:
 		default:
-			panic(outsideTheEnum(action.Type))
+			panic(OutsideTheEnum(action.Type))
 		}
 	}
 
@@ -214,16 +214,16 @@ func isFolderDelete(action *Action) bool {
 		return false
 	}
 
-	return isDeleteAction(action) && deletedItemType(action) == ItemTypeFolder
+	return isDeleteAction(action) && DeletedItemType(action) == ItemTypeFolder
 }
 
-// deletedItemType is the type of the item a delete removes: the side it
-// deletes from, when that side is known. It differs from resolveItemType only
+// DeletedItemType is the type of the item a delete removes: the side it
+// deletes from, when that side is known. It differs from ResolveItemType only
 // across a type change, where the two sides disagree and the view's preferred
 // (remote) type would misdescribe a local delete.
-func deletedItemType(action *Action) ItemType {
+func DeletedItemType(action *Action) ItemType {
 	if action == nil || action.View == nil {
-		return resolveItemType(nil)
+		return ResolveItemType(nil)
 	}
 	switch action.Type {
 	case ActionLocalDelete:
@@ -237,10 +237,10 @@ func deletedItemType(action *Action) ItemType {
 	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove,
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 
-	return resolveItemType(action.View)
+	return ResolveItemType(action.View)
 }
 
 // runnableSubtreeActionRequiresParent reports whether an admitted action below
@@ -262,10 +262,10 @@ func runnableSubtreeActionRequiresParent(actions []Action, parentPath string, mo
 	return false
 }
 
-// countByType counts actions grouped by action type, for the plan summary log
+// CountByType counts actions grouped by action type, for the plan summary log
 // and the engine's pass report.
-func countByType(actions []Action) map[actionType]int {
-	counts := make(map[actionType]int)
+func CountByType(actions []Action) map[ActionType]int {
+	counts := make(map[ActionType]int)
 	for i := range actions {
 		counts[actions[i].Type]++
 	}
@@ -441,7 +441,7 @@ func detectDependencyCycle(deps [][]int) error {
 	for i := range deps {
 		if color[i] == white {
 			if dfs(i) {
-				return errDependencyCycle
+				return ErrDependencyCycle
 			}
 		}
 	}

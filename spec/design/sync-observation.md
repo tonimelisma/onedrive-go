@@ -19,8 +19,8 @@ local-snapshot rows for `local_state`, and scoped local observation batches
 that the engine applies to `local_state`.
 
 In watch mode, that ownership is explicit: local observers emit engine-applied
-`localObservation` values (a patch, a snapshot, or a suspect-truth statement), while remote observers and full-refresh workers
-emit one `remoteObservationBatch` value that the watch loop applies durably. No
+`LocalObservation` values (a patch, a snapshot, or a suspect-truth statement), while remote observers and full-refresh workers
+emit one `RemoteObservationBatch` value that the watch loop applies durably. No
 observer goroutine commits state rows or observation cursors directly. Once the
 engine starts applying that batch as durable current truth, failures in local
 row commits, remote row commits, cursor commits, or observation-findings
@@ -33,14 +33,14 @@ the non-runtime dependencies needed by the loop.
 
 The observation stack has four main pieces:
 
-- `remoteObserver`: Graph delta/enumeration and wake-driven watch polling
-- `localObserver`: fsnotify-driven watch observation
+- `RemoteObserver`: Graph delta/enumeration and wake-driven watch polling
+- `LocalObserver`: fsnotify-driven watch observation
 - `Scanner`: full local walk for one-shot bootstrap and rebuild cases
-- `dirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
+- `DirtyBuffer`: debounce/coalescing before snapshot refresh and replanning
 
 ## A Timed-Out Request Is Not A Stop
 
-Every observer loop stops only when its run's context has ended (`runEnded`),
+Every observer loop stops only when its run's context has ended (`RunEnded`),
 never because an error has the shape of a cancellation: every transport
 timeout carries `context.DeadlineExceeded` while the run goes on. A delta page
 whose request timed out is retried by `fetchDeltaPageWithRetry` like any other
@@ -56,10 +56,10 @@ ended (R-6.8.29; `TestFullDelta_RetriesATimedOutPageUpToItsPolicy`,
 
 ## Observer Time Is Engine Clock Time
 
-`localObserver` and `remoteObserver` hold the engine's `syncClock` rather than
+`LocalObserver` and `RemoteObserver` hold the engine's `SyncClock` rather than
 separate sleep, tick, and timer function fields. So does the Socket.IO wake
 source: its endpoint refresh deadline, the refresh timer, and its reconnect
-backoff sleeps all read one clock (`socketIOWakeSourceOptions.Clock`). It once
+backoff sleeps all read one clock (`SocketIOWakeSourceOptions.Clock`). It once
 took separate now and sleep hooks while the refresh timer ran on wall time, so
 the refresh test waited on a real 400 ms timer and failed on a loaded host
 (`TestSocketIOWakeSource_RefreshesEndpointBeforeExpiry` now advances a manual
@@ -72,8 +72,8 @@ except that the type had once been public.
 - Owns: local and remote change capture, path normalization, sparse-item recovery, skipped-item reporting, and dirty buffering
 - Does Not Own: planning, retry policy, scope persistence, or user-facing issue interpretation
 - Source of Truth: live filesystem state, Graph responses, and read-only baseline context supplied by the engine
-- Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission. Hashing takes the observer's context (`localObserver.hashFunc`, `computeStableHashWith`, the scan's hash phase through its errgroup context): the watch event loop hashes synchronously, so a shutdown must stop a read in progress rather than wait it out (R-6.3.6; `driveops.ComputeQuickXorHashContext`).
-- Mutable Runtime Owner: `remoteObserver`, `localObserver`, `Scanner`, and `dirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
+- Allowed Side Effects: rooted filesystem reads, hashing, Graph observation calls, watch registration, and event emission. Hashing takes the observer's context (`LocalObserver.hashFunc`, `computeStableHashWith`, the scan's hash phase through its errgroup context): the watch event loop hashes synchronously, so a shutdown must stop a read in progress rather than wait it out (R-6.3.6; `driveops.ComputeQuickXorHashContext`).
+- Mutable Runtime Owner: `RemoteObserver`, `LocalObserver`, `Scanner`, and `DirtyBuffer` each own only their own invocation- or run-scoped mutable state, watches, and goroutines. The engine owns lifecycle and composition across those pieces.
 - Error Boundary: observation surfaces filesystem, watch, and Graph observation failures as observation results and control signals; once the engine starts durably applying an observation batch, observation-finding reconciliation is fail-closed and execution paths do not invent observation-owned durable rows.
 
 ## Verified By
@@ -110,7 +110,7 @@ except that the type had once been public.
 
 ## Remote Observation
 
-`remoteObserver` supports:
+`RemoteObserver` supports:
 
 - one-shot `FullDelta`
 - watch-mode polling
@@ -127,7 +127,7 @@ Important properties:
   (`pollOnly`): no items and no token, so it commits nothing and replans
   nothing
 - every batch of a watch poll carries the time the poll began
-  (`remoteObservationBatch.pollStartedAt`, read from the observer's clock
+  (`RemoteObservationBatch.pollStartedAt`, read from the observer's clock
   before the first page is asked for, or, for a mount-root engine's poll,
   from the run's clock), so the watch loop can drop the create
   intent of a file that is gone once a poll that began after the last create
@@ -142,7 +142,7 @@ Important properties:
   (`TestWatch_OnlyUnrecoverableDeletes_AdvancesToken`)
 - an incremental window that deletes a folder the baseline holds makes the
   full refresh due within 15 minutes (`deltaWindowDeletesSyncedFolder`,
-  `fullRefreshAfterFolderDeleteDelay`; deferred so a burst of folder deletions
+  `FullRefreshAfterFolderDeleteDelay`; deferred so a burst of folder deletions
   shares one enumeration and refreshes stay that far apart). Delta reports a
   deleted folder alone (R-2.17.2), and that also hides an item moved into the
   folder in the same window: its row stayed at the old path as a ghost and its
@@ -165,12 +165,12 @@ Important properties:
   (`TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward`,
   `TestFullRefresh_PermanentlyUndecidedOrphanBacksOff`,
   `TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward`)
-- HTTP 410 delta expiry is surfaced as `deltaExpiredError`, which carries the
+- HTTP 410 delta expiry is surfaced as `DeltaExpiredError`, which carries the
   resync flavor from the error's inner code; recovery is the engine's full
   refresh with orphan detection, in watch mode too (`SetDeltaExpiredRecovery`,
   `sync-engine.md` "An Expired Token Is A Full Refresh", R-2.15.3)
 - a cursor the client cannot continue takes the same recovery, through
-  `newCursorUnusableError` (R-2.15.2): `deltaLoopGuard` stops a window whose
+  `NewCursorUnusableError` (R-2.15.2): `deltaLoopGuard` stops a window whose
   nextLink returns to a page already fetched or whose non-empty page repeats
   an earlier page's items (followed, such a list ran to the 10,000-page guard
   with every item in memory); `fetchPageRetryingRejection` retries a token
@@ -222,7 +222,7 @@ persists those facts in `shortcut_roots` and publishes parent-declared child
 process commands; `internal/multisync` only starts, skips, final-drains, or
 stops managed children as separate mount-root engines.
 
-The engine applies topology batches with its internal `shouldApply` gate.
+The engine applies topology batches with its internal `ShouldApply` gate.
 Any batch with facts applies, a complete batch applies even when it contains no
 facts, and an empty incremental batch is a non-event. This lets a full parent
 enumeration with no shortcut aliases retire old managed children while keeping
@@ -262,7 +262,7 @@ persists one managed observation batch containing:
 
 The two types block the same truth, take the same arm in every per-type
 switch except the condition family, and both mark a shared folder unreadable for its release
-(`issueTypeIsRootReadFailure`, `sharedFolderUnreadable`); their condition families differ, so what `status` tells the user
+(`IssueTypeIsRootReadFailure`, `sharedFolderUnreadable`); their condition families differ, so what `status` tells the user
 (cli.md) and the label in a watch's condition log differ too. The batch manages both, so the next observation replaces whichever
 one an earlier answer left, including a `remote_read_denied` row for a root
 whose next read answers "not
@@ -292,7 +292,7 @@ It owns:
   is skipped if that still does not say, or if Graph answers not found (the
   item is gone; its deletion arrives in a later window). A re-read that fails
   for any other reason marks the observation incomplete
-  (`errRemoteObservationIncomplete`), so the window is replayed and the delta
+  (`ErrRemoteObservationIncomplete`), so the window is replayed and the delta
   cursor is not saved past an item that was never classified: the same rule
   as a parentless item whose re-read fails (`sparseEnrichFailed` records the
   error per item). Read as a file by default, a sparse update of a synced
@@ -347,7 +347,7 @@ Sparse parent recovery is intentionally layered:
   so a permanently orphaned item cannot hold the cursor forever
   (`TestWatch_OrphanWithUnreachableParent_AdvancesToken`)
 - otherwise (a transient read failure, or the fetch bound reached) fail the
-  batch as `errRemoteObservationIncomplete` rather than fabricating a
+  batch as `ErrRemoteObservationIncomplete` rather than fabricating a
   root-level path, and retry it on the next poll
   (`TestWatch_OrphanWithReadableParent_AdvancesToken`,
   `TestFullDelta_OrphanParentReadTransientFailure_StaysIncomplete`)
@@ -365,8 +365,8 @@ not by deleting raw remote mirror rows. Delta/watch handling may suppress
 planner wakeups for batches whose changes are entirely outside the filtered
 view, but cursor advancement remains tied to successfully committed raw
 observation progress. The converter and the orphan finders report each item as
-its stored row (`observedItem`) plus, for a move, the old path (`remoteItem`);
-a batch carries the rows and one `remoteChange` (path, old path, kind) per
+its stored row (`ObservedItem`) plus, for a move, the old path (`remoteItem`);
+a batch carries the rows and one `RemoteChange` (path, old path, kind) per
 reported item, an item without an ID included: it stores no row but still
 counts as a change, so the cursor advances over it
 (`TestRemoteObservation_RowsAndChangesForEveryItemKind`,
@@ -381,7 +381,7 @@ placeholder delta as ordinary content or an unavailable new child.
 
 ## Local Observation
 
-`localObserver` and `Scanner` observe the configured local root through the
+`LocalObserver` and `Scanner` observe the configured local root through the
 drive's compiled `contentFilter`. The filter is product visibility policy only:
 `included_dirs`, `ignored_dirs`, `ignored_paths`, `ignore_dotfiles`,
 `ignore_junk_files`, and `follow_symlinks`. It is not the owner of provider
@@ -428,7 +428,7 @@ registered below the path, and the path's own if it has one
 rows are the whole of local truth: a synced item that is gone has no row,
 which the planner reads as a local delete, and the scan walks no baseline to
 find it (`TestFullScan_DeletedSyncedFileHasNoRow`). Local observation reaches the
-runtime as one `localObservation` of one of three kinds on one channel: a
+runtime as one `LocalObservation` of one of three kinds on one channel: a
 patch (rows to write, paths and subtrees to remove), a snapshot (every row of
 one full scan with that scan's whole finding set and the mount points it
 crossed), or a statement that local truth is suspect; the runtime's apply
@@ -478,8 +478,8 @@ carrying the cause, and the watch runtime falls back to full scans with one
 warning per cause that names the limit and its fix. The fallback scans at once
 (the stopped watcher's pending hashes and recovery scan are gone with it), then
 at the safety-scan interval, and retries the watcher after
-`localWatchRetryInitialDelay` (10 minutes), doubling to
-`localWatchRetryMaxDelay` (an hour) while the limit persists; a watcher that
+`LocalWatchRetryInitialDelay` (10 minutes), doubling to
+`LocalWatchRetryMaxDelay` (an hour) while the limit persists; a watcher that
 then ran for an hour or more before failing again starts a fresh episode.
 `Watch` resets its registrations and stop reason on every call, so it can be
 re-entered after a fallback period. The same applies to a
@@ -567,7 +567,7 @@ watched subdirectory reuses its entry's descriptor, so it is counted once) and
 stops with `watchCauseDescriptorBudget` once those entries plus the root exceed
 `watchDescriptorBudget()`, half of `RLIMIT_NOFILE` (zero, meaning no budget,
 on Linux, where inotify watches are not open files). The runtime then falls
-back to periodic full scans. An FSEvents watcher behind `fsWatcher` is the
+back to periodic full scans. An FSEvents watcher behind `FsWatcher` is the
 durable fix and is planned separately (P-15).
 
 At watch start the observer identifies the sync root's filesystem with statfs
@@ -700,7 +700,7 @@ Ignore invariants:
 - if a baseline path is absent from both filtered current views, reconciliation
   removes only the baseline row
 
-Observation may emit `skippedItem`s for invalid or unsupported local content.
+Observation may emit `SkippedItem`s for invalid or unsupported local content.
 The engine reconciles those findings through one `ObservationFindingsBatch`
 boundary, and `observation_findings.go` is the single constructor path for
 those batches. A whole-drive scan's batch replaces the stored findings of
@@ -730,12 +730,12 @@ family survived that change with no production caller and stayed alive only
 because its own tests referenced it, which is why `unused` never reported it.
 It is deleted; replanning from committed truth is the single owner.
 
-`Scanner.FullScan()` now also returns direct `localStateRow` values for every
+`Scanner.FullScan()` now also returns direct `LocalStateRow` values for every
 admissible currently observed local path. `local_state` persistence therefore
 comes from current disk truth, not by replaying local change events against
 baseline.
 
-Dry-run uses those same direct `localStateRow` values, but commits them only to
+Dry-run uses those same direct `LocalStateRow` values, but commits them only to
 an isolated scratch store before SQLite comparison/reconciliation. Observation
 findings discovered during preview also reconcile only into that scratch store.
 The durable runtime store keeps its prior committed snapshots, observation
@@ -815,7 +815,7 @@ leftover `.detach` file outlived the file for good. The list is checked
 against the scanner's source
 (`TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`):
 every `IssueType` constant named in a production file that builds a
-`skippedItem` must be managed or carry a recorded reason for staying
+`SkippedItem` must be managed or carry a recorded reason for staying
 unmanaged (none does), and every managed type must be one a local scan
 reports, since a full scan would otherwise delete a condition another writer
 owns, or carry a recorded reason for being cleared by the scan alone. One
@@ -852,7 +852,7 @@ debounce window as the rename's delete half.
 
 ## Dirty Buffer
 
-`dirtyBuffer` owns short-lived replan scheduling only:
+`DirtyBuffer` owns short-lived replan scheduling only:
 
 - debounce bursts of local or remote dirty signals
 - wait 5 seconds from the last local or remote observation before triggering replanning by default

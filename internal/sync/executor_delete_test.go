@@ -18,7 +18,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// isDisposable tests
+// IsDisposable tests
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.4.14
@@ -86,7 +86,7 @@ func TestIsDisposable(t *testing.T) {
 // DeleteLocalFolder with disposable files tests
 // ---------------------------------------------------------------------------
 
-func newDeleteTestExecutor(t *testing.T) (*executor, string) {
+func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
@@ -99,11 +99,11 @@ func newDeleteTestExecutor(t *testing.T) (*executor, string) {
 	dl := &executorMockDownloader{}
 	ul := &executorMockUploader{}
 
-	cfg := newExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	return e, syncRoot
 }
@@ -117,7 +117,7 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := newExecutorConfig(
+	cfg := NewExecutorConfig(
 		&executorMockItemClient{},
 		&executorMockDownloader{},
 		&executorMockUploader{},
@@ -127,7 +127,7 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 		nil,
 	)
 	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	dir := filepath.Join(syncRoot, "folder")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
@@ -189,17 +189,17 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	}
 	pathConvergence := &executorPathConvergenceStub{}
 
-	cfg := newExecutorConfig(items, &executorMockDownloader{}, &executorMockUploader{}, syncTree, driveID, logger, pathConvergence)
+	cfg := NewExecutorConfig(items, &executorMockDownloader{}, &executorMockUploader{}, syncTree, driveID, logger, pathConvergence)
 	cfg.SetTransferMgr(driveops.NewTransferManager(&executorMockDownloader{}, &executorMockUploader{}, nil, logger))
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:   ActionRemoteDelete,
 		Path:   "docs/report.txt",
 		ItemID: "remote-item-id",
-		View: &pathView{
+		View: &PathView{
 			Path: "docs/report.txt",
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -232,16 +232,16 @@ func TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNot
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "docs/report.txt",
 		ItemID:  "remote-item-id",
 		DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path: "docs/report.txt",
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -252,7 +252,7 @@ func TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNot
 
 	outcome := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 }
 
 // Validates: R-2.8.10
@@ -276,16 +276,16 @@ func TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoe
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "docs/report.txt",
 		ItemID:  "remote-item-id",
 		DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path: "docs/report.txt",
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -296,7 +296,7 @@ func TestExecuteRemoteDelete_ETagMismatchPreflightReturnsStalePreconditionAndDoe
 
 	outcome := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 }
 
 // Validates: R-2.8.10
@@ -316,16 +316,16 @@ func TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure(t *testi
 	}
 
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	action := &Action{
 		Type:    ActionRemoteDelete,
 		Path:    "docs/report.txt",
 		ItemID:  "remote-item-id",
 		DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path: "docs/report.txt",
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  driveID,
 				ItemID:   "remote-item-id",
 				ItemType: ItemTypeFile,
@@ -337,7 +337,7 @@ func TestExecuteRemoteDelete_TransientPreflightFailureIsOrdinaryFailure(t *testi
 	outcome := e.ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, assert.AnError)
-	assert.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	assert.NotErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 }
 
 func TestExecuteLocalDelete_SymlinkAliasDeletesOnlyLink(t *testing.T) {

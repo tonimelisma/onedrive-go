@@ -35,7 +35,7 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 		return false, nil
 	}
 
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return false, fmt.Errorf("sync: begin observation findings reconcile: %w", err)
 	}
@@ -58,7 +58,7 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 // whether the persisted issue set changed.
 func (s *SyncStore) reconcileObservationFindingsTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	batch *ObservationFindingsBatch,
 ) (bool, error) {
 	state, err := loadObservationReconcileStoreStateTx(ctx, tx)
@@ -79,7 +79,7 @@ func (s *SyncStore) reconcileObservationFindingsTx(
 
 func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	plan observationReconcilePlan,
 ) error {
 	if err := s.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts); err != nil {
@@ -94,9 +94,9 @@ func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
 
 func loadObservationReconcileStoreStateTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 ) (observationReconcileStoreState, error) {
-	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	issues, err := QueryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
 		return observationReconcileStoreState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
 	}
@@ -106,9 +106,9 @@ func loadObservationReconcileStoreStateTx(
 	}, nil
 }
 
-func queryObservationIssueRowsWithRunner(
+func QueryObservationIssueRowsWithRunner(
 	ctx context.Context,
-	runner sqlTxRunner,
+	runner SqlTxRunner,
 ) ([]ObservationIssueRow, error) {
 	contentDriveID, err := contentDriveIDForDB(ctx, runner)
 	if err != nil {
@@ -148,10 +148,10 @@ type observationIssueScanner interface {
 
 func (s *SyncStore) upsertObservationIssuesTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	issues []ObservationIssue,
 ) error {
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func (s *SyncStore) upsertObservationIssuesTx(
 			return fmt.Errorf("sync: upsert observation issue: missing path")
 		}
 		// Never write what scanObservationIssueRow would refuse to read.
-		if !issue.IssueType.isMember() {
+		if !issue.IssueType.IsMember() {
 			return fmt.Errorf("sync: upsert observation issue for %s: unknown issue type %q", issue.Path, issue.IssueType)
 		}
 
@@ -205,7 +205,7 @@ func (s *SyncStore) upsertObservationIssuesTx(
 
 func deleteObservationIssuesTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	deletes []managedObservationIssueKey,
 ) error {
 	if len(deletes) == 0 {
@@ -248,15 +248,15 @@ func scanObservationIssueRow(
 	}
 
 	// An unknown issue type fails the read rather than reaching truth
-	// availability, where no verdict for it exists (parseIssueType).
-	parsed, err := parseIssueType(issueType)
+	// availability, where no verdict for it exists (ParseIssueType).
+	parsed, err := ParseIssueType(issueType)
 	if err != nil {
 		return fmt.Errorf("sync: scanning observation issue row %s: %w", row.Path, err)
 	}
 
 	row.IssueType = parsed
 	row.DriveID = contentDriveID
-	row.ScopeKey = parseScopeKey(scopeKey)
+	row.ScopeKey = ParseScopeKey(scopeKey)
 	return nil
 }
 

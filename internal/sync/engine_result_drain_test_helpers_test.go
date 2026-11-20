@@ -13,15 +13,15 @@ import (
 // cancels the loop and waits for it to return; only the loop's goroutine
 // owns the scope ledger, so a test reads the ledger after stop. Calling stop
 // again does nothing.
-func startDrainLoop(t *testing.T) (chan actionCompletion, func(), *testEngine) {
+func startDrainLoop(t *testing.T) (chan ActionCompletion, func(), *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 
-	results := make(chan actionCompletion, 16)
+	results := make(chan ActionCompletion, 16)
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
@@ -48,9 +48,9 @@ func runResultDrainLoopForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	results <-chan actionCompletion,
+	results <-chan ActionCompletion,
 ) {
-	var outbox []*trackedAction
+	var outbox []*TrackedAction
 
 	for {
 		if len(outbox) == 0 {
@@ -74,8 +74,8 @@ func runResultDrainLoopIdleForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	results <-chan actionCompletion,
-) ([]*trackedAction, bool) {
+	results <-chan ActionCompletion,
+) ([]*TrackedAction, bool) {
 	select {
 	case workerResult, ok := <-results:
 		if !ok {
@@ -99,9 +99,9 @@ func runResultDrainLoopWithOutboxForTest(
 	ctx context.Context,
 	rt *watchRuntime,
 	bl *Baseline,
-	results <-chan actionCompletion,
-	outbox []*trackedAction,
-) ([]*trackedAction, bool) {
+	results <-chan ActionCompletion,
+	outbox []*TrackedAction,
+) ([]*TrackedAction, bool) {
 	select {
 	case rt.sched.dispatchCh <- outbox[0]:
 		return outbox[1:], false
@@ -127,9 +127,9 @@ func appendDrainOutcome(
 	rt *watchRuntime,
 	ctx context.Context,
 	bl *Baseline,
-	outbox []*trackedAction,
-	workerResult *actionCompletion,
-) ([]*trackedAction, bool) {
+	outbox []*TrackedAction,
+	workerResult *ActionCompletion,
+) ([]*TrackedAction, bool) {
 	ready, completionErr := rt.applyRuntimeCompletionStage(ctx, workerResult, bl)
 	if completionErr != nil {
 		return outbox, true
@@ -146,7 +146,7 @@ func mustNoDrainLoopError(err error) {
 
 // readReadyAction reads one TrackedAction from the ready channel with a
 // race-detector-friendly timeout.
-func readReadyAction(t *testing.T, ready <-chan *trackedAction) *trackedAction {
+func readReadyAction(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
 	t.Helper()
 
 	select {
@@ -159,7 +159,7 @@ func readReadyAction(t *testing.T, ready <-chan *trackedAction) *trackedAction {
 	return nil
 }
 
-func readReady(t *testing.T, ready <-chan *trackedAction) {
+func readReady(t *testing.T, ready <-chan *TrackedAction) {
 	t.Helper()
 	_ = readReadyAction(t, ready)
 }

@@ -59,7 +59,7 @@ func (e *Engine) SetActivityHook(hook func(Activity)) {
 	e.activityHook = hook
 }
 
-func activityKindFor(t actionType) (ActivityKind, bool) {
+func activityKindFor(t ActionType) (ActivityKind, bool) {
 	switch t {
 	case ActionDownload:
 		return ActivityDownload, true
@@ -80,7 +80,7 @@ func activityKindFor(t actionType) (ActivityKind, bool) {
 	case ActionBaselineUpdate, ActionCleanup:
 		return 0, false
 	default:
-		panic(outsideTheEnum(t))
+		panic(OutsideTheEnum(t))
 	}
 }
 
@@ -89,7 +89,7 @@ func activityKindFor(t actionType) (ActivityKind, bool) {
 // on request or was replaced by newer truth. conditionStarts is whether the
 // condition the failure is refused for starts with it (conditionStartsWith);
 // the activity carries it with that condition.
-func (e *Engine) emitActivity(r *actionCompletion, decision *resultDecision, conditionStarts bool) {
+func (e *Engine) emitActivity(r *ActionCompletion, decision *ResultDecision, conditionStarts bool) {
 	if e.activityHook == nil || r == nil || decision == nil {
 		return
 	}
@@ -138,8 +138,8 @@ func (e *Engine) emitActivity(r *actionCompletion, decision *resultDecision, con
 // user does clears it, and its retry may succeed. The activity feed's
 // condition and a pass's count of such failures (Report.LastPassAwaitingUser)
 // both read it, so the two cannot disagree.
-func failureAwaitsUser(decision *resultDecision, r *actionCompletion) bool {
-	return decision.Class == errclass.ClassActionable && decision.Persistence == persistRetryWork &&
+func failureAwaitsUser(decision *ResultDecision, r *ActionCompletion) bool {
+	return decision.Class == errclass.ClassActionable && decision.Persistence == PersistRetryWork &&
 		decision.ConditionType != "" && decision.ConditionKey != "" &&
 		decision.ConditionKey != ConditionUploadVerification && decision.ConditionKey != ConditionDownloadIntegrity &&
 		!shouldHandleRemote403Permission(r) && !shouldHandleLocalPermission(r)
@@ -149,7 +149,7 @@ func failureAwaitsUser(decision *resultDecision, r *actionCompletion) bool {
 // consumer that the condition that refused this failure starts with it
 // (failureAwaitsUser and conditionStarts): sync's output then says it to the
 // user in the words `status` uses.
-func (e *Engine) activitySaysConditionStarts(decision *resultDecision, r *actionCompletion, conditionStarts bool) bool {
+func (e *Engine) activitySaysConditionStarts(decision *ResultDecision, r *ActionCompletion, conditionStarts bool) bool {
 	return conditionStarts && e.activityHook != nil && decision != nil && failureAwaitsUser(decision, r)
 }
 
@@ -158,8 +158,8 @@ func (e *Engine) activitySaysConditionStarts(decision *resultDecision, r *action
 // yet. A path whose retry work the plan dropped, with no activity of the path
 // in between, starts it again. Read before the failure is recorded, the
 // activity feed and the log line of the failure read one answer.
-func (flow *engineFlow) conditionStartsWith(decision *resultDecision, r *actionCompletion) bool {
-	row, held := flow.retryWork.row(retryWorkKeyForCompletion(r))
+func (flow *engineFlow) conditionStartsWith(decision *ResultDecision, r *ActionCompletion) bool {
+	row, held := flow.retryWork.row(RetryWorkKeyForCompletion(r))
 	return !held || row.Blocked || row.ConditionType != decision.ConditionType
 }
 
@@ -182,7 +182,7 @@ func failureKeptForRetry(class errclass.Class) bool {
 
 // emitPlannedActivity lists what a dry run would do, one activity per
 // user-visible planned action.
-func (e *Engine) emitPlannedActivity(plan *actionPlan) {
+func (e *Engine) emitPlannedActivity(plan *ActionPlan) {
 	if e.activityHook == nil || plan == nil {
 		return
 	}

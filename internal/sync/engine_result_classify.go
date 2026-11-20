@@ -19,15 +19,15 @@ const (
 	resultFatal      = errclass.ClassFatal
 )
 
-// classifyResult is a pure function that maps an actionCompletion to a
-// single resultDecision. No side effects — classification is separate from
+// classifyResult is a pure function that maps an ActionCompletion to a
+// single ResultDecision. No side effects — classification is separate from
 // routing.
-func classifyResult(r *actionCompletion) resultDecision {
+func classifyResult(r *ActionCompletion) ResultDecision {
 	if r.Success {
-		return withRuntimeSummary(&resultDecision{
+		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSuccess,
 			RecordSuccess: true,
-			TrialHint:     trialHintRelease,
+			TrialHint:     TrialHintRelease,
 		})
 	}
 
@@ -37,42 +37,42 @@ func classifyResult(r *actionCompletion) resultDecision {
 	// is classified like any other, and so is a store access that outlasted
 	// its own bound: its deadline is the engine's limit on its database, which
 	// the stop does not set, and the record it failed to write is lost.
-	if r.RunEnded && isCancellationEcho(r.Err) && !errors.Is(r.Err, errStoreAccessTimedOut) {
-		return withRuntimeSummary(&resultDecision{
+	if r.RunEnded && IsCancellationEcho(r.Err) && !errors.Is(r.Err, ErrStoreAccessTimedOut) {
+		return withRuntimeSummary(&ResultDecision{
 			Class:     resultShutdown,
-			TrialHint: trialHintShutdown,
+			TrialHint: TrialHintShutdown,
 		})
 	}
 
 	// A request that timed out while the run goes on is the service's silence:
 	// retry work and the outage evidence an answered 5xx is, by the scope its
-	// server answer names (serverAnswerServiceOutage). Its issue names the
+	// server answer names (ServerAnswerServiceOutage). Its issue names the
 	// timeout. One that lands once the run has ended is retry work but no
 	// evidence, whatever its shape: a stop is never read as the service's
 	// silence.
-	if isRequestTimeout(r.Err) {
+	if IsRequestTimeout(r.Err) {
 		if r.RunEnded {
-			return withRuntimeSummary(&resultDecision{
+			return withRuntimeSummary(&ResultDecision{
 				Class:         resultRequeue,
-				Persistence:   persistRetryWork,
-				TrialHint:     trialHintReclassify,
-				ConditionType: issueRequestTimeout,
+				Persistence:   PersistRetryWork,
+				TrialHint:     TrialHintReclassify,
+				ConditionType: IssueRequestTimeout,
 			})
 		}
 
-		return retryWithScopeEvidence(deriveScopeKey(r), issueRequestTimeout)
+		return retryWithScopeEvidence(deriveScopeKey(r), IssueRequestTimeout)
 	}
 
 	// A create refused because OneDrive holds a differently spelled sibling
 	// of the same name: the user has to rename one, so it is a durable
 	// name-collision condition with backoff, not a 409 retried every pass.
-	var nameTaken *remoteNameTakenError
+	var nameTaken *RemoteNameTakenError
 	if errors.As(r.Err, &nameTaken) {
-		return withRuntimeSummary(&resultDecision{
+		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSkip,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
-			ConditionType: issueCaseCollision,
+			Persistence:   PersistRetryWork,
+			TrialHint:     TrialHintReclassify,
+			ConditionType: IssueCaseCollision,
 		})
 	}
 
@@ -82,10 +82,10 @@ func classifyResult(r *actionCompletion) resultDecision {
 	// below the engine without a reason it names, so the action is tried again
 	// rather than dropped (and the engine says so, isLiveRunCancel).
 	if isLiveRunCancel(r) {
-		return withRuntimeSummary(&resultDecision{
+		return withRuntimeSummary(&ResultDecision{
 			Class:       resultRequeue,
-			Persistence: persistRetryWork,
-			TrialHint:   trialHintReclassify,
+			Persistence: PersistRetryWork,
+			TrialHint:   TrialHintReclassify,
 		})
 	}
 
@@ -95,11 +95,11 @@ func classifyResult(r *actionCompletion) resultDecision {
 	// not a failure to retry. Classified by that status first, a stale 409
 	// would be held as actionable retry work and a stale 412 as
 	// transient_conflict, instead of being replanned at once.
-	if errors.Is(r.Err, errActionPreconditionChanged) {
-		return withRuntimeSummary(&resultDecision{
+	if errors.Is(r.Err, ErrActionPreconditionChanged) {
+		return withRuntimeSummary(&ResultDecision{
 			Class:       resultSuperseded,
-			Persistence: persistNone,
-			TrialHint:   trialHintReclassify,
+			Persistence: PersistNone,
+			TrialHint:   TrialHintReclassify,
 		})
 	}
 
@@ -112,75 +112,75 @@ func classifyResult(r *actionCompletion) resultDecision {
 
 // isLiveRunCancel reports an action canceled while its run went on: something
 // narrower than the run canceled it.
-func isLiveRunCancel(r *actionCompletion) bool {
+func isLiveRunCancel(r *ActionCompletion) bool {
 	return !r.RunEnded && errors.Is(r.Err, context.Canceled)
 }
 
-func classifyHTTPResult(r *actionCompletion) (resultDecision, bool) {
-	answer := r.serverAnswer()
+func classifyHTTPResult(r *ActionCompletion) (ResultDecision, bool) {
+	answer := r.ServerAnswer()
 	scopeEvidence := deriveScopeKey(r)
 	conditionType := issueTypeForResult(r)
 
 	switch answer {
-	case serverAnswerNone:
-		return resultDecision{}, false
-	case serverAnswerUnauthorized:
-		return withRuntimeSummary(&resultDecision{
+	case ServerAnswerNone:
+		return ResultDecision{}, false
+	case ServerAnswerUnauthorized:
+		return withRuntimeSummary(&ResultDecision{
 			Class:         resultFatal,
-			Persistence:   persistNone,
-			TrialHint:     trialHintFatal,
+			Persistence:   PersistNone,
+			TrialHint:     TrialHintFatal,
 			ConditionType: conditionType,
 		}), true
-	case serverAnswerThrottled, serverAnswerQuota:
-		return withRuntimeSummary(&resultDecision{
+	case ServerAnswerThrottled, ServerAnswerQuota:
+		return withRuntimeSummary(&ResultDecision{
 			Class:             resultBlockScope,
 			ScopeKey:          scopeEvidence,
 			ScopeEvidence:     scopeEvidence,
-			Persistence:       persistRetryWork,
+			Persistence:       PersistRetryWork,
 			RunScopeDetection: true,
-			TrialHint:         trialHintExtendOnMatchingScope,
+			TrialHint:         TrialHintExtendOnMatchingScope,
 			ConditionType:     conditionType,
 		}), true
-	case serverAnswerServiceOutage,
-		serverAnswerRequestTimeout,
-		serverAnswerTransientConflict,
-		serverAnswerTransientNotFound,
-		serverAnswerLocked,
-		serverAnswerTransferURLRejected:
+	case ServerAnswerServiceOutage,
+		ServerAnswerRequestTimeout,
+		ServerAnswerTransientConflict,
+		ServerAnswerTransientNotFound,
+		ServerAnswerLocked,
+		ServerAnswerTransferURLRejected:
 		return retryWithScopeEvidence(scopeEvidence, conditionType), true
-	case serverAnswerForbidden,
-		serverAnswerUnsupported,
-		serverAnswerPathTooLong,
-		serverAnswerMalware,
-		serverAnswerOther:
+	case ServerAnswerForbidden,
+		ServerAnswerUnsupported,
+		ServerAnswerPathTooLong,
+		ServerAnswerMalware,
+		ServerAnswerOther:
 		// Actionable per item: retrying the same request gets the same
 		// answer, and none of these say anything about a wider scope.
-		return withRuntimeSummary(&resultDecision{
+		return withRuntimeSummary(&ResultDecision{
 			Class:         resultSkip,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
+			Persistence:   PersistRetryWork,
+			TrialHint:     TrialHintReclassify,
 			ConditionType: conditionType,
 		}), true
 	}
 
-	return resultDecision{}, false
+	return ResultDecision{}, false
 }
 
 // retryWithScopeEvidence is the decision for a transient failure that is
 // timed retry work and the evidence of scopeEvidence (zero for none): scope
 // detection counts it, and a trial that fails with it keeps that scope.
-func retryWithScopeEvidence(scopeEvidence ScopeKey, conditionType IssueType) resultDecision {
-	return withRuntimeSummary(&resultDecision{
+func retryWithScopeEvidence(scopeEvidence ScopeKey, conditionType IssueType) ResultDecision {
+	return withRuntimeSummary(&ResultDecision{
 		Class:             resultRequeue,
 		ScopeEvidence:     scopeEvidence,
-		Persistence:       persistRetryWork,
+		Persistence:       PersistRetryWork,
 		RunScopeDetection: true,
-		TrialHint:         trialHintExtendOnMatchingScope,
+		TrialHint:         TrialHintExtendOnMatchingScope,
 		ConditionType:     conditionType,
 	})
 }
 
-func classifyLocalResult(r *actionCompletion) resultDecision {
+func classifyLocalResult(r *ActionCompletion) ResultDecision {
 	conditionType := issueTypeForResult(r)
 
 	switch driveops.ClassifyLocalError(r.Err) {
@@ -188,19 +188,19 @@ func classifyLocalResult(r *actionCompletion) resultDecision {
 		// Every write on a full filesystem fails the same way, so one
 		// disk-wide scope replaces N per-file "unexpected" failures whether the
 		// min_free_space pre-check or a real ENOSPC/EDQUOT write found it.
-		return withRuntimeSummary(&resultDecision{
+		return withRuntimeSummary(&ResultDecision{
 			Class:         resultBlockScope,
 			ScopeKey:      SKDiskLocal(),
 			ScopeEvidence: SKDiskLocal(),
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintExtendOnMatchingScope,
+			Persistence:   PersistRetryWork,
+			TrialHint:     TrialHintExtendOnMatchingScope,
 			ConditionType: conditionType,
 		})
 	case driveops.LocalErrorBusy:
-		return withRuntimeSummary(&resultDecision{
+		return withRuntimeSummary(&ResultDecision{
 			Class:         resultRequeue,
-			Persistence:   persistRetryWork,
-			TrialHint:     trialHintReclassify,
+			Persistence:   PersistRetryWork,
+			TrialHint:     TrialHintReclassify,
 			ConditionType: conditionType,
 		})
 	case driveops.LocalErrorOther,
@@ -213,28 +213,28 @@ func classifyLocalResult(r *actionCompletion) resultDecision {
 		// are actionable rows named by issueTypeForFilesystemResult.
 	}
 
-	return withRuntimeSummary(&resultDecision{
+	return withRuntimeSummary(&ResultDecision{
 		Class:         resultSkip,
-		Persistence:   persistRetryWork,
-		TrialHint:     trialHintReclassify,
+		Persistence:   PersistRetryWork,
+		TrialHint:     TrialHintReclassify,
 		ConditionType: conditionType,
 	})
 }
 
-func withRuntimeSummary(decision *resultDecision) resultDecision {
-	decision.ConditionKey = conditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
+func withRuntimeSummary(decision *ResultDecision) ResultDecision {
+	decision.ConditionKey = ConditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
 	return *decision
 }
 
 // deriveScopeKey maps an action completion to its typed scope key. Delegates to
-// scopeKeyForResult, the single source of truth for server answer -> scope
+// ScopeKeyForResult, the single source of truth for server answer -> scope
 // key. Returns the zero-value ScopeKey for answers that are not scope
 // evidence.
-func deriveScopeKey(r *actionCompletion) ScopeKey {
-	return scopeKeyForResult(r.serverAnswer(), r.DriveID)
+func deriveScopeKey(r *ActionCompletion) ScopeKey {
+	return ScopeKeyForResult(r.ServerAnswer(), r.DriveID)
 }
 
-func issueTypeForResult(r *actionCompletion) IssueType {
+func issueTypeForResult(r *ActionCompletion) IssueType {
 	if issueType, ok := issueTypeForHTTPResult(r); ok {
 		return issueType
 	}
@@ -245,13 +245,13 @@ func issueTypeForResult(r *actionCompletion) IssueType {
 	return ""
 }
 
-func issueTypeForHTTPResult(r *actionCompletion) (IssueType, bool) {
+func issueTypeForHTTPResult(r *ActionCompletion) (IssueType, bool) {
 	if r == nil {
 		return "", false
 	}
 
-	answer := r.serverAnswer()
-	if answer == serverAnswerForbidden {
+	answer := r.ServerAnswer()
+	if answer == ServerAnswerForbidden {
 		return issueTypeForForbiddenResult(r), true
 	}
 
@@ -261,40 +261,40 @@ func issueTypeForHTTPResult(r *actionCompletion) (IssueType, bool) {
 
 // serverAnswerIssueTypes names the issue each server answer records. A
 // function, not a package-level map, so the table cannot be mutated.
-// serverAnswerNone, serverAnswerForbidden (probe-dependent) and
-// serverAnswerOther have no fixed issue.
-func serverAnswerIssueTypes() map[serverAnswer]IssueType {
-	return map[serverAnswer]IssueType{
-		serverAnswerPathTooLong:         issuePathTooLong,
-		serverAnswerUnauthorized:        IssueUnauthorized,
-		serverAnswerThrottled:           issueRateLimited,
-		serverAnswerQuota:               IssueQuotaExceeded,
-		serverAnswerUnsupported:         issueUnsupportedOperation,
-		serverAnswerServiceOutage:       issueServiceOutage,
-		serverAnswerRequestTimeout:      issueRequestTimeout,
-		serverAnswerTransientConflict:   issueTransientConflict,
-		serverAnswerTransientNotFound:   issueTransientNotFound,
-		serverAnswerLocked:              issueResourceLocked,
-		serverAnswerTransferURLRejected: issueTransferURLRejected,
-		serverAnswerMalware:             issueMalwareDetected,
+// ServerAnswerNone, ServerAnswerForbidden (probe-dependent) and
+// ServerAnswerOther have no fixed issue.
+func serverAnswerIssueTypes() map[ServerAnswer]IssueType {
+	return map[ServerAnswer]IssueType{
+		ServerAnswerPathTooLong:         IssuePathTooLong,
+		ServerAnswerUnauthorized:        IssueUnauthorized,
+		ServerAnswerThrottled:           IssueRateLimited,
+		ServerAnswerQuota:               IssueQuotaExceeded,
+		ServerAnswerUnsupported:         IssueUnsupportedOperation,
+		ServerAnswerServiceOutage:       IssueServiceOutage,
+		ServerAnswerRequestTimeout:      IssueRequestTimeout,
+		ServerAnswerTransientConflict:   IssueTransientConflict,
+		ServerAnswerTransientNotFound:   IssueTransientNotFound,
+		ServerAnswerLocked:              IssueResourceLocked,
+		ServerAnswerTransferURLRejected: IssueTransferURLRejected,
+		ServerAnswerMalware:             IssueMalwareDetected,
 	}
 }
 
-func issueTypeForForbiddenResult(r *actionCompletion) IssueType {
+func issueTypeForForbiddenResult(r *ActionCompletion) IssueType {
 	switch effectiveRemotePermissionCapability(r) {
-	case permissionCapabilityRemoteRead:
-		return issueRemoteReadDenied
-	case permissionCapabilityUnknown,
-		permissionCapabilityLocalRead,
-		permissionCapabilityLocalWrite,
-		permissionCapabilityRemoteWrite:
+	case PermissionCapabilityRemoteRead:
+		return IssueRemoteReadDenied
+	case PermissionCapabilityUnknown,
+		PermissionCapabilityLocalRead,
+		PermissionCapabilityLocalWrite,
+		PermissionCapabilityRemoteWrite:
 		return IssueRemoteWriteDenied
 	default:
 		return IssueRemoteWriteDenied
 	}
 }
 
-func issueTypeForFilesystemResult(r *actionCompletion) (IssueType, bool) {
+func issueTypeForFilesystemResult(r *ActionCompletion) (IssueType, bool) {
 	if r == nil {
 		return "", false
 	}
@@ -305,31 +305,31 @@ func issueTypeForFilesystemResult(r *actionCompletion) (IssueType, bool) {
 	}
 	switch {
 	case errors.Is(err, driveops.ErrFileTooLargeForSpace):
-		return issueFileTooLargeForSpace, true
+		return IssueFileTooLargeForSpace, true
 	case errors.Is(err, driveops.ErrFileExceedsOneDriveLimit):
-		return issueFileTooLarge, true
+		return IssueFileTooLarge, true
 	case errors.Is(err, driveops.ErrUploadVerificationFailed):
-		return issueUploadVerification, true
+		return IssueUploadVerification, true
 	case errors.Is(err, driveops.ErrDownloadIntegrity):
-		return issueDownloadIntegrity, true
+		return IssueDownloadIntegrity, true
 	}
 
 	switch driveops.ClassifyLocalError(err) {
 	case driveops.LocalErrorNoSpace:
-		return issueDiskFull, true
+		return IssueDiskFull, true
 	case driveops.LocalErrorReadOnly:
-		return issueLocalReadOnly, true
+		return IssueLocalReadOnly, true
 	case driveops.LocalErrorFileTooLarge:
-		return issueLocalFileTooLarge, true
+		return IssueLocalFileTooLarge, true
 	case driveops.LocalErrorBusy:
-		return issueLocalBusy, true
+		return IssueLocalBusy, true
 	case driveops.LocalErrorCrossDevice:
-		return issueLocalCrossDevice, true
+		return IssueLocalCrossDevice, true
 	case driveops.LocalErrorNameTooLong:
 		// OneDrive accepts names longer than the 255 bytes a Linux or
 		// macOS filesystem can store; without a named issue each download
 		// would retry forever as an "unexpected" failure.
-		return issueLocalNameTooLong, true
+		return IssueLocalNameTooLong, true
 	case driveops.LocalErrorOther:
 	}
 
@@ -344,76 +344,76 @@ func issueTypeForFilesystemResult(r *actionCompletion) (IssueType, bool) {
 // errors.
 func issueTypeForSentinelResult(err error) (IssueType, bool) {
 	switch {
-	case errors.Is(err, errDatabaseInUse):
-		return issueLocalDatabaseOpen, true
-	case errors.Is(err, errRemoteFolderTooLargeToVerify):
-		return issueRemoteFolderUnverifiable, true
+	case errors.Is(err, ErrDatabaseInUse):
+		return IssueLocalDatabaseOpen, true
+	case errors.Is(err, ErrRemoteFolderTooLargeToVerify):
+		return IssueRemoteFolderUnverifiable, true
 	default:
 		return "", false
 	}
 }
 
-func issueTypeForLocalPermissionResult(r *actionCompletion) IssueType {
+func issueTypeForLocalPermissionResult(r *ActionCompletion) IssueType {
 	switch effectiveLocalPermissionCapability(r) {
-	case permissionCapabilityLocalRead:
-		return issueLocalReadDenied
-	case permissionCapabilityUnknown,
-		permissionCapabilityLocalWrite,
-		permissionCapabilityRemoteRead,
-		permissionCapabilityRemoteWrite:
-		return issueLocalWriteDenied
+	case PermissionCapabilityLocalRead:
+		return IssueLocalReadDenied
+	case PermissionCapabilityUnknown,
+		PermissionCapabilityLocalWrite,
+		PermissionCapabilityRemoteRead,
+		PermissionCapabilityRemoteWrite:
+		return IssueLocalWriteDenied
 	default:
-		return issueLocalWriteDenied
+		return IssueLocalWriteDenied
 	}
 }
 
-func effectiveRemotePermissionCapability(r *actionCompletion) permissionCapability {
+func effectiveRemotePermissionCapability(r *ActionCompletion) PermissionCapability {
 	if r == nil {
-		return permissionCapabilityUnknown
+		return PermissionCapabilityUnknown
 	}
-	if r.FailureCapability == permissionCapabilityRemoteRead || r.FailureCapability == permissionCapabilityRemoteWrite {
+	if r.FailureCapability == PermissionCapabilityRemoteRead || r.FailureCapability == PermissionCapabilityRemoteWrite {
 		return r.FailureCapability
 	}
 	if !hasPermissionActionContext(r) {
-		return permissionCapabilityUnknown
+		return PermissionCapabilityUnknown
 	}
 
 	switch r.ActionType {
 	case ActionDownload:
-		return permissionCapabilityRemoteRead
+		return PermissionCapabilityRemoteRead
 	case ActionUpload, ActionRemoteDelete, ActionRemoteMove, ActionFolderCreate:
-		return permissionCapabilityRemoteWrite
+		return PermissionCapabilityRemoteWrite
 	case ActionConflictCopy, ActionLocalDelete, ActionLocalMove, ActionBaselineUpdate, ActionCleanup:
-		return permissionCapabilityUnknown
+		return PermissionCapabilityUnknown
 	default:
-		panic(outsideTheEnum(r.ActionType))
+		panic(OutsideTheEnum(r.ActionType))
 	}
 }
 
-func effectiveLocalPermissionCapability(r *actionCompletion) permissionCapability {
+func effectiveLocalPermissionCapability(r *ActionCompletion) PermissionCapability {
 	if r == nil {
-		return permissionCapabilityUnknown
+		return PermissionCapabilityUnknown
 	}
-	if r.FailureCapability == permissionCapabilityLocalRead || r.FailureCapability == permissionCapabilityLocalWrite {
+	if r.FailureCapability == PermissionCapabilityLocalRead || r.FailureCapability == PermissionCapabilityLocalWrite {
 		return r.FailureCapability
 	}
 	if !hasPermissionActionContext(r) {
-		return permissionCapabilityUnknown
+		return PermissionCapabilityUnknown
 	}
 
 	switch r.ActionType {
 	case ActionUpload:
-		return permissionCapabilityLocalRead
+		return PermissionCapabilityLocalRead
 	case ActionDownload, ActionLocalDelete, ActionLocalMove, ActionFolderCreate, ActionConflictCopy, ActionCleanup:
-		return permissionCapabilityLocalWrite
+		return PermissionCapabilityLocalWrite
 	case ActionRemoteDelete, ActionRemoteMove, ActionBaselineUpdate:
-		return permissionCapabilityUnknown
+		return PermissionCapabilityUnknown
 	default:
-		panic(outsideTheEnum(r.ActionType))
+		panic(OutsideTheEnum(r.ActionType))
 	}
 }
 
-func hasPermissionActionContext(r *actionCompletion) bool {
+func hasPermissionActionContext(r *ActionCompletion) bool {
 	if r == nil {
 		return false
 	}

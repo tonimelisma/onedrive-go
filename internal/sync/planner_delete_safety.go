@@ -23,7 +23,7 @@ import (
 //   - proportional: more deletes (files and folders) toward one side than
 //     max(deleteSafetyMinItems, deleteSafetyBaselinePercent of baseline items)
 //     are held. The unconfirmed deletes sync already ran toward that side
-//     within deleteSafetyWindow count too, against the baseline as it stood
+//     within DeleteSafetyWindow count too, against the baseline as it stood
 //     before them, so a deletion spread over many small passes is judged as
 //     the one deletion it is.
 //
@@ -46,32 +46,32 @@ const (
 	percentDenominator          = 100
 )
 
-// deleteSafetyInput is the evidence the hold is decided from: the planner's
+// DeleteSafetyInput is the evidence the hold is decided from: the planner's
 // baseline and the planner-visible current snapshots of both sides.
-type deleteSafetyInput struct {
+type DeleteSafetyInput struct {
 	Baseline   *Baseline
-	LocalRows  []localStateRow
-	RemoteRows []remoteStateRow
+	LocalRows  []LocalStateRow
+	RemoteRows []RemoteStateRow
 	// Approved is the held set the user confirmed with `sync
 	// --confirm-deletes`: the deletes recorded as held before this pass.
 	// Only those are released. A delete that appeared after the user looked
 	// is judged by the rules again, so confirming one batch never waves
 	// through the next.
-	Approved []heldDelete
+	Approved []HeldDelete
 	// RecentDeletes counts, per side, the unconfirmed deletes sync ran
-	// toward that side within deleteSafetyWindow before this plan (the
+	// toward that side within DeleteSafetyWindow before this plan (the
 	// store's delete ledger). They count toward the proportional rule.
-	RecentDeletes map[deleteSafetySide]int
+	RecentDeletes map[DeleteSafetySide]int
 	// MountBoundaries are the folders recorded as crossed mount points
 	// (mount_boundaries). A delete toward OneDrive of one whose folder is not
 	// in LocalRows, or of anything below it, is held whatever the count.
 	MountBoundaries []string
 }
 
-// applyDeleteSafetyHold removes held deletes, and every action that depends
+// ApplyDeleteSafetyHold removes held deletes, and every action that depends
 // on one, from plan, rebuilding dependencies when anything was held. It is
 // deterministic and performs no I/O.
-func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
+func ApplyDeleteSafetyHold(plan *ActionPlan, input *DeleteSafetyInput) error {
 	if plan == nil || input == nil || len(plan.Actions) == 0 {
 		return nil
 	}
@@ -85,16 +85,16 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 	for i := range approved {
 		plan.Actions[i].DeleteConfirmed = true
 	}
-	reasons := map[actionType]deleteSafetyReason{}
+	reasons := map[ActionType]DeleteSafetyReason{}
 	if reason, held := deleteSafetyVerdict(
 		plan.Actions, approved, ActionRemoteDelete, baselineItems,
-		input.RecentDeletes[deleteSafetySideRemote], localSideIsEmpty(input.LocalRows),
+		input.RecentDeletes[DeleteSafetySideRemote], localSideIsEmpty(input.LocalRows),
 	); held {
 		reasons[ActionRemoteDelete] = reason
 	}
 	if reason, held := deleteSafetyVerdict(
 		plan.Actions, approved, ActionLocalDelete, baselineItems,
-		input.RecentDeletes[deleteSafetySideLocal], remoteSideIsEmpty(input.RemoteRows),
+		input.RecentDeletes[DeleteSafetySideLocal], remoteSideIsEmpty(input.RemoteRows),
 	); held {
 		reasons[ActionLocalDelete] = reason
 	}
@@ -105,20 +105,20 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 
 	heldIdx := heldDeleteClosure(plan, seeds)
 	kept := make([]Action, 0, len(plan.Actions)-len(heldIdx))
-	var held []heldDelete
+	var held []HeldDelete
 	for i := range plan.Actions {
 		action := &plan.Actions[i]
 		if _, isHeld := heldIdx[i]; !isHeld {
 			kept = append(kept, *action)
 			continue
 		}
-		side, isDelete := deleteSafetySideOf(action.Type)
+		side, isDelete := DeleteSafetySideOf(action.Type)
 		if reason, isSeed := seeds[i]; isDelete && isSeed {
-			held = append(held, heldDelete{
+			held = append(held, HeldDelete{
 				Path:     action.Path,
 				Side:     side,
 				Reason:   reason,
-				ItemType: deletedItemType(action),
+				ItemType: DeletedItemType(action),
 				ItemID:   action.ItemID,
 			})
 		}
@@ -148,10 +148,10 @@ func applyDeleteSafetyHold(plan *actionPlan, input *deleteSafetyInput) error {
 func heldDeleteSeeds(
 	actions []Action,
 	approved map[int]struct{},
-	reasons map[actionType]deleteSafetyReason,
+	reasons map[ActionType]DeleteSafetyReason,
 	missingMounts []string,
-) map[int]deleteSafetyReason {
-	seeds := make(map[int]deleteSafetyReason)
+) map[int]DeleteSafetyReason {
+	seeds := make(map[int]DeleteSafetyReason)
 	for i := range actions {
 		if _, isApproved := approved[i]; isApproved {
 			continue
@@ -161,7 +161,7 @@ func heldDeleteSeeds(
 			continue
 		}
 		if actions[i].Type == ActionRemoteDelete && underAnyFolder(actions[i].Path, missingMounts) {
-			seeds[i] = deleteSafetyReasonMountPointGone
+			seeds[i] = DeleteSafetyReasonMountPointGone
 		}
 	}
 	return seeds
@@ -170,7 +170,7 @@ func heldDeleteSeeds(
 // missingMountPoints returns the recorded mount points whose folder the
 // local snapshot does not hold. A file at a mount point's path does not
 // count as its folder.
-func missingMountPoints(input *deleteSafetyInput) []string {
+func missingMountPoints(input *DeleteSafetyInput) []string {
 	if len(input.MountBoundaries) == 0 {
 		return nil
 	}
@@ -201,21 +201,21 @@ func underAnyFolder(itemPath string, folders []string) bool {
 
 // approvedDeleteIndexes returns the delete actions the user's confirmation
 // covers: same path, same side, and the same item when both record one.
-func approvedDeleteIndexes(actions []Action, approved []heldDelete) map[int]struct{} {
+func approvedDeleteIndexes(actions []Action, approved []HeldDelete) map[int]struct{} {
 	if len(approved) == 0 {
 		return nil
 	}
 	type key struct {
 		path string
-		side deleteSafetySide
+		side DeleteSafetySide
 	}
-	byKey := make(map[key]heldDelete, len(approved))
+	byKey := make(map[key]HeldDelete, len(approved))
 	for i := range approved {
 		byKey[key{path: approved[i].Path, side: approved[i].Side}] = approved[i]
 	}
 	indexes := make(map[int]struct{})
 	for i := range actions {
-		side, isDelete := deleteSafetySideOf(actions[i].Type)
+		side, isDelete := DeleteSafetySideOf(actions[i].Type)
 		if !isDelete {
 			continue
 		}
@@ -244,11 +244,11 @@ func approvedDeleteIndexes(actions []Action, approved []heldDelete) map[int]stru
 func deleteSafetyVerdict(
 	actions []Action,
 	approved map[int]struct{},
-	deleteType actionType,
+	deleteType ActionType,
 	baselineItems int,
 	recentDeletes int,
 	oppositeSideEmpty bool,
-) (deleteSafetyReason, bool) {
+) (DeleteSafetyReason, bool) {
 	deletes := 0
 	for i := range actions {
 		if actions[i].Type != deleteType {
@@ -263,10 +263,10 @@ func deleteSafetyVerdict(
 		return "", false
 	}
 	if oppositeSideEmpty {
-		return deleteSafetyReasonSideVanished, true
+		return DeleteSafetyReasonSideVanished, true
 	}
 	if deletes+recentDeletes > deleteSafetyThreshold(baselineItems+recentDeletes) {
-		return deleteSafetyReasonTooMany, true
+		return DeleteSafetyReasonTooMany, true
 	}
 
 	return "", false
@@ -285,7 +285,7 @@ func deleteSafetyThreshold(baselineItems int) int {
 // safely alone: the create half of a type-change replacement would land on
 // the item the held delete was to remove, and an upload waiting on the delete
 // of a case variant would overwrite it in place.
-func heldDeleteClosure(plan *actionPlan, seeds map[int]deleteSafetyReason) map[int]struct{} {
+func heldDeleteClosure(plan *ActionPlan, seeds map[int]DeleteSafetyReason) map[int]struct{} {
 	deps := plan.Deps
 	if len(deps) != len(plan.Actions) {
 		deps = buildDependencies(plan.Actions)
@@ -339,7 +339,7 @@ func countBaselineItems(baseline *Baseline) int {
 // otherwise empty, so it is not evidence that the side still has content.
 const lostAndFoundName = "lost+found"
 
-func localSideIsEmpty(rows []localStateRow) bool {
+func localSideIsEmpty(rows []LocalStateRow) bool {
 	for i := range rows {
 		if rows[i].ItemType == ItemTypeRoot || rows[i].Path == "" || localRowIsNotContent(rows[i].Path) {
 			continue
@@ -358,7 +358,7 @@ func localRowIsNotContent(rowPath string) bool {
 	return driveops.IsOwnedTransferArtifactName(path.Base(rowPath))
 }
 
-func remoteSideIsEmpty(rows []remoteStateRow) bool {
+func remoteSideIsEmpty(rows []RemoteStateRow) bool {
 	for i := range rows {
 		if rows[i].ItemType != ItemTypeRoot && rows[i].Path != "" {
 			return false

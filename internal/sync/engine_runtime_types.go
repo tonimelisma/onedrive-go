@@ -89,7 +89,7 @@ type oneShotRunner struct {
 	// outbox is the admitted work the results loop has not handed to a
 	// worker yet. Owned by the results loop goroutine; a scope activation
 	// applied by that goroutine takes blocked work back out of it.
-	outbox []*trackedAction
+	outbox []*TrackedAction
 }
 
 func newOneShotRunner(engine *Engine) *oneShotRunner {
@@ -103,7 +103,7 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 
 // takeAdmittedWorkBlockedBy satisfies admittedWorkOwner for the one-shot
 // results loop.
-func (r *oneShotRunner) takeAdmittedWorkBlockedBy(key ScopeKey) []*trackedAction {
+func (r *oneShotRunner) takeAdmittedWorkBlockedBy(key ScopeKey) []*TrackedAction {
 	taken, kept := takeOutboxBlockedBy(r.outbox, key)
 	if len(taken) == 0 {
 		return nil

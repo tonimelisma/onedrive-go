@@ -21,7 +21,7 @@ func boolInt(value bool) int {
 	return 0
 }
 
-// storedTimeNano encodes t for a stored time that is compared by order (a
+// StoredTimeNano encodes t for a stored time that is compared by order (a
 // deadline or a not-before time) and for a remote modification time: Unix
 // nanoseconds, saturated at the ends of the int64 range. UnixNano is
 // undefined outside 1678 to 2262: a server's Retry-After that saturates at
@@ -40,7 +40,7 @@ func boolInt(value bool) int {
 // only with themselves and never turned back into a time, UnixNano wraps a
 // given time to the same value every time, and saturating would make two
 // different far-future local times equal.
-func storedTimeNano(t time.Time) int64 {
+func StoredTimeNano(t time.Time) int64 {
 	switch {
 	case t.IsZero():
 		return 0
@@ -56,18 +56,18 @@ func storedTimeNano(t time.Time) int64 {
 	return storedEpochNano
 }
 
-// storedTimeIsSet reports whether a value storedTimeNano wrote is a time.
+// StoredTimeIsSet reports whether a value StoredTimeNano wrote is a time.
 // Zero, and only zero, is "no time": a time before 1970 is negative and a
 // time like any other.
-func storedTimeIsSet(stored int64) bool {
+func StoredTimeIsSet(stored int64) bool {
 	return stored != 0
 }
 
-// remoteModTime is the file time a stored remote modification time stands
+// RemoteModTime is the file time a stored remote modification time stands
 // for, which a download and a folder create set on what they make. It is the
 // zero time, which nothing sets, when no time is stored.
-func remoteModTime(stored int64) time.Time {
-	if !storedTimeIsSet(stored) {
+func RemoteModTime(stored int64) time.Time {
+	if !StoredTimeIsSet(stored) {
 		return time.Time{}
 	}
 

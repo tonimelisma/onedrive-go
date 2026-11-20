@@ -6,21 +6,21 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// actionCompletion reports the terminal outcome of one planned action. The
+// ActionCompletion reports the terminal outcome of one planned action. The
 // engine reads these from the completions channel, classifies them, and calls
-// depGraph.Complete. Failed items become retry_work, block_scopes, or other
+// DepGraph.Complete. Failed items become retry_work, block_scopes, or other
 // engine-owned durable control state through the persistence flow.
-type actionCompletion struct {
+type ActionCompletion struct {
 	Path              string
 	OldPath           string
 	ItemID            string
 	DriveID           driveid.ID
-	ActionType        actionType
+	ActionType        ActionType
 	Success           bool
 	ErrMsg            string
 	HTTPStatus        int // from graph.GraphError, 0 if not a Graph API error
 	FailurePath       string
-	FailureCapability permissionCapability
+	FailureCapability PermissionCapability
 
 	// Size is the transferred file size for display, when the outcome knows it.
 	Size      int64
@@ -31,7 +31,7 @@ type actionCompletion struct {
 	Err error
 
 	// RunEnded is whether the run the action ran under had ended when it
-	// returned (runEnded): the one fact that makes a failure a shutdown. Set
+	// returned (RunEnded): the one fact that makes a failure a shutdown. Set
 	// by whoever ran the action, from the run's context; the classifier reads
 	// it and no context.
 	RunEnded bool
@@ -48,7 +48,7 @@ type actionCompletion struct {
 	TrialScopeKey ScopeKey
 
 	// TrialScopeGeneration is the scope generation the trial was released
-	// under (trackedAction.TrialScopeGeneration).
+	// under (TrackedAction.TrialScopeGeneration).
 	TrialScopeGeneration uint64
 
 	// ActionID is the TrackedAction.ID for the engine to call Complete on
@@ -56,12 +56,12 @@ type actionCompletion struct {
 	ActionID int64
 }
 
-// serverAnswer is what this completion's Graph failure means (see
+// ServerAnswer is what this completion's Graph failure means (see
 // classifyServerAnswer). It is derived, not stored, so it can never disagree
 // with HTTPStatus and Err.
-func (r *actionCompletion) serverAnswer() serverAnswer {
+func (r *ActionCompletion) ServerAnswer() ServerAnswer {
 	if r == nil {
-		return serverAnswerNone
+		return ServerAnswerNone
 	}
 
 	return classifyServerAnswer(r.HTTPStatus, r.Err)
@@ -69,7 +69,7 @@ func (r *actionCompletion) serverAnswer() serverAnswer {
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
 // after a 429 for this action completion.
-func (r *actionCompletion) ThrottleTargetKey() string {
+func (r *ActionCompletion) ThrottleTargetKey() string {
 	if r == nil {
 		return ""
 	}
@@ -79,21 +79,21 @@ func (r *actionCompletion) ThrottleTargetKey() string {
 	return throttleDriveParam(r.DriveID)
 }
 
-// actionCompletionFromTrackedAction builds the shared runtime result shape for
+// ActionCompletionFromTrackedAction builds the shared runtime result shape for
 // one exact tracked action. Workers and the engine-owned publication-drain stage both
 // use this helper so classification/persistence sees one consistent exact
 // action identity.
-func actionCompletionFromTrackedAction(
-	ta *trackedAction,
-	outcome *actionOutcome,
+func ActionCompletionFromTrackedAction(
+	ta *TrackedAction,
+	outcome *ActionOutcome,
 	actionErr error,
-) actionCompletion {
+) ActionCompletion {
 	driveID := ta.Action.DriveID
 	if outcome != nil && !outcome.DriveID.IsZero() {
 		driveID = outcome.DriveID
 	}
 
-	r := actionCompletion{
+	r := ActionCompletion{
 		Path:                 ta.Action.Path,
 		OldPath:              ta.Action.OldPath,
 		ItemID:               ta.Action.ItemID,
@@ -101,7 +101,7 @@ func actionCompletionFromTrackedAction(
 		ActionType:           ta.Action.Type,
 		Err:                  actionErr,
 		ErrMsg:               "",
-		HTTPStatus:           extractHTTPStatus(actionErr),
+		HTTPStatus:           ExtractHTTPStatus(actionErr),
 		RetryAfter:           extractRetryAfter(actionErr),
 		IsTrial:              ta.IsTrial,
 		TrialScopeKey:        ta.TrialScopeKey,
@@ -117,7 +117,7 @@ func actionCompletionFromTrackedAction(
 		if outcome.Error != nil {
 			r.ErrMsg = outcome.Error.Error()
 			r.Err = outcome.Error
-			r.HTTPStatus = extractHTTPStatus(outcome.Error)
+			r.HTTPStatus = ExtractHTTPStatus(outcome.Error)
 			r.RetryAfter = extractRetryAfter(outcome.Error)
 		}
 	} else if actionErr != nil {
@@ -129,7 +129,7 @@ func actionCompletionFromTrackedAction(
 
 // outcomeDisplaySize picks the size a user would associate with the action:
 // what arrived for a download, what was sent for an upload.
-func outcomeDisplaySize(outcome *actionOutcome) (int64, bool) {
+func outcomeDisplaySize(outcome *ActionOutcome) (int64, bool) {
 	switch outcome.Action {
 	case ActionDownload:
 		return outcome.RemoteSize, outcome.RemoteSizeKnown
@@ -139,6 +139,6 @@ func outcomeDisplaySize(outcome *actionOutcome) (int64, bool) {
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return 0, false
 	default:
-		panic(outsideTheEnum(outcome.Action))
+		panic(OutsideTheEnum(outcome.Action))
 	}
 }

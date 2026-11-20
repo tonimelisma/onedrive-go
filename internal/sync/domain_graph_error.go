@@ -19,9 +19,9 @@ import (
 // them in the worker made the domain appear to depend on execution machinery
 // when it depends only on how a transport failure is described.
 
-// extractHTTPStatus unwraps a graph.GraphError from err and returns its
+// ExtractHTTPStatus unwraps a graph.GraphError from err and returns its
 // StatusCode. Returns 0 if err is nil or not a GraphError.
-func extractHTTPStatus(err error) int {
+func ExtractHTTPStatus(err error) int {
 	if err == nil {
 		return 0
 	}
@@ -49,50 +49,50 @@ func extractRetryAfter(err error) time.Duration {
 	return 0
 }
 
-// serverAnswer is what a Graph failure means for the work around it. It is
+// ServerAnswer is what a Graph failure means for the work around it. It is
 // the one table from (HTTP status, Graph code, message) to meaning: scope
 // detection, result classification and issue naming all read it, so a quota
 // answer or a refusal is recognized identically everywhere. The most specific
 // evidence wins: a Graph code or a known message is checked before the bare
 // status, because OneDrive reports one condition under several statuses. A
-// request OneDrive never answered (isRequestTimeout) means what a 5xx means:
+// request OneDrive never answered (IsRequestTimeout) means what a 5xx means:
 // the service is not answering.
-type serverAnswer int
+type ServerAnswer int
 
 const (
-	serverAnswerNone serverAnswer = iota
-	serverAnswerUnauthorized
-	serverAnswerForbidden
-	serverAnswerThrottled
-	// serverAnswerQuota is a full OneDrive: 507, or quotaLimitReached /
+	ServerAnswerNone ServerAnswer = iota
+	ServerAnswerUnauthorized
+	ServerAnswerForbidden
+	ServerAnswerThrottled
+	// ServerAnswerQuota is a full OneDrive: 507, or quotaLimitReached /
 	// insufficientStorage or an "insufficient space" message under any
 	// status (Business has returned it as 500 and 403).
-	serverAnswerQuota
-	serverAnswerServiceOutage
-	// serverAnswerUnsupported is OneDrive refusing an operation it does not
+	ServerAnswerQuota
+	ServerAnswerServiceOutage
+	// ServerAnswerUnsupported is OneDrive refusing an operation it does not
 	// implement (501, 505, or a notSupported code under any status). It is a
 	// stable answer about one request, not an outage, so it must never count
 	// toward the service scope: counted, five refusals would block every
 	// drive.
-	serverAnswerUnsupported
-	serverAnswerPathTooLong
-	serverAnswerRequestTimeout
-	// serverAnswerTransientConflict is 412, and 409 resourceModified: the
+	ServerAnswerUnsupported
+	ServerAnswerPathTooLong
+	ServerAnswerRequestTimeout
+	// ServerAnswerTransientConflict is 412, and 409 resourceModified: the
 	// item changed between our read and our write (an mtime PATCH racing a
 	// server-side post-upload update), so a retry against fresh truth works.
-	serverAnswerTransientConflict
-	serverAnswerTransientNotFound
-	serverAnswerLocked
-	// serverAnswerTransferURLRejected is a pre-authenticated upload or
+	ServerAnswerTransientConflict
+	ServerAnswerTransientNotFound
+	ServerAnswerLocked
+	// ServerAnswerTransferURLRejected is a pre-authenticated upload or
 	// download URL refusing its own credential (graph.ErrPreAuthURLRejected).
 	// Only that file's transfer is affected; it is retried with a new URL.
-	serverAnswerTransferURLRejected
-	// serverAnswerMalware is content OneDrive flagged as malware
+	ServerAnswerTransferURLRejected
+	// ServerAnswerMalware is content OneDrive flagged as malware
 	// (graph.ErrMalwareDetected). It is a permanent per-file issue: probed as
 	// a permission problem, the download's 403 would be labeled read-denied
 	// and retried forever.
-	serverAnswerMalware
-	serverAnswerOther
+	ServerAnswerMalware
+	ServerAnswerOther
 )
 
 // Graph codes and message fragments the server-answer table recognizes
@@ -106,11 +106,11 @@ const (
 // classifyServerAnswer maps one Graph failure to its meaning. status is the
 // HTTP status recorded on the completion; err supplies the code and message
 // when it carries a graph.GraphError.
-func classifyServerAnswer(status int, err error) serverAnswer {
+func classifyServerAnswer(status int, err error) ServerAnswer {
 	if errors.Is(err, graph.ErrMalwareDetected) {
 		// Checked before the status: the facet check refuses before any
 		// request, so there may be no status at all.
-		return serverAnswerMalware
+		return ServerAnswerMalware
 	}
 	if status == 0 {
 		return unansweredServerAnswer(err)
@@ -128,26 +128,26 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 		// The client clamps every time it sends to 1900 or later, so this
 		// is a defense: a generic per-file failure, never "the item is
 		// gone" (the wire status is a misleading 404).
-		return serverAnswerOther
+		return ServerAnswerOther
 	case errors.Is(err, graph.ErrAuthTransient):
 		// A 401 that a just-refreshed token still got, naming a server-side
 		// validation fault: an outage, never "sign-in required" (D-072).
-		return serverAnswerServiceOutage
+		return ServerAnswerServiceOutage
 	case errors.Is(err, graph.ErrPreAuthURLRejected):
-		return serverAnswerTransferURLRejected
+		return ServerAnswerTransferURLRejected
 	case status == http.StatusInsufficientStorage, graph.IsQuotaExhausted(err):
-		return serverAnswerQuota
+		return ServerAnswerQuota
 	case status == http.StatusNotImplemented, status == http.StatusHTTPVersionNotSupported, graph.IsNotSupported(err):
-		return serverAnswerUnsupported
+		return ServerAnswerUnsupported
 	case status == http.StatusBadRequest &&
 		(strings.Contains(message, graphMessageNameTooLong) || strings.Contains(message, graphMessagePathLimit)):
 		// OneDrive accepted a path below the drive root of 364 UTF-16 units
 		// and refused one of 365 (L-36; why below its stated 400 is not
 		// known), so the scanner's 400 cannot catch every case, and a bare
 		// 400 would retry forever.
-		return serverAnswerPathTooLong
+		return ServerAnswerPathTooLong
 	case status == http.StatusConflict && hasGraphErr && graphErr.HasCode(graphCodeResourceModified):
-		return serverAnswerTransientConflict
+		return ServerAnswerTransientConflict
 	}
 
 	return classifyServerStatus(status)
@@ -156,15 +156,15 @@ func classifyServerAnswer(status int, err error) serverAnswer {
 // unansweredServerAnswer is the meaning of a failure that carries no status:
 // a request that ran out of time waiting for OneDrive is the service's
 // silence, the outage a 5xx says out loud; any other carries no answer.
-func unansweredServerAnswer(err error) serverAnswer {
-	if isRequestTimeout(err) {
-		return serverAnswerServiceOutage
+func unansweredServerAnswer(err error) ServerAnswer {
+	if IsRequestTimeout(err) {
+		return ServerAnswerServiceOutage
 	}
 
-	return serverAnswerNone
+	return ServerAnswerNone
 }
 
-// isRequestTimeout reports a request that ran out of time waiting for
+// IsRequestTimeout reports a request that ran out of time waiting for
 // OneDrive, or for the Microsoft sign-in its token comes from. The dial,
 // response-header and whole-request timeouts and an expired request deadline
 // carry context.DeadlineExceeded; a transfer the stall watchdog abandoned
@@ -176,10 +176,10 @@ func unansweredServerAnswer(err error) serverAnswer {
 // connection's keepalive found the server gone carry none of these
 // (isNetworkTimeout). An outcome commit or created-item record that outlasted
 // its bound carries context.DeadlineExceeded too, but it is no request:
-// errStoreAccessTimedOut marks it. Whether the run had ended is not asked
+// ErrStoreAccessTimedOut marks it. Whether the run had ended is not asked
 // here: classifyResult asks.
-func isRequestTimeout(err error) bool {
-	if errors.Is(err, errStoreAccessTimedOut) {
+func IsRequestTimeout(err error) bool {
+	if errors.Is(err, ErrStoreAccessTimedOut) {
 		return false
 	}
 
@@ -209,25 +209,25 @@ func isNetworkTimeout(err error) bool {
 	return errors.As(err, &opErr) && opErr.Timeout()
 }
 
-func classifyServerStatus(status int) serverAnswer {
+func classifyServerStatus(status int) ServerAnswer {
 	switch {
 	case status == http.StatusUnauthorized:
-		return serverAnswerUnauthorized
+		return ServerAnswerUnauthorized
 	case status == http.StatusForbidden:
-		return serverAnswerForbidden
+		return ServerAnswerForbidden
 	case status == http.StatusTooManyRequests:
-		return serverAnswerThrottled
+		return ServerAnswerThrottled
 	case status >= http.StatusInternalServerError:
-		return serverAnswerServiceOutage
+		return ServerAnswerServiceOutage
 	case status == http.StatusRequestTimeout:
-		return serverAnswerRequestTimeout
+		return ServerAnswerRequestTimeout
 	case status == http.StatusPreconditionFailed:
-		return serverAnswerTransientConflict
+		return ServerAnswerTransientConflict
 	case status == http.StatusNotFound:
-		return serverAnswerTransientNotFound
+		return ServerAnswerTransientNotFound
 	case status == http.StatusLocked:
-		return serverAnswerLocked
+		return ServerAnswerLocked
 	default:
-		return serverAnswerOther
+		return ServerAnswerOther
 	}
 }

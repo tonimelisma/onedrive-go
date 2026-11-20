@@ -49,7 +49,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before completion")
 
 	p := &watchPipeline{bl: bl}
-	err = rt.handleWatchActionCompletion(ctx, p, &actionCompletion{
+	err = rt.handleWatchActionCompletion(ctx, p, &ActionCompletion{
 		Path:       "sync.txt",
 		ItemID:     "sync-item",
 		DriveID:    driveID,
@@ -101,7 +101,7 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 		Path:    "after.txt",
 		DriveID: driveID,
 		ItemID:  "after-item",
-		View:    &pathView{Path: "after.txt"},
+		View:    &PathView{Path: "after.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, unlocked)
 
@@ -114,11 +114,11 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	require.NotNil(t, held)
 	rt.holdAction(held, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID, "publication drain should only enqueue dependents unlocked by publication success")
-	assert.Contains(t, rt.retries.heldByKey, retryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication drain")
+	assert.Contains(t, rt.retries.heldByKey, RetryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication drain")
 }
 
 // Validates: R-2.10.5, R-2.10.33
@@ -166,11 +166,11 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 		Path:    "after.txt",
 		DriveID: driveID,
 		ItemID:  "after-item",
-		View:    &pathView{Path: "after.txt"},
+		View:    &PathView{Path: "after.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID)
@@ -200,8 +200,8 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	require.NoError(t, err)
 
 	rt.initializeRuntimeState(&runtimePlan{})
-	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
-	rt.scopes.state.UpdateScope(&actionCompletion{
+	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state.UpdateScope(&ActionCompletion{
 		Path:       "service.txt",
 		ActionType: ActionUpload,
 		DriveID:    driveID,
@@ -218,7 +218,7 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.Contains(t, rt.scopes.state.windows, SKService(),
@@ -253,11 +253,11 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
-	work := retryWorkKeyForAction(&publication.Action)
+	work := RetryWorkKeyForAction(&publication.Action)
 	require.Contains(t, rt.retries.heldByKey, work)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, ctx)
@@ -336,7 +336,7 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*trackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*TrackedAction{publication})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, outbox)
@@ -353,9 +353,9 @@ func TestWatchRuntime_ASnapshotTakenBeforeShutdownIsStillCommitted(t *testing.T)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := rt.handleWatchLocalObservationBatch(ctx, &localObservation{
-		kind: localSnapshot,
-		findings: []skippedItem{{
+	err := rt.handleWatchLocalObservationBatch(ctx, &LocalObservation{
+		Kind: LocalSnapshot,
+		Findings: []SkippedItem{{
 			Path:   "bad?.txt",
 			Reason: IssueInvalidFilename,
 			Detail: "invalid filename",
@@ -382,7 +382,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 	concrete := rt.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
-		View: &pathView{Path: "retry.txt"},
+		View: &PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
 	rt.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))

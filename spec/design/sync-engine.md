@@ -90,9 +90,9 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | A failure that names a scope whose detection window is not crossed yet, and whose scope is not active, is persisted as timed retry work carrying the scope as evidence (`decisionAsScopeEvidence`), never blocked under a scope that does not exist; the activating failure alone is recorded blocked first. At startup, after empty scopes are discarded, blocked rows whose scope has no `block_scopes` row are made due (`ReleaseOrphanBlockedRetryWork`), which heals stores earlier builds left with such rows (R-2.10.33; live on 2026-11-03: one 507 below the quota window left two rows blocked across a restart). | `TestRunOnce_AQuotaRefusalBelowTheWindowIsTimedRetryWorkNotABlock`, `TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows`, `TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup` |
 | A one-shot sync whose pass left work under a pause OneDrive asked for (a drive throttle or the service scope still blocking, `earliestPauseTrialAt`; the pass counts the refused requests as failed and holds the rest, so the held work is counted from the blocked retry rows, `countWorkBlockedUnderPause`) waits for that scope's trial when it is within `oneShotScopeWaitLimit` (ten minutes) and passes again within the four-pass bound (`oneShotScopeWait`, through the `waitFn` seam: tests on a manual clock skip the wait unless they advance their clock in it); a longer pause is logged and left to the next sync (R-2.1.7). | `TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass`, `TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes` |
 | A one-shot sync whose pass gave up on an action as superseded (`applySupersededCompletion`, counted in `runResults.superseded` and reported as `Report.Superseded`) passes again within the pass bound even when nothing succeeded (`oneShotFollowUp`), since the next plan sees the fresh truth; a 412 on a folder move while a file inside changed online used to leave both for the next sync (R-2.1.7). | `TestRunOnce_ReplansASupersededMoveInTheSameRun` |
-| One page of the change list is fetched through `fetchDeltaPageWithRetry` (`retry.DeltaPagePolicy`, four attempts, 2 s doubling to 8 s on the observer's clock): a 5xx, a transport failure (a request that timed out among them, R-6.8.29) or a 429 with a Retry-After within `deltaPageRetryAfterLimit` (two minutes, waited as given) is tried again before `fetchPage` returns the error; other 4xx, an expired cursor and a longer Retry-After surface at once, and the loop stops only when its run has ended (`runEnded`). The sync client set dispatches once by design, which is right for actions the engine retries itself but made one 504 on page 2 of 32 fail a whole one-shot run (R-2.15.5). | `TestFullDelta_RetriesAServerErrorOnAPage`, `TestFullDelta_WaitsAShortRetryAfterOnAPage`, `TestFullDelta_ALongRetryAfterOnAPageIsLeftToTheCaller`, `TestFullDelta_AClientErrorOnAPageIsNotRetried`, `TestFullDelta_GivesUpAPageAfterItsAttempts`, `TestFullDelta_RetriesATimedOutPageUpToItsPolicy` |
+| One page of the change list is fetched through `fetchDeltaPageWithRetry` (`retry.DeltaPagePolicy`, four attempts, 2 s doubling to 8 s on the observer's clock): a 5xx, a transport failure (a request that timed out among them, R-6.8.29) or a 429 with a Retry-After within `deltaPageRetryAfterLimit` (two minutes, waited as given) is tried again before `fetchPage` returns the error; other 4xx, an expired cursor and a longer Retry-After surface at once, and the loop stops only when its run has ended (`RunEnded`). The sync client set dispatches once by design, which is right for actions the engine retries itself but made one 504 on page 2 of 32 fail a whole one-shot run (R-2.15.5). | `TestFullDelta_RetriesAServerErrorOnAPage`, `TestFullDelta_WaitsAShortRetryAfterOnAPage`, `TestFullDelta_ALongRetryAfterOnAPageIsLeftToTheCaller`, `TestFullDelta_AClientErrorOnAPageIsNotRetried`, `TestFullDelta_GivesUpAPageAfterItsAttempts`, `TestFullDelta_RetriesATimedOutPageUpToItsPolicy` |
 | The local permission probe makes a folder that can be listed but not written (mode 0555, an ACL) the boundary of a write denial into it (`isDirWritable`), so the directory gets one scope with a timed write trial instead of each file its own retry; a per-file denial is recorded with its condition, on the durable curve, and said once (R-2.10.13, R-2.10.71). | `TestPermHandler_HandleLocalPermission_UnwritableParentIsAWriteBoundary` |
-| The engine decides three things per issue type in switches that name every member (sync-domain.md), each held by a test that reads the members from source: the retry curve (`retryDelayForCondition`: a name collision and a folder too large to verify wait on the durable curve whatever their class, every other member keeps the reconcile curve or is made durable by `ClassActionable`, and a value outside the enum waits on the durable curve), the boundary scope permission evidence names (`scopeKeyForPermissionEvidence`: the two local permission denials, a read-only filesystem and a remote write denial; every other member and a non-member name none, which the store refuses for blocked work), and the wording a block scope starts with (`blockScopeActivationWording`: throttling, an outage, a full drive, a full disk and a read-only filesystem in their own words, every other condition in words after the scope). Whether a condition clears without the user is one switch over every condition key (`conditionClearsAutomatically`: throttling and an outage), which sets the block-scope line's level (Info, else Warn; `blockScopeActivationLine` derives it from the issue type's family) and keeps the watch condition summary below a warning (`watchConditionSummaryAddsActionable`); every condition key is labeled in user words by a switch over every key (`conditionLabelText`), and only a key outside the set is worded by its name. A failure kept as retry work with no condition is summarized under `transient_failure` (`noConditionSummaryGroup`), a log value and not an issue type (R-2.10.71, R-2.10.13, R-6.6.30, R-6.6.12). | `TestRetryDelayForCondition_EveryMemberIsDecided`, `TestScopeKeyForPermissionEvidence_EveryMemberIsDecided`, `TestBlockScopeActivationLine_EveryMemberIsDecided`, `TestBlockScopeActivationLine_AgreesWithTheFamilyVerdict`, `TestConditionClearsAutomatically_EveryKeyIsDecided`, `TestConditionLabel_EveryDeclaredKeyHasALabel`, `TestEngineFlow_LogFailureSummary_GroupsFailuresWithNoConditionApart` |
+| The engine decides three things per issue type in switches that name every member (sync-domain.md), each held by a test that reads the members from source: the retry curve (`retryDelayForCondition`: a name collision and a folder too large to verify wait on the durable curve whatever their class, every other member keeps the reconcile curve or is made durable by `ClassActionable`, and a value outside the enum waits on the durable curve), the boundary scope permission evidence names (`scopeKeyForPermissionEvidence`: the two local permission denials, a read-only filesystem and a remote write denial; every other member and a non-member name none, which the store refuses for blocked work), and the wording a block scope starts with (`blockScopeActivationWording`: throttling, an outage, a full drive, a full disk and a read-only filesystem in their own words, every other condition in words after the scope). Whether a condition clears without the user is one switch over every condition key (`ConditionClearsAutomatically`: throttling and an outage), which sets the block-scope line's level (Info, else Warn; `blockScopeActivationLine` derives it from the issue type's family) and keeps the watch condition summary below a warning (`watchConditionSummaryAddsActionable`); every condition key is labeled in user words by a switch over every key (`conditionLabelText`), and only a key outside the set is worded by its name. A failure kept as retry work with no condition is summarized under `transient_failure` (`noConditionSummaryGroup`), a log value and not an issue type (R-2.10.71, R-2.10.13, R-6.6.30, R-6.6.12). | `TestRetryDelayForCondition_EveryMemberIsDecided`, `TestScopeKeyForPermissionEvidence_EveryMemberIsDecided`, `TestBlockScopeActivationLine_EveryMemberIsDecided`, `TestBlockScopeActivationLine_AgreesWithTheFamilyVerdict`, `TestConditionClearsAutomatically_EveryKeyIsDecided`, `TestConditionLabel_EveryDeclaredKeyHasALabel`, `TestEngineFlow_LogFailureSummary_GroupsFailuresWithNoConditionApart` |
 | One-shot and watch share the same admission/runtime contract, while watch alone keeps the runtime alive for future timer release. | `TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue`, `TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly`, `TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial`, `TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjectableWithoutExternalObservation` |
 | After a throttle, re-admission ramps from a bounded batch released in held order, a further 429 re-blocks and restarts the ramp, admitted work a scope activation blocks is taken back from the watch and one-shot outboxes, and a one-shot pass that ends with such work still held reports it as left for the next sync (`Report.LeftForNextSync`, the planned work neither completed nor failed; the summary counts it as "will be retried"), the scope row is deleted with its last blocked rows, and the 429s an episode costs stay bounded by the transfers in flight (R-6.8.24). | `TestRunOnce_ThrottledBacklogRampsInsteadOfFlooding`, `TestNextReleaseAllowance_RampsFromTheWorkerCountAndDoubles`, `TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation`, `TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndResetsTheRamp`, `TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks`, `TestOneShotRunner_ScopeActivationRetiresPendingOutbox`, `TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows`, `TestSyncStore_ReleaseScopeWork_EmptyBatchRemovesAScopeWithoutBlockedWork`, `TestSlowStartThresholdAfterThrottle_RemembersHalfTheBatchThatDrewThe429`, `TestSyncStore_BlockScope_Roundtrip`, `TestEngineFlow_ReleaseScopeBatch_ReportsThroughRuntimeSignals` |
 | A released ramp batch's members are admitted at distinct instants spread over a one-second window on the engine clock, the trial at the Retry-After deadline is not jittered, the watch loop wakes for a parked member by its admit timer and a one-shot pass waits for its parked members in-loop and still completes (R-6.8.24). | `TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow`, `TestReleaseJitter_OneShotBatchUnderReverseDispatch`, `TestWatchRuntime_ParkedBatchMembersWaitForTheirAdmitInstant` |
@@ -109,8 +109,8 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | The model test's operations cover the shapes that found most sync bugs (D-096): beyond create, edit, delete, move, mkdir and type change, a remote swap, a remote delete and re-create at the same path, the same rename on both sides, divergent renames, a local move with a remote edit and the reverse, a hard link, a move then re-create, a folder rebuilt with new inodes, case-only renames (on a case-sensitive filesystem), cross-side case-variant creates, percent and plus names, and wiping a side, whose first pass must hold the deletes (D-002). The model plays the user who renames a name collision the engine reports, and advances the engine clock past retry backoff between passes. The model test, its replay, chaos and crash variants, the planner model and the reconcile matrix are the exhaustive tier: skipped under `go test -short` (the per-PR lane), run by `verify default`, `verify public` and nightly CI; the named TestRunOnce_ scenarios they generalize stay in the short lane. | `TestRunOnce_RandomizedBidirectionalEditsConverge` |
 | A process killed at a commit boundary recovers (D-091): crash points after OneDrive moved an item, after a local rename, after a new file's empty item exists but before its record (only the intent knows it is ours), after an upload reached OneDrive, after a download was renamed into place, after a local delete moved the file into the trash under a still-pending entry, after OneDrive deleted an item, after a replacing local move took the file at its destination into the trash and before it renamed, and before an observation window or an action outcome commits (`crash_points.go`; `crashAt` hooks on the executor configuration and the store, nil in production). A fresh engine on a snapshot taken at each point (committed database, local tree with its file identities, OneDrive as it is) converges with nothing lost, and so does one whose database lost every commit since the last checkpoint. At the replacing move's point a test of its own also holds the state the crash leaves: with the database as committed, the next plan finishes the move, deletes nothing on OneDrive and keeps the displaced file in the trash once (`TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove`). At the two delete boundaries the file deleted on OneDrive is in the local trash exactly once and restores, the file deleted locally is deleted on OneDrive exactly once and neither re-uploaded nor downloaded again, and both baseline rows are gone. The model test also crashes every batch of a few seeds at a seeded point and continues on the recovered engine. The per-crash-point test runs in every lane; the seeded model variant is exhaustive and skipped under `-short`. | `TestCrashRecovery_EveryCrashPointConverges`, `TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry`, `TestModel_CrashAtSeededPointsRecovers` |
 | Executor live preconditions use the same superseded completion path as worker-start and admission stale-work checks. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition` |
-| Shutdown is a fact about the run, never the shape of an error (R-6.8.29). The worker records on each completion whether the context it was started under had ended when the action returned (`actionCompletion.RunEnded`, through `runEnded`; the publication drain sets it from the run's context for the completions it builds), and the classifier reads that field and no context: a completion is a shutdown only when its run had ended and its error is the cancellation's own echo (`isCancellationEcho`); a separate failure that landed during the stop keeps its class. With the run going on, a request that timed out (`isRequestTimeout`: a transport timeout carries `context.DeadlineExceeded` or says it timed out; a transfer the stall watchdog abandoned carries `graph.ErrTransferStalled`) is retry work with `request_timeout` and outage evidence (the next row), so its dependents wait for its retry instead of being dropped and a one-shot run counts it as left work it will retry; a cancel with a live run is retried too and said at Warn with the action's path and kind (`isLiveRunCancel`), since no cancel the engine makes reaches an action while its run goes on (`errActionReturned`, `errWorkerPoolStopped`, `errOneShotPassFailed`, `errOneShotPassEnded`, each a `cancelCauseError`, which answers to `context.Canceled`: a request that carries one in place of `context.Canceled` still reads as canceled, so what a cancel interrupts once its run has ended is a shutdown). Only `isCancellationEcho`, `isRequestTimeout`, `isLiveRunCancel` and `cancelCauseError.Is` read the two context errors off an error, and only `isWatchShutdownError`, `classifyResult`, `logSuppressedShutdownCompletionError` and `withTimerPanic` call `isCancellationEcho`, each where its run has ended; a source-reading test holds both lists by file and function for the engine and the watch control plane. | `TestClassifyResult_TransportTimeoutIsARequestTimeoutUntilTheRunEnds`, `TestClassifyResult_SuccessAndShutdown`, `TestRunEnded_AsksTheRunNotTheError`, `TestRunOnce_TimedOutRequestIsKeptForRetryAndLeftWork`, `TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns`, `TestRunOnce_ACancelWhileTheRunGoesOnIsRetriedAndSaid`, `TestContextErrorChecks_OnlyNamedReadersReadTheShape`, `TestContextErrorChecks_FindsEachFormInItsFunction`, `TestClassifyResult_StalledTransferIsRetryableNotShutdown`, `TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown`, `TestCancelCauses_AnswerToCanceledAndNameTheirCancel`, `TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation`, `TestContextErrorChecks_RefusesAnUnnamedSite`, `TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain` |
-| A request OneDrive never answered while its run goes on is outage evidence as a 5xx is (R-2.10.3): the server-answer table reads it as `serverAnswerServiceOutage` (`classifyServerAnswer`: no status and `isRequestTimeout`, which also takes a TLS handshake timeout and a read whose connection's keepalive found the server gone, network errors that say they timed out, an answer whose body brought nothing for the stall window (`graph.ErrResponseStalled`), a request or a body read on an HTTP/2 connection closed because its ping went unanswered (`graph.ErrConnectionLost`: graph types the library's untyped failure, and sync reads only the type), and a token Microsoft sign-in never answered for, without which no request reaches OneDrive), so the request-timeout branch of `classifyResult` takes its evidence from `deriveScopeKey`, the function a 504 uses: `SKService`, counted in the service window (five paths in 30 s), and a trial that times out keeps the scope as a trial a 504 answers does. Its own issue stays `request_timeout`. The outage is then said as a 5xx outage is: one activation line, one `service_outage` condition in status, one line in the watch condition log. Only the service's silence counts: a timeout the end of the run landed on is a shutdown, any other timeout that lands once the run has ended is retry work with no evidence, a cancel of the run or of something narrower is no evidence, a read of the local file an upload sends that timed out is the disk's failure (a chain that holds `*fs.PathError` is no network timeout), and an outcome commit or created-item record that outlasted its bound carries `errStoreAccessTimedOut`, which `isRequestTimeout` refuses and the shutdown test does not take for the stop's echo, so it is classified as any failed store access is (actionable), and a stopping run that cannot write that failure down says it could not record the result. | `TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504`, `TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope`, `TestRunOnce_OneTimedOutRequestOpensNoOutageScope`, `TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile`, `TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope`, `TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence`, `TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure`, `TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure`, `TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid` |
+| Shutdown is a fact about the run, never the shape of an error (R-6.8.29). The worker records on each completion whether the context it was started under had ended when the action returned (`ActionCompletion.RunEnded`, through `RunEnded`; the publication drain sets it from the run's context for the completions it builds), and the classifier reads that field and no context: a completion is a shutdown only when its run had ended and its error is the cancellation's own echo (`IsCancellationEcho`); a separate failure that landed during the stop keeps its class. With the run going on, a request that timed out (`IsRequestTimeout`: a transport timeout carries `context.DeadlineExceeded` or says it timed out; a transfer the stall watchdog abandoned carries `graph.ErrTransferStalled`) is retry work with `request_timeout` and outage evidence (the next row), so its dependents wait for its retry instead of being dropped and a one-shot run counts it as left work it will retry; a cancel with a live run is retried too and said at Warn with the action's path and kind (`isLiveRunCancel`), since no cancel the engine makes reaches an action while its run goes on (`ErrActionReturned`, `ErrWorkerPoolStopped`, `ErrOneShotPassFailed`, `ErrOneShotPassEnded`, each a `cancelCauseError`, which answers to `context.Canceled`: a request that carries one in place of `context.Canceled` still reads as canceled, so what a cancel interrupts once its run has ended is a shutdown). Only `IsCancellationEcho`, `IsRequestTimeout`, `isLiveRunCancel` and `cancelCauseError.Is` read the two context errors off an error, and only `isWatchShutdownError`, `classifyResult`, `logSuppressedShutdownCompletionError` and `withTimerPanic` call `IsCancellationEcho`, each where its run has ended; a source-reading test holds both lists by file and function for the engine and the watch control plane. | `TestClassifyResult_TransportTimeoutIsARequestTimeoutUntilTheRunEnds`, `TestClassifyResult_SuccessAndShutdown`, `TestRunEnded_AsksTheRunNotTheError`, `TestRunOnce_TimedOutRequestIsKeptForRetryAndLeftWork`, `TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns`, `TestRunOnce_ACancelWhileTheRunGoesOnIsRetriedAndSaid`, `TestContextErrorChecks_OnlyNamedReadersReadTheShape`, `TestContextErrorChecks_FindsEachFormInItsFunction`, `TestClassifyResult_StalledTransferIsRetryableNotShutdown`, `TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown`, `TestCancelCauses_AnswerToCanceledAndNameTheirCancel`, `TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation`, `TestContextErrorChecks_RefusesAnUnnamedSite`, `TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain` |
+| A request OneDrive never answered while its run goes on is outage evidence as a 5xx is (R-2.10.3): the server-answer table reads it as `ServerAnswerServiceOutage` (`classifyServerAnswer`: no status and `IsRequestTimeout`, which also takes a TLS handshake timeout and a read whose connection's keepalive found the server gone, network errors that say they timed out, an answer whose body brought nothing for the stall window (`graph.ErrResponseStalled`), a request or a body read on an HTTP/2 connection closed because its ping went unanswered (`graph.ErrConnectionLost`: graph types the library's untyped failure, and sync reads only the type), and a token Microsoft sign-in never answered for, without which no request reaches OneDrive), so the request-timeout branch of `classifyResult` takes its evidence from `deriveScopeKey`, the function a 504 uses: `SKService`, counted in the service window (five paths in 30 s), and a trial that times out keeps the scope as a trial a 504 answers does. Its own issue stays `request_timeout`. The outage is then said as a 5xx outage is: one activation line, one `service_outage` condition in status, one line in the watch condition log. Only the service's silence counts: a timeout the end of the run landed on is a shutdown, any other timeout that lands once the run has ended is retry work with no evidence, a cancel of the run or of something narrower is no evidence, a read of the local file an upload sends that timed out is the disk's failure (a chain that holds `*fs.PathError` is no network timeout), and an outcome commit or created-item record that outlasted its bound carries `ErrStoreAccessTimedOut`, which `IsRequestTimeout` refuses and the shutdown test does not take for the stop's echo, so it is classified as any failed store access is (actionable), and a stopping run that cannot write that failure down says it could not record the result. | `TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504`, `TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope`, `TestRunOnce_OneTimedOutRequestOpensNoOutageScope`, `TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile`, `TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope`, `TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence`, `TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure`, `TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure`, `TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid` |
 | A stale precondition is classified before any server answer its error chain also carries (only shutdown, a request that timed out, a durable name collision and a cancel with a live run come first), so a create's 409 resolved as stale, a conditional overwrite's 412 or any other status is superseded and replanned in the same run, not held as retry work; and a superseded completion never reaches the permission probes. Classified by its 409 first, a stale create waited on the durable curve, and a stale 412 was recorded as `transient_conflict` (R-2.8.7, R-5.6.2). | `TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries`, `TestEngineFlow_ProcessNormalDecision_StaleCompletionIsNeverProbedForPermissions`, `TestRunOnce_OverwriteRefusedWithA412IsReplannedInTheSameRun`, `TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt` |
 | Watch runtime and admission record aggregate stale-work perf counters without exposing paths or IDs. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters` |
 | Watch shutdown enters drain before accepting cancellation-closed intake channels as terminal, and non-canceled scheduler closure is fatal instead of a clean stop, so retry and trial timers stop at the observable shutdown boundary. | `TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase`, `TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
@@ -135,7 +135,7 @@ removed shared folder that cannot be read reconciles the same batch empty.
 ## The Engine Clock Is One Capability
 
 Every time-dependent decision in the runtime -- `Now`, delayed callbacks,
-tickers, sleeps, and retry jitter -- goes through a single `syncClock` value on
+tickers, sleeps, and retry jitter -- goes through a single `SyncClock` value on
 the engine. The local and remote observers the engine builds run on its real
 clock (`wallClock`, which is that value unless a test replaced it) for their
 safety-scan ticks, retry sleeps, and write-coalesce timers. A pass's full local
@@ -367,7 +367,7 @@ apart stops a debug-only read from re-introducing the production coupling.
 6. reconcile durable retry/blocker state to that actionable set, and drop
    the create intents no create will claim: expired ones, and, since this
    pass observed OneDrive before the local tree
-   (`passObservedRemoteThenLocal`), those whose file the scan found gone
+   (`PassObservedRemoteThenLocal`), those whose file the scan found gone
    ([sync-store.md](sync-store.md), Pending creates)
 7. commit any ready publication-only actions directly through the store and
    drain publication-only dependents before worker dispatch
@@ -383,7 +383,7 @@ one-shot run are durable state for a later run.
 Planning moves is conservative by design (sync-planning.md, Follow-Up Work):
 a plan that moves, re-keys or conflict-copies items, or defers or drops work
 until those have happened, leaves ready work for the pass after it, and says
-so in `actionPlan.FollowUp`. Watch mode always has a next pass; a one-shot
+so in `ActionPlan.FollowUp`. Watch mode always has a next pass; a one-shot
 sync used to stop after the first and report success with that work left
 (a local edit inside a folder renamed online stayed unuploaded until the next
 `sync`). `RunOnce` therefore runs passes until one leaves nothing for the
@@ -567,7 +567,7 @@ When the run ends, `RunOnce` adds two things to the report beside the
 last pass's own counts:
 
 - the follow-up work of the plan the last pass ran
-  (`planFollowUp.leftWhenTheRunEnds`) goes into `LeftForNextSync`. Deferred
+  (`PlanFollowUp.LeftWhenTheRunEnds`) goes into `LeftForNextSync`. Deferred
   and dropped work is in no action list, so nothing else counts it; only its
   `Unfinished` part counts, the deferred and dropped work the run's sync mode
   runs, because work a one-way mode holds back is not left (R-6.6.19).
@@ -579,7 +579,7 @@ last pass's own counts:
 - `Report.UnsyncedIssues` (`readIssuesTheRunLeft`), the observation issues
   that keep a file unsynced, read after the housekeeping from the snapshot
   `status` reads (`ReadDriveStatusSnapshot`) and counted by
-  `DriveStatusSnapshot.unsyncedIssueCount` with `status`'s own filter
+  `DriveStatusSnapshot.UnsyncedIssueCount` with `status`'s own filter
   (sync-store.md, Unresolved work), and beside it `Report.InterruptedRemovals`,
   the files an interrupted removal set aside, which are not work left but
   keep a local tree from being removed
@@ -694,7 +694,7 @@ one that fails the same way every time cannot re-enumerate the drive in a hot
 loop (`TestWatch_RepeatedlyFailingRecoveryBacksOff`). One-shot runs never
 reset a token on sustained 5xx; only watch mode measures that.
 
-The 410's inner code (`newDeltaExpiredError`) decides what a confirmed orphan
+The 410's inner code (`NewDeltaExpiredError`) decides what a confirmed orphan
 means:
 
 - `resyncChangesApplyDifferences`: OneDrive's view is current, an orphan was
@@ -753,7 +753,7 @@ bootstrap/running/drain phase, outbox, dispatch admission, held-work timing,
 refresh coordination, and drain behavior. Remote observation commits now
 follow the same single-owner rule:
 watch observers and full-refresh goroutines emit one loop-applied
-`remoteObservationBatch` value, and the loop itself owns projected remote
+`RemoteObservationBatch` value, and the loop itself owns projected remote
 observation commits, cursor commits, observation-finding reconciliation, dirty
 marking, and refresh-timer re-arm.
 Observer lifecycle follows that same runtime-owned model. `startObservers`
@@ -815,7 +815,7 @@ which signal channel is authoritative.
 The full scan a replan runs is local truth. What a watch observes updates the
 rows in its scope and wakes the replan: the local observer re-observes the
 affected file, directory, or safety-scan snapshot and sends a
-`localObservation`, the only output it has; the watch loop applies it to
+`LocalObservation`, the only output it has; the watch loop applies it to
 `local_state`/`observation_state` before marking the dirty scheduler. Remote
 delta batches and full remote refresh results similarly arrive as loop-applied
 durable observation batches. Websocket wakes remain scheduler hints only. After
@@ -830,7 +830,7 @@ watch-owned frontier helpers. DirtyBuffer emits only a coarse
 dirty/full-refresh scheduler signal, and that signal feeds only this
 steady-state replan path; it does not define a second planning model.
 
-A steady-state replan observed the local tree only (`passRefreshedLocalOnly`),
+A steady-state replan observed the local tree only (`PassRefreshedLocalOnly`),
 so its runtime-state step drops expired create intents but no fresh intent
 whose file is gone. A create whose answer was lost may have landed without a
 change batch showing it yet; the fresh intent stays for the batch that does,
@@ -849,7 +849,7 @@ read-denied issue type it clears, so it needs no poll-only batch.
 Once such a batch is applied, an intent at a path whose last attempt ended
 before the poll began, with no create in flight there, is judged as after a
 pass that observed OneDrive first and is dropped when its file is gone
-(`dropGoneCreateIntentsAt`); a path whose intent stays (its file is still
+(`DropGoneCreateIntentsAt`); a path whose intent stays (its file is still
 there) is judged again after the next poll. The store is touched only when
 such a path exists. An intent of an earlier process waits for the next
 start, whose bootstrap observes OneDrive first, or until it expires
@@ -896,7 +896,7 @@ retired instead of appended to the old outbox. Once running work settles, the
 loop rebuilds from current committed truth plus durable `retry_work` /
 `block_scopes`. If local observation fails before that replacement runtime is
 installed, the retired work stays retired and the same dirty/full-refresh intent
-is rescheduled through `dirtyBuffer` instead of being dropped. The same
+is rescheduled through `DirtyBuffer` instead of being dropped. The same
 reschedule rule applies when an idle runtime consumes a ready dirty signal
 directly and local observation fails before a replacement runtime is installed.
 The idle watch-step owner still receives debounced coarse dirty hints directly;
@@ -904,7 +904,7 @@ an empty outbox does not mean steady-state replans can be deferred until some
 other watch event arrives.
 
 Watch replans on observed changes, but the work a plan leaves for the next
-pass (`actionPlan.FollowUp`) often follows from the engine's own commits, which
+pass (`ActionPlan.FollowUp`) often follows from the engine's own commits, which
 nothing observes: a baseline re-key whose OneDrive edit is downloaded next
 pass, a move made on OneDrive, a bootstrap rename made before the observers
 started. The loop therefore records the installed plan's follow-up
@@ -930,7 +930,7 @@ The engine holds dependency-ready exact work in memory, keyed by exact
 `RetryWorkKey` and grouped by `ScopeKey` for blocked scopes. Timer ticks do
 not rebuild subset plans, do not compute dependency closure, and do not
 revalidate stale rows. Stale-row cleanup belongs only to normal
-current-plan build/runtime-state reconcile. Dependency tracking stays inside `depGraph`, but runtime
+current-plan build/runtime-state reconcile. Dependency tracking stays inside `DepGraph`, but runtime
 completion does not: the engine owns quiescence and no longer waits on a
 graph-owned completion signal.
 
@@ -991,7 +991,7 @@ opposite source/destination peer needed for the mutation.
 Watch replan failure policy is also explicit. Pre-authority local observation
 failure is recoverable and reports that no replacement runtime was applied; the
 pending-replan and direct-idle callers reschedule the same dirty/full-refresh
-intent through `dirtyBuffer` rather than restoring retired work or dropping the
+intent through `DirtyBuffer` rather than restoring retired work or dropping the
 trigger. Once the engine starts depending on authoritative current-truth writes
 or runtime state, failure is fatal to the current watch session: remote
 observation apply, observation findings reconciliation, local snapshot commit,
@@ -1010,7 +1010,7 @@ ended (`noteRunCancel`), or from the moment the run first sees a stop no
 cancel caused, so a store wait the run's goroutine was in when the cancel
 landed leaves the drain what remains of the bound instead of adding one. A
 detached store access nested in the drain, such as a success's retry-work
-clear, keeps that bound instead of starting its own (`detachedStoreContext`).
+clear, keeps that bound instead of starting its own (`DetachedStoreContext`).
 A record that fails for another reason is logged; the loop keeps draining the
 already-owned completion sources and returns clean shutdown rather than
 converting cancellation timing into a fatal watch error. A record the bound
@@ -1172,7 +1172,7 @@ folder deleted on OneDrive and nothing else:
   is committed and the store checkpointed, then their entries are removed,
   and an entry the delete refused gets its row back, without its stored
   change time when the delete's content check proved the file changed
-  (`localContentChangedError`), so the next scan reads that file instead of
+  (`LocalContentChangedError`), so the next scan reads that file instead of
   trusting the row and uploads the change
   (`TestRunOnce_AReleaseRefusedForAnUnseenChangeUploadsItOnTheNextDrain`). A
   crash or a lost write-ahead log can then leave an entry without its row,
@@ -1202,7 +1202,7 @@ folder deleted on OneDrive and nothing else:
   so a refusal that persists makes no download and no trash move on any later
   drain (`TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook`).
   Each refusal carries its cause (`releaseRefusal`): one the delete's content
-  check proved (`localContentChangedError`) is work left for the next drain,
+  check proved (`LocalContentChangedError`) is work left for the next drain,
   which uploads the change; any other (the trash took nothing, the file is
   immutable, a folder would not go) is an entry the release could not remove,
   which no drain cures by itself;
@@ -1339,7 +1339,7 @@ each delivers the panic through the error path it already had:
   in order: the close frame first, so the server sees a normal closure, then
   the reader's cancel and a wait for the reader, so no reader outlives its
   connection (`TestSocketIOWakeSource_ConnectionClosesNormallyAndLeavesNoReader`).
-- The debounce loop (`dirtyBuffer.debounceLoop`) ends like any early exit:
+- The debounce loop (`DirtyBuffer.debounceLoop`) ends like any early exit:
   its batch channel closes outside shutdown, and the loop fails the mount
   ("dirty scheduler stopped unexpectedly")
   (`TestDirtyBuffer_DebounceLoopPanicClosesTheBatchChannel`).
@@ -1350,7 +1350,7 @@ each delivers the panic through the error path it already had:
   (`TestHashPhase_PanicRecovery`).
 - A timer callback runs on a goroutine of its own, on the engine's one real
   clock (`wallClock`, built in `newEngine` and handed to every observer the
-  engine builds), whose boundary (`realClock.recoverTimerPanic`) logs the
+  engine builds), whose boundary (`RealClock.RecoverTimerPanic`) logs the
   panic and cancels the run that `RunOnce` or `RunWatch` bound (`beginRun`)
   without a cause, so the actions in flight end as at a stop and the next run
   redoes them, while the run returns the panic's error and a panic with no run
@@ -1412,7 +1412,7 @@ The engine classifies results into:
 
 ### Runtime admission model
 
-`depGraph` remains dependency-only. The engine still performs final scope
+`DepGraph` remains dependency-only. The engine still performs final scope
 admission after dependency readiness:
 
 - build the graph from current actions
@@ -1568,7 +1568,7 @@ the same expression that detaches it:
 | the WAL checkpoint in `SyncStore.Close` | `store.go` | `StoreCloseCheckpointTimeout` (10 s) |
 
 An access detached inside a context that is already detached
-(`detachedStoreContext`) keeps the outer bound instead of starting its own
+(`DetachedStoreContext`) keeps the outer bound instead of starting its own
 (`TestRunDetachedStoreAccess_ANestedAccessKeepsTheOuterBound`), so the
 records of a stop, a success's retry-work clear among them, add up to one
 bound.
@@ -1586,8 +1586,8 @@ code that is not the first argument of `context.WithTimeout`,
 `context.WithDeadline` or their `Cause` forms (R-6.3.9).
 
 The commit of an outcome and the record of a created item fail the action
-they belong to, so both run through `runDetachedStoreAccess`: its bound
-expires with the cause `errStoreAccessTimedOut`, which it joins after the
+they belong to, so both run through `RunDetachedStoreAccess`: its bound
+expires with the cause `ErrStoreAccessTimedOut`, which it joins after the
 store's error, since `database/sql` returns the context's error and not its
 cause; joined last, its sentence is the reason the console prints. An
 expired bound is then a store failure, classified as any failed commit is,
@@ -1670,7 +1670,7 @@ runtime state:
 - held retry release emits exact held actions whose `next_retry_at` is due
 - held trial release emits one deterministic held blocked candidate for each
   due scope
-- neither held-release path rebuilds an `actionPlan`, refreshes current
+- neither held-release path rebuilds an `ActionPlan`, refreshes current
   truth, or walks a second dependency closure
 
 Scope lifecycle is owned only by `block_scopes` plus blocked/unblocked
@@ -1708,7 +1708,7 @@ minutes against one announced activation. Two rules fix both halves:
   held entries of the scope in held order (the transfer worker count, at
   least `releaseRampMinimumBatch`), the store marks exactly those rows ready
   (`ReleaseScopeWork`), and the scope stays in the ledger with that allowance
-  (`activeScope.ReleaseAllowance`) and a trial re-armed one interval out, so
+  (`ActiveScope.ReleaseAllowance`) and a trial re-armed one interval out, so
   a probation that stalls (every member superseded, a replan rebuilt the
   runtime) recovers by an ordinary trial. The batch's members are dispatched
   as trials of the scope, which is what lets admission pass them while the
@@ -1805,7 +1805,7 @@ Two follow-ups measured on the same live account after the ramp landed.
   reach a worker and do not count. Both loops and the reverse-dispatch test
   order go through the same picker.
 - **A released batch is spread over a window** (R-6.8.24). `releaseScopeBatch`
-  gives each member an admission instant, `trackedAction.AdmitAt`, uniformly
+  gives each member an admission instant, `TrackedAction.AdmitAt`, uniformly
   within `releaseBatchAdmissionWindow` (1 s) of the release through the
   engine clock's `Jitter`, so a batch of 32 does not reach the drive as one
   spike and tests stay deterministic on the manual clock. The trial itself,
@@ -1857,7 +1857,7 @@ reports each fact once (R-6.6.21, R-6.6.22, R-6.6.30):
 - A persistent condition is reported when it starts or changes: skipped
   files only when newly found (diffed against the persisted observation
   issues), block scopes once on activation (throttling and outages at Info),
-  poll failures once per outage via `pollOutageLog` with an Info on recovery,
+  poll failures once per outage via `PollOutageLog` with an Info on recovery,
   socket.io retries once at Info, the watch condition summary only when a new
   kind of condition appears (a moved count at Debug, and an unchanged
   breakdown not at all, `TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges`;

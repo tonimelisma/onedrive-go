@@ -14,11 +14,11 @@ func TestActionCompletion_ThrottleTargetKey(t *testing.T) {
 
 	driveID := driveid.New("0000000000000001")
 
-	assert.Empty(t, (*actionCompletion)(nil).ThrottleTargetKey())
+	assert.Empty(t, (*ActionCompletion)(nil).ThrottleTargetKey())
 
-	assert.Equal(t, throttleDriveParam(driveID), (&actionCompletion{
+	assert.Equal(t, throttleDriveParam(driveID), (&ActionCompletion{
 		DriveID: driveID,
 	}).ThrottleTargetKey())
 
-	assert.Empty(t, (&actionCompletion{}).ThrottleTargetKey())
+	assert.Empty(t, (&ActionCompletion{}).ThrottleTargetKey())
 }

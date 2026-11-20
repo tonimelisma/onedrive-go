@@ -211,7 +211,7 @@ func TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook(t *testing
 			var trashed atomic.Int32
 			trashDir := drain.eng.trash.Dir()
 			drain.eng.execCfg.crashAt = func(point string) error {
-				if point == crashPointLocalDeleteTrashed && trashed.Add(1) == tc.trashFailsAfter {
+				if point == CrashPointLocalDeleteTrashed && trashed.Add(1) == tc.trashFailsAfter {
 					return os.Chmod(trashDir, 0o500) //nolint:gosec // the test makes the trash refuse new entries
 				}
 				return nil
@@ -417,7 +417,7 @@ func TestReleaseLocalTree_ARestoreThatFailsStillPutsBackTheRestOfTheBatch(t *tes
 	eng.baseline.crashAt = func(point string) error {
 		// The five rows are forgotten first; the next commit restores the
 		// refused Docs/a.txt (Docs/sub/b.txt left before it).
-		if point == crashPointCommitOutcome && commits.Add(1) == releaseSyncedRows+1 {
+		if point == CrashPointCommitOutcome && commits.Add(1) == releaseSyncedRows+1 {
 			return errRestore
 		}
 		return nil

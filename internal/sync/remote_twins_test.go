@@ -22,7 +22,7 @@ func twinIssuePaths(t *testing.T, mgr *SyncStore) []string {
 	require.NoError(t, err)
 	var paths []string
 	for i := range issues {
-		if issues[i].IssueType == issueRemoteNameTwin {
+		if issues[i].IssueType == IssueRemoteNameTwin {
 			paths = append(paths, issues[i].Path)
 		}
 	}
@@ -37,9 +37,9 @@ func TestCommitObservation_RemoteTwinsInOneBatchDoNotFailTheCommit(t *testing.T)
 	driveID := driveid.New(testDriveID)
 	for _, order := range [][]string{{"composed", "decomposed"}, {"decomposed", "composed"}} {
 		mgr := newTestStore(t)
-		items := make([]observedItem, 0, len(order))
+		items := make([]ObservedItem, 0, len(order))
 		for _, id := range order {
-			items = append(items, observedItem{DriveID: driveID, ItemID: id, Path: remoteTwinPath, ItemType: ItemTypeFile, Hash: "h-" + id, Size: 1})
+			items = append(items, ObservedItem{DriveID: driveID, ItemID: id, Path: remoteTwinPath, ItemType: ItemTypeFile, Hash: "h-" + id, Size: 1})
 		}
 
 		// Before: "UNIQUE constraint failed: remote_state.path" failed the
@@ -62,11 +62,11 @@ func TestCommitObservation_RemoteTwinAcrossBatchesKeepsTheBaselinedHolder(t *tes
 
 	mgr := newTestStore(t)
 	driveID := driveid.New(testDriveID)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		{DriveID: driveID, ItemID: "synced", Path: remoteTwinPath, ItemType: ItemTypeFile, Hash: "h1", Size: 1},
 	}, "t1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		{DriveID: driveID, ItemID: "newcomer", Path: remoteTwinPath, ItemType: ItemTypeFile, Hash: "h2", Size: 1},
 	}, "t2", driveID))
 
@@ -82,7 +82,7 @@ func TestCommitObservation_RemoteTwinFolderKeepsItsSubtreeApart(t *testing.T) {
 	mgr := newTestStore(t)
 	driveID := driveid.New(testDriveID)
 	folder := "ά"
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		{DriveID: driveID, ItemID: "oxia", Path: folder, ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "tonos", Path: folder, ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "kid-a", ParentID: "oxia", Path: folder + "/same.txt", ItemType: ItemTypeFile, Hash: "a", Size: 1},
@@ -94,7 +94,7 @@ func TestCommitObservation_RemoteTwinFolderKeepsItsSubtreeApart(t *testing.T) {
 		"the twin's child lives under the twin, not next to the holder's child")
 
 	// Deleting the holder folder promotes the twin with its subtree intact.
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		{DriveID: driveID, ItemID: "oxia", Path: folder, ItemType: ItemTypeFolder, IsDeleted: true},
 	}, "t2", driveID))
 
@@ -112,7 +112,7 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 	twins := func(t *testing.T) *SyncStore {
 		t.Helper()
 		mgr := newTestStore(t)
-		require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 			{DriveID: driveID, ItemID: "a", Path: remoteTwinPath, ItemType: ItemTypeFile, Hash: "ha", Size: 1},
 			{DriveID: driveID, ItemID: "b", Path: remoteTwinPath, ItemType: ItemTypeFile, Hash: "hb", Size: 1},
 		}, "t1", driveID))
@@ -122,7 +122,7 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 	t.Run("holder deleted", func(t *testing.T) {
 		t.Parallel()
 		mgr := twins(t)
-		require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 			{DriveID: driveID, ItemID: "a", Path: remoteTwinPath, ItemType: ItemTypeFile, IsDeleted: true},
 		}, "t2", driveID))
 		assert.Equal(t, remoteTwinPath, readRemoteStateRow(t, mgr.rawDB(), "b").Path)
@@ -132,7 +132,7 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 	t.Run("twin deleted", func(t *testing.T) {
 		t.Parallel()
 		mgr := twins(t)
-		require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 			{DriveID: driveID, ItemID: "b", Path: remoteTwinPath, ItemType: ItemTypeFile, IsDeleted: true},
 		}, "t2", driveID))
 		assert.Equal(t, remoteTwinPath, readRemoteStateRow(t, mgr.rawDB(), "a").Path)
@@ -146,7 +146,7 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 		t.Run(renamed.name, func(t *testing.T) {
 			t.Parallel()
 			mgr := twins(t)
-			require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+			require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 				{DriveID: driveID, ItemID: renamed.moved, Path: "renamed.txt", ItemType: ItemTypeFile, Hash: "h" + renamed.moved, Size: 1},
 			}, "t2", driveID))
 			assert.Equal(t, "renamed.txt", readRemoteStateRow(t, mgr.rawDB(), renamed.moved).Path)
@@ -173,7 +173,7 @@ func TestRunOnce_RemoteTwinsAreHeldAndTheDriveKeepsSyncing(t *testing.T) {
 
 	assert.FileExists(t, filepath.Join(syncRoot, "other.txt"), "one remote fact must not stop the drive")
 	assert.NoFileExists(t, filepath.Join(syncRoot, remoteTwinPath), "neither twin syncs")
-	requireScenarioIssue(t, eng, remoteTwinPath, issueRemoteNameTwin)
+	requireScenarioIssue(t, eng, remoteTwinPath, IssueRemoteNameTwin)
 
 	// Deleting one twin on OneDrive lets the survivor sync.
 	remote.mu.Lock()
@@ -207,5 +207,5 @@ func TestRunOnce_RemoteTwinOfASyncedFileKeepsTheLocalFile(t *testing.T) {
 	require.NoError(t, err, "a twin being held must never delete the synced file")
 	assert.Equal(t, "synced\n", string(data))
 	assert.Empty(t, remote.deletes)
-	requireScenarioIssue(t, eng, remoteTwinPath, issueRemoteNameTwin)
+	requireScenarioIssue(t, eng, remoteTwinPath, IssueRemoteNameTwin)
 }

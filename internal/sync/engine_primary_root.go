@@ -5,55 +5,55 @@ import (
 	"errors"
 )
 
-func (batch *remoteObservationBatch) hasObservationFindings() bool {
+func (batch *RemoteObservationBatch) HasObservationFindings() bool {
 	if batch == nil {
 		return false
 	}
 
-	return len(batch.findings.Issues) > 0 ||
-		len(batch.findings.ManagedIssueTypes) > 0
+	return len(batch.Findings.Issues) > 0 ||
+		len(batch.Findings.ManagedIssueTypes) > 0
 }
 
-func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch {
+func (batch *RemoteObservationBatch) DeferredProgress() *RemoteObservationBatch {
 	if batch == nil ||
-		(batch.cursorToken == "" &&
-			!batch.markFullRemoteRefresh &&
-			!batch.fullRefreshDueSoon &&
-			!batch.orphansUndecided &&
-			batch.observationMode != remoteObservationModeEnumerate) {
+		(batch.CursorToken == "" &&
+			!batch.MarkFullRemoteRefresh &&
+			!batch.FullRefreshDueSoon &&
+			!batch.OrphansUndecided &&
+			batch.ObservationMode != RemoteObservationModeEnumerate) {
 		return nil
 	}
 
 	clone := *batch
-	clone.source = ""
-	clone.observed = nil
-	clone.changes = nil
-	clone.findings = ObservationFindingsBatch{}
-	clone.shortcutTopology = shortcutTopologyBatch{}
-	clone.armFullRefreshTimer = false
-	clone.markFullRefreshIfIdle = false
-	clone.applyAck = nil
+	clone.Source = ""
+	clone.Observed = nil
+	clone.Changes = nil
+	clone.Findings = ObservationFindingsBatch{}
+	clone.ShortcutTopology = ShortcutTopologyBatch{}
+	clone.ArmFullRefreshTimer = false
+	clone.MarkFullRefreshIfIdle = false
+	clone.ApplyAck = nil
 
 	return &clone
 }
 
 func buildRemoteObservationBatch(
 	engine *Engine,
-	mode remoteObservationMode,
-	events []remoteItem,
+	mode RemoteObservationMode,
+	events []RemoteItem,
 	token string,
 	markFullRemoteRefresh bool,
 	findings ObservationFindingsBatch,
-) remoteObservationBatch {
-	projected := projectRemoteObservations(engine.logger, events)
+) RemoteObservationBatch {
+	projected := ProjectRemoteObservations(engine.logger, events)
 
-	return remoteObservationBatch{
-		observationMode:       mode,
-		observed:              projected.observed,
-		changes:               projected.changes,
-		cursorToken:           primaryObservationCursorToken(token, markFullRemoteRefresh, len(projected.changes), mode),
-		markFullRemoteRefresh: markFullRemoteRefresh,
-		findings:              findings,
+	return RemoteObservationBatch{
+		ObservationMode:       mode,
+		Observed:              projected.Observed,
+		Changes:               projected.Changes,
+		CursorToken:           primaryObservationCursorToken(token, markFullRemoteRefresh, len(projected.Changes), mode),
+		MarkFullRemoteRefresh: markFullRemoteRefresh,
+		Findings:              findings,
 	}
 }
 
@@ -61,9 +61,9 @@ func primaryObservationCursorToken(
 	token string,
 	markFullRemoteRefresh bool,
 	changeCount int,
-	mode remoteObservationMode,
+	mode RemoteObservationMode,
 ) string {
-	needsEnumerateClamp := mode == remoteObservationModeEnumerate
+	needsEnumerateClamp := mode == RemoteObservationModeEnumerate
 	if token == "" && !markFullRemoteRefresh && !needsEnumerateClamp {
 		return ""
 	}
@@ -77,37 +77,37 @@ func primaryObservationCursorToken(
 func buildPrimaryWatchBatch(
 	engine *Engine,
 	bl *Baseline,
-	primaryEvents []remoteItem,
+	primaryEvents []RemoteItem,
 	newToken string,
-) remoteObservationBatch {
+) RemoteObservationBatch {
 	batch := buildRemoteObservationBatch(
 		engine,
-		remoteObservationModeDelta,
+		RemoteObservationModeDelta,
 		primaryEvents,
 		newToken,
 		false,
-		newRemoteObservationFindingsBatch(),
+		NewRemoteObservationFindingsBatch(),
 	)
-	batch.fullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
-	batch.source = remoteObservationBatchPrimaryWatch
-	batch.applyAck = make(chan error, 1)
+	batch.FullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
+	batch.Source = RemoteObservationBatchPrimaryWatch
+	batch.ApplyAck = make(chan error, 1)
 
 	return batch
 }
 
-func (e *Engine) preferredMountRootObservationMode() remoteObservationMode {
+func (e *Engine) preferredMountRootObservationMode() RemoteObservationMode {
 	if e.mountRootDeltaSupported() {
-		return remoteObservationModeDelta
+		return RemoteObservationModeDelta
 	}
 
-	return remoteObservationModeEnumerate
+	return RemoteObservationModeEnumerate
 }
 
 func (flow *engineFlow) executePrimaryRootObservation(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (remoteObservationBatch, error) {
+) (RemoteObservationBatch, error) {
 	if flow.engine.hasRemoteMountRoot() {
 		return flow.executeMountRootObservation(ctx, bl, fullReconcile)
 	}
@@ -118,7 +118,7 @@ func (flow *engineFlow) executePrimaryRootObservation(
 // rootReadFailureBatch is the observation batch of a root OneDrive refused
 // to read: no events and no new cursor, only the root's read issue, so the
 // whole tree is unavailable rather than absent.
-func (flow *engineFlow) rootReadFailureBatch(mode remoteObservationMode, issueType IssueType) remoteObservationBatch {
+func (flow *engineFlow) rootReadFailureBatch(mode RemoteObservationMode, issueType IssueType) RemoteObservationBatch {
 	return buildRemoteObservationBatch(
 		flow.engine,
 		mode,
@@ -133,33 +133,33 @@ func (flow *engineFlow) executeDriveRootObservation(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (remoteObservationBatch, error) {
+) (RemoteObservationBatch, error) {
 	if fullReconcile {
-		return flow.executeDriveRootFullObservation(ctx, bl, resyncKindApplyDifferences)
+		return flow.executeDriveRootFullObservation(ctx, bl, ResyncKindApplyDifferences)
 	}
 
 	events, token, topology, err := flow.observeRemoteWithShortcutTopology(ctx, bl)
-	if errors.Is(err, errDeltaExpired) {
+	if errors.Is(err, ErrDeltaExpired) {
 		// Info: self-healing. Recovery is a full refresh with orphan
 		// detection, not a bare re-enumeration: a delete that happened while
 		// the token aged out is in no delta window (R-2.15.3).
 		flow.engine.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
-		return flow.executeDriveRootFullObservation(ctx, bl, resyncKindOf(err))
+		return flow.executeDriveRootFullObservation(ctx, bl, ResyncKindOf(err))
 	}
 	if issueType, ok := rootReadFailureIssueType(err); ok {
-		return flow.rootReadFailureBatch(remoteObservationModeDelta, issueType), nil
+		return flow.rootReadFailureBatch(RemoteObservationModeDelta, issueType), nil
 	}
 
 	batch := buildRemoteObservationBatch(
 		flow.engine,
-		remoteObservationModeDelta,
+		RemoteObservationModeDelta,
 		events,
 		token,
 		false,
-		newRemoteObservationFindingsBatch(),
+		NewRemoteObservationFindingsBatch(),
 	)
-	batch.fullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, events)
-	batch.shortcutTopology = topology
+	batch.FullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, events)
+	batch.ShortcutTopology = topology
 	return batch, err
 }
 
@@ -170,13 +170,13 @@ func (flow *engineFlow) executeDriveRootObservation(
 // never repeats, so the item's row stays at its old path as a ghost and its
 // synced local copy is never deleted. Only a full enumeration can see that
 // such an item is gone, so the folder's tombstone makes the full refresh due
-// within fullRefreshAfterFolderDeleteDelay; its orphans are confirmed by ID
+// within FullRefreshAfterFolderDeleteDelay; its orphans are confirmed by ID
 // before anything is deleted (confirmEnumerationOrphans).
 //
 // A folder this client deleted itself is no longer in the baseline when its
 // tombstone echoes back, so propagating a local folder delete does not cost a
 // full enumeration.
-func deltaWindowDeletesSyncedFolder(bl *Baseline, events []remoteItem) bool {
+func deltaWindowDeletesSyncedFolder(bl *Baseline, events []RemoteItem) bool {
 	if bl == nil {
 		return false
 	}
@@ -197,27 +197,27 @@ func deltaWindowDeletesSyncedFolder(bl *Baseline, events []remoteItem) bool {
 func (flow *engineFlow) executeDriveRootFullObservation(
 	ctx context.Context,
 	bl *Baseline,
-	kind resyncKind,
-) (remoteObservationBatch, error) {
+	kind ResyncKind,
+) (RemoteObservationBatch, error) {
 	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
 	// A later page whose position OneDrive refused twice is an unusable
-	// position (errDeltaExpired) that unwraps to the refusal, which may be
+	// position (ErrDeltaExpired) that unwraps to the refusal, which may be
 	// "not found": it says nothing about the root, so it is returned like any
 	// other failure.
-	if issueType, ok := rootReadFailureIssueType(err); ok && !errors.Is(err, errDeltaExpired) {
-		return flow.rootReadFailureBatch(remoteObservationModeDelta, issueType), nil
+	if issueType, ok := rootReadFailureIssueType(err); ok && !errors.Is(err, ErrDeltaExpired) {
+		return flow.rootReadFailureBatch(RemoteObservationModeDelta, issueType), nil
 	}
 
 	batch := buildRemoteObservationBatch(
 		flow.engine,
-		remoteObservationModeDelta,
+		RemoteObservationModeDelta,
 		full.events,
 		full.token,
 		true,
-		newRemoteObservationFindingsBatch(),
+		NewRemoteObservationFindingsBatch(),
 	)
-	batch.shortcutTopology = full.topology
-	batch.orphansUndecided = full.orphansUndecided
+	batch.ShortcutTopology = full.topology
+	batch.OrphansUndecided = full.orphansUndecided
 	return batch, err
 }
 
@@ -225,7 +225,7 @@ func (flow *engineFlow) executeMountRootObservation(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (remoteObservationBatch, error) {
+) (RemoteObservationBatch, error) {
 	observed, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)
 	if issueType, ok := rootReadFailureIssueType(err); ok {
 		return flow.rootReadFailureBatch(observed.mode, issueType), nil
@@ -235,16 +235,16 @@ func (flow *engineFlow) executeMountRootObservation(
 	// full refresh like the drive root's: it restarts the cadence, and an
 	// orphan it could not confirm, which the saved position never reports
 	// again, brings the next one forward on the undecided-refresh backoff.
-	completeDelta := observed.mode == remoteObservationModeDelta && observed.complete
+	completeDelta := observed.mode == RemoteObservationModeDelta && observed.complete
 	batch := buildRemoteObservationBatch(
 		flow.engine,
 		observed.mode,
 		observed.events,
 		observed.token,
 		fullReconcile || completeDelta,
-		newRemoteObservationFindingsBatch(),
+		NewRemoteObservationFindingsBatch(),
 	)
-	batch.orphansUndecided = completeDelta && observed.orphansUndecided
+	batch.OrphansUndecided = completeDelta && observed.orphansUndecided
 
 	return batch, err
 }

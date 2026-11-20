@@ -22,7 +22,7 @@ import (
 func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "dir/File.txt"},
 		{Path: "dir/file.txt"},
 	}
@@ -32,7 +32,7 @@ func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 	require.Len(t, collisions, 2, "both colliders should be returned as SkippedItems")
 
 	for _, si := range collisions {
-		assert.Equal(t, issueCaseCollision, si.Reason)
+		assert.Equal(t, IssueCaseCollision, si.Reason)
 		assert.NotEmpty(t, si.Detail, "detail should name the colliding file")
 	}
 }
@@ -41,7 +41,7 @@ func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 func TestDetectCaseCollisions_ThreeWay(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "File.txt"},
 		{Path: "file.txt"},
 		{Path: "FILE.txt"},
@@ -56,7 +56,7 @@ func TestDetectCaseCollisions_ThreeWay(t *testing.T) {
 func TestDetectCaseCollisions_DifferentDirs(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "dir1/File.txt"},
 		{Path: "dir2/file.txt"},
 	}
@@ -79,7 +79,7 @@ func TestDetectCaseCollisions_Empty(t *testing.T) {
 func TestDetectCaseCollisions_NoCollisions(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "a.txt"},
 		{Path: "b.txt"},
 		{Path: "c.txt"},
@@ -96,7 +96,7 @@ func TestDetectCaseCollisions_NoCollisions(t *testing.T) {
 func TestDetectCaseCollisions_DetailContainsCollidingName(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "docs/Report.md"},
 		{Path: "docs/report.md"},
 	}
@@ -142,7 +142,7 @@ func TestFullScan_CaseCollision_InSkippedNotEvents(t *testing.T) {
 		t.Skip("case-insensitive filesystem — files are the same inode")
 	}
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestFullScan_CaseCollision_InSkippedNotEvents(t *testing.T) {
 	// Both colliders should be in Skipped, not in Events.
 	var collisionPaths []string
 	for _, si := range result.Skipped {
-		if si.Reason == issueCaseCollision {
+		if si.Reason == IssueCaseCollision {
 			collisionPaths = append(collisionPaths, si.Path)
 		}
 	}
@@ -191,7 +191,7 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 		&BaselineEntry{Path: "doc.pdf", DriveID: driveid.New("d"), ItemID: "id2"},
 	)
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -217,11 +217,11 @@ func TestFullScan_StoresFilesystemIdentityForFilesAndDirectories(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "Docs"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "Docs", "report.txt"), []byte("hello"), 0o600))
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
-	rowsByPath := make(map[string]localStateRow, len(result.Rows))
+	rowsByPath := make(map[string]LocalStateRow, len(result.Rows))
 	for i := range result.Rows {
 		rowsByPath[result.Rows[i].Path] = result.Rows[i]
 	}
@@ -256,13 +256,13 @@ func TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval(t *testing.T)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, folderName, "inside.txt"), []byte("user\n"), 0o600))
 	require.NoError(t, syscall.Mkfifo(filepath.Join(syncRoot, fifoName), 0o600))
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	var reported []string
 	for i := range result.Skipped {
-		if result.Skipped[i].Reason == issueLocalInterruptedRemoval {
+		if result.Skipped[i].Reason == IssueLocalInterruptedRemoval {
 			reported = append(reported, result.Skipped[i].Path)
 		}
 	}
@@ -296,14 +296,14 @@ func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
 	// file.txt overwrites this (same inode), so only one file exists.
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "File.txt"), []byte("content"), 0o600))
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// No collision — the FS itself prevents the scenario from arising.
 	for _, si := range result.Skipped {
-		assert.NotEqual(t, issueCaseCollision, si.Reason,
+		assert.NotEqual(t, IssueCaseCollision, si.Reason,
 			"case-insensitive FS should not report collisions for a single file")
 	}
 
@@ -325,7 +325,7 @@ func TestDetectCaseCollisions_BaselineCrossCheck(t *testing.T) {
 		{Path: "File.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "file.txt"},
 	}
 
@@ -333,7 +333,7 @@ func TestDetectCaseCollisions_BaselineCrossCheck(t *testing.T) {
 	assert.Empty(t, clean, "new file should be removed — collides with baseline")
 	require.Len(t, collisions, 1)
 	assert.Equal(t, "file.txt", collisions[0].Path)
-	assert.Equal(t, issueCaseCollision, collisions[0].Reason)
+	assert.Equal(t, IssueCaseCollision, collisions[0].Reason)
 	assert.Contains(t, collisions[0].Detail, "File.txt", "detail should name the synced file")
 }
 
@@ -343,7 +343,7 @@ func TestDetectCaseCollisions_FullCaseFoldingCollides(t *testing.T) {
 
 	// Manual test: STRASSE.txt uploaded over straße.txt because ToLower
 	// does not fold ß to ss, while OneDrive treats them as one name.
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "stra\u00dfe.txt"},
 		{Path: "STRASSE.txt"},
 	}
@@ -362,7 +362,7 @@ func TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles(t *te
 	baseline := newBaselineForTest([]*BaselineEntry{
 		{Path: "a\U0001F600.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
-	events := []changeEvent{{Path: "a.txt"}}
+	events := []ChangeEvent{{Path: "a.txt"}}
 
 	clean, collisions := detectCaseCollisions(events, baseline, nil)
 	assert.Empty(t, clean)
@@ -377,7 +377,7 @@ func TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles(t *te
 func TestDetectCaseCollisions_KelvinSignAndMicroSignAreDistinctNames(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "\u212a.txt"},
 		{Path: "K.txt"},
 		{Path: "\u00b5.txt"},
@@ -398,7 +398,7 @@ func TestDetectCaseCollisions_CaseOnlyRenameIsNotACollision(t *testing.T) {
 	baseline := newBaselineForTest([]*BaselineEntry{
 		{Path: "File.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "file.txt"},
 	}
 
@@ -420,7 +420,7 @@ func TestDetectCaseCollisions_BaselineExactMatch_NoCollision(t *testing.T) {
 		{Path: "File.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "File.txt"},
 	}
 
@@ -440,7 +440,7 @@ func TestDetectCaseCollisions_BaselineAndEventCollision(t *testing.T) {
 		{Path: "FILE.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "File.txt"},
 		{Path: "file.txt"},
 	}
@@ -459,7 +459,7 @@ func TestDetectCaseCollisions_BaselineInSubdir(t *testing.T) {
 		{Path: "docs/Report.md", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "docs/report.md"},
 	}
 
@@ -474,7 +474,7 @@ func TestDetectCaseCollisions_NilBaseline_NoChange(t *testing.T) {
 	t.Parallel()
 
 	// nil baseline (backwards compat) — should behave exactly like before.
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "unique.txt"},
 	}
 
@@ -493,7 +493,7 @@ func TestDetectCaseCollisions_DirectoryChildrenSuppressed(t *testing.T) {
 
 	// "Docs/" (folder) collides with "docs" (file). Children of "Docs/" must
 	// also be suppressed — they can't be uploaded to a folder that won't exist.
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "Docs", ItemType: ItemTypeFolder},
 		{Path: "docs", ItemType: ItemTypeFile},
 		{Path: "Docs/readme.txt", ItemType: ItemTypeFile},
@@ -516,7 +516,7 @@ func TestDetectCaseCollisions_DirectoryNestedChildrenSuppressed(t *testing.T) {
 	t.Parallel()
 
 	// Nested children under a colliding directory should also be suppressed.
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "Docs", ItemType: ItemTypeFolder},
 		{Path: "docs", ItemType: ItemTypeFile},
 		{Path: "Docs/sub", ItemType: ItemTypeFolder},
@@ -533,7 +533,7 @@ func TestDetectCaseCollisions_DirectoryNoCollision_ChildrenPass(t *testing.T) {
 	t.Parallel()
 
 	// No collision on the directory — children pass through normally.
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "Docs", ItemType: ItemTypeFolder},
 		{Path: "Docs/readme.txt", ItemType: ItemTypeFile},
 	}
@@ -572,15 +572,15 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 		t.Skip("case-insensitive filesystem — files are the same inode")
 	}
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
 	// Both files should appear in Skipped with IssueCaseCollision.
-	var collisions []skippedItem
+	var collisions []SkippedItem
 	for _, si := range result.Skipped {
-		if si.Reason == issueCaseCollision {
+		if si.Reason == IssueCaseCollision {
 			collisions = append(collisions, si)
 		}
 	}
@@ -603,7 +603,7 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 func TestDetectCaseCollisions_ChildInMultiGroup_NoDuplicate(t *testing.T) {
 	t.Parallel()
 
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "Docs", ItemType: ItemTypeFolder},
 		{Path: "docs", ItemType: ItemTypeFile},
 		// These are children of "Docs/" AND collide with each other.
@@ -644,7 +644,7 @@ func TestDetectCaseCollisions_UnicodeFormTwinsReportOnceWithClearReason(t *testi
 	t.Parallel()
 
 	// "café" composed and decomposed both normalize to the same NFC path.
-	events := []changeEvent{
+	events := []ChangeEvent{
 		{Path: "dir/café.txt"},
 		{Path: "dir/café.txt"},
 	}

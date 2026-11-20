@@ -36,15 +36,15 @@ func TestExecutor_Upload_CreateConflictIsAStalePrecondition(t *testing.T) {
 		},
 	}
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "x.docx", "mine")
 
 	o := e.ExecuteUpload(t.Context(), &Action{
-		Type: ActionUpload, Path: "x.docx", DriveID: driveid.New(synctest.TestDriveID), View: &pathView{Path: "x.docx"},
+		Type: ActionUpload, Path: "x.docx", DriveID: driveid.New(synctest.TestDriveID), View: &PathView{Path: "x.docx"},
 	})
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
-	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability, "OneDrive's answer proved the remote side moved on")
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability, "OneDrive's answer proved the remote side moved on")
 }
 
 // followUpReadFailure is a read made after OneDrive answered a create or an
@@ -79,17 +79,17 @@ func followUpReadFailures() []followUpReadFailure {
 // precondition, not the 409 or 412 the read followed, and classified by the
 // read's own answer.
 func requireClassifiedAsTheRead(
-	t *testing.T, read followUpReadFailure, actionType actionType, driveID driveid.ID, err error,
+	t *testing.T, read followUpReadFailure, actionType ActionType, driveID driveid.ID, err error,
 ) {
 	t.Helper()
 
 	require.ErrorIs(t, err, read.err)
-	require.NotErrorIs(t, err, errActionPreconditionChanged, "a failed read proves nothing about the plan")
+	require.NotErrorIs(t, err, ErrActionPreconditionChanged, "a failed read proves nothing about the plan")
 	require.NotErrorIs(t, err, graph.ErrConflict)
 	require.NotErrorIs(t, err, graph.ErrPreconditionFailed)
-	decision := classifyResult(&actionCompletion{
+	decision := classifyResult(&ActionCompletion{
 		Path: "read-failed", ActionType: actionType, DriveID: driveID,
-		Err: err, HTTPStatus: extractHTTPStatus(err),
+		Err: err, HTTPStatus: ExtractHTTPStatus(err),
 	})
 	assert.Equal(t, read.class, decision.Class)
 	assert.Equal(t, read.evidence(driveID), decision.ScopeEvidence)
@@ -150,12 +150,12 @@ func TestExecutor_CreateRemoteFolder_ListingFailureAfterAConflictIsClassifiedByI
 				},
 			}
 			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-			e := newExecution(cfg, emptyBaseline())
+			e := NewExecution(cfg, emptyBaseline())
 			driveID := driveid.New(synctest.TestDriveID)
 
 			o := e.ExecuteFolderCreate(t.Context(), &Action{
 				Type: ActionFolderCreate, Path: "photos", DriveID: driveID, CreateSide: CreateRemote,
-				View: &pathView{Path: "photos"},
+				View: &PathView{Path: "photos"},
 			})
 
 			requireOutcomeFailure(t, &o)
@@ -225,12 +225,12 @@ func TestExecutor_Upload_OverwriteIsConditionalOnThePreflightETag(t *testing.T) 
 		},
 	}
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "known.txt", "content")
 
 	o := e.ExecuteUpload(t.Context(), &Action{
 		Type: ActionUpload, Path: "known.txt", ItemID: "known-item-id",
-		DriveID: driveid.New(synctest.TestDriveID), View: &pathView{Path: "known.txt"},
+		DriveID: driveid.New(synctest.TestDriveID), View: &PathView{Path: "known.txt"},
 	})
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, []string{"live-etag"}, sentIfMatch)
@@ -246,16 +246,16 @@ func TestExecutor_Upload_OverwriteRaceWithARemoteEditIsAStalePrecondition(t *tes
 		},
 	}
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "known.txt", "content")
 
 	o := e.ExecuteUpload(t.Context(), &Action{
 		Type: ActionUpload, Path: "known.txt", ItemID: "known-item-id",
-		DriveID: driveid.New(synctest.TestDriveID), View: &pathView{Path: "known.txt"},
+		DriveID: driveid.New(synctest.TestDriveID), View: &PathView{Path: "known.txt"},
 	})
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
-	assert.Equal(t, permissionCapabilityRemoteWrite, o.FailureCapability,
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityRemoteWrite, o.FailureCapability,
 		"a post-preflight 412 is a remote-write precondition, as for a remote delete or move")
 }
 
@@ -275,10 +275,10 @@ func TestExecutor_CreateRemoteFolder_ConflictAdoptsTheSameNamedFolder(t *testing
 		},
 	}
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	o := e.ExecuteFolderCreate(t.Context(), &Action{
-		Type: ActionFolderCreate, Path: "photos", CreateSide: CreateRemote, View: &pathView{Path: "photos"},
+		Type: ActionFolderCreate, Path: "photos", CreateSide: CreateRemote, View: &PathView{Path: "photos"},
 	})
 	requireOutcomeSuccess(t, &o)
 	assert.Equal(t, "existing-folder", o.ItemID)
@@ -290,7 +290,7 @@ func TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollis
 
 	// "Photos" is the same OneDrive name as "photos" but not this folder's
 	// spelling: the executor does not merge them, and the user has to rename
-	// one, as for an upload (remoteNameTakenError).
+	// one, as for an upload (RemoteNameTakenError).
 	items := &executorMockItemClient{
 		createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
 			return nil, &graph.GraphError{StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict}
@@ -300,15 +300,15 @@ func TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollis
 		},
 	}
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	o := e.ExecuteFolderCreate(t.Context(), &Action{
-		Type: ActionFolderCreate, Path: "photos", CreateSide: CreateRemote, View: &pathView{Path: "photos"},
+		Type: ActionFolderCreate, Path: "photos", CreateSide: CreateRemote, View: &PathView{Path: "photos"},
 	})
 	requireOutcomeFailure(t, &o)
-	var taken *remoteNameTakenError
+	var taken *RemoteNameTakenError
 	require.ErrorAs(t, o.Error, &taken)
-	assert.NotErrorIs(t, o.Error, errActionPreconditionChanged, "not a precondition the next plan can fix")
+	assert.NotErrorIs(t, o.Error, ErrActionPreconditionChanged, "not a precondition the next plan can fix")
 }
 
 // Validates: R-2.12.3, R-5.6.14
@@ -406,17 +406,17 @@ func TestExecutor_CreateRemoteFolder_ConflictBesideATwinAdoptsNothing(t *testing
 				},
 			}
 			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-			e := newExecution(cfg, emptyBaseline())
+			e := NewExecution(cfg, emptyBaseline())
 
 			o := e.ExecuteFolderCreate(t.Context(), &Action{
-				Type: ActionFolderCreate, Path: "K", CreateSide: CreateRemote, View: &pathView{Path: "K"},
+				Type: ActionFolderCreate, Path: "K", CreateSide: CreateRemote, View: &PathView{Path: "K"},
 			})
 			requireOutcomeFailure(t, &o)
 			assert.NotEqual(t, "twin", o.ItemID)
-			var taken *remoteNameTakenError
+			var taken *RemoteNameTakenError
 			if !tc.taken {
 				assert.NotErrorAs(t, o.Error, &taken)
-				require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+				require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 				return
 			}
 			require.ErrorAs(t, o.Error, &taken)

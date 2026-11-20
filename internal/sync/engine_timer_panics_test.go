@@ -202,8 +202,8 @@ func TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown(t *tes
 
 // panicThroughTheBoundary panics inside clock's timer boundary, as a timer
 // callback the clock runs would.
-func panicThroughTheBoundary(clock realClock, value string) {
-	defer clock.recoverTimerPanic()
+func panicThroughTheBoundary(clock RealClock, value string) {
+	defer clock.RecoverTimerPanic()
 
 	panic(value)
 }
@@ -217,13 +217,13 @@ func TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged(t *testing.T) {
 	t.Parallel()
 
 	capture, logger := synctest.NewLogCapture()
-	eng := &Engine{wallClock: realClock{logger: logger, panics: &timerPanics{}}}
+	eng := &Engine{wallClock: RealClock{logger: logger, panics: &TimerPanics{}}}
 	bound := eng.wallClock
 	_, end := eng.beginRun(t.Context())
 	require.NoError(t, end(nil))
 
 	require.NotPanics(t, func() { panicThroughTheBoundary(bound, "late timer exploded") }, "after its run returned")
-	require.NotPanics(t, func() { panicThroughTheBoundary(realClock{logger: logger}, "unbound timer exploded") },
+	require.NotPanics(t, func() { panicThroughTheBoundary(RealClock{logger: logger}, "unbound timer exploded") },
 		"on a clock no engine bound")
 
 	logged := capture.AtLeast(slog.LevelError)
@@ -266,11 +266,11 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 			ast.Inspect(decl, func(node ast.Node) bool {
 				switch n := node.(type) {
 				case *ast.CompositeLit:
-					if ident, ok := n.Type.(*ast.Ident); ok && ident.Name == "realClock" && len(n.Elts) > 0 {
+					if ident, ok := n.Type.(*ast.Ident); ok && ident.Name == "RealClock" && len(n.Elts) > 0 {
 						clocks = append(clocks, owner)
 					}
 				case *ast.CallExpr:
-					if ident, ok := n.Fun.(*ast.Ident); ok && (ident.Name == "newLocalObserver" || ident.Name == "newRemoteObserver") {
+					if ident, ok := n.Fun.(*ast.Ident); ok && (ident.Name == "NewLocalObserver" || ident.Name == "NewRemoteObserver") {
 						constructorCalls = append(constructorCalls, ident.Name+" from "+owner)
 					}
 				}
@@ -281,6 +281,6 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 
 	assert.Equal(t, []string{"newEngine"}, clocks, "one real clock with the engine's timer panics, built in newEngine")
 	assert.ElementsMatch(t,
-		[]string{"newLocalObserver from buildLocalObserver", "newRemoteObserver from buildRemoteObserver"},
+		[]string{"NewLocalObserver from buildLocalObserver", "NewRemoteObserver from buildRemoteObserver"},
 		constructorCalls, "every observer the engine builds gets the engine's real clock")
 }

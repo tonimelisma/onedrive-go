@@ -16,7 +16,7 @@ func TestBuildObservationReconcilePlan_ReportsChangeOnlyWhenTheIssueSetDiffers(t
 		{Path: bad.Path, IssueType: bad.IssueType},
 	}}
 	managed := func(issues ...ObservationIssue) *ObservationFindingsBatch {
-		batch := newLocalObservationFindingsBatch()
+		batch := NewLocalObservationFindingsBatch()
 		batch.Issues = issues
 		return &batch
 	}
@@ -32,7 +32,7 @@ func TestBuildObservationReconcilePlan_ReportsChangeOnlyWhenTheIssueSetDiffers(t
 		{name: "a persistent finding cleared", batch: managed(), state: persisted, changes: true},
 		{
 			name:    "a known path with a different issue",
-			batch:   managed(ObservationIssue{Path: bad.Path, IssueType: issuePathTooLong}),
+			batch:   managed(ObservationIssue{Path: bad.Path, IssueType: IssuePathTooLong}),
 			state:   persisted,
 			changes: true,
 		},

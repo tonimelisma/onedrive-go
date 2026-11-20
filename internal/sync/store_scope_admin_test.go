@@ -203,12 +203,12 @@ func TestReadPathTruthStatus_DerivesReadBoundaryDescendantsFromObservationIssues
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
-	scopeKey := sKPermLocalRead("Private")
+	scopeKey := SKPermLocalRead("Private")
 
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Private",
 		DriveID:   driveID,
-		IssueType: issueLocalReadDenied,
+		IssueType: IssueLocalReadDenied,
 		ScopeKey:  scopeKey,
 	})
 
@@ -221,7 +221,7 @@ func TestReadPathTruthStatus_DerivesReadBoundaryDescendantsFromObservationIssues
 
 	assert.Equal(t, truthAvailabilityBlockedObservationIssue, statuses["Private/sub/file.txt"].Local.Availability)
 	assert.Equal(t, pathTruthSourceObservationIssue, statuses["Private/sub/file.txt"].Local.Source)
-	assert.Equal(t, issueLocalReadDenied, statuses["Private/sub/file.txt"].Local.IssueType)
+	assert.Equal(t, IssueLocalReadDenied, statuses["Private/sub/file.txt"].Local.IssueType)
 	assert.Equal(t, scopeKey, statuses["Private/sub/file.txt"].Local.ScopeKey)
 }
 

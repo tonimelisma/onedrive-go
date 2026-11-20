@@ -53,7 +53,7 @@ Each boundary owns exactly one translation step:
 - `config`: normalize parse, validation, and discovery outcomes into fatal load
   errors or lenient warnings
 - `sync`: normalize action completions, observer sentinels, and permission
-  checks into `resultDecision`, retry scheduling, scope decisions, and durable
+  checks into `ResultDecision`, retry scheduling, scope decisions, and durable
   authority writes
 - `cli`: map fatal/actionable/transient outcomes into exit behavior and
   reason/action text
@@ -70,7 +70,7 @@ entry points:
   `ConditionKey` values until the status-surface naming sweep lands
 - `internal/config/failure_class.go`: classify config load results
 - `internal/sync/executor_preconditions.go`: translate stale live local/remote
-  side-effect checks into `errActionPreconditionChanged`
+  side-effect checks into `ErrActionPreconditionChanged`
 - `internal/driveops/local_errors.go`: the one errno-to-domain table for local
   filesystem failures (`ClassifyLocalError`), consumed by the sync classifier
   and CLI presentation
@@ -126,7 +126,7 @@ Permission recovery follows the same ownership split:
 - Errors cross one classification boundary before being wrapped with local
   context.
 - The boundary that understands the invariant owns the classification.
-- `errActionPreconditionChanged` is the sync executor/worker signal for
+- `ErrActionPreconditionChanged` is the sync executor/worker signal for
   "this exact action is obsolete." Worker-start freshness, admission freshness,
   and executor live preconditions may return it; the engine maps it to
   `superseded`, not ordinary retry, before it reads any server answer the
@@ -135,7 +135,7 @@ Permission recovery follows the same ownership split:
   to read live precondition truth are not wrapped with this sentinel. Graph
   conditional mutation mismatches surface first as
   `graph.ErrPreconditionFailed` from HTTP 412; the executor translates that
-  boundary-specific fact into `errActionPreconditionChanged` when it proves a
+  boundary-specific fact into `ErrActionPreconditionChanged` when it proves a
   post-preflight stale action.
 - A read that follows an answer and fails is that read's failure, classified
   by its own answer, never joined to the answer it followed: the listing that

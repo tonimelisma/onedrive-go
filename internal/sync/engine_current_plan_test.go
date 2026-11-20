@@ -44,7 +44,7 @@ func seedStaleRetryAndBlockScopeForCurrentPlanTest(t *testing.T, ctx context.Con
 	}))
 }
 
-func localRowsContainPath(rows []localStateRow, path string) bool {
+func localRowsContainPath(rows []LocalStateRow, path string) bool {
 	for i := range rows {
 		if rows[i].Path == path {
 			return true
@@ -53,7 +53,7 @@ func localRowsContainPath(rows []localStateRow, path string) bool {
 	return false
 }
 
-func remoteRowsContainPath(rows []remoteStateRow, path string) bool {
+func remoteRowsContainPath(rows []RemoteStateRow, path string) bool {
 	for i := range rows {
 		if rows[i].Path == path {
 			return true
@@ -75,13 +75,13 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES ('item-hidden', 'hidden/file.txt', 'file')`)
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "hidden/file.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-hidden",
 		Size:     10,
 	}}))
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-hidden",
 		Path:     "hidden/file.txt",
@@ -136,13 +136,13 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 
 	writeLocalFile(t, syncRoot, "visible/local.txt", "visible local")
 	writeLocalFile(t, syncRoot, "hidden/local.txt", "hidden local")
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "hidden/stale.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "stale",
 		Size:     5,
 	}}))
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-hidden-remote",
 		Path:     "hidden/remote.txt",
@@ -151,7 +151,7 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 		Size:     20,
 	}}, "", driveID))
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "cursor-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, clock.Now(), remoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, clock.Now(), RemoteObservationModeDelta))
 
 	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
 	bl, err := eng.baseline.Load(ctx)
@@ -295,8 +295,8 @@ func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *te
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 	var closeStore sync.Once
-	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
-		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+	attachDebugEventRecorderWithHook(eng, func(event EngineDebugEvent) {
+		if event.Type != EngineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
 			return
 		}
 		closeStore.Do(func() {
@@ -341,8 +341,8 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 	var closeStore sync.Once
-	attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
-		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+	attachDebugEventRecorderWithHook(eng, func(event EngineDebugEvent) {
+		if event.Type != EngineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
 			return
 		}
 		closeStore.Do(func() {
@@ -353,7 +353,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	err = runWithin(t, ctx, "bootstrap to fail on the closed store", func(runCtx context.Context) error {
 		return rt.bootstrapSync(runCtx, SyncDownloadOnly, &watchPipeline{
 			bl:          bl,
-			completions: make(chan actionCompletion),
+			completions: make(chan ActionCompletion),
 		})
 	})
 	require.Error(t, err)
@@ -368,7 +368,7 @@ func TestBootstrapSync_RequiresStartupBaseline(t *testing.T) {
 	setupWatchEngine(t, eng)
 
 	err := testWatchRuntime(t, eng).bootstrapSync(t.Context(), SyncDownloadOnly, &watchPipeline{
-		completions: make(chan actionCompletion),
+		completions: make(chan ActionCompletion),
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "bootstrap requires startup baseline")
@@ -409,7 +409,7 @@ func TestRunSteadyStateReplan_PrunesStaleDurableRuntimeStateLikeBootstrapCurrent
 	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   dirtyBaseline,
 		mode: SyncBidirectional,
-	}, dirtyBatch{})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.True(t, applied)
 	assert.Empty(t, rt.currentOutbox())
@@ -451,7 +451,7 @@ func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing
 	build, err := rt.buildCurrentPlanStage(ctx, bl, SyncBidirectional, RunOptions{}, observed)
 	require.NoError(t, err)
 
-	runtime, err := rt.reconcileRuntimeStateStage(ctx, build, passRefreshedLocalOnly)
+	runtime, err := rt.reconcileRuntimeStateStage(ctx, build, PassRefreshedLocalOnly)
 	require.NoError(t, err)
 
 	assert.Empty(t, runtime.RetryRows)
@@ -509,9 +509,9 @@ func reconciliationQueryWithoutLocalUploadRule(t *testing.T) string {
 	t.Helper()
 
 	const rule = "WHEN comparison_kind = 'local_only_create' THEN 'upload'"
-	require.Contains(t, sqlQueryReconciliationState, rule)
+	require.Contains(t, SqlQueryReconciliationState, rule)
 
-	return strings.Replace(sqlQueryReconciliationState, rule, "", 1)
+	return strings.Replace(SqlQueryReconciliationState, rule, "", 1)
 }
 
 func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.Int32) {
@@ -576,7 +576,7 @@ func TestRunSteadyStateReplan_UnclassifiedRowEndsTheReplanNamingThePath(t *testi
 	writeLocalFile(t, syncRoot, "new.txt", "local content")
 
 	rt := testWatchRuntime(t, eng)
-	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{bl: bl, mode: SyncBidirectional}, dirtyBatch{})
+	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{bl: bl, mode: SyncBidirectional}, DirtyBatch{})
 	require.ErrorIs(t, err, errUnclassifiedPlan)
 	require.ErrorContains(t, err, "sync: watch replan build_current_plan: "+unclassifiedNewFileError)
 	assert.False(t, applied)

@@ -104,7 +104,7 @@ func TestPlannerKindCases_LiteralsAreExactlyTheKinds(t *testing.T) {
 	reconciliationNames := kindNames(allReconciliationKinds())
 	var testedComparisonNames []string
 	for _, kind := range allComparisonKinds() {
-		if kind != comparisonUnclassified {
+		if kind != ComparisonUnclassified {
 			testedComparisonNames = append(testedComparisonNames, kind.String())
 		}
 	}
@@ -113,8 +113,8 @@ func TestPlannerKindCases_LiteralsAreExactlyTheKinds(t *testing.T) {
 	assert.ElementsMatch(t, reconciliationNames, sqlLiterals(sqlReconciliationKindCase, `(?:THEN|ELSE) '([a-z_]+)'`))
 	assert.ElementsMatch(t, testedComparisonNames, sqlLiterals(sqlReconciliationKindCase, `comparison_kind = '([a-z_]+)'`),
 		"the reconciliation CASE must test every classified comparison kind")
-	assert.Equal(t, []string{comparisonUnclassified.String()}, sqlLiterals(sqlComparisonKindCase, `ELSE '([a-z_]+)'`))
-	assert.Equal(t, []string{reconcileUnclassified.String()}, sqlLiterals(sqlReconciliationKindCase, `ELSE '([a-z_]+)'`))
+	assert.Equal(t, []string{ComparisonUnclassified.String()}, sqlLiterals(sqlComparisonKindCase, `ELSE '([a-z_]+)'`))
+	assert.Equal(t, []string{ReconcileUnclassified.String()}, sqlLiterals(sqlReconciliationKindCase, `ELSE '([a-z_]+)'`))
 }
 
 // Validates: R-6.2.16
@@ -122,25 +122,25 @@ func TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers(t *testing.T) {
 	t.Parallel()
 
 	comparisons := allComparisonKinds()
-	assert.Equal(t, comparisonUnclassified, comparisons[0], "the zero value is the unclassified member")
+	assert.Equal(t, ComparisonUnclassified, comparisons[0], "the zero value is the unclassified member")
 	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(kindNames(comparisons)))), len(comparisons))
 	for _, kind := range comparisons {
-		parsed, err := parseComparisonKind(kind.String())
+		parsed, err := ParseComparisonKind(kind.String())
 		require.NoError(t, err)
 		assert.Equal(t, kind, parsed)
 	}
-	_, err := parseComparisonKind("bogus")
+	_, err := ParseComparisonKind("bogus")
 	require.Error(t, err)
 
 	reconciliations := allReconciliationKinds()
-	assert.Equal(t, reconcileUnclassified, reconciliations[0], "the zero value is the unclassified member")
+	assert.Equal(t, ReconcileUnclassified, reconciliations[0], "the zero value is the unclassified member")
 	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(kindNames(reconciliations)))), len(reconciliations))
 	for _, kind := range reconciliations {
-		parsed, parseErr := parseReconciliationKind(kind.String())
+		parsed, parseErr := ParseReconciliationKind(kind.String())
 		require.NoError(t, parseErr)
 		assert.Equal(t, kind, parsed)
 	}
-	_, err = parseReconciliationKind("bogus")
+	_, err = ParseReconciliationKind("bogus")
 	require.Error(t, err)
 }
 
@@ -160,12 +160,12 @@ func TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath(t *testing.T) {
 	require.ErrorContains(t, err, `"docs/compared.txt"`)
 	require.ErrorContains(t, err, `"bogus"`)
 
-	_, err = queryReconciliationRows(ctx, store.rawDB(),
+	_, err = QueryReconciliationRows(ctx, store.rawDB(),
 		`SELECT 'docs/compared.txt', 'file', 'bogus', 'noop', '', '', '', ''`)
 	require.Error(t, err)
 	require.ErrorContains(t, err, `"docs/compared.txt"`)
 
-	_, err = queryReconciliationRows(ctx, store.rawDB(),
+	_, err = QueryReconciliationRows(ctx, store.rawDB(),
 		`SELECT 'docs/reconciled.txt', 'file', 'unchanged', 'bogus', '', '', '', ''`)
 	require.Error(t, err)
 	require.ErrorContains(t, err, `"docs/reconciled.txt"`)
@@ -174,7 +174,7 @@ func TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath(t *testing.T) {
 
 // comparisonCaseGroup is one group of the stage 1 enumeration.
 type comparisonCaseGroup struct {
-	kind          comparisonKind
+	kind          ComparisonKind
 	anySide       bool
 	localChanged  bool
 	remoteChanged bool
@@ -217,12 +217,12 @@ GROUP BY 1, 2, 3, 4, 5`, comparisonCaseStateCount, strings.Join(columns, ",\n\t"
 
 	groups := queryComparisonCaseGroups(t, query)
 	total := 0
-	produced := map[comparisonKind]bool{}
+	produced := map[ComparisonKind]bool{}
 	var violations []string
 	for _, g := range groups {
 		total += g.states
 		produced[g.kind] = true
-		if (g.kind == comparisonUnclassified) == g.anySide {
+		if (g.kind == ComparisonUnclassified) == g.anySide {
 			violations = append(violations, fmt.Sprintf("%s with a side present: %t", g.kind, g.anySide))
 		}
 		changedNowhere := !g.localChanged && !g.remoteChanged
@@ -252,7 +252,7 @@ func queryComparisonCaseGroups(t *testing.T, query string) []comparisonCaseGroup
 			kind string
 		)
 		require.NoError(t, rows.Scan(&kind, &g.anySide, &g.localChanged, &g.remoteChanged, &g.currentEqual, &g.states))
-		g.kind, err = parseComparisonKind(kind)
+		g.kind, err = ParseComparisonKind(kind)
 		require.NoError(t, err)
 		groups = append(groups, g)
 	}
@@ -306,7 +306,7 @@ GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", 
 	defer rows.Close()
 
 	total := 0
-	produced := map[reconciliationKind]bool{}
+	produced := map[ReconciliationKind]bool{}
 	var violations []string
 	for rows.Next() {
 		var (
@@ -315,19 +315,19 @@ GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", 
 			states                             int
 		)
 		require.NoError(t, rows.Scan(&comparisonName, &reconciliationName, &localChanged, &remoteChanged, &states))
-		comparison, parseErr := parseComparisonKind(comparisonName)
+		comparison, parseErr := ParseComparisonKind(comparisonName)
 		require.NoError(t, parseErr)
-		reconciliation, parseErr := parseReconciliationKind(reconciliationName)
+		reconciliation, parseErr := ParseReconciliationKind(reconciliationName)
 		require.NoError(t, parseErr)
 		total += states
 		produced[reconciliation] = true
 
 		unreachableDiverged := comparison == comparisonDiverged && !localChanged && !remoteChanged
-		if reconciliation == reconcileUnclassified && comparison != comparisonUnclassified && !unreachableDiverged {
+		if reconciliation == ReconcileUnclassified && comparison != ComparisonUnclassified && !unreachableDiverged {
 			violations = append(violations, fmt.Sprintf("%s (local_changed=%t remote_changed=%t) is unclassified",
 				comparison, localChanged, remoteChanged))
 		}
-		if comparison == comparisonUnclassified && reconciliation != reconcileUnclassified {
+		if comparison == ComparisonUnclassified && reconciliation != ReconcileUnclassified {
 			violations = append(violations, fmt.Sprintf("an unclassified comparison was reconciled as %s", reconciliation))
 		}
 	}
@@ -350,36 +350,36 @@ GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", 
 func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	plan := func(kind reconciliationKind) (*actionPlan, error) {
-		return newPlanner(testLogger(t)).PlanCurrentState(
-			[]sQLiteComparisonRow{
+	plan := func(kind ReconciliationKind) (*ActionPlan, error) {
+		return NewPlanner(testLogger(t)).PlanCurrentState(
+			[]SQLiteComparisonRow{
 				{Path: "docs/a.txt", LocalPresent: true, ComparisonKind: comparisonLocalOnlyCreate},
 				{Path: "docs/b.txt", LocalPresent: true, ComparisonKind: comparisonLocalOnlyCreate},
 			},
-			[]sQLiteReconciliationRow{
+			[]SQLiteReconciliationRow{
 				{Path: "docs/a.txt", ItemType: ItemTypeFile, ComparisonKind: comparisonLocalOnlyCreate, ReconciliationKind: kind},
 				{Path: "docs/b.txt", ItemType: ItemTypeFile, ComparisonKind: comparisonLocalOnlyCreate, ReconciliationKind: kind},
 			},
-			[]localStateRow{
+			[]LocalStateRow{
 				{Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "local-a"},
 				{Path: "docs/b.txt", ItemType: ItemTypeFile, Hash: "local-b"},
 			},
 			nil,
 			[]ObservationIssueRow{
-				{Path: "docs/a.txt", IssueType: issueLocalReadDenied},
-				{Path: "docs/b.txt", IssueType: issueLocalReadDenied},
+				{Path: "docs/a.txt", IssueType: IssueLocalReadDenied},
+				{Path: "docs/b.txt", IssueType: IssueLocalReadDenied},
 			},
 			NewBaselineForTest(nil),
-			plannerMountContext{},
+			PlannerMountContext{},
 			SyncBidirectional,
 		)
 	}
 
-	suppressed, err := plan(reconcileUpload)
+	suppressed, err := plan(ReconcileUpload)
 	require.NoError(t, err)
 	assert.Empty(t, suppressed.Actions, "the control: unavailable truth suppresses the classified rows")
 
-	_, err = plan(reconcileUnclassified)
+	_, err = plan(ReconcileUnclassified)
 	require.ErrorIs(t, err, errUnclassifiedPlan)
 	var unclassified *unclassifiedPlanError
 	require.ErrorAs(t, err, &unclassified)
@@ -398,14 +398,14 @@ func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *tes
 func TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan(t *testing.T) {
 	t.Parallel()
 
-	_, err := newPlanner(testLogger(t)).PlanCurrentState(
-		[]sQLiteComparisonRow{{Path: "docs/a.txt", LocalPresent: true}},
+	_, err := NewPlanner(testLogger(t)).PlanCurrentState(
+		[]SQLiteComparisonRow{{Path: "docs/a.txt", LocalPresent: true}},
 		nil,
-		[]localStateRow{{Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "local-a"}},
+		[]LocalStateRow{{Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "local-a"}},
 		nil,
 		nil,
 		NewBaselineForTest(nil),
-		plannerMountContext{},
+		PlannerMountContext{},
 		SyncBidirectional,
 	)
 	require.ErrorIs(t, err, errUnclassifiedPlan)
@@ -420,19 +420,19 @@ func TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan(t *testing.T) {
 func TestPlanCurrentState_FolderTransferFailsThePlan(t *testing.T) {
 	t.Parallel()
 
-	_, err := newPlanner(testLogger(t)).PlanCurrentState(
-		[]sQLiteComparisonRow{{Path: "local-dir", LocalPresent: true, ComparisonKind: comparisonLocalOnlyCreate}},
-		[]sQLiteReconciliationRow{{
+	_, err := NewPlanner(testLogger(t)).PlanCurrentState(
+		[]SQLiteComparisonRow{{Path: "local-dir", LocalPresent: true, ComparisonKind: comparisonLocalOnlyCreate}},
+		[]SQLiteReconciliationRow{{
 			Path:               "local-dir",
 			ItemType:           ItemTypeFolder,
 			ComparisonKind:     comparisonLocalOnlyCreate,
-			ReconciliationKind: reconcileUpload,
+			ReconciliationKind: ReconcileUpload,
 		}},
-		[]localStateRow{{Path: "local-dir", ItemType: ItemTypeFolder}},
+		[]LocalStateRow{{Path: "local-dir", ItemType: ItemTypeFolder}},
 		nil,
 		nil,
 		NewBaselineForTest(nil),
-		plannerMountContext{},
+		PlannerMountContext{},
 		SyncBidirectional,
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)
@@ -456,10 +456,10 @@ func TestPlanCurrentState_UnlistedActionTypeFailsThePlan(t *testing.T) {
 		unlistedAction = ActionCleanup + 1
 		unlistedSide   = CreateRemote + 1
 	)
-	listed := Action{Type: ActionUpload, Path: "docs/listed.txt", View: &pathView{Path: "docs/listed.txt"}}
-	plan := func(reconciled, composed []Action) (*actionPlan, error) {
-		return newPlanner(testLogger(t)).planBuiltActions(reconciled, composed, nil,
-			&moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
+	listed := Action{Type: ActionUpload, Path: "docs/listed.txt", View: &PathView{Path: "docs/listed.txt"}}
+	plan := func(reconciled, composed []Action) (*ActionPlan, error) {
+		return NewPlanner(testLogger(t)).planBuiltActions(reconciled, composed, nil,
+			&moveComposition{}, &moveInputs{}, PlannerMountContext{}, SyncBidirectional)
 	}
 
 	control, err := plan([]Action{listed}, nil)

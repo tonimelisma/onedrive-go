@@ -87,7 +87,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -109,7 +109,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -124,7 +124,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -136,7 +136,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	t.Parallel()
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -151,7 +151,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -172,7 +172,7 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 
 	// Baseline has "File.txt" — no file on disk.
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: bl,
 	}
 
@@ -189,7 +189,7 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 	dir := t.TempDir()
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: bl,
 	}
 
@@ -205,7 +205,7 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 	dir := t.TempDir()
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: bl,
 		localWatchState: localWatchState{
 			RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
@@ -478,7 +478,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	removal := nextLocalPatch(t, batches, "the removal of file.txt")
 
 	assert.Equal(t, "File.txt", survivor.Path, "should have re-emitted the surviving File.txt")
-	assert.Equal(t, []string{"file.txt"}, removal.deletedPrefixes, "should have removed the deleted file.txt")
+	assert.Equal(t, []string{"file.txt"}, removal.DeletedPrefixes, "should have removed the deleted file.txt")
 
 	stopWatch(t, cancel, done)
 }
@@ -538,8 +538,8 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	// reported before the delete, no create precedes the delete, and nothing
 	// follows it.
 	ev := nextLocalPatch(t, batches, "the delete of file.txt")
-	assert.Empty(t, ev.rows, "expected no rows (survivors still collide): got %+v", ev)
-	assert.Equal(t, []string{"file.txt"}, ev.deletedPrefixes)
+	assert.Empty(t, ev.Rows, "expected no rows (survivors still collide): got %+v", ev)
+	assert.Equal(t, []string{"file.txt"}, ev.DeletedPrefixes)
 	require.Equal(t, 2, recorder.countEvents(collisionSkipOf("FILE.txt")),
 		"the re-emitted FILE.txt was skipped again before the delete went out")
 	requireNoLocalPatch(t, batches, "the delete, which the re-emitted peers precede")
@@ -604,7 +604,7 @@ func TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself(t *testing
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "café.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{baseline: emptyBaseline()}
+	obs := &LocalObserver{baseline: emptyBaseline()}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "café.txt", ".")
 	assert.False(t, found)
@@ -619,7 +619,7 @@ func TestHasCaseCollisionCached_FullCaseFoldingAndEmojiCollide(t *testing.T) {
 	emojiName := "a\U0001F600.txt"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, emojiName), []byte("b"), 0o600))
 
-	obs := &localObserver{baseline: emptyBaseline()}
+	obs := &LocalObserver{baseline: emptyBaseline()}
 	tree := mustOpenSyncTree(t, dir)
 
 	colliding, found := obs.HasCaseCollisionCached(tree, dir, "STRASSE.txt", ".")

@@ -22,7 +22,7 @@ import (
 // newScenarioCreateExecutor returns an executor that creates and uploads on
 // remote and records its pending creates in a real store, plus that store and
 // the sync root.
-func newScenarioCreateExecutor(t *testing.T, remote *moveScenarioRemote) (*executor, *SyncStore, string) {
+func newScenarioCreateExecutor(t *testing.T, remote *moveScenarioRemote) (*Executor, *SyncStore, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
@@ -30,12 +30,12 @@ func newScenarioCreateExecutor(t *testing.T, remote *moveScenarioRemote) (*execu
 	require.NoError(t, err)
 	client := remote.client(t)
 	_, logger := newDebugLogBuffer()
-	cfg := newExecutorConfig(client, client, client, syncTree, remote.driveID, logger, nil)
+	cfg := NewExecutorConfig(client, client, client, syncTree, remote.driveID, logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(client, client, nil, logger))
 	store := newTestStore(t)
 	cfg.SetPendingCreates(store)
 
-	return newExecution(cfg, emptyBaseline()), store, syncRoot
+	return NewExecution(cfg, emptyBaseline()), store, syncRoot
 }
 
 // loseCreateAnswers turns the lost create answers of remote on or off
@@ -176,13 +176,13 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 			e, store, syncRoot := newScenarioCreateExecutor(t, remote)
 			local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 			if tc.priorIntent {
-				store.setNowFunc(func() time.Time { return intendedAt })
+				store.SetNowFunc(func() time.Time { return intendedAt })
 				require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &PendingCreate{
 					DriveID: remote.driveID, Path: "doc.txt", ParentID: graphRootID,
 				}))
 			}
 			now := func() time.Time { return intendedAt.Add(tc.retriedAfter) }
-			store.setNowFunc(now)
+			store.SetNowFunc(now)
 			e.SetNowFunc(now)
 			stranger, ok := remote.itemAt("doc.txt")
 			require.True(t, ok)
@@ -190,7 +190,7 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 			_, err := e.uploadNewFile(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
 				remote.driveID, graphRootID, "doc.txt", local)
 			require.ErrorIs(t, err, graph.ErrConflict)
-			var nameTaken *remoteNameTakenError
+			var nameTaken *RemoteNameTakenError
 			assert.Equal(t, tc.nameTaken, errors.As(err, &nameTaken), "only another spelling is a name collision")
 
 			assert.Equal(t, before, remote.tree(), "what holds the name is untouched")

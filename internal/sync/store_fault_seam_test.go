@@ -244,7 +244,7 @@ func registerFaultDriver(t *testing.T) {
 	t.Helper()
 
 	faultDriverOnce.Do(func() {
-		probe, err := sql.Open(sqliteDriverName, ":memory:")
+		probe, err := sql.Open(SqliteDriverName, ":memory:")
 		require.NoError(t, err)
 		inner := probe.Driver()
 		require.NoError(t, probe.Close())
@@ -272,7 +272,7 @@ func newTestEngineOnFaultStore(
 }
 
 func faultSeedOutcome(path, itemID, localHash string) *BaselineMutation {
-	return mutationFromActionOutcome(&actionOutcome{
+	return MutationFromActionOutcome(&ActionOutcome{
 		Action: ActionDownload, Success: true, Path: path,
 		DriveID: driveid.New(engineTestDriveID), ItemID: itemID,
 		ParentID: "root", ItemType: ItemTypeFile,
@@ -367,14 +367,14 @@ func TestFault_ReadFailureIsReturnedNotEmpty(t *testing.T) {
 
 	store, fault := newFaultStore(t)
 	ctx := t.Context()
-	require.NoError(t, store.ReplaceHeldDeletes(ctx, []heldDelete{{Path: "x.txt", Side: deleteSafetySideRemote, Reason: deleteSafetyReasonTooMany, ItemType: ItemTypeFile}}))
+	require.NoError(t, store.ReplaceHeldDeletes(ctx, []HeldDelete{{Path: "x.txt", Side: DeleteSafetySideRemote, Reason: DeleteSafetyReasonTooMany, ItemType: ItemTypeFile}}))
 
 	fault.arm("FROM held_deletes", errInjectedFault)
-	held, err := store.listHeldDeletes(ctx)
+	held, err := store.ListHeldDeletes(ctx)
 	require.ErrorIs(t, err, errInjectedFault)
 	assert.Nil(t, held)
 
-	held, err = store.listHeldDeletes(ctx)
+	held, err = store.ListHeldDeletes(ctx)
 	require.NoError(t, err)
 	assert.Len(t, held, 1, "the read works again once the fault is gone")
 }

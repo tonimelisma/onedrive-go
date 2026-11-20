@@ -60,11 +60,11 @@ func TestFullDelta_RepeatedNextLinkIsCursorUnusable(t *testing.T) {
 		// 10,000 pages with every item buffered.
 		return &graph.DeltaPage{Items: []graph.Item{cursorTestItem(fmt.Sprintf("i%d", call))}, NextLink: "page-2"}, nil
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "saved-token")
 
-	require.ErrorIs(t, err, errDeltaExpired, "a looping change list takes the expired-token recovery")
+	require.ErrorIs(t, err, ErrDeltaExpired, "a looping change list takes the expired-token recovery")
 	assert.Equal(t, []string{"saved-token", "page-2"}, fetcher.seen(), "the loop is noticed after two fetches")
 }
 
@@ -78,11 +78,11 @@ func TestFullDelta_RepeatedPageItemsIsCursorUnusable(t *testing.T) {
 			NextLink: fmt.Sprintf("page-%d", call+1),
 		}, nil
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "saved-token")
 
-	require.ErrorIs(t, err, errDeltaExpired)
+	require.ErrorIs(t, err, ErrDeltaExpired)
 	assert.Len(t, fetcher.seen(), 2)
 }
 
@@ -99,7 +99,7 @@ func TestFullDelta_EmptyPageWithNextLinkContinues(t *testing.T) {
 			return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("x")}, DeltaLink: "done"}, nil
 		}
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
 
@@ -130,14 +130,14 @@ func TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable(t *testing.T) {
 			fetcher := &scriptedDeltaFetcher{answer: func(int, string) (*graph.DeltaPage, error) {
 				return nil, tt.rejected
 			}}
-			obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
-			obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
+			obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+			obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: noopSleep}
 
 			_, _, err := obs.FullDelta(t.Context(), "saved-token")
 
 			require.Error(t, err)
 			if !tt.unusable {
-				require.NotErrorIs(t, err, errDeltaExpired)
+				require.NotErrorIs(t, err, ErrDeltaExpired)
 				// A 429 or 5xx is tried again as a transient page fault
 				// (R-2.15.5), always with the saved token: never as a
 				// cursor problem that re-enumerates the drive.
@@ -146,7 +146,7 @@ func TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable(t *testing.T) {
 				}
 				return
 			}
-			require.ErrorIs(t, err, errDeltaExpired, "a token OneDrive keeps refusing is re-enumerated")
+			require.ErrorIs(t, err, ErrDeltaExpired, "a token OneDrive keeps refusing is re-enumerated")
 			assert.Equal(t, []string{"saved-token", "saved-token"}, fetcher.seen())
 		})
 	}
@@ -162,7 +162,7 @@ func TestFullDelta_OneRejectionOfASavedTokenIsRetried(t *testing.T) {
 		}
 		return &graph.DeltaPage{DeltaLink: "next-token"}, nil
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 
 	_, token, err := obs.FullDelta(t.Context(), "saved-token")
 
@@ -183,11 +183,11 @@ func TestWatch_TransientErrorRetriesAndKeepsToken(t *testing.T) {
 		}
 		return &graph.DeltaPage{DeltaLink: "kept-token"}, nil
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sleeps := 0
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		sleeps++
 		if sleeps < 3 {
 			return nil
@@ -196,10 +196,10 @@ func TestWatch_TransientErrorRetriesAndKeepsToken(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
-	obs.SetDeltaExpiredRecovery(func(context.Context, resyncKind) (remoteObservationBatch, error) {
-		return remoteObservationBatch{}, errors.New("a transient failure must not reset the cursor")
+	obs.SetDeltaExpiredRecovery(func(context.Context, ResyncKind) (RemoteObservationBatch, error) {
+		return RemoteObservationBatch{}, errors.New("a transient failure must not reset the cursor")
 	})
-	batches := make(chan remoteObservationBatch, 4)
+	batches := make(chan RemoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	require.NoError(t, runWithin(t, ctx, "the third sleep to end the watch", func(watchCtx context.Context) error {
@@ -217,21 +217,21 @@ func TestWatch_SustainedServerErrorsOnTheCursorResetIt(t *testing.T) {
 	fetcher := &scriptedDeltaFetcher{answer: func(int, string) (*graph.DeltaPage, error) {
 		return nil, graphStatusError(http.StatusInternalServerError, graph.ErrServerError)
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	clock := newManualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	obs.clock = &observerTestClock{syncClock: clock, sleep: func(_ context.Context, delay time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: clock, sleep: func(_ context.Context, delay time.Duration) error {
 		clock.Advance(delay)
 		return nil
 	}}
 	recovered := make(chan struct{})
-	obs.SetDeltaExpiredRecovery(func(context.Context, resyncKind) (remoteObservationBatch, error) {
+	obs.SetDeltaExpiredRecovery(func(context.Context, ResyncKind) (RemoteObservationBatch, error) {
 		close(recovered)
 		cancel()
-		return remoteObservationBatch{}, context.Canceled
+		return RemoteObservationBatch{}, context.Canceled
 	})
-	batches := make(chan remoteObservationBatch, 4)
+	batches := make(chan RemoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	require.NoError(t, runWithin(t, ctx, "the cursor reset's re-enumeration to end the watch", func(watchCtx context.Context) error {
@@ -257,27 +257,27 @@ func TestWatch_RepeatedlyFailingRecoveryBacksOff(t *testing.T) {
 	fetcher := &scriptedDeltaFetcher{answer: func(int, string) (*graph.DeltaPage, error) {
 		return nil, deltaGone("resyncChangesApplyDifferences")
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	clock := newManualClock(start)
 	var slept time.Duration
-	obs.clock = &observerTestClock{syncClock: clock, sleep: func(_ context.Context, delay time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: clock, sleep: func(_ context.Context, delay time.Duration) error {
 		slept += delay
 		clock.Advance(delay)
 		return nil
 	}}
 	const attempts = 5
 	var recoveredAt []time.Time
-	obs.SetDeltaExpiredRecovery(func(context.Context, resyncKind) (remoteObservationBatch, error) {
+	obs.SetDeltaExpiredRecovery(func(context.Context, ResyncKind) (RemoteObservationBatch, error) {
 		recoveredAt = append(recoveredAt, clock.Now())
 		if len(recoveredAt) == attempts {
 			cancel()
 		}
-		return remoteObservationBatch{}, newCursorUnusableError("a page links back to an earlier page", nil)
+		return RemoteObservationBatch{}, NewCursorUnusableError("a page links back to an earlier page", nil)
 	})
-	batches := make(chan remoteObservationBatch, 4)
+	batches := make(chan RemoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	require.NoError(t, runWithin(t, ctx, "the last recovery attempt to end the watch", func(watchCtx context.Context) error {

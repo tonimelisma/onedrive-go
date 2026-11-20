@@ -9,64 +9,64 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// applyShortcutTopology persists parent-owned shortcut-root state. Callers run
+// ApplyShortcutTopology persists parent-owned shortcut-root state. Callers run
 // this before committing remote observation progress so topology facts replay if
 // the parent namespace state cannot be durably accepted.
-func (s *SyncStore) applyShortcutTopology(ctx context.Context, batch shortcutTopologyBatch) (bool, error) {
-	if s == nil || !batch.shouldApply() {
+func (s *SyncStore) ApplyShortcutTopology(ctx context.Context, batch ShortcutTopologyBatch) (bool, error) {
+	if s == nil || !batch.ShouldApply() {
 		return false, nil
 	}
-	current, err := s.listShortcutRoots(ctx)
+	current, err := s.ListShortcutRoots(ctx)
 	if err != nil {
 		return false, err
 	}
-	plan := planShortcutRootTopology(current, batch)
+	plan := PlanShortcutRootTopology(current, batch)
 	if !plan.Changed {
 		return false, nil
 	}
-	if err := s.replaceShortcutRoots(ctx, plan.Records); err != nil {
+	if err := s.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (s *SyncStore) markShortcutChildFinalDrainReleasePending(
+func (s *SyncStore) MarkShortcutChildFinalDrainReleasePending(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
 ) (bool, error) {
 	if s == nil || ack.Ref.IsZero() {
 		return false, nil
 	}
-	current, err := s.listShortcutRoots(ctx)
+	current, err := s.ListShortcutRoots(ctx)
 	if err != nil {
 		return false, err
 	}
-	plan := planShortcutRootDrainReleasePending(current, ack)
+	plan := PlanShortcutRootDrainReleasePending(current, ack)
 	if !plan.Changed {
 		return false, nil
 	}
-	if err := s.replaceShortcutRoots(ctx, plan.Records); err != nil {
+	if err := s.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (s *SyncStore) acknowledgeShortcutChildArtifactsPurged(
+func (s *SyncStore) AcknowledgeShortcutChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
 ) (bool, error) {
 	if s == nil || ack.Ref.IsZero() {
 		return false, nil
 	}
-	current, err := s.listShortcutRoots(ctx)
+	current, err := s.ListShortcutRoots(ctx)
 	if err != nil {
 		return false, err
 	}
-	plan := planShortcutRootArtifactCleanupAck(current, ack)
+	plan := PlanShortcutRootArtifactCleanupAck(current, ack)
 	if !plan.Changed {
 		return false, nil
 	}
-	if err := s.replaceShortcutRoots(ctx, plan.Records); err != nil {
+	if err := s.ReplaceShortcutRoots(ctx, plan.Records); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -80,15 +80,15 @@ func (s *SyncStore) ShortcutChildWorkSnapshot(
 	if s == nil {
 		return ShortcutChildWorkSnapshot{NamespaceID: namespaceID}, nil
 	}
-	records, err := s.listShortcutRoots(ctx)
+	records, err := s.ListShortcutRoots(ctx)
 	if err != nil {
 		return ShortcutChildWorkSnapshot{}, err
 	}
-	return shortcutChildWorkSnapshotFromRootsWithParentRoot(namespaceID, parentSyncRoot, ContentFilterConfig{}, records), nil
+	return ShortcutChildWorkSnapshotFromRootsWithParentRoot(namespaceID, parentSyncRoot, ContentFilterConfig{}, records), nil
 }
 
-// listShortcutRoots returns parent-engine-owned shortcut root state.
-func (s *SyncStore) listShortcutRoots(ctx context.Context) ([]ShortcutRootRecord, error) {
+// ListShortcutRoots returns parent-engine-owned shortcut root state.
+func (s *SyncStore) ListShortcutRoots(ctx context.Context) ([]ShortcutRootRecord, error) {
 	return queryShortcutRootRecords(ctx, s.db, "sync: querying shortcut_roots", "sync: iterating shortcut_roots")
 }
 
@@ -127,8 +127,8 @@ func queryShortcutRootRecords(
 	return records, nil
 }
 
-// replaceShortcutRoots atomically replaces the parent shortcut-root table.
-func (s *SyncStore) replaceShortcutRoots(ctx context.Context, records []ShortcutRootRecord) (err error) {
+// ReplaceShortcutRoots atomically replaces the parent shortcut-root table.
+func (s *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []ShortcutRootRecord) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sync: beginning shortcut_roots replacement: %w", err)
@@ -156,7 +156,7 @@ func (s *SyncStore) replaceShortcutRoots(ctx context.Context, records []Shortcut
 	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
 	for i := range records {
-		record := normalizeShortcutRootRecord(&records[i])
+		record := NormalizeShortcutRootRecord(&records[i])
 		protectedPaths, marshalErr := json.Marshal(record.ProtectedPaths)
 		if marshalErr != nil {
 			return fmt.Errorf("sync: encoding protected paths for shortcut root %s: %w", record.BindingItemID, marshalErr)
@@ -254,7 +254,7 @@ func scanShortcutRootRecord(row shortcutRootScanner) (ShortcutRootRecord, error)
 	if waiting.BindingItemID != "" {
 		record.Waiting = &waiting
 	}
-	return normalizeShortcutRootRecord(&record), nil
+	return NormalizeShortcutRootRecord(&record), nil
 }
 
 func shortcutRootIdentitySQL(identity *synctree.FileIdentity) (synctree.FileIdentity, bool) {

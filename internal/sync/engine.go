@@ -29,14 +29,14 @@ type driveIdentityProof struct {
 // internal/multisync.
 type Engine struct {
 	baseline        *SyncStore
-	planner         *planner
-	execCfg         *executorConfig
-	fetcher         deltaFetcher
-	socketIOFetcher socketIOEndpointFetcher
-	itemsClient     itemClient
-	driveVerifier   driveVerifier      // optional (B-074)
-	folderDelta     folderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister recursiveLister    // optional: mount-root recursive enumeration fallback
+	planner         *Planner
+	execCfg         *ExecutorConfig
+	fetcher         DeltaFetcher
+	socketIOFetcher SocketIOEndpointFetcher
+	itemsClient     ItemClient
+	driveVerifier   DriveVerifier      // optional (B-074)
+	folderDelta     FolderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister RecursiveLister    // optional: mount-root recursive enumeration fallback
 	permHandler     *permissionHandler // encapsulates all permission logic (6.4c)
 	dataDir         string
 	syncRoot        string
@@ -46,7 +46,7 @@ type Engine struct {
 	locks engineLocks
 	// syncRootIdentity is the one owner of the identity the sync folder must
 	// match; the executor and every observer read it, never a copy.
-	syncRootIdentity       *syncRootIdentity
+	syncRootIdentity       *SyncRootIdentity
 	driveID                driveid.ID
 	driveType              string
 	remoteRootItemID       string
@@ -109,7 +109,7 @@ type Engine struct {
 	// (D-090). Tests run scenarios forward, reversed or in a seeded shuffle
 	// so a bug that depends on dispatch order cannot pass by timing; nil, as
 	// in production, keeps the dependency graph's order.
-	dispatchOrder func([]*trackedAction) []*trackedAction
+	dispatchOrder func([]*TrackedAction) []*TrackedAction
 	// serializeWorkers runs one worker instead of the pool, so with a
 	// dispatch order execution is deterministic. Test-only.
 	serializeWorkers bool
@@ -122,7 +122,7 @@ type Engine struct {
 	// test advances its manual clock instead.
 	waitFn func(ctx context.Context, d time.Duration) error
 	// reconciliationQueryOverride, when set, replaces
-	// sqlQueryReconciliationState in planning. Test-only: no reachable state
+	// SqlQueryReconciliationState in planning. Test-only: no reachable state
 	// is outside the decision table, so a test removes one rule from it to
 	// prove the pass fails closed on the row that rule classified (R-6.2.16).
 	reconciliationQueryOverride string
@@ -130,26 +130,26 @@ type Engine struct {
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
-	localWatcherFactory func() (fsWatcher, error)
+	localWatcherFactory func() (FsWatcher, error)
 
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
 	// wakeups. Production uses NewSocketIOWakeSourceWithOptions.
 	socketIOWakeSourceFactory func(
-		socketIOEndpointFetcher,
+		SocketIOEndpointFetcher,
 		driveid.ID,
-		socketIOWakeSourceOptions,
+		SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
 
 	// clock is the engine's single time capability: now, delayed callbacks,
-	// tickers, sleeps, and retry jitter. See syncClock for why these are one
+	// tickers, sleeps, and retry jitter. See SyncClock for why these are one
 	// value rather than five injectable fields.
-	clock syncClock
+	clock SyncClock
 	// wallClock is the engine's real clock: clock is it unless a test
 	// replaced clock, and every observer the engine builds runs on it, except
 	// that a pass's full local scan, which runs no timer, measures its
 	// racily-clean window on the run's clock (observeLocal). Its timer panics
 	// carry a timer callback's panic to the run it ends (beginRun).
-	wallClock realClock
+	wallClock RealClock
 	// nextRunID numbers the engine's runs. One engine runs one RunOnce or
 	// RunWatch at a time, and that run's goroutine alone takes the next.
 	nextRunID int64
@@ -192,7 +192,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	if !syncRootExists(cfg.SyncRoot) {
+	if !SyncRootExists(cfg.SyncRoot) {
 		return nil, fmt.Errorf("%w: %s is missing or is not a folder", ErrMountRootUnavailable, cfg.SyncRoot)
 	}
 
@@ -209,7 +209,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	storeOwnedByEngine := false
 	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
-	bm, err := openEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.storeDriverName())
+	bm, err := OpenEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.storeDriverName())
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -219,7 +219,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, err
 	}
 
-	execCfg := newExecutorConfig(
+	execCfg := NewExecutorConfig(
 		cfg.Items,
 		cfg.Downloads,
 		cfg.Uploads,
@@ -228,7 +228,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.Logger,
 		cfg.PathConvergence,
 	)
-	rootIdentity := newSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
+	rootIdentity := NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
 	trash := configureEngineExecutor(execCfg, cfg, bm, rootIdentity)
 
 	// Construct sessionStore and TransferManager together so the TM is
@@ -247,7 +247,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 
 	e := &Engine{
 		baseline:               bm,
-		planner:                newPlanner(cfg.Logger),
+		planner:                NewPlanner(cfg.Logger),
 		execCfg:                execCfg,
 		fetcher:                cfg.Fetcher,
 		socketIOFetcher:        cfg.SocketIOFetcher,
@@ -276,13 +276,13 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		shortcutNamespaceID:    cfg.ShortcutNamespaceID,
 		shortcutChildWorkSink:  cfg.ShortcutChildWorkSink,
 		enableWebsocket:        cfg.EnableWebsocket,
-		wallClock:              realClock{logger: cfg.Logger, panics: &timerPanics{}},
+		wallClock:              RealClock{logger: cfg.Logger, panics: &TimerPanics{}},
 		socketIOWakeSourceFactory: func(
-			fetcher socketIOEndpointFetcher,
+			fetcher SocketIOEndpointFetcher,
 			driveID driveid.ID,
-			opts socketIOWakeSourceOptions,
+			opts SocketIOWakeSourceOptions,
 		) socketIOWakeSourceRunner {
-			return newSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
+			return NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
 	e.clock = e.wallClock
@@ -295,7 +295,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	// One clock: the store's retry and trial schedule and the executor's
 	// timestamps read the engine clock, or a retry scheduled by one clock is
 	// judged due by another.
-	bm.setNowFunc(e.nowFunc)
+	bm.SetNowFunc(e.nowFunc)
 	execCfg.SetNowFunc(e.nowFunc)
 
 	storeOwnedByEngine = true
@@ -303,8 +303,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 }
 
 // buildLocalObserver builds a local observer on the engine's real clock.
-func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *localObserver {
-	obs := newLocalObserver(bl, logger, e.checkWorkers)
+func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *LocalObserver {
+	obs := NewLocalObserver(bl, logger, e.checkWorkers)
 	obs.clock = e.wallClock
 
 	return obs
@@ -312,8 +312,8 @@ func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *localObs
 
 // buildRemoteObserver builds an observer of the engine's drive on the
 // engine's real clock.
-func (e *Engine) buildRemoteObserver(bl *Baseline, logger *slog.Logger) *remoteObserver {
-	obs := newRemoteObserver(e.fetcher, bl, e.driveID, logger)
+func (e *Engine) buildRemoteObserver(bl *Baseline, logger *slog.Logger) *RemoteObserver {
+	obs := NewRemoteObserver(e.fetcher, bl, e.driveID, logger)
 	obs.clock = e.wallClock
 
 	return obs
@@ -360,7 +360,7 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 	if cfg.ExpectedSyncRootIdentity != nil {
 		return ""
 	}
-	return errSyncRootRebindHint
+	return ErrSyncRootRebindHint
 }
 
 // configureEngineExecutor installs the mount-owned executor policy: the remote
@@ -368,10 +368,10 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 // folder identity remote deletes re-check (D-011). It returns the trash so the
 // engine's housekeeping purges the same one.
 func configureEngineExecutor(
-	execCfg *executorConfig,
+	execCfg *ExecutorConfig,
 	cfg *engineInputs,
 	store *SyncStore,
-	rootIdentity *syncRootIdentity,
+	rootIdentity *SyncRootIdentity,
 ) *localtrash.Trash {
 	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
 	execCfg.SetPendingCreates(store)
@@ -384,10 +384,10 @@ func configureEngineExecutor(
 
 // openBoundSyncTree opens the sync tree and resolves the folder identity
 // every scan of it is validated against (D-001).
-func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs) (*synctree.Root, resolvedSyncRoot, error) {
+func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs) (*synctree.Root, ResolvedSyncRoot, error) {
 	syncTree, err := openSyncTree(cfg.SyncRoot)
 	if err != nil {
-		return nil, resolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
+		return nil, ResolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
 	if cfg.interposeSyncTree != nil {
 		syncTree = syncTree.Interpose(cfg.interposeSyncTree)
@@ -395,13 +395,13 @@ func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs)
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)
 	if err != nil {
-		return nil, resolvedSyncRoot{}, err
+		return nil, ResolvedSyncRoot{}, err
 	}
 	return syncTree, binding, nil
 }
 
 func openSyncTree(syncRoot string) (*synctree.Root, error) {
-	resolved, err := resolveSyncRootPath(syncRoot)
+	resolved, err := ResolveSyncRootPath(syncRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +421,7 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // alone. Mark-and-bind is serialized: two commits racing would otherwise
 // write two tokens, and the folder would keep the one the store did not
 // record. It reports what the commit changed and marks nothing itself.
-func (e *Engine) commitLocalSnapshot(ctx context.Context, commit localSnapshotCommit) (localSnapshotCommitResult, error) {
+func (e *Engine) commitLocalSnapshot(ctx context.Context, commit LocalSnapshotCommit) (LocalSnapshotCommitResult, error) {
 	identity := e.syncRootIdentity
 	if identity == nil || !identity.bindPending.Load() {
 		return e.commitLocalSnapshotUnbound(ctx, &commit)
@@ -435,7 +435,7 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, commit localSnapshotCo
 
 	expected := identity.Expected()
 	if expected == nil {
-		return localSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
+		return LocalSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
 	bind.Token = ""
@@ -447,15 +447,15 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, commit localSnapshotCo
 		e.logger.Debug("sync folder cannot carry a bind token; binding on inode and filesystem id",
 			slog.Any("error", err))
 	default:
-		return localSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: %w", err)
+		return LocalSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: %w", err)
 	}
 
-	commit.bind = &bind
+	commit.Bind = &bind
 	result, err := e.baseline.CommitLocalSnapshot(ctx, &commit)
 	if err != nil {
 		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
-	bound := result.bound
+	bound := result.Bound
 	if bound != nil && bound.Token != bind.Token && bound.Token != "" {
 		// Another binding won in the store; the folder must carry the token
 		// the store recorded, not the one just written.
@@ -472,8 +472,8 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, commit localSnapshotCo
 }
 
 func (e *Engine) commitLocalSnapshotUnbound(
-	ctx context.Context, commit *localSnapshotCommit,
-) (localSnapshotCommitResult, error) {
+	ctx context.Context, commit *LocalSnapshotCommit,
+) (LocalSnapshotCommitResult, error) {
 	result, err := e.baseline.CommitLocalSnapshot(ctx, commit)
 	if err != nil {
 		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
@@ -485,7 +485,7 @@ func (e *Engine) commitLocalSnapshotUnbound(
 // through: the SQLite driver unless a test named another.
 func (cfg *engineInputs) storeDriverName() string {
 	if cfg.storeDriver == "" {
-		return sqliteDriverName
+		return SqliteDriverName
 	}
 
 	return cfg.storeDriver

@@ -36,12 +36,12 @@ func TestPermissionProbe_HandleLocalPermission_DoesNotPersistDurableState(t *tes
 	ph, syncRoot := newTestPermHandler(t, nil)
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 
-	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 		Path:              "accessible/file.txt",
 		ActionType:        ActionDownload,
 		Err:               os.ErrPermission,
 		ErrMsg:            "permission denied",
-		FailureCapability: permissionCapabilityLocalRead,
+		FailureCapability: PermissionCapabilityLocalRead,
 	})
 
 	require.NotEqual(t, permissionEvidenceNone, evidence.Kind)
@@ -74,7 +74,7 @@ func TestPermissionApply_ActivateTimedRemoteWriteScope_PersistsRetryWorkAndScope
 	flow := testEngineFlow(t, eng)
 	scopeKey := SKPermRemoteWrite("Shared/Docs")
 
-	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &ActionCompletion{
 		Path:       "Shared/Docs/file.txt",
 		ActionType: ActionUpload,
 	}, permissionEvidence{
@@ -102,16 +102,16 @@ func TestPermissionApply_ReadBoundaryScope_DoesNotPersistBlockScopeRow(t *testin
 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
-	scopeKey := sKPermLocalRead("Private")
+	scopeKey := SKPermLocalRead("Private")
 
-	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &ActionCompletion{
 		Path:       "Private/file.txt",
 		ActionType: ActionDownload,
 	}, permissionEvidence{
 		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: "Private",
 		TriggerPath:  "Private/file.txt",
-		IssueType:    issueLocalReadDenied,
+		IssueType:    IssueLocalReadDenied,
 	}, false))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -141,7 +141,7 @@ func TestPermissionApply_KnownActiveBoundary_DoesNotPersistOrArmRetryTimer(t *te
 		NextTrialAt:   time.Unix(61, 0),
 	}))
 
-	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
+	require.NoError(t, flow.applyPermissionFailureEvidence(t.Context(), nil, &ActionCompletion{
 		Path:       "Shared/Docs/file.txt",
 		ActionType: ActionUpload,
 	}, permissionEvidence{

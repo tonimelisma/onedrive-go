@@ -83,7 +83,7 @@ func (e syncedEntry) skipError() error {
 
 // dropEntry sets aside an entry admitted earlier that turned out to be a
 // twin: its hash jobs, and for a folder the rows its walk found below it.
-func (a *scanAvailability) dropEntry(entry syncedEntry, dbRelPath string, currentRows map[string]localStateRow) {
+func (a *scanAvailability) dropEntry(entry syncedEntry, dbRelPath string, currentRows map[string]LocalStateRow) {
 	a.droppedHashJobs[entry.fsPath] = struct{}{}
 	if !entry.isDir {
 		return
@@ -152,7 +152,7 @@ func (a *scanAvailability) baselineEntryWithIdentity(baseline *Baseline, identit
 	if entry == nil {
 		return nil
 	}
-	if entryIdentity, _ := entry.fileIdentity(); !synctree.SameIdentity(entryIdentity, identity) {
+	if entryIdentity, _ := entry.FileIdentity(); !synctree.SameIdentity(entryIdentity, identity) {
 		// The inode number was reused by another entry.
 		return nil
 	}
@@ -163,14 +163,14 @@ func (a *scanAvailability) baselineEntryWithIdentity(baseline *Baseline, identit
 // recordSyncedPathReplaced keeps a synced path that now holds an entry sync
 // skips (a symlink it does not follow, a special file) unavailable instead
 // of deleted.
-func (o *localObserver) recordSyncedPathReplaced(skipped *[]skippedItem, dbRelPath string, what string) {
+func (o *LocalObserver) recordSyncedPathReplaced(skipped *[]SkippedItem, dbRelPath string, what string) {
 	entry, ok := o.baseline.GetByPath(dbRelPath)
 	if !ok {
 		return
 	}
-	*skipped = append(*skipped, skippedItem{
+	*skipped = append(*skipped, SkippedItem{
 		Path:   dbRelPath,
-		Reason: issueLocalUnsyncableReplacement,
+		Reason: IssueLocalUnsyncableReplacement,
 		Detail: fmt.Sprintf("this synced %s was replaced by %s, which sync does not sync; the OneDrive copy is kept",
 			itemNoun(entry.ItemType), what),
 		BlocksReadBoundary: entry.ItemType == ItemTypeFolder,
@@ -180,8 +180,8 @@ func (o *localObserver) recordSyncedPathReplaced(skipped *[]skippedItem, dbRelPa
 // recordSyncedItemMovedOutOfReach keeps a synced item that was renamed to
 // something sync skips (an invalid name, a too-long path, an excluded name)
 // unavailable at its synced path, recognized by its filesystem identity.
-func (o *localObserver) recordSyncedItemMovedOutOfReach(
-	skipped *[]skippedItem,
+func (o *LocalObserver) recordSyncedItemMovedOutOfReach(
+	skipped *[]SkippedItem,
 	availability *scanAvailability,
 	dbRelPath string,
 	d fs.DirEntry,
@@ -203,9 +203,9 @@ func (o *localObserver) recordSyncedItemMovedOutOfReach(
 	if entry == nil || entry.Path == dbRelPath {
 		return
 	}
-	*skipped = append(*skipped, skippedItem{
+	*skipped = append(*skipped, SkippedItem{
 		Path:   entry.Path,
-		Reason: issueLocalUnsyncableReplacement,
+		Reason: IssueLocalUnsyncableReplacement,
 		Detail: fmt.Sprintf("this synced %s is now %s, which sync cannot sync; the OneDrive copy is kept",
 			itemNoun(entry.ItemType), dbRelPath),
 		BlocksReadBoundary: entry.ItemType == ItemTypeFolder,
@@ -219,7 +219,7 @@ func (o *localObserver) recordSyncedItemMovedOutOfReach(
 // A mount point crossed under cross_filesystems is remembered in the scan
 // result, so a later scan can tell its unmounted, empty folder from deleted
 // content.
-func (o *localObserver) isForeignMountPoint(
+func (o *LocalObserver) isForeignMountPoint(
 	availability *scanAvailability,
 	dbRelPath string,
 	identity synctree.FileIdentity,
@@ -247,7 +247,7 @@ func (o *localObserver) isForeignMountPoint(
 // deleted (D-003). A flagged folder still on its own device is the mounted
 // disk, and emptying it is an ordinary delete the hold judges. Call after
 // isForeignMountPoint recorded the folder's device.
-func (o *localObserver) flaggedMountIsGone(availability *scanAvailability, dbRelPath string) bool {
+func (o *LocalObserver) flaggedMountIsGone(availability *scanAvailability, dbRelPath string) bool {
 	if availability == nil {
 		return false
 	}
@@ -267,10 +267,10 @@ func parentRelPath(dbRelPath string) string {
 	return parent
 }
 
-func vanishedMountSkippedItem(dbRelPath string) skippedItem {
-	return skippedItem{
+func vanishedMountSkippedItem(dbRelPath string) SkippedItem {
+	return SkippedItem{
 		Path:   dbRelPath,
-		Reason: issueLocalMountMissing,
+		Reason: IssueLocalMountMissing,
 		Detail: "this folder was a mount point for another filesystem that is no longer mounted; " +
 			"its synced content is kept until the disk is back, and 'onedrive-go drive rebind-root' keeps it " +
 			"(if the disk is gone for good, remove this empty folder: sync then deletes its content on OneDrive)",
@@ -278,10 +278,10 @@ func vanishedMountSkippedItem(dbRelPath string) skippedItem {
 	}
 }
 
-func mountBoundarySkippedItem(dbRelPath string) skippedItem {
-	return skippedItem{
+func mountBoundarySkippedItem(dbRelPath string) SkippedItem {
+	return SkippedItem{
 		Path:   dbRelPath,
-		Reason: issueLocalMountBoundary,
+		Reason: IssueLocalMountBoundary,
 		Detail: "this folder is a mount point for another filesystem; sync does not cross into it " +
 			"(set cross_filesystems = true to sync it)",
 		BlocksReadBoundary: true,
@@ -291,13 +291,13 @@ func mountBoundarySkippedItem(dbRelPath string) skippedItem {
 // recordUnreadableEntry turns an entry the walk listed but could not stat
 // into a read boundary. Only "it vanished" is absence; an I/O error is not
 // (D-005).
-func recordUnreadableEntry(skipped *[]skippedItem, dbRelPath string, err error) {
+func recordUnreadableEntry(skipped *[]SkippedItem, dbRelPath string, err error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
-	*skipped = append(*skipped, skippedItem{
+	*skipped = append(*skipped, SkippedItem{
 		Path:               dbRelPath,
-		Reason:             issueLocalReadDenied,
+		Reason:             IssueLocalReadDenied,
 		Detail:             fmt.Sprintf("could not read this entry (%v); it is kept as it was", err),
 		BlocksReadBoundary: true,
 	})
@@ -313,7 +313,7 @@ func hasOtherHardLinks(info fs.FileInfo) bool {
 
 func itemNoun(itemType ItemType) string {
 	if itemType == ItemTypeFolder {
-		return strFolder
+		return StrFolder
 	}
-	return strFile
+	return StrFile
 }

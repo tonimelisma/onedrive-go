@@ -87,11 +87,11 @@ func TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable(t *testing.T) {
 		return strings.HasSuffix(name, string(filepath.Separator)+"a")
 	})
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
-	require.ErrorIs(t, err, errLocalWatchUnavailable)
-	cause, ok := watchUnavailableCauseOf(err)
+	require.ErrorIs(t, err, ErrLocalWatchUnavailable)
+	cause, ok := WatchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseFileLimit, cause)
 	assert.Equal(t, []string{root}, watcher.removedPaths(), "the partial watch set is rolled back")
@@ -115,14 +115,14 @@ func TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan(t *testing.T) {
 
 	// inotify_init1 fails with EMFILE when max_user_instances is used up.
 	// Before the fix this ended local observation for the whole session.
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return nil, syscall.EMFILE
 	}
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackStarted
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackStarted
 	}, "fallback started after watcher creation failed with EMFILE")
 
 	cancel()
@@ -139,7 +139,7 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 		return filepath.Base(name) == "newdir"
 	})
 	obs := newWatchTestObserver(t, &watcher.mockFsWatcher, watchObserverTestOptions{})
-	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
+	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
 	// newdir must appear only after setup has walked the tree; created
 	// earlier, setup itself meets the limit, closes the watcher, and the
 	// Create below would be sent on a closed channel.
@@ -167,8 +167,8 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	// keeping the watcher starves transfers and SQLite, so watching stops and
 	// the runtime falls back to periodic scans.
 	err := receiveWithin(t, done, "the watch to stop at the descriptor limit")
-	require.ErrorIs(t, err, errLocalWatchUnavailable)
-	cause, ok := watchUnavailableCauseOf(err)
+	require.ErrorIs(t, err, ErrLocalWatchUnavailable)
+	cause, ok := WatchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseFileLimit, cause)
 }
@@ -182,7 +182,7 @@ func TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst(t *testing.T
 	t.Parallel()
 
 	watcher := newRecordingFsWatcher()
-	obs := newLocalObserver(baselineWith(&BaselineEntry{
+	obs := NewLocalObserver(baselineWith(&BaselineEntry{
 		Path: "a", DriveID: driveid.New("d"), ItemID: "a1", ItemType: ItemTypeFolder,
 	}), synctest.TestLogger(t), 0)
 	// "/sync/a/q" is not registered (its Add failed) but a directory below
@@ -206,7 +206,7 @@ func TestHandleDelete_UnknownDirectoryDropsTheWatchesBelowIt(t *testing.T) {
 	t.Parallel()
 
 	watcher := newRecordingFsWatcher()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	registerWatchedForTest(obs, "/sync", "/sync/new/x", "/sync/new/x/y", "/sync/news")
 	tree := mustOpenSyncTree(t, "/sync")
 
@@ -231,7 +231,7 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 		&BaselineEntry{Path: "a", DriveID: driveid.New("d"), ItemID: "a1", ItemType: ItemTypeFolder},
 		&BaselineEntry{Path: "a/sub", DriveID: driveid.New("d"), ItemID: "s1", ItemType: ItemTypeFolder},
 	)
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 64)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -243,12 +243,12 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 
 	writeTestFile(t, dir, "b/sub/new.txt", "after rename")
 
-	patch := waitForLocalPatch(t, batches, func(batch *localObservation) bool {
-		return slices.ContainsFunc(batch.rows, func(row localStateRow) bool {
+	patch := waitForLocalPatch(t, batches, func(batch *LocalObservation) bool {
+		return slices.ContainsFunc(batch.Rows, func(row LocalStateRow) bool {
 			return strings.HasSuffix(row.Path, "/new.txt")
 		})
 	}, "a row for the file created inside the renamed tree")
-	assert.Equal(t, []string{"b/sub/new.txt"}, patchRowPaths([]localObservation{patch}),
+	assert.Equal(t, []string{"b/sub/new.txt"}, patchRowPaths([]LocalObservation{patch}),
 		"a descendant watch must not keep reporting the directory's old path")
 	stopWatch(t, cancel, done)
 }
@@ -263,7 +263,7 @@ func TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches(t *testing.T)
 	require.NoError(t, os.Mkdir(filepath.Join(replaced, "fresh"), 0o700))
 
 	watcher := newRecordingFsWatcher()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	// Registrations left by the directory that used to live at "a" and was
 	// moved away while watched; its delete event was ignored because "a"
 	// exists again.
@@ -290,7 +290,7 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 	photos := filepath.Join(dir, "photos")
 
 	var hashCalls atomic.Int64
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.hashFunc = func(context.Context, string) (string, error) {
 		hashCalls.Add(1)
 		return "h", nil
@@ -309,7 +309,7 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 	assert.Contains(t, obs.watchedDirs.paths(), filepath.Join(photos, "nested"))
 }
 
-func registerWatchedForTest(obs *localObserver, paths ...string) {
+func registerWatchedForTest(obs *LocalObserver, paths ...string) {
 	for _, path := range paths {
 		obs.watchedDirs.add(path, nil)
 	}
@@ -329,12 +329,12 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	timers := make(chan capturedTimer, 4)
 	watcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, watcher, watchObserverTestOptions{
-		AfterFunc: func(delay time.Duration, fn func()) syncTimer {
+		AfterFunc: func(delay time.Duration, fn func()) SyncTimer {
 			timers <- capturedTimer{delay: delay, fn: fn}
 			return noopSyncTimer{}
 		},
 	})
-	batches := make(chan localObservation, 8)
+	batches := make(chan LocalObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
@@ -342,7 +342,7 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	watcher.errs <- fsnotify.ErrEventOverflow
 
 	suspect := receiveWithin(t, batches, "suspect marker")
-	assert.Equal(t, localTruthSuspect, suspect.kind)
+	assert.Equal(t, LocalTruthSuspect, suspect.Kind)
 
 	// Before the fix nothing rescanned until the five-minute safety scan.
 	var timer capturedTimer
@@ -356,8 +356,8 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	timer.fn()
 
 	snapshot := receiveWithin(t, batches, "recovery full snapshot")
-	require.Equal(t, localSnapshot, snapshot.kind, "the recovery scan replaces local truth with a full snapshot")
-	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"), "the change the kernel dropped is observed")
+	require.Equal(t, LocalSnapshot, snapshot.Kind, "the recovery scan replaces local truth with a full snapshot")
+	assert.True(t, containsLocalRow(snapshot.Rows, "missed.txt"), "the change the kernel dropped is observed")
 	stopWatch(t, cancel, done)
 }
 
@@ -367,7 +367,7 @@ func TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan(t *testing.T) {
 
 	timers := make(chan capturedTimer, 4)
 	obs := newWatchTestObserver(t, newMockFsWatcher(), watchObserverTestOptions{
-		AfterFunc: func(delay time.Duration, fn func()) syncTimer {
+		AfterFunc: func(delay time.Duration, fn func()) SyncTimer {
 			timers <- capturedTimer{delay: delay, fn: fn}
 			return noopSyncTimer{}
 		},
@@ -389,10 +389,10 @@ func TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan(t *testing.T) {
 func TestTrySendLocalObservationBatch_DropRequestsRecoveryScan(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetLocalObservationBatchChannel(make(chan localObservation)) // unbuffered, nobody reading
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.SetLocalObservationBatchChannel(make(chan LocalObservation)) // unbuffered, nobody reading
 
-	obs.TrySendLocalObservationBatch(t.Context(), &localObservation{deletedPaths: []string{"x"}})
+	obs.TrySendLocalObservationBatch(t.Context(), &LocalObservation{DeletedPaths: []string{"x"}})
 
 	assert.Equal(t, int64(1), obs.DroppedEvents())
 	assert.Len(t, obs.recoveryScanRequests, 1, "a dropped batch asks for a recovery rescan")
@@ -407,7 +407,7 @@ type noopSyncTimer struct{}
 
 func (noopSyncTimer) Stop() bool { return true }
 
-func containsLocalRow(rows []localStateRow, path string) bool {
+func containsLocalRow(rows []LocalStateRow, path string) bool {
 	for i := range rows {
 		if rows[i].Path == path {
 			return true
@@ -441,9 +441,9 @@ func TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm(t *testin
 	t.Parallel()
 
 	clock := newManualClock(time.Now())
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.clock = clock
-	obs.safetyScanInterval = localWatchHealthySafetyScanInterval
+	obs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
 
 	// A tree whose full scan takes 20 s is not rescanned 10 s apart.
 	obs.lastFullScanDuration = 20 * time.Second
@@ -459,7 +459,7 @@ func TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm(t *testin
 		require.True(t, obs.takeRecoveryScanDue(gen))
 		obs.finishRecoveryScan()
 	}
-	for _, want := range []time.Duration{80 * time.Second, 160 * time.Second, localWatchHealthySafetyScanInterval, localWatchHealthySafetyScanInterval} {
+	for _, want := range []time.Duration{80 * time.Second, 160 * time.Second, LocalWatchHealthySafetyScanInterval, LocalWatchHealthySafetyScanInterval} {
 		runArmedRecovery()
 		obs.armRecoveryScan()
 		assert.Equal(t, want, obs.lastRecoveryDelay)
@@ -467,7 +467,7 @@ func TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm(t *testin
 
 	// Once the storm has passed the delay is back to its base.
 	runArmedRecovery()
-	clock.Advance(2 * localWatchHealthySafetyScanInterval)
+	clock.Advance(2 * LocalWatchHealthySafetyScanInterval)
 	obs.armRecoveryScan()
 	assert.Equal(t, 40*time.Second, obs.lastRecoveryDelay)
 }
@@ -477,7 +477,7 @@ func TestCancelRecoveryScan_StaleTimerFiringIsIgnored(t *testing.T) {
 	t.Parallel()
 
 	clock := newManualClock(time.Now())
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.clock = clock
 	obs.armRecoveryScan()
 	clock.mu.Lock()
@@ -518,24 +518,24 @@ func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	t.Parallel()
 
 	eng, recorder, clock := newFallbackTestEngine(t)
-	eng.localWatcherFactory = func() (fsWatcher, error) { return newEnospcWatcher(1), nil }
-	tickerCreated := installTickerCreatedSignal(eng, localWatchHealthySafetyScanInterval)
+	eng.localWatcherFactory = func() (FsWatcher, error) { return newEnospcWatcher(1), nil }
+	tickerCreated := installTickerCreatedSignal(eng, LocalWatchHealthySafetyScanInterval)
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackStarted
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	// Before the fix the first fallback scan came an hour later, and the
 	// hashes and recovery scan the stopped watcher had pending were lost.
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackScanned
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackScanned
 	}, "immediate fallback scan")
 
 	receiveWithin(t, tickerCreated, "fallback scans to run at the safety-scan interval, not hourly")
-	clock.Advance(localWatchHealthySafetyScanInterval)
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackScanned
+	clock.Advance(LocalWatchHealthySafetyScanInterval)
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackScanned
 	}, "scan at the safety-scan interval")
 
 	stopWatch(t, cancel, done)
@@ -548,25 +548,25 @@ func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
 	eng, recorder, clock := newFallbackTestEngine(t)
 	recovered := newSignalingWatcher()
 	var factoryCalls atomic.Int64
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		if factoryCalls.Add(1) == 1 {
 			return newEnospcWatcher(1), nil
 		}
 		return recovered, nil
 	}
-	retryArmed := installAfterFuncCreatedSignal(eng, localWatchRetryInitialDelay)
+	retryArmed := installAfterFuncCreatedSignal(eng, LocalWatchRetryInitialDelay)
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackStarted
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	receiveWithin(t, retryArmed, "a watcher retry to be scheduled")
 
 	// The limit was transient. Before the fix the session stayed degraded.
-	clock.Advance(localWatchRetryInitialDelay)
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackStopped
+	clock.Advance(LocalWatchRetryInitialDelay)
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackStopped
 	}, "fallback ends for the retry")
 	receiveWithin(t, recovered.Added(), "the retried watcher to be established")
 	assert.Equal(t, int64(2), factoryCalls.Load())
@@ -589,13 +589,13 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 	watcher := newAddErrWatcher(nil, nil)
 	timers := make(chan capturedTimer, 4)
 	obs := newWatchTestObserver(t, &watcher.mockFsWatcher, watchObserverTestOptions{
-		AfterFunc: func(delay time.Duration, fn func()) syncTimer {
+		AfterFunc: func(delay time.Duration, fn func()) SyncTimer {
 			timers <- capturedTimer{delay: delay, fn: fn}
 			return noopSyncTimer{}
 		},
 	})
-	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
-	batches := make(chan localObservation, 8)
+	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	batches := make(chan LocalObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, &watcher.mockFsWatcher, dir)
@@ -605,7 +605,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 	require.NoError(t, os.MkdirAll(filepath.Join(missed, "inner"), 0o700))
 	watcher.errs <- fsnotify.ErrEventOverflow
 
-	assert.Equal(t, localTruthSuspect, receiveWithin(t, batches, "suspect marker").kind)
+	assert.Equal(t, LocalTruthSuspect, receiveWithin(t, batches, "suspect marker").Kind)
 	var timer capturedTimer
 	select {
 	case timer = <-timers:
@@ -613,7 +613,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 		require.Fail(t, "an overflow must arm a recovery rescan")
 	}
 	timer.fn()
-	require.Equal(t, localSnapshot, receiveWithin(t, batches, "recovery snapshot").kind)
+	require.Equal(t, LocalSnapshot, receiveWithin(t, batches, "recovery snapshot").Kind)
 
 	// Before the fix the directory stayed unwatched for the whole session.
 	assert.Contains(t, watcher.addedPaths(), missed, "the recovery scan watches the directory it found")
@@ -636,10 +636,10 @@ func TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan(t *testing.T) 
 		}
 		return false
 	})
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.activeWatcher = watcher
 	tree := mustOpenSyncTree(t, dir)
-	rows := []localStateRow{{Path: "flaky", ItemType: ItemTypeFolder}}
+	rows := []LocalStateRow{{Path: "flaky", ItemType: ItemTypeFolder}}
 
 	obs.rewatchUnwatchedDirectories(tree, rows)
 	require.NotContains(t, obs.watchedDirs.paths(), flaky, "the watch limit refused it this time")

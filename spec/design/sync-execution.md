@@ -10,7 +10,7 @@ Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.
 
 Execution takes a runtime plan, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
-`actionCompletion` per finished action. That runtime-plan handoff is
+`ActionCompletion` per finished action. That runtime-plan handoff is
 assembled on the engine side by the shared pipeline in
 `engine_current_plan.go`, then admitted through `engine_runtime_start.go`
 before execution begins. Publication-only planner actions are not executor
@@ -25,7 +25,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 - Owns: dispatch, dependency satisfaction, worker execution, conflict-copy creation, and success outcomes
 - Does Not Own: planning, retry scheduling, scope activation policy, or store schema
-- Source of Truth: planner-produced `actionPlan` plus the rooted capabilities injected into the executor
+- Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
 - Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
 - Mutable Runtime Owner: workers own only action execution. The engine owns
   runtime quiescence, held-work timing, admission, and dependency completion
@@ -60,7 +60,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 ## Worker And Dependency Model
 
-`depGraph` is the execution-time dependency graph. It tracks:
+`DepGraph` is the execution-time dependency graph. It tracks:
 
 - which actions are in flight
 - which dependencies remain unsatisfied
@@ -86,7 +86,7 @@ latest committed truth using the shared action-freshness predicate. Admission
 uses the same predicate only for actions that are about to enter the worker
 outbox; retry-held or scope-held actions are checked when they later become
 dispatch candidates. A stale worker-start action returns
-`errActionPreconditionChanged`, so the engine classifies it as superseded
+`ErrActionPreconditionChanged`, so the engine classifies it as superseded
 instead of ordinary retry. This gate runs before hashing, upload-session
 creation, download writes, delete/move mutation, or other executor side
 effects. Canceled worker/admission freshness checks fail closed before any
@@ -106,7 +106,7 @@ identity and content facts. Executable actions must carry planner view truth;
 missing planner view data is an internal validation error once committed truth
 is authoritative, not a reason to skip stale work checks. Move actions
 additionally check the source/destination peer path that is not represented by
-the main `pathView`, so a changed local source, a remote move source the moved
+the main `PathView`, so a changed local source, a remote move source the moved
 item itself is back at, missing local move destination, a local move destination
 that no longer matches the planner's `Action.MovedLocal`, or occupied remote move
 destination supersedes the old move before side effects. Another item at a local
@@ -145,7 +145,7 @@ downloads the edit instead of recording an agreement that does not exist.
 
 Worker-start rejections record aggregate perf counters by truth authority
 (`local_state` or `remote_state`). Executor live-precondition rejections carry
-their failure capability through `actionCompletion`, so the worker boundary can
+their failure capability through `ActionCompletion`, so the worker boundary can
 record local-vs-remote live-precondition superseded counters without parsing
 logs or paths. The worker metric boundary does not infer live-precondition
 source from action type; ambiguous outcomes must be fixed at the executor
@@ -254,7 +254,7 @@ resolved:
   the read by ID sees it, or the If-Match refuses it
   (`TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile`);
 - as a durable name collision when OneDrive holds a differently spelled
-  sibling of the same name (`remoteNameTakenError`, classified as
+  sibling of the same name (`RemoteNameTakenError`, classified as
   `case_collision` with backoff, naming both names;
   `TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`);
 - as a stale precondition otherwise. A 409 without a prior intent, or on a
@@ -407,7 +407,7 @@ so the second same-second copy of a long name is as writable as the first.
 The dependency graph is dependency-only: it does not define runtime
 quiescence. Held retry/scope work intentionally keeps exact nodes unresolved,
 so the engine decides when the current runtime is quiescent based on outbox,
-running work, and due held entries. `depGraph` therefore does not expose a
+running work, and due held entries. `DepGraph` therefore does not expose a
 runtime-completion channel; callers use dependency release plus engine-owned
 settle checks instead. When shutdown has already started, the engine still
 processes late worker completions for bookkeeping, but it immediately converts
@@ -440,7 +440,7 @@ admitted by local observation are validated against the followed target facts
 that observation persisted, not rejected merely because the alias directory
 entry is a symlink. That holds for a file beneath a symlinked directory as
 well as for a file symlink: when the source or any ancestor is a link
-(`symlinkBoundaryForPath`, a rooted no-follow walk), the source is stated by
+(`SymlinkBoundaryForPath`, a rooted no-follow walk), the source is stated by
 following links, as observation did; otherwise it is stated through the rooted
 no-follow `synctree.Lstat`. The rooted capability is deliberately not asked
 about a followed source, because it refuses every name that resolves outside
@@ -449,7 +449,7 @@ another disk would otherwise never upload. The lexical containment check
 (`synctree.Abs`) still runs first. The transfer manager then reuses the executor-supplied
 callback before upload reads so a large file can abort if it changes
 mid-session. Expected source-hash mismatches are returned as
-`errActionPreconditionChanged`.
+`ErrActionPreconditionChanged`.
 
 For downloads, the executor validates the planned destination before transfer
 starts and supplies the same callback for the transfer manager to run
@@ -490,7 +490,7 @@ upload in the soak of 2026-11-02
 `TestExecutor_CreateRemoteFolder_IntoAParentGoneMidPlanIsAParentGoneFact`,
 `TestExecutor_Upload_DoesNotProbeItsOwnPathAfterTheUpload`). A live `itemNotFound` result, changed item identity,
 drive, item type, eTag, hash, size, or same-coordinate path where Graph supplies
-that fact is a stale precondition and maps to `errActionPreconditionChanged`.
+that fact is a stale precondition and maps to `ErrActionPreconditionChanged`.
 Folder eTags are the exception: OneDrive changes a folder's eTag whenever
 anything beneath it changes, so a folder's recorded eTag (often captured when
 it was created, before its children were uploaded) is not evidence the folder
@@ -559,14 +559,14 @@ drain stage, and only then releases concrete dependents for worker
 dispatch.
 
 A download never replaces a SQLite database an application has open:
-`refuseLiveDatabaseTarget` returns `errDatabaseInUse` when the target has a
+`refuseLiveDatabaseTarget` returns `ErrDatabaseInUse` when the target has a
 non-empty `-wal` or `-journal` sibling, whether or not the target itself exists yet, both before the transfer and again in
 `ValidateTargetBeforeRename`. It is the retryable per-file condition
 `local_database_open`, not a superseded action, because superseding would
 replan the same download at once. Only a sidecar that does not exist is "no
 sidecar": one that cannot be checked (permission denied, I/O error) refuses the
 replacement too, as an ordinary precondition failure naming the sidecar rather
-than `errDatabaseInUse`, because the download cannot prove the database closed
+than `ErrDatabaseInUse`, because the download cannot prove the database closed
 (R-2.4.15, `TestExecutor_Download_RefusesToReplaceDatabaseWithLiveWAL`,
 `TestExecutor_Download_DatabaseOpenedDuringDownloadIsNotReplaced`,
 `TestExecutor_Download_RefusesNewDatabaseBesideALiveWAL`,
@@ -709,7 +709,7 @@ Local delete keeps the ordinary per-item safety rule:
   return a stale-precondition/superseded outcome so the engine replans from
   current truth without retrying that exact old delete
 - a content hash that no longer matches the baseline is a proven change
-  (`localContentChangedError`), which its stat facts may not show (a damaged
+  (`LocalContentChangedError`), which its stat facts may not show (a damaged
   block keeps size, times and identity): beside superseding the delete, the
   engine clears that baseline row's stored change time
   (`SyncStore.ForgetBaselineLocalCtime`, in `forgetLocalCtimeProvenChanged`
@@ -876,7 +876,7 @@ anything (`engine_shortcut_release.go`, sync-engine.md): it drives
 `ExecuteLocalDelete` for one synced entry at a time from the entry's baseline
 row, a file whose remote item still exists included, and keeps what the
 delete refuses. Content it keeps that sync does not sync is named in the
-folder-not-empty sentence a folder delete gives (`folderNotEmptyReason`).
+folder-not-empty sentence a folder delete gives (`FolderNotEmptyReason`).
 
 ## Conflict Execution
 
@@ -896,7 +896,7 @@ The dependent download carries `RequireMissingLocalTarget`, so executor-side
 local preconditions treat the post-copy missing canonical path as the expected
 state. If the canonical path reappears before the dependent download runs or
 before its final atomic rename, that is a stale local-write precondition and the executor returns
-`errActionPreconditionChanged` instead of overwriting the newly appeared file.
+`ErrActionPreconditionChanged` instead of overwriting the newly appeared file.
 
 If the download fails, the preserved local conflict copy remains on disk and
 the canonical path stays pending for retry/replan. Execution does not recreate
@@ -919,8 +919,8 @@ upload from a stale local delete.
 For engines rooted below the remote drive root, execution uses the engine's own
 mount context:
 
-- `executorConfig.driveID`
-- `executorConfig.remoteRootItemID`
+- `ExecutorConfig.driveID`
+- `ExecutorConfig.remoteRootItemID`
 - `Action.DriveID`
 
 Path convergence checks after successful remote mutation are resolved relative

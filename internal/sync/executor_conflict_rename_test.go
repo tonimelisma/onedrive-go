@@ -40,13 +40,13 @@ func conflictCopyClock() time.Time {
 	return time.Date(2026, 1, 15, 12, 30, 45, 0, time.UTC)
 }
 
-func newConflictCopyExecutor(t *testing.T) (*executor, string) {
+func newConflictCopyExecutor(t *testing.T) (*Executor, string) {
 	t.Helper()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	cfg.SetNowFunc(conflictCopyClock)
 
-	return newExecution(cfg, emptyBaseline()), syncRoot
+	return NewExecution(cfg, emptyBaseline()), syncRoot
 }
 
 func conflictCopyAction(path string) *Action {
@@ -55,10 +55,10 @@ func conflictCopyAction(path string) *Action {
 		Path:    path,
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &pathView{
+		View: &PathView{
 			Path:   path,
-			Local:  &localState{ItemType: ItemTypeFile},
-			Remote: &remoteState{ItemID: "item1", ETag: "etag1"},
+			Local:  &LocalState{ItemType: ItemTypeFile},
+			Remote: &RemoteState{ItemID: "item1", ETag: "etag1"},
 		},
 	}
 }

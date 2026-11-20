@@ -19,18 +19,18 @@ const shortcutNamespaceTestID = "personal:owner@example.com"
 func TestShortcutObservationBatch_ShouldApplyCompleteEvenWithoutFacts(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, shortcutTopologyBatch{
-		Kind: shortcutTopologyObservationComplete,
-	}.shouldApply())
-	assert.True(t, shortcutTopologyBatch{
-		Kind: shortcutTopologyObservationIncremental,
-		Deletes: []shortcutBindingDelete{{
+	assert.True(t, ShortcutTopologyBatch{
+		Kind: ShortcutTopologyObservationComplete,
+	}.ShouldApply())
+	assert.True(t, ShortcutTopologyBatch{
+		Kind: ShortcutTopologyObservationIncremental,
+		Deletes: []ShortcutBindingDelete{{
 			BindingItemID: "binding-1",
 		}},
-	}.shouldApply())
-	assert.False(t, shortcutTopologyBatch{
-		Kind: shortcutTopologyObservationIncremental,
-	}.shouldApply())
+	}.ShouldApply())
+	assert.False(t, ShortcutTopologyBatch{
+		Kind: ShortcutTopologyObservationIncremental,
+	}.ShouldApply())
 }
 
 // Validates: R-2.4.8
@@ -38,7 +38,7 @@ func TestShortcutChildWorkSnapshotIncludesExplicitCleanupScope(t *testing.T) {
 	t.Parallel()
 
 	parentRoot := filepath.Join(t.TempDir(), "parent")
-	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
+	publication := ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		shortcutNamespaceTestID,
 		parentRoot,
 		ContentFilterConfig{},
@@ -63,7 +63,7 @@ func TestShortcutChildWorkSnapshotIncludesExplicitRunnerScope(t *testing.T) {
 	t.Parallel()
 
 	parentRoot := filepath.Join(t.TempDir(), "parent")
-	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
+	publication := ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		shortcutNamespaceTestID,
 		parentRoot,
 		ContentFilterConfig{},
@@ -91,7 +91,7 @@ func TestShortcutChildWorkSnapshotProjectsParentContentFilter(t *testing.T) {
 	t.Parallel()
 
 	parentRoot := filepath.Join(t.TempDir(), "parent")
-	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
+	publication := ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		shortcutNamespaceTestID,
 		parentRoot,
 		ContentFilterConfig{
@@ -129,7 +129,7 @@ func TestShortcutChildWorkSnapshotSkipsHiddenAlias(t *testing.T) {
 	t.Parallel()
 
 	parentRoot := filepath.Join(t.TempDir(), "parent")
-	publication := shortcutChildWorkSnapshotFromRootsWithParentRoot(
+	publication := ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		shortcutNamespaceTestID,
 		parentRoot,
 		ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Run"}},
@@ -207,7 +207,7 @@ func TestShortcutChildWorkSnapshotEqualityIsSyncOwned(t *testing.T) {
 func TestShortcutChildAckHandleZeroReturnsExplicitErrors(t *testing.T) {
 	t.Parallel()
 
-	handle := shortcutChildAckHandle{}
+	handle := ShortcutChildAckHandle{}
 
 	_, err := handle.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
 		Ref: newShortcutChildAckRef("binding-1"),
@@ -234,9 +234,9 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 		return nil
 	}
 
-	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: shortcutTopologyBatch{
-			Kind: shortcutTopologyObservationComplete,
+	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &RemoteObservationBatch{
+		ShortcutTopology: ShortcutTopologyBatch{
+			Kind: ShortcutTopologyObservationComplete,
 		},
 	})
 	require.NoError(t, err)
@@ -253,7 +253,7 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.shortcutNamespaceID = shortcutNamespaceTestID
 	eng.shortcutChildWorkSink = func(ctx context.Context, publication ShortcutChildWorkSnapshot) error {
-		roots, err := eng.baseline.listShortcutRoots(ctx)
+		roots, err := eng.baseline.ListShortcutRoots(ctx)
 		require.NoError(t, err)
 		require.Len(t, roots, 1)
 		assert.Equal(t, "binding-1", roots[0].BindingItemID)
@@ -263,10 +263,10 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 		return nil
 	}
 
-	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: shortcutTopologyBatch{
-			Kind: shortcutTopologyObservationIncremental,
-			Upserts: []shortcutBindingUpsert{{
+	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &RemoteObservationBatch{
+		ShortcutTopology: ShortcutTopologyBatch{
+			Kind: ShortcutTopologyObservationIncremental,
+			Upserts: []ShortcutBindingUpsert{{
 				BindingItemID:     "binding-1",
 				RelativeLocalPath: "Shared/Docs",
 				LocalAlias:        "Docs",
@@ -289,9 +289,9 @@ func TestApplyShortcutObservationBatch_SkipsEmptyIncrementalBatch(t *testing.T) 
 		return nil
 	}
 
-	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &remoteObservationBatch{
-		shortcutTopology: shortcutTopologyBatch{
-			Kind: shortcutTopologyObservationIncremental,
+	err := testEngineFlow(t, eng).applyShortcutObservationBatch(t.Context(), &RemoteObservationBatch{
+		ShortcutTopology: ShortcutTopologyBatch{
+			Kind: ShortcutTopologyObservationIncremental,
 		},
 	})
 	require.NoError(t, err)

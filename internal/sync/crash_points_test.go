@@ -376,16 +376,16 @@ const (
 // from it by index, so a new point goes last.
 func allCrashPoints() []string {
 	return []string{
-		crashPointRemoteMoveDone,
-		crashPointLocalMoveDone,
-		crashPointUploadCreatedUnrecorded,
-		crashPointUploadRemoteDone,
-		crashPointDownloadRenamed,
-		crashPointLocalDeleteTrashed,
-		crashPointRemoteDeleteDone,
-		crashPointCommitObservation,
-		crashPointCommitOutcome,
-		crashPointLocalMoveDestinationTrashed,
+		CrashPointRemoteMoveDone,
+		CrashPointLocalMoveDone,
+		CrashPointUploadCreatedUnrecorded,
+		CrashPointUploadRemoteDone,
+		CrashPointDownloadRenamed,
+		CrashPointLocalDeleteTrashed,
+		CrashPointRemoteDeleteDone,
+		CrashPointCommitObservation,
+		CrashPointCommitOutcome,
+		CrashPointLocalMoveDestinationTrashed,
 	}
 }
 
@@ -526,7 +526,7 @@ func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 
 				_, recovered := crashAndRecover(t, point, lostWAL)
 				assertSyncInvariants(t, recovered)
-				if point == crashPointUploadCreatedUnrecorded && !lostWAL {
+				if point == CrashPointUploadCreatedUnrecorded && !lostWAL {
 					// The kept intent claims the cut create's empty item, so the
 					// upload finishes into it instead of meeting a create conflict.
 					assert.Equal(t, crashCreatedLocallyContent,
@@ -552,7 +552,7 @@ func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing.T) {
 	t.Parallel()
 
-	for _, point := range []string{crashPointLocalDeleteTrashed, crashPointRemoteDeleteDone} {
+	for _, point := range []string{CrashPointLocalDeleteTrashed, CrashPointRemoteDeleteDone} {
 		for _, lostWAL := range []bool{false, true} {
 			t.Run(crashCaseName(point, lostWAL), func(t *testing.T) {
 				t.Parallel()
@@ -572,7 +572,7 @@ func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing
 					"the crashed engine deleted the locally deleted file on OneDrive exactly once")
 				recoveredDeletes := countOf(recovered.remote.deletes, crashDeletedLocallyItemID)
 				assert.LessOrEqual(t, recoveredDeletes, 1, "the recovered engine deletes it at most once")
-				if point == crashPointRemoteDeleteDone {
+				if point == CrashPointRemoteDeleteDone {
 					assert.Zero(t, recoveredDeletes, "a delete that reached OneDrive is not sent again")
 				}
 				bl, err := recovered.eng.baseline.Load(t.Context())

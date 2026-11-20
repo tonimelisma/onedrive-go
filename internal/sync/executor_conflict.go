@@ -18,7 +18,7 @@ import (
 // it to a unique conflict-copy path. It performs no baseline or remote
 // mutation; the current-state planner schedules any follow-up download/upload
 // action separately.
-func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) actionOutcome {
+func (e *Executor) ExecuteConflictCopy(_ context.Context, action *Action) ActionOutcome {
 	// The entry is renamed from its spelling on disk; the copy is a new entry,
 	// named from the stored name inside the parents' spellings on disk
 	// (R-2.13.2).
@@ -29,7 +29,7 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 			ActionConflictCopy,
 			err,
 			action.Path,
-			permissionCapabilityLocalWrite,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
@@ -45,7 +45,7 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 	case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
 		return e.failedOutcomeWithFailure(action, ActionConflictCopy,
 			fmt.Errorf("checking conflict copy source: %w", normalizeSyncTreePathError(statErr)),
-			action.Path, permissionCapabilityLocalWrite)
+			action.Path, PermissionCapabilityLocalWrite)
 	}
 
 	return e.renameToConflictCopy(action, source, e.syncTree.SpellingOfParent(action.Path), candidateName)
@@ -54,8 +54,8 @@ func (e *executor) ExecuteConflictCopy(_ context.Context, action *Action) action
 // vanishedConflictCopySourceOutcome is the outcome of a conflict copy whose
 // source is gone before its rename, a file or a folder alike: nothing is left
 // to preserve, so the copy succeeds for the path it was asked about.
-func (e *executor) vanishedConflictCopySourceOutcome(action *Action) actionOutcome {
-	return actionOutcome{
+func (e *Executor) vanishedConflictCopySourceOutcome(action *Action) ActionOutcome {
+	return ActionOutcome{
 		Action:   ActionConflictCopy,
 		Success:  true,
 		Path:     action.Path,
@@ -177,9 +177,9 @@ const conflictCopyAttempts = 100
 // ExecuteConflictCopy checked the source's ancestors fails the rename instead
 // of carrying it outside, and it never copies the entry, so a file keeps its
 // identity and a program writing to it keeps writing to the copy.
-func (e *executor) renameToConflictCopy(
+func (e *Executor) renameToConflictCopy(
 	action *Action, source, naming string, candidateName func(string, time.Time, int) string,
-) actionOutcome {
+) ActionOutcome {
 	now := e.nowFunc()
 	for ordinal := 1; ordinal <= conflictCopyAttempts; ordinal++ {
 		candidate := candidateName(naming, now, ordinal)
@@ -203,7 +203,7 @@ func (e *executor) renameToConflictCopy(
 			slog.String("path", action.Path),
 			slog.String("conflict_copy", filepath.Base(candidate)),
 		)
-		return actionOutcome{
+		return ActionOutcome{
 			Action:  ActionConflictCopy,
 			Success: true,
 			Path:    action.Path,
@@ -216,7 +216,7 @@ func (e *executor) renameToConflictCopy(
 	return e.failedOutcomeWithFailure(action, ActionConflictCopy,
 		fmt.Errorf("no free conflict copy name for %s: all %d names stamped %s are taken",
 			action.Path, conflictCopyAttempts, now.Format(conflictCopyStampLayout)),
-		action.Path, permissionCapabilityLocalWrite)
+		action.Path, PermissionCapabilityLocalWrite)
 }
 
 // failedConflictCopyRename is the outcome of a conflict copy whose rename
@@ -224,7 +224,7 @@ func (e *executor) renameToConflictCopy(
 // well as the source, so only a source a lstat through the sync tree finds
 // absent is the vanished outcome; a lstat that fails another way is added to
 // the failure on the same line, so its reason is not lost.
-func (e *executor) failedConflictCopyRename(action *Action, source, candidate string, renameErr error) actionOutcome {
+func (e *Executor) failedConflictCopyRename(action *Action, source, candidate string, renameErr error) ActionOutcome {
 	if errors.Is(renameErr, os.ErrNotExist) {
 		_, statErr := e.syncTree.Lstat(source)
 		switch {
@@ -237,5 +237,5 @@ func (e *executor) failedConflictCopyRename(action *Action, source, candidate st
 
 	return e.failedOutcomeWithFailure(action, ActionConflictCopy,
 		fmt.Errorf("renaming to conflict copy %s: %w", filepath.Base(candidate), normalizeSyncTreePathError(renameErr)),
-		action.Path, permissionCapabilityLocalWrite)
+		action.Path, PermissionCapabilityLocalWrite)
 }

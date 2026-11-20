@@ -37,14 +37,14 @@ func skipUnlessBothUnicodeFormsCoexist(t *testing.T) {
 
 // syncedTwinScanRoot writes the synced file, scans it once and returns the
 // sync root, the baseline that records the scanned row as synced, and the row.
-func syncedTwinScanRoot(t *testing.T) (string, *Baseline, localStateRow) {
+func syncedTwinScanRoot(t *testing.T) (string, *Baseline, LocalStateRow) {
 	t.Helper()
 	skipUnlessBothUnicodeFormsCoexist(t)
 
 	syncRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, twinSyncedName), []byte(twinSyncedContent), 0o600))
 
-	first, err := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0).
+	first, err := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0).
 		FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 	require.Len(t, first.Rows, 1)
@@ -87,7 +87,7 @@ func TestFullScan_UnicodeFormTwinOfSyncedFileIsACollision(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(syncRoot, twinSyncedName), []byte(tt.syncedEdit), 0o600))
 			}
 
-			result, err := newLocalObserver(baseline, synctest.TestLogger(t), 0).
+			result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
 				FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 			require.NoError(t, err)
 
@@ -103,7 +103,7 @@ func TestFullScan_UnicodeFormTwinOfSyncedFileIsACollision(t *testing.T) {
 
 			require.Len(t, result.Skipped, 1)
 			assert.Equal(t, twinSyncedName, result.Skipped[0].Path)
-			assert.Equal(t, issueCaseCollision, result.Skipped[0].Reason)
+			assert.Equal(t, IssueCaseCollision, result.Skipped[0].Reason)
 			assert.Equal(t, sameUnicodeFormCollisionDetail, result.Skipped[0].Detail)
 		})
 	}
@@ -117,7 +117,7 @@ func TestFullScan_RemovedUnicodeFormTwinClearsTheCollision(t *testing.T) {
 	twinPath := filepath.Join(syncRoot, twinSecondName)
 	require.NoError(t, os.WriteFile(twinPath, []byte("twin content, longer\n"), 0o600))
 	tree := mustOpenSyncTree(t, syncRoot)
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 
 	withTwin, err := obs.FullScan(t.Context(), tree)
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestFullScan_UnicodeFormFolderTwinOfSyncedFileIsACollision(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, twinSecondName), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, twinSecondName, "child.txt"), []byte("child\n"), 0o600))
 
-	result, err := newLocalObserver(baseline, synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
 		FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -154,7 +154,7 @@ func TestFullScan_UnicodeFormFolderTwinOfSyncedFileIsACollision(t *testing.T) {
 	assert.Equal(t, syncedRow.Hash, result.Rows[0].Hash)
 	require.Len(t, result.Skipped, 1)
 	assert.Equal(t, twinSyncedName, result.Skipped[0].Path)
-	assert.Equal(t, issueCaseCollision, result.Skipped[0].Reason)
+	assert.Equal(t, IssueCaseCollision, result.Skipped[0].Reason)
 }
 
 // Validates: R-2.13.2
@@ -171,7 +171,7 @@ func TestFullScan_UnicodeFormFileTwinOfSyncedFolderIsACollision(t *testing.T) {
 		Path: nfcCafe, DriveID: driveid.New(engineTestDriveID), ItemID: "synced-folder", ItemType: ItemTypeFolder,
 	})
 
-	result, err := newLocalObserver(baseline, synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
 		FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -183,5 +183,5 @@ func TestFullScan_UnicodeFormFileTwinOfSyncedFolderIsACollision(t *testing.T) {
 		"the synced folder keeps its row and its content; the file twin has none")
 	require.Len(t, result.Skipped, 1)
 	assert.Equal(t, nfcCafe, result.Skipped[0].Path)
-	assert.Equal(t, issueCaseCollision, result.Skipped[0].Reason)
+	assert.Equal(t, IssueCaseCollision, result.Skipped[0].Reason)
 }

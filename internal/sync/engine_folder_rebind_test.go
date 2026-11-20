@@ -107,15 +107,15 @@ func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(
 	_, err := mgr.rawDB().ExecContext(ctx,
 		`INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES ('id1', 'X', 'root', 'folder')`)
 	require.NoError(t, err)
-	require.NoError(t, mgr.ReplaceLocalState(ctx, []localStateRow{{Path: "X", ItemType: ItemTypeFolder}}))
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+	require.NoError(t, mgr.ReplaceLocalState(ctx, []LocalStateRow{{Path: "X", ItemType: ItemTypeFolder}}))
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "id2", Path: "X", ItemType: ItemTypeFolder},
 	}, "", driveID))
 
 	rows, err := mgr.QueryReconciliationState(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, reconcileBaselineUpdate, rows[0].ReconciliationKind)
+	assert.Equal(t, ReconcileBaselineUpdate, rows[0].ReconciliationKind)
 }
 
 // Validates: R-2.10.49

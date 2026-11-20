@@ -32,7 +32,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 		ItemType: ItemTypeFile,
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -58,7 +58,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 	require.True(t, obs.watchedDirs.has(subDir), "the directory is watched before its delete")
@@ -79,7 +79,7 @@ func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *test
 	syncRoot := t.TempDir()
 	writeTestFile(t, syncRoot, "real.txt", "content")
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
@@ -128,7 +128,7 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 		},
 	)
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
@@ -171,7 +171,7 @@ func TestAddWatchesRecursive_SkipsSymlinksByDefault(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	err := obs.AddWatchesRecursive(t.Context(), tracker, mustOpenSyncTree(t, root))
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestAddWatchesRecursive_RespectsIncludeAndIgnoreDirs(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{
 		IncludedDirs: []string{"Projects"},
 		IgnoredDirs:  []string{"Projects/build"},
@@ -333,8 +333,8 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 				ItemType: tt.baseType,
 			})
 
-			obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-			obs.PendingTimers = make(map[string]syncTimer)
+			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+			obs.PendingTimers = make(map[string]SyncTimer)
 			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 			if tt.baseType == ItemTypeFolder {
@@ -380,8 +380,8 @@ func TestHandleDelete_SendsTheRemovalOfThePath(t *testing.T) {
 				ItemType: tt.baseType,
 			})
 
-			obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-			obs.PendingTimers = make(map[string]syncTimer)
+			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+			obs.PendingTimers = make(map[string]SyncTimer)
 			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 			batches := localBatches(obs, 10)
@@ -389,9 +389,9 @@ func TestHandleDelete_SendsTheRemovalOfThePath(t *testing.T) {
 
 			patches := drainLocalPatches(batches)
 			require.Len(t, patches, 1, "one delete sends one patch")
-			assert.Equal(t, []string{"target"}, patches[0].deletedPrefixes)
-			assert.Empty(t, patches[0].rows)
-			assert.True(t, patches[0].dirty)
+			assert.Equal(t, []string{"target"}, patches[0].DeletedPrefixes)
+			assert.Empty(t, patches[0].Rows)
+			assert.True(t, patches[0].Dirty)
 		})
 	}
 }
@@ -403,12 +403,12 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	t.Parallel()
 
 	watcher := newRecordingFsWatcher()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]syncTimer)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.PendingTimers = make(map[string]SyncTimer)
 	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
-	obs.PendingTimers["file.txt"] = realClock{}.AfterFunc(time.Hour, func() {})
+	obs.PendingTimers["file.txt"] = RealClock{}.AfterFunc(time.Hour, func() {})
 
 	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt")
 
@@ -434,8 +434,8 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		ItemType: ItemTypeFolder,
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]syncTimer)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.PendingTimers = make(map[string]SyncTimer)
 	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
 	registerWatchedForTest(obs, dirPath)
@@ -468,7 +468,7 @@ func TestHandleFsEvent_SyncRootLifecycleEventDoesNotEmitContentDelete(t *testing
 		ItemID:   "child-id",
 		ItemType: ItemTypeFile,
 	})
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 
 	obs.HandleFsEvent(t.Context(), fsnotify.Event{
@@ -486,26 +486,26 @@ var _ = context.Background
 // watchDeleteRemainingRows stores rows as local truth, runs the delete the
 // watch observer reports for rel, applies the batch it sends the way the
 // watch loop does, and returns the rows left.
-func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []localStateRow, rel string) []localStateRow {
+func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []LocalStateRow, rel string) []LocalStateRow {
 	t.Helper()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), rows))
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]syncTimer)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.PendingTimers = make(map[string]SyncTimer)
 	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
-	batches := make(chan localObservation, 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	syncRoot := t.TempDir()
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, syncRoot),
 		filepath.Join(syncRoot, rel), rel, filepath.Base(rel))
 
-	var batch localObservation
+	var batch LocalObservation
 	select {
 	case batch = <-batches:
 	default:
@@ -527,7 +527,7 @@ func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []localStat
 func TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows(t *testing.T) {
 	t.Parallel()
 
-	remaining := watchDeleteRemainingRows(t, emptyBaseline(), []localStateRow{
+	remaining := watchDeleteRemainingRows(t, emptyBaseline(), []LocalStateRow{
 		{Path: "new", ItemType: ItemTypeFolder},
 		{Path: "new/a.txt", ItemType: ItemTypeFile},
 		{Path: "new/nested", ItemType: ItemTypeFolder},
@@ -535,7 +535,7 @@ func TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows(t *testing.T) {
 		{Path: "new-sibling.txt", ItemType: ItemTypeFile},
 	}, "new")
 
-	assert.Equal(t, []localStateRow{{Path: "new-sibling.txt", ItemType: ItemTypeFile}}, remaining)
+	assert.Equal(t, []LocalStateRow{{Path: "new-sibling.txt", ItemType: ItemTypeFile}}, remaining)
 }
 
 // Validates: R-2.8.8
@@ -545,14 +545,14 @@ func TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix(t *testing.T
 	baseline := baselineWith(&BaselineEntry{
 		Path: "report", DriveID: driveid.New("d"), ItemID: "item1", ItemType: ItemTypeFile,
 	})
-	remaining := watchDeleteRemainingRows(t, baseline, []localStateRow{
+	remaining := watchDeleteRemainingRows(t, baseline, []LocalStateRow{
 		{Path: "report", ItemType: ItemTypeFile},
 		{Path: "report.txt", ItemType: ItemTypeFile},
 		{Path: "report-old", ItemType: ItemTypeFolder},
 		{Path: "report-old/a.txt", ItemType: ItemTypeFile},
 	}, "report")
 
-	assert.Equal(t, []localStateRow{
+	assert.Equal(t, []LocalStateRow{
 		{Path: "report-old", ItemType: ItemTypeFolder},
 		{Path: "report-old/a.txt", ItemType: ItemTypeFile},
 		{Path: "report.txt", ItemType: ItemTypeFile},

@@ -18,21 +18,21 @@ var (
 )
 
 // The causes of the worker contexts' cancels. Neither reaches an action while
-// its run goes on: errActionReturned lands after the action returned, and
-// errWorkerPoolStopped ends the context the workers were started under, so an
+// its run goes on: ErrActionReturned lands after the action returned, and
+// ErrWorkerPoolStopped ends the context the workers were started under, so an
 // action it interrupts completes with RunEnded set, as a shutdown.
 const (
-	errActionReturned    cancelCauseError = "sync: action returned"
-	errWorkerPoolStopped cancelCauseError = "sync: worker pool stopped"
+	ErrActionReturned    cancelCauseError = "sync: action returned"
+	ErrWorkerPoolStopped cancelCauseError = "sync: worker pool stopped"
 )
 
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 
-// poolWorkerCount is how many workers a pool runs for a requested count: the
+// PoolWorkerCount is how many workers a pool runs for a requested count: the
 // floor applies unless the pool is serialized to one worker (D-090). The
 // engine's slow start doubles toward this same number (R-6.8.25).
-func poolWorkerCount(requested int, serialize bool) int {
+func PoolWorkerCount(requested int, serialize bool) int {
 	if serialize {
 		return 1
 	}
@@ -53,23 +53,23 @@ func poolWorkerCount(requested int, serialize bool) int {
 // from it.
 const OutcomeCommitTimeout = 30 * time.Second
 
-// workerPool spawns goroutines that pull trackedActions from the dispatch
+// WorkerPool spawns goroutines that pull trackedActions from the dispatch
 // channel, execute them, persist success outcomes, and send completions back
 // to the engine.
-// Workers never call depGraph.Complete(); the engine owns all completion
+// Workers never call DepGraph.Complete(); the engine owns all completion
 // decisions (R-6.8.9).
-type workerPool struct {
-	cfg           *executorConfig
-	dispatchCh    <-chan *trackedAction
+type WorkerPool struct {
+	cfg           *ExecutorConfig
+	dispatchCh    <-chan *TrackedAction
 	baseline      *SyncStore
 	logger        *slog.Logger
 	perfCollector *perf.Collector
 
 	// completions reports per-action outcomes back to the engine. The engine
-	// reads from this channel, classifies completions, and calls depGraph.Complete.
+	// reads from this channel, classifies completions, and calls DepGraph.Complete.
 	// Failed items are persisted through the engine-owned retry/block-scope
 	// authorities; observation-owned issues are written by observation passes.
-	completions chan actionCompletion
+	completions chan ActionCompletion
 
 	// serialize runs exactly one worker, below the minWorkers floor, so a
 	// test's dispatch order is also the execution order (D-090).
@@ -84,24 +84,24 @@ type workerPool struct {
 	closeOnce stdsync.Once
 }
 
-// newWorkerPool creates a pool without starting any workers. planSize
+// NewWorkerPool creates a pool without starting any workers. planSize
 // determines the result channel buffer (use the number of actions in the
 // plan for one-shot mode, or a generous buffer for watch mode).
 //
 // dispatchCh provides actions ready for execution. Workers exit only when the
 // owning context is canceled or the dispatch channel is closed.
-func newWorkerPool(
-	cfg *executorConfig,
-	dispatchCh <-chan *trackedAction,
+func NewWorkerPool(
+	cfg *ExecutorConfig,
+	dispatchCh <-chan *TrackedAction,
 	baseline *SyncStore,
 	logger *slog.Logger,
 	planSize int,
-) *workerPool {
+) *WorkerPool {
 	if planSize < 1 {
 		planSize = 1
 	}
 
-	return &workerPool{
+	return &WorkerPool{
 		cfg:           cfg,
 		dispatchCh:    dispatchCh,
 		baseline:      baseline,
@@ -111,7 +111,7 @@ func newWorkerPool(
 		// the number of actions, so workers never block). Watch mode passes
 		// watchCompletionBuf, which the watch loop reads as completions
 		// arrive, so blocking is unlikely under normal load.
-		completions:          make(chan actionCompletion, planSize),
+		completions:          make(chan ActionCompletion, planSize),
 		outcomeCommitTimeout: OutcomeCommitTimeout,
 	}
 }
@@ -119,8 +119,8 @@ func newWorkerPool(
 // Start spawns a flat pool of goroutines, all reading from the single dispatch
 // channel. total is the desired concurrency (typically cfg.TransferWorkers).
 // Minimum 4 workers.
-func (wp *workerPool) Start(ctx context.Context, total int) {
-	total = poolWorkerCount(total, wp.serialize)
+func (wp *WorkerPool) Start(ctx context.Context, total int) {
+	total = PoolWorkerCount(total, wp.serialize)
 
 	ctx, wp.cancel = context.WithCancelCause(ctx)
 
@@ -140,16 +140,16 @@ func (wp *workerPool) Start(ctx context.Context, total int) {
 // closeCompletionsWhenWorkersExit closes the completions channel once every
 // worker has returned, so the engine-owned completion loop ends. Waiting and
 // a close through sync.Once cannot panic, so it needs no boundary.
-func (wp *workerPool) closeCompletionsWhenWorkersExit() {
+func (wp *WorkerPool) closeCompletionsWhenWorkersExit() {
 	wp.wg.Wait()
 	wp.closeCompletions()
 }
 
 // Stop cancels all in-flight work, waits for goroutines to exit, and closes
 // the completions channel so the engine-owned completion loop can terminate.
-func (wp *workerPool) Stop() {
+func (wp *WorkerPool) Stop() {
 	if wp.cancel != nil {
-		wp.cancel(errWorkerPoolStopped)
+		wp.cancel(ErrWorkerPoolStopped)
 	}
 
 	wp.wg.Wait()
@@ -160,7 +160,7 @@ func (wp *workerPool) Stop() {
 // until the context is canceled or all actions are complete. Its panic
 // boundary is safeExecuteAction, around each action; the loop itself only
 // receives.
-func (wp *workerPool) worker(ctx context.Context) {
+func (wp *WorkerPool) worker(ctx context.Context) {
 	defer wp.wg.Done()
 
 	for {
@@ -183,7 +183,7 @@ func (wp *workerPool) worker(ctx context.Context) {
 // safeExecuteAction wraps executeAction with panic recovery so a single
 // action panic doesn't crash the entire program. The engine receives the
 // panic as a failed ActionCompletion and decides how to handle it.
-func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) {
+func (wp *WorkerPool) safeExecuteAction(ctx context.Context, ta *TrackedAction) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Logged with the stack here because the goroutine that could
@@ -192,7 +192,7 @@ func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) 
 			panicErr := panicguard.Recovered(wp.logger, "while syncing "+ta.Action.Path, r,
 				slog.Int64("action_id", ta.ID))
 			wp.sendResult(ctx, ta, nil, panicErr)
-			// NO depGraph.Complete() — engine owns completion decisions.
+			// NO DepGraph.Complete() — engine owns completion decisions.
 		}
 	}()
 
@@ -201,12 +201,12 @@ func (wp *workerPool) safeExecuteAction(ctx context.Context, ta *trackedAction) 
 
 // executeAction runs a single tracked action: execute, persist success
 // outcomes, and send the result to the engine. Workers never call
-// depGraph.Complete(); the engine owns all completion decisions.
-func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
+// DepGraph.Complete(); the engine owns all completion decisions.
+func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 	// actionCtx is canceled when executeAction returns, which stops what the
 	// action started under it.
 	actionCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(errActionReturned)
+	defer cancel(ErrActionReturned)
 
 	if freshnessErr := wp.validateActionFreshness(actionCtx, ta); freshnessErr != nil {
 		wp.sendResult(ctx, ta, nil, freshnessErr)
@@ -226,7 +226,7 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	}
 
 	// Execute the action.
-	exec := newExecution(wp.cfg, bl)
+	exec := NewExecution(wp.cfg, bl)
 	outcome := wp.dispatchAction(actionCtx, exec, ta)
 
 	// Persist success outcomes immediately via the store-owned mutation input.
@@ -236,7 +236,7 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	// is already done. OutcomeCommitTimeout bounds the detached commit so a
 	// wedged store cannot hold shutdown hostage.
 	if outcome.Success {
-		mutation := mutationFromActionOutcome(&outcome)
+		mutation := MutationFromActionOutcome(&outcome)
 		if mutation != nil {
 			if commitErr := wp.commitOutcome(ctx, mutation); commitErr != nil {
 				// Debug: returned as the action's failure (and a shutdown
@@ -252,70 +252,70 @@ func (wp *workerPool) executeAction(ctx context.Context, ta *trackedAction) {
 	}
 
 	wp.sendResult(ctx, ta, &outcome, outcome.Error)
-	// NO depGraph.Complete() — engine owns completion decisions.
+	// NO DepGraph.Complete() — engine owns completion decisions.
 }
 
 // commitOutcome persists a completed action's baseline mutation detached
 // from the caller's cancellation, bounded by the pool's outcomeCommitTimeout.
-func (wp *workerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
-	return runDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
+func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
+	return RunDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
 		return wp.baseline.CommitMutation(commitCtx, mutation)
 	})
 }
 
-// runDetachedStoreAccess runs access on a context that keeps ctx's values but
+// RunDetachedStoreAccess runs access on a context that keeps ctx's values but
 // not its cancellation, bounded by bound: a shutdown cannot drop the record of
 // work that already happened, and a store that stopped answering cannot hold
-// the shutdown. A failure the bound ended carries errStoreAccessTimedOut beside
+// the shutdown. A failure the bound ended carries ErrStoreAccessTimedOut beside
 // the store's own error, because database/sql returns the context's error and
 // not its cause. The sentinel is joined last: the sync console prints the
 // innermost error of the last error a chain joins, so a user reads that the
 // sync database did not answer, not the deadline the store gave up at.
-func runDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
-	accessCtx, cancel := detachedStoreContext(ctx, time.Now().Add(bound))
+func RunDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
+	accessCtx, cancel := DetachedStoreContext(ctx, time.Now().Add(bound))
 	defer cancel()
 
-	return storeAccessError(accessCtx, access(accessCtx))
+	return StoreAccessError(accessCtx, access(accessCtx))
 }
 
-// detachedStoreAccessKey marks a context detachedStoreContext made.
+// detachedStoreAccessKey marks a context DetachedStoreContext made.
 type detachedStoreAccessKey struct{}
 
-// detachedStoreContext is the context runDetachedStoreAccess runs its access
+// DetachedStoreContext is the context RunDetachedStoreAccess runs its access
 // on: it keeps ctx's values but not its cancellation and ends at deadline with
-// errStoreAccessTimedOut as its cause. A caller that runs several accesses
+// ErrStoreAccessTimedOut as its cause. A caller that runs several accesses
 // under one bound (a stopping run's drain) gives each the same deadline. A
 // ctx that runs under such a context, itself or one derived from it, is
 // returned as it is, any cancel of its own included, so an access detached
 // inside a detached one keeps the outer deadline: nested accesses add up to
 // one bound, never to one each.
-func detachedStoreContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+func DetachedStoreContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
 	if detached, ok := ctx.Value(detachedStoreAccessKey{}).(bool); ok && detached {
 		return ctx, func() {}
 	}
 
-	accessCtx, cancel := context.WithDeadlineCause(context.WithoutCancel(ctx), deadline, errStoreAccessTimedOut)
+	accessCtx, cancel := context.WithDeadlineCause(context.WithoutCancel(ctx), deadline, ErrStoreAccessTimedOut)
 
 	return context.WithValue(accessCtx, detachedStoreAccessKey{}, true), cancel
 }
 
-// storeAccessError is err from an access that ran on accessCtx, with
-// errStoreAccessTimedOut joined once when accessCtx's bound ended it.
-func storeAccessError(accessCtx context.Context, err error) error {
-	if err == nil || errors.Is(err, errStoreAccessTimedOut) ||
-		!errors.Is(context.Cause(accessCtx), errStoreAccessTimedOut) {
+// StoreAccessError is err from an access that ran on accessCtx, with
+// ErrStoreAccessTimedOut joined once when accessCtx's bound ended it.
+func StoreAccessError(accessCtx context.Context, err error) error {
+	if err == nil || errors.Is(err, ErrStoreAccessTimedOut) ||
+		!errors.Is(context.Cause(accessCtx), ErrStoreAccessTimedOut) {
 		return err
 	}
 
-	return fmt.Errorf("%w: %w", err, errStoreAccessTimedOut)
+	return fmt.Errorf("%w: %w", err, ErrStoreAccessTimedOut)
 }
 
-func (wp *workerPool) validateActionFreshness(ctx context.Context, ta *trackedAction) error {
+func (wp *WorkerPool) validateActionFreshness(ctx context.Context, ta *TrackedAction) error {
 	if ta == nil {
 		return nil
 	}
 
-	decision, err := evaluateActionFreshnessFromStore(ctx, wp.baseline, &ta.Action)
+	decision, err := EvaluateActionFreshnessFromStore(ctx, wp.baseline, &ta.Action)
 	if err != nil {
 		return err
 	}
@@ -324,10 +324,10 @@ func (wp *workerPool) validateActionFreshness(ctx context.Context, ta *trackedAc
 	}
 
 	wp.recordWorkerStartSuperseded(decision)
-	return fmt.Errorf("%w: %s", errActionPreconditionChanged, decision.Reason)
+	return fmt.Errorf("%w: %s", ErrActionPreconditionChanged, decision.Reason)
 }
 
-func (wp *workerPool) recordWorkerStartSuperseded(decision actionFreshnessDecision) {
+func (wp *WorkerPool) recordWorkerStartSuperseded(decision actionFreshnessDecision) {
 	switch decision.Source {
 	case actionFreshnessSourceLocalTruth:
 		wp.collector().RecordSuperseded(perf.SupersededSourceWorkerStartLocalTruth, 1)
@@ -339,9 +339,9 @@ func (wp *workerPool) recordWorkerStartSuperseded(decision actionFreshnessDecisi
 }
 
 // dispatchAction routes a tracked action to the appropriate executor method.
-func (wp *workerPool) dispatchAction(
-	ctx context.Context, exec *executor, ta *trackedAction,
-) actionOutcome {
+func (wp *WorkerPool) dispatchAction(
+	ctx context.Context, exec *Executor, ta *TrackedAction,
+) ActionOutcome {
 	action := &ta.Action
 
 	switch action.Type {
@@ -360,7 +360,7 @@ func (wp *workerPool) dispatchAction(
 	case ActionRemoteDelete:
 		return exec.ExecuteRemoteDelete(ctx, action)
 	case ActionBaselineUpdate, ActionCleanup:
-		return actionOutcome{
+		return ActionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
@@ -369,25 +369,25 @@ func (wp *workerPool) dispatchAction(
 	default:
 		// The plan refuses an action outside the enum before it is admitted
 		// (validatePlannedActions); dispatch fails one rather than run it.
-		return actionOutcome{
+		return ActionOutcome{
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
-			Error:   fmt.Errorf("%w: %s", errUnknownActionType, outsideTheEnum(action.Type)),
+			Error:   fmt.Errorf("%w: %s", errUnknownActionType, OutsideTheEnum(action.Type)),
 		}
 	}
 }
 
 // Completions returns a read-only channel of per-action completions. The
 // engine reads from this channel, classifies each completion, and calls
-// depGraph.Complete. Failed items become retry_work, block scopes, or other
+// DepGraph.Complete. Failed items become retry_work, block scopes, or other
 // engine-owned durable control state for held release and scope lifecycle.
-func (wp *workerPool) Completions() <-chan actionCompletion {
+func (wp *WorkerPool) Completions() <-chan ActionCompletion {
 	return wp.completions
 }
 
 // sendResult reports a per-action outcome to the completions channel. Populates
-// the actionCompletion from the trackedAction and any error. When outcome is
+// the ActionCompletion from the TrackedAction and any error. When outcome is
 // non-nil, uses its Success/Error fields; otherwise treats as failure with
 // the provided error. ctx is the context the workers were started under,
 // which ends only with the run or once nothing is left to classify: whether
@@ -400,9 +400,9 @@ func (wp *workerPool) Completions() <-chan actionCompletion {
 // read it, and says the drop at Debug. One select of both would pick at random
 // once the context has ended, and drop completions the stopping run's drain
 // still reads.
-func (wp *workerPool) sendResult(ctx context.Context, ta *trackedAction, outcome *actionOutcome, actionErr error) {
-	r := actionCompletionFromTrackedAction(ta, outcome, actionErr)
-	r.RunEnded = runEnded(ctx, r.Err)
+func (wp *WorkerPool) sendResult(ctx context.Context, ta *TrackedAction, outcome *ActionOutcome, actionErr error) {
+	r := ActionCompletionFromTrackedAction(ta, outcome, actionErr)
+	r.RunEnded = RunEnded(ctx, r.Err)
 	wp.recordLivePreconditionSuperseded(&r, outcome)
 
 	select {
@@ -421,21 +421,21 @@ func (wp *workerPool) sendResult(ctx context.Context, ta *trackedAction, outcome
 	}
 }
 
-func (wp *workerPool) recordLivePreconditionSuperseded(r *actionCompletion, outcome *actionOutcome) {
-	if outcome == nil || r == nil || !errors.Is(r.Err, errActionPreconditionChanged) {
+func (wp *WorkerPool) recordLivePreconditionSuperseded(r *ActionCompletion, outcome *ActionOutcome) {
+	if outcome == nil || r == nil || !errors.Is(r.Err, ErrActionPreconditionChanged) {
 		return
 	}
 
 	switch r.FailureCapability {
-	case permissionCapabilityLocalRead, permissionCapabilityLocalWrite:
+	case PermissionCapabilityLocalRead, PermissionCapabilityLocalWrite:
 		wp.collector().RecordSuperseded(perf.SupersededSourceLiveLocalPrecondition, 1)
-	case permissionCapabilityRemoteRead, permissionCapabilityRemoteWrite:
+	case PermissionCapabilityRemoteRead, PermissionCapabilityRemoteWrite:
 		wp.collector().RecordSuperseded(perf.SupersededSourceLiveRemotePrecondition, 1)
-	case permissionCapabilityUnknown:
+	case PermissionCapabilityUnknown:
 	}
 }
 
-func (wp *workerPool) collector() *perf.Collector {
+func (wp *WorkerPool) collector() *perf.Collector {
 	if wp == nil {
 		return nil
 	}
@@ -443,7 +443,7 @@ func (wp *workerPool) collector() *perf.Collector {
 	return wp.perfCollector
 }
 
-func (wp *workerPool) closeCompletions() {
+func (wp *WorkerPool) closeCompletions() {
 	wp.closeOnce.Do(func() {
 		close(wp.completions)
 	})

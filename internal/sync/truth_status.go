@@ -8,7 +8,7 @@ type truthAvailabilityIndex struct {
 	remoteReadBoundaries []ObservationIssueRow
 }
 
-func newTruthAvailabilityIndex(observationIssues []ObservationIssueRow) truthAvailabilityIndex {
+func NewTruthAvailabilityIndex(observationIssues []ObservationIssueRow) truthAvailabilityIndex {
 	return truthAvailabilityIndex{
 		observationByPath:    truthBlockingObservationByPath(observationIssues),
 		localReadBoundaries:  truthReadBoundaryIssues(observationIssues, true),
@@ -17,17 +17,17 @@ func newTruthAvailabilityIndex(observationIssues []ObservationIssueRow) truthAva
 }
 
 // StatusForPath returns the raw local/remote truth availability for one path.
-func (index truthAvailabilityIndex) StatusForPath(path string) pathTruthStatus {
+func (index truthAvailabilityIndex) StatusForPath(path string) PathTruthStatus {
 	return pathTruthStatusForPath(path, index.observationByPath, index.localReadBoundaries, index.remoteReadBoundaries)
 }
 
 // StatusByPath returns the raw local/remote truth availability for a path set.
-func (index truthAvailabilityIndex) StatusByPath(paths []string) map[string]pathTruthStatus {
+func (index truthAvailabilityIndex) StatusByPath(paths []string) map[string]PathTruthStatus {
 	if len(paths) == 0 {
 		return nil
 	}
 
-	statusByPath := make(map[string]pathTruthStatus, len(paths))
+	statusByPath := make(map[string]PathTruthStatus, len(paths))
 	for i := range paths {
 		statusByPath[paths[i]] = index.StatusForPath(paths[i])
 	}
@@ -52,12 +52,12 @@ func pathTruthStatusForPath(
 	observationByPath map[string]ObservationIssueRow,
 	localReadBoundaries []ObservationIssueRow,
 	remoteReadBoundaries []ObservationIssueRow,
-) pathTruthStatus {
+) PathTruthStatus {
 	observationIssue, hasObservationIssue := observationByPath[path]
 	localBoundary, hasLocalBoundary := mostSpecificObservationReadBoundary(path, localReadBoundaries)
 	remoteBoundary, hasRemoteBoundary := mostSpecificObservationReadBoundary(path, remoteReadBoundaries)
 
-	status := pathTruthStatus{
+	status := PathTruthStatus{
 		Local:  availablePathTruthSideStatus(),
 		Remote: availablePathTruthSideStatus(),
 	}
@@ -135,57 +135,57 @@ type observationIssueTruthVerdict struct {
 // that retry_work or a block scope carries and observation never stores.
 //
 // A value outside the enum cannot come from the store, which refuses an
-// unknown stored issue type (parseIssueType). Should one appear anyway, its
+// unknown stored issue type (ParseIssueType). Should one appear anyway, its
 // path is unavailable on both sides: unknown is not absent (D-005). It bounds
 // no subtree by its type, because nothing says what it would cover; the
 // subtree boundaries are read scope keys and remote twins.
 func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict {
 	switch issueType {
 	case IssueInvalidFilename,
-		issuePathTooLong,
-		issueFileTooLarge,
-		issueCaseCollision,
-		issueHashPanic,
-		issueLocalReadDenied,
-		issueLocalUnsyncableReplacement,
-		issueLocalMountBoundary,
-		issueLocalMountMissing:
+		IssuePathTooLong,
+		IssueFileTooLarge,
+		IssueCaseCollision,
+		IssueHashPanic,
+		IssueLocalReadDenied,
+		IssueLocalUnsyncableReplacement,
+		IssueLocalMountBoundary,
+		IssueLocalMountMissing:
 		// The scan found the path but cannot represent it.
 		return observationIssueTruthVerdict{blocksLocal: true}
-	case issueRemoteReadDenied, issueRemoteRootNotFound:
+	case IssueRemoteReadDenied, IssueRemoteRootNotFound:
 		// A folder's subtree is bounded by the issue's read scope key.
 		return observationIssueTruthVerdict{blocksRemote: true}
-	case issueRemoteNameTwin:
+	case IssueRemoteNameTwin:
 		// OneDrive keeps two items under the path; the twin has no scope key,
 		// so its type is what bounds the subtree it holds twice.
 		return observationIssueTruthVerdict{blocksRemote: true, boundsRemoteSubtree: true}
-	case issueLocalInterruptedRemoval,
-		issueRemovedFolderKept,
+	case IssueLocalInterruptedRemoval,
+		IssueRemovedFolderKept,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		IssueQuotaExceeded,
-		issueRateLimited,
-		issueLocalWriteDenied,
-		issueDiskFull,
-		issueServiceOutage,
-		issueFileTooLargeForSpace,
-		issueLocalNameTooLong,
-		issueLocalReadOnly,
-		issueDeletesHeld,
-		issueRemoteFolderUnverifiable,
-		issueLocalFileTooLarge,
-		issueLocalBusy,
-		issueLocalCrossDevice,
-		issueUnsupportedOperation,
-		issueMalwareDetected,
-		issueLocalDatabaseOpen,
-		issueUploadVerification,
-		issueDownloadIntegrity,
-		issueRequestTimeout,
-		issueTransientConflict,
-		issueTransientNotFound,
-		issueResourceLocked,
-		issueTransferURLRejected:
+		IssueRateLimited,
+		IssueLocalWriteDenied,
+		IssueDiskFull,
+		IssueServiceOutage,
+		IssueFileTooLargeForSpace,
+		IssueLocalNameTooLong,
+		IssueLocalReadOnly,
+		IssueDeletesHeld,
+		IssueRemoteFolderUnverifiable,
+		IssueLocalFileTooLarge,
+		IssueLocalBusy,
+		IssueLocalCrossDevice,
+		IssueUnsupportedOperation,
+		IssueMalwareDetected,
+		IssueLocalDatabaseOpen,
+		IssueUploadVerification,
+		IssueDownloadIntegrity,
+		IssueRequestTimeout,
+		IssueTransientConflict,
+		IssueTransientNotFound,
+		IssueResourceLocked,
+		IssueTransferURLRejected:
 		return observationIssueTruthVerdict{}
 	default:
 		return observationIssueTruthVerdict{blocksLocal: true, blocksRemote: true}

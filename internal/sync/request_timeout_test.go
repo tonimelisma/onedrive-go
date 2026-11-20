@@ -54,12 +54,12 @@ func TestClassifyResult_TransportTimeoutIsARequestTimeoutUntilTheRunEnds(t *test
 			err := stalledGraphRequestError(t, kind)
 			require.ErrorIs(t, err, context.DeadlineExceeded, "the transport's timeout has the shape of a deadline")
 
-			live := classifyResult(&actionCompletion{Err: err, HTTPStatus: extractHTTPStatus(err)})
+			live := classifyResult(&ActionCompletion{Err: err, HTTPStatus: ExtractHTTPStatus(err)})
 			assert.Equal(t, resultRequeue, live.Class, "%v", err)
-			assert.Equal(t, persistRetryWork, live.Persistence)
-			assert.Equal(t, issueRequestTimeout, live.ConditionType)
+			assert.Equal(t, PersistRetryWork, live.Persistence)
+			assert.Equal(t, IssueRequestTimeout, live.ConditionType)
 
-			ended := classifyResult(&actionCompletion{Err: err, HTTPStatus: extractHTTPStatus(err), RunEnded: true})
+			ended := classifyResult(&ActionCompletion{Err: err, HTTPStatus: ExtractHTTPStatus(err), RunEnded: true})
 			assert.Equal(t, resultShutdown, ended.Class)
 		})
 	}
@@ -77,10 +77,10 @@ func TestRunEnded_AsksTheRunNotTheError(t *testing.T) {
 	cancel()
 	failure := errors.New("request failed")
 
-	assert.False(t, runEnded(t.Context(), context.DeadlineExceeded), "a deadline while the run goes on")
-	assert.False(t, runEnded(t.Context(), context.Canceled), "a cancel narrower than the run")
-	assert.True(t, runEnded(ended, failure), "any failure once the run has ended")
-	assert.False(t, runEnded(ended, nil), "no error is never a stop")
+	assert.False(t, RunEnded(t.Context(), context.DeadlineExceeded), "a deadline while the run goes on")
+	assert.False(t, RunEnded(t.Context(), context.Canceled), "a cancel narrower than the run")
+	assert.True(t, RunEnded(ended, failure), "any failure once the run has ended")
+	assert.False(t, RunEnded(ended, nil), "no error is never a stop")
 }
 
 // A page of the change list whose request timed out is retried like any
@@ -92,9 +92,9 @@ func TestFullDelta_RetriesATimedOutPageUpToItsPolicy(t *testing.T) {
 
 	server, _ := newStalledServer(t)
 	client, dispatched := stalledGraphClient(t, server, &http.Client{Timeout: stalledRequestTimeout})
-	obs := newRemoteObserver(client, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(client, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 	var slept []time.Duration
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(_ context.Context, d time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		slept = append(slept, d)
 		return nil
 	}}
@@ -116,12 +116,12 @@ func TestRemoteObserverWatch_BacksOffAfterATimedOutPollInsteadOfStopping(t *test
 
 	server, _ := newStalledServer(t)
 	client, dispatched := stalledGraphClient(t, server, &http.Client{Timeout: stalledRequestTimeout})
-	obs := newRemoteObserver(client, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(client, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 	policy := retry.DeltaPagePolicy()
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
 	sleeps := 0
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(sleepCtx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(sleepCtx context.Context, _ time.Duration) error {
 		sleeps++
 		if sleeps < policy.MaxAttempts {
 			return nil
@@ -133,7 +133,7 @@ func TestRemoteObserverWatch_BacksOffAfterATimedOutPollInsteadOfStopping(t *test
 	}}
 
 	err := runWithin(t, ctx, "the remote watch to return", func(watchCtx context.Context) error {
-		return obs.Watch(watchCtx, "saved-token", make(chan remoteObservationBatch), MinPollInterval, nil, nil)
+		return obs.Watch(watchCtx, "saved-token", make(chan RemoteObservationBatch), MinPollInterval, nil, nil)
 	})
 
 	require.NoError(t, err)
@@ -168,24 +168,24 @@ func TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded(t *testin
 			fetcher := &scriptedDeltaFetcher{answer: func(int, string) (*graph.DeltaPage, error) {
 				return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("a")}, DeltaLink: "token-after"}, nil
 			}}
-			obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+			obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 			runCtx, endRun := context.WithCancel(t.Context())
 			defer endRun()
-			handle := func(context.Context, []remoteItem, string, shortcutTopologyBatch) (remoteObservationBatch, error) {
+			handle := func(context.Context, []RemoteItem, string, ShortcutTopologyBatch) (RemoteObservationBatch, error) {
 				if tc.endRun {
 					endRun()
 				}
 				if !tc.failApply {
-					return remoteObservationBatch{}, failure
+					return RemoteObservationBatch{}, failure
 				}
 				applied := make(chan error, 1)
 				applied <- failure
 
-				return remoteObservationBatch{applyAck: applied}, nil
+				return RemoteObservationBatch{ApplyAck: applied}, nil
 			}
 
 			err := runWithin(t, runCtx, "the remote watch to return", func(ctx context.Context) error {
-				return obs.Watch(ctx, "saved-token", make(chan remoteObservationBatch, 1), MinPollInterval, nil, handle)
+				return obs.Watch(ctx, "saved-token", make(chan RemoteObservationBatch, 1), MinPollInterval, nil, handle)
 			})
 
 			if tc.endRun {
@@ -210,14 +210,14 @@ func TestCancelCauses_AnswerToCanceledAndNameTheirCancel(t *testing.T) {
 		name  string
 		cause error
 	}{
-		{name: "action returned", cause: errActionReturned},
-		{name: "worker pool stopped", cause: errWorkerPoolStopped},
-		{name: "one-shot pass failed", cause: errOneShotPassFailed},
-		{name: "one-shot pass ended", cause: errOneShotPassEnded},
+		{name: "action returned", cause: ErrActionReturned},
+		{name: "worker pool stopped", cause: ErrWorkerPoolStopped},
+		{name: "one-shot pass failed", cause: ErrOneShotPassFailed},
+		{name: "one-shot pass ended", cause: ErrOneShotPassEnded},
 	} {
 		require.ErrorIs(t, tc.cause, context.Canceled, tc.name)
 		require.NotErrorIs(t, tc.cause, context.DeadlineExceeded, tc.name)
-		assert.True(t, isCancellationEcho(fmt.Errorf("request canceled: %w", tc.cause)), tc.name)
+		assert.True(t, IsCancellationEcho(fmt.Errorf("request canceled: %w", tc.cause)), tc.name)
 		assert.NotContains(t, texts, tc.cause.Error(), "%s has a text of its own", tc.name)
 		texts[tc.cause.Error()] = tc.name
 	}
@@ -237,7 +237,7 @@ func TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation(t *testing.T) {
 	canceled := fmt.Errorf("watch step: %w", context.Canceled)
 	expired := fmt.Errorf("watch step: %w", context.DeadlineExceeded)
 	diskFailure := errors.New("write sync state: disk I/O error")
-	storeSilent := fmt.Errorf("record retry work: %w: %w", context.DeadlineExceeded, errStoreAccessTimedOut)
+	storeSilent := fmt.Errorf("record retry work: %w: %w", context.DeadlineExceeded, ErrStoreAccessTimedOut)
 
 	assert.True(t, isWatchShutdownError(ended, canceled), "the cancel coming back")
 	assert.True(t, isWatchShutdownError(ended, expired), "an ended context's deadline coming back")
@@ -326,8 +326,8 @@ func serveSocketIOUntilTheClientGoes(conn *websocket.Conn, r *http.Request) erro
 // nextSocketIOEvent returns the next lifecycle event of type want, and fails
 // the test when the wake source stops first.
 func nextSocketIOEvent(
-	t *testing.T, events <-chan socketIOLifecycleEvent, want socketIOLifecycleEventType,
-) socketIOLifecycleEvent {
+	t *testing.T, events <-chan SocketIOLifecycleEvent, want socketIOLifecycleEventType,
+) SocketIOLifecycleEvent {
 	t.Helper()
 
 	for {
@@ -335,7 +335,7 @@ func nextSocketIOEvent(
 		if event.Type == want {
 			return event
 		}
-		require.NotEqual(t, socketIOLifecycleEventStopped, event.Type, "the wake source stopped before %s", want)
+		require.NotEqual(t, SocketIOLifecycleEventStopped, event.Type, "the wake source stopped before %s", want)
 	}
 }
 
@@ -352,29 +352,29 @@ func TestSocketIOWakeSource_ReconnectsAfterAConnectionThatTimedOut(t *testing.T)
 		ID: "endpoint-1", NotificationURL: graph.SocketIONotificationURL(server.URL + "/callback?snthgk=test"),
 	}}}
 	clock := newManualClock(time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
-	events := make(chan socketIOLifecycleEvent, 32)
+	events := make(chan SocketIOLifecycleEvent, 32)
 	dialed := make(chan *expiringConn, 4)
-	source := newSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
+	source := NewSocketIOWakeSourceWithOptions(fetcher, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
 		Logger:        synctest.TestLogger(t),
 		DialFunc:      expiringSocketIODial(t, dialed), //nolint:bodyclose // the wake source's connect closes the dial's response body
 		Clock:         clock,
-		LifecycleHook: func(event socketIOLifecycleEvent) { events <- event },
+		LifecycleHook: func(event SocketIOLifecycleEvent) { events <- event },
 		BackoffMax:    time.Second,
 	})
 	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
 		return source.Run(ctx, make(chan struct{}, 1))
 	})
 
-	nextSocketIOEvent(t, events, socketIOLifecycleEventConnected)
+	nextSocketIOEvent(t, events, SocketIOLifecycleEventConnected)
 	require.NoError(t, receiveWithin(t, dialed, "the first connection").expire())
-	dropped := nextSocketIOEvent(t, events, socketIOLifecycleEventConnectionDropped)
+	dropped := nextSocketIOEvent(t, events, SocketIOLifecycleEventConnectionDropped)
 	assert.Contains(t, dropped.Error, context.DeadlineExceeded.Error())
 	retryAt := clock.Now().Add(dropped.Delay)
 	require.Eventually(t, func() bool { return clock.HasPendingTimerAt(retryAt) }, eventWait, time.Millisecond,
 		"the wake source waits out its backoff")
 	clock.Advance(dropped.Delay)
 
-	nextSocketIOEvent(t, events, socketIOLifecycleEventConnected)
+	nextSocketIOEvent(t, events, SocketIOLifecycleEventConnected)
 	assert.Equal(t, 2, fetcher.CallCount(), "the reconnect fetches the endpoint again")
 	stopWatch(t, cancel, done)
 }

@@ -88,8 +88,8 @@ func folderReadKey(driveID driveid.ID, itemID string) string {
 	return driveID.String() + "/" + itemID
 }
 
-// resetRemoteParentChecks forgets the parents read for the previous plan.
-func (cfg *executorConfig) resetRemoteParentChecks() {
+// ResetRemoteParentChecks forgets the parents read for the previous plan.
+func (cfg *ExecutorConfig) ResetRemoteParentChecks() {
 	if cfg == nil {
 		return
 	}

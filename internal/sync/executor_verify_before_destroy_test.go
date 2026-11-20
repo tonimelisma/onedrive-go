@@ -33,10 +33,10 @@ func remoteFolderDeleteAction() *Action {
 		Path:    path,
 		ItemID:  itemID,
 		DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path:     path,
 			Baseline: &BaselineEntry{Path: path, ItemID: itemID, ItemType: ItemTypeFolder},
-			Remote:   &remoteState{DriveID: driveID, ItemID: itemID, ItemType: ItemTypeFolder, ETag: "etag-folder"},
+			Remote:   &RemoteState{DriveID: driveID, ItemID: itemID, ItemType: ItemTypeFolder, ETag: "etag-folder"},
 		},
 	}
 }
@@ -73,10 +73,10 @@ func TestExecuteRemoteDelete_FolderWithUnobservedChildIsStale(t *testing.T) {
 	}, &deleted)
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
 
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	assert.Contains(t, outcome.Error.Error(), "new.txt")
 	assert.Empty(t, deleted, "a folder holding content sync never saw must not be deleted recursively")
 }
@@ -92,7 +92,7 @@ func TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns(t *testin
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 	bl := baselineWith(&BaselineEntry{Path: "X/a.txt", ItemID: "known", ItemType: ItemTypeFile, RemoteHash: "hash-a"})
 
-	outcome := newExecution(cfg, bl).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
+	outcome := NewExecution(cfg, bl).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
 
 	requireOutcomeSuccess(t, &outcome)
 	assert.Equal(t, []string{"folder-x"}, deleted)
@@ -103,9 +103,9 @@ func TestExecuteRemoteDelete_FolderWithOnlySyncedUnchangedChildrenRuns(t *testin
 		"folder-x": {{ID: "known", Name: "a.txt", ParentID: "folder-x", QuickXorHash: "hash-edited"}},
 	}, &deleted)
 	cfg, _ = newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	outcome = newExecution(cfg, bl).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
+	outcome = NewExecution(cfg, bl).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	assert.Empty(t, deleted)
 }
 
@@ -129,15 +129,15 @@ func TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded(t *testing.T) {
 
 	action := &Action{
 		Type: ActionRemoteDelete, Path: "a.txt", ItemID: "item-a", DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path:   "a.txt",
-			Remote: &remoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
+			Remote: &RemoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
 		},
 	}
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	assert.Empty(t, deleted, "a file that is back locally must not be deleted on OneDrive")
 
 	// The sync folder itself was replaced: absence proves nothing.
@@ -145,8 +145,8 @@ func TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded(t *testing.T) {
 	identity, err := cfg.syncTree.RootIdentity()
 	require.NoError(t, err)
 	identity.Inode++
-	cfg.SetSyncRootIdentity(fixedSyncRootIdentity(&identity))
-	outcome = newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
+	cfg.SetSyncRootIdentity(FixedSyncRootIdentity(&identity))
+	outcome = NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 	requireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, ErrMountRootUnavailable)
 	assert.Empty(t, deleted)
@@ -162,13 +162,13 @@ func TestDeleteLocalFolder_OnlyIgnoredChildrenConverges(t *testing.T) {
 
 	action := &Action{
 		Type: ActionLocalDelete, Path: "X", ItemID: "folder-x", DriveID: driveid.New(synctest.TestDriveID),
-		View: &pathView{
+		View: &PathView{
 			Path:     "X",
 			Baseline: &BaselineEntry{Path: "X", ItemID: "folder-x", ItemType: ItemTypeFolder},
-			Local:    &localState{ItemType: ItemTypeFolder},
+			Local:    &LocalState{ItemType: ItemTypeFolder},
 		},
 	}
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), action)
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), action)
 
 	requireOutcomeSuccess(t, &outcome)
 	assert.FileExists(t, filepath.Join(syncRoot, "X", ".env"), "ignored content is never deleted")
@@ -185,7 +185,7 @@ func TestHandleDelete_PathThatStillExistsEmitsNoDelete(t *testing.T) {
 
 	syncRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "file.txt"), []byte("still here\n"), 0o600))
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, syncRoot),
@@ -331,10 +331,10 @@ func TestExecuteRemoteDelete_FolderChildChangedOnlyInETagOrSizeIsStale(t *testin
 			items := folderDeleteItems(t, map[string][]graph.Item{"folder-x": {child}}, &deleted)
 			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 
-			outcome := newExecution(cfg, baselineWith(known)).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
+			outcome := NewExecution(cfg, baselineWith(known)).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
 
 			requireOutcomeFailure(t, &outcome)
-			require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+			require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 			assert.Empty(t, deleted)
 		})
 	}
@@ -355,14 +355,14 @@ func TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale(t *testi
 	items := folderDeleteItems(t, map[string][]graph.Item{"folder-x": children}, &deleted)
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
 
-	outcome := newExecution(cfg, baselineWith(entries...)).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
+	outcome := NewExecution(cfg, baselineWith(entries...)).ExecuteRemoteDelete(t.Context(), remoteFolderDeleteAction())
 
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errRemoteFolderTooLargeToVerify)
-	require.NotErrorIs(t, outcome.Error, errActionPreconditionChanged, "a stale verdict would relist the folder every pass")
-	issue, ok := issueTypeForFilesystemResult(&actionCompletion{Err: outcome.Error})
+	require.ErrorIs(t, outcome.Error, ErrRemoteFolderTooLargeToVerify)
+	require.NotErrorIs(t, outcome.Error, ErrActionPreconditionChanged, "a stale verdict would relist the folder every pass")
+	issue, ok := issueTypeForFilesystemResult(&ActionCompletion{Err: outcome.Error})
 	require.True(t, ok, "the failure maps to a durable issue")
-	assert.Equal(t, issueRemoteFolderUnverifiable, issue)
+	assert.Equal(t, IssueRemoteFolderUnverifiable, issue)
 	assert.Empty(t, deleted)
 }
 
@@ -428,7 +428,7 @@ func TestRunOnce_RemoteFolderDeleteOverListingCapIsADurableIssueNotRelistedEvery
 
 	require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	require.Len(t, report.Errors, 1)
-	require.ErrorIs(t, report.Errors[0], errRemoteFolderTooLargeToVerify)
+	require.ErrorIs(t, report.Errors[0], ErrRemoteFolderTooLargeToVerify)
 	assert.NotContains(t, remote.deletes, syncedFolderItemID, "the folder is not deleted recursively")
 	assert.Contains(t, remote.tree(), "X")
 	assert.Equal(t, 1, *folderListings)
@@ -597,13 +597,13 @@ func TestExecuteRemoteDelete_LocalAbsenceHoldsBelowAFileAndAcrossATypeChange(t *
 			tc.local(t, syncRoot)
 			action := &Action{
 				Type: ActionRemoteDelete, Path: tc.path, ItemID: "item-a", DriveID: driveID,
-				View: &pathView{
+				View: &PathView{
 					Path:   tc.path,
-					Remote: &remoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
+					Remote: &RemoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
 				},
 			}
 
-			outcome := newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
+			outcome := NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 
 			requireOutcomeSuccess(t, &outcome)
 			assert.Equal(t, []string{"item-a"}, deleted)

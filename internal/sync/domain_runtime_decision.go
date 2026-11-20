@@ -12,25 +12,25 @@ import "github.com/tonimelisma/onedrive-go/internal/errclass"
 type resultPersistenceMode int
 
 const (
-	persistNone resultPersistenceMode = iota
-	persistRetryWork
+	PersistNone resultPersistenceMode = iota
+	PersistRetryWork
 )
 
 // trialHint says what a timed scope trial should do with its scope next.
 type trialHint int
 
 const (
-	trialHintRelease trialHint = iota
-	trialHintExtendOnMatchingScope
-	trialHintReclassify
-	trialHintShutdown
-	trialHintFatal
+	TrialHintRelease trialHint = iota
+	TrialHintExtendOnMatchingScope
+	TrialHintReclassify
+	TrialHintShutdown
+	TrialHintFatal
 )
 
-// resultDecision is the single classification output consumed by result
+// ResultDecision is the single classification output consumed by result
 // routing. The decision is behavior-complete so downstream code does not
 // re-derive policy from raw HTTP/local error facts.
-type resultDecision struct {
+type ResultDecision struct {
 	Class             errclass.Class
 	ConditionKey      ConditionKey
 	ScopeKey          ScopeKey

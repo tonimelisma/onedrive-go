@@ -38,11 +38,11 @@ func requireUnavailableIssue(t *testing.T, eng *testEngine, path string) {
 	issues, err := eng.baseline.ListObservationIssues(t.Context())
 	require.NoError(t, err)
 	for i := range issues {
-		if issues[i].Path == path && issues[i].IssueType == issueLocalUnsyncableReplacement {
+		if issues[i].Path == path && issues[i].IssueType == IssueLocalUnsyncableReplacement {
 			return
 		}
 	}
-	require.Failf(t, "missing issue", "no %s issue at %s in %+v", issueLocalUnsyncableReplacement, path, issues)
+	require.Failf(t, "missing issue", "no %s issue at %s in %+v", IssueLocalUnsyncableReplacement, path, issues)
 }
 
 // Validates: R-6.2.14
@@ -135,20 +135,20 @@ func (d failingInfoDirEntry) Info() (fs.FileInfo, error) { return nil, syscall.E
 func TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	var (
-		events  []changeEvent
+		events  []ChangeEvent
 		jobs    []hashJob
-		skipped []skippedItem
+		skipped []SkippedItem
 	)
 
 	err := obs.processEntry("/sync/a.txt", "a.txt", failingInfoDirEntry{name: "a.txt"},
-		map[string]bool{}, map[string]localStateRow{}, &events, &jobs, &skipped, 0)
+		map[string]bool{}, map[string]LocalStateRow{}, &events, &jobs, &skipped, 0)
 
 	require.NoError(t, err)
 	require.Len(t, skipped, 1)
 	assert.Equal(t, "a.txt", skipped[0].Path)
-	assert.Equal(t, issueLocalReadDenied, skipped[0].Reason)
+	assert.Equal(t, IssueLocalReadDenied, skipped[0].Reason)
 	assert.True(t, skipped[0].BlocksReadBoundary, "an unreadable entry is unknown, not absent")
 }
 
@@ -158,7 +158,7 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 
 	dir := t.TempDir()
 	writeTestFile(t, dir, "a.txt", "content")
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.hashFunc = func(context.Context, string) (string, error) {
 		return "", &fs.PathError{Op: "read", Path: "a.txt", Err: syscall.EIO}
 	}
@@ -166,14 +166,14 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
-	var issue *skippedItem
+	var issue *SkippedItem
 	for i := range result.Skipped {
 		if result.Skipped[i].Path == "a.txt" {
 			issue = &result.Skipped[i]
 		}
 	}
 	require.NotNil(t, issue, "a read failure must be recorded, making the path unavailable truth")
-	assert.Equal(t, issueHashPanic, issue.Reason)
+	assert.Equal(t, IssueHashPanic, issue.Reason)
 	assert.True(t, observationIssueBlocksLocalTruth(issue.Reason))
 }
 
@@ -181,7 +181,7 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 func TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	availability := newScanAvailability(10)
 
 	assert.False(t, obs.isForeignMountPoint(availability, "Docs", synctree.FileIdentity{Device: 10, Inode: 2}, true))
@@ -194,7 +194,7 @@ func TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault(t *testing.T) {
 
 	item := mountBoundarySkippedItem("Docs/nas")
 	assert.True(t, item.BlocksReadBoundary, "everything beneath an uncrossed mount stays unavailable")
-	assert.Equal(t, issueLocalMountBoundary, item.Reason)
+	assert.Equal(t, IssueLocalMountBoundary, item.Reason)
 }
 
 // A disk mounted inside the sync folder was crossed under cross_filesystems
@@ -213,7 +213,7 @@ func TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted(t *testing.T) {
 
 	assert.Empty(t, remote.deletes, "an unmounted disk's synced files must not be deleted on OneDrive")
 	assert.Zero(t, report.RemoteDeletes)
-	requireIssueOfType(t, eng, "nas", issueLocalMountMissing)
+	requireIssueOfType(t, eng, "nas", IssueLocalMountMissing)
 }
 
 // diskFile is a file a disk held, by its path under the sync folder, with
@@ -335,7 +335,7 @@ func TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted(t *testing.T) {
 			assert.Empty(t, remote.deletes, "a rebind deletes nothing of a disk that is not mounted")
 			assert.Zero(t, report.RemoteDeletes+report.HeldRemoteDeletes+report.LocalDeletes, "%+v", report)
 			for _, disk := range tc.disks {
-				requireIssueOfType(t, eng, disk, issueLocalMountMissing)
+				requireIssueOfType(t, eng, disk, IssueLocalMountMissing)
 			}
 
 			for _, disk := range tc.disks {
@@ -349,7 +349,7 @@ func TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted(t *testing.T) {
 			assert.Equal(t, downloads, remote.downloads, "nothing is downloaded")
 			assert.Zero(t, report.LocalDeletes+report.RemoteDeletes+report.ConflictCopies+report.Failed, "%+v", report)
 			for _, disk := range tc.disks {
-				requireNoIssueOfType(t, eng, disk, issueLocalMountMissing)
+				requireNoIssueOfType(t, eng, disk, IssueLocalMountMissing)
 			}
 			for _, f := range held {
 				requireScenarioLocalFile(t, syncRoot, f.relPath, string(f.content))
@@ -378,7 +378,7 @@ func TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved(t *testing.T)
 
 	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
-	flags, err := eng.baseline.listMountBoundaries(t.Context())
+	flags, err := eng.baseline.ListMountBoundaries(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, flags, "the mount point of a removed folder is forgotten")
 
@@ -388,7 +388,7 @@ func TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved(t *testing.T)
 	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Greater(t, remote.uploads, uploads, "a folder made there again syncs as an ordinary folder")
-	requireNoIssueOfType(t, eng, "nas", issueLocalMountMissing)
+	requireNoIssueOfType(t, eng, "nas", IssueLocalMountMissing)
 }
 
 // A rebind onto a folder that lacks a recorded mount point's folder (a
@@ -466,7 +466,7 @@ func TestRunOnce_ADiskMountedAgainLosesNothing(t *testing.T) {
 	assert.Equal(t, uploads, remote.uploads, "nothing is uploaded")
 	assert.Equal(t, downloads, remote.downloads, "nothing is downloaded")
 	assert.Zero(t, report.LocalDeletes+report.RemoteDeletes+report.ConflictCopies+report.Failed, "%+v", report)
-	requireNoIssueOfType(t, eng, "nas", issueLocalMountMissing)
+	requireNoIssueOfType(t, eng, "nas", IssueLocalMountMissing)
 	for _, f := range held {
 		requireScenarioLocalFile(t, syncRoot, f.relPath, string(f.content))
 	}
@@ -514,7 +514,7 @@ func TestRunOnce_AnEditOnOneDriveWhileItsDiskIsNotMountedIsDownloadedOnceItIsBac
 func TestIsForeignMountPoint_CrossingRecordsTheBoundary(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{CrossFilesystems: true})
 	availability := newScanAvailability(10)
 
@@ -552,7 +552,7 @@ func TestFlaggedMountIsGone_MountedButEmptiedDiskIsNotABoundary(t *testing.T) {
 		&BaselineEntry{Path: "nas", ItemID: "nas", ItemType: ItemTypeFolder},
 		&BaselineEntry{Path: "nas/a.txt", ItemID: "a", ItemType: ItemTypeFile},
 	)
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{CrossFilesystems: true})
 	obs.SetMountBoundaryFlags([]string{"nas"})
 	availability := newScanAvailability(10)
@@ -578,7 +578,7 @@ func TestClearSyncRootIdentity_KeepsRecordedMountPoints(t *testing.T) {
 
 	require.NoError(t, eng.baseline.ClearSyncRootIdentity(t.Context()))
 
-	flags, err := eng.baseline.listMountBoundaries(t.Context())
+	flags, err := eng.baseline.ListMountBoundaries(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"nas"}, flags, "a rebind keeps every recorded mount point")
 }
@@ -587,7 +587,7 @@ func TestClearSyncRootIdentity_KeepsRecordedMountPoints(t *testing.T) {
 func TestContentFilter_RestoreCopiesAreNeverObserved(t *testing.T) {
 	t.Parallel()
 
-	filter := newContentFilter(ContentFilterConfig{})
+	filter := NewContentFilter(ContentFilterConfig{})
 	assert.False(t, filter.Visible("Docs/.onedrive-go-restore-123", ItemTypeFile))
 	assert.False(t, filter.Visible("Docs/.onedrive-go.0123456789abcdef.detach", ItemTypeFile))
 }
@@ -652,7 +652,7 @@ func TestRunOnce_ReplacedSyncedFileSyncsAgainOnceRestored(t *testing.T) {
 	item, ok := remote.itemAt("a.txt")
 	require.True(t, ok)
 	assert.Equal(t, "alpha, edited\n", remote.contents[item.ID], "the restored file's edit is uploaded")
-	requireNoIssueOfType(t, eng, "a.txt", issueLocalUnsyncableReplacement)
+	requireNoIssueOfType(t, eng, "a.txt", IssueLocalUnsyncableReplacement)
 }
 
 // A file sync set aside while removing it, left in the sync folder because the
@@ -680,7 +680,7 @@ func TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone(t *testing.
 	require.NoError(t, os.Remove(leftover))
 	runScenarioPass(t, eng)
 
-	requireNoIssueOfType(t, eng, leftoverPath, issueLocalInterruptedRemoval)
+	requireNoIssueOfType(t, eng, leftoverPath, IssueLocalInterruptedRemoval)
 	assert.Empty(t, interruptedRemovalStatusPaths(t, eng.baseline), "status no longer lists it")
 }
 
@@ -697,14 +697,14 @@ func TestRunOnce_MountBoundaryClearsWhenTheFolderIsPlainAgain(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
-	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{mountBoundarySkippedItem("Dir")})
+	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []SkippedItem{mountBoundarySkippedItem("Dir")})
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch))
 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "Dir", "two.txt")))
 	report := runScenarioPass(t, eng)
 
 	assert.Equal(t, 1, report.RemoteDeletes, "a delete in a folder that is no longer a mount point is an ordinary delete")
-	requireNoIssueOfType(t, eng, "Dir", issueLocalMountBoundary)
+	requireNoIssueOfType(t, eng, "Dir", IssueLocalMountBoundary)
 }
 
 // A crossed mount point that is not mounted now is a condition of its own,
@@ -726,7 +726,7 @@ func TestRunOnce_AVanishedCrossedMountIsMissingNotABoundary(t *testing.T) {
 
 	_, err := eng.baseline.rawDB().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
 	require.NoError(t, err)
-	stored := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{mountBoundarySkippedItem("nas")})
+	stored := localObservationFindingsBatchFromSkippedItems(eng.driveID, []SkippedItem{mountBoundarySkippedItem("nas")})
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &stored))
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "nas", "n0.txt")))
 
@@ -738,8 +738,8 @@ func TestRunOnce_AVanishedCrossedMountIsMissingNotABoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1, "%+v", issues)
 	assert.Equal(t, "nas", issues[0].Path)
-	assert.Equal(t, issueLocalMountMissing, issues[0].IssueType)
-	assert.Equal(t, sKPermLocalRead("nas"), issues[0].ScopeKey, "still a read boundary")
+	assert.Equal(t, IssueLocalMountMissing, issues[0].IssueType)
+	assert.Equal(t, SKPermLocalRead("nas"), issues[0].ScopeKey, "still a read boundary")
 }
 
 // The condition of a crossed mount point that is not mounted clears when a
@@ -755,8 +755,8 @@ func TestRunOnce_MountMissingClearsWhenTheScanNoLongerFindsIt(t *testing.T) {
 	runScenarioPass(t, eng)
 
 	missing := vanishedMountSkippedItem("Dir")
-	require.Equal(t, issueLocalMountMissing, missing.Reason)
-	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []skippedItem{missing})
+	require.Equal(t, IssueLocalMountMissing, missing.Reason)
+	batch := localObservationFindingsBatchFromSkippedItems(eng.driveID, []SkippedItem{missing})
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch))
 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "Dir", "two.txt")))

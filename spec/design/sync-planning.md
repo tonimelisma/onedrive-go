@@ -275,7 +275,7 @@ The SQL decision table has two stages, one `CASE` expression each in
 baseline), and `sqlReconciliationKindCase` turns that kind and the path's flags
 into a reconciliation kind, the decision `buildActionsForReconciliation` maps
 to actions. Both vocabularies are Go enums in `sqlite_compare_kinds.go`
-(`comparisonKind`, `reconciliationKind`), the source of truth. They sit in the
+(`ComparisonKind`, `ReconciliationKind`), the source of truth. They sit in the
 store layer, next to the SQL that carries their names, because the row scans
 parse them; `planner_kinds.go` holds the planner's check of them and its error.
 The SQL carries the names as literals, and
@@ -359,7 +359,7 @@ which the `exhaustive` linter holds (no `//nolint:exhaustive` remains on one);
 the planner's former tagless switches and its `isDeleteAction` and
 `isMoveAction` tests are switches over the type for that reason, and every
 "creates an entry on this side" test goes through `createSide`. Each
-default, which no value can reach, panics with `outsideTheEnum` where the
+default, which no value can reach, panics with `OutsideTheEnum` where the
 decision returns a plain value, and returns an error where it already returns
 one (the store's row value, mutation classification, publication mutation,
 delete ledger and remote mirror; worker dispatch), so no default answers with
@@ -495,7 +495,7 @@ bin. A remote delete under a folder the user replaced with a file treats the
 path as absent (nothing can exist below a file); its local-absence check used to
 fail on the non-folder parent and held the folder's delete forever. Delete
 ordering and parent preservation use the deleted side's type
-(`deletedItemType`), since the two sides disagree across a type change. Moves that cross drive ownership are
+(`DeletedItemType`), since the two sides disagree across a type change. Moves that cross drive ownership are
 decomposed into delete + upload because Graph move cannot cross drive
 ownership.
 
@@ -939,7 +939,7 @@ indexed builder to its exact edges over random plans, and
 ### Follow-Up Work
 
 Planning moves leaves work for the next pass on purpose, and the plan says so
-in `actionPlan.FollowUp` (`planFollowUp`, R-2.1.7). The executing side uses it
+in `ActionPlan.FollowUp` (`PlanFollowUp`, R-2.1.7). The executing side uses it
 to run that next pass now instead of reporting the run finished. The count is
 set where the planner leaves ready work:
 
@@ -974,7 +974,7 @@ delete-safety hold is not follow-up, because another pass would hold it again.
 include work a one-way mode holds back. `Unfinished` is the part of them the
 plan's mode runs (`moveComposition.deferredRelocationsInMode`,
 `countActionsAllowedInMode`). When a one-shot run ends on a plan,
-`planFollowUp.leftWhenTheRunEnds` is the work it leaves for the next sync:
+`PlanFollowUp.LeftWhenTheRunEnds` is the work it leaves for the next sync:
 `Unfinished` always, since that work is in no action list, and `Renames` only
 when the pass bound ended the run, since a rename is an action already
 counted and the work behind it is planned by the pass the bound prevented
@@ -999,7 +999,7 @@ reaches execution, ordinary actions are mount-local concrete work.
 ## Delete-Safety Hold
 
 `planner_delete_safety.go` is a post-pass over the admitted plan
-(`applyDeleteSafetyHold`, run by the engine's planning stage after
+(`ApplyDeleteSafetyHold`, run by the engine's planning stage after
 `PlanCurrentState`). Per-item checks prove each delete matches what was
 synced; they cannot tell an intended mass delete from a wrong tree that
 passed every identity check (an fscrypt folder with its key unloaded, a
@@ -1014,10 +1014,10 @@ enumeration). So, per direction (product decision P-1):
 - **proportional**: when more than `max(50, 30% of baseline items)` deletes,
   files and folders alike, go toward one side, all deletes toward that side
   are held. The unconfirmed deletes sync already ran toward that side within
-  the last 24 hours (`deleteSafetyWindow`) count with the plan's, against the
+  the last 24 hours (`DeleteSafetyWindow`) count with the plan's, against the
   baseline as it stood before them (`delete_ledger`, written and
   pruned by `CommitMutation` in the outcome's own transaction, read by
-  `recentUnconfirmedDeletes` at plan time). Each plan used to be judged alone,
+  `RecentUnconfirmedDeletes` at plan time). Each plan used to be judged alone,
   so a process removing files below the threshold per pass (a failing disk, a
   misbehaving app, a cron job) emptied the drive one small batch at a time and
   was never held;
@@ -1074,7 +1074,7 @@ restores trustworthy truth.
 
 A removed shared folder's final drain (`RunOptions.ReleaseLocalTree`) plans for
 a mount whose local tree is being released
-(`plannerMountContext.ReleasesLocalTree`). `planBuiltActions` admits its
+(`PlannerMountContext.ReleasesLocalTree`). `planBuiltActions` admits its
 actions through one rule beside the mode, `leaveOutNewLocalItems`, after
 normalization: a download or a local folder create of an item with no
 baseline row and no local entry is left out. The mode stays bidirectional,

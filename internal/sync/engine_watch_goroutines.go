@@ -51,13 +51,13 @@ type watchGoroutines struct {
 	// observers' exits and a refresh's result, and stop itself share the one
 	// bound. timer is its timer; both are nil until a wait begins.
 	expired chan struct{}
-	timer   syncTimer
+	timer   SyncTimer
 }
 
 // deadline is the channel that closes when the bound on waiting for the
 // goroutines has passed, arming the bound on the engine's clock at the first
 // call.
-func (g *watchGoroutines) deadline(clock syncClock) <-chan struct{} {
+func (g *watchGoroutines) deadline(clock SyncClock) <-chan struct{} {
 	if g.expired == nil {
 		expired := make(chan struct{})
 		g.expired = expired
@@ -108,7 +108,7 @@ func (g *watchGoroutines) forgetExited() {
 // bound passes first, one Warn names the kinds still running, and stop
 // returns all the same: a goroutine that ignores its context must not hold
 // the watch's return for ever. Safe to call more than once.
-func (g *watchGoroutines) stop(clock syncClock, logger *slog.Logger) {
+func (g *watchGoroutines) stop(clock SyncClock, logger *slog.Logger) {
 	defer g.disarm()
 	if len(g.started) == 0 {
 		return

@@ -35,14 +35,14 @@ const (
 )
 
 const (
-	remoteRefreshEnumerateInterval = time.Hour
+	RemoteRefreshEnumerateInterval = time.Hour
 )
 
-type observationState struct {
+type ObservationState struct {
 	ContentDriveID driveid.ID
 	Cursor         string
 	// NextFullRemoteRefreshAt is when the next full remote refresh is due,
-	// as storedTimeNano encodes it; zero means one is due now.
+	// as StoredTimeNano encodes it; zero means one is due now.
 	NextFullRemoteRefreshAt  int64
 	LocalTruthComplete       bool
 	LocalTruthRecoveryReason string
@@ -60,24 +60,24 @@ type observationState struct {
 }
 
 const (
-	localTruthRecoveryDroppedEvents  = "dropped_local_events"
-	localTruthRecoveryWatcherError   = "watcher_error"
-	localTruthRecoveryFullScanFailed = "full_local_scan_failed"
+	LocalTruthRecoveryDroppedEvents  = "dropped_local_events"
+	LocalTruthRecoveryWatcherError   = "watcher_error"
+	LocalTruthRecoveryFullScanFailed = "full_local_scan_failed"
 )
 
-func remoteRefreshIntervalForMode(mode remoteObservationMode) time.Duration {
+func remoteRefreshIntervalForMode(mode RemoteObservationMode) time.Duration {
 	switch mode {
-	case remoteObservationModeDelta:
-		return fullRemoteRefreshInterval
-	case remoteObservationModeEnumerate:
-		return remoteRefreshEnumerateInterval
+	case RemoteObservationModeDelta:
+		return FullRemoteRefreshInterval
+	case RemoteObservationModeEnumerate:
+		return RemoteRefreshEnumerateInterval
 	default:
-		return fullRemoteRefreshInterval
+		return FullRemoteRefreshInterval
 	}
 }
 
-func applyRemoteRefreshSchedule(state *observationState, at time.Time, mode remoteObservationMode) {
-	state.NextFullRemoteRefreshAt = storedTimeNano(at.Add(remoteRefreshIntervalForMode(mode)))
+func applyRemoteRefreshSchedule(state *ObservationState, at time.Time, mode RemoteObservationMode) {
+	state.NextFullRemoteRefreshAt = StoredTimeNano(at.Add(remoteRefreshIntervalForMode(mode)))
 }
 
 func (s *SyncStore) contentDriveIDForRead(
@@ -105,7 +105,7 @@ func (s *SyncStore) contentDriveIDForRead(
 	return driveid.ID{}, nil
 }
 
-func contentDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID, error) {
+func contentDriveIDForDB(ctx context.Context, runner SqlTxRunner) (driveid.ID, error) {
 	var raw string
 	if err := runner.QueryRowContext(ctx,
 		`SELECT content_drive_id FROM observation_state LIMIT 1`,
@@ -134,8 +134,8 @@ func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
 		"reset it with onedrive-go drive reset-sync-state", actual, expected)
 }
 
-func (s *SyncStore) ReadObservationState(ctx context.Context) (*observationState, error) {
-	state, err := readObservationStateFromTx(ctx, s.db)
+func (s *SyncStore) ReadObservationState(ctx context.Context) (*ObservationState, error) {
+	state, err := ReadObservationStateFromTx(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func (s *SyncStore) CommitObservationCursor(
 	driveID driveid.ID,
 	cursor string,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation cursor transaction: %w", err)
 	}
@@ -157,7 +157,7 @@ func (s *SyncStore) CommitObservationCursor(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation cursor transaction")
 	}()
 
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func (s *SyncStore) MarkFullRemoteRefresh(
 	ctx context.Context,
 	driveID driveid.ID,
 	at time.Time,
-	mode remoteObservationMode,
+	mode RemoteObservationMode,
 ) error {
 	return s.markObservationRefresh(
 		ctx,
@@ -198,7 +198,7 @@ func (s *SyncStore) MarkFullRemoteRefresh(
 		"sync: beginning full remote refresh transaction",
 		"sync: rollback full remote refresh transaction",
 		"sync: committing full remote refresh transaction",
-		func(state *observationState) {
+		func(state *ObservationState) {
 			applyRemoteRefreshSchedule(state, at, mode)
 		},
 	)
@@ -223,14 +223,14 @@ func (s *SyncStore) RecordFullRefreshOrphans(
 		"sync: beginning undecided-orphan refresh transaction",
 		"sync: rollback undecided-orphan refresh transaction",
 		"sync: committing undecided-orphan refresh transaction",
-		func(state *observationState) {
+		func(state *ObservationState) {
 			if !undecided {
 				state.UndecidedRefreshStreak = 0
 				return
 			}
 			state.UndecidedRefreshStreak++
-			deadline := storedTimeNano(at.Add(undecidedRefreshDelay(state.UndecidedRefreshStreak)))
-			if !storedTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
+			deadline := StoredTimeNano(at.Add(undecidedRefreshDelay(state.UndecidedRefreshStreak)))
+			if !StoredTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
 				changed = true
 			}
@@ -241,14 +241,14 @@ func (s *SyncStore) RecordFullRefreshOrphans(
 }
 
 // undecidedRefreshDelay is how soon a full refresh follows the streak-th
-// consecutive one that left an orphan undecided: fullRefreshAfterFolderDeleteDelay,
+// consecutive one that left an orphan undecided: FullRefreshAfterFolderDeleteDelay,
 // doubling per refresh, up to the normal cadence.
 func undecidedRefreshDelay(streak int) time.Duration {
-	delay := fullRefreshAfterFolderDeleteDelay
+	delay := FullRefreshAfterFolderDeleteDelay
 	for range streak - 1 {
 		delay *= 2
-		if delay >= fullRemoteRefreshInterval {
-			return fullRemoteRefreshInterval
+		if delay >= FullRemoteRefreshInterval {
+			return FullRemoteRefreshInterval
 		}
 	}
 
@@ -264,7 +264,7 @@ func (s *SyncStore) ClampFullRemoteRefreshDeadline(
 		return false, nil
 	}
 
-	deadline := storedTimeNano(notAfter)
+	deadline := StoredTimeNano(notAfter)
 	changed := false
 	err := s.markObservationRefresh(
 		ctx,
@@ -272,8 +272,8 @@ func (s *SyncStore) ClampFullRemoteRefreshDeadline(
 		"sync: beginning full remote refresh clamp transaction",
 		"sync: rollback full remote refresh clamp transaction",
 		"sync: committing full remote refresh clamp transaction",
-		func(state *observationState) {
-			if !storedTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
+		func(state *ObservationState) {
+			if !StoredTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
 				changed = true
 			}
@@ -288,9 +288,9 @@ func (s *SyncStore) markObservationRefresh(
 	beginMessage string,
 	rollbackMessage string,
 	commitMessage string,
-	update func(*observationState),
+	update func(*ObservationState),
 ) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("%s: %w", beginMessage, err)
 	}
@@ -298,7 +298,7 @@ func (s *SyncStore) markObservationRefresh(
 		err = finalizeTxRollback(err, tx, rollbackMessage)
 	}()
 
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -336,17 +336,17 @@ func (s *SyncStore) rememberContentDriveID(id driveid.ID) {
 	s.cachedContentDriveID = id
 }
 
-func readObservationStateFromTx(
+func ReadObservationStateFromTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-) (*observationState, error) {
+	tx SqlTxRunner,
+) (*ObservationState, error) {
 	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
 	}
 
 	var (
 		contentDriveID string
-		state          observationState
+		state          ObservationState
 		localComplete  int
 		rootBound      int
 		rootDevice     int64
@@ -387,9 +387,9 @@ func readObservationStateFromTx(
 
 func (s *SyncStore) ensureContentDriveIDTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	driveID driveid.ID,
-	state *observationState,
+	state *ObservationState,
 ) error {
 	if driveID.IsZero() {
 		return nil
@@ -414,8 +414,8 @@ func (s *SyncStore) ensureContentDriveIDTx(
 
 func (s *SyncStore) writeObservationStateTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	state *observationState,
+	tx SqlTxRunner,
+	state *ObservationState,
 ) error {
 	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
 		return err
@@ -430,8 +430,8 @@ func (s *SyncStore) writeObservationStateTx(
 
 func writeObservationStateToTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	state *observationState,
+	tx SqlTxRunner,
+	state *ObservationState,
 ) error {
 	rootIdentity := state.SyncRootIdentity
 	if rootIdentity == nil {
@@ -491,10 +491,10 @@ func syncRootIdentityFromColumns(bound int, device, inode, fsid, birthTime int64
 // one already recorded.
 func bindSyncRootIdentityTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	identity synctree.RootIdentity,
 ) (*synctree.RootIdentity, error) {
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -520,14 +520,14 @@ func bindSyncRootIdentityTx(
 // A disk gone for good is let go of by removing its folder, which the next
 // snapshot prunes (recordMountBoundariesTx).
 func (s *SyncStore) ClearSyncRootIdentity(ctx context.Context) error {
-	return s.updateObservationState(ctx, func(state *observationState) {
+	return s.updateObservationState(ctx, func(state *ObservationState) {
 		state.SyncRootIdentity = nil
 		state.SyncRootRebind = true
 	})
 }
 
 func (s *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {
-	return s.updateObservationState(ctx, func(state *observationState) {
+	return s.updateObservationState(ctx, func(state *ObservationState) {
 		state.LocalTruthComplete = false
 		state.LocalTruthRecoveryReason = reason
 	})
@@ -535,9 +535,9 @@ func (s *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) er
 
 func (s *SyncStore) updateObservationState(
 	ctx context.Context,
-	update func(*observationState),
+	update func(*ObservationState),
 ) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin observation-state update tx: %w", err)
 	}
@@ -545,7 +545,7 @@ func (s *SyncStore) updateObservationState(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation-state update tx")
 	}()
 
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -561,8 +561,8 @@ func (s *SyncStore) updateObservationState(
 	return nil
 }
 
-func (s *SyncStore) replaceObservationState(ctx context.Context, state *observationState) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+func (s *SyncStore) replaceObservationState(ctx context.Context, state *ObservationState) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin observation-state replace tx: %w", err)
 	}
@@ -581,8 +581,8 @@ func (s *SyncStore) replaceObservationState(ctx context.Context, state *observat
 	return nil
 }
 
-// baselineEntryCount counts synced (non-root) baseline rows.
-func (s *SyncStore) baselineEntryCount(ctx context.Context) (int, error) {
+// BaselineEntryCount counts synced (non-root) baseline rows.
+func (s *SyncStore) BaselineEntryCount(ctx context.Context) (int, error) {
 	var count int
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'`,

@@ -8,29 +8,29 @@ import (
 // literal both SQL CASE expressions return from their ELSE.
 const kindUnclassified = "unclassified"
 
-// comparisonKind is the per-path comparison the SQL decision table computes
+// ComparisonKind is the per-path comparison the SQL decision table computes
 // (sqlComparisonKindCase): which of baseline, local and remote hold the path,
 // and how the sides relate to the baseline. The enum is the vocabulary; the
 // SQL carries its names as literals, which
 // TestPlannerKindCases_LiteralsAreExactlyTheKinds holds to the enum.
 //
-// The zero value is comparisonUnclassified, the CASE's ELSE: a state no rule
+// The zero value is ComparisonUnclassified, the CASE's ELSE: a state no rule
 // covers, which planning refuses (validatePlannerKinds). Members are never
 // persisted, so their numbers may change; comparisonDiverged stays last,
-// because allComparisonKinds and parseComparisonKind range up to it.
-type comparisonKind uint8
+// because allComparisonKinds and ParseComparisonKind range up to it.
+type ComparisonKind uint8
 
 const (
-	comparisonUnclassified comparisonKind = iota
-	comparisonLocalMoveSource
+	ComparisonUnclassified ComparisonKind = iota
+	ComparisonLocalMoveSource
 	comparisonDeleteAwaitsAncestorMove
 	comparisonBothMissing
-	comparisonLocalMoveDest
-	comparisonRemoteMoveSource
+	ComparisonLocalMoveDest
+	ComparisonRemoteMoveSource
 	comparisonRemoteMoveDest
 	comparisonKeptLocalFolder
 	comparisonLocalOnlyCreate
-	comparisonRemoteMoveShadowed
+	ComparisonRemoteMoveShadowed
 	comparisonRemoteOnlyCreate
 	comparisonCreateEqual
 	comparisonCreateConflict
@@ -42,19 +42,19 @@ const (
 )
 
 //nolint:gocyclo // one case per member: the name table of the enum
-func (k comparisonKind) String() string {
+func (k ComparisonKind) String() string {
 	switch k {
-	case comparisonUnclassified:
+	case ComparisonUnclassified:
 		return kindUnclassified
-	case comparisonLocalMoveSource:
+	case ComparisonLocalMoveSource:
 		return "local_move_source"
 	case comparisonDeleteAwaitsAncestorMove:
 		return "delete_awaits_ancestor_move"
 	case comparisonBothMissing:
 		return "both_missing"
-	case comparisonLocalMoveDest:
+	case ComparisonLocalMoveDest:
 		return "local_move_dest"
-	case comparisonRemoteMoveSource:
+	case ComparisonRemoteMoveSource:
 		return "remote_move_source"
 	case comparisonRemoteMoveDest:
 		return "remote_move_dest"
@@ -62,7 +62,7 @@ func (k comparisonKind) String() string {
 		return "kept_local_folder"
 	case comparisonLocalOnlyCreate:
 		return "local_only_create"
-	case comparisonRemoteMoveShadowed:
+	case ComparisonRemoteMoveShadowed:
 		return "remote_move_shadowed"
 	case comparisonRemoteOnlyCreate:
 		return "remote_only_create"
@@ -87,100 +87,100 @@ func (k comparisonKind) String() string {
 
 // allComparisonKinds lists every member in declaration order, the
 // unclassified one first.
-func allComparisonKinds() []comparisonKind {
-	kinds := make([]comparisonKind, 0, int(comparisonDiverged)+1)
-	for k := comparisonUnclassified; k <= comparisonDiverged; k++ {
+func allComparisonKinds() []ComparisonKind {
+	kinds := make([]ComparisonKind, 0, int(comparisonDiverged)+1)
+	for k := ComparisonUnclassified; k <= comparisonDiverged; k++ {
 		kinds = append(kinds, k)
 	}
 
 	return kinds
 }
 
-// parseComparisonKind reads the comparison kind SQL returned. "unclassified"
+// ParseComparisonKind reads the comparison kind SQL returned. "unclassified"
 // parses to the zero member: it is a state outside the decision table, which
 // planning refuses with the row's inputs. Any other unknown name is the SQL
 // and the enum drifting apart.
-func parseComparisonKind(s string) (comparisonKind, error) {
-	for k := comparisonUnclassified; k <= comparisonDiverged; k++ {
+func ParseComparisonKind(s string) (ComparisonKind, error) {
+	for k := ComparisonUnclassified; k <= comparisonDiverged; k++ {
 		if k.String() == s {
 			return k, nil
 		}
 	}
 
-	return comparisonUnclassified, fmt.Errorf("sync: unknown comparison kind %q", s)
+	return ComparisonUnclassified, fmt.Errorf("sync: unknown comparison kind %q", s)
 }
 
-// reconciliationKind is the decision the SQL decision table takes for a path
+// ReconciliationKind is the decision the SQL decision table takes for a path
 // (sqlReconciliationKindCase), which the planner maps to actions
 // (buildActionsForReconciliation). It owns its names: some equal action-type
 // names (local_delete, upload, ...), but those are a persisted wire format
 // (retry_work.action_type) and coincide by choice, not by definition.
 //
-// The zero value is reconcileUnclassified, the CASE's ELSE; reconcileNoop is
+// The zero value is ReconcileUnclassified, the CASE's ELSE; ReconcileNoop is
 // the explicit "nothing to do" that the decision table states for a path.
-// reconcileReplaceLocal stays last (allReconciliationKinds,
-// parseReconciliationKind).
-type reconciliationKind uint8
+// ReconcileReplaceLocal stays last (allReconciliationKinds,
+// ParseReconciliationKind).
+type ReconciliationKind uint8
 
 const (
-	reconcileUnclassified reconciliationKind = iota
-	reconcileNoop
-	reconcileBaselineRemove
-	reconcileBaselineUpdate
-	reconcileFolderCreateLocal
-	reconcileFolderCreateRemote
-	reconcileUpload
-	reconcileDownload
-	reconcileLocalDelete
-	reconcileRemoteDelete
-	reconcileLocalMove
-	reconcileRemoteMove
-	reconcileConflictEditEdit
-	reconcileConflictEditDelete
-	reconcileConflictCreateCreate
-	reconcileConflictKeepBoth
-	reconcileReplaceRemote
-	reconcileReplaceLocal
+	ReconcileUnclassified ReconciliationKind = iota
+	ReconcileNoop
+	ReconcileBaselineRemove
+	ReconcileBaselineUpdate
+	ReconcileFolderCreateLocal
+	ReconcileFolderCreateRemote
+	ReconcileUpload
+	ReconcileDownload
+	ReconcileLocalDelete
+	ReconcileRemoteDelete
+	ReconcileLocalMove
+	ReconcileRemoteMove
+	ReconcileConflictEditEdit
+	ReconcileConflictEditDelete
+	ReconcileConflictCreateCreate
+	ReconcileConflictKeepBoth
+	ReconcileReplaceRemote
+	ReconcileReplaceLocal
 )
 
 //nolint:gocyclo // one case per member: the name table of the enum
-func (k reconciliationKind) String() string {
+func (k ReconciliationKind) String() string {
 	switch k {
-	case reconcileUnclassified:
+	case ReconcileUnclassified:
 		return kindUnclassified
-	case reconcileNoop:
+	case ReconcileNoop:
 		return "noop"
-	case reconcileBaselineRemove:
+	case ReconcileBaselineRemove:
 		return "baseline_remove"
-	case reconcileBaselineUpdate:
+	case ReconcileBaselineUpdate:
 		return "baseline_update"
-	case reconcileFolderCreateLocal:
+	case ReconcileFolderCreateLocal:
 		return "folder_create_local"
-	case reconcileFolderCreateRemote:
+	case ReconcileFolderCreateRemote:
 		return "folder_create_remote"
-	case reconcileUpload:
+	case ReconcileUpload:
 		return "upload"
-	case reconcileDownload:
+	case ReconcileDownload:
 		return "download"
-	case reconcileLocalDelete:
+	case ReconcileLocalDelete:
 		return "local_delete"
-	case reconcileRemoteDelete:
+	case ReconcileRemoteDelete:
 		return "remote_delete"
-	case reconcileLocalMove:
+	case ReconcileLocalMove:
 		return "local_move"
-	case reconcileRemoteMove:
+	case ReconcileRemoteMove:
 		return "remote_move"
-	case reconcileConflictEditEdit:
+	case ReconcileConflictEditEdit:
 		return "conflict_edit_edit"
-	case reconcileConflictEditDelete:
+	case ReconcileConflictEditDelete:
 		return "conflict_edit_delete"
-	case reconcileConflictCreateCreate:
+	case ReconcileConflictCreateCreate:
 		return "conflict_create_create"
-	case reconcileConflictKeepBoth:
+	case ReconcileConflictKeepBoth:
 		return "conflict_keep_both"
-	case reconcileReplaceRemote:
+	case ReconcileReplaceRemote:
 		return "replace_remote"
-	case reconcileReplaceLocal:
+	case ReconcileReplaceLocal:
 		return "replace_local"
 	default:
 		return fmt.Sprintf("reconciliationKind(%d)", uint8(k))
@@ -189,30 +189,30 @@ func (k reconciliationKind) String() string {
 
 // allReconciliationKinds lists every member in declaration order, the
 // unclassified one first.
-func allReconciliationKinds() []reconciliationKind {
-	kinds := make([]reconciliationKind, 0, int(reconcileReplaceLocal)+1)
-	for k := reconcileUnclassified; k <= reconcileReplaceLocal; k++ {
+func allReconciliationKinds() []ReconciliationKind {
+	kinds := make([]ReconciliationKind, 0, int(ReconcileReplaceLocal)+1)
+	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
 		kinds = append(kinds, k)
 	}
 
 	return kinds
 }
 
-// parseReconciliationKind reads the reconciliation kind SQL returned, with
-// the same contract as parseComparisonKind.
-func parseReconciliationKind(s string) (reconciliationKind, error) {
-	for k := reconcileUnclassified; k <= reconcileReplaceLocal; k++ {
+// ParseReconciliationKind reads the reconciliation kind SQL returned, with
+// the same contract as ParseComparisonKind.
+func ParseReconciliationKind(s string) (ReconciliationKind, error) {
+	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
 		if k.String() == s {
 			return k, nil
 		}
 	}
 
-	return reconcileUnclassified, fmt.Errorf("sync: unknown reconciliation kind %q", s)
+	return ReconcileUnclassified, fmt.Errorf("sync: unknown reconciliation kind %q", s)
 }
 
-// plannerDecisionInput is one input column of the SQL decision table as the
+// PlannerDecisionInput is one input column of the SQL decision table as the
 // planning transaction's diagnostic read found it (sqlQueryPlannerDecisionInputs).
-type plannerDecisionInput struct {
+type PlannerDecisionInput struct {
 	Column string
 	// Value is the column's value as text, or "NULL": no rule tests for a
 	// NULL, so a flag expression that yields one leaves the row unclassified.

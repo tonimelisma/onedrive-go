@@ -82,7 +82,7 @@ func shortcutRootStatusViewFromRecord(
 	if record == nil {
 		return ShortcutRootStatusView{}
 	}
-	normalized := normalizeShortcutRootRecord(record)
+	normalized := NormalizeShortcutRootRecord(record)
 	if namespaceID == "" {
 		namespaceID = normalized.NamespaceID
 	}
@@ -110,7 +110,7 @@ func shortcutRootStatusViewFromRecord(
 	return view
 }
 
-func shortcutRootStatusViewsFromRecords(
+func ShortcutRootStatusViewsFromRecords(
 	records []ShortcutRootRecord,
 	namespaceID string,
 	parentSyncRoot string,

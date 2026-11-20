@@ -784,7 +784,7 @@ func (r *exRun) stillHolds(local bool, base string) bool {
 // syncUntilQuiet plans and applies passes until a plan has nothing to do, up
 // to the pass limit, and returns the last plan. A run with a refusal has one
 // pass more, the one the refusal costs.
-func (r *exRun) syncUntilQuiet() (*actionPlan, bool) {
+func (r *exRun) syncUntilQuiet() (*ActionPlan, bool) {
 	limit := exPassLimit
 	if r.refusal.nth > 0 {
 		limit++
@@ -816,7 +816,7 @@ func (r *exRun) syncUntilQuiet() (*actionPlan, bool) {
 }
 
 // exRecordPass is what a pass's plan holds for the refusals of its pair.
-func exRecordPass(plan *actionPlan) exPassRecord {
+func exRecordPass(plan *ActionPlan) exPassRecord {
 	var record exPassRecord
 	for i := range plan.Actions {
 		if _, creates := createSide(&plan.Actions[i]); creates {
@@ -910,7 +910,7 @@ func (r *exRun) freeRemoteName(dir string) string {
 
 // planPass writes the model into the store, with the case collisions a scan
 // here reports, and plans it.
-func (w *exWorld) planPass() *actionPlan {
+func (w *exWorld) planPass() *ActionPlan {
 	w.writeStore()
 	ctx := w.t.Context()
 	db := w.store.rawDB()
@@ -918,7 +918,7 @@ func (w *exWorld) planPass() *actionPlan {
 	require.NoError(w.t, err)
 	for _, p := range w.localCaseCollisions() {
 		_, err := db.ExecContext(ctx,
-			"INSERT INTO observation_issues (path, issue_type, scope_key) VALUES (?, ?, '')", p, string(issueCaseCollision))
+			"INSERT INTO observation_issues (path, issue_type, scope_key) VALUES (?, ?, '')", p, string(IssueCaseCollision))
 		require.NoError(w.t, err)
 	}
 
@@ -935,7 +935,7 @@ func (w *exWorld) localCaseCollisions() []string {
 		row := w.baseline[p]
 		entries = append(entries, &BaselineEntry{Path: p, ItemID: row.id, ItemType: pmType(row.folder)})
 	}
-	var events []changeEvent
+	var events []ChangeEvent
 	observed := map[string]bool{}
 	for _, p := range sortedKeys(w.local) {
 		item := w.local[p]
@@ -944,7 +944,7 @@ func (w *exWorld) localCaseCollisions() []string {
 		if synced && row.folder == item.folder && row.inode == item.inode && (item.folder || row.localContent == item.content) {
 			continue
 		}
-		events = append(events, changeEvent{Path: p, ItemType: pmType(item.folder)})
+		events = append(events, ChangeEvent{Path: p, ItemType: pmType(item.folder)})
 	}
 	_, skipped := detectCaseCollisions(events, newBaselineForTest(entries), observed)
 	paths := make([]string, 0, len(skipped))
@@ -960,7 +960,7 @@ func (w *exWorld) localCaseCollisions() []string {
 // action whose dependency did not succeed does not run. The first action of
 // the line refuse fails without changing anything. It returns the OneDrive
 // contents an upload replaced, which OneDrive keeps as versions.
-func (w *exWorld) applyPlan(plan *actionPlan, refuse string) map[string]bool {
+func (w *exWorld) applyPlan(plan *ActionPlan, refuse string) map[string]bool {
 	kept := map[string]bool{}
 	failed := make([]bool, len(plan.Actions))
 	for _, i := range exPlanOrder(plan) {
@@ -987,7 +987,7 @@ func (w *exWorld) applyPlan(plan *actionPlan, refuse string) map[string]bool {
 	}
 	for _, held := range plan.HeldDeletes {
 		w.logf("  confirmed held %v delete %s", held.Side, held.Path)
-		if held.Side == deleteSafetySideLocal {
+		if held.Side == DeleteSafetySideLocal {
 			w.deleteTree(w.local, held.Path)
 		} else {
 			w.deleteTree(w.remote, held.Path)
@@ -1000,7 +1000,7 @@ func (w *exWorld) applyPlan(plan *actionPlan, refuse string) map[string]bool {
 
 // exPlanOrder is the plan's actions in an order that respects its
 // dependencies; actions caught in a cycle come last, in plan order.
-func exPlanOrder(plan *actionPlan) []int {
+func exPlanOrder(plan *ActionPlan) []int {
 	done := make([]bool, len(plan.Actions))
 	order := make([]int, 0, len(plan.Actions))
 	for progressed := true; progressed; {
@@ -1364,7 +1364,7 @@ func registerExCachingDriver(t *testing.T) {
 	if slices.Contains(sql.Drivers(), exDriverName) {
 		return
 	}
-	db, err := sql.Open(sqliteDriverName, ":memory:")
+	db, err := sql.Open(SqliteDriverName, ":memory:")
 	require.NoError(t, err)
 	base := db.Driver()
 	require.NoError(t, db.Close())

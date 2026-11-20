@@ -232,15 +232,15 @@ func TestFullScan_RootReadDirEIOReturnsError(t *testing.T) {
 
 	syncRoot := t.TempDir()
 	tree := mustOpenSyncTree(t, syncRoot)
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	var (
-		events  []changeEvent
+		events  []ChangeEvent
 		jobs    []hashJob
-		skipped []skippedItem
+		skipped []SkippedItem
 	)
 	walkFn := obs.makeWalkFunc(
-		t.Context(), tree, map[string]bool{}, map[string]localStateRow{},
+		t.Context(), tree, map[string]bool{}, map[string]LocalStateRow{},
 		&events, &jobs, &skipped, new(atomic.Int64), 0, map[string]struct{}{},
 	)
 
@@ -286,7 +286,7 @@ func rewriteRecordedSyncRoot(t *testing.T, paths rootSafetyPaths, edit func(*syn
 
 	store, err := openSyncStore(t.Context(), paths.dbPath, testLogger(t), false)
 	require.NoError(t, err)
-	require.NoError(t, store.updateObservationState(t.Context(), func(state *observationState) {
+	require.NoError(t, store.updateObservationState(t.Context(), func(state *ObservationState) {
 		require.NotNil(t, state.SyncRootIdentity)
 		edit(state.SyncRootIdentity)
 	}))
@@ -447,7 +447,7 @@ func TestWatchObserver_SeesBindingMadeAfterItWasBuilt(t *testing.T) {
 
 	rebound := resetAndReopen(t, paths, remote)
 	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
-	watchObserver := newLocalObserver(emptyBaseline(), testLogger(t), 0)
+	watchObserver := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	watchObserver.SetSyncRootIdentity(rebound.syncRootIdentity)
 
 	runScenarioPass(t, rebound) // binds, writing a new marker
@@ -472,7 +472,7 @@ func TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, errs[i] = eng.commitLocalSnapshot(t.Context(), localSnapshotCommit{})
+			_, errs[i] = eng.commitLocalSnapshot(t.Context(), LocalSnapshotCommit{})
 		}()
 	}
 	group.Wait()
@@ -499,7 +499,7 @@ func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.
 
 	missing := live
 	missing.Token = "recorded-token"
-	err = validateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
+	err = ValidateExpectedSyncRootIdentity(tree, &missing, ErrSyncRootRebindHint)
 	require.ErrorIs(t, err, ErrMountRootUnavailable)
 	assert.Contains(t, err.Error(), "has no sync folder marker")
 	assert.Contains(t, err.Error(), synctree.RootMarkAttribute)
@@ -507,7 +507,7 @@ func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.
 	assert.Contains(t, err.Error(), "drive rebind-root")
 
 	require.NoError(t, tree.SetRootMark("someone-else"))
-	err = validateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
+	err = ValidateExpectedSyncRootIdentity(tree, &missing, ErrSyncRootRebindHint)
 	assert.Contains(t, err.Error(), "different sync folder marker")
 	assert.Contains(t, err.Error(), "drive rebind-root")
 }

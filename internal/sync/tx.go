@@ -14,7 +14,7 @@ type txRollbacker interface {
 	Rollback() error
 }
 
-type sqlTxRunner interface {
+type SqlTxRunner interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
@@ -36,7 +36,7 @@ type perfTx struct {
 	recorded  bool
 }
 
-func beginPerfTx(ctx context.Context, db *sql.DB) (*perfTx, error) {
+func BeginPerfTx(ctx context.Context, db *sql.DB) (*perfTx, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)

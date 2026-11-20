@@ -49,7 +49,7 @@ func TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove(t *testing
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
 	capture := &crashCapture{
-		point:  crashPointLocalMoveDestinationTrashed,
+		point:  CrashPointLocalMoveDestinationTrashed,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	h.eng.execCfg.crashAt = capture.hook

@@ -14,9 +14,9 @@ import (
 func TestRemoteRefreshIntervalForMode_CoversDegradedAndDefault(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, remoteRefreshEnumerateInterval, remoteRefreshIntervalForMode(remoteObservationModeEnumerate))
-	assert.Equal(t, fullRemoteRefreshInterval, remoteRefreshIntervalForMode(remoteObservationModeDelta))
-	assert.Equal(t, fullRemoteRefreshInterval, remoteRefreshIntervalForMode("unexpected"))
+	assert.Equal(t, RemoteRefreshEnumerateInterval, remoteRefreshIntervalForMode(RemoteObservationModeEnumerate))
+	assert.Equal(t, FullRemoteRefreshInterval, remoteRefreshIntervalForMode(RemoteObservationModeDelta))
+	assert.Equal(t, FullRemoteRefreshInterval, remoteRefreshIntervalForMode("unexpected"))
 }
 
 func TestContentDriveIDForRead_UsesFallbackAndCache(t *testing.T) {
@@ -90,11 +90,11 @@ func TestMarkFullRemoteRefresh_UpdatesNextDeadlineForLatestMode(t *testing.T) {
 	first := time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC)
 	second := first.Add(10 * time.Minute)
 
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, first, remoteObservationModeEnumerate))
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, second, remoteObservationModeDelta))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, first, RemoteObservationModeEnumerate))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, second, RemoteObservationModeDelta))
 
 	state := readObservationStateForTest(t, store, ctx)
-	assert.Equal(t, testObservationState(driveID, "", second.Add(fullRemoteRefreshInterval).UnixNano()), state)
+	assert.Equal(t, testObservationState(driveID, "", second.Add(FullRemoteRefreshInterval).UnixNano()), state)
 }
 
 func TestClearObservationCursor_PreservesRefreshSchedules(t *testing.T) {
@@ -106,11 +106,11 @@ func TestClearObservationCursor_PreservesRefreshSchedules(t *testing.T) {
 	remoteAt := time.Date(2026, 4, 19, 8, 0, 0, 0, time.UTC)
 
 	require.NoError(t, store.CommitObservationCursor(ctx, driveID, "token-before-clear"))
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, remoteAt, remoteObservationModeEnumerate))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, remoteAt, RemoteObservationModeEnumerate))
 	require.NoError(t, store.ClearObservationCursor(ctx))
 
 	state := readObservationStateForTest(t, store, ctx)
-	assert.Equal(t, testObservationState(driveID, "", remoteAt.Add(remoteRefreshEnumerateInterval).UnixNano()), state)
+	assert.Equal(t, testObservationState(driveID, "", remoteAt.Add(RemoteRefreshEnumerateInterval).UnixNano()), state)
 }
 
 func TestClampFullRemoteRefreshDeadline_ReturnsWhetherDeadlineMovedEarlier(t *testing.T) {
@@ -121,13 +121,13 @@ func TestClampFullRemoteRefreshDeadline_ReturnsWhetherDeadlineMovedEarlier(t *te
 	driveID := driveid.New(testDriveID)
 	now := time.Date(2026, 4, 20, 15, 0, 0, 0, time.UTC)
 
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, now, remoteObservationModeDelta))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, now, RemoteObservationModeDelta))
 
-	changed, err := store.ClampFullRemoteRefreshDeadline(ctx, driveID, now.Add(remoteRefreshEnumerateInterval))
+	changed, err := store.ClampFullRemoteRefreshDeadline(ctx, driveID, now.Add(RemoteRefreshEnumerateInterval))
 	require.NoError(t, err)
 	assert.True(t, changed)
 
-	changed, err = store.ClampFullRemoteRefreshDeadline(ctx, driveID, now.Add(2*remoteRefreshEnumerateInterval))
+	changed, err = store.ClampFullRemoteRefreshDeadline(ctx, driveID, now.Add(2*RemoteRefreshEnumerateInterval))
 	require.NoError(t, err)
 	assert.False(t, changed)
 }

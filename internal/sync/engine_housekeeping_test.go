@@ -170,7 +170,7 @@ func seedRemovedSharedFolders(t *testing.T, eng *Engine, syncRoot string) {
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Docs"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Notes"), 0o700))
-	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{
 		{
 			NamespaceID:       shortcutNamespaceTestID,
 			BindingItemID:     "binding-1",

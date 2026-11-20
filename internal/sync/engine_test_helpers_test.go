@@ -46,16 +46,16 @@ func newSingleOwnerEngine(t *testing.T) *testEngine {
 
 // Compile-time interface satisfaction checks.
 var (
-	_ deltaFetcher            = (*engineMockClient)(nil)
-	_ socketIOEndpointFetcher = (*engineMockClient)(nil)
-	_ itemClient              = (*engineMockClient)(nil)
+	_ DeltaFetcher            = (*engineMockClient)(nil)
+	_ SocketIOEndpointFetcher = (*engineMockClient)(nil)
+	_ ItemClient              = (*engineMockClient)(nil)
 	_ driveops.Downloader     = (*engineMockClient)(nil)
 	_ driveops.Uploader       = (*engineMockClient)(nil)
 	_ driveops.ItemUploader   = (*engineMockClient)(nil)
-	_ folderDeltaFetcher      = (*engineMockClient)(nil)
-	_ recursiveLister         = (*engineMockClient)(nil)
-	_ permissionChecker       = (*engineMockClient)(nil)
-	_ driveVerifier           = (*engineMockClient)(nil)
+	_ FolderDeltaFetcher      = (*engineMockClient)(nil)
+	_ RecursiveLister         = (*engineMockClient)(nil)
+	_ PermissionChecker       = (*engineMockClient)(nil)
+	_ DriveVerifier           = (*engineMockClient)(nil)
 )
 
 type engineMockClient struct {
@@ -551,13 +551,13 @@ func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, co
 // setupWatchEngine initializes an engine with DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
-func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *trackedAction {
+func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *TrackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
-	rt.sched.graph = newDepGraph(eng.logger)
-	rt.sched.dispatchCh = make(chan *trackedAction, 1024)
-	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
+	rt.sched.graph = NewDepGraph(eng.logger)
+	rt.sched.dispatchCh = make(chan *TrackedAction, 1024)
+	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = rt.engineFlow
 
@@ -586,7 +586,7 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	}
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {
-		active := activeScopeFromBlockScopeRow(block)
+		active := ActiveScopeFromBlockScopeRow(block)
 		eng.runtime.scopes.upsertActiveScope(&active)
 	}
 }
@@ -625,9 +625,9 @@ func testEngineFlow(t *testing.T, eng *testEngine) *engineFlow {
 }
 
 type debugEventRecorder struct {
-	events  chan engineDebugEvent
+	events  chan EngineDebugEvent
 	mu      sync.Mutex
-	history []engineDebugEvent
+	history []EngineDebugEvent
 }
 
 func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
@@ -636,7 +636,7 @@ func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
 
 func attachDebugEventRecorderWithHook(
 	eng *testEngine,
-	hook func(engineDebugEvent),
+	hook func(EngineDebugEvent),
 ) *debugEventRecorder {
 	recorder := newDebugEventRecorder()
 	eng.SetDebugEventHook(func(event DebugEvent) {
@@ -656,14 +656,14 @@ const debugEventRecorderBuffer = 128
 // record method to an observer as the debug event sink the watch runtime
 // would install.
 func newDebugEventRecorder() *debugEventRecorder {
-	return &debugEventRecorder{events: make(chan engineDebugEvent, debugEventRecorderBuffer)}
+	return &debugEventRecorder{events: make(chan EngineDebugEvent, debugEventRecorderBuffer)}
 }
 
 // record is the recorder's sink: it keeps the event and queues it for the
 // waits.
 //
 //nolint:gocritic // the sink's signature is the hook's, which passes events by value
-func (r *debugEventRecorder) record(event engineDebugEvent) {
+func (r *debugEventRecorder) record(event EngineDebugEvent) {
 	r.mu.Lock()
 	r.history = append(r.history, event)
 	r.mu.Unlock()
@@ -672,7 +672,7 @@ func (r *debugEventRecorder) record(event engineDebugEvent) {
 
 func (r *debugEventRecorder) waitForEvent(
 	t *testing.T,
-	match func(engineDebugEvent) bool,
+	match func(EngineDebugEvent) bool,
 	description string,
 ) {
 	t.Helper()
@@ -699,7 +699,7 @@ func (r *debugEventRecorder) waitForEvent(
 func (r *debugEventRecorder) waitUntilSeenOrExit(
 	t *testing.T,
 	done <-chan error,
-	match func(engineDebugEvent) bool,
+	match func(EngineDebugEvent) bool,
 	description string,
 ) {
 	t.Helper()
@@ -735,7 +735,7 @@ func (r *debugEventRecorder) waitUntilSeenOrExit(
 
 func (r *debugEventRecorder) waitUntilSeen(
 	t *testing.T,
-	match func(engineDebugEvent) bool,
+	match func(EngineDebugEvent) bool,
 	description string,
 ) {
 	t.Helper()
@@ -762,12 +762,12 @@ func (r *debugEventRecorder) waitUntilSeen(
 	}
 }
 
-func (r *debugEventRecorder) findEvent(match func(engineDebugEvent) bool) bool {
+func (r *debugEventRecorder) findEvent(match func(EngineDebugEvent) bool) bool {
 	return r.findEventIndex(match) >= 0
 }
 
 // countEvents is how many of the events recorded so far match.
-func (r *debugEventRecorder) countEvents(match func(engineDebugEvent) bool) int {
+func (r *debugEventRecorder) countEvents(match func(EngineDebugEvent) bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -781,7 +781,7 @@ func (r *debugEventRecorder) countEvents(match func(engineDebugEvent) bool) int 
 	return count
 }
 
-func (r *debugEventRecorder) findEventIndex(match func(engineDebugEvent) bool) int {
+func (r *debugEventRecorder) findEventIndex(match func(EngineDebugEvent) bool) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -794,11 +794,11 @@ func (r *debugEventRecorder) findEventIndex(match func(engineDebugEvent) bool) i
 	return -1
 }
 
-func (r *debugEventRecorder) eventsSnapshot() []engineDebugEvent {
+func (r *debugEventRecorder) eventsSnapshot() []EngineDebugEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	events := make([]engineDebugEvent, len(r.history))
+	events := make([]EngineDebugEvent, len(r.history))
 	copy(events, r.history)
 
 	return events
@@ -806,7 +806,7 @@ func (r *debugEventRecorder) eventsSnapshot() []engineDebugEvent {
 
 func (r *debugEventRecorder) requireOrderedSubsequence(
 	t *testing.T,
-	matches []func(engineDebugEvent) bool,
+	matches []func(EngineDebugEvent) bool,
 	description string,
 ) {
 	t.Helper()
@@ -830,8 +830,8 @@ func (r *debugEventRecorder) requireOrderedSubsequence(
 
 func (r *debugEventRecorder) requireNoEventAfter(
 	t *testing.T,
-	anchor func(engineDebugEvent) bool,
-	forbidden func(engineDebugEvent) bool,
+	anchor func(EngineDebugEvent) bool,
+	forbidden func(EngineDebugEvent) bool,
 	description string,
 ) {
 	t.Helper()
@@ -855,7 +855,7 @@ func (r *debugEventRecorder) requireNoEventAfter(
 
 func (r *debugEventRecorder) requireEventCount(
 	t *testing.T,
-	match func(engineDebugEvent) bool,
+	match func(EngineDebugEvent) bool,
 	expected int,
 	description string,
 ) {
@@ -924,7 +924,7 @@ var errManualClockSkipsScopeWait = errors.New("manual clock: scope wait skipped"
 // refreshes the deps of the runtime and flow the harness already built.
 func installManualClockForTestEngine(eng *testEngine, clock *manualClock) {
 	installManualClock(eng.Engine, clock)
-	eng.baseline.setNowFunc(clock.Now)
+	eng.baseline.SetNowFunc(clock.Now)
 	// A one-shot scope wait is wall-clock time; on a manual clock it would
 	// pass without making the trial due. A test that wants the wait sets a
 	// waitFn of its own that advances its clock.
@@ -1007,7 +1007,7 @@ func (c *manualClock) AdvanceTo(at time.Time) {
 	}
 }
 
-func (c *manualClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+func (c *manualClock) AfterFunc(delay time.Duration, fn func()) SyncTimer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1208,9 +1208,9 @@ func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
 func getTestBlockScope(eng *testEngine, key ScopeKey) (BlockScope, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.scopes.lookupActiveScope(key); ok {
-			row, err := blockScopeRowFromActiveScope(block)
+			row, err := BlockScopeRowFromActiveScope(block)
 			if err != nil {
-				panic(fmt.Sprintf("blockScopeRowFromActiveScope: %v", err))
+				panic(fmt.Sprintf("BlockScopeRowFromActiveScope: %v", err))
 			}
 			return *row, true
 		}
@@ -1266,11 +1266,11 @@ func hashContentQuickXor(t *testing.T, content string) string {
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
 // using per-outcome CommitMutation inputs (the old batch Commit was removed).
-func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []actionOutcome, deltaToken string) {
+func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []ActionOutcome, deltaToken string) {
 	t.Helper()
 
 	for i := range outcomes {
-		require.NoError(t, mgr.CommitMutation(ctx, mutationFromActionOutcome(&outcomes[i])), "seed CommitMutation[%d]", i)
+		require.NoError(t, mgr.CommitMutation(ctx, MutationFromActionOutcome(&outcomes[i])), "seed CommitMutation[%d]", i)
 	}
 
 	if deltaToken != "" {
@@ -1295,13 +1295,13 @@ func readObservationCursorForTest(t *testing.T, mgr *SyncStore, ctx context.Cont
 	return state.Cursor
 }
 
-// observingClock decorates a syncClock so a test can observe when the runtime
+// observingClock decorates a SyncClock so a test can observe when the runtime
 // creates a ticker, arms a timer, or sleeps. It wraps rather than replaces:
 // the underlying clock still supplies the behavior, so observation cannot
 // produce the incoherent mix of real and fake time that separate injectable
 // function fields allowed.
 type observingClock struct {
-	syncClock
+	SyncClock
 	onNewTicker func(time.Duration)
 	onAfterFunc func(time.Duration)
 	onSleep     func(time.Duration)
@@ -1313,7 +1313,7 @@ type observingClock struct {
 // land in the gap, so the tick was never delivered and the test timed out
 // under -race -count=50 load (TestRunWatch_FallbackSleepHonorsCancellation).
 func (c *observingClock) NewTicker(interval time.Duration) syncTicker {
-	ticker := c.syncClock.NewTicker(interval)
+	ticker := c.SyncClock.NewTicker(interval)
 	if c.onNewTicker != nil {
 		c.onNewTicker(interval)
 	}
@@ -1321,8 +1321,8 @@ func (c *observingClock) NewTicker(interval time.Duration) syncTicker {
 	return ticker
 }
 
-func (c *observingClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
-	timer := c.syncClock.AfterFunc(delay, fn)
+func (c *observingClock) AfterFunc(delay time.Duration, fn func()) SyncTimer {
+	timer := c.SyncClock.AfterFunc(delay, fn)
 	if c.onAfterFunc != nil {
 		c.onAfterFunc(delay)
 	}
@@ -1336,7 +1336,7 @@ func (c *observingClock) Sleep(ctx context.Context, delay time.Duration) error {
 	}
 
 	//nolint:wrapcheck // decorator delegates to the wrapped clock; adding context here would attribute the failure to the test seam rather than the clock that produced it
-	return c.syncClock.Sleep(ctx, delay)
+	return c.SyncClock.Sleep(ctx, delay)
 }
 
 // observeEngineClock wraps the engine's current clock so callers can attach
@@ -1346,7 +1346,7 @@ func observeEngineClock(eng *Engine) *observingClock {
 		return existing
 	}
 
-	wrapped := &observingClock{syncClock: eng.clock}
+	wrapped := &observingClock{SyncClock: eng.clock}
 	eng.clock = wrapped
 
 	return wrapped

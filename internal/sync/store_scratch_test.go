@@ -45,7 +45,7 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 
 	ctx := t.Context()
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "remote-1",
@@ -68,7 +68,7 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 		},
 	}, "cursor-seeded", driveID))
 	refreshAt := time.Unix(1700000000, 0).UTC()
-	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, refreshAt, remoteObservationModeDelta))
+	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, refreshAt, RemoteObservationModeDelta))
 }
 
 func scratchPlanningBaseline(driveID driveid.ID) *Baseline {
@@ -109,7 +109,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 
 	seedScratchPlanningSource(t, store, driveID)
 
-	scratch, cleanup, err := store.createScratchPlanningStore(ctx, scratchPlanningBaseline(driveID))
+	scratch, cleanup, err := store.CreateScratchPlanningStore(ctx, scratchPlanningBaseline(driveID))
 	require.NoError(t, err)
 	require.NotNil(t, scratch)
 	require.NotNil(t, cleanup)
@@ -123,7 +123,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, driveID, state.ContentDriveID)
 	assert.Equal(t, "cursor-seeded", state.Cursor)
-	assert.Equal(t, refreshAt.Add(fullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
+	assert.Equal(t, refreshAt.Add(FullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 
 	remoteRows, err := listScratchRemoteStateRows(ctx, scratch.rawDB())
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestCreateScratchPlanningStore_RequiresBaseline(t *testing.T) {
 
 	store := newTestStore(t)
 
-	scratch, cleanup, err := store.createScratchPlanningStore(t.Context(), nil)
+	scratch, cleanup, err := store.CreateScratchPlanningStore(t.Context(), nil)
 	require.Error(t, err)
 	assert.Nil(t, scratch)
 	assert.Nil(t, cleanup)

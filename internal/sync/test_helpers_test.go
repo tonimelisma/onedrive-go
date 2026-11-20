@@ -323,18 +323,18 @@ func (w *enospcWatcher) Close() error {
 // that controls the safety-scan tick still gets coherent timers and sleeps
 // rather than a mix of controlled and wall-clock time.
 type observerTestClock struct {
-	syncClock
+	SyncClock
 
 	// tickCh, when non-nil, backs every ticker this clock hands out.
 	tickCh <-chan time.Time
 	// sleep, when non-nil, replaces the real sleep.
 	sleep func(context.Context, time.Duration) error
 	// afterFunc, when non-nil, replaces the real delayed callback.
-	afterFunc func(time.Duration, func()) syncTimer
+	afterFunc func(time.Duration, func()) SyncTimer
 }
 
 func newObserverTestClock() *observerTestClock {
-	return &observerTestClock{syncClock: realClock{}}
+	return &observerTestClock{SyncClock: RealClock{}}
 }
 
 // fixedTicker delivers on a channel the test owns and ignores its interval.
@@ -350,7 +350,7 @@ func (c *observerTestClock) NewTicker(interval time.Duration) syncTicker {
 		return &fixedTicker{ch: c.tickCh}
 	}
 
-	return c.syncClock.NewTicker(interval)
+	return c.SyncClock.NewTicker(interval)
 }
 
 func (c *observerTestClock) Sleep(ctx context.Context, delay time.Duration) error {
@@ -359,15 +359,15 @@ func (c *observerTestClock) Sleep(ctx context.Context, delay time.Duration) erro
 	}
 
 	//nolint:wrapcheck // decorator delegates to the wrapped clock; adding context here would attribute the failure to the test seam rather than the clock that produced it
-	return c.syncClock.Sleep(ctx, delay)
+	return c.SyncClock.Sleep(ctx, delay)
 }
 
-func (c *observerTestClock) AfterFunc(delay time.Duration, fn func()) syncTimer {
+func (c *observerTestClock) AfterFunc(delay time.Duration, fn func()) SyncTimer {
 	if c.afterFunc != nil {
 		return c.afterFunc(delay, fn)
 	}
 
-	return c.syncClock.AfterFunc(delay, fn)
+	return c.SyncClock.AfterFunc(delay, fn)
 }
 
 // skipInShort marks an exhaustive test: a breadth, replay, randomized or

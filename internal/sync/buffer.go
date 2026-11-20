@@ -51,17 +51,17 @@ func newRealDebounceTimer(delay time.Duration) debounceTimer {
 	return &realDebounceTimer{timer: time.NewTimer(delay)}
 }
 
-// dirtyBatch is a debounced scheduling signal for refresh/replan work. The
+// DirtyBatch is a debounced scheduling signal for refresh/replan work. The
 // signal itself means "replan from current truth now"; FullRefresh is the only
 // additional scheduler hint the runtime preserves.
-type dirtyBatch struct {
+type DirtyBatch struct {
 	FullRefresh bool
 }
 
-// dirtyBuffer coalesces dirty observations into debounced replan signals for
+// DirtyBuffer coalesces dirty observations into debounced replan signals for
 // the snapshot-first runtime. It deliberately does not preserve path subsets or
 // event history because the runtime always replans from committed current truth.
-type dirtyBuffer struct {
+type DirtyBuffer struct {
 	mu          sync.Mutex // guards dirty, fullRefresh, and notify
 	dirty       bool
 	fullRefresh bool
@@ -90,15 +90,15 @@ func dirtyMaxWait(debounce time.Duration) time.Duration {
 	return max(minDirtyMaxWait, dirtyMaxWaitDebounceFactor*debounce)
 }
 
-func newDirtyBuffer(logger *slog.Logger) *dirtyBuffer {
-	return &dirtyBuffer{
+func NewDirtyBuffer(logger *slog.Logger) *DirtyBuffer {
+	return &DirtyBuffer{
 		logger:           logger,
 		newTimer:         newRealDebounceTimer,
 		newDeadlineTimer: newRealDebounceTimer,
 	}
 }
 
-func (b *dirtyBuffer) MarkDirty() {
+func (b *DirtyBuffer) MarkDirty() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -106,7 +106,7 @@ func (b *dirtyBuffer) MarkDirty() {
 	b.signalNewLocked()
 }
 
-func (b *dirtyBuffer) MarkFullRefresh() {
+func (b *DirtyBuffer) MarkFullRefresh() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -114,7 +114,7 @@ func (b *dirtyBuffer) MarkFullRefresh() {
 	b.signalNewLocked()
 }
 
-func (b *dirtyBuffer) FlushImmediate() *dirtyBatch {
+func (b *DirtyBuffer) FlushImmediate() *DirtyBatch {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -122,7 +122,7 @@ func (b *dirtyBuffer) FlushImmediate() *dirtyBatch {
 		return nil
 	}
 
-	batch := &dirtyBatch{
+	batch := &DirtyBatch{
 		FullRefresh: b.fullRefresh,
 	}
 	b.dirty = false
@@ -131,8 +131,8 @@ func (b *dirtyBuffer) FlushImmediate() *dirtyBatch {
 	return batch
 }
 
-func (b *dirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan dirtyBatch {
-	out := make(chan dirtyBatch, 1)
+func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration) <-chan DirtyBatch {
+	out := make(chan DirtyBatch, 1)
 
 	b.mu.Lock()
 	if b.notify != nil {
@@ -171,7 +171,7 @@ func (a *armedTimer) restart(delay time.Duration) {
 	a.active = true
 }
 
-func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- dirtyBatch) {
+func (b *DirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, out chan<- DirtyBatch) {
 	defer close(out)
 	// A panic ends the loop like any other early exit: out closes outside
 	// shutdown, and the watch loop fails the mount ("dirty scheduler stopped
@@ -233,7 +233,7 @@ func (b *dirtyBuffer) debounceLoop(ctx context.Context, debounce time.Duration, 
 
 // flushTo hands the pending batch, if any, to out. It reports false when the
 // context ended first.
-func (b *dirtyBuffer) flushTo(ctx context.Context, out chan<- dirtyBatch) bool {
+func (b *DirtyBuffer) flushTo(ctx context.Context, out chan<- DirtyBatch) bool {
 	batch := b.FlushImmediate()
 	if batch == nil {
 		return true
@@ -248,7 +248,7 @@ func (b *dirtyBuffer) flushTo(ctx context.Context, out chan<- dirtyBatch) bool {
 }
 
 // finalDrain hands a last pending batch to out on shutdown without blocking.
-func (b *dirtyBuffer) finalDrain(out chan<- dirtyBatch) {
+func (b *DirtyBuffer) finalDrain(out chan<- DirtyBatch) {
 	batch := b.FlushImmediate()
 	if batch == nil {
 		return
@@ -265,7 +265,7 @@ func (b *dirtyBuffer) finalDrain(out chan<- dirtyBatch) {
 	}
 }
 
-func (b *dirtyBuffer) signalNewLocked() {
+func (b *DirtyBuffer) signalNewLocked() {
 	if b.notify == nil {
 		return
 	}

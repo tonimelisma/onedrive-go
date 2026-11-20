@@ -21,7 +21,7 @@ type dispatchTrace struct {
 
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
 func (tr *dispatchTrace) record(event DebugEvent) {
-	if event.Type != engineDebugEventActionDispatched {
+	if event.Type != EngineDebugEventActionDispatched {
 		return
 	}
 	tr.mu.Lock()
@@ -153,7 +153,7 @@ func TestWatchRuntime_ParkedBatchMembersWaitForTheirAdmitInstant(t *testing.T) {
 	// test is about admission instants alone.
 	now := clock.Now()
 
-	actions := make([]*trackedAction, 0, 4)
+	actions := make([]*TrackedAction, 0, 4)
 	for i := range 4 {
 		ta := rt.sched.graph.Add(&Action{
 			Type:    ActionUpload,

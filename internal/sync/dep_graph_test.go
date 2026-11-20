@@ -18,7 +18,7 @@ import (
 func TestDepGraph_Add_NoDeps(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	ta := dg.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
@@ -37,7 +37,7 @@ func TestDepGraph_Add_NoDeps(t *testing.T) {
 func TestDepGraph_Add_WithDeps(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Action 1: no deps — should be returned as ready.
 	ta1 := dg.Add(&Action{
@@ -62,7 +62,7 @@ func TestDepGraph_Add_WithDeps(t *testing.T) {
 func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Action 1: no deps.
 	dg.Add(&Action{
@@ -103,7 +103,7 @@ func TestDepGraph_Complete_ReturnsDependents(t *testing.T) {
 func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	dg.Add(&Action{
 		Type: ActionFolderCreate, Path: "dir",
@@ -137,7 +137,7 @@ func TestDepGraph_Complete_DeletesFromActions(t *testing.T) {
 func TestDepGraph_Complete_UnknownID(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Add one real action.
 	dg.Add(&Action{
@@ -155,7 +155,7 @@ func TestDepGraph_Complete_UnknownID(t *testing.T) {
 func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Should not panic on unknown ID with zero tracked actions.
 	ready, ok := dg.Complete(999)
@@ -171,7 +171,7 @@ func TestDepGraph_Complete_UnknownID_NoPanic(t *testing.T) {
 func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Action 2 depends on action 1, but action 1 is not in the graph
 	// (simulating it was already completed before graph was populated).
@@ -193,7 +193,7 @@ func TestDepGraph_SkipCompletedDeps(t *testing.T) {
 func TestDepGraph_InFlightCount(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	assert.Equal(t, 0, dg.InFlightCount())
 
@@ -226,7 +226,7 @@ func TestDepGraph_InFlightCount(t *testing.T) {
 func TestDepGraph_D10_CompletedDepSatisfiedForNewAction(t *testing.T) {
 	t.Parallel()
 
-	dg := newDepGraph(synctest.TestLogger(t))
+	dg := NewDepGraph(synctest.TestLogger(t))
 
 	// Add and complete action 1.
 	dg.Add(&Action{

@@ -1,19 +1,19 @@
 package sync
 
-// permissionCapability identifies the concrete access capability an action
+// PermissionCapability identifies the concrete access capability an action
 // requires or a failed executor step attempted.
-type permissionCapability string
+type PermissionCapability string
 
 const (
 	// The zero value intentionally means "unknown" so unset worker/test fields
 	// still flow through the fallback capability inference paths.
-	permissionCapabilityUnknown     permissionCapability = ""
-	permissionCapabilityLocalRead   permissionCapability = "local_read"
-	permissionCapabilityLocalWrite  permissionCapability = "local_write"
-	permissionCapabilityRemoteRead  permissionCapability = "remote_read"
-	permissionCapabilityRemoteWrite permissionCapability = "remote_write"
+	PermissionCapabilityUnknown     PermissionCapability = ""
+	PermissionCapabilityLocalRead   PermissionCapability = "local_read"
+	PermissionCapabilityLocalWrite  PermissionCapability = "local_write"
+	PermissionCapabilityRemoteRead  PermissionCapability = "remote_read"
+	PermissionCapabilityRemoteWrite PermissionCapability = "remote_write"
 )
 
-func (c permissionCapability) IsLocal() bool {
-	return c == permissionCapabilityLocalRead || c == permissionCapabilityLocalWrite
+func (c PermissionCapability) IsLocal() bool {
+	return c == PermissionCapabilityLocalRead || c == PermissionCapabilityLocalWrite
 }

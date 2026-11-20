@@ -9,31 +9,31 @@ import "time"
 // the observers it starts. The engine's own event kinds are in
 // engine_debug_events.go.
 
-type engineDebugEventType string
+type EngineDebugEventType string
 
 // The observation events: inputs a watch observer dropped by decision. Each
 // is the observer's report that it handled the input, so a test waits for it
 // instead of waiting out a window in which nothing should happen.
 const (
-	// engineDebugEventLocalCaseCollisionSkipped: the local observer skipped
+	// EngineDebugEventLocalCaseCollisionSkipped: the local observer skipped
 	// an entry whose name OneDrive treats as a sibling's (R-2.12.2): a watch
 	// create, an entry of a new directory's scan, or the hash of a coalesced
 	// write. Path is the skipped entry, Note the name it collides with.
-	engineDebugEventLocalCaseCollisionSkipped engineDebugEventType = "local_case_collision_skipped"
-	// engineDebugEventRemoteWakesCoalesced: the remote observer dropped Count
+	EngineDebugEventLocalCaseCollisionSkipped EngineDebugEventType = "local_case_collision_skipped"
+	// EngineDebugEventRemoteWakesCoalesced: the remote observer dropped Count
 	// wake signals that were waiting when a poll began; that poll covers them.
-	engineDebugEventRemoteWakesCoalesced engineDebugEventType = "remote_wakes_coalesced"
+	EngineDebugEventRemoteWakesCoalesced EngineDebugEventType = "remote_wakes_coalesced"
 )
 
 // The observers an event's Observer field names.
 const (
-	engineDebugObserverLocal  = "local"
-	engineDebugObserverRemote = "remote"
+	EngineDebugObserverLocal  = "local"
+	EngineDebugObserverRemote = "remote"
 )
 
-type engineDebugEvent struct {
+type EngineDebugEvent struct {
 	At          time.Time
-	Type        engineDebugEventType
+	Type        EngineDebugEventType
 	DriveID     string
 	ScopeKey    ScopeKey
 	Path        string
@@ -49,4 +49,4 @@ type engineDebugEvent struct {
 
 // DebugEvent is one event of the engine's debug stream, as a hook installed
 // with Engine.SetDebugEventHook receives it.
-type DebugEvent = engineDebugEvent
+type DebugEvent = EngineDebugEvent

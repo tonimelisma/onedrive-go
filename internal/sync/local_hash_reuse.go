@@ -80,7 +80,7 @@ func canReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNan
 // recorded. A baseline without identity proves nothing.
 func sameBaselineIdentity(info fs.FileInfo, base *BaselineEntry) bool {
 	identity, hasIdentity := synctree.IdentityFromFileInfo(info)
-	baseIdentity, baseHasIdentity := base.fileIdentity()
+	baseIdentity, baseHasIdentity := base.FileIdentity()
 	if !hasIdentity || !baseHasIdentity {
 		return false
 	}
@@ -88,10 +88,10 @@ func sameBaselineIdentity(info fs.FileInfo, base *BaselineEntry) bool {
 	return synctree.SameIdentity(identity, baseIdentity)
 }
 
-// fileChangeTime returns the ctime a local_state row records for info: the
+// FileChangeTime returns the ctime a local_state row records for info: the
 // inode change time for a regular file, and zero (unknown) for anything else,
 // because a folder's ctime moves with every child and means nothing here.
-func fileChangeTime(info fs.FileInfo) int64 {
+func FileChangeTime(info fs.FileInfo) int64 {
 	if info == nil || !info.Mode().IsRegular() {
 		return 0
 	}

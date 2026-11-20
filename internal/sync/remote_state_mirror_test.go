@@ -11,12 +11,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *remoteStateRow {
+func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *RemoteStateRow {
 	t.Helper()
 
 	var (
 		rawDriveID string
-		row        remoteStateRow
+		row        RemoteStateRow
 		hash       sql.NullString
 		size       sql.NullInt64
 		mtime      sql.NullInt64
@@ -24,7 +24,7 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *remoteStateRow
 	)
 
 	err := db.QueryRowContext(t.Context(),
-		`SELECT `+sqlSelectRemoteStateCols+`
+		`SELECT `+SqlSelectRemoteStateCols+`
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
@@ -74,7 +74,7 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	err := mgr.CommitObservation(ctx, []observedItem{{
+	err := mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "hello.txt",
@@ -103,7 +103,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "hello.txt",
@@ -111,7 +111,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 		Hash:     "hash1",
 	}}, "delta-token-1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:   driveID,
 		ItemID:    "item1",
 		Path:      "hello.txt",
@@ -132,7 +132,7 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 	contentDriveID := driveid.New(testDriveID)
 	sharedDriveID := driveid.New("shared-drive-id")
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  sharedDriveID,
 		ItemID:   "shared-item",
 		Path:     "Shared/inside.txt",
@@ -166,7 +166,7 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "same.txt",
@@ -177,7 +177,7 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 		ETag:     "etag1",
 	}}, "delta-token-1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "same.txt",
@@ -202,7 +202,7 @@ func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:   driveID,
 		ItemID:    "missing-item",
 		Path:      "gone.txt",
@@ -222,7 +222,7 @@ func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 	ctx := context.Background()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-junk",
 		Path:     ".DS_Store",
@@ -247,7 +247,7 @@ func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "dir", Path: "links", ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "sub", Path: "links/sub", ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "a", Path: "links/a.txt", ItemType: ItemTypeFile, Hash: "ha", Size: 1},
@@ -256,7 +256,7 @@ func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 	}, "t1", driveID))
 
 	// The next delta carries only the folder.
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "dir", Path: "links-renamed", ItemType: ItemTypeFolder, ETag: "e2"},
 	}, "t2", driveID))
 
@@ -286,14 +286,14 @@ func TestCommitObservation_FolderDeleteRemovesDescendants(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "sub", Path: "probe/len", ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "kid", Path: "probe/len/long.txt", ItemType: ItemTypeFile, Hash: "h", Size: 1},
 		{DriveID: driveID, ItemID: "sib", Path: "probe-other/keep.txt", ItemType: ItemTypeFile, Hash: "h2", Size: 1},
 	}, "t1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: ItemTypeFolder, IsDeleted: true},
 	}, "t2", driveID))
 
@@ -324,14 +324,14 @@ func TestCommitObservation_ARemoteRowThatCannotBeReadFailsTheWindow(t *testing.T
 			mgr := newTestStore(t)
 			ctx := t.Context()
 			driveID := driveid.New(testDriveID)
-			require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+			require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: ItemTypeFile, Hash: "hash1", Size: 5,
 			}}, "delta-token-1", driveID))
 			// A size the column can no longer be read back as.
 			_, err := mgr.rawDB().ExecContext(ctx, `UPDATE remote_state SET size = 'five' WHERE item_id = 'item1'`)
 			require.NoError(t, err)
 
-			err = mgr.CommitObservation(ctx, []observedItem{{
+			err = mgr.CommitObservation(ctx, []ObservedItem{{
 				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: ItemTypeFile,
 				Hash: "hash2", Size: 6, IsDeleted: tc.deleted,
 			}}, "delta-token-2", driveID)
@@ -352,7 +352,7 @@ func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *tes
 	mgr := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "dir", Path: "docs", ItemType: ItemTypeFolder},
 		{DriveID: driveID, ItemID: "kid", Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "h", Size: 1},
 		{DriveID: driveID, ItemID: "odd", Path: "odd", ItemType: ItemTypeFolder},

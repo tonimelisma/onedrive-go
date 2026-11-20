@@ -16,12 +16,12 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	flow.sched.resetColdStart(flow.engine.workerPoolSize())
 	flow.retries.nextHeldOrder = 0
 
-	activeScopes := make([]activeScope, 0, len(runtime.BlockScopes))
+	activeScopes := make([]ActiveScope, 0, len(runtime.BlockScopes))
 	for i := range runtime.BlockScopes {
 		if runtime.BlockScopes[i] == nil {
 			continue
 		}
-		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(runtime.BlockScopes[i]))
+		activeScopes = append(activeScopes, ActiveScopeFromBlockScopeRow(runtime.BlockScopes[i]))
 	}
 	flow.scopes.replaceActiveScopes(activeScopes)
 	// A target already under a throttle (or service) scope when the plan
@@ -31,18 +31,18 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 		flow.handOverColdStart(activeScopes[i].Key)
 	}
 	if flow.scopes.state == nil {
-		flow.scopes.state = newScopeState(flow.engine.nowFunc, flow.deps.logger)
+		flow.scopes.state = NewScopeState(flow.engine.nowFunc, flow.deps.logger)
 	}
 }
 
-func (flow *engineFlow) holdAction(ta *trackedAction, reason heldReason, scopeKey ScopeKey, nextRetry time.Time) {
+func (flow *engineFlow) holdAction(ta *TrackedAction, reason heldReason, scopeKey ScopeKey, nextRetry time.Time) {
 	if ta == nil {
 		return
 	}
 
 	flow.sched.markFinished(ta)
 	ta.AdmitAt = time.Time{}
-	key := retryWorkKeyForAction(&ta.Action)
+	key := RetryWorkKeyForAction(&ta.Action)
 	flow.retries.nextHeldOrder++
 	held := &heldAction{
 		Tracked:   ta,

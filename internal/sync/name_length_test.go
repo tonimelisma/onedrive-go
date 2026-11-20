@@ -55,13 +55,13 @@ func TestShouldObserve_RootLevelNameMeetsOnlyThePathLimit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		require.Equal(t, tt.wantUnit, oneDrivePathLength(tt.name), tt.label)
-		skip := shouldObserveWithFilter(tt.name, tt.name, observedKindFile, ContentFilterConfig{}, nil, LocalObservationRules{})
+		skip := shouldObserveWithFilter(tt.name, tt.name, ObservedKindFile, ContentFilterConfig{}, nil, LocalObservationRules{})
 		if !tt.tooLong {
 			assert.Nil(t, skip, tt.label)
 			continue
 		}
 		require.NotNil(t, skip, tt.label)
-		assert.Equal(t, issuePathTooLong, skip.Reason, tt.label)
+		assert.Equal(t, IssuePathTooLong, skip.Reason, tt.label)
 		assert.Equal(t, fmt.Sprintf("path length 401 exceeds %d-character limit", maxOneDrivePathLength), skip.Detail, tt.label)
 	}
 }
@@ -76,7 +76,7 @@ func TestFullScan_LongNonASCIIPathWithinTheCharacterLimitIsObserved(t *testing.T
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, rel), []byte("x"), 0o600))
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 

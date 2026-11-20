@@ -39,7 +39,7 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 
 	synced := "rescan keeps the synced content"
 	syncedHash := hashContentQuickXor(t, synced)
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "edited.txt",
@@ -61,10 +61,10 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 	pipe := &watchPipeline{bl: bl, mode: SyncBidirectional}
 
-	applied, err := rt.runSteadyStateReplan(ctx, pipe, dirtyBatch{})
+	applied, err := rt.runSteadyStateReplan(ctx, pipe, DirtyBatch{})
 	require.NoError(t, err)
 	require.True(t, applied)
 	require.Len(t, rt.currentOutbox(), 1, "the edit is planned as one upload")
@@ -74,7 +74,7 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 	// The observer's safety scan of the unchanged tree, exactly as watch
 	// mode produces it: a full scan against the baseline, handed over as a
 	// full snapshot batch.
-	obs := newLocalObserver(bl, eng.logger, 0)
+	obs := NewLocalObserver(bl, eng.logger, 0)
 	obs.SetFilterConfig(eng.contentFilter)
 	obs.SetObservationRules(eng.localRules)
 	obs.SetSyncRootIdentity(eng.syncRootIdentity)
@@ -82,11 +82,11 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, result.Events, "against the baseline the edit is still an event")
 
-	batches := make(chan localObservation, 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	obs.TrySendFullLocalSnapshot(ctx, result)
 	snapshot := receiveWithin(t, batches, "safety scan snapshot")
-	require.Equal(t, localSnapshot, snapshot.kind)
+	require.Equal(t, LocalSnapshot, snapshot.Kind)
 	require.NoError(t, rt.handleWatchLocalObservationBatch(ctx, &snapshot))
 
 	// Before the fix the snapshot carried a dirty hint, the debounce flushed
@@ -105,10 +105,10 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 }
 
 // applySnapshot hands a snapshot to the runtime as the watch loop does.
-func applySnapshot(t *testing.T, rt *watchRuntime, snapshot *localObservation) {
+func applySnapshot(t *testing.T, rt *watchRuntime, snapshot *LocalObservation) {
 	t.Helper()
 
-	snapshot.kind = localSnapshot
+	snapshot.Kind = LocalSnapshot
 	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), snapshot))
 }
 
@@ -123,19 +123,19 @@ func TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
-	applySnapshot(t, rt, &localObservation{})
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	applySnapshot(t, rt, &LocalObservation{})
 	rt.resources.dirtyBuf.FlushImmediate()
 
-	bad := skippedItem{Path: "docs/bad:name.txt", Reason: IssueInvalidFilename, Detail: "name contains ':'"}
+	bad := SkippedItem{Path: "docs/bad:name.txt", Reason: IssueInvalidFilename, Detail: "name contains ':'"}
 
-	applySnapshot(t, rt, &localObservation{findings: []skippedItem{bad}})
+	applySnapshot(t, rt, &LocalObservation{Findings: []SkippedItem{bad}})
 	assert.NotNil(t, rt.resources.dirtyBuf.FlushImmediate(), "a new finding replans")
 
-	applySnapshot(t, rt, &localObservation{findings: []skippedItem{bad}})
+	applySnapshot(t, rt, &LocalObservation{Findings: []SkippedItem{bad}})
 	assert.Nil(t, rt.resources.dirtyBuf.FlushImmediate(), "the same finding re-reported by the next scan does not")
 
-	applySnapshot(t, rt, &localObservation{})
+	applySnapshot(t, rt, &LocalObservation{})
 	assert.NotNil(t, rt.resources.dirtyBuf.FlushImmediate(), "a finding that cleared replans")
 }
 
@@ -150,9 +150,9 @@ func TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
-	obs := newLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
-	batches := make(chan localObservation, 1)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	obs := NewLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := mustOpenSyncTree(t, syncRoot)
 	leftover := filepath.Join(syncRoot, leftoverName)
@@ -184,8 +184,8 @@ func TestWatchRuntime_FallbackScanRecordsAndClearsFindings(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	obs := newLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
-	batches := make(chan localObservation, 1)
+	obs := NewLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := mustOpenSyncTree(t, syncRoot)
 	leftover := filepath.Join(syncRoot, leftoverName)
@@ -210,17 +210,17 @@ func TestWatchRuntime_ASnapshotCommitsRowsFindingsAndMountsTogether(t *testing.T
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	snapshot := localObservation{
-		rows:          []localStateRow{{Path: "disk", ItemType: ItemTypeFolder}},
-		findings:      []skippedItem{{Path: "bad:name.txt", Reason: IssueInvalidFilename}},
-		crossedMounts: []string{"disk"},
+	snapshot := LocalObservation{
+		Rows:          []LocalStateRow{{Path: "disk", ItemType: ItemTypeFolder}},
+		Findings:      []SkippedItem{{Path: "bad:name.txt", Reason: IssueInvalidFilename}},
+		CrossedMounts: []string{"disk"},
 	}
 
 	// A finding the local findings batch does not manage fails the commit
 	// part way: none of the three is stored.
 	failing := snapshot
-	failing.kind = localSnapshot
-	failing.findings = append([]skippedItem{{Path: "quota", Reason: IssueQuotaExceeded}}, snapshot.findings...)
+	failing.Kind = LocalSnapshot
+	failing.Findings = append([]SkippedItem{{Path: "quota", Reason: IssueQuotaExceeded}}, snapshot.Findings...)
 	require.Error(t, rt.handleWatchLocalObservationBatch(ctx, &failing))
 	assertLocalSnapshotStored(t, eng, nil, nil, nil)
 
@@ -244,7 +244,7 @@ func assertLocalSnapshotStored(t *testing.T, eng *testEngine, rows, findings, mo
 	for i := range issues {
 		storedFindings = append(storedFindings, issues[i].Path)
 	}
-	storedMounts, err := eng.baseline.listMountBoundaries(ctx)
+	storedMounts, err := eng.baseline.ListMountBoundaries(ctx)
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, rows, storedRows, "rows")
@@ -259,13 +259,13 @@ func TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	obs := newLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
+	obs := NewLocalObserver(NewBaselineForTest(nil), eng.logger, 1)
 	obs.SetMountBoundaryFlags(nil)
 	rt.resources.localObs = obs
 
-	applySnapshot(t, rt, &localObservation{
-		rows:          []localStateRow{{Path: "disk", ItemType: ItemTypeFolder}},
-		crossedMounts: []string{"disk"},
+	applySnapshot(t, rt, &LocalObservation{
+		Rows:          []LocalStateRow{{Path: "disk", ItemType: ItemTypeFolder}},
+		CrossedMounts: []string{"disk"},
 	})
 
 	flags := obs.mountBoundaryFlags.Load()

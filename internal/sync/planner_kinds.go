@@ -17,11 +17,11 @@ var errUnclassifiedPlan = errors.New("sync: planner state is outside the decisio
 // ends on it is restarted after its backoff (R-2.8.11).
 type unclassifiedPlanError struct {
 	Path           string
-	Comparison     comparisonKind
-	Reconciliation reconciliationKind
+	Comparison     ComparisonKind
+	Reconciliation ReconciliationKind
 	// Inputs are nil for rows handed to the planner without the engine's
 	// diagnostic read (tests, the planner model).
-	Inputs []plannerDecisionInput
+	Inputs []PlannerDecisionInput
 	// Others counts the plan's further unclassified rows.
 	Others int
 }
@@ -51,13 +51,13 @@ func (e *unclassifiedPlanError) Unwrap() error {
 	return errUnclassifiedPlan
 }
 
-// isUnclassified reports a reconciliation row outside the decision table: the
+// IsUnclassified reports a reconciliation row outside the decision table: the
 // comparison has no rule, or no reconciliation rule matched it.
-func (r *sQLiteReconciliationRow) isUnclassified() bool {
-	return r.ComparisonKind == comparisonUnclassified || r.ReconciliationKind == reconcileUnclassified
+func (r *SQLiteReconciliationRow) IsUnclassified() bool {
+	return r.ComparisonKind == ComparisonUnclassified || r.ReconciliationKind == ReconcileUnclassified
 }
 
-func unclassifiedRowError(rec *sQLiteReconciliationRow) *unclassifiedPlanError {
+func unclassifiedRowError(rec *SQLiteReconciliationRow) *unclassifiedPlanError {
 	return &unclassifiedPlanError{
 		Path:           rec.Path,
 		Comparison:     rec.ComparisonKind,
@@ -66,10 +66,10 @@ func unclassifiedRowError(rec *sQLiteReconciliationRow) *unclassifiedPlanError {
 	}
 }
 
-// firstUnclassifiedRow returns the index of the first unclassified row, or -1.
-func firstUnclassifiedRow(rows []sQLiteReconciliationRow) int {
+// FirstUnclassifiedRow returns the index of the first unclassified row, or -1.
+func FirstUnclassifiedRow(rows []SQLiteReconciliationRow) int {
 	for i := range rows {
-		if rows[i].isUnclassified() {
+		if rows[i].IsUnclassified() {
 			return i
 		}
 	}
@@ -83,11 +83,11 @@ func firstUnclassifiedRow(rows []sQLiteReconciliationRow) int {
 // The error names the first unclassified path (rows come ordered by path) and
 // counts the rest. Comparison rows are checked too: move composition reads
 // their kinds directly.
-func validatePlannerKinds(comparisons []sQLiteComparisonRow, reconciliations []sQLiteReconciliationRow) error {
-	if first := firstUnclassifiedRow(reconciliations); first >= 0 {
+func validatePlannerKinds(comparisons []SQLiteComparisonRow, reconciliations []SQLiteReconciliationRow) error {
+	if first := FirstUnclassifiedRow(reconciliations); first >= 0 {
 		unclassified := unclassifiedRowError(&reconciliations[first])
 		for i := first + 1; i < len(reconciliations); i++ {
-			if reconciliations[i].isUnclassified() {
+			if reconciliations[i].IsUnclassified() {
 				unclassified.Others++
 			}
 		}
@@ -95,14 +95,14 @@ func validatePlannerKinds(comparisons []sQLiteComparisonRow, reconciliations []s
 		return unclassified
 	}
 	for i := range comparisons {
-		if comparisons[i].ComparisonKind == comparisonUnclassified {
+		if comparisons[i].ComparisonKind == ComparisonUnclassified {
 			// No reconciliation rule matches an unclassified comparison
 			// (the SQL tests for named kinds only), so its reconciliation
 			// is unclassified too.
 			return &unclassifiedPlanError{
 				Path:           comparisons[i].Path,
-				Comparison:     comparisonUnclassified,
-				Reconciliation: reconcileUnclassified,
+				Comparison:     ComparisonUnclassified,
+				Reconciliation: ReconcileUnclassified,
 			}
 		}
 	}
@@ -120,15 +120,15 @@ var errUnlistedActionPlanned = errors.New("sync: planned action is outside the a
 
 // validatePlannedActions refuses built actions holding a value outside the
 // action enums, naming the first. planBuiltActions runs it before any rule
-// reads the actions, so each rule's own default, which panics (outsideTheEnum),
+// reads the actions, so each rule's own default, which panics (OutsideTheEnum),
 // stays unreachable.
 func validatePlannedActions(actions []Action) error {
 	for i := range actions {
 		action := &actions[i]
-		if !action.Type.isMember() {
+		if !action.Type.IsMember() {
 			return fmt.Errorf("%w: %s at %q", errUnlistedActionPlanned, action.Type, action.Path)
 		}
-		if action.Type == ActionFolderCreate && !action.CreateSide.isMember() {
+		if action.Type == ActionFolderCreate && !action.CreateSide.IsMember() {
 			return fmt.Errorf("%w: %s on side %s at %q", errUnlistedActionPlanned, action.Type, action.CreateSide, action.Path)
 		}
 	}

@@ -387,7 +387,7 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 	remote.deleteRemotely("item-bin")
 	h.beginRound(t)
 	runScenarioPass(t, eng)
-	clock.Advance(fullRefreshAfterFolderDeleteDelay)
+	clock.Advance(FullRefreshAfterFolderDeleteDelay)
 	runScenarioPass(t, eng)
 
 	assert.NoDirExists(t, filepath.Join(syncRoot, "bin"))

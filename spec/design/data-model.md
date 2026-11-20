@@ -196,7 +196,7 @@ The target persisted scope families are:
 
 `scope_key` remains the durable identity referenced by `retry_work`. Runtime
 and read-side code recover scope semantics from that key via
-`describeScopeKey`; SQLite does not persist a second copy of parsed scope
+`DescribeScopeKey`; SQLite does not persist a second copy of parsed scope
 metadata.
 
 Read-denied subtree boundaries continue to use `perm:*:read:*` keys, but only
@@ -258,7 +258,7 @@ full scan compare the folder at the sync path against the record:
 A token that does not read back after it is written counts as no token. A
 marker found on the folder at startup while the state has no binding (after
 `drive reset-sync-state`) is ignored, because the bind replaces it. The
-expected identity has one owner per engine (`syncRootIdentity`): the executor
+expected identity has one owner per engine (`SyncRootIdentity`): the executor
 and every local observer read it there, so the token a bind adds is enforced
 everywhere at once, and mark-and-bind is serialized; if the store already
 holds a binding, the folder is re-marked with the recorded token.

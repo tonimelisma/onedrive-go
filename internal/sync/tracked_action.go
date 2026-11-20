@@ -4,10 +4,10 @@ import (
 	"time"
 )
 
-// trackedAction pairs an Action with an ID. Workers pull trackedActions from
+// TrackedAction pairs an Action with an ID. Workers pull trackedActions from
 // the dispatch channel. The ID is a sequential counter (assigned by the
 // engine) used as a unique key for the graph's internal maps.
-type trackedAction struct {
+type TrackedAction struct {
 	Action Action
 	ID     int64
 
@@ -17,7 +17,7 @@ type trackedAction struct {
 
 	// TrialScopeKey identifies which scope this trial is testing. Set when
 	// held work is released as a trial (drainDueHeldWorkNow,
-	// releaseScopeBatch) and carried on the actionCompletion, so the engine
+	// releaseScopeBatch) and carried on the ActionCompletion, so the engine
 	// knows which scope to release on trial success.
 	TrialScopeKey ScopeKey
 

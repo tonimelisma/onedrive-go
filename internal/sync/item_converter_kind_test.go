@@ -12,14 +12,14 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func kindTestObserver(t *testing.T, bl *Baseline, items []graph.Item, getItem func(string) (*graph.Item, error)) *remoteObserver {
+func kindTestObserver(t *testing.T, bl *Baseline, items []graph.Item, getItem func(string) (*graph.Item, error)) *RemoteObserver {
 	t.Helper()
 
 	driveID := driveid.New(engineTestDriveID)
 	fetcher := &mockDeltaFetcher{pages: []mockDeltaPage{{page: deltaPageWithItems(append([]graph.Item{
 		{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
 	}, items...), "next-token")}}}
-	obs := newRemoteObserver(fetcher, bl, driveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, bl, driveID, testLogger(t))
 	obs.SetItemClient(&engineMockClient{getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 		if getItem == nil {
 			return nil, graph.ErrNotFound
@@ -30,7 +30,7 @@ func kindTestObserver(t *testing.T, bl *Baseline, items []graph.Item, getItem fu
 	return obs
 }
 
-func kindTestEvent(t *testing.T, events []remoteItem, itemID string) *remoteItem {
+func kindTestEvent(t *testing.T, events []RemoteItem, itemID string) *RemoteItem {
 	t.Helper()
 
 	for i := range events {
@@ -107,7 +107,7 @@ func TestFullDelta_FacetlessNewItemReReadFailureReplaysWindow(t *testing.T) {
 	})
 
 	events, token, err := obs.FullDelta(t.Context(), "saved")
-	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 	assert.Empty(t, token, "the cursor does not advance past a window that could not be classified")
 	assert.Nil(t, kindTestEvent(t, events, "flaky"))
 }
@@ -170,7 +170,7 @@ func TestFullDelta_NegativeSizeIsUnknown(t *testing.T) {
 	assert.True(t, ev.SizeUnknown)
 
 	mgr := newTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), projectRemoteObservations(testLogger(t), events).observed, "t", driveID))
+	require.NoError(t, mgr.CommitObservation(t.Context(), ProjectRemoteObservations(testLogger(t), events).Observed, "t", driveID))
 	row := readRemoteStateRow(t, mgr.rawDB(), "odd")
 	require.NotNil(t, row)
 	assert.False(t, row.SizeKnown, "a negative size is stored as unknown, not as a size")

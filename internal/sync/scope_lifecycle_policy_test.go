@@ -13,7 +13,7 @@ func TestPlanPersistedScopeNormalization_DiscardsOnlyScopesWithoutBlockedRetryWo
 	scopeWithWork := SKPermRemoteWrite("Shared/Docs")
 	scopeWithoutWork := SKDiskLocal()
 
-	plan := planPersistedScopeNormalization(
+	plan := PlanPersistedScopeNormalization(
 		[]*BlockScope{
 			{Key: scopeWithWork},
 			{Key: scopeWithoutWork},
@@ -49,15 +49,15 @@ func TestEvaluateScopeTrialOutcome_UsesSharedLifecyclePolicy(t *testing.T) {
 
 	trialScopeKey := SKService()
 
-	assert.Equal(t, scopeTrialOutcomeRelease, evaluateScopeTrialOutcome(trialScopeKey, &resultDecision{
-		TrialHint: trialHintRelease,
+	assert.Equal(t, ScopeTrialOutcomeRelease, EvaluateScopeTrialOutcome(trialScopeKey, &ResultDecision{
+		TrialHint: TrialHintRelease,
 	}))
-	assert.Equal(t, scopeTrialOutcomeExtend, evaluateScopeTrialOutcome(trialScopeKey, &resultDecision{
-		TrialHint:     trialHintExtendOnMatchingScope,
+	assert.Equal(t, ScopeTrialOutcomeExtend, EvaluateScopeTrialOutcome(trialScopeKey, &ResultDecision{
+		TrialHint:     TrialHintExtendOnMatchingScope,
 		ScopeEvidence: trialScopeKey,
 	}))
-	assert.Equal(t, scopeTrialOutcomeRearmOrDiscard, evaluateScopeTrialOutcome(trialScopeKey, &resultDecision{
-		TrialHint:     trialHintExtendOnMatchingScope,
+	assert.Equal(t, ScopeTrialOutcomeRearmOrDiscard, EvaluateScopeTrialOutcome(trialScopeKey, &ResultDecision{
+		TrialHint:     TrialHintExtendOnMatchingScope,
 		ScopeEvidence: SKQuotaOwn(),
 	}))
 }

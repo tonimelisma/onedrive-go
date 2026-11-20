@@ -7,8 +7,8 @@ const localScopeTrialInterval = 60 * time.Second
 type timedBlockScopeAction int
 
 const (
-	timedBlockScopeKeep timedBlockScopeAction = iota
-	timedBlockScopeDiscard
+	TimedBlockScopeKeep timedBlockScopeAction = iota
+	TimedBlockScopeDiscard
 )
 
 type persistedScopeFacts struct {
@@ -23,14 +23,14 @@ type persistedScopeNormalizationStep struct {
 type scopeTrialOutcome int
 
 const (
-	scopeTrialOutcomeRelease scopeTrialOutcome = iota
-	scopeTrialOutcomeExtend
-	scopeTrialOutcomeRearmOrDiscard
-	scopeTrialOutcomeShutdown
-	scopeTrialOutcomeFatal
+	ScopeTrialOutcomeRelease scopeTrialOutcome = iota
+	ScopeTrialOutcomeExtend
+	ScopeTrialOutcomeRearmOrDiscard
+	ScopeTrialOutcomeShutdown
+	ScopeTrialOutcomeFatal
 )
 
-func planPersistedScopeNormalization(
+func PlanPersistedScopeNormalization(
 	blocks []*BlockScope,
 	blockedRetries []RetryWorkRow,
 ) []persistedScopeNormalizationStep {
@@ -42,7 +42,7 @@ func planPersistedScopeNormalization(
 		if block == nil {
 			continue
 		}
-		if decideTimedBlockScopeAction(facts.blockedRetryCountByScope[block.Key] > 0) == timedBlockScopeKeep {
+		if DecideTimedBlockScopeAction(facts.blockedRetryCountByScope[block.Key] > 0) == TimedBlockScopeKeep {
 			continue
 		}
 
@@ -70,46 +70,46 @@ func summarizePersistedBlockedRetries(rows []RetryWorkRow) persistedScopeFacts {
 	return facts
 }
 
-func decideTimedBlockScopeAction(hasBlockedRetryWork bool) timedBlockScopeAction {
+func DecideTimedBlockScopeAction(hasBlockedRetryWork bool) timedBlockScopeAction {
 	if hasBlockedRetryWork {
-		return timedBlockScopeKeep
+		return TimedBlockScopeKeep
 	}
 
-	return timedBlockScopeDiscard
+	return TimedBlockScopeDiscard
 }
 
 func shouldKeepTimedBlockScope(hasBlockedRetryWork bool) bool {
-	return decideTimedBlockScopeAction(hasBlockedRetryWork) == timedBlockScopeKeep
+	return DecideTimedBlockScopeAction(hasBlockedRetryWork) == TimedBlockScopeKeep
 }
 
-// computeTrialInterval is the single source of truth for timed blocker
+// ComputeTrialInterval is the single source of truth for timed blocker
 // scheduling. Locally timed scopes use a fixed cadence; server Retry-After
 // remains authoritative when present.
-func computeTrialInterval(retryAfter time.Duration) time.Duration {
+func ComputeTrialInterval(retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
 		return retryAfter
 	}
 	return localScopeTrialInterval
 }
 
-func evaluateScopeTrialOutcome(
+func EvaluateScopeTrialOutcome(
 	trialScopeKey ScopeKey,
-	decision *resultDecision,
+	decision *ResultDecision,
 ) scopeTrialOutcome {
 	switch decision.TrialHint {
-	case trialHintRelease:
-		return scopeTrialOutcomeRelease
-	case trialHintExtendOnMatchingScope:
+	case TrialHintRelease:
+		return ScopeTrialOutcomeRelease
+	case TrialHintExtendOnMatchingScope:
 		if trialScopeStillMatches(trialScopeKey, decision) {
-			return scopeTrialOutcomeExtend
+			return ScopeTrialOutcomeExtend
 		}
-		return scopeTrialOutcomeRearmOrDiscard
-	case trialHintReclassify:
-		return scopeTrialOutcomeRearmOrDiscard
-	case trialHintShutdown:
-		return scopeTrialOutcomeShutdown
-	case trialHintFatal:
-		return scopeTrialOutcomeFatal
+		return ScopeTrialOutcomeRearmOrDiscard
+	case TrialHintReclassify:
+		return ScopeTrialOutcomeRearmOrDiscard
+	case TrialHintShutdown:
+		return ScopeTrialOutcomeShutdown
+	case TrialHintFatal:
+		return ScopeTrialOutcomeFatal
 	}
 
 	panic("unknown trial hint")
@@ -117,7 +117,7 @@ func evaluateScopeTrialOutcome(
 
 func trialScopeStillMatches(
 	trialScopeKey ScopeKey,
-	decision *resultDecision,
+	decision *ResultDecision,
 ) bool {
 	return !decision.ScopeEvidence.IsZero() && decision.ScopeEvidence == trialScopeKey
 }

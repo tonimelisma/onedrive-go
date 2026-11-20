@@ -48,14 +48,14 @@ func (c *DeferredCounts) AddAction(action *Action) {
 	case ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
-// isPublicationOnlyActionType reports an action type that only publishes to
+// IsPublicationOnlyActionType reports an action type that only publishes to
 // the baseline (a baseline update, a cleanup): the engine applies it from the
 // plan's view, and no worker runs it.
-func isPublicationOnlyActionType(actionType actionType) bool {
+func IsPublicationOnlyActionType(actionType ActionType) bool {
 	switch actionType {
 	case ActionBaselineUpdate, ActionCleanup:
 		return true
@@ -69,26 +69,26 @@ func isPublicationOnlyActionType(actionType actionType) bool {
 		ActionConflictCopy:
 		return false
 	default:
-		panic(outsideTheEnum(actionType))
+		panic(OutsideTheEnum(actionType))
 	}
 }
 
 // Action is an instruction for the executor, produced by the planner.
 type Action struct {
-	Type                      actionType
+	Type                      ActionType
 	DriveID                   driveid.ID
 	ItemID                    string
 	Path                      string           // canonical path (destination for moves)
 	OldPath                   string           // source path (moves only)
-	CreateSide                folderCreateSide // for folder creates
-	View                      *pathView        // full three-way context
+	CreateSide                FolderCreateSide // for folder creates
+	View                      *PathView        // full three-way context
 	RequireMissingLocalTarget bool             // downloads after preserving a local conflict copy
 	// MovedLocal is the local truth the planner observed at Path for a
 	// local-origin move (ActionRemoteMove). View describes the source at
 	// OldPath, which is absent locally, so this is the only record of what
 	// now sits at the destination. Freshness checks the destination against
 	// it, and the move outcome publishes it as the baseline's local half.
-	MovedLocal *localState
+	MovedLocal *LocalState
 	// MovedLocalPath is where MovedLocal sits in the local snapshot when that
 	// is not Path: a move composed under a parent that an earlier move of the
 	// same plan puts in place (planner_move_composition.go). local_state is
@@ -125,27 +125,27 @@ func (a *Action) ThrottleTargetKey() string {
 	return throttleDriveParam(a.DriveID)
 }
 
-// actionPlan contains a flat list of actions with explicit dependency edges.
+// ActionPlan contains a flat list of actions with explicit dependency edges.
 // The Deps adjacency list encodes ordering constraints (parent-before-child,
 // children-before-parent-delete, move-target-parent).
-type actionPlan struct {
+type ActionPlan struct {
 	Actions        []Action       // flat list of all executable actions
 	Deps           [][]int        // Deps[i] = indices that action i depends on
 	DeferredByMode DeferredCounts // planner-observed work suppressed by direction
 	// HeldDeletes are deletes the delete-safety hold kept out of Actions
 	// until the user confirms them (planner_delete_safety.go).
-	HeldDeletes []heldDelete
+	HeldDeletes []HeldDelete
 	// FollowUp is the work this plan deliberately leaves for the next pass:
 	// that pass has more to do even when every action here succeeds.
-	FollowUp planFollowUp
+	FollowUp PlanFollowUp
 }
 
-// planFollowUp counts what a plan leaves for the pass after it (R-2.1.7).
+// PlanFollowUp counts what a plan leaves for the pass after it (R-2.1.7).
 // Planning a move is deliberately conservative: anything that cannot be
 // ordered in this plan, or that depends on where a move puts an item, is
 // planned by the next pass, which observes the moves this one made. A pass
 // whose plan has a follow-up is therefore not the end of a one-shot sync.
-type planFollowUp struct {
+type PlanFollowUp struct {
 	// Renames are the actions that put an item at a new path: moves,
 	// baseline re-keys and conflict copies. A move's outcome publishes the
 	// item's new path and keeps the content facts the baseline had, and
@@ -176,17 +176,17 @@ type planFollowUp struct {
 }
 
 // pending reports whether the plan leaves work for the next pass.
-func (f planFollowUp) pending() bool {
+func (f PlanFollowUp) Pending() bool {
 	return f.Renames+f.Deferred+f.Dropped > 0
 }
 
-// leftWhenTheRunEnds is the follow-up work a one-shot run leaves for the next
+// LeftWhenTheRunEnds is the follow-up work a one-shot run leaves for the next
 // sync when it ends after this plan (R-6.6.28). Unfinished deferred and
 // dropped work is in no action list, so nothing else counts it. A rename is
 // an action: one that did not succeed is already failed or left, and the
 // work it leaves for the pass after it is counted only when the pass bound,
 // rather than a pass without progress or with a failure, ended the run.
-func (f planFollowUp) leftWhenTheRunEnds(stoppedAtPassBound bool) int {
+func (f PlanFollowUp) LeftWhenTheRunEnds(stoppedAtPassBound bool) int {
 	if stoppedAtPassBound {
 		return f.Unfinished + f.Renames
 	}
@@ -194,10 +194,10 @@ func (f planFollowUp) leftWhenTheRunEnds(stoppedAtPassBound bool) int {
 	return f.Unfinished
 }
 
-// actionOutcome is the result of executing a single action. Self-contained —
+// ActionOutcome is the result of executing a single action. Self-contained —
 // has everything the SyncStore needs to update the database.
-type actionOutcome struct {
-	Action                actionType
+type ActionOutcome struct {
+	Action                ActionType
 	Success               bool
 	Error                 error
 	Path                  string
@@ -207,7 +207,7 @@ type actionOutcome struct {
 	ItemID                string // from API response after upload
 	ParentID              string
 	ItemType              ItemType
-	FailureCapability     permissionCapability
+	FailureCapability     PermissionCapability
 	LocalHash             string
 	RemoteHash            string
 	LocalSize             int64
@@ -233,8 +233,8 @@ type actionOutcome struct {
 	KeptLocally bool
 }
 
-// actionViewPath is the path an action's view describes, else its own path.
-func actionViewPath(action *Action) string {
+// ActionViewPath is the path an action's view describes, else its own path.
+func ActionViewPath(action *Action) string {
 	if action != nil && action.View != nil && action.View.Path != "" {
 		return action.View.Path
 	}

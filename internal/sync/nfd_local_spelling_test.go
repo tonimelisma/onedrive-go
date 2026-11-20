@@ -302,10 +302,10 @@ func TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder(t *testing.T) {
 	onDisk := filepath.Join(dir, nfdCafe+" dir")
 	require.NoError(t, os.Mkdir(onDisk, 0o700))
 	watcher := newAddErrWatcher(nil, nil)
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.activeWatcher = watcher
 
-	obs.rewatchUnwatchedDirectories(mustOpenSyncTree(t, dir), []localStateRow{{Path: nfcCafe + " dir", ItemType: ItemTypeFolder}})
+	obs.rewatchUnwatchedDirectories(mustOpenSyncTree(t, dir), []LocalStateRow{{Path: nfcCafe + " dir", ItemType: ItemTypeFolder}})
 
 	assert.Contains(t, watcher.addedPaths(), onDisk)
 	assert.NotContains(t, watcher.addedPaths(), filepath.Join(dir, nfcCafe+" dir"))
@@ -326,7 +326,7 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 		ph, syncRoot := newTestPermHandler(t, nil)
 		require.NoError(t, os.Mkdir(filepath.Join(syncRoot, nfdCafe), 0o750))
 
-		evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 			Path:       nfcCafe + "/file.txt",
 			ActionType: ActionDownload,
 			ErrMsg:     "permission denied",
@@ -346,7 +346,7 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 			return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
 		}
 
-		evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 			Path:       nfcCafe + "/photos/a.jpg",
 			ActionType: ActionDownload,
 			Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
@@ -383,15 +383,15 @@ func TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded(t *testing.T) {
 
 	action := &Action{
 		Type: ActionRemoteDelete, Path: stored, ItemID: "item-a", DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path:   stored,
-			Remote: &remoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
+			Remote: &RemoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
 		},
 	}
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	assert.Empty(t, deleted, "a file that is back locally must not be deleted on OneDrive")
 }
 
@@ -423,7 +423,7 @@ func TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, twinSyncedName, issues[0].Path)
-	assert.Equal(t, issueCaseCollision, issues[0].IssueType)
+	assert.Equal(t, IssueCaseCollision, issues[0].IssueType)
 
 	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, twinSecondName)))
 	writeLocalFile(t, h.syncRoot, twinSyncedName, "edited after the twin went\n")
@@ -453,21 +453,21 @@ func syncedFileWithRemovedTwin(t *testing.T) *syncHarness {
 
 // handleTwinDelete runs the watch observer's delete of the removed twin and
 // returns the observations it sent.
-func handleTwinDelete(t *testing.T, h *syncHarness) []localObservation {
+func handleTwinDelete(t *testing.T, h *syncHarness) []LocalObservation {
 	t.Helper()
 
 	bl, err := h.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	obs := newLocalObserver(bl, h.eng.logger, 0)
-	obs.PendingTimers = make(map[string]syncTimer)
+	obs := NewLocalObserver(bl, h.eng.logger, 0)
+	obs.PendingTimers = make(map[string]SyncTimer)
 	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
-	batches := make(chan localObservation, 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), h.eng.syncTree,
 		filepath.Join(h.syncRoot, twinSecondName), twinSyncedName, twinSyncedName)
 
-	var sent []localObservation
+	var sent []LocalObservation
 	for len(batches) > 0 {
 		sent = append(sent, <-batches)
 	}
@@ -512,5 +512,5 @@ func TestRunOnce_UnicodeFormFolderTwinOfSyncedFileFailsNothing(t *testing.T) {
 	issues, err := h.eng.baseline.ListObservationIssues(t.Context())
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, issueCaseCollision, issues[0].IssueType)
+	assert.Equal(t, IssueCaseCollision, issues[0].IssueType)
 }

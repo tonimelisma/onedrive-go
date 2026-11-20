@@ -69,7 +69,7 @@ import (
 //   - the attempt: it clears its intent when it is known to have created
 //     nothing or succeeded without the hook (a zero-byte file), and drops the
 //     row of an item the cleanup removed (ForgetRemovedPlaceholder);
-//   - the step after planning (prunePendingCreates): an intent past
+//   - the step after planning (PrunePendingCreates): an intent past
 //     pendingCreateIntentTTL, an intent whose file is gone after a pass that
 //     observed OneDrive first, the row of an adopted placeholder whose local
 //     file is empty too, and the row naming an item at a path the local scan
@@ -77,7 +77,7 @@ import (
 //     it), where this engine plans nothing;
 //   - in watch mode, an intent whose file is gone once a remote poll that
 //     began after the last create attempt at its path ended has been applied
-//     (dropGoneCreateIntentsAt, watchCreateAttempts).
+//     (DropGoneCreateIntentsAt, watchCreateAttempts).
 //
 // The item ID and its emptiness identify the placeholder, not its creation
 // eTag: opening and then canceling an upload session on the empty item moves
@@ -133,7 +133,7 @@ import (
 // it records that empty file as the pending create and uploads into it by ID
 // with If-Match (resolveCreateConflict in executor_transfer.go). Both ask the
 // same of the file: at the intent's path, live, a file, empty, within the
-// TTL (PendingCreate.intentIsFresh). Observation also passes over a file the
+// TTL (PendingCreate.IntentIsFresh). Observation also passes over a file the
 // baseline already holds, and waits on a file whose size is unknown
 // (claimIntendedPlaceholderTx). A 409 without such an intent never claims
 // anything.
@@ -152,15 +152,15 @@ type PendingCreate struct {
 	CreatedETag string
 	LocalSize   int64
 	LocalHash   string
-	IntendedAt  int64 // when the create was decided, as storedTimeNano encodes it
+	IntendedAt  int64 // when the create was decided, as StoredTimeNano encodes it
 }
 
-// intentIsFresh reports whether the intent was recorded within
+// IntentIsFresh reports whether the intent was recorded within
 // pendingCreateIntentTTL of now, so that an empty file at its path can still
 // be the file its create made. Observation's claim, the executor's claim on a
 // 409 and the prune all ask this one question.
-func (p *PendingCreate) intentIsFresh(now time.Time) bool {
-	return storedTimeIsSet(p.IntendedAt) && now.Sub(time.Unix(0, p.IntendedAt)) <= pendingCreateIntentTTL
+func (p *PendingCreate) IntentIsFresh(now time.Time) bool {
+	return StoredTimeIsSet(p.IntendedAt) && now.Sub(time.Unix(0, p.IntendedAt)) <= pendingCreateIntentTTL
 }
 
 // RecordPendingCreateIntent durably records that a create at pending.Path is
@@ -180,7 +180,7 @@ func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *Pend
 			local_size = excluded.local_size, local_hash = excluded.local_hash,
 			intended_at = excluded.intended_at`,
 		pending.Path, pending.DriveID.String(), pending.ParentID,
-		pending.LocalSize, pending.LocalHash, storedTimeNano(s.nowFunc()),
+		pending.LocalSize, pending.LocalHash, StoredTimeNano(s.nowFunc()),
 	); err != nil {
 		return fmt.Errorf("sync: recording pending create intent at %s: %w", pending.Path, err)
 	}
@@ -202,7 +202,7 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *PendingCre
 			created_etag = excluded.created_etag, local_size = excluded.local_size, local_hash = excluded.local_hash,
 			intended_at = CASE WHEN pending_creates.intended_at <> 0 THEN pending_creates.intended_at ELSE excluded.intended_at END`,
 		pending.Path, pending.ItemID, pending.DriveID.String(), pending.ParentID,
-		pending.CreatedETag, pending.LocalSize, pending.LocalHash, storedTimeNano(s.nowFunc()),
+		pending.CreatedETag, pending.LocalSize, pending.LocalHash, StoredTimeNano(s.nowFunc()),
 	); err != nil {
 		return fmt.Errorf("sync: recording pending create of %s (item %s): %w", pending.Path, pending.ItemID, err)
 	}
@@ -241,37 +241,37 @@ func (s *SyncStore) ForgetRemovedPlaceholder(ctx context.Context, path, itemID s
 	return nil
 }
 
-// passObservation is what a pass observed before it planned. It bounds what
+// PassObservation is what a pass observed before it planned. It bounds what
 // the prune of create intents may conclude from that plan's truth.
-type passObservation int
+type PassObservation int
 
 const (
-	// passRefreshedLocalOnly is a watch replan: it refreshes local truth and
+	// PassRefreshedLocalOnly is a watch replan: it refreshes local truth and
 	// plans on the OneDrive changes the observers committed before it. The
 	// empty file of a create whose answer was lost may not have been in a
 	// change batch yet, so nothing is concluded from its absence.
-	passRefreshedLocalOnly passObservation = iota
-	// passObservedRemoteThenLocal is a one-shot sync or a watch bootstrap:
+	PassRefreshedLocalOnly PassObservation = iota
+	// PassObservedRemoteThenLocal is a one-shot sync or a watch bootstrap:
 	// OneDrive is observed, then the local tree, then the pass plans. Every
 	// empty file of a create that landed before the pass has been claimed by
 	// the time the prune runs.
-	passObservedRemoteThenLocal
+	PassObservedRemoteThenLocal
 )
 
 // claimedLandedCreates reports whether the pass's own remote observation ran
 // before its plan, and so claimed the empty file of every create that landed.
-func (o passObservation) claimedLandedCreates() bool {
+func (o PassObservation) claimedLandedCreates() bool {
 	switch o {
-	case passObservedRemoteThenLocal:
+	case PassObservedRemoteThenLocal:
 		return true
-	case passRefreshedLocalOnly:
+	case PassRefreshedLocalOnly:
 		return false
 	default:
 		return false
 	}
 }
 
-// prunePendingCreates deletes, in one transaction once a plan has been
+// PrunePendingCreates deletes, in one transaction once a plan has been
 // built, the records no create, no upload and no observation needs any more.
 // It runs after the observations that plan was built from were committed.
 //
@@ -290,7 +290,7 @@ func (o passObservation) claimedLandedCreates() bool {
 // A watch replan observes the local tree only, so it keeps a fresh intent
 // whose file is gone; the watch loop drops that one after a remote poll that
 // began once the last create attempt at the path had ended
-// (dropGoneCreateIntentsAt). Any other row naming an item ends through
+// (DropGoneCreateIntentsAt). Any other row naming an item ends through
 // observation or an outcome's commit.
 //
 // It never runs while an upload of this engine is in flight: a one-shot pass
@@ -302,10 +302,10 @@ func (o passObservation) claimedLandedCreates() bool {
 // so its absence there proves nothing. Read boundaries on either side, case
 // collisions and other observation issues that block truth keep an intent the
 // same way, as suspect local truth keeps every one.
-func (s *SyncStore) prunePendingCreates(
-	ctx context.Context, observed passObservation, scanned func(path string) bool,
+func (s *SyncStore) PrunePendingCreates(
+	ctx context.Context, observed PassObservation, scanned func(path string) bool,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning the prune of pending creates: %w", err)
 	}
@@ -334,7 +334,7 @@ func (s *SyncStore) prunePendingCreates(
 	return nil
 }
 
-// dropGoneCreateIntentsAt is the watch loop's prune after a remote poll that
+// DropGoneCreateIntentsAt is the watch loop's prune after a remote poll that
 // began once the last create attempt at each of paths had ended, and that
 // has been applied: every create of those attempts that landed before the
 // poll has been claimed by then, so an intent still without an item there is
@@ -342,10 +342,10 @@ func (s *SyncStore) prunePendingCreates(
 // whose intent stays (its file is still there, or absence proves nothing
 // there yet); a path with no intent any more, or whose row names an item, is
 // not returned.
-func (s *SyncStore) dropGoneCreateIntentsAt(
+func (s *SyncStore) DropGoneCreateIntentsAt(
 	ctx context.Context, paths []string, scanned func(path string) bool,
 ) (kept []string, err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: beginning the prune of create intents after a poll: %w", err)
 	}
@@ -382,7 +382,7 @@ func (s *SyncStore) dropGoneCreateIntentsAt(
 // or, when claimedLandedCreates, whose file the committed truth proves gone
 // (createIntentFileGoneTx), and reports the paths it dropped.
 func (s *SyncStore) dropAbandonedCreateIntentsTx(
-	ctx context.Context, tx sqlTxRunner, intents []PendingCreate, claimedLandedCreates bool, scanned func(path string) bool,
+	ctx context.Context, tx SqlTxRunner, intents []PendingCreate, claimedLandedCreates bool, scanned func(path string) bool,
 ) (map[string]bool, error) {
 	dropped := make(map[string]bool, len(intents))
 	if len(intents) == 0 {
@@ -396,7 +396,7 @@ func (s *SyncStore) dropAbandonedCreateIntentsTx(
 	now := s.nowFunc()
 	for i := range intents {
 		intent := &intents[i]
-		expired := !intent.intentIsFresh(now)
+		expired := !intent.IntentIsFresh(now)
 		abandoned := expired
 		if !expired {
 			if abandoned, err = fileGone(intent.Path); err != nil {
@@ -424,24 +424,24 @@ func (s *SyncStore) dropAbandonedCreateIntentsTx(
 // remote observation committed before it claimed the empty file of every
 // create that landed (claimedLandedCreates) and local truth is complete.
 func createIntentFileGoneTx(
-	ctx context.Context, tx sqlTxRunner, claimedLandedCreates bool, scanned func(path string) bool,
+	ctx context.Context, tx SqlTxRunner, claimedLandedCreates bool, scanned func(path string) bool,
 ) (func(path string) (bool, error), error) {
 	provesNothing := func(string) (bool, error) { return false, nil }
 	if !claimedLandedCreates {
 		return provesNothing, nil
 	}
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 	if !state.LocalTruthComplete {
 		return provesNothing, nil
 	}
-	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	issues, err := QueryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading observation issues for the create intents: %w", err)
 	}
-	availability := newTruthAvailabilityIndex(issues)
+	availability := NewTruthAvailabilityIndex(issues)
 
 	return func(path string) (bool, error) {
 		status := availability.StatusForPath(path)
@@ -462,7 +462,7 @@ func createIntentFileGoneTx(
 // following it. Nothing is left to upload, and an echo of an empty file is no
 // change. A row whose baseline holds content (an upload committed) keeps its
 // row for the stale echo of the empty state.
-func (s *SyncStore) dropRecordsOfSettledEmptyPlaceholdersTx(ctx context.Context, tx sqlTxRunner) error {
+func (s *SyncStore) dropRecordsOfSettledEmptyPlaceholdersTx(ctx context.Context, tx SqlTxRunner) error {
 	result, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id <> '' AND item_id IN (
 		SELECT b.item_id FROM baseline b JOIN local_state l ON l.path = b.path
 		WHERE b.item_type = 'file' AND b.local_size = 0 AND b.remote_size = 0
@@ -486,7 +486,7 @@ func (s *SyncStore) dropRecordsOfSettledEmptyPlaceholdersTx(ctx context.Context,
 // that removes an adopted item's hidden baseline row would end that row too,
 // but this step runs before the plan executes. An intent at such a path is
 // kept: it names no item, and its own TTL ends it.
-func (s *SyncStore) dropRecordsAtUnscannedPathsTx(ctx context.Context, tx sqlTxRunner, scanned func(path string) bool) error {
+func (s *SyncStore) dropRecordsAtUnscannedPathsTx(ctx context.Context, tx SqlTxRunner, scanned func(path string) bool) error {
 	paths, err := listRecordedItemPathsTx(ctx, tx)
 	if err != nil {
 		return err
@@ -505,7 +505,7 @@ func (s *SyncStore) dropRecordsAtUnscannedPathsTx(ctx context.Context, tx sqlTxR
 }
 
 // listRecordedItemPathsTx returns the paths of the rows that name an item.
-func listRecordedItemPathsTx(ctx context.Context, tx sqlTxRunner) ([]string, error) {
+func listRecordedItemPathsTx(ctx context.Context, tx SqlTxRunner) ([]string, error) {
 	return queryPathsTx(ctx, tx,
 		`SELECT path FROM pending_creates WHERE item_id <> '' ORDER BY path`, "the records of created items")
 }
@@ -520,7 +520,7 @@ type baselineBeforeOutcome struct {
 
 // readBaselineBeforeOutcomeTx reads baselineBeforeOutcome for outcome, in the
 // transaction that applies it.
-func readBaselineBeforeOutcomeTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation) (baselineBeforeOutcome, error) {
+func readBaselineBeforeOutcomeTx(ctx context.Context, tx SqlTxRunner, outcome *BaselineMutation) (baselineBeforeOutcome, error) {
 	kind, err := classifyMutation(outcome)
 	if err != nil {
 		return baselineBeforeOutcome{}, err
@@ -565,7 +565,7 @@ func readBaselineBeforeOutcomeTx(ctx context.Context, tx sqlTxRunner, outcome *B
 //
 // An outcome that commits content keeps its row for the stale echo of the
 // empty state (placeholderStale).
-func settlePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation, before baselineBeforeOutcome) error {
+func settlePendingCreatesTx(ctx context.Context, tx SqlTxRunner, outcome *BaselineMutation, before baselineBeforeOutcome) error {
 	kind, err := classifyMutation(outcome)
 	if err != nil {
 		return err
@@ -601,7 +601,7 @@ func settlePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *Baseli
 // a create there that met 409, which uploaded into the item at its new path.
 // A new path that already holds a row keeps it, and the moved row ends there
 // instead of staying where its item left.
-func movePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *BaselineMutation, previousPath string) error {
+func movePendingCreatesTx(ctx context.Context, tx SqlTxRunner, outcome *BaselineMutation, previousPath string) error {
 	if outcome.ItemID != "" {
 		if err := movePendingCreateOfItemTx(ctx, tx, outcome.ItemID, outcome.Path); err != nil {
 			return err
@@ -632,7 +632,7 @@ func movePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *Baseline
 // movePendingCreateOfItemTx moves the row naming itemID to path. A path that
 // already holds another row keeps that one, and this row ends: two rows never
 // name one item, and none stays at a path its item left.
-func movePendingCreateOfItemTx(ctx context.Context, tx sqlTxRunner, itemID, path string) error {
+func movePendingCreateOfItemTx(ctx context.Context, tx SqlTxRunner, itemID, path string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE pending_creates SET path = ? WHERE item_id = ?`,
 		path, itemID); err != nil {
 		return fmt.Errorf("sync: moving the record of placeholder %s to %s: %w", itemID, path, err)
@@ -646,7 +646,7 @@ func movePendingCreateOfItemTx(ctx context.Context, tx sqlTxRunner, itemID, path
 }
 
 // baselineOccupantAtTx returns the item the baseline holds at path, or "".
-func baselineOccupantAtTx(ctx context.Context, tx sqlTxRunner, path string) (string, error) {
+func baselineOccupantAtTx(ctx context.Context, tx SqlTxRunner, path string) (string, error) {
 	var itemID string
 	switch err := tx.QueryRowContext(ctx, `SELECT item_id FROM baseline WHERE path = ?`, path).Scan(&itemID); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -660,7 +660,7 @@ func baselineOccupantAtTx(ctx context.Context, tx sqlTxRunner, path string) (str
 
 // listCreateIntentsTx returns the rows that record only an intent: every one,
 // or the one at path when path is not empty.
-func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner, path string) ([]PendingCreate, error) {
+func listCreateIntentsTx(ctx context.Context, tx SqlTxRunner, path string) ([]PendingCreate, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT path, intended_at FROM pending_creates
 		WHERE item_id = '' AND (? = '' OR path = ?) ORDER BY path`, path, path)
 	if err != nil {
@@ -684,7 +684,7 @@ func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner, path string) ([]Pe
 }
 
 // localStateIsEmptyAtTx reports whether local_state holds no entry at path.
-func localStateIsEmptyAtTx(ctx context.Context, tx sqlTxRunner, path string) (bool, error) {
+func localStateIsEmptyAtTx(ctx context.Context, tx SqlTxRunner, path string) (bool, error) {
 	var entries int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM local_state WHERE path = ?`, path).Scan(&entries); err != nil {
 		return false, fmt.Errorf("sync: reading local_state at %s: %w", path, err)
@@ -702,7 +702,7 @@ func (s *SyncStore) PendingCreateAt(ctx context.Context, path string) (pending P
 const sqlSelectPendingCreate = `SELECT item_id, drive_id, path, parent_id, created_etag, local_size, local_hash, intended_at
 	FROM pending_creates`
 
-func deletePendingCreateTx(ctx context.Context, tx sqlTxRunner, itemID string) error {
+func deletePendingCreateTx(ctx context.Context, tx SqlTxRunner, itemID string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id = ?`, itemID); err != nil {
 		return fmt.Errorf("sync: clearing pending create of item %s: %w", itemID, err)
 	}
@@ -745,7 +745,7 @@ func scanPendingCreate(row *sql.Row) (PendingCreate, bool, error) {
 // named an item without a baseline row, which the next observation would
 // adopt at its new path as an untouched placeholder, and with no local file
 // there the plan would delete it online.
-func freeBaselinePathForPlaceholderTx(ctx context.Context, tx sqlTxRunner, path string) (bool, error) {
+func freeBaselinePathForPlaceholderTx(ctx context.Context, tx SqlTxRunner, path string) (bool, error) {
 	var (
 		occupantID string
 		stillThere int
@@ -796,7 +796,7 @@ const (
 // record existed, which the next upload by ID could overwrite). It is
 // observed like any item, and the record stays for an observation that knows.
 func classifyObservedPlaceholderTx(
-	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
+	ctx context.Context, tx SqlTxRunner, item *ObservedItem, now time.Time,
 ) (*PendingCreate, placeholderDecision, error) {
 	pending, found, err := scanPendingCreate(tx.QueryRowContext(ctx, sqlSelectPendingCreate+` WHERE item_id = ?`, item.ItemID))
 	if err != nil {
@@ -857,7 +857,7 @@ func classifyObservedPlaceholderTx(
 // (movePendingCreateOfItemTx): left where it was, it named an item that is no
 // longer there, for a create there to upload into.
 func followAdoptedPlaceholderTx(
-	ctx context.Context, tx sqlTxRunner, item *observedItem, pending *PendingCreate, adopted *[]*BaselineEntry,
+	ctx context.Context, tx SqlTxRunner, item *ObservedItem, pending *PendingCreate, adopted *[]*BaselineEntry,
 ) error {
 	if item.Path != pending.Path {
 		return movePendingCreateOfItemTx(ctx, tx, item.ItemID, item.Path)
@@ -884,7 +884,7 @@ func followAdoptedPlaceholderTx(
 // baselineEntryByItemIDTx reads the baseline row of itemID; found is false
 // when it has none.
 func baselineEntryByItemIDTx(
-	ctx context.Context, tx sqlTxRunner, itemID string, driveID driveid.ID,
+	ctx context.Context, tx SqlTxRunner, itemID string, driveID driveid.ID,
 ) (entry *BaselineEntry, found bool, err error) {
 	rows, err := tx.QueryContext(ctx, sqlLoadBaseline+` WHERE item_id = ?`, itemID)
 	if err != nil {
@@ -910,7 +910,7 @@ func baselineEntryByItemIDTx(
 // adopted entry is appended to adopted for the in-memory baseline; nothing is
 // adopted when the path is already taken.
 func adoptPlaceholderTx(
-	ctx context.Context, tx sqlTxRunner, item *observedItem, pending *PendingCreate, adopted *[]*BaselineEntry,
+	ctx context.Context, tx SqlTxRunner, item *ObservedItem, pending *PendingCreate, adopted *[]*BaselineEntry,
 ) error {
 	if item.Path != pending.Path {
 		// Moved or renamed meanwhile: not the create this record describes.
@@ -951,7 +951,7 @@ func adoptPlaceholderTx(
 // file or not: a fresh intent neither claims it nor is dropped, and an
 // observation that knows the size decides.
 func claimIntendedPlaceholderTx(
-	ctx context.Context, tx sqlTxRunner, item *observedItem, now time.Time,
+	ctx context.Context, tx SqlTxRunner, item *ObservedItem, now time.Time,
 ) (PendingCreate, bool, error) {
 	pending, found, err := scanPendingCreate(tx.QueryRowContext(ctx,
 		sqlSelectPendingCreate+` WHERE path = ? AND item_id = ''`, item.Path))
@@ -959,10 +959,10 @@ func claimIntendedPlaceholderTx(
 		return PendingCreate{}, false, err
 	}
 	isLiveFile := !item.IsDeleted && item.ItemType == ItemTypeFile
-	if isLiveFile && item.SizeUnknown && pending.intentIsFresh(now) {
+	if isLiveFile && item.SizeUnknown && pending.IntentIsFresh(now) {
 		return PendingCreate{}, false, nil
 	}
-	claimable := pending.intentIsFresh(now) && isLiveFile && !item.SizeUnknown && item.Size == 0
+	claimable := pending.IntentIsFresh(now) && isLiveFile && !item.SizeUnknown && item.Size == 0
 	if claimable {
 		synced, syncedErr := baselineHoldsItemTx(ctx, tx, item.ItemID)
 		if syncedErr != nil {
@@ -988,7 +988,7 @@ func claimIntendedPlaceholderTx(
 }
 
 // baselineHoldsItemTx reports whether the baseline has a row for itemID.
-func baselineHoldsItemTx(ctx context.Context, tx sqlTxRunner, itemID string) (bool, error) {
+func baselineHoldsItemTx(ctx context.Context, tx SqlTxRunner, itemID string) (bool, error) {
 	var rows int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM baseline WHERE item_id = ?`, itemID).Scan(&rows); err != nil {
 		return false, fmt.Errorf("sync: reading the baseline of %s: %w", itemID, err)

@@ -17,7 +17,7 @@ const (
 )
 
 type admissionDecision struct {
-	Action        *trackedAction
+	Action        *TrackedAction
 	Kind          admissionDecisionKind
 	ScopeKey      ScopeKey
 	NextRetryAt   time.Time
@@ -33,8 +33,8 @@ type admissionDecision struct {
 // held row written for work that will not run.
 func (flow *engineFlow) admitReady(
 	ctx context.Context,
-	ready []*trackedAction,
-) ([]*trackedAction, error) {
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
 	if isStoppingRun(ctx) {
 		return ready, nil
 	}
@@ -51,7 +51,7 @@ func (flow *engineFlow) admitReady(
 func (flow *engineFlow) filterFreshAdmissionDecisions(
 	ctx context.Context,
 	decisions []admissionDecision,
-) ([]admissionDecision, []*trackedAction, error) {
+) ([]admissionDecision, []*TrackedAction, error) {
 	filtered := make([]admissionDecision, 0, len(decisions))
 	for i := range decisions {
 		decision := decisions[i]
@@ -64,7 +64,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 			continue
 		}
 
-		freshness, err := evaluateActionFreshnessFromStore(ctx, flow.deps.store, &ta.Action)
+		freshness, err := EvaluateActionFreshnessFromStore(ctx, flow.deps.store, &ta.Action)
 		if err != nil {
 			return filtered, append(admissionDispatchActions(filtered), ta), err
 		}
@@ -73,8 +73,8 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 			continue
 		}
 
-		completionErr := fmt.Errorf("%w: %s", errActionPreconditionChanged, freshness.Reason)
-		completion := actionCompletionFromTrackedAction(ta, nil, completionErr)
+		completionErr := fmt.Errorf("%w: %s", ErrActionPreconditionChanged, freshness.Reason)
+		completion := ActionCompletionFromTrackedAction(ta, nil, completionErr)
 		flow.engine.collector().RecordSuperseded(perf.SupersededSourceEngineAdmission, 1)
 		if err := flow.applySupersededCompletion(ctx, ta, &completion, "admission stale action"); err != nil {
 			return filtered, admissionDispatchActions(filtered), err
@@ -84,8 +84,8 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 	return filtered, nil, nil
 }
 
-func admissionDispatchActions(decisions []admissionDecision) []*trackedAction {
-	actions := make([]*trackedAction, 0, len(decisions))
+func admissionDispatchActions(decisions []admissionDecision) []*TrackedAction {
+	actions := make([]*TrackedAction, 0, len(decisions))
 	for i := range decisions {
 		if decisions[i].Kind == admissionDispatchNow && decisions[i].Action != nil {
 			actions = append(actions, decisions[i].Action)
@@ -97,7 +97,7 @@ func admissionDispatchActions(decisions []admissionDecision) []*trackedAction {
 
 func (flow *engineFlow) decideAdmission(
 	now time.Time,
-	ready []*trackedAction,
+	ready []*TrackedAction,
 ) []admissionDecision {
 	decisions := make([]admissionDecision, 0, len(ready))
 
@@ -115,11 +115,11 @@ func (flow *engineFlow) decideAdmission(
 	return decisions
 }
 
-func (flow *engineFlow) newAdmissionDecision(ta *trackedAction) admissionDecision {
+func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) admissionDecision {
 	decision := admissionDecision{
 		Action:       ta,
 		Kind:         admissionDispatchNow,
-		RetryWorkKey: retryWorkKeyForAction(&ta.Action),
+		RetryWorkKey: RetryWorkKeyForAction(&ta.Action),
 	}
 
 	if ta.IsTrial && !ta.TrialScopeKey.IsZero() &&
@@ -131,7 +131,7 @@ func (flow *engineFlow) newAdmissionDecision(ta *trackedAction) admissionDecisio
 }
 
 func (flow *engineFlow) applyActiveScopeAdmission(
-	ta *trackedAction,
+	ta *TrackedAction,
 	decision *admissionDecision,
 ) {
 	if ta == nil || decision == nil || decision.Kind != admissionDispatchNow {
@@ -153,8 +153,8 @@ func (flow *engineFlow) applyActiveScopeAdmission(
 func (flow *engineFlow) applyAdmissionDecisions(
 	ctx context.Context,
 	decisions []admissionDecision,
-) ([]*trackedAction, error) {
-	var dispatch []*trackedAction
+) ([]*TrackedAction, error) {
+	var dispatch []*TrackedAction
 
 	for i := range decisions {
 		decision := &decisions[i]
@@ -199,7 +199,7 @@ func (flow *engineFlow) applyAdmissionScopeClear(
 
 func (flow *engineFlow) persistHeldScopeDecision(
 	ctx context.Context,
-	ta *trackedAction,
+	ta *TrackedAction,
 	decision *admissionDecision,
 ) error {
 	if ta == nil || decision == nil || decision.ScopeKey.IsZero() {
@@ -213,7 +213,7 @@ func (flow *engineFlow) persistHeldScopeDecision(
 
 	work := decision.RetryWorkKey
 	if work == (RetryWorkKey{}) {
-		work = retryWorkKeyForAction(&ta.Action)
+		work = RetryWorkKeyForAction(&ta.Action)
 	}
 	if err := flow.persistBlockedRetryWork(ctx, work, decision.ScopeKey); err != nil {
 		return err

@@ -92,7 +92,7 @@ func watchConditionSummaryFingerprint(summary watchConditionSummary) string {
 // watchConditionSummaryAddsActionable reports whether the summary contains a
 // condition kind absent from the previous fingerprint that the user may need
 // to act on. A condition that clears automatically (throttling, a service
-// outage; conditionClearsAutomatically) never makes this summary a warning.
+// outage; ConditionClearsAutomatically) never makes this summary a warning.
 func watchConditionSummaryAddsActionable(summary watchConditionSummary, previousFingerprint string) bool {
 	previous := make(map[string]struct{})
 	for _, key := range strings.Split(previousFingerprint, "|") {
@@ -101,7 +101,7 @@ func watchConditionSummaryAddsActionable(summary watchConditionSummary, previous
 
 	for i := range summary.Counts {
 		key := summary.Counts[i].Key
-		if conditionClearsAutomatically(key) {
+		if ConditionClearsAutomatically(key) {
 			continue
 		}
 		if _, seen := previous[string(key)]; !seen {

@@ -149,14 +149,14 @@ func ReadDriveStatusSnapshotWithFilter(
 
 // countVisibleRemoteDrift counts the remote drift rows the filter lets the
 // planner see (store_planner_visible.go applies the same test to its rows).
-func countVisibleRemoteDrift(ctx context.Context, runner sqlTxRunner, filter ContentFilterConfig) (int, error) {
+func countVisibleRemoteDrift(ctx context.Context, runner SqlTxRunner, filter ContentFilterConfig) (int, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRemoteDriftItems)
 	if err != nil {
 		return 0, fmt.Errorf("query remote drift rows: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	visibility := newContentFilter(filter)
+	visibility := NewContentFilter(filter)
 	count := 0
 	for rows.Next() {
 		var path string
@@ -183,8 +183,8 @@ func readPathTruthStatus(
 	dbPath string,
 	logger *slog.Logger,
 	paths []string,
-) (map[string]pathTruthStatus, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]pathTruthStatus, error) {
+) (map[string]PathTruthStatus, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]PathTruthStatus, error) {
 		return inspector.ReadPathTruthStatus(ctx, paths)
 	})
 }
@@ -209,7 +209,7 @@ func (s *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 func (s *SyncStore) ReadPathTruthStatus(
 	ctx context.Context,
 	paths []string,
-) (map[string]pathTruthStatus, error) {
+) (map[string]PathTruthStatus, error) {
 	if s == nil {
 		return nil, fmt.Errorf("read path truth status: nil store")
 	}
@@ -288,7 +288,7 @@ func openStoreInspector(dbPath string, logger *slog.Logger) (*storeInspector, er
 const inspectorBusyTimeout = time.Second
 
 func openReadOnlySyncStoreDB(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open(sqliteDriverName, sqliteFileURI(dbPath, url.Values{
+	db, err := sql.Open(SqliteDriverName, sqliteFileURI(dbPath, url.Values{
 		"mode": {"ro"},
 		sqlitePragmaParam: {
 			"query_only(1)",
@@ -347,7 +347,7 @@ func (i *storeInspector) ReadDriveStatusSnapshotWithFilter(
 
 // readDriveStatusCounts reads the first half of a status snapshot: the
 // baseline and drift counts and the observation issues.
-func readDriveStatusCounts(ctx context.Context, runner sqlTxRunner, filter ContentFilterConfig) (DriveStatusSnapshot, error) {
+func readDriveStatusCounts(ctx context.Context, runner SqlTxRunner, filter ContentFilterConfig) (DriveStatusSnapshot, error) {
 	snapshot := DriveStatusSnapshot{}
 
 	var err error
@@ -372,7 +372,7 @@ func readDriveStatusCounts(ctx context.Context, runner sqlTxRunner, filter Conte
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status local drift count: %w", err)
 	}
-	snapshot.ObservationIssues, err = queryObservationIssueRowsWithRunner(ctx, runner)
+	snapshot.ObservationIssues, err = QueryObservationIssueRowsWithRunner(ctx, runner)
 	if err != nil {
 		return DriveStatusSnapshot{}, fmt.Errorf("read drive status observation issues: %w", err)
 	}
@@ -382,7 +382,7 @@ func readDriveStatusCounts(ctx context.Context, runner sqlTxRunner, filter Conte
 
 // readDriveStatusConditions reads the second half of a status snapshot: block
 // scopes, retry work and held deletes.
-func readDriveStatusConditions(ctx context.Context, runner sqlTxRunner, snapshot *DriveStatusSnapshot) error {
+func readDriveStatusConditions(ctx context.Context, runner SqlTxRunner, snapshot *DriveStatusSnapshot) error {
 	var err error
 	snapshot.BlockScopes, err = queryBlockScopeRowsWithRunner(ctx, runner)
 	if err != nil {
@@ -419,7 +419,7 @@ func (i *storeInspector) ReadShortcutRootStatusSnapshot(
 	if err != nil {
 		return nil, err
 	}
-	return shortcutRootStatusViewsFromRecords(records, namespaceID, parentSyncRoot), nil
+	return ShortcutRootStatusViewsFromRecords(records, namespaceID, parentSyncRoot), nil
 }
 
 // ReadPathTruthStatus returns the derived current-truth availability for the
@@ -427,19 +427,19 @@ func (i *storeInspector) ReadShortcutRootStatusSnapshot(
 func (i *storeInspector) ReadPathTruthStatus(
 	ctx context.Context,
 	paths []string,
-) (map[string]pathTruthStatus, error) {
+) (map[string]PathTruthStatus, error) {
 	if len(paths) == 0 {
-		return map[string]pathTruthStatus{}, nil
+		return map[string]PathTruthStatus{}, nil
 	}
 
-	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, i.db)
+	observationIssues, err := QueryObservationIssueRowsWithRunner(ctx, i.db)
 	if err != nil {
 		return nil, fmt.Errorf("read path truth status observation issues: %w", err)
 	}
-	return newTruthAvailabilityIndex(observationIssues).StatusByPath(paths), nil
+	return NewTruthAvailabilityIndex(observationIssues).StatusByPath(paths), nil
 }
 
-func readCount(ctx context.Context, runner sqlTxRunner, query string) (int, error) {
+func readCount(ctx context.Context, runner SqlTxRunner, query string) (int, error) {
 	var count int
 	if err := runner.QueryRowContext(ctx, query).Scan(&count); err != nil {
 		return 0, fmt.Errorf("scan count query: %w", err)

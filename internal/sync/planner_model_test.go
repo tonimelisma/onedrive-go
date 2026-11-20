@@ -147,7 +147,7 @@ func (s *pmState) remoteParentID(p string) string {
 }
 
 // plan writes the model into a fresh store and plans it.
-func (s *pmState) plan() *actionPlan {
+func (s *pmState) plan() *ActionPlan {
 	s.writeStore()
 
 	return planCurrentStateForStore(s.t, s.store)
@@ -171,10 +171,10 @@ func (s *pmState) writeStore() {
 	store.baseline = nil
 	store.baselineMu.Unlock()
 
-	var observed []observedItem
+	var observed []ObservedItem
 	for _, p := range sortedKeys(s.remote) {
 		item := s.remote[p]
-		observed = append(observed, observedItem{
+		observed = append(observed, ObservedItem{
 			DriveID: driveID, ItemID: item.id, ParentID: s.remoteParentID(p), Path: p, ItemType: pmType(item.folder),
 			Hash: s.hash(item.folder, item.content), Size: int64(len(item.content)), Mtime: pmMtime(item.content),
 			ETag: "etag-" + strconv.Itoa(item.etag),
@@ -201,10 +201,10 @@ func (s *pmState) writeStore() {
 		}))
 	}
 
-	var local []localStateRow
+	var local []LocalStateRow
 	for _, p := range sortedKeys(s.local) {
 		item := s.local[p]
-		local = append(local, localStateRow{
+		local = append(local, LocalStateRow{
 			Path: p, ItemType: pmType(item.folder), Hash: s.hash(item.folder, item.content),
 			Size: int64(len(item.content)), Mtime: pmMtime(item.content), Ctime: pmMtime(item.content),
 			LocalDevice: plannerModelLocalDevice, LocalInode: item.inode, LocalHasIdentity: true,
@@ -228,7 +228,7 @@ func actionLine(a *Action) string {
 
 // planOrder is the plan's actions in an order that respects its
 // dependencies, as the dependency graph would dispatch them.
-func planOrder(t *testing.T, plan *actionPlan) []int {
+func planOrder(t *testing.T, plan *ActionPlan) []int {
 	t.Helper()
 
 	done := make([]bool, len(plan.Actions))
@@ -259,7 +259,7 @@ func planOrder(t *testing.T, plan *actionPlan) []int {
 
 // apply carries out a plan on the model: its actions in dependency order,
 // then its held deletes, as a user confirming them would.
-func (s *pmState) apply(plan *actionPlan) {
+func (s *pmState) apply(plan *ActionPlan) {
 	for _, i := range planOrder(s.t, plan) {
 		a := &plan.Actions[i]
 		s.logf("  %s", actionLine(a))
@@ -267,7 +267,7 @@ func (s *pmState) apply(plan *actionPlan) {
 	}
 	for _, held := range plan.HeldDeletes {
 		s.logf("  confirmed held %v delete %s", held.Side, held.Path)
-		if held.Side == deleteSafetySideLocal {
+		if held.Side == DeleteSafetySideLocal {
 			s.deleteTree(s.local, held.Path)
 		} else {
 			s.deleteTree(s.remote, held.Path)

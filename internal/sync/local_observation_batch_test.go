@@ -13,7 +13,7 @@ import (
 func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 	t.Parallel()
 
-	batch := localObservationBatchForEvent(&changeEvent{
+	batch := localObservationBatchForEvent(&ChangeEvent{
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "hash",
@@ -24,8 +24,8 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 		LocalHasIdentity: true,
 	})
 
-	assert.True(t, batch.dirty)
-	assert.Equal(t, []localStateRow{{
+	assert.True(t, batch.Dirty)
+	assert.Equal(t, []LocalStateRow{{
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "hash",
@@ -34,9 +34,9 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 		LocalDevice:      56,
 		LocalInode:       78,
 		LocalHasIdentity: true,
-	}}, batch.rows)
-	assert.Empty(t, batch.deletedPaths)
-	assert.Empty(t, batch.deletedPrefixes)
+	}}, batch.Rows)
+	assert.Empty(t, batch.DeletedPaths)
+	assert.Empty(t, batch.DeletedPrefixes)
 }
 
 // Validates: R-2.8.8
@@ -45,15 +45,15 @@ func TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree(t *testing.T) {
 
 	// A removal carries no kind: whatever the path was, its rows go with
 	// every row below it, so a file and a folder are removed the same way.
-	batch := localObservationBatchForEvent(&changeEvent{
+	batch := localObservationBatchForEvent(&ChangeEvent{
 		Path:      "gone",
 		IsDeleted: true,
 	})
 
-	assert.True(t, batch.dirty)
-	assert.Empty(t, batch.rows)
-	assert.Empty(t, batch.deletedPaths)
-	assert.Equal(t, []string{"gone"}, batch.deletedPrefixes,
+	assert.True(t, batch.Dirty)
+	assert.Empty(t, batch.Rows)
+	assert.Empty(t, batch.DeletedPaths)
+	assert.Equal(t, []string{"gone"}, batch.DeletedPrefixes,
 		"a removed path can still have rows below it")
 }
 
@@ -65,42 +65,42 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "fresh.txt"), []byte("fresh"), 0o600))
 
 	baseline := NewBaselineForTest(nil)
-	obs := newLocalObserver(baseline, testLogger(t), 1)
-	batches := make(chan localObservation, 1)
+	obs := NewLocalObserver(baseline, testLogger(t), 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	require.True(t, obs.runSafetyScan(t.Context(), mustOpenSyncTree(t, root)))
 
 	// The scan sends before it returns: a missing batch fails here instead of
 	// hanging the test.
-	var batch localObservation
+	var batch LocalObservation
 	select {
 	case batch = <-batches:
 	default:
 		require.Fail(t, "the safety scan sent no local snapshot batch")
 	}
-	assert.Equal(t, localSnapshot, batch.kind)
-	require.Len(t, batch.rows, 1)
-	assert.Equal(t, "fresh.txt", batch.rows[0].Path)
-	assert.Equal(t, ItemTypeFile, batch.rows[0].ItemType)
+	assert.Equal(t, LocalSnapshot, batch.Kind)
+	require.Len(t, batch.Rows, 1)
+	assert.Equal(t, "fresh.txt", batch.Rows[0].Path)
+	assert.Equal(t, ItemTypeFile, batch.Rows[0].ItemType)
 	// The runtime replans when the snapshot changes committed truth, not on
 	// the scan's baseline-relative event count (R-2.8.21).
-	assert.False(t, batch.dirty)
+	assert.False(t, batch.Dirty)
 }
 
 // forwardedSnapshot takes the snapshot a full scan sent, failing when it
 // sent none. The scan sends before it returns, so the snapshot is already
 // buffered.
-func forwardedSnapshot(t *testing.T, batches <-chan localObservation) *localObservation {
+func forwardedSnapshot(t *testing.T, batches <-chan LocalObservation) *LocalObservation {
 	t.Helper()
 
 	select {
 	case batch := <-batches:
-		require.Equal(t, localSnapshot, batch.kind)
+		require.Equal(t, LocalSnapshot, batch.Kind)
 		return &batch
 	default:
 		require.Fail(t, "the full scan sent no snapshot")
-		return &localObservation{}
+		return &LocalObservation{}
 	}
 }
 
@@ -119,42 +119,42 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 	leftover := filepath.Join(root, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
 
-	obs := newLocalObserver(NewBaselineForTest(nil), testLogger(t), 1)
-	batches := make(chan localObservation, 1)
+	obs := NewLocalObserver(NewBaselineForTest(nil), testLogger(t), 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := mustOpenSyncTree(t, root)
 
 	require.True(t, obs.runSafetyScan(t.Context(), tree))
-	skipped := forwardedSnapshot(t, batches).findings
+	skipped := forwardedSnapshot(t, batches).Findings
 	require.Len(t, skipped, 1)
 	assert.Equal(t, leftoverName, skipped[0].Path)
-	assert.Equal(t, issueLocalInterruptedRemoval, skipped[0].Reason)
+	assert.Equal(t, IssueLocalInterruptedRemoval, skipped[0].Reason)
 
 	require.NoError(t, os.Remove(leftover))
 	require.True(t, obs.runSafetyScan(t.Context(), tree))
-	assert.Empty(t, forwardedSnapshot(t, batches).findings, "the scan found nothing to skip, and says so")
+	assert.Empty(t, forwardedSnapshot(t, batches).Findings, "the scan found nothing to skip, and says so")
 }
 
 // Validates: R-2.8.8, R-2.8.22
 func TestLocalObserver_AFullScanSendsItsFindingsWithItsRows(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(NewBaselineForTest(nil), testLogger(t), 1)
-	batches := make(chan localObservation, 1)
+	obs := NewLocalObserver(NewBaselineForTest(nil), testLogger(t), 1)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
-	scan := scanResult{
-		Rows:          []localStateRow{{Path: "disk", ItemType: ItemTypeFolder}},
-		Skipped:       []skippedItem{{Path: "bad:name.txt", Reason: IssueInvalidFilename}},
+	scan := ScanResult{
+		Rows:          []LocalStateRow{{Path: "disk", ItemType: ItemTypeFolder}},
+		Skipped:       []SkippedItem{{Path: "bad:name.txt", Reason: IssueInvalidFilename}},
 		CrossedMounts: []string{"disk"},
 	}
 
 	obs.TrySendFullLocalSnapshot(t.Context(), scan)
 	snapshot := forwardedSnapshot(t, batches)
-	assert.Equal(t, scan.Rows, snapshot.rows)
-	assert.Equal(t, scan.Skipped, snapshot.findings)
-	assert.Equal(t, scan.CrossedMounts, snapshot.crossedMounts)
+	assert.Equal(t, scan.Rows, snapshot.Rows)
+	assert.Equal(t, scan.Skipped, snapshot.Findings)
+	assert.Equal(t, scan.CrossedMounts, snapshot.CrossedMounts)
 
-	batches <- localObservation{}
+	batches <- LocalObservation{}
 	obs.TrySendFullLocalSnapshot(t.Context(), scan)
 	assert.Len(t, obs.recoveryScanRequests, 1, "a snapshot the full channel dropped asks for a recovery scan")
 	assert.Equal(t, int64(1), obs.ResetDroppedEvents())

@@ -92,20 +92,20 @@ func rampTestEngine(t *testing.T, workers int) (*testEngine, *watchRuntime, *syn
 
 // holdBlockedUploadsForTest registers count uploads of the engine's drive,
 // persisted blocked under key and held for its trial, in held order.
-func holdBlockedUploadsForTest(t *testing.T, eng *testEngine, rt *watchRuntime, key ScopeKey, firstID int64, count int) []*trackedAction {
+func holdBlockedUploadsForTest(t *testing.T, eng *testEngine, rt *watchRuntime, key ScopeKey, firstID int64, count int) []*TrackedAction {
 	t.Helper()
 
-	held := make([]*trackedAction, 0, count)
+	held := make([]*TrackedAction, 0, count)
 	for i := range count {
 		id := firstID + int64(i)
 		ta := rt.sched.graph.Add(&Action{
 			Type:    ActionUpload,
 			Path:    fmt.Sprintf("blocked-%02d.txt", id),
 			DriveID: eng.driveID,
-			View:    &pathView{Path: fmt.Sprintf("blocked-%02d.txt", id)},
+			View:    &PathView{Path: fmt.Sprintf("blocked-%02d.txt", id)},
 		}, id, nil)
 		require.NotNil(t, ta)
-		require.NoError(t, rt.persistBlockedRetryWork(t.Context(), retryWorkKeyForAction(&ta.Action), key))
+		require.NoError(t, rt.persistBlockedRetryWork(t.Context(), RetryWorkKeyForAction(&ta.Action), key))
 		rt.holdAction(ta, heldReasonScope, key, time.Time{})
 		held = append(held, ta)
 	}
@@ -126,8 +126,8 @@ func blockedRetryRowsForTest(t *testing.T, eng *testEngine, key ScopeKey) int {
 	return blocked
 }
 
-func trialSuccessForTest(ta *trackedAction) *actionCompletion {
-	return &actionCompletion{
+func trialSuccessForTest(ta *TrackedAction) *ActionCompletion {
+	return &ActionCompletion{
 		ActionID:             ta.ID,
 		Path:                 ta.Action.Path,
 		ActionType:           ta.Action.Type,
@@ -252,7 +252,7 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	assert.Equal(t, clock.Now().Add(30*time.Second), scope.NextTrialAt)
 	assert.Empty(t, rt.currentOutbox(), "admitted members the scope blocks are taken back")
 	for _, ta := range batch[1:] {
-		heldEntry := rt.retries.heldByKey[retryWorkKeyForAction(&ta.Action)]
+		heldEntry := rt.retries.heldByKey[RetryWorkKeyForAction(&ta.Action)]
 		require.NotNil(t, heldEntry, "%s is held again", ta.Action.Path)
 		assert.Equal(t, heldReasonScope, heldEntry.Reason)
 		assert.Equal(t, key, heldEntry.ScopeKey)
@@ -326,22 +326,22 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	first := rt.sched.graph.Add(&Action{Type: ActionUpload, Path: "first.txt", DriveID: eng.driveID}, 1, nil)
 	other := rt.sched.graph.Add(&Action{Type: ActionDownload, Path: "other.txt", DriveID: otherDrive, ItemID: "other-item"}, 2, nil)
 	second := rt.sched.graph.Add(&Action{Type: ActionUpload, Path: "second.txt", DriveID: eng.driveID}, 3, nil)
-	for _, ta := range []*trackedAction{first, other, second} {
+	for _, ta := range []*TrackedAction{first, other, second} {
 		require.NotNil(t, ta)
 		rt.sched.markQueued(ta)
 	}
-	rt.replaceOutbox([]*trackedAction{first, other, second})
+	rt.replaceOutbox([]*TrackedAction{first, other, second})
 
 	// The failure that activates the scope is persisted blocked first.
 	_, err := eng.baseline.RecordBlockedRetryWork(ctx, testRetryWorkKey("failed.txt", "", ActionUpload), key)
 	require.NoError(t, err)
-	require.NoError(t, rt.applyBlockScope(ctx, scopeUpdateResult{
-		Block: true, ScopeKey: key, ConditionType: issueRateLimited, RetryAfter: 10 * time.Second,
+	require.NoError(t, rt.applyBlockScope(ctx, ScopeUpdateResult{
+		Block: true, ScopeKey: key, ConditionType: IssueRateLimited, RetryAfter: 10 * time.Second,
 	}))
 
-	require.Equal(t, []*trackedAction{other}, rt.currentOutbox(), "only work the scope does not block stays admitted")
-	for _, ta := range []*trackedAction{first, second} {
-		heldEntry := rt.retries.heldByKey[retryWorkKeyForAction(&ta.Action)]
+	require.Equal(t, []*TrackedAction{other}, rt.currentOutbox(), "only work the scope does not block stays admitted")
+	for _, ta := range []*TrackedAction{first, second} {
+		heldEntry := rt.retries.heldByKey[RetryWorkKeyForAction(&ta.Action)]
 		require.NotNil(t, heldEntry, "%s is held under the scope", ta.Action.Path)
 		assert.Equal(t, heldReasonScope, heldEntry.Reason)
 		assert.Equal(t, key, heldEntry.ScopeKey)
@@ -350,8 +350,8 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	}
 	assert.Equal(t, 3, blockedRetryRowsForTest(t, eng, key), "the retired work is persisted blocked under the scope")
 	assert.Equal(t, 3, rt.sched.graph.InFlightCount(), "retiring must not complete dependency nodes")
-	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventAdmittedWorkRetired && event.ScopeKey == key && event.Count == 2
+	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventAdmittedWorkRetired && event.ScopeKey == key && event.Count == 2
 	}, 1, "the retirement is instrumented once with its count")
 }
 
@@ -365,9 +365,9 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = newDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *trackedAction)
-	runner.scopes.state = newScopeState(eng.nowFunc, eng.logger)
+	runner.sched.graph = NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *TrackedAction)
+	runner.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
 	ctx := t.Context()
 	key := SKThrottleDrive(eng.driveID)
 	otherDrive := driveid.New("0000000000000002")
@@ -381,9 +381,9 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 	runner.sched.markRunning(failing)
 	runner.sched.markQueued(pending)
 	runner.sched.markQueued(other)
-	runner.outbox = []*trackedAction{pending, other}
+	runner.outbox = []*TrackedAction{pending, other}
 
-	err := runner.handleOneShotCompletion(ctx, nil, nil, nil, &actionCompletion{
+	err := runner.handleOneShotCompletion(ctx, nil, nil, nil, &ActionCompletion{
 		ActionID:   1,
 		Path:       "failing.txt",
 		ActionType: ActionUpload,
@@ -395,8 +395,8 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, []*trackedAction{other}, runner.outbox)
-	heldEntry := runner.retries.heldByKey[retryWorkKeyForAction(&pending.Action)]
+	assert.Equal(t, []*TrackedAction{other}, runner.outbox)
+	heldEntry := runner.retries.heldByKey[RetryWorkKeyForAction(&pending.Action)]
 	require.NotNil(t, heldEntry)
 	assert.Equal(t, heldReasonScope, heldEntry.Reason)
 	assert.Equal(t, key, heldEntry.ScopeKey)
@@ -450,11 +450,11 @@ func TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier(t *testing.T
 	holdBlockedUploadsForTest(t, eng, rt, key, 1, 3)
 	now := clock.Now()
 
-	require.NoError(t, rt.applyBlockScope(ctx, scopeUpdateResult{
-		Block: true, ScopeKey: key, ConditionType: issueRateLimited, RetryAfter: 40 * time.Second,
+	require.NoError(t, rt.applyBlockScope(ctx, ScopeUpdateResult{
+		Block: true, ScopeKey: key, ConditionType: IssueRateLimited, RetryAfter: 40 * time.Second,
 	}))
-	require.NoError(t, rt.applyBlockScope(ctx, scopeUpdateResult{
-		Block: true, ScopeKey: key, ConditionType: issueRateLimited, RetryAfter: 10 * time.Second,
+	require.NoError(t, rt.applyBlockScope(ctx, ScopeUpdateResult{
+		Block: true, ScopeKey: key, ConditionType: IssueRateLimited, RetryAfter: 10 * time.Second,
 	}))
 	scope, active := rt.scopes.lookupActiveScope(key)
 	require.True(t, active)

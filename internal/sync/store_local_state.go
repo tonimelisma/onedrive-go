@@ -54,33 +54,33 @@ const (
 // current admissible observation result for the drive.
 func (s *SyncStore) ReplaceLocalState(
 	ctx context.Context,
-	rows []localStateRow,
+	rows []LocalStateRow,
 ) error {
-	_, err := s.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: rows})
+	_, err := s.CommitLocalSnapshot(ctx, &LocalSnapshotCommit{Rows: rows})
 	return err
 }
 
-// localSnapshotCommit is what one full local scan commits.
-type localSnapshotCommit struct {
-	rows []localStateRow
+// LocalSnapshotCommit is what one full local scan commits.
+type LocalSnapshotCommit struct {
+	Rows []LocalStateRow
 	// findings, when not nil, is the scan's whole finding set; it is
 	// reconciled before the rows are replaced.
-	findings *ObservationFindingsBatch
+	Findings *ObservationFindingsBatch
 	// bind, when not nil, is recorded as the sync folder's identity.
-	bind *synctree.RootIdentity
+	Bind *synctree.RootIdentity
 	// crossedMounts are the mount points the scan crossed.
-	crossedMounts []string
+	CrossedMounts []string
 }
 
-// localSnapshotCommitResult reports what a snapshot commit changed.
-type localSnapshotCommitResult struct {
-	rowsChanged     bool
-	findingsChanged bool
+// LocalSnapshotCommitResult reports what a snapshot commit changed.
+type LocalSnapshotCommitResult struct {
+	RowsChanged     bool
+	FindingsChanged bool
 	// bound is the identity the store holds after a bind.
-	bound *synctree.RootIdentity
+	Bound *synctree.RootIdentity
 	// mountBoundaries are the folders recorded as crossed mount points
 	// after the commit.
-	mountBoundaries []string
+	MountBoundaries []string
 }
 
 // CommitLocalSnapshot commits one full local scan in one transaction: its
@@ -91,9 +91,9 @@ type localSnapshotCommitResult struct {
 // idle 100k-file tree each time was gigabytes a day of SSD wear (D-081a).
 func (s *SyncStore) CommitLocalSnapshot(
 	ctx context.Context,
-	commit *localSnapshotCommit,
-) (result localSnapshotCommitResult, err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	commit *LocalSnapshotCommit,
+) (result LocalSnapshotCommitResult, err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return result, fmt.Errorf("sync: beginning local_state transaction: %w", err)
 	}
@@ -124,30 +124,30 @@ func (s *SyncStore) CommitLocalSnapshot(
 // rows got their filesystem identity backfilled.
 func (s *SyncStore) commitLocalSnapshotTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	commit *localSnapshotCommit,
-	result *localSnapshotCommitResult,
+	tx SqlTxRunner,
+	commit *LocalSnapshotCommit,
+	result *LocalSnapshotCommitResult,
 ) (int64, error) {
 	var err error
-	if commit.findings != nil {
-		if result.findingsChanged, err = s.reconcileObservationFindingsTx(ctx, tx, commit.findings); err != nil {
+	if commit.Findings != nil {
+		if result.FindingsChanged, err = s.reconcileObservationFindingsTx(ctx, tx, commit.Findings); err != nil {
 			return 0, err
 		}
 	}
-	changed, backfilled, err := replaceLocalTruthTx(ctx, tx, commit.rows)
+	changed, backfilled, err := replaceLocalTruthTx(ctx, tx, commit.Rows)
 	if err != nil {
 		return 0, err
 	}
-	result.rowsChanged = changed
-	if commit.bind != nil {
-		if result.bound, err = bindSyncRootIdentityTx(ctx, tx, *commit.bind); err != nil {
+	result.RowsChanged = changed
+	if commit.Bind != nil {
+		if result.Bound, err = bindSyncRootIdentityTx(ctx, tx, *commit.Bind); err != nil {
 			return 0, err
 		}
 	}
-	if recordErr := recordMountBoundariesTx(ctx, tx, commit.crossedMounts); recordErr != nil {
+	if recordErr := recordMountBoundariesTx(ctx, tx, commit.CrossedMounts); recordErr != nil {
 		return 0, recordErr
 	}
-	if result.mountBoundaries, err = listMountBoundariesTx(ctx, tx); err != nil {
+	if result.MountBoundaries, err = listMountBoundariesTx(ctx, tx); err != nil {
 		return 0, err
 	}
 
@@ -159,8 +159,8 @@ func (s *SyncStore) commitLocalSnapshotTx(
 // whether anything changed and how many baseline rows were backfilled.
 func replaceLocalTruthTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	rows []localStateRow,
+	tx SqlTxRunner,
+	rows []LocalStateRow,
 ) (bool, int64, error) {
 	changed, err := replaceLocalStateTx(ctx, tx, rows)
 	if err != nil {
@@ -187,7 +187,7 @@ func replaceLocalTruthTx(
 
 // backfillBaselineIdentityTx attaches the full snapshot's filesystem identity
 // to baseline rows that lack one and returns how many rows it changed.
-func backfillBaselineIdentityTx(ctx context.Context, tx sqlTxRunner) (int64, error) {
+func backfillBaselineIdentityTx(ctx context.Context, tx SqlTxRunner) (int64, error) {
 	result, err := tx.ExecContext(ctx, sqlBackfillBaselineIdentity)
 	if err != nil {
 		return 0, fmt.Errorf("sync: backfilling baseline identity: %w", err)
@@ -201,13 +201,13 @@ func backfillBaselineIdentityTx(ctx context.Context, tx sqlTxRunner) (int64, err
 }
 
 // ListLocalState returns the durable local snapshot rows in path order.
-func (s *SyncStore) ListLocalState(ctx context.Context) ([]localStateRow, error) {
-	return listLocalStateRows(ctx, s.db)
+func (s *SyncStore) ListLocalState(ctx context.Context) ([]LocalStateRow, error) {
+	return ListLocalStateRows(ctx, s.db)
 }
 
 // GetLocalStateByPath returns the durable local_state row for path, or nil
 // when the path is absent from the committed local snapshot.
-func (s *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*localStateRow, bool, error) {
+func (s *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*LocalStateRow, bool, error) {
 	row, err := scanLocalStateRow(ctx, s.db, sqlSelectLocalStateByPath, path)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -222,8 +222,8 @@ func (s *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*loca
 // UpsertLocalStateRows applies scoped local observations without changing the
 // store's local-truth confidence. Confidence changes are owned by full snapshot
 // replacement or explicit suspect markers.
-func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []localStateRow) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []LocalStateRow) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state upsert transaction: %w", err)
 	}
@@ -243,7 +243,7 @@ func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []localStateR
 }
 
 func (s *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state delete transaction: %w", err)
 	}
@@ -263,7 +263,7 @@ func (s *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err 
 }
 
 func (s *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state prefix delete transaction: %w", err)
 	}
@@ -282,13 +282,13 @@ func (s *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (
 	return nil
 }
 
-func (s *SyncStore) applyLocalStatePatch(
+func (s *SyncStore) ApplyLocalStatePatch(
 	ctx context.Context,
-	rows []localStateRow,
+	rows []LocalStateRow,
 	deletedPaths []string,
 	deletedPrefixes []string,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning local_state patch transaction: %w", err)
 	}
@@ -326,15 +326,15 @@ func (s *SyncStore) applyLocalStatePatch(
 // minutes, gigabytes a day of SSD wear for no change (D-081a).
 func replaceLocalStateTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	rows []localStateRow,
+	tx SqlTxRunner,
+	rows []LocalStateRow,
 ) (bool, error) {
-	current, err := listLocalStateRows(ctx, tx)
+	current, err := ListLocalStateRows(ctx, tx)
 	if err != nil {
 		return false, err
 	}
 
-	stored := make(map[string]localStateRow, len(current))
+	stored := make(map[string]LocalStateRow, len(current))
 	for i := range current {
 		stored[current[i].Path] = current[i]
 	}
@@ -363,7 +363,7 @@ func replaceLocalStateTx(
 	return changed, nil
 }
 
-func upsertLocalStateRowsTx(ctx context.Context, tx sqlTxRunner, rows []localStateRow) error {
+func upsertLocalStateRowsTx(ctx context.Context, tx SqlTxRunner, rows []LocalStateRow) error {
 	for i := range rows {
 		if err := upsertLocalStateRowTx(ctx, tx, rows[i]); err != nil {
 			return err
@@ -373,7 +373,7 @@ func upsertLocalStateRowsTx(ctx context.Context, tx sqlTxRunner, rows []localSta
 	return nil
 }
 
-func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row localStateRow) error {
+func upsertLocalStateRowTx(ctx context.Context, tx SqlTxRunner, row LocalStateRow) error {
 	if _, err := tx.ExecContext(ctx, sqlInsertLocalState,
 		row.Path,
 		row.ItemType,
@@ -392,7 +392,7 @@ func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row localStateRo
 	return nil
 }
 
-func deleteLocalStatePathTx(ctx context.Context, tx sqlTxRunner, path string) error {
+func deleteLocalStatePathTx(ctx context.Context, tx SqlTxRunner, path string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM local_state WHERE path = ?`, path); err != nil {
 		return fmt.Errorf("sync: deleting local_state row for %s: %w", path, err)
 	}
@@ -415,7 +415,7 @@ func localStateSubtreeArgs(prefix string) []any {
 }
 
 // deleteLocalStatePrefixTx removes the row of prefix and every row below it.
-func deleteLocalStatePrefixTx(ctx context.Context, tx sqlTxRunner, prefix string) error {
+func deleteLocalStatePrefixTx(ctx context.Context, tx SqlTxRunner, prefix string) error {
 	if _, err := tx.ExecContext(ctx, sqlDeleteLocalStateSubtree, localStateSubtreeArgs(prefix)...); err != nil {
 		return fmt.Errorf("sync: deleting local_state prefix for %s: %w", prefix, err)
 	}
@@ -425,8 +425,8 @@ func deleteLocalStatePrefixTx(ctx context.Context, tx sqlTxRunner, prefix string
 
 // markLocalTruthCompleteTx marks local truth complete and reports whether it
 // was not complete before.
-func markLocalTruthCompleteTx(ctx context.Context, tx sqlTxRunner) (bool, error) {
-	state, err := readObservationStateFromTx(ctx, tx)
+func markLocalTruthCompleteTx(ctx context.Context, tx SqlTxRunner) (bool, error) {
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return false, err
 	}
@@ -442,21 +442,21 @@ func markLocalTruthCompleteTx(ctx context.Context, tx sqlTxRunner) (bool, error)
 	return !wasComplete, writeObservationStateToTx(ctx, tx, state)
 }
 
-func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]localStateRow, error) {
+func ListLocalStateRows(ctx context.Context, runner SqlTxRunner) ([]LocalStateRow, error) {
 	return listLocalStateRowsWithQuery(ctx, runner, sqlListLocalState)
 }
 
-func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query string) ([]localStateRow, error) {
+func listLocalStateRowsWithQuery(ctx context.Context, runner SqlTxRunner, query string) ([]LocalStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying local_state: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var result []localStateRow
+	var result []LocalStateRow
 	for rows.Next() {
 		var (
-			row              localStateRow
+			row              LocalStateRow
 			hash             sql.NullString
 			size             sql.NullInt64
 			mtime            sql.NullInt64
@@ -499,12 +499,12 @@ func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query 
 
 func scanLocalStateRow(
 	ctx context.Context,
-	runner sqlTxRunner,
+	runner SqlTxRunner,
 	query string,
 	args ...any,
-) (*localStateRow, error) {
+) (*LocalStateRow, error) {
 	var (
-		row              localStateRow
+		row              LocalStateRow
 		hash             sql.NullString
 		size             sql.NullInt64
 		mtime            sql.NullInt64
@@ -546,7 +546,7 @@ func scanLocalStateRow(
 // filesystem, and forgets flags for folders that are neither synced nor
 // present any more. A flag outlives an unmount on purpose: it is what tells
 // the next scan that the empty folder is a disk that is not mounted.
-func recordMountBoundariesTx(ctx context.Context, tx sqlTxRunner, crossed []string) error {
+func recordMountBoundariesTx(ctx context.Context, tx SqlTxRunner, crossed []string) error {
 	for _, boundary := range crossed {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO mount_boundaries (path) VALUES (?)`, boundary); err != nil {
 			return fmt.Errorf("sync: recording mount boundary %s: %w", boundary, err)
@@ -559,18 +559,18 @@ func recordMountBoundariesTx(ctx context.Context, tx sqlTxRunner, crossed []stri
 	return nil
 }
 
-// listMountBoundaries returns the folders recorded as crossed mount points.
-func (s *SyncStore) listMountBoundaries(ctx context.Context) ([]string, error) {
+// ListMountBoundaries returns the folders recorded as crossed mount points.
+func (s *SyncStore) ListMountBoundaries(ctx context.Context) ([]string, error) {
 	return listMountBoundariesTx(ctx, s.db)
 }
 
-func listMountBoundariesTx(ctx context.Context, runner sqlTxRunner) ([]string, error) {
+func listMountBoundariesTx(ctx context.Context, runner SqlTxRunner) ([]string, error) {
 	return queryPathsTx(ctx, runner, `SELECT path FROM mount_boundaries ORDER BY path`, "mount boundaries")
 }
 
 // queryPathsTx runs a query whose one column is a path and returns the
 // paths in the query's order. what names the rows in its errors.
-func queryPathsTx(ctx context.Context, runner sqlTxRunner, query, what string) ([]string, error) {
+func queryPathsTx(ctx context.Context, runner SqlTxRunner, query, what string) ([]string, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: listing %s: %w", what, err)
@@ -595,7 +595,7 @@ func queryPathsTx(ctx context.Context, runner sqlTxRunner, query, what string) (
 // a full snapshot no longer shows as the same folder at the same path: one
 // the user deleted, moved or replaced. The kept row is aliased b so the one
 // SQL identity rule, sqlSameLocalEntryL, decides "the same folder".
-func pruneKeptLocalFoldersTx(ctx context.Context, tx sqlTxRunner) error {
+func pruneKeptLocalFoldersTx(ctx context.Context, tx SqlTxRunner) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM kept_local_folders AS b
 		WHERE NOT EXISTS (
 			SELECT 1 FROM local_state l

@@ -27,7 +27,7 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 	for _, key := range keys {
 		t.Run(key.String(), func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, key, parseScopeKey(key.String()))
+			assert.Equal(t, key, ParseScopeKey(key.String()))
 		})
 	}
 }
@@ -35,7 +35,7 @@ func TestScopeKey_StringParseRoundTrip(t *testing.T) {
 func TestParseScopeKey_UnknownReturnsZero(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, parseScopeKey("not-a-scope").IsZero())
+	assert.True(t, ParseScopeKey("not-a-scope").IsZero())
 }
 
 // Validates: R-6.8.4
@@ -82,7 +82,7 @@ func TestScopeKey_CoveredPath(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, "/docs", SKPermLocalWrite("/docs").CoveredPath())
-	assert.Equal(t, "/readonly", sKPermRemoteRead("/readonly").CoveredPath())
+	assert.Equal(t, "/readonly", SKPermRemoteRead("/readonly").CoveredPath())
 	assert.Empty(t, SKService().CoveredPath())
 }
 
@@ -101,8 +101,8 @@ func TestScopeKey_PersistsInBlockScopes(t *testing.T) {
 	assert.True(t, SKQuotaOwn().PersistsInBlockScopes())
 	assert.True(t, SKPermLocalWrite("/docs").PersistsInBlockScopes())
 	assert.True(t, SKPermRemoteWrite("/readonly").PersistsInBlockScopes())
-	assert.False(t, sKPermLocalRead("/docs").PersistsInBlockScopes())
-	assert.False(t, sKPermRemoteRead("/readonly").PersistsInBlockScopes())
+	assert.False(t, SKPermLocalRead("/docs").PersistsInBlockScopes())
+	assert.False(t, SKPermRemoteRead("/readonly").PersistsInBlockScopes())
 	assert.False(t, ScopeKey{}.PersistsInBlockScopes())
 }
 
@@ -125,7 +125,7 @@ func TestScopeKey_RemotePathPanicsForNonPermRemote(t *testing.T) {
 func TestDescribeScopeKey_PermRemoteWrite(t *testing.T) {
 	t.Parallel()
 
-	descriptor := describeScopeKey(SKPermRemoteWrite("/readonly"))
+	descriptor := DescribeScopeKey(SKPermRemoteWrite("/readonly"))
 	assert.Equal(t, scopeFamilyPermRemote, descriptor.Family)
 	assert.Equal(t, scopeAccessWrite, descriptor.Access)
 	assert.Equal(t, scopeSubjectKindPath, descriptor.SubjectKind)
@@ -137,11 +137,11 @@ func TestDescribeScopeKey_PermRemoteWrite(t *testing.T) {
 func TestDescribeScopeKey_Service(t *testing.T) {
 	t.Parallel()
 
-	descriptor := describeScopeKey(SKService())
+	descriptor := DescribeScopeKey(SKService())
 	assert.Equal(t, scopeFamilyService, descriptor.Family)
 	assert.Equal(t, scopeAccessNone, descriptor.Access)
 	assert.Equal(t, scopeSubjectKindNone, descriptor.SubjectKind)
 	assert.Empty(t, descriptor.SubjectValue)
-	assert.Equal(t, issueServiceOutage, descriptor.DefaultConditionType)
+	assert.Equal(t, IssueServiceOutage, descriptor.DefaultConditionType)
 	assert.Equal(t, "OneDrive service", descriptor.Humanize())
 }

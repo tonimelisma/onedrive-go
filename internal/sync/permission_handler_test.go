@@ -16,7 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func newTestPermHandler(t *testing.T, checker permissionChecker) (*permissionHandler, string) {
+func newTestPermHandler(t *testing.T, checker PermissionChecker) (*permissionHandler, string) {
 	t.Helper()
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")
@@ -117,7 +117,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 	ph, syncRoot := newTestPermHandler(t, nil)
 
 	require.NoError(t, os.Chmod(syncRoot, 0o000))
-	r := &actionCompletion{
+	r := &ActionCompletion{
 		Path:       "file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -127,7 +127,7 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 	require.NotEqual(t, permissionEvidenceNone, decision.Kind)
 	assert.Equal(t, permissionEvidenceFileDenied, decision.Kind)
-	assert.Equal(t, issueLocalReadDenied, decision.IssueType)
+	assert.Equal(t, IssueLocalReadDenied, decision.IssueType)
 }
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
@@ -138,7 +138,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "blocked")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 	require.NoError(t, os.Chmod(subDir, 0o000))
-	r := &actionCompletion{
+	r := &ActionCompletion{
 		Path:       "blocked/file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -148,7 +148,7 @@ func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 
 	require.NotEqual(t, permissionEvidenceNone, decision.Kind)
 	assert.Equal(t, permissionEvidenceBoundaryDenied, decision.Kind)
-	assert.Equal(t, issueLocalReadDenied, decision.IssueType)
+	assert.Equal(t, IssueLocalReadDenied, decision.IssueType)
 	assert.Equal(t, "blocked", decision.BoundaryPath)
 }
 
@@ -160,7 +160,7 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 	subDir := filepath.Join(syncRoot, "accessible")
 	require.NoError(t, os.MkdirAll(subDir, 0o750))
 
-	r := &actionCompletion{
+	r := &ActionCompletion{
 		Path:       "accessible/file.txt",
 		ActionType: ActionDownload,
 		ErrMsg:     "permission denied",
@@ -185,7 +185,7 @@ func TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary(t *testing
 		return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
 	}
 
-	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 		Path:       "media/photos/2026/a.jpg",
 		ActionType: ActionDownload,
 		Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
@@ -193,7 +193,7 @@ func TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary(t *testing
 
 	assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
 	assert.Equal(t, "media", evidence.BoundaryPath)
-	assert.Equal(t, issueLocalReadOnly, evidence.IssueType)
+	assert.Equal(t, IssueLocalReadOnly, evidence.IssueType)
 	assert.Equal(t, SKLocalReadOnly("media"), scopeKeyForPermissionEvidence(evidence))
 }
 
@@ -205,7 +205,7 @@ func TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree(t *te
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o750))
 	ph.readOnlyDir = func(string) bool { return true }
 
-	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 		Path:       "docs/a.txt",
 		ActionType: ActionDownload,
 		Err:        &os.PathError{Op: "open", Path: "a.txt", Err: syscall.EROFS},
@@ -218,7 +218,7 @@ func TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree(t *te
 	assert.True(t, scope.BlocksAction("other/b.txt", "", ActionLocalDelete))
 	assert.False(t, scope.BlocksAction("docs/a.txt", "", ActionUpload), "uploads only read and keep running")
 	assert.True(t, scope.PersistsInBlockScopes(), "a timed trial revalidates the mount")
-	assert.Equal(t, issueLocalReadOnly, scope.ConditionType())
+	assert.Equal(t, IssueLocalReadOnly, scope.ConditionType())
 }
 
 // The boundary scope every issue type names for denied-boundary evidence.
@@ -241,24 +241,24 @@ func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
 	}
 
 	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
-		issueTypeVerdictGroup[ScopeKey]{verdict: sKPermLocalRead(boundary), members: []IssueType{issueLocalReadDenied}},
-		issueTypeVerdictGroup[ScopeKey]{verdict: SKPermLocalWrite(boundary), members: []IssueType{issueLocalWriteDenied}},
-		issueTypeVerdictGroup[ScopeKey]{verdict: SKLocalReadOnly(boundary), members: []IssueType{issueLocalReadOnly}},
+		issueTypeVerdictGroup[ScopeKey]{verdict: SKPermLocalRead(boundary), members: []IssueType{IssueLocalReadDenied}},
+		issueTypeVerdictGroup[ScopeKey]{verdict: SKPermLocalWrite(boundary), members: []IssueType{IssueLocalWriteDenied}},
+		issueTypeVerdictGroup[ScopeKey]{verdict: SKLocalReadOnly(boundary), members: []IssueType{IssueLocalReadOnly}},
 		issueTypeVerdictGroup[ScopeKey]{verdict: SKPermRemoteWrite(boundary), members: []IssueType{IssueRemoteWriteDenied}},
 		issueTypeVerdictGroup[ScopeKey]{
 			// A remote read denial is a boundary observation finds, never probe
 			// evidence; every other member is not a permission condition.
 			verdict: ScopeKey{},
 			members: []IssueType{
-				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
-				IssueUnauthorized, issueRemoteReadDenied, issueRemoteRootNotFound, IssueQuotaExceeded, issueRateLimited,
-				issueCaseCollision, issueRemoteNameTwin, issueDiskFull, issueServiceOutage,
-				issueFileTooLargeForSpace, issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement,
-				issueLocalMountBoundary, issueLocalMountMissing, issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval,
-				issueRemovedFolderKept, issueLocalFileTooLarge,
-				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
-				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity, issueRequestTimeout,
-				issueTransientConflict, issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic,
+				IssueUnauthorized, IssueRemoteReadDenied, IssueRemoteRootNotFound, IssueQuotaExceeded, IssueRateLimited,
+				IssueCaseCollision, IssueRemoteNameTwin, IssueDiskFull, IssueServiceOutage,
+				IssueFileTooLargeForSpace, IssueLocalNameTooLong, IssueDeletesHeld, IssueLocalUnsyncableReplacement,
+				IssueLocalMountBoundary, IssueLocalMountMissing, IssueRemoteFolderUnverifiable, IssueLocalInterruptedRemoval,
+				IssueRemovedFolderKept, IssueLocalFileTooLarge,
+				IssueLocalBusy, IssueLocalCrossDevice, IssueUnsupportedOperation, IssueMalwareDetected,
+				IssueLocalDatabaseOpen, IssueUploadVerification, IssueDownloadIntegrity, IssueRequestTimeout,
+				IssueTransientConflict, IssueTransientNotFound, IssueResourceLocked, IssueTransferURLRejected,
 			},
 		},
 	), scopeFor)
@@ -273,12 +273,12 @@ func TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFil
 	ph, _ := newTestPermHandler(t, nil)
 	ph.readOnlyDir = func(string) bool { return false }
 
-	evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 		Path:       "bound.txt",
 		ActionType: ActionDownload,
 		Err:        &os.PathError{Op: "open", Path: "bound.txt", Err: syscall.EROFS},
 	})
 
 	assert.Equal(t, permissionEvidenceFileDenied, evidence.Kind)
-	assert.Equal(t, issueLocalReadOnly, evidence.IssueType)
+	assert.Equal(t, IssueLocalReadOnly, evidence.IssueType)
 }

@@ -49,7 +49,7 @@ func TestCommitObservation_OwnPlaceholderIsAdoptedAsEmptySyncedContent(t *testin
 		LocalSize: 7, LocalHash: "local-hash",
 	}))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
 	}}, "t1", driveID))
@@ -77,7 +77,7 @@ func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemOneDriveDeleted
 
 	mgr := newTestStore(t)
 	driveID := driveid.New(testDriveID)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "folder", ParentID: "root", Path: "doc", ItemType: ItemTypeFolder, ETag: `"f,1"`,
 	}}, "t1", driveID))
 	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO baseline
@@ -88,7 +88,7 @@ func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemOneDriveDeleted
 		LocalSize: 7, LocalHash: "local-hash",
 	}))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		{
 			DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc", ItemType: ItemTypeFile,
 			Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
@@ -116,7 +116,7 @@ func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemMovedAway(t *te
 
 	mgr := newTestStore(t)
 	driveID := driveid.New(testDriveID)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "moved", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: "h", Size: 3, ETag: `"m,1"`,
 	}}, "t1", driveID))
@@ -128,7 +128,7 @@ func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemMovedAway(t *te
 		ItemID: "placeholder", DriveID: driveID, Path: "doc.txt", ParentID: "root", CreatedETag: `"p,1"`,
 	}))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		{
 			DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 			Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
@@ -155,7 +155,7 @@ func TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem(t *testin
 
 	mgr := newTestStore(t)
 	driveID := driveid.New(testDriveID)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "live", ParentID: "root", Path: "doc", ItemType: ItemTypeFile,
 		Hash: "h", Size: 3, ETag: `"l,1"`,
 	}}, "t1", driveID))
@@ -167,7 +167,7 @@ func TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem(t *testin
 		ItemID: "placeholder", DriveID: driveID, Path: "doc", ParentID: "root", CreatedETag: `"p,1"`,
 	}))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
 	}}, "t2", driveID))
@@ -193,7 +193,7 @@ func TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange(
 		(item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, etag)
 		VALUES ('item', 'doc.txt', 'file', 'h', 'h', 7, 7, '"p,2"')`)
 	require.NoError(t, err)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "item", Path: "doc.txt", ItemType: ItemTypeFile, Hash: "h", Size: 7, ETag: `"p,2"`,
 	}}, "t1", driveID))
 	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
@@ -201,7 +201,7 @@ func TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange(
 	}))
 
 	// A delta page captured mid-upload, applied after the commit.
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "item", Path: "doc.txt", ItemType: ItemTypeFile, Hash: emptyQuickXor, Size: 0, ETag: `"p,1"`,
 	}}, "t2", driveID))
 
@@ -220,7 +220,7 @@ func TestCommitObservation_PendingCreateIsDroppedOnceTheItemChanges(t *testing.T
 	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
 		ItemID: "item", DriveID: driveID, Path: "doc.txt", CreatedETag: `"p,1"`,
 	}))
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "item", Path: "doc.txt", ItemType: ItemTypeFile, Hash: "h", Size: 7, ETag: `"p,2"`,
 	}}, "t1", driveID))
 
@@ -284,7 +284,7 @@ func TestCommitObservation_PlaceholderWhoseETagMovedWithoutContentIsStillAdopted
 		LocalSize: 7, LocalHash: "local-hash",
 	}))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"p,2"`,
 	}}, "t1", driveID))
@@ -415,7 +415,7 @@ func TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent(t *testin
 		message   string
 		condition IssueType
 	}{
-		{name: "path limit", message: scenarioPathLimitRefusal, condition: issuePathTooLong},
+		{name: "path limit", message: scenarioPathLimitRefusal, condition: IssuePathTooLong},
 		{name: "bare invalid request", message: "Invalid request"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -505,7 +505,7 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, issueCaseCollision, rows[0].ConditionType)
+	assert.Equal(t, IssueCaseCollision, rows[0].ConditionType)
 	assert.Equal(t, 1, rows[0].AttemptCount, "the stale attempt recorded no retry work of its own")
 	assert.Equal(t, map[string]string{"straße.txt": "theirs\n"}, remote.tree())
 }
@@ -638,7 +638,7 @@ func TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded(t *testi
 		DriveID: driveID, Path: "doc.txt", ParentID: "root", LocalSize: 7, LocalHash: "local-hash",
 	}))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "orphan", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"o,1"`,
 	}}, "t1", driveID))
@@ -667,7 +667,7 @@ func TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL(t *testing.T
 
 	withContent := newTestStore(t)
 	require.NoError(t, withContent.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: "root"}))
-	require.NoError(t, withContent.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, withContent.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "theirs", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: "their-hash", Size: 9, ETag: `"t,1"`,
 	}}, "t1", driveID))
@@ -679,10 +679,10 @@ func TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL(t *testing.T
 
 	expired := newTestStore(t)
 	base := time.Date(2026, 11, 1, 23, 0, 0, 0, time.UTC)
-	expired.setNowFunc(func() time.Time { return base })
+	expired.SetNowFunc(func() time.Time { return base })
 	require.NoError(t, expired.RecordPendingCreateIntent(t.Context(), &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: "root"}))
-	expired.setNowFunc(func() time.Time { return base.Add(pendingCreateIntentTTL + time.Minute) })
-	require.NoError(t, expired.CommitObservation(t.Context(), []observedItem{{
+	expired.SetNowFunc(func() time.Time { return base.Add(pendingCreateIntentTTL + time.Minute) })
+	require.NoError(t, expired.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "late", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"l,1"`,
 	}}, "t1", driveID))
@@ -714,7 +714,7 @@ func TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds(t *testing.T)
 		VALUES ('created', 'empty.txt', 'root', 'file', ?, ?, 0, 0, '"c,1"')`, emptyQuickXor, emptyQuickXor)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID: driveID, ItemID: "created", ParentID: "root", Path: "empty.txt", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"c,1"`,
 	}}, "t1", driveID))
@@ -820,38 +820,38 @@ func runCreateIntentPruneCase(t *testing.T, tc *createIntentPruneCase) {
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
-	store.setNowFunc(func() time.Time { return intendedAt })
+	store.SetNowFunc(func() time.Time { return intendedAt })
 	pending := &PendingCreate{DriveID: driveID, Path: tc.path, ParentID: "root"}
 	require.NoError(t, store.RecordPendingCreateIntent(ctx, pending))
 	if tc.namesItem {
 		pending.ItemID, pending.CreatedETag = "placeholder", `"p,1"`
 		require.NoError(t, store.RecordPendingCreate(ctx, pending))
 	}
-	scanned := []localStateRow{{Path: "keep.txt", ItemType: ItemTypeFile, Hash: "keep-hash", Size: 5}}
+	scanned := []LocalStateRow{{Path: "keep.txt", ItemType: ItemTypeFile, Hash: "keep-hash", Size: 5}}
 	if tc.localFile {
-		scanned = append(scanned, localStateRow{Path: tc.path, ItemType: ItemTypeFile, Hash: "my-hash", Size: 9})
+		scanned = append(scanned, LocalStateRow{Path: tc.path, ItemType: ItemTypeFile, Hash: "my-hash", Size: 9})
 	}
 	require.NoError(t, store.ReplaceLocalState(ctx, scanned))
 	if tc.readDenied != "" {
 		seedObservationIssueRowForTest(t, store, &ObservationIssue{
-			Path: tc.readDenied, DriveID: driveID, IssueType: issueLocalReadDenied, ScopeKey: sKPermLocalRead(tc.readDenied),
+			Path: tc.readDenied, DriveID: driveID, IssueType: IssueLocalReadDenied, ScopeKey: SKPermLocalRead(tc.readDenied),
 		})
 	}
 	if tc.remoteDenied != "" {
 		seedObservationIssueRowForTest(t, store, &ObservationIssue{
-			Path: tc.remoteDenied, DriveID: driveID, IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead(tc.remoteDenied),
+			Path: tc.remoteDenied, DriveID: driveID, IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead(tc.remoteDenied),
 		})
 	}
 	if tc.suspect {
 		require.NoError(t, store.MarkLocalTruthSuspect(ctx, "watch overflow"))
 	}
-	store.setNowFunc(func() time.Time { return intendedAt.Add(tc.prunedAfter) })
-	observed := passObservedRemoteThenLocal
+	store.SetNowFunc(func() time.Time { return intendedAt.Add(tc.prunedAfter) })
+	observed := PassObservedRemoteThenLocal
 	if tc.localOnlyPass {
-		observed = passRefreshedLocalOnly
+		observed = PassRefreshedLocalOnly
 	}
 
-	require.NoError(t, store.prunePendingCreates(ctx, observed, func(path string) bool {
+	require.NoError(t, store.PrunePendingCreates(ctx, observed, func(path string) bool {
 		return !tc.unscanned || path != tc.path
 	}))
 
@@ -942,19 +942,19 @@ func (u *creatingTestUploader) RemoveEmptyItem(_ context.Context, _ driveid.ID, 
 // newPendingCreateTestExecutor returns an executor that uploads through ul and
 // records its pending creates in a real store, plus that store and the sync
 // root.
-func newPendingCreateTestExecutor(t *testing.T, ul driveops.Uploader, logger *slog.Logger) (*executor, *SyncStore, string) {
+func newPendingCreateTestExecutor(t *testing.T, ul driveops.Uploader, logger *slog.Logger) (*Executor, *SyncStore, string) {
 	t.Helper()
 
 	syncRoot := t.TempDir()
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 	dl := &executorMockDownloader{}
-	cfg := newExecutorConfig(&executorMockItemClient{}, dl, ul, syncTree, driveid.New(testDriveID), logger, nil)
+	cfg := NewExecutorConfig(&executorMockItemClient{}, dl, ul, syncTree, driveid.New(testDriveID), logger, nil)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	store := newTestStore(t)
 	cfg.SetPendingCreates(store)
 
-	return newExecution(cfg, emptyBaseline()), store, syncRoot
+	return NewExecution(cfg, emptyBaseline()), store, syncRoot
 }
 
 // Validates: R-5.6.15
@@ -1040,11 +1040,11 @@ func TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict
 		LocalSize: 7, LocalHash: "local-hash",
 	}))
 	createdAt := time.Date(2026, 11, 10, 18, 0, 48, 0, time.UTC)
-	placeholder := observedItem{
+	placeholder := ObservedItem{
 		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Size: 0, ETag: `"p,1"`, Mtime: createdAt.UnixNano(),
 	}
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{placeholder}, "t1", driveID))
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{placeholder}, "t1", driveID))
 	_, err := mgr.rawDB().ExecContext(t.Context(), `INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES ('doc.txt', 'file', 'local-hash', 7, 7)`)
 	require.NoError(t, err)
@@ -1056,8 +1056,8 @@ func TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict
 	moved.ETag = `"p,2"`
 	touched := moved
 	touched.ETag, touched.Mtime = `"p,3"`, createdAt.Add(time.Second).UnixNano()
-	for i, observed := range []observedItem{moved, touched} {
-		require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{observed}, fmt.Sprintf("t%d", i+2), driveID))
+	for i, observed := range []ObservedItem{moved, touched} {
+		require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{observed}, fmt.Sprintf("t%d", i+2), driveID))
 		rows, queryErr := mgr.QueryReconciliationState(t.Context())
 		require.NoError(t, queryErr)
 		assert.Equal(t, "upload", reconciliationKindsByPath(rows)["doc.txt"], "observation %d is no remote edit", i)
@@ -1086,15 +1086,15 @@ func TestCommitObservation_AdoptedPlaceholderOfUnknownSizeIsNotFollowed(t *testi
 	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &PendingCreate{
 		ItemID: "placeholder", DriveID: driveID, Path: "doc.txt", ParentID: "root", CreatedETag: `"p,1"`,
 	}))
-	placeholder := observedItem{
+	placeholder := ObservedItem{
 		DriveID: driveID, ItemID: "placeholder", ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 		Size: 0, ETag: `"p,1"`,
 	}
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{placeholder}, "t1", driveID))
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{placeholder}, "t1", driveID))
 
 	sizeless := placeholder
 	sizeless.ETag, sizeless.SizeUnknown = `"p,moved"`, true
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{sizeless}, "t2", driveID))
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{sizeless}, "t2", driveID))
 
 	bl, err := mgr.Load(t.Context())
 	require.NoError(t, err)
@@ -1114,12 +1114,12 @@ func TestPendingCreate_AnIntentRecordedBefore1970KeepsItsTimeAndStaysFresh(t *te
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 	intended := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return intended })
+	mgr.SetNowFunc(func() time.Time { return intended })
 	require.NoError(t, mgr.RecordPendingCreateIntent(ctx, &PendingCreate{
 		DriveID: driveID, Path: "moon.txt", ParentID: "root", LocalSize: 3, LocalHash: "local-hash",
 	}))
 
-	mgr.setNowFunc(func() time.Time { return intended.Add(time.Hour) })
+	mgr.SetNowFunc(func() time.Time { return intended.Add(time.Hour) })
 	require.NoError(t, mgr.RecordPendingCreate(ctx, &PendingCreate{
 		ItemID: "placeholder", DriveID: driveID, Path: "moon.txt", ParentID: "root", CreatedETag: `"p,1"`,
 		LocalSize: 3, LocalHash: "local-hash",
@@ -1128,7 +1128,7 @@ func TestPendingCreate_AnIntentRecordedBefore1970KeepsItsTimeAndStaysFresh(t *te
 	pending, found, err := mgr.PendingCreateAt(ctx, "moon.txt")
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, storedTimeNano(intended), pending.IntendedAt, "the second record keeps the first intent's time")
-	assert.True(t, pending.intentIsFresh(intended.Add(2*time.Hour)), "inside its lifetime the intent is fresh")
-	assert.False(t, pending.intentIsFresh(intended.Add(pendingCreateIntentTTL+time.Second)))
+	assert.Equal(t, StoredTimeNano(intended), pending.IntendedAt, "the second record keeps the first intent's time")
+	assert.True(t, pending.IntentIsFresh(intended.Add(2*time.Hour)), "inside its lifetime the intent is fresh")
+	assert.False(t, pending.IntentIsFresh(intended.Add(pendingCreateIntentTTL+time.Second)))
 }

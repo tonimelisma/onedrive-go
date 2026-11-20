@@ -1,51 +1,51 @@
 package sync
 
-// localObservation is one unit of local observation the watch runtime applies
+// LocalObservation is one unit of local observation the watch runtime applies
 // to local truth. Local observers build it from re-observed filesystem facts;
 // the watch loop owns its durable application and dirty scheduling. Its kind
 // says which of three it is, and the runtime's apply switches over every kind
 // (the exhaustive linter holds it to that).
-type localObservation struct {
-	kind localObservationKind
+type LocalObservation struct {
+	Kind localObservationKind
 
 	// rows are the patch's upserts, or every row of the snapshot's scan.
-	rows []localStateRow
+	Rows []LocalStateRow
 	// deletedPaths and deletedPrefixes are the patch's exact and subtree
 	// deletes.
-	deletedPaths    []string
-	deletedPrefixes []string
+	DeletedPaths    []string
+	DeletedPrefixes []string
 	// dirty asks the patch's apply to mark the runtime dirty.
-	dirty bool
+	Dirty bool
 
 	// findings and crossedMounts are the snapshot's scan findings (the whole
 	// set, the empty one included) and the mount points it crossed.
-	findings      []skippedItem
-	crossedMounts []string
+	Findings      []SkippedItem
+	CrossedMounts []string
 
 	// recoveryReason is why local truth is suspect.
-	recoveryReason string
+	RecoveryReason string
 }
 
-// localObservationKind says what a localObservation carries.
+// localObservationKind says what a LocalObservation carries.
 type localObservationKind int
 
 const (
-	// localPatch writes rows and removes paths and subtrees of local truth.
-	localPatch localObservationKind = iota
-	// localSnapshot is every row of one full scan with that scan's findings
+	// LocalPatch writes rows and removes paths and subtrees of local truth.
+	LocalPatch localObservationKind = iota
+	// LocalSnapshot is every row of one full scan with that scan's findings
 	// and crossed mounts: the three commit together, in one transaction.
-	localSnapshot
-	// localTruthSuspect states that local truth may have missed a change.
-	localTruthSuspect
+	LocalSnapshot
+	// LocalTruthSuspect states that local truth may have missed a change.
+	LocalTruthSuspect
 )
 
 func (k localObservationKind) String() string {
 	switch k {
-	case localPatch:
+	case LocalPatch:
 		return "patch"
-	case localSnapshot:
+	case LocalSnapshot:
 		return "snapshot"
-	case localTruthSuspect:
+	case LocalTruthSuspect:
 		return "suspect"
 	default:
 		return unknownLocalObservationKind
@@ -60,23 +60,23 @@ const unknownLocalObservationKind = "unknown"
 // and every row below it. A deleted path takes its subtree whatever it was: a
 // folder neither the baseline nor the watch set knows can still have rows
 // below it.
-func localObservationBatchForEvent(event *changeEvent) localObservation {
+func localObservationBatchForEvent(event *ChangeEvent) LocalObservation {
 	if event == nil || event.Path == "" {
-		return localObservation{}
+		return LocalObservation{}
 	}
 
-	batch := localObservation{dirty: true}
+	batch := LocalObservation{Dirty: true}
 	if event.IsDeleted {
-		batch.deletedPrefixes = []string{event.Path}
+		batch.DeletedPrefixes = []string{event.Path}
 	} else {
-		batch.rows = []localStateRow{localStateRowFromEvent(event)}
+		batch.Rows = []LocalStateRow{localStateRowFromEvent(event)}
 	}
 
 	return batch
 }
 
-func localStateRowFromEvent(event *changeEvent) localStateRow {
-	return localStateRow{
+func localStateRowFromEvent(event *ChangeEvent) LocalStateRow {
+	return LocalStateRow{
 		Path:             event.Path,
 		ItemType:         event.ItemType,
 		Hash:             event.Hash,

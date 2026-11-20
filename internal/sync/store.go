@@ -94,10 +94,10 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 	return openSyncStore(ctx, dbPath, logger, true)
 }
 
-// sqliteDriverName is the database/sql driver the store opens its database
+// SqliteDriverName is the database/sql driver the store opens its database
 // with. Tests open through a fault-injecting wrapper of the same driver
 // (openSyncStoreWithDriver) to reach the store's failure branches.
-const sqliteDriverName = "sqlite"
+const SqliteDriverName = "sqlite"
 
 const (
 	// sqlitePragmaParam is the URI parameter whose values the SQLite driver
@@ -130,7 +130,7 @@ func sqliteFileURI(path string, query url.Values) string {
 }
 
 func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
-	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, sqliteDriverName)
+	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, SqliteDriverName)
 }
 
 func openSyncStoreWithDriver(
@@ -238,11 +238,11 @@ func (s *SyncStore) rawDB() *sql.DB {
 	return s.db
 }
 
-// setNowFunc overrides the store's clock, which dates delete-ledger rows,
+// SetNowFunc overrides the store's clock, which dates delete-ledger rows,
 // retry timing and pending-create intents. Used in tests to produce
 // deterministic times without mocking the real clock; call it before the
 // writes it should date.
-func (s *SyncStore) setNowFunc(fn func() time.Time) {
+func (s *SyncStore) SetNowFunc(fn func() time.Time) {
 	s.nowFunc = fn
 }
 

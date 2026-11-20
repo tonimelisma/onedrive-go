@@ -82,13 +82,13 @@ func (r stateStoreIncompatibleReason) Description() string {
 // missing DBs bootstrap normally via NewSyncStore, while unreadable or
 // incompatible existing DBs surface a typed store-incompatible error.
 func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
-	return openEngineSyncStoreWithDriver(ctx, dbPath, logger, sqliteDriverName)
+	return OpenEngineSyncStoreWithDriver(ctx, dbPath, logger, SqliteDriverName)
 }
 
-// openEngineSyncStoreWithDriver is openEngineSyncStore through the named
+// OpenEngineSyncStoreWithDriver is openEngineSyncStore through the named
 // database/sql driver; tests open an engine's store through a fault-injecting
 // driver with it.
-func openEngineSyncStoreWithDriver(
+func OpenEngineSyncStoreWithDriver(
 	ctx context.Context, dbPath string, logger *slog.Logger, driverName string,
 ) (*SyncStore, error) {
 	store, err := openSyncStoreWithDriver(ctx, dbPath, logger, true, driverName)
@@ -111,7 +111,7 @@ func openEngineSyncStoreWithDriver(
 	}
 	// Only an existing store is incompatible. One that cannot be checked is
 	// reported as the failure it is, never steered towards a reset.
-	exists, existsErr := stateDBFamilyExists(dbPath)
+	exists, existsErr := StateDBFamilyExists(dbPath)
 	if existsErr != nil {
 		return nil, errors.Join(err, existsErr)
 	}
@@ -133,11 +133,11 @@ func openEngineSyncStoreWithDriver(
 	}
 }
 
-// stateDBFamilyExists reports whether any file of the store at dbPath is on
+// StateDBFamilyExists reports whether any file of the store at dbPath is on
 // disk (config.StateDBFamily). A file that cannot be checked (permission denied, an
 // I/O error) is an error, not absent: read as absent, an email change would
 // rename a drive's config away from a store it could not see.
-func stateDBFamilyExists(dbPath string) (bool, error) {
+func StateDBFamilyExists(dbPath string) (bool, error) {
 	for _, candidate := range config.StateDBFamily(dbPath) {
 		_, err := localpath.Stat(candidate)
 		switch {

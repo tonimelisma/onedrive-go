@@ -21,7 +21,7 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -38,7 +38,7 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	batches := localBatches(obs, 20)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -66,7 +66,7 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	batches := localBatches(obs, 30)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -98,7 +98,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	batches := localBatches(obs, 50)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -125,7 +125,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	for !foundFile || len(foundDirs) < len(wantDirs) {
 		select {
 		case batch := <-batches:
-			for _, row := range batch.rows {
+			for _, row := range batch.Rows {
 				if row.ItemType == ItemTypeFolder && wantDirs[row.Path] {
 					foundDirs[row.Path] = true
 				}
@@ -165,7 +165,7 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)

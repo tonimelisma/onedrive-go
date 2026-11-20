@@ -28,7 +28,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	_, found := cached.GetByPath("fm2")
 	require.False(t, found)
 
-	tx, err := beginPerfTx(ctx, eng.baseline.db)
+	tx, err := BeginPerfTx(ctx, eng.baseline.db)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, tx.Rollback())

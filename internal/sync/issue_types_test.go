@@ -169,8 +169,8 @@ func TestIssueType_EveryDeclaredConstantIsAMemberAndParses(t *testing.T) {
 		assert.False(t, duplicate, "two IssueType constants share the value %q", member)
 		seen[member] = struct{}{}
 
-		assert.True(t, member.isMember(), "%q is declared but isMember does not name it", member)
-		parsed, err := parseIssueType(string(member))
+		assert.True(t, member.IsMember(), "%q is declared but IsMember does not name it", member)
+		parsed, err := ParseIssueType(string(member))
 		require.NoError(t, err)
 		assert.Equal(t, member, parsed)
 	}
@@ -193,26 +193,26 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 			// The leftover of an interrupted removal sits at an internal name
 			// sync never syncs; its report asks the user to look at it.
 			verdict: false,
-			members: []IssueType{issueDeletesHeld, issueLocalInterruptedRemoval, issueRemovedFolderKept},
+			members: []IssueType{IssueDeletesHeld, IssueLocalInterruptedRemoval, IssueRemovedFolderKept},
 		},
 		issueTypeVerdictGroup[bool]{
 			// The scan found a path sync cannot represent, read or reach.
 			verdict: true,
 			members: []IssueType{
-				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
-				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary, issueLocalMountMissing,
-				issueRemoteNameTwin, issueRemoteReadDenied, issueRemoteRootNotFound,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic, IssueCaseCollision,
+				IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary, IssueLocalMountMissing,
+				IssueRemoteNameTwin, IssueRemoteReadDenied, IssueRemoteRootNotFound,
 			},
 		},
 		issueTypeVerdictGroup[bool]{
 			// A refusal or a condition that holds the work back until it clears.
 			verdict: true,
 			members: []IssueType{
-				IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, issueRateLimited,
-				issueLocalWriteDenied, issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace,
-				issueLocalNameTooLong, issueLocalReadOnly, issueRemoteFolderUnverifiable, issueLocalFileTooLarge,
-				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
-				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity,
+				IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, IssueRateLimited,
+				IssueLocalWriteDenied, IssueDiskFull, IssueServiceOutage, IssueFileTooLargeForSpace,
+				IssueLocalNameTooLong, IssueLocalReadOnly, IssueRemoteFolderUnverifiable, IssueLocalFileTooLarge,
+				IssueLocalBusy, IssueLocalCrossDevice, IssueUnsupportedOperation, IssueMalwareDetected,
+				IssueLocalDatabaseOpen, IssueUploadVerification, IssueDownloadIntegrity,
 			},
 		},
 		issueTypeVerdictGroup[bool]{
@@ -220,13 +220,13 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 			// observation issue, so this verdict only decides the case.
 			verdict: true,
 			members: []IssueType{
-				issueRequestTimeout, issueTransientConflict, issueTransientNotFound, issueResourceLocked,
-				issueTransferURLRejected,
+				IssueRequestTimeout, IssueTransientConflict, IssueTransientNotFound, IssueResourceLocked,
+				IssueTransferURLRejected,
 			},
 		},
-	), issueTypeLeavesFileUnsynced)
+	), IssueTypeLeavesFileUnsynced)
 
-	assert.True(t, issueTypeLeavesFileUnsynced(issueTypeOutsideTheEnum),
+	assert.True(t, IssueTypeLeavesFileUnsynced(issueTypeOutsideTheEnum),
 		"a value outside the enum is not known to be done, so it counts")
 }
 
@@ -242,37 +242,37 @@ func TestIssueTypeIsRootReadFailure_EveryMemberIsDecided(t *testing.T) {
 		issueTypeVerdictGroup[bool]{
 			// The two answers rootReadFailureIssueType records at the root.
 			verdict: true,
-			members: []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound},
+			members: []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound},
 		},
 		issueTypeVerdictGroup[bool]{
 			// What a scan finds, or a refusal of one path's work.
 			verdict: false,
 			members: []IssueType{
-				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic, issueCaseCollision,
-				issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary, issueLocalMountMissing,
-				issueRemoteNameTwin, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, issueRateLimited,
-				issueLocalWriteDenied, issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace,
-				issueLocalNameTooLong, issueLocalReadOnly, issueRemoteFolderUnverifiable, issueLocalFileTooLarge,
-				issueLocalBusy, issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected,
-				issueLocalDatabaseOpen, issueUploadVerification, issueDownloadIntegrity,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic, IssueCaseCollision,
+				IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary, IssueLocalMountMissing,
+				IssueRemoteNameTwin, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, IssueRateLimited,
+				IssueLocalWriteDenied, IssueDiskFull, IssueServiceOutage, IssueFileTooLargeForSpace,
+				IssueLocalNameTooLong, IssueLocalReadOnly, IssueRemoteFolderUnverifiable, IssueLocalFileTooLarge,
+				IssueLocalBusy, IssueLocalCrossDevice, IssueUnsupportedOperation, IssueMalwareDetected,
+				IssueLocalDatabaseOpen, IssueUploadVerification, IssueDownloadIntegrity,
 			},
 		},
 		issueTypeVerdictGroup[bool]{
 			// A deliberate hold, or what a removal kept or set aside.
 			verdict: false,
-			members: []IssueType{issueDeletesHeld, issueLocalInterruptedRemoval, issueRemovedFolderKept},
+			members: []IssueType{IssueDeletesHeld, IssueLocalInterruptedRemoval, IssueRemovedFolderKept},
 		},
 		issueTypeVerdictGroup[bool]{
 			// A transient failure no store keeps as an observation issue.
 			verdict: false,
 			members: []IssueType{
-				issueRequestTimeout, issueTransientConflict, issueTransientNotFound, issueResourceLocked,
-				issueTransferURLRejected,
+				IssueRequestTimeout, IssueTransientConflict, IssueTransientNotFound, IssueResourceLocked,
+				IssueTransferURLRejected,
 			},
 		},
-	), issueTypeIsRootReadFailure)
+	), IssueTypeIsRootReadFailure)
 
-	assert.False(t, issueTypeIsRootReadFailure(issueTypeOutsideTheEnum), "a value outside the enum is not")
+	assert.False(t, IssueTypeIsRootReadFailure(issueTypeOutsideTheEnum), "a value outside the enum is not")
 }
 
 // Validates: R-2.5.6
@@ -280,9 +280,9 @@ func TestParseIssueType_RefusesAValueNoMemberHas(t *testing.T) {
 	t.Parallel()
 
 	for _, stored := range []string{"", "invalid_name", "Invalid_Filename", "hash_error"} {
-		parsed, err := parseIssueType(stored)
+		parsed, err := ParseIssueType(stored)
 		require.ErrorContains(t, err, "unknown issue type "+strconv.Quote(stored))
 		assert.Empty(t, parsed)
-		assert.False(t, IssueType(stored).isMember(), "%q", stored)
+		assert.False(t, IssueType(stored).IsMember(), "%q", stored)
 	}
 }

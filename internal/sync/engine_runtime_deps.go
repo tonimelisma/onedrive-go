@@ -19,8 +19,8 @@ import (
 type runtimeDeps struct {
 	logger *slog.Logger
 	store  *SyncStore
-	clock  syncClock
-	events func(engineDebugEvent)
+	clock  SyncClock
+	events func(EngineDebugEvent)
 }
 
 func newRuntimeDeps(engine *Engine) runtimeDeps {
@@ -47,7 +47,7 @@ func (d runtimeDeps) since(start time.Time) time.Duration {
 // diagnostics: they never own or redirect control flow.
 //
 //nolint:gocritic // Value semantics are intentional so runtime hooks cannot mutate engine-owned events, matching Engine.emitDebugEvent.
-func (d runtimeDeps) emit(event engineDebugEvent) {
+func (d runtimeDeps) emit(event EngineDebugEvent) {
 	if d.events == nil {
 		return
 	}

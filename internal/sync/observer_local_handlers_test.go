@@ -149,7 +149,7 @@ func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 
 	snapshot := waitForLocalSnapshot(t, batches, "the startup safety scan's snapshot")
 	stopWatch(t, cancel, done)
-	row := findRow(snapshot.rows, "during-setup.txt")
+	row := findRow(snapshot.Rows, "during-setup.txt")
 	require.NotNil(t, row, "the startup safety scan observes the file created during setup")
 	assert.Equal(t, hashContent(t, "created during setup"), row.Hash)
 }
@@ -167,7 +167,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -186,7 +186,7 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	batches := localBatches(obs, 10)
@@ -198,10 +198,10 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	// Then create a valid file — should produce a row.
 	writeTestFile(t, dir, "valid.txt", "keep")
 
-	patch := waitForLocalPatch(t, batches, func(*localObservation) bool { return true }, "any local patch")
+	patch := waitForLocalPatch(t, batches, func(*LocalObservation) bool { return true }, "any local patch")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, []string{"valid.txt"}, patchRowPaths([]localObservation{patch}), "excluded file should be ignored")
+	assert.Equal(t, []string{"valid.txt"}, patchRowPaths([]LocalObservation{patch}), "excluded file should be ignored")
 }
 
 // Validates: R-2.8.3
@@ -209,7 +209,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	cancel, done := startLocalWatch(t, obs, dir)
 	stopWatch(t, cancel, done)
@@ -234,19 +234,19 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	tickCh := make(chan time.Time, 1)
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]syncTimer),
+			PendingTimers: make(map[string]SyncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		clock: &observerTestClock{
-			syncClock: realClock{},
+			SyncClock: RealClock{},
 			sleep:     recorder.sleep,
 			tickCh:    tickCh,
 		},
-		watcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
@@ -267,7 +267,7 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	tickCh <- time.Now()
 
 	snapshot := waitForLocalSnapshot(t, batches, "the safety scan's snapshot")
-	require.NotNil(t, findRow(snapshot.rows, "safety-scan.txt"))
+	require.NotNil(t, findRow(snapshot.Rows, "safety-scan.txt"))
 
 	// Step 3: Inject another watcher error → should use initial backoff (1s),
 	// NOT the escalated value (2s), because the safety scan reset it.
@@ -292,19 +292,19 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 	recorder := newSleepRecorder()
 	mockWatcher := newMockFsWatcher()
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]syncTimer),
+			PendingTimers: make(map[string]SyncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		clock: &observerTestClock{
-			syncClock: realClock{},
+			SyncClock: RealClock{},
 			sleep:     recorder.sleep,
 			tickCh:    make(chan time.Time),
 		},
-		watcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}
@@ -414,20 +414,20 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	})
 
 	mockWatcher := newMockFsWatcher()
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: baseline,
 		logger:   synctest.TestLogger(t),
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]syncTimer),
+			PendingTimers: make(map[string]SyncTimer),
 			HashRequests:  make(chan hashRequest, hashRequestBufSize),
 		},
 		clock: &observerTestClock{
-			syncClock: realClock{},
-			afterFunc: realClock{}.AfterFunc,
+			SyncClock: RealClock{},
+			afterFunc: RealClock{}.AfterFunc,
 			sleep:     func(_ context.Context, _ time.Duration) error { return nil },
 			tickCh:    make(chan time.Time),
 		},
-		watcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}

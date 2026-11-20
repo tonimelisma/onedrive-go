@@ -32,33 +32,33 @@ func isFatalObserverError(err error) bool {
 	return errors.As(err, &fatal)
 }
 
-func (batch *remoteObservationBatch) waitApplied(ctx context.Context) error {
-	if batch == nil || batch.applyAck == nil {
+func (batch *RemoteObservationBatch) WaitApplied(ctx context.Context) error {
+	if batch == nil || batch.ApplyAck == nil {
 		return nil
 	}
 
 	select {
-	case err := <-batch.applyAck:
+	case err := <-batch.ApplyAck:
 		return err
 	case <-ctx.Done():
 		return fmt.Errorf("waiting for remote observation batch apply: %w", ctx.Err())
 	}
 }
 
-func (batch *remoteObservationBatch) finishApplied(err error) {
-	if batch == nil || batch.applyAck == nil {
+func (batch *RemoteObservationBatch) FinishApplied(err error) {
+	if batch == nil || batch.ApplyAck == nil {
 		return
 	}
 
 	select {
-	case batch.applyAck <- err:
+	case batch.ApplyAck <- err:
 	default:
 	}
 }
 
 func (rt *watchRuntime) applyRemoteObservationBatch(
 	ctx context.Context,
-	batch *remoteObservationBatch,
+	batch *RemoteObservationBatch,
 ) error {
 	if batch == nil {
 		return nil
@@ -70,13 +70,13 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 
 	commitToken := ""
 	progress := *batch
-	if batch.source == remoteObservationBatchPrimaryWatch && !batch.markFullRemoteRefresh {
-		commitToken = batch.cursorToken
-		progress.cursorToken = ""
+	if batch.Source == RemoteObservationBatchPrimaryWatch && !batch.MarkFullRemoteRefresh {
+		commitToken = batch.CursorToken
+		progress.CursorToken = ""
 	}
 
-	if len(batch.observed) > 0 || commitToken != "" {
-		if err := rt.commitObservedItems(ctx, batch.observed, commitToken); err != nil {
+	if len(batch.Observed) > 0 || commitToken != "" {
+		if err := rt.commitObservedItems(ctx, batch.Observed, commitToken); err != nil {
 			return fmt.Errorf("commit remote observations: %w", err)
 		}
 	}
@@ -84,8 +84,8 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 	// Watch mode must rearm the live refresh timer in the same control path that
 	// shortens the persisted deadline, otherwise mount-root enumerate fallback
 	// can leave the process sleeping on an outdated timer.
-	armFullRefreshTimer := batch.armFullRefreshTimer
-	if deferredProgress := progress.deferredProgress(); deferredProgress != nil {
+	armFullRefreshTimer := batch.ArmFullRefreshTimer
+	if deferredProgress := progress.DeferredProgress(); deferredProgress != nil {
 		deadlineChanged, err := rt.commitPendingRemoteObservation(ctx, deferredProgress)
 		if err != nil {
 			return err
@@ -93,12 +93,12 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 		armFullRefreshTimer = armFullRefreshTimer || deadlineChanged
 	}
 
-	findings := batch.findings
+	findings := batch.Findings
 	if err := rt.applyObservationFindingsBatch(
 		ctx,
 		&findings,
-		batchObservationFailureMessage(batch.source),
-		batchObservationDebugNote(batch.source),
+		batchObservationFailureMessage(batch.Source),
+		batchObservationDebugNote(batch.Source),
 	); err != nil {
 		return err
 	}
@@ -116,26 +116,26 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 // findings of a remote observation batch.
 const recordSkippedOneDriveItems = "record skipped OneDrive items"
 
-func batchObservationFailureMessage(source remoteObservationBatchSource) string {
+func batchObservationFailureMessage(source RemoteObservationBatchSource) string {
 	switch source {
-	case remoteObservationBatchPrimaryWatch:
+	case RemoteObservationBatchPrimaryWatch:
 		return recordSkippedOneDriveItems
-	case remoteObservationBatchMountRoot:
+	case RemoteObservationBatchMountRoot:
 		return "record skipped shared folder items"
-	case remoteObservationBatchFullRefresh:
+	case RemoteObservationBatchFullRefresh:
 		return "record skipped items from the full OneDrive check"
 	default:
 		return recordSkippedOneDriveItems
 	}
 }
 
-func batchObservationDebugNote(source remoteObservationBatchSource) string {
+func batchObservationDebugNote(source RemoteObservationBatchSource) string {
 	switch source {
-	case remoteObservationBatchPrimaryWatch:
+	case RemoteObservationBatchPrimaryWatch:
 		return engineDebugNotePrimaryWatch
-	case remoteObservationBatchMountRoot:
+	case RemoteObservationBatchMountRoot:
 		return engineDebugNoteMountRootWatch
-	case remoteObservationBatchFullRefresh:
+	case RemoteObservationBatchFullRefresh:
 		return engineDebugNoteFullRefresh
 	default:
 		return ""
@@ -144,20 +144,20 @@ func batchObservationDebugNote(source remoteObservationBatchSource) string {
 
 func (rt *watchRuntime) handleRemoteObservationBatch(
 	ctx context.Context,
-	batch *remoteObservationBatch,
+	batch *RemoteObservationBatch,
 ) error {
 	if batch == nil {
 		return nil
 	}
-	if batch.pollOnly {
+	if batch.PollOnly {
 		// A poll that returned no items: nothing to commit and nothing to
 		// replan, only the time it began, which may settle create intents.
-		rt.dropGoneCreateIntentsAfterPoll(ctx, batch.pollStartedAt)
-		batch.finishApplied(nil)
+		rt.dropGoneCreateIntentsAfterPoll(ctx, batch.PollStartedAt)
+		batch.FinishApplied(nil)
 		return nil
 	}
 
-	if batch.source == remoteObservationBatchFullRefresh {
+	if batch.Source == RemoteObservationBatchFullRefresh {
 		defer func() {
 			rt.resources.refreshActive = false
 		}()
@@ -167,26 +167,26 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 		return rt.handleRemoteObservationBatchApplyFailure(ctx, batch, err)
 	}
 	// Committed: every create the poll saw has been claimed by now.
-	rt.dropGoneCreateIntentsAfterPoll(ctx, batch.pollStartedAt)
+	rt.dropGoneCreateIntentsAfterPoll(ctx, batch.PollStartedAt)
 
-	if batch.source == remoteObservationBatchFullRefresh {
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshCommitted})
+	if batch.Source == RemoteObservationBatchFullRefresh {
+		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshCommitted})
 	}
 
-	if batch.source == remoteObservationBatchFullRefresh && ctx.Err() != nil {
+	if batch.Source == RemoteObservationBatchFullRefresh && ctx.Err() != nil {
 		if rt.resources.dirtyBuf != nil {
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}
-		batch.finishApplied(nil)
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
+		batch.FinishApplied(nil)
+		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshApplied})
 		return nil
 	}
 
 	rt.markDirtyFromRemoteBatch(batch)
-	batch.finishApplied(nil)
+	batch.FinishApplied(nil)
 
-	if batch.source == remoteObservationBatchFullRefresh {
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
+	if batch.Source == RemoteObservationBatchFullRefresh {
+		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshApplied})
 	}
 
 	return nil
@@ -194,22 +194,22 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 
 func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 	ctx context.Context,
-	batch *remoteObservationBatch,
+	batch *RemoteObservationBatch,
 	err error,
 ) error {
 	if batch == nil {
 		return err
 	}
 
-	switch batch.source {
-	case remoteObservationBatchPrimaryWatch, remoteObservationBatchMountRoot:
-		batch.finishApplied(err)
+	switch batch.Source {
+	case RemoteObservationBatchPrimaryWatch, RemoteObservationBatchMountRoot:
+		batch.FinishApplied(err)
 		if ctx.Err() != nil {
 			return err
 		}
 
-		return newFatalObserverError(fmt.Errorf("apply %s batch: %w", batch.source, err))
-	case remoteObservationBatchFullRefresh:
+		return newFatalObserverError(fmt.Errorf("apply %s batch: %w", batch.Source, err))
+	case RemoteObservationBatchFullRefresh:
 		// The full refresh is re-armed below and retried, so this is a
 		// Warn, and a Ctrl-C landing during its commit is not reported.
 		if ctx.Err() == nil {
@@ -220,21 +220,21 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 		if rt.resources.dirtyBuf != nil {
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
-		batch.finishApplied(nil)
+		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshApplied})
+		batch.FinishApplied(nil)
 		return nil
 	default:
-		batch.finishApplied(err)
+		batch.FinishApplied(err)
 		return err
 	}
 }
 
-func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *remoteObservationBatch) {
+func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *RemoteObservationBatch) {
 	if rt == nil || rt.resources.dirtyBuf == nil || batch == nil {
 		return
 	}
 
-	if batch.markFullRefreshIfIdle {
+	if batch.MarkFullRefreshIfIdle {
 		rt.resources.dirtyBuf.MarkFullRefresh()
 	}
 
@@ -243,15 +243,15 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *remoteObservationBatch) 
 	}
 }
 
-func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *remoteObservationBatch) bool {
-	if rt == nil || rt.engine == nil || batch == nil || len(batch.changes) == 0 {
+func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *RemoteObservationBatch) bool {
+	if rt == nil || rt.engine == nil || batch == nil || len(batch.Changes) == 0 {
 		return false
 	}
 
-	return remoteChangesHavePlannerVisibleEffects(rt.engine.contentFilter, batch.changes)
+	return remoteChangesHavePlannerVisibleEffects(rt.engine.contentFilter, batch.Changes)
 }
 
-func remoteChangesHavePlannerVisibleEffects(filter ContentFilterConfig, changes []remoteChange) bool {
+func remoteChangesHavePlannerVisibleEffects(filter ContentFilterConfig, changes []RemoteChange) bool {
 	for i := range changes {
 		if remoteChangeHasPlannerVisibleEffect(filter, &changes[i]) {
 			return true
@@ -260,8 +260,8 @@ func remoteChangesHavePlannerVisibleEffects(filter ContentFilterConfig, changes 
 	return false
 }
 
-func remoteChangeHasPlannerVisibleEffect(filter ContentFilterConfig, change *remoteChange) bool {
-	visibility := newContentFilter(filter)
+func remoteChangeHasPlannerVisibleEffect(filter ContentFilterConfig, change *RemoteChange) bool {
+	visibility := NewContentFilter(filter)
 	if visibility.Visible(change.Path, change.ItemType) {
 		return true
 	}

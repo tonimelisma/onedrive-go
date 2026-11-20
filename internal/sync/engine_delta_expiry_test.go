@@ -133,10 +133,10 @@ func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 	})
 
 	for _, tt := range []struct {
-		kind         resyncKind
+		kind         ResyncKind
 		wantReupload bool
 	}{
-		{kind: resyncKindApplyDifferences, wantReupload: false},
+		{kind: ResyncKindApplyDifferences, wantReupload: false},
 		{kind: resyncKindUploadDifferences, wantReupload: true},
 		{kind: resyncKindUnknown, wantReupload: true},
 	} {
@@ -151,13 +151,13 @@ func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 func TestNewDeltaExpiredError_ParsesTheResyncFlavor(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, resyncKindApplyDifferences, resyncKindOf(newDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))))
-	assert.Equal(t, resyncKindUploadDifferences, resyncKindOf(newDeltaExpiredError(deltaGone("resyncChangesUploadDifferences"))))
-	assert.Equal(t, resyncKindUnknown, resyncKindOf(newDeltaExpiredError(deltaGone(""))))
-	assert.Equal(t, resyncKindUnknown, resyncKindOf(newDeltaExpiredError(graph.ErrGone)))
+	assert.Equal(t, ResyncKindApplyDifferences, ResyncKindOf(NewDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))))
+	assert.Equal(t, resyncKindUploadDifferences, ResyncKindOf(NewDeltaExpiredError(deltaGone("resyncChangesUploadDifferences"))))
+	assert.Equal(t, resyncKindUnknown, ResyncKindOf(NewDeltaExpiredError(deltaGone(""))))
+	assert.Equal(t, resyncKindUnknown, ResyncKindOf(NewDeltaExpiredError(graph.ErrGone)))
 
-	err := newDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))
-	require.ErrorIs(t, err, errDeltaExpired)
+	err := NewDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))
+	require.ErrorIs(t, err, ErrDeltaExpired)
 	require.ErrorIs(t, err, graph.ErrGone)
 }
 
@@ -193,31 +193,31 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 
 	driveID := driveid.New(engineTestDriveID)
 	fetcher := &tokenRecordingFetcher{gone: deltaGone("resyncChangesUploadDifferences")}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
 	// Every watch sleep lasts until the test cancels: the loop stops after
 	// the recovery instead of polling on.
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
 
-	recovered := make(chan resyncKind, 1)
-	orphan := remoteItem{observedItem: observedItem{ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}}
-	obs.SetDeltaExpiredRecovery(func(_ context.Context, kind resyncKind) (remoteObservationBatch, error) {
+	recovered := make(chan ResyncKind, 1)
+	orphan := RemoteItem{ObservedItem: ObservedItem{ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}}
+	obs.SetDeltaExpiredRecovery(func(_ context.Context, kind ResyncKind) (RemoteObservationBatch, error) {
 		recovered <- kind
-		return remoteObservationBatch{
-			observed:              []observedItem{orphan.observedItem},
-			changes:               remoteChangesOf([]remoteItem{orphan}),
-			cursorToken:           "token-after-full-refresh",
-			markFullRemoteRefresh: true,
+		return RemoteObservationBatch{
+			Observed:              []ObservedItem{orphan.ObservedItem},
+			Changes:               remoteChangesOf([]RemoteItem{orphan}),
+			CursorToken:           "token-after-full-refresh",
+			MarkFullRemoteRefresh: true,
 		}, nil
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	batches := make(chan remoteObservationBatch, 4)
-	applied := make(chan remoteObservationBatch, 1)
-	events := startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
+	batches := make(chan RemoteObservationBatch, 4)
+	applied := make(chan RemoteObservationBatch, 1)
+	events := startTestRemoteBatchDrain(t, ctx, batches, func(batch RemoteObservationBatch) error {
 		applied <- batch
 		return nil
 	})
@@ -230,8 +230,8 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	emitted := receiveWithin(t, events, "the full refresh's change")
 	assert.Equal(t, "gone.txt", emitted.Path)
 	handed := receiveWithin(t, applied, "the full refresh's batch")
-	require.Len(t, handed.observed, 1)
-	assert.True(t, handed.observed[0].ReuploadLocal, "the full refresh's batch, orphans included, is what watch emits")
+	require.Len(t, handed.Observed, 1)
+	assert.True(t, handed.Observed[0].ReuploadLocal, "the full refresh's batch, orphans included, is what watch emits")
 	require.Eventually(t, func() bool { return obs.CurrentDeltaToken() == "token-after-full-refresh" },
 		eventWait, time.Millisecond)
 	stopWatch(t, cancel, done)

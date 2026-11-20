@@ -104,21 +104,21 @@ func benchDependencyActions(actionCount int, shape dependencyBenchShape) []Actio
 // benchDependencyViews are the path views the shapes attach: moves carry
 // the moved item's baseline type, deletes the deleted item's type.
 type benchDependencyViews struct {
-	folder, file, deletedFolder, deletedFile *pathView
+	folder, file, deletedFolder, deletedFile *PathView
 }
 
 func newBenchDependencyViews() benchDependencyViews {
 	return benchDependencyViews{
-		folder: &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}},
-		file:   &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}},
-		deletedFolder: &pathView{
-			Local:    &localState{ItemType: ItemTypeFolder},
-			Remote:   &remoteState{ItemType: ItemTypeFolder},
+		folder: &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}},
+		file:   &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}},
+		deletedFolder: &PathView{
+			Local:    &LocalState{ItemType: ItemTypeFolder},
+			Remote:   &RemoteState{ItemType: ItemTypeFolder},
 			Baseline: &BaselineEntry{ItemType: ItemTypeFolder},
 		},
-		deletedFile: &pathView{
-			Local:    &localState{ItemType: ItemTypeFile},
-			Remote:   &remoteState{ItemType: ItemTypeFile},
+		deletedFile: &PathView{
+			Local:    &LocalState{ItemType: ItemTypeFile},
+			Remote:   &RemoteState{ItemType: ItemTypeFile},
 			Baseline: &BaselineEntry{ItemType: ItemTypeFile},
 		},
 	}

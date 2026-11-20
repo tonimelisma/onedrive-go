@@ -52,9 +52,9 @@ func BenchmarkReplacePlannerVisibleState(b *testing.B) {
 
 			b.ResetTimer()
 			for b.Loop() {
-				tx, err := beginPerfTx(ctx, store.rawDB())
+				tx, err := BeginPerfTx(ctx, store.rawDB())
 				require.NoError(b, err)
-				visible, err := replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
+				visible, err := ReplacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
 				require.NoError(b, err)
 				require.NoError(b, tx.Rollback())
 				b.ReportMetric(float64(len(visible.Local)), "local-rows")
@@ -86,7 +86,7 @@ func benchPlannerVisibleRowCount() int {
 // seedPlannerVisibleBench writes the synced tree into baseline and returns
 // the local and remote rows of the same tree, minus the missing top folder's
 // own row when shape asks for it.
-func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibleBenchShape) ([]localStateRow, []remoteStateRow) {
+func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibleBenchShape) ([]LocalStateRow, []RemoteStateRow) {
 	b.Helper()
 
 	ctx := context.Background()
@@ -96,8 +96,8 @@ func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibl
 	require.NoError(b, err)
 
 	const mtime = int64(1_700_000_000_000_000_000)
-	var localRows []localStateRow
-	var remoteRows []remoteStateRow
+	var localRows []LocalStateRow
+	var remoteRows []RemoteStateRow
 	inode := uint64(0)
 	add := func(path, parentID, itemID string, itemType ItemType, hash string, size int64) {
 		inode++
@@ -111,11 +111,11 @@ func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibl
 		if shape == benchPlannerVisibleMissingFolder && path == benchPlannerVisibleMissingTopFolder {
 			return
 		}
-		localRows = append(localRows, localStateRow{
+		localRows = append(localRows, LocalStateRow{
 			Path: path, ItemType: itemType, Hash: hash, Size: size, Mtime: mtime, Ctime: mtime,
 			LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 		})
-		remoteRows = append(remoteRows, remoteStateRow{
+		remoteRows = append(remoteRows, RemoteStateRow{
 			DriveID: driveid.New(engineTestDriveID), ItemID: itemID, Path: path, ItemType: itemType,
 			Hash: hash, Size: size, SizeKnown: true, Mtime: mtime, ETag: "etag-" + itemID,
 		})

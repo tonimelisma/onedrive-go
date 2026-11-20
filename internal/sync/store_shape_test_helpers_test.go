@@ -13,7 +13,7 @@ import (
 func testDelayedRetryWorkRow(
 	path string,
 	oldPath string,
-	actionType actionType,
+	actionType ActionType,
 	attemptCount int,
 	nextRetryAt int64,
 ) *RetryWorkRow {
@@ -29,7 +29,7 @@ func testDelayedRetryWorkRow(
 func testBlockedRetryWorkRow(
 	path string,
 	oldPath string,
-	actionType actionType,
+	actionType ActionType,
 	scopeKey ScopeKey,
 	attemptCount int,
 ) *RetryWorkRow {
@@ -59,8 +59,8 @@ func testObservationState(
 	contentDriveID driveid.ID,
 	cursor string,
 	nextFullRemoteRefreshAt int64,
-) observationState {
-	return observationState{
+) ObservationState {
+	return ObservationState{
 		ContentDriveID:          contentDriveID,
 		Cursor:                  cursor,
 		NextFullRemoteRefreshAt: nextFullRemoteRefreshAt,
@@ -71,7 +71,7 @@ func readObservationStateForTest(
 	tb testing.TB,
 	store *SyncStore,
 	ctx context.Context,
-) observationState {
+) ObservationState {
 	tb.Helper()
 
 	state, err := store.ReadObservationState(ctx)

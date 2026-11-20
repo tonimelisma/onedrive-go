@@ -101,7 +101,7 @@ func TestSyncStore_UpsertBlockScope_RejectsReadBoundaryScopes(t *testing.T) {
 	now := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 
 	err := store.UpsertBlockScope(ctx, testBlockScope(
-		sKPermRemoteRead("Shared/TeamDocs"),
+		SKPermRemoteRead("Shared/TeamDocs"),
 		time.Second,
 		now.Add(time.Second),
 	))
@@ -198,7 +198,7 @@ func TestSyncStore_ListBlockScopes_RejectsReadBoundaryScopes(t *testing.T) {
 		ctx,
 		`INSERT INTO block_scopes (scope_key, trial_interval, next_trial_at)
 		VALUES (?, ?, ?)`,
-		sKPermRemoteRead("Shared/Readonly").String(),
+		SKPermRemoteRead("Shared/Readonly").String(),
 		int64(time.Second),
 		now.Add(time.Second).UnixNano(),
 	)
@@ -245,7 +245,7 @@ func TestUpsertBlockScope_SaturatedTrialSurvivesAReload(t *testing.T) {
 	// A Retry-After too long for a Duration saturates at the longest one
 	// (retry.ResponseRetryAfter), and the trial it asks for lies near 2318,
 	// past the last time Unix nanoseconds can hold.
-	trialInterval := computeTrialInterval(time.Duration(math.MaxInt64))
+	trialInterval := ComputeTrialInterval(time.Duration(math.MaxInt64))
 	key := SKThrottleDrive(driveid.New("0000000000000001"))
 
 	store, err := NewSyncStore(ctx, dbPath, logger)
@@ -264,6 +264,6 @@ func TestUpsertBlockScope_SaturatedTrialSurvivesAReload(t *testing.T) {
 	require.Len(t, blocks, 1)
 	assert.Equal(t, trialInterval, blocks[0].TrialInterval)
 	assert.Equal(t, time.Unix(0, math.MaxInt64).UTC(), blocks[0].NextTrialAt, "the trial reads back as the last storable time")
-	assert.Empty(t, dueTrials([]activeScope{activeScopeFromBlockScopeRow(blocks[0])}, now),
+	assert.Empty(t, dueTrials([]ActiveScope{ActiveScopeFromBlockScopeRow(blocks[0])}, now),
 		"a trial OneDrive put past 2262 is not due after a restart")
 }

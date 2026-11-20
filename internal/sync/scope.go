@@ -1,8 +1,8 @@
 // Scope-state helpers used by execution and scope-lifecycle flows.
 //
-// scopeState maintains sliding windows for scope escalation. The engine
+// ScopeState maintains sliding windows for scope escalation. The engine
 // calls UpdateScope after each action completion; when a threshold is crossed,
-// it returns a scopeUpdateResult and the engine creates a BlockScope.
+// it returns a ScopeUpdateResult and the engine creates a BlockScope.
 //
 // Detection thresholds for shared blocker activation:
 //   - throttle:target:* (429) — immediate, single response
@@ -14,7 +14,7 @@
 // not in detection code.
 //
 // The types it works with live in the sync domain: ScopeKey and ScopeKeyKind
-// in scope_key.go, BlockScope and scopeUpdateResult in scope_block.go.
+// in scope_key.go, BlockScope and ScopeUpdateResult in scope_block.go.
 
 package sync
 
@@ -38,19 +38,19 @@ const (
 	serviceWindowDuration  = 30 * time.Second
 )
 
-// scopeState maintains sliding windows for scope escalation detection and
+// ScopeState maintains sliding windows for scope escalation detection and
 // records successes that reset windows. Thread-safety is provided by the
 // engine-owned result loop — all calls come from applyRuntimeCompletionStage on one
 // goroutine.
-type scopeState struct {
+type ScopeState struct {
 	windows map[ScopeKey]*slidingWindow
 	nowFunc func() time.Time
 	logger  *slog.Logger
 }
 
-// newScopeState creates a scopeState with the given clock and logger.
-func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
-	return &scopeState{
+// NewScopeState creates a ScopeState with the given clock and logger.
+func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
+	return &ScopeState{
 		windows: make(map[ScopeKey]*slidingWindow),
 		nowFunc: nowFunc,
 		logger:  logger,
@@ -58,7 +58,7 @@ func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
 }
 
 // UpdateScope feeds an action completion into scope detection. Returns a
-// scopeUpdateResult indicating whether a new block scope should be created.
+// ScopeUpdateResult indicating whether a new block scope should be created.
 //
 // Per the sync-engine scope taxonomy and activation rules:
 //   - 429 → immediate target-drive throttle block (server signal)
@@ -68,48 +68,48 @@ func newScopeState(nowFunc func() time.Time, logger *slog.Logger) *scopeState {
 //   - outage 5xx (no Retry-After), or a request OneDrive never answered (its
 //     server answer is the outage's) → sliding window service (5 unique
 //     paths / 30s); 501/505 refusals are excluded
-func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
-	answer := r.serverAnswer()
+func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
+	answer := r.ServerAnswer()
 	switch {
-	case answer == serverAnswerThrottled:
+	case answer == ServerAnswerThrottled:
 		// Immediate block — server signal, single response triggers (R-2.10.26).
-		scopeKey := scopeKeyForResult(answer, r.DriveID)
+		scopeKey := ScopeKeyForResult(answer, r.DriveID)
 		if scopeKey.IsZero() {
-			return scopeUpdateResult{}
+			return ScopeUpdateResult{}
 		}
-		return scopeUpdateResult{
+		return ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      scopeKey,
-			ConditionType: issueRateLimited,
+			ConditionType: IssueRateLimited,
 			RetryAfter:    r.RetryAfter,
 		}
 
-	case answer == serverAnswerServiceOutage && r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
+	case answer == ServerAnswerServiceOutage && r.HTTPStatus == http.StatusServiceUnavailable && r.RetryAfter > 0:
 		// Immediate block — 503 with Retry-After is a server signal (R-2.10.3).
-		return scopeUpdateResult{
+		return ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      SKService(),
-			ConditionType: issueServiceOutage,
+			ConditionType: IssueServiceOutage,
 			RetryAfter:    r.RetryAfter,
 		}
 
-	case answer == serverAnswerQuota:
+	case answer == ServerAnswerQuota:
 		// Quota failure — a drive-scoped quota block suppresses uploads until the
 		// backing drive has space again. The answer, not the bare 507, decides:
 		// OneDrive also reports a full drive as 500 or 403 (R-2.10.66).
-		sk := scopeKeyForResult(answer, r.DriveID)
+		sk := ScopeKeyForResult(answer, r.DriveID)
 		return ss.checkWindow(sk, r.Path, quotaWindowThreshold, quotaWindowDuration, IssueQuotaExceeded)
 
-	case answer == serverAnswerServiceOutage:
+	case answer == ServerAnswerServiceOutage:
 		// Service error — feed into service sliding window (R-2.10.28, R-2.10.29).
 		// A 501/505 refusal is not an outage and never gets here (R-2.10.65).
-		sk := scopeKeyForResult(answer, r.DriveID)
+		sk := ScopeKeyForResult(answer, r.DriveID)
 		return ss.checkWindow(sk, r.Path,
 			serviceWindowThreshold, serviceWindowDuration,
-			issueServiceOutage)
+			IssueServiceOutage)
 
 	default:
-		return scopeUpdateResult{}
+		return ScopeUpdateResult{}
 	}
 }
 
@@ -122,17 +122,17 @@ func (ss *scopeState) UpdateScope(r *actionCompletion) scopeUpdateResult {
 // owned by the trial admission path via admissionDecision.ClearScopeKey,
 // which knows which specific blocked scope a trial was admitted against. Doing
 // it in both places would give two owners for one transition.
-func (ss *scopeState) RecordSuccess() {
+func (ss *ScopeState) RecordSuccess() {
 	delete(ss.windows, SKQuotaOwn())
 	delete(ss.windows, SKService())
 }
 
 // checkWindow adds a failure to the named sliding window and returns a
-// scopeUpdateResult indicating whether the threshold was crossed.
-func (ss *scopeState) checkWindow(
+// ScopeUpdateResult indicating whether the threshold was crossed.
+func (ss *ScopeState) checkWindow(
 	sk ScopeKey, path string, threshold int, window time.Duration,
 	conditionType IssueType,
-) scopeUpdateResult {
+) ScopeUpdateResult {
 	now := ss.nowFunc()
 
 	w, ok := ss.windows[sk]
@@ -152,14 +152,14 @@ func (ss *scopeState) checkWindow(
 		)
 		// Reset window after triggering to avoid re-triggering on next failure.
 		delete(ss.windows, sk)
-		return scopeUpdateResult{
+		return ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      sk,
 			ConditionType: conditionType,
 		}
 	}
 
-	return scopeUpdateResult{}
+	return ScopeUpdateResult{}
 }
 
 // slidingWindow tracks unique failed paths within a time window for

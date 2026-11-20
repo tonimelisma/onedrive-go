@@ -111,7 +111,7 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -151,7 +151,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -304,12 +304,12 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	executor := newExecution(eng.execCfg, emptyBaseline())
+	executor := NewExecution(eng.execCfg, emptyBaseline())
 	outcome := executor.ExecuteFolderCreate(t.Context(), &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
-		View:       &pathView{Path: "photos"},
+		View:       &PathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
@@ -351,7 +351,7 @@ func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.
 
 	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",

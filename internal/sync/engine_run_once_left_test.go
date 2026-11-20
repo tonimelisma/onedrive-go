@@ -113,7 +113,7 @@ func TestRunOnce_ReportCountsUnresolvedWork(t *testing.T) {
 
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, snapshot.unsyncedIssueCount(), report.UnsyncedIssues, "the report counts what status reads")
+	assert.Equal(t, snapshot.UnsyncedIssueCount(), report.UnsyncedIssues, "the report counts what status reads")
 }
 
 // Validates: R-6.6.28, R-2.10.33
@@ -138,7 +138,7 @@ func TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone(t *testing.T) {
 	for _, row := range []*RetryWorkRow{
 		{Path: "gone/retrying.txt", ActionType: ActionUpload, AttemptCount: unresolvedTestRetryingAttempts, NextRetryAt: future},
 		{Path: "gone/blocked.txt", ActionType: ActionUpload, ScopeKey: scope, Blocked: true, AttemptCount: 1},
-		{Path: "gone/deep", ActionType: ActionFolderCreate, ConditionType: issuePathTooLong, AttemptCount: 1, NextRetryAt: future},
+		{Path: "gone/deep", ActionType: ActionFolderCreate, ConditionType: IssuePathTooLong, AttemptCount: 1, NextRetryAt: future},
 	} {
 		require.NoError(t, eng.baseline.UpsertRetryWork(ctx, row))
 	}
@@ -195,7 +195,7 @@ func TestExecutePreparedPlan_AMismatchedPlanFailsEveryActionLoudly(t *testing.T)
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	report := &Report{}
 	runtime := &runtimePlan{
-		Plan: &actionPlan{
+		Plan: &ActionPlan{
 			Actions: []Action{{Type: ActionUpload, Path: "a.txt"}, {Type: ActionUpload, Path: "b.txt"}},
 			Deps:    [][]int{nil},
 		},
@@ -292,15 +292,15 @@ func TestPassWithoutActions_KeepsThePlansFollowUp(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
-	followUp := planFollowUp{Dropped: 2, Unfinished: 2}
+	followUp := PlanFollowUp{Dropped: 2, Unfinished: 2}
 	pass := eng.passWithoutActions(eng.nowFunc(), SyncBidirectional, RunOptions{}, &runtimePlan{
-		Plan:   &actionPlan{FollowUp: followUp},
+		Plan:   &ActionPlan{FollowUp: followUp},
 		Report: &Report{},
 	})
 
 	assert.Equal(t, followUp, pass.followUp)
 	assert.False(t, oneShotFollowUpWanted(t.Context(), pass), "a pass without progress runs no follow-up")
-	assert.Equal(t, 2, pass.followUp.leftWhenTheRunEnds(false))
+	assert.Equal(t, 2, pass.followUp.LeftWhenTheRunEnds(false))
 }
 
 // Validates: R-6.6.28, R-2.1.7
@@ -316,15 +316,15 @@ func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testi
 	logs := &syncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	cycle := []Action{
 		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
 		{Type: ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
 	}
 	require.Error(t, detectDependencyCycle(buildDependencies(cycle)), "the fixture must contain a cycle")
 
-	plan, err := newPlanner(logger).planBuiltActions(
-		cycle, nil, nil, &moveComposition{}, &moveInputs{}, plannerMountContext{}, SyncBidirectional)
+	plan, err := NewPlanner(logger).planBuiltActions(
+		cycle, nil, nil, &moveComposition{}, &moveInputs{}, PlannerMountContext{}, SyncBidirectional)
 	require.NoError(t, err)
 	require.Empty(t, plan.Actions, "both moves are dropped")
 
@@ -347,10 +347,10 @@ func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testi
 func TestPlanFollowUp_LeftWhenTheRunEnds(t *testing.T) {
 	t.Parallel()
 
-	followUp := planFollowUp{Renames: 3, Deferred: 2, Dropped: 2, Unfinished: 1}
-	assert.Equal(t, 1, followUp.leftWhenTheRunEnds(false))
-	assert.Equal(t, 4, followUp.leftWhenTheRunEnds(true))
-	assert.Zero(t, planFollowUp{}.leftWhenTheRunEnds(true))
+	followUp := PlanFollowUp{Renames: 3, Deferred: 2, Dropped: 2, Unfinished: 1}
+	assert.Equal(t, 1, followUp.LeftWhenTheRunEnds(false))
+	assert.Equal(t, 4, followUp.LeftWhenTheRunEnds(true))
+	assert.Zero(t, PlanFollowUp{}.LeftWhenTheRunEnds(true))
 }
 
 // unresolvedTestRetryingAttempts is the attempt count from which `status`
@@ -383,5 +383,5 @@ func TestRunOnce_DryRunLeavesUnresolvedZero(t *testing.T) {
 
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
-	assert.Positive(t, snapshot.unsyncedIssueCount(), "the store does hold an issue")
+	assert.Positive(t, snapshot.UnsyncedIssueCount(), "the store does hold an issue")
 }

@@ -69,17 +69,17 @@ func TestPublicationMutation_RecordsTheObservedItem(t *testing.T) {
 				Path:    replacedFolderPath,
 				ItemID:  "item-before",
 				DriveID: driveid.New(engineTestDriveID),
-				View: &pathView{
+				View: &PathView{
 					Baseline: &BaselineEntry{
 						ItemID: "item-before", ItemType: tc.baseline,
 						LocalHash: "hash-before", RemoteHash: "hash-before", ETag: "etag-before",
 					},
-					Remote: &remoteState{ItemID: "item-after", ItemType: tc.observed, Hash: tc.remoteHash, ETag: tc.remoteETag},
-					Local:  &localState{ItemType: tc.observed, Hash: tc.localHash},
+					Remote: &RemoteState{ItemID: "item-after", ItemType: tc.observed, Hash: tc.remoteHash, ETag: tc.remoteETag},
+					Local:  &LocalState{ItemType: tc.observed, Hash: tc.localHash},
 				},
 			}
 
-			mutation, err := publicationMutationFromAction(action, driveid.New(engineTestDriveID))
+			mutation, err := PublicationMutationFromAction(action, driveid.New(engineTestDriveID))
 			require.NoError(t, err)
 			assert.Equal(t, tc.observed, mutation.ItemType, "the observed sides decide the type")
 			assert.Equal(t, "item-after", mutation.ItemID)
@@ -122,7 +122,7 @@ func TestCrashRecovery_AFolderReplacedOnOneDriveWhoseDownloadWasCutConverges(t *
 	t.Parallel()
 
 	for _, lostWAL := range []bool{false, true} {
-		t.Run(crashCaseName(crashPointDownloadRenamed, lostWAL), func(t *testing.T) {
+		t.Run(crashCaseName(CrashPointDownloadRenamed, lostWAL), func(t *testing.T) {
 			t.Parallel()
 
 			recovered := crashAfterTheReplacingDownload(t, lostWAL)
@@ -162,7 +162,7 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 	remote.deleteAt(t, replacedFolderPath)
 	remote.putFileAt(t, replacedFolderPath, replacingFileContent)
 	capture := &crashCapture{
-		point: crashPointDownloadRenamed, lostWAL: lostWAL,
+		point: CrashPointDownloadRenamed, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	h.eng.execCfg.crashAt = capture.hook

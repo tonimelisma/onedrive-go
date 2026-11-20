@@ -25,16 +25,16 @@ import (
 // root re-pointed at an empty folder scans successfully with zero entries,
 // and every synced file is planned as a remote delete (D-001).
 
-// errSyncRootRebindHint is appended to a primary-root mismatch so the user
+// ErrSyncRootRebindHint is appended to a primary-root mismatch so the user
 // learns the one explicit way out. It is not offered for shortcut child roots,
 // whose identity is owned by the parent engine.
-const errSyncRootRebindHint = "if you moved or restored the sync folder on purpose, run " +
+const ErrSyncRootRebindHint = "if you moved or restored the sync folder on purpose, run " +
 	"'onedrive-go drive rebind-root' to sync with the folder that is there now"
 
-// validateExpectedSyncRootIdentity refuses a sync folder that is not the one
+// ValidateExpectedSyncRootIdentity refuses a sync folder that is not the one
 // expected. hint, when not empty, is appended to the refusal (the rebind hint
 // for primary roots).
-func validateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.RootIdentity, hint string) error {
+func ValidateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.RootIdentity, hint string) error {
 	if root == nil || expected == nil {
 		return nil
 	}
@@ -69,12 +69,12 @@ func withRefusalHint(err error, hint string) error {
 	return fmt.Errorf("%w; %s", err, hint)
 }
 
-// syncRootIdentity is the one owner of the identity an engine's sync folder
+// SyncRootIdentity is the one owner of the identity an engine's sync folder
 // must match. The executor, every local observer and the binding read it
 // through Expected, so the token a bind adds is seen everywhere at once
 // rather than by whoever copied the identity after it (a stale copy refused
 // every remote delete after a reset-sync-state rebind).
-type syncRootIdentity struct {
+type SyncRootIdentity struct {
 	current atomic.Pointer[synctree.RootIdentity]
 	// refusalHint is appended to every refusal: the rebind hint for primary
 	// roots, nothing for parent-owned shortcut child roots.
@@ -87,24 +87,24 @@ type syncRootIdentity struct {
 	bindMu stdsync.Mutex
 }
 
-func newSyncRootIdentity(binding resolvedSyncRoot, refusalHint string) *syncRootIdentity {
-	identity := &syncRootIdentity{refusalHint: refusalHint}
-	if binding.expected != nil {
-		expected := *binding.expected
+func NewSyncRootIdentity(binding ResolvedSyncRoot, refusalHint string) *SyncRootIdentity {
+	identity := &SyncRootIdentity{refusalHint: refusalHint}
+	if binding.Expected != nil {
+		expected := *binding.Expected
 		identity.current.Store(&expected)
 	}
-	identity.bindPending.Store(binding.bindPending)
+	identity.bindPending.Store(binding.BindPending)
 	return identity
 }
 
-// fixedSyncRootIdentity wraps a single known identity (tests, and callers
+// FixedSyncRootIdentity wraps a single known identity (tests, and callers
 // that validate once).
-func fixedSyncRootIdentity(expected *synctree.RootIdentity) *syncRootIdentity {
-	return newSyncRootIdentity(resolvedSyncRoot{expected: expected}, "")
+func FixedSyncRootIdentity(expected *synctree.RootIdentity) *SyncRootIdentity {
+	return NewSyncRootIdentity(ResolvedSyncRoot{Expected: expected}, "")
 }
 
 // Expected returns a copy of the identity to validate against, or nil.
-func (s *syncRootIdentity) Expected() *synctree.RootIdentity {
+func (s *SyncRootIdentity) Expected() *synctree.RootIdentity {
 	if s == nil {
 		return nil
 	}
@@ -117,22 +117,22 @@ func (s *syncRootIdentity) Expected() *synctree.RootIdentity {
 }
 
 // Validate refuses tree when it is not the expected sync folder.
-func (s *syncRootIdentity) Validate(tree *synctree.Root) error {
+func (s *SyncRootIdentity) Validate(tree *synctree.Root) error {
 	if s == nil {
 		return nil
 	}
-	return validateExpectedSyncRootIdentity(tree, s.Expected(), s.refusalHint)
+	return ValidateExpectedSyncRootIdentity(tree, s.Expected(), s.refusalHint)
 }
 
-// resolvedSyncRoot is the expected identity an engine validates every scan
+// ResolvedSyncRoot is the expected identity an engine validates every scan
 // against, plus whether the store still has to record it.
-type resolvedSyncRoot struct {
-	expected *synctree.RootIdentity
+type ResolvedSyncRoot struct {
+	Expected *synctree.RootIdentity
 	// bindPending is true for a primary engine whose store has no recorded
 	// fingerprint yet. The fingerprint taken at startup is enforced in memory
 	// immediately, and persisted with the first committed local snapshot so a
 	// dry run never writes it.
-	bindPending bool
+	BindPending bool
 }
 
 func resolveExpectedSyncRoot(
@@ -140,31 +140,31 @@ func resolveExpectedSyncRoot(
 	store *SyncStore,
 	tree *synctree.Root,
 	parentIssued *synctree.FileIdentity,
-) (resolvedSyncRoot, error) {
+) (ResolvedSyncRoot, error) {
 	if parentIssued != nil {
 		expected := synctree.RootIdentityFromFileIdentity(*parentIssued)
-		if err := validateExpectedSyncRootIdentity(tree, &expected, ""); err != nil {
-			return resolvedSyncRoot{}, err
+		if err := ValidateExpectedSyncRootIdentity(tree, &expected, ""); err != nil {
+			return ResolvedSyncRoot{}, err
 		}
-		return resolvedSyncRoot{expected: &expected}, nil
+		return ResolvedSyncRoot{Expected: &expected}, nil
 	}
 
 	state, err := store.ReadObservationState(ctx)
 	if err != nil {
-		return resolvedSyncRoot{}, fmt.Errorf("sync: reading recorded sync folder identity: %w", err)
+		return ResolvedSyncRoot{}, fmt.Errorf("sync: reading recorded sync folder identity: %w", err)
 	}
 	if state.SyncRootIdentity != nil {
 		recorded := *state.SyncRootIdentity
-		if mismatchErr := validateExpectedSyncRootIdentity(tree, &recorded, errSyncRootRebindHint); mismatchErr != nil {
-			return resolvedSyncRoot{}, mismatchErr
+		if mismatchErr := ValidateExpectedSyncRootIdentity(tree, &recorded, ErrSyncRootRebindHint); mismatchErr != nil {
+			return ResolvedSyncRoot{}, mismatchErr
 		}
-		return resolvedSyncRoot{expected: &recorded}, nil
+		return ResolvedSyncRoot{Expected: &recorded}, nil
 	}
 
 	if !state.SyncRootRebind {
-		synced, countErr := store.baselineEntryCount(ctx)
+		synced, countErr := store.BaselineEntryCount(ctx)
 		if countErr != nil {
-			return resolvedSyncRoot{}, fmt.Errorf("sync: counting synced items before binding the sync folder: %w", countErr)
+			return ResolvedSyncRoot{}, fmt.Errorf("sync: counting synced items before binding the sync folder: %w", countErr)
 		}
 		if synced > 0 {
 			// A state that already holds synced items but never recorded
@@ -172,30 +172,30 @@ func resolveExpectedSyncRoot(
 			// the one those items came from. Binding it silently would
 			// accept exactly the unmounted or replaced folder this check
 			// exists to refuse.
-			return resolvedSyncRoot{}, fmt.Errorf("%w: this sync state has no record of its sync folder; %s",
-				ErrMountRootUnavailable, errSyncRootRebindHint)
+			return ResolvedSyncRoot{}, fmt.Errorf("%w: this sync state has no record of its sync folder; %s",
+				ErrMountRootUnavailable, ErrSyncRootRebindHint)
 		}
 	}
 
 	current, err := tree.RootIdentity()
 	if err != nil {
-		return resolvedSyncRoot{}, fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
+		return ResolvedSyncRoot{}, fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
 	}
 	// A marker already on the folder belongs to a binding this state no
 	// longer has (a reset-sync-state or rebind-root): the bind writes a new
 	// one, so the stale token must not become the in-memory expectation.
 	current.Token = ""
 
-	return resolvedSyncRoot{expected: &current, bindPending: true}, nil
+	return ResolvedSyncRoot{Expected: &current, BindPending: true}, nil
 }
 
-// resolveSyncRootPath returns the folder the sync tree is opened on. When the
+// ResolveSyncRootPath returns the folder the sync tree is opened on. When the
 // configured sync folder is itself a symbolic link, the tree is opened on its
 // target, resolved once at startup: re-pointing the link while the engine runs
 // must not silently move every later operation to a different folder. Only the
 // final component is resolved, so platform aliases in ancestors (such as
 // macOS's /var -> /private/var) keep the configured spelling.
-func resolveSyncRootPath(syncRoot string) (string, error) {
+func ResolveSyncRootPath(syncRoot string) (string, error) {
 	info, err := localpath.Lstat(syncRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

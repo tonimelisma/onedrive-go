@@ -34,7 +34,7 @@ func localDeleteActionFor(t *testing.T, path string) *Action {
 		Path:    path,
 		ItemID:  "item-" + path,
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &pathView{
+		View: &PathView{
 			Path: path,
 			Baseline: &BaselineEntry{
 				Path: path, ItemID: "item-" + path, ItemType: ItemTypeFile,
@@ -54,7 +54,7 @@ func TestDeleteLocalFile_MovesTheFileToTheTrash(t *testing.T) {
 	cfg.SetTrash(trash)
 	writeExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
 
 	requireOutcomeSuccess(t, &outcome)
 	assert.NoFileExists(t, filepath.Join(syncRoot, "docs", "a.txt"))
@@ -95,10 +95,10 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 				return hash, nil
 			}
 
-			outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt"))
+			outcome := NewExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt"))
 
 			requireOutcomeFailure(t, &outcome)
-			require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+			require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 			data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
 			require.NoError(t, err)
 			assert.Equal(t, "new edit\n", string(data), "the new content must survive")
@@ -142,11 +142,11 @@ func TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone(t *testing
 	cfg.hashReader = hashRemovingTrash(t, trashDir)
 	writeExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
 
 	requireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, synctree.ErrDestinationFailed)
-	require.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	requireExecFileContent(t, syncRoot, "docs/a.txt", syncedContent)
 }
 
@@ -164,14 +164,14 @@ func TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove(t *testing.T) {
 	trashDir := filepath.Join(t.TempDir(), "trash")
 	cfg.SetTrash(localtrash.Open(trashDir, nil))
 	cfg.hashReader = hashRemovingTrash(t, trashDir)
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
 	planned := plannedDestination(t, e, syncRoot, "b.txt")
 
 	o := e.ExecuteMove(t.Context(), &Action{
 		Type: ActionLocalMove, Path: "b.txt", OldPath: "a.txt", ReplaceLocalTarget: true,
-		View: &pathView{
+		View: &PathView{
 			Path: "b.txt", Local: planned,
 			Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
 		},
@@ -179,7 +179,7 @@ func TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove(t *testing.T) {
 
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, synctree.ErrDestinationFailed)
-	require.NotErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	requireExecFileContent(t, syncRoot, "b.txt", "bravo\n")
 	requireExecFileContent(t, syncRoot, "a.txt", "moving\n")
 }
@@ -207,10 +207,10 @@ func TestDeleteLocalFile_AReservationThatFailsIsAFailureNotAFileAlreadyGone(t *t
 	cfg.SetTrash(reservationLosingItsFolder(t))
 	writeExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
 
 	requireOutcomeFailure(t, &outcome)
-	require.NotErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	require.NotErrorIs(t, outcome.Error, os.ErrNotExist)
 	require.ErrorContains(t, outcome.Error, "reserving a trash entry")
 	requireExecFileContent(t, syncRoot, "docs/a.txt", syncedContent)
@@ -227,21 +227,21 @@ func TestExecutor_LocalMove_AReservationThatFailsFailsTheReplacingMove(t *testin
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	cfg.SetTrash(reservationLosingItsFolder(t))
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
 	planned := plannedDestination(t, e, syncRoot, "b.txt")
 
 	o := e.ExecuteMove(t.Context(), &Action{
 		Type: ActionLocalMove, Path: "b.txt", OldPath: "a.txt", ReplaceLocalTarget: true,
-		View: &pathView{
+		View: &PathView{
 			Path: "b.txt", Local: planned,
 			Baseline: &BaselineEntry{Path: "a.txt", ItemType: ItemTypeFile},
 		},
 	})
 
 	requireOutcomeFailure(t, &o)
-	require.NotErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	require.NotErrorIs(t, o.Error, os.ErrNotExist)
 	require.ErrorContains(t, o.Error, "reserving a trash entry")
 	requireExecFileContent(t, syncRoot, "b.txt", "bravo\n")
@@ -270,7 +270,7 @@ func TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted(t *testing.T) {
 	require.NoError(t, err)
 	found := false
 	for i := range issues {
-		if issues[i].Path == ".onedrive-go.0123456789abcdef.detach" && issues[i].IssueType == issueLocalInterruptedRemoval {
+		if issues[i].Path == ".onedrive-go.0123456789abcdef.detach" && issues[i].IssueType == IssueLocalInterruptedRemoval {
 			found = true
 		}
 	}
@@ -319,7 +319,7 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 			require.NoError(t, err)
 
 			syncedHash := testQuickXor(synced)
-			planned := &localState{ItemType: ItemTypeFile, Size: info.Size(), Mtime: info.ModTime().UnixNano()}
+			planned := &LocalState{ItemType: ItemTypeFile, Size: info.Size(), Mtime: info.ModTime().UnixNano()}
 			if tt.plannedHash {
 				// The scan reused the stale baseline hash for the edited file.
 				planned.Hash = syncedHash
@@ -329,9 +329,9 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 				Path:    "doc.txt",
 				ItemID:  "item-doc",
 				DriveID: driveid.New(synctest.TestDriveID),
-				View: &pathView{
+				View: &PathView{
 					Local: planned,
-					Remote: &remoteState{
+					Remote: &RemoteState{
 						ItemID: "item-doc", ItemType: ItemTypeFile, Hash: testQuickXor(remote),
 						Size: int64(len(remote)), Mtime: 1,
 					},
@@ -343,10 +343,10 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 				},
 			}
 
-			o := newExecution(cfg, emptyBaseline()).ExecuteDownload(t.Context(), action)
+			o := NewExecution(cfg, emptyBaseline()).ExecuteDownload(t.Context(), action)
 
 			requireOutcomeFailure(t, &o)
-			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+			require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 			data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
 			require.NoError(t, err)
 			assert.Equal(t, edited, string(data), "the unsynced local edit survives")
@@ -366,7 +366,7 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 	trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 	cfg.SetTrash(trash)
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
 	plannedHash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, "b.txt"))
@@ -381,9 +381,9 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 		Path:               "b.txt",
 		OldPath:            "a.txt",
 		ReplaceLocalTarget: true,
-		View: &pathView{
+		View: &PathView{
 			Path:  "b.txt",
-			Local: &localState{ItemType: ItemTypeFile, Hash: plannedHash, Size: info.Size()},
+			Local: &LocalState{ItemType: ItemTypeFile, Hash: plannedHash, Size: info.Size()},
 			// The synced item had another inode: a.txt is not it any more.
 			Baseline: &BaselineEntry{
 				Path: "a.txt", ItemType: ItemTypeFile,
@@ -394,7 +394,7 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 
 	o := e.ExecuteMove(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	data, err := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
 	require.NoError(t, err)
 	assert.Equal(t, "bravo\n", string(data), "the destination is untouched")

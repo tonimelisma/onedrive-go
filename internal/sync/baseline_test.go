@@ -254,7 +254,7 @@ func seedDurableRecoveryTruth(
 		RemoteMtime:     now.UnixNano(),
 		ETag:            "etag-report",
 	}))
-	require.NoError(t, mgr.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, mgr.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:             "docs/report.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "local-hash",
@@ -264,7 +264,7 @@ func seedDurableRecoveryTruth(
 		LocalInode:       99,
 		LocalHasIdentity: true,
 	}}))
-	require.NoError(t, mgr.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "remote-report",
 		Path:     "docs/report.txt",
@@ -415,7 +415,7 @@ func TestCommit_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return fixedTime })
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []BaselineMutation{{
 		Action:          ActionDownload,
@@ -453,7 +453,7 @@ func TestCommit_Upload(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return fixedTime })
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcomes := []BaselineMutation{{
 		Action:          ActionUpload,
@@ -489,7 +489,7 @@ func TestCommit_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	})
 
@@ -525,7 +525,7 @@ func TestCommit_BaselineUpdate(t *testing.T) {
 
 	// First commit: create baseline entry.
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return t1 })
+	mgr.SetNowFunc(func() time.Time { return t1 })
 
 	outcomes := []BaselineMutation{{
 		Action:          ActionDownload,
@@ -548,7 +548,7 @@ func TestCommit_BaselineUpdate(t *testing.T) {
 
 	// Second commit: convergent edit updates the stored baseline tuple.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return t2 })
+	mgr.SetNowFunc(func() time.Time { return t2 })
 
 	outcomes[0].Action = ActionBaselineUpdate
 	outcomes[0].LocalHash = updatedHash
@@ -568,7 +568,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 	cases := []struct {
 		name         string
 		path         string
-		deleteAction actionType
+		deleteAction ActionType
 	}{
 		{name: "LocalDelete", path: "delete-me.txt", deleteAction: ActionLocalDelete},
 		{name: "RemoteDelete", path: "remote-del.txt", deleteAction: ActionRemoteDelete},
@@ -581,7 +581,7 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.setNowFunc(func() time.Time {
+			mgr.SetNowFunc(func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			})
 
@@ -614,7 +614,7 @@ func TestCommit_Move(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return fixedTime })
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	// Create original entry.
 	create := []BaselineMutation{{
@@ -656,7 +656,7 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 
@@ -697,7 +697,7 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.setNowFunc(func() time.Time {
+			mgr.SetNowFunc(func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 			})
 
@@ -730,7 +730,7 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time {
+	mgr.SetNowFunc(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 
@@ -772,7 +772,7 @@ func TestMarkFullRemoteRefresh_PersistsNextRefreshAt(t *testing.T) {
 	ctx := t.Context()
 	at := time.Unix(20_000, 0)
 
-	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at, remoteObservationModeDelta))
+	require.NoError(t, mgr.MarkFullRemoteRefresh(ctx, driveid.New("drive-1"), at, RemoteObservationModeDelta))
 
 	state, err := mgr.ReadObservationState(ctx)
 	require.NoError(t, err)
@@ -822,7 +822,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed a baseline entry.
 	outcomes := []BaselineMutation{{
@@ -853,7 +853,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	// Seed one entry.
 	outcomes := []BaselineMutation{{
@@ -925,7 +925,7 @@ func TestCommitMutation_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.setNowFunc(func() time.Time { return fixedTime })
+	mgr.SetNowFunc(func() time.Time { return fixedTime })
 
 	outcome := BaselineMutation{
 		Action:          ActionDownload,
@@ -961,7 +961,7 @@ func TestCommitMutation_Upload(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := BaselineMutation{
 		Action:          ActionUpload,
@@ -989,7 +989,7 @@ func TestCommitMutation_Upload(t *testing.T) {
 func TestCommitMutation_EmptyItemIDFails(t *testing.T) {
 	t.Parallel()
 
-	for _, action := range []actionType{ActionUpload, ActionDownload, ActionFolderCreate, ActionRemoteMove} {
+	for _, action := range []ActionType{ActionUpload, ActionDownload, ActionFolderCreate, ActionRemoteMove} {
 		t.Run(action.String(), func(t *testing.T) {
 			t.Parallel()
 
@@ -1021,7 +1021,7 @@ func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
 
 	outcome := BaselineMutation{
 		Action:          ActionUpload,
@@ -1135,7 +1135,7 @@ func TestCommitMutation_Delete(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed an entry first.
 	seed := BaselineMutation{
@@ -1162,7 +1162,7 @@ func TestCommitMutation_Move(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	// Seed original entry.
 	seed := BaselineMutation{
@@ -1267,14 +1267,14 @@ func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) 
 	ctx := t.Context()
 
 	err := mgr.CommitMutation(ctx, &BaselineMutation{
-		Action:   actionType(999),
+		Action:   ActionType(999),
 		Success:  true,
 		Path:     "unknown.txt",
 		DriveID:  driveid.New("d"),
 		ItemID:   "unknown-item",
 		ItemType: ItemTypeFile,
 	})
-	require.ErrorContains(t, err, outsideTheEnum(actionType(999)))
+	require.ErrorContains(t, err, OutsideTheEnum(ActionType(999)))
 
 	var count int
 	queryErr := mgr.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)
@@ -1313,7 +1313,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	require.False(t, ok, "test setup should corrupt the cache before reload")
 
 	err := mgr.updateBaselineCache(ctx, &BaselineMutation{
-		Action: actionType(999),
+		Action: ActionType(999),
 		Path:   "ignored.txt",
 	})
 	require.NoError(t, err)
@@ -1330,7 +1330,7 @@ func TestCommitMutation_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	outcome := BaselineMutation{
 		Action:   ActionFolderCreate,
@@ -1423,7 +1423,7 @@ func TestCommitObservationCursor(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-abc"))
 
@@ -1438,7 +1438,7 @@ func TestCommitObservationCursor_Update(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.setNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-1"))
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-2"))

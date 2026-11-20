@@ -103,7 +103,7 @@ func storeRootIssue(t *testing.T, eng *testEngine, issueType IssueType) {
 			Path:      "/",
 			DriveID:   eng.driveID,
 			IssueType: issueType,
-			ScopeKey:  sKPermRemoteRead(""),
+			ScopeKey:  SKPermRemoteRead(""),
 		}},
 		ManagedIssueTypes: []IssueType{issueType},
 	}
@@ -127,18 +127,18 @@ func TestRootObservation_AnswerDecidesTheStoredRootIssue(t *testing.T) {
 		answer error
 		want   IssueType
 	}{
-		{name: "not found", answer: graph.ErrNotFound, want: issueRemoteRootNotFound},
-		{name: "forbidden", answer: graph.ErrForbidden, want: issueRemoteReadDenied},
+		{name: "not found", answer: graph.ErrNotFound, want: IssueRemoteRootNotFound},
+		{name: "forbidden", answer: graph.ErrForbidden, want: IssueRemoteReadDenied},
 		{
 			name:   "not found replaces the read denial",
-			stored: issueRemoteReadDenied, answer: graph.ErrNotFound, want: issueRemoteRootNotFound,
+			stored: IssueRemoteReadDenied, answer: graph.ErrNotFound, want: IssueRemoteRootNotFound,
 		},
 		{
 			name:   "forbidden replaces not found",
-			stored: issueRemoteRootNotFound, answer: graph.ErrForbidden, want: issueRemoteReadDenied,
+			stored: IssueRemoteRootNotFound, answer: graph.ErrForbidden, want: IssueRemoteReadDenied,
 		},
-		{name: "a successful read clears not found", stored: issueRemoteRootNotFound},
-		{name: "a successful read clears the read denial", stored: issueRemoteReadDenied},
+		{name: "a successful read clears not found", stored: IssueRemoteRootNotFound},
+		{name: "a successful read clears the read denial", stored: IssueRemoteReadDenied},
 	}
 
 	for _, path := range rootReadPaths() {
@@ -162,7 +162,7 @@ func TestRootObservation_AnswerDecidesTheStoredRootIssue(t *testing.T) {
 				require.Len(t, issues, 1)
 				assert.Equal(t, "/", issues[0].Path)
 				assert.Equal(t, tc.want, issues[0].IssueType)
-				assert.Equal(t, sKPermRemoteRead(""), issues[0].ScopeKey)
+				assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
 			})
 		}
 	}
@@ -183,7 +183,7 @@ func TestRootReadOfASharedFolder_TheListingDecidesAfterTheFolderDeltaAnswersNotF
 		want    []IssueType
 	}{
 		{name: "listing succeeds"},
-		{name: "listing forbidden", listing: graph.ErrForbidden, want: []IssueType{issueRemoteReadDenied}},
+		{name: "listing forbidden", listing: graph.ErrForbidden, want: []IssueType{IssueRemoteReadDenied}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -237,7 +237,7 @@ func TestRootReadFullRefresh_ALaterPageAnsweredNotFoundIsNotTheRoot(t *testing.T
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 	_, err = testEngineFlow(t, eng).observeAndCommitRemoteCurrentState(ctx, bl, true)
-	require.ErrorIs(t, err, errDeltaExpired)
+	require.ErrorIs(t, err, ErrDeltaExpired)
 	assert.Equal(t, int32(2), laterPageReads.Load(), "the later page is asked for twice")
 
 	issues, err := eng.baseline.ListObservationIssues(ctx)
@@ -254,11 +254,11 @@ func TestRootReadFailureIssueType_NamesOnlyNotFoundAndForbidden(t *testing.T) {
 
 	issueType, ok := rootReadFailureIssueType(graph.ErrNotFound)
 	assert.True(t, ok)
-	assert.Equal(t, issueRemoteRootNotFound, issueType)
+	assert.Equal(t, IssueRemoteRootNotFound, issueType)
 
 	issueType, ok = rootReadFailureIssueType(graph.ErrForbidden)
 	assert.True(t, ok)
-	assert.Equal(t, issueRemoteReadDenied, issueType)
+	assert.Equal(t, IssueRemoteReadDenied, issueType)
 
 	for _, err := range []error{nil, graph.ErrThrottled, errors.New("connection reset")} {
 		issueType, ok = rootReadFailureIssueType(err)
@@ -278,9 +278,9 @@ func TestSharedFolderUnreadable_EitherRootAnswerMakesTheFolderUnreadable(t *test
 		return []ObservationIssueRow{{Path: "/", IssueType: issueType, ScopeKey: scopeKey}}
 	}
 
-	assert.True(t, sharedFolderUnreadable(rootIssue(issueRemoteReadDenied, sKPermRemoteRead(""))))
-	assert.True(t, sharedFolderUnreadable(rootIssue(issueRemoteRootNotFound, sKPermRemoteRead(""))))
-	assert.False(t, sharedFolderUnreadable(rootIssue(issueRemoteReadDenied, sKPermRemoteRead("Docs"))),
+	assert.True(t, sharedFolderUnreadable(rootIssue(IssueRemoteReadDenied, SKPermRemoteRead(""))))
+	assert.True(t, sharedFolderUnreadable(rootIssue(IssueRemoteRootNotFound, SKPermRemoteRead(""))))
+	assert.False(t, sharedFolderUnreadable(rootIssue(IssueRemoteReadDenied, SKPermRemoteRead("Docs"))),
 		"a folder below the root that cannot be read leaves the rest readable")
 	assert.False(t, sharedFolderUnreadable(nil))
 }

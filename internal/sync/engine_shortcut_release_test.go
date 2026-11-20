@@ -190,7 +190,7 @@ func releaseKeptIssuePaths(t *testing.T, eng *testEngine) []string {
 	require.NoError(t, err)
 	var paths []string
 	for i := range issues {
-		if issues[i].IssueType == issueRemovedFolderKept {
+		if issues[i].IssueType == IssueRemovedFolderKept {
 			paths = append(paths, issues[i].Path)
 		}
 	}
@@ -861,7 +861,7 @@ func TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept(t *t
 				assert.Equal(t, LeftWork{NotUploaded: 1}, holds.Left,
 					"pass %d: the run left the change it kept and nothing else", pass)
 				assert.Equal(t, []string{notUploadedReason(1, []string{releaseFileA})}, holds.Reasons(), "pass %d", pass)
-				assert.Equal(t, []string{string(issueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
+				assert.Equal(t, []string{string(IssueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
 					"pass %d: the store holds the kept change and no issue of the folder", pass)
 			}
 			assert.FileExists(t, filepath.Join(syncRoot, filepath.FromSlash(releaseFileA)), "the change stays")
@@ -886,10 +886,10 @@ func TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete(t *testing.T) {
 		point      string
 		occurrence int
 	}{
-		{point: crashPointCommitOutcome, occurrence: 1},
-		{point: crashPointCommitOutcome, occurrence: 3},
-		{point: crashPointLocalDeleteTrashed, occurrence: 1},
-		{point: crashPointLocalDeleteTrashed, occurrence: 2},
+		{point: CrashPointCommitOutcome, occurrence: 1},
+		{point: CrashPointCommitOutcome, occurrence: 3},
+		{point: CrashPointLocalDeleteTrashed, occurrence: 1},
+		{point: CrashPointLocalDeleteTrashed, occurrence: 2},
 	} {
 		for _, lostWAL := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%d", crashCaseName(tc.point, lostWAL), tc.occurrence), func(t *testing.T) {

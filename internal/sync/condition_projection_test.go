@@ -58,29 +58,29 @@ func TestDriveStatusSnapshot_UnsyncedIssueCountIsWhatStatusListsLessDeliberateHo
 		RetryingItems: 1,
 		RetryingWork:  []RetryWorkRow{{Path: "a.txt", ActionType: ActionUpload, AttemptCount: 3}},
 		ActionableRetryWork: []RetryWorkRow{
-			{Path: "deep", ActionType: ActionFolderCreate, ConditionType: issuePathTooLong, AttemptCount: 1},
+			{Path: "deep", ActionType: ActionFolderCreate, ConditionType: IssuePathTooLong, AttemptCount: 1},
 		},
 		ObservationIssues: []ObservationIssueRow{
 			{Path: "CON", IssueType: IssueInvalidFilename},
-			{Path: "Shared/Gone", IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead("Shared/Gone")},
-			{Path: "Docs/.interrupted-removal", IssueType: issueLocalInterruptedRemoval},
+			{Path: "Shared/Gone", IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared/Gone")},
+			{Path: "Docs/.interrupted-removal", IssueType: IssueLocalInterruptedRemoval},
 		},
 		BlockScopes:      []*BlockScope{{Key: SKPermRemoteWrite("Shared/Docs")}},
 		BlockedRetryWork: []RetryWorkRow{{Path: "Shared/Docs/a.txt", ScopeKey: SKPermRemoteWrite("Shared/Docs"), Blocked: true}},
-		HeldDeletes:      []HeldDeleteRow{{Path: "gone-1.txt", Side: string(deleteSafetySideRemote)}},
+		HeldDeletes:      []HeldDeleteRow{{Path: "gone-1.txt", Side: string(DeleteSafetySideRemote)}},
 	}
 
-	assert.Equal(t, 2, snapshot.unsyncedIssueCount())
-	assert.Zero(t, (&DriveStatusSnapshot{}).unsyncedIssueCount(), "an empty store holds no issue")
+	assert.Equal(t, 2, snapshot.UnsyncedIssueCount())
+	assert.Zero(t, (&DriveStatusSnapshot{}).UnsyncedIssueCount(), "an empty store holds no issue")
 
 	// Every counted issue is one status lists in a condition group.
 	listed := 0
 	for _, group := range ProjectStoredConditionGroups(&DriveStatusSnapshot{ObservationIssues: snapshot.ObservationIssues}) {
-		if issueTypeLeavesFileUnsynced(group.ConditionType) {
+		if IssueTypeLeavesFileUnsynced(group.ConditionType) {
 			listed += group.Count
 		}
 	}
-	assert.Equal(t, listed, snapshot.unsyncedIssueCount())
+	assert.Equal(t, listed, snapshot.UnsyncedIssueCount())
 }
 
 // Validates: R-2.10.47

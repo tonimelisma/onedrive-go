@@ -34,7 +34,7 @@ func TestCrashRecovery_ConflictCopyWhoseUploadWasCutAfterTheCreate(t *testing.T)
 	t.Parallel()
 
 	for _, lostWAL := range []bool{false, true} {
-		t.Run(crashCaseName(crashPointUploadCreatedUnrecorded, lostWAL), func(t *testing.T) {
+		t.Run(crashCaseName(CrashPointUploadCreatedUnrecorded, lostWAL), func(t *testing.T) {
 			t.Parallel()
 
 			placeholder, placeholderID, recovered := conflictCopyUploadCutAfterCreate(t, lostWAL)
@@ -84,7 +84,7 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 	writeLocalFile(t, h.syncRoot, conflictCrashPath, conflictCrashLocalContent)
 	remote.putFileAt(t, conflictCrashPath, conflictCrashRemoteContent)
 	capture := &crashCapture{
-		point: crashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
+		point: CrashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	h.eng.execCfg.crashAt = capture.hook

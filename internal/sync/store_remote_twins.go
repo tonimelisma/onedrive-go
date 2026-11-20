@@ -50,7 +50,7 @@ func remoteTwinShadowParent(p string) string {
 }
 
 // remoteStateHolderTx returns the item ID that holds exactly path, or "".
-func remoteStateHolderTx(ctx context.Context, tx sqlTxRunner, p string) (string, error) {
+func remoteStateHolderTx(ctx context.Context, tx SqlTxRunner, p string) (string, error) {
 	var itemID string
 	err := tx.QueryRowContext(ctx, `SELECT item_id FROM remote_state WHERE path = ?`, p).Scan(&itemID)
 	switch {
@@ -66,7 +66,7 @@ func remoteStateHolderTx(ctx context.Context, tx sqlTxRunner, p string) (string,
 // storedPathForObservedItem is where an observed item's row belongs: below its
 // parent's shadow path when the parent is a shadowed twin, and at a shadow path
 // of its own when another item already holds its path.
-func (s *SyncStore) storedPathForObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) (string, error) {
+func (s *SyncStore) storedPathForObservedItem(ctx context.Context, tx SqlTxRunner, item *ObservedItem) (string, error) {
 	target := item.Path
 	if item.ParentID != "" {
 		parent, found, err := remoteStateRowByIDTx(ctx, tx, item.DriveID.String(), item.ParentID)
@@ -94,7 +94,7 @@ func (s *SyncStore) storedPathForObservedItem(ctx context.Context, tx sqlTxRunne
 
 // promoteRemoteTwinTx gives a freed path to the lowest-ID twin shadowed below
 // it, together with that twin's subtree.
-func promoteRemoteTwinTx(ctx context.Context, tx sqlTxRunner, freedPath string) error {
+func promoteRemoteTwinTx(ctx context.Context, tx SqlTxRunner, freedPath string) error {
 	if freedPath == "" || remoteTwinShadowParent(freedPath) != "" {
 		return nil
 	}
@@ -132,7 +132,7 @@ func promoteRemoteTwinTx(ctx context.Context, tx sqlTxRunner, freedPath string) 
 // keepRemoteTwinsAtHolderPathTx undoes the part of a holder folder's subtree
 // move that carried twins shadowed at its old path: they are siblings of the
 // holder at the old path, not its children.
-func keepRemoteTwinsAtHolderPathTx(ctx context.Context, tx sqlTxRunner, oldPath, newPath string) error {
+func keepRemoteTwinsAtHolderPathTx(ctx context.Context, tx SqlTxRunner, oldPath, newPath string) error {
 	from := newPath + "/" + remoteTwinShadowMarker
 	to := oldPath + "/" + remoteTwinShadowMarker
 	if _, err := tx.ExecContext(ctx,
@@ -147,7 +147,7 @@ func keepRemoteTwinsAtHolderPathTx(ctx context.Context, tx sqlTxRunner, oldPath,
 
 // reconcileRemoteTwinIssuesTx makes the remote_name_twin issues exactly the
 // holder paths that currently have shadowed twins.
-func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRunner) error {
+func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx SqlTxRunner) error {
 	shadowRows, err := queryRemoteStatePairsTx(ctx, tx,
 		`SELECT path, '' FROM remote_state WHERE instr(path, ?) > 0`, "/"+remoteTwinShadowMarker)
 	if err != nil {
@@ -162,7 +162,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 	}
 
 	issueRows, err := queryRemoteStatePairsTx(ctx, tx,
-		`SELECT path, '' FROM observation_issues WHERE issue_type = ?`, string(issueRemoteNameTwin))
+		`SELECT path, '' FROM observation_issues WHERE issue_type = ?`, string(IssueRemoteNameTwin))
 	if err != nil {
 		return fmt.Errorf("sync: listing remote twin issues: %w", err)
 	}
@@ -172,7 +172,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 			delete(desired, row[0])
 			continue
 		}
-		stale = append(stale, managedObservationIssueKey{path: row[0], issueType: issueRemoteNameTwin})
+		stale = append(stale, managedObservationIssueKey{path: row[0], issueType: IssueRemoteNameTwin})
 	}
 
 	if err := deleteObservationIssuesTx(ctx, tx, stale); err != nil {
@@ -181,7 +181,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 
 	upserts := make([]ObservationIssue, 0, len(desired))
 	for p := range desired {
-		upserts = append(upserts, ObservationIssue{Path: p, IssueType: issueRemoteNameTwin})
+		upserts = append(upserts, ObservationIssue{Path: p, IssueType: IssueRemoteNameTwin})
 	}
 	sort.Slice(upserts, func(i, j int) bool { return upserts[i].Path < upserts[j].Path })
 
@@ -189,7 +189,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 }
 
 // queryRemoteStatePairsTx runs a two-column TEXT query and returns its rows.
-func queryRemoteStatePairsTx(ctx context.Context, tx sqlTxRunner, query string, args ...any) (_ [][2]string, err error) {
+func queryRemoteStatePairsTx(ctx context.Context, tx SqlTxRunner, query string, args ...any) (_ [][2]string, err error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)

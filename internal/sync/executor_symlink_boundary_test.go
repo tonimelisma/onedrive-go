@@ -23,7 +23,7 @@ import (
 // path beneath "alias/" is lexically inside the sync tree but physically
 // outside it.
 type symlinkBoundaryFixture struct {
-	exec     *executor
+	exec     *Executor
 	syncRoot string
 	outside  string
 }
@@ -38,7 +38,7 @@ func newSymlinkBoundaryFixtureWithUploader(t *testing.T, ul *executorMockUploade
 	t.Helper()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	exec := newExecution(cfg, emptyBaseline())
+	exec := NewExecution(cfg, emptyBaseline())
 
 	outside := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(outside, "target"), 0o700))
@@ -80,7 +80,7 @@ func TestExecutor_Download_SymlinkedAncestorIsBlocked(t *testing.T) {
 		Type:   ActionDownload,
 		Path:   "alias/victim.txt",
 		ItemID: "item1",
-		View:   &pathView{},
+		View:   &PathView{},
 	}
 
 	o := f.exec.ExecuteDownload(t.Context(), action)
@@ -101,7 +101,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorSourceIsBlocked(t *testing.T) {
 		OldPath: "alias/src.txt",
 		Path:    "moved.txt",
 		ItemID:  "item1",
-		View:    &pathView{},
+		View:    &PathView{},
 	}
 
 	o := f.exec.ExecuteLocalMove(t.Context(), action)
@@ -123,7 +123,7 @@ func TestExecutor_LocalMove_SymlinkedAncestorDestinationIsBlocked(t *testing.T) 
 		OldPath: "src.txt",
 		Path:    "alias/victim.txt",
 		ItemID:  "item1",
-		View:    &pathView{},
+		View:    &PathView{},
 	}
 
 	o := f.exec.ExecuteLocalMove(t.Context(), action)
@@ -144,7 +144,7 @@ func TestExecutor_ConflictCopy_SymlinkedAncestorIsBlocked(t *testing.T) {
 		Type:   ActionConflictCopy,
 		Path:   "alias/doc.txt",
 		ItemID: "item1",
-		View:   &pathView{},
+		View:   &PathView{},
 	}
 
 	o := f.exec.ExecuteConflictCopy(t.Context(), action)
@@ -161,10 +161,10 @@ func TestExecutor_CreateLocalFolder_SymlinkedAncestorIsBlocked(t *testing.T) {
 
 	action := &Action{
 		Type:       ActionFolderCreate,
-		CreateSide: createLocal,
+		CreateSide: CreateLocal,
 		Path:       "alias/newdir",
 		ItemID:     "item1",
-		View:       &pathView{},
+		View:       &PathView{},
 	}
 
 	o := f.exec.ExecuteFolderCreate(t.Context(), action)
@@ -186,7 +186,7 @@ func TestExecutor_LocalDelete_AliasItselfStillRemovesOnlyTheSymlink(t *testing.T
 		Type:   ActionLocalDelete,
 		Path:   "alias",
 		ItemID: "item1",
-		View:   &pathView{},
+		View:   &PathView{},
 	}
 
 	o := f.exec.ExecuteLocalDelete(t.Context(), action)
@@ -209,7 +209,7 @@ func TestExecutor_LocalMove_WithoutSymlinkBoundarySucceeds(t *testing.T) {
 		OldPath: "plain/src.txt",
 		Path:    "plain/dst.txt",
 		ItemID:  "item1",
-		View:    &pathView{},
+		View:    &PathView{},
 	}
 
 	o := f.exec.ExecuteLocalMove(t.Context(), action)
@@ -231,7 +231,7 @@ func (f symlinkBoundaryFixture) syncAliasFolder() {
 // plannedLocalStateFor builds the local view observation would have planned
 // for a file read through the alias: the followed target's size, mtime and
 // identity.
-func plannedLocalStateFor(t *testing.T, absPath string, hash string) *localState {
+func plannedLocalStateFor(t *testing.T, absPath string, hash string) *LocalState {
 	t.Helper()
 
 	info, err := os.Stat(absPath)
@@ -239,7 +239,7 @@ func plannedLocalStateFor(t *testing.T, absPath string, hash string) *localState
 	identity, identityOK := synctree.IdentityFromFileInfo(info)
 	require.True(t, identityOK)
 
-	return &localState{
+	return &LocalState{
 		ItemType:         ItemTypeFile,
 		Hash:             hash,
 		Size:             info.Size(),
@@ -281,7 +281,7 @@ func TestExecutor_Upload_UnderFollowedDirectoryAliasSucceeds(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "alias/photo.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View: &pathView{
+		View: &PathView{
 			Path:  "alias/photo.txt",
 			Local: plannedLocalStateFor(t, targetPath, ""),
 		},
@@ -324,12 +324,12 @@ func TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget(t *test
 		Type:    ActionUpload,
 		Path:    "alias/photo.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Path: "alias/photo.txt", Local: planned},
+		View:    &PathView{Path: "alias/photo.txt", Local: planned},
 	}
 
 	o := f.exec.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	assert.Contains(t, o.Error.Error(), "upload source alias/photo.txt changed size")
 }
 
@@ -356,7 +356,7 @@ func TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused
 		Type:    ActionUpload,
 		Path:    "alias/photo.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Path: "alias/photo.txt", Local: plannedLocalStateFor(t, targetPath, "")},
+		View:    &PathView{Path: "alias/photo.txt", Local: plannedLocalStateFor(t, targetPath, "")},
 	}
 	uploadOutcome := f.exec.ExecuteUpload(t.Context(), upload)
 	requireOutcomeSuccess(t, &uploadOutcome)
@@ -365,7 +365,7 @@ func TestExecutor_UnderFollowedDirectoryAlias_UploadReadsButDownloadStaysRefused
 		Type:   ActionDownload,
 		Path:   "alias/photo.txt",
 		ItemID: "uploaded-under-alias",
-		View:   &pathView{},
+		View:   &PathView{},
 	}
 	downloadOutcome := f.exec.ExecuteDownload(t.Context(), download)
 	requireOutcomeFailure(t, &downloadOutcome)
@@ -387,11 +387,11 @@ func TestExecutor_Upload_PathLeavingSyncRootIsRefused(t *testing.T) {
 		Type:    ActionUpload,
 		Path:    "../photo.txt",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Path: "../photo.txt"},
+		View:    &PathView{Path: "../photo.txt"},
 	}
 
 	o := f.exec.ExecuteUpload(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errPathEscapesSyncRoot)
+	require.ErrorIs(t, o.Error, ErrPathEscapesSyncRoot)
 	require.ErrorIs(t, o.Error, synctree.ErrUnsafePath)
 }
