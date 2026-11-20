@@ -130,7 +130,7 @@ and every other significant type in the tree already matched its own name
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | A store write that fails part-way (a statement inside the transaction, or the commit itself) leaves the database and the in-memory baseline cache agreeing, with the failed outcome in neither, and the same write succeeds once the fault is gone; a failed read is returned, never answered as an empty result. Proven through `openSyncStoreWithDriver`, the seam the tests use to open the store through a fault-injecting wrapper of the SQLite driver that fails the next statement matching a SQL fragment or the next commit. | `TestFault_CommitMutationFailureLeavesCacheAndDatabaseAgreeing`, `TestFault_RefreshLocalBaselineCommitFailureLeavesTheOldRow`, `TestFault_ReadFailureIsReturnedNotEmpty` |
 | Baseline, local observation truth, remote mirror truth, observation cursor/confidence, observation issues, retry work, and block scopes survive close/reopen as one restart authority. | `TestSyncStore_ReopenPreservesDurableRecoveryTruth` |
-| Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
+| Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth, read from the database in one transaction and never from the baseline cache, and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp`, `TestCreateScratchPlanningStore_CopiesTheDatabaseNotAStaleCache` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestBuildChildStatusDrive_RendersLifecycleState` |
 | The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
 | A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestCommitMutation_FolderRebindUpdatesCachedChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
@@ -1030,6 +1030,26 @@ its startup view for the whole run
 (`TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent`).
 `LoadBaselineWithRunner` returns an immutable `syncdomain.BaselineSnapshot` of
 the rows a transaction sees.
+
+Nothing that can fail follows `COMMIT`. Each writing transaction decides
+what the cache must change (`baselineCachePatch`) inside the transaction:
+one entry put or deleted, or, after a folder move, a folder rebind, a
+forgotten reupload subtree or an identity backfill, a rebuild read through
+the transaction itself. After `COMMIT` the patch is applied, which cannot
+fail, so an error from `CommitMutation`, `CommitObservation` or
+`CommitLocalSnapshot` always means nothing was committed
+(`TestFault_FolderMoveCacheReloadFailureCommitsNothing`,
+`TestCommitMutation_UnknownActionChangesNeitherDatabaseNorCache`).
+`CheckCacheConsistency` compares every field of every entry with the table and
+returns `ErrBaselineCacheDiverged` naming the paths; the sync invariant suite
+runs it after every scenario, model round and crash recovery
+(`TestCheckCacheConsistency_ReportsAMismatchInAnyColumn`).
+
+Planning reads its baseline as a snapshot taken in the plan's own read
+transaction (`currentInputs.baseline`); `PlanCurrentState` and the delete
+safety hold take `*syncdomain.BaselineSnapshot`, a type the cache is not, so
+the cache cannot be handed to the planner
+(`TestPlanning_UsesBaselineFromTheComparisonSnapshot`).
 
 ## Schema And Open Semantics
 

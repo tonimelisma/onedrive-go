@@ -1287,8 +1287,12 @@ func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) 
 	assert.False(t, ok, "unknown actions must not mutate the in-memory cache")
 }
 
-// Validates: R-2.2
-func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
+// Validates: R-2.2, R-6.5.2
+//
+// The cache patch is decided inside the outcome's transaction, so an
+// outcome the store cannot classify fails before COMMIT and touches
+// neither the database nor the cache.
+func TestCommitMutation_UnknownActionChangesNeitherDatabaseNorCache(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
@@ -1310,19 +1314,16 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	mgr.cachedBaseline().delete("cached.txt")
-	_, ok := mgr.cachedBaseline().GetByPath("cached.txt")
-	require.False(t, ok, "test setup should corrupt the cache before reload")
-
-	err := mgr.updateBaselineCache(ctx, &syncdomain.BaselineMutation{
-		Action: syncdomain.ActionType(999),
-		Path:   "ignored.txt",
+	err := mgr.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionType(999), Success: true,
+		Path: "cached.txt", DriveID: driveid.New("d"), ItemID: "item-other",
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
 
 	entry, ok := mgr.cachedBaseline().GetByPath("cached.txt")
-	require.True(t, ok, "unknown cache mutations should trigger a DB reload")
+	require.True(t, ok)
 	assert.Equal(t, "item-cached", entry.ItemID)
+	require.NoError(t, mgr.CheckCacheConsistency(ctx))
 }
 
 // Validates: R-2.2
@@ -1510,7 +1511,7 @@ func TestBaseline_Put(t *testing.T) {
 		ItemID:  "item-new",
 	}
 
-	b.put(*entry)
+	b.put(entry)
 
 	got, ok := b.GetByPath("new/file.txt")
 	require.True(t, ok, "entry not found after Put")
@@ -1534,7 +1535,7 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 
 	// Put a new entry at the same path but different item_id.
 	newEntry := &syncdomain.BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "new-id"}
-	b.put(*newEntry)
+	b.put(newEntry)
 
 	// New entry should be accessible by path and new ID.
 	got, ok := b.GetByPath("file.txt")
@@ -1611,7 +1612,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 			DriveID: driveid.New("d1"),
 			ItemID:  fmt.Sprintf("item-%03d", i),
 		}
-		b.put(*entry)
+		b.put(entry)
 	}
 
 	var wg stdsync.WaitGroup
@@ -1638,7 +1639,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 				DriveID: driveid.New("d1"),
 				ItemID:  fmt.Sprintf("concurrent-item-%d", i),
 			}
-			b.put(*entry)
+			b.put(entry)
 		}()
 	}
 
@@ -1657,41 +1658,48 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 	assert.GreaterOrEqual(t, b.Len(), 100)
 }
 
-// Validates: R-2.2
-// TestCheckCacheConsistency verifies that CheckCacheConsistency detects
-// mismatches between the in-memory baseline cache and the database (B-198).
-func TestCheckCacheConsistency(t *testing.T) {
-	mgr := newTestStore(t)
-	ctx := t.Context()
+// Validates: R-2.2, R-6.5.2
+//
+// CheckCacheConsistency compares every field of every entry: a row changed
+// behind the cache's back in any one column, or present on one side only,
+// is reported, naming the path.
+func TestCheckCacheConsistency_ReportsAMismatchInAnyColumn(t *testing.T) {
+	t.Parallel()
 
-	_, err := mgr.Load(ctx)
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		column, sql string
+	}{
+		{"local_hash", `UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`},
+		{"parent_id", `UPDATE baseline SET parent_id = 'other-parent' WHERE path = 'consistency-check.txt'`},
+		{"item_type", `UPDATE baseline SET item_type = 'folder' WHERE path = 'consistency-check.txt'`},
+		{"etag", `UPDATE baseline SET etag = 'other-etag' WHERE path = 'consistency-check.txt'`},
+		{"row only in the database", `INSERT INTO baseline (item_id, path, item_type) VALUES ('item-db', 'db-only.txt', 'file')`},
+		{"row only in the cache", `DELETE FROM baseline WHERE path = 'consistency-check.txt'`},
+	} {
+		t.Run(tc.column, func(t *testing.T) {
+			t.Parallel()
 
-	// Insert a baseline entry via CommitMutation.
-	require.NoError(t, mgr.CommitMutation(ctx, &syncdomain.BaselineMutation{
-		Action: syncdomain.ActionDownload, Success: true,
-		Path: "consistency-check.txt", DriveID: driveid.New(syncfixture.TestDriveID),
-		ItemID: "item-cc", ParentID: "root", ItemType: syncdomain.ItemTypeFile,
-		LocalHash: "hash1", RemoteHash: "hash1",
-		LocalSize: 100, LocalSizeKnown: true,
-		RemoteSize: 100, RemoteSizeKnown: true,
-		LocalMtime: 1000, RemoteMtime: 1000,
-	}))
+			mgr := newTestStore(t)
+			ctx := t.Context()
+			require.NoError(t, mgr.CommitMutation(ctx, &syncdomain.BaselineMutation{
+				Action: syncdomain.ActionDownload, Success: true,
+				Path: "consistency-check.txt", DriveID: driveid.New(syncfixture.TestDriveID),
+				ItemID: "item-cc", ParentID: "root", ItemType: syncdomain.ItemTypeFile,
+				LocalHash: "hash1", RemoteHash: "hash1",
+				LocalSize: 100, LocalSizeKnown: true,
+				RemoteSize: 100, RemoteSizeKnown: true,
+				LocalMtime: 1000, RemoteMtime: 1000, ETag: "etag-1",
+			}))
+			require.NoError(t, mgr.CheckCacheConsistency(ctx))
 
-	// Cache and DB should be consistent — no mismatches.
-	mismatches, err := mgr.CheckCacheConsistency(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 0, mismatches)
+			_, err := mgr.RawDBForTest().ExecContext(ctx, tc.sql)
+			require.NoError(t, err)
 
-	// Manually corrupt the DB row behind the cache's back.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
-		`UPDATE baseline SET local_hash = 'tampered' WHERE path = 'consistency-check.txt'`)
-	require.NoError(t, err)
-
-	// Now check again — should detect 1 mismatch.
-	mismatches, err = mgr.CheckCacheConsistency(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 1, mismatches)
+			err = mgr.CheckCacheConsistency(ctx)
+			require.ErrorIs(t, err, ErrBaselineCacheDiverged)
+			require.ErrorContains(t, err, ".txt")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1887,7 +1895,7 @@ func TestBaselineCache_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.
 	go func() {
 		defer close(done)
 		for i := range 200 {
-			baseline.put(syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: fmt.Sprintf("id-%d", i), ItemType: syncdomain.ItemTypeFile})
+			baseline.put(&syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: fmt.Sprintf("id-%d", i), ItemType: syncdomain.ItemTypeFile})
 		}
 	}()
 

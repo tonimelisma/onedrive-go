@@ -63,7 +63,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		},
 	}, "", driveID))
 
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	comparisons, err := store.QueryComparisonState(ctx)
@@ -386,7 +386,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		ETag:     "etag-remote",
 	}}, "", driveID))
 
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	comparisons, err := store.QueryComparisonState(ctx)
@@ -767,7 +767,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 		ETag:     "etag-remote",
 	}}, "", driveID))
 
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	comparisons, err := store.QueryComparisonState(ctx)
@@ -815,7 +815,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 	t.Helper()
 
 	ctx := t.Context()
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	tx, err := syncstore.BeginPerfTx(ctx, store.RawDBForTest())
@@ -883,7 +883,7 @@ func planCurrentStateForInputs(
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
-	baseline syncdomain.BaselineView,
+	baseline *syncdomain.BaselineSnapshot,
 ) *syncdomain.ActionPlan {
 	t.Helper()
 

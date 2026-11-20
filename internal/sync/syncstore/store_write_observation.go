@@ -64,6 +64,16 @@ func (s *SyncStore) commitObservation(
 		err = commitErr
 		return err
 	}
+	var reload baselineCachePatch
+	if windowForgetsBaseline(events) {
+		// The forgotten rows' subtrees went with them; the cache is rebuilt
+		// from this transaction's own read, which the adopted placeholders
+		// are part of.
+		reload, err = s.reloadPatchTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+	}
 	if crashErr := s.reachCrashPoint(syncdomain.CrashPointCommitObservation); crashErr != nil {
 		err = crashErr
 		return err
@@ -72,11 +82,10 @@ func (s *SyncStore) commitObservation(
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("sync: committing observation transaction: %w", err)
 	}
-	s.cacheAdoptedPlaceholders(adopted)
-	if windowForgetsBaseline(events) {
-		if reloadErr := s.reloadBaselineCache(ctx); reloadErr != nil {
-			return reloadErr
-		}
+	if reload.reload != nil {
+		s.applyBaselineCachePatch(reload)
+	} else {
+		s.cacheAdoptedPlaceholders(adopted)
 	}
 
 	s.logger.Debug("observations committed",
@@ -391,13 +400,8 @@ func (s *SyncStore) cacheAdoptedPlaceholders(adopted []*syncdomain.BaselineEntry
 		return
 	}
 
-	s.baselineMu.Lock()
-	defer s.baselineMu.Unlock()
-	if s.baseline == nil {
-		return
-	}
 	for _, entry := range adopted {
-		s.baseline.put(*entry)
+		s.applyBaselineCachePatch(baselineCachePatch{put: entry})
 	}
 }
 

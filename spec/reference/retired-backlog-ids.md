@@ -49,7 +49,6 @@ and nothing in `spec/` resolves them.
 | `B-158` | `internal/graph/types.go`, `internal/graph/types_test.go` |
 | `B-189` | `internal/sync/observer_local_handlers_test.go` |
 | `B-190` | `internal/sync/observer_local_trysend_test.go` |
-| `B-198` | `internal/sync/baseline_test.go`, `internal/sync/store_write_baseline.go` |
 | `B-203` | `internal/sync/observer_local_handlers.go`, `internal/sync/scanner.go` |
 | `B-207` | `internal/driveops/stale_partials.go`, `internal/driveops/transfer_download.go` |
 | `B-208` | `internal/driveops/transfer_manager_test.go`, `internal/driveops/transfer_session.go` |

@@ -37,7 +37,7 @@ func TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation(t *testing.T) {
 		defer wg.Done()
 
 		for i := range rounds {
-			store.baseline.put(syncdomain.BaselineEntry{
+			store.baseline.put(&syncdomain.BaselineEntry{
 				Path:      "file.txt",
 				ItemID:    "item",
 				DriveID:   driveid.New(syncfixture.TestDriveID),
@@ -49,8 +49,10 @@ func TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation(t *testing.T) {
 	}()
 
 	for range rounds {
-		if _, checkErr := store.CheckCacheConsistency(ctx); checkErr != nil {
-			require.NoError(t, checkErr)
+		// The writer changes the cache behind the database's back, so a
+		// reported divergence is expected; the race detector is the check.
+		if checkErr := store.CheckCacheConsistency(ctx); checkErr != nil {
+			require.ErrorIs(t, checkErr, ErrBaselineCacheDiverged)
 		}
 	}
 

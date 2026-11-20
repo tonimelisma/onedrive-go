@@ -173,7 +173,7 @@ func TestPlanningLoadError_SameTextInOneShotAndWatch(t *testing.T) {
 	_, bootstrapErr := rt.runBootstrapCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
 	require.ErrorIs(t, bootstrapErr, syncfixture.ErrInjectedFault, "watch bootstrap")
 	fault.Arm(faultComparisonQuery, syncfixture.ErrInjectedFault)
-	_, replanErr := rt.runSteadyStateCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
+	_, replanErr := rt.runSteadyStateCurrentPlan(ctx, syncdomain.SyncBidirectional)
 	require.ErrorIs(t, replanErr, syncfixture.ErrInjectedFault, "watch replan")
 
 	assert.Equal(t, oneShotErr.Error(), bootstrapErr.Error(), "one-shot and watch bootstrap")

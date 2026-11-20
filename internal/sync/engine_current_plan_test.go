@@ -446,14 +446,11 @@ func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing
 	seedStaleRetryAndBlockScopeForCurrentPlanTest(t, ctx, eng)
 
 	setupWatchEngine(t, eng)
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
 	rt := testWatchRuntime(t, eng)
 	observed, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	require.NoError(t, err)
 
-	build, err := rt.buildCurrentPlanStage(ctx, bl, syncdomain.SyncBidirectional, RunOptions{}, observed)
+	build, err := rt.buildCurrentPlanStage(ctx, syncdomain.SyncBidirectional, RunOptions{}, observed)
 	require.NoError(t, err)
 
 	runtime, err := rt.reconcileRuntimeStateStage(ctx, build, syncstore.PassRefreshedLocalOnly)
@@ -487,7 +484,7 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	observed, err := runner.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
-	build, err := runner.buildCurrentPlanStage(ctx, bl, syncdomain.SyncBidirectional, RunOptions{DryRun: true}, observed)
+	build, err := runner.buildCurrentPlanStage(ctx, syncdomain.SyncBidirectional, RunOptions{DryRun: true}, observed)
 	require.NoError(t, err)
 
 	runtime := runner.keepBuiltCurrentPlan(build)

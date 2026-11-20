@@ -154,10 +154,7 @@ func TestRuntimeArchitecture_SteadyStatePrepareUsesCommittedTruthOnly(t *testing
 		Size:     10,
 	}}, ""))
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, syncdomain.SyncDownloadOnly)
+	runtime, err := rt.runSteadyStateCurrentPlan(ctx, syncdomain.SyncDownloadOnly)
 	require.NoError(t, err)
 	require.NotNil(t, runtime)
 	require.Len(t, runtime.Plan.Actions, 1)

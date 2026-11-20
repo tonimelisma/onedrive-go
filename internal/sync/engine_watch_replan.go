@@ -51,7 +51,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 
 	planStart := rt.deps.now()
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventPlanningStarted, "", 0, replanStart)
-	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
+	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.mode)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhasePlanning, planStart, rt.totalWorkers())
 	if err != nil {
 		return false, rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
