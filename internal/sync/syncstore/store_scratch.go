@@ -30,7 +30,7 @@ const (
 
 type scratchPlanningSeed struct {
 	observationState *syncdomain.ObservationState
-	baselineEntries  []syncdomain.BaselineEntry
+	baselineEntries  []*syncdomain.BaselineEntry
 	remoteRows       []syncdomain.RemoteStateRow
 	// keptFolders are planner input too: a dry run that left them out
 	// planned the online re-creation of every kept folder (D-012).
@@ -47,16 +47,13 @@ type keptLocalFolderRow struct {
 
 // CreateScratchPlanningStore opens a temporary SyncStore and seeds it with the
 // committed baseline, remote mirror, and observation state needed for dry-run
-// planning. The caller owns the returned cleanup function.
+// planning, all read from the database in one transaction: never from the
+// baseline cache, so a dry run plans from what is committed. The caller owns
+// the returned cleanup function.
 func (s *SyncStore) CreateScratchPlanningStore(
 	ctx context.Context,
-	baseline syncdomain.BaselineView,
 ) (_ *SyncStore, cleanup func(context.Context) error, err error) {
-	if baseline == nil {
-		return nil, nil, fmt.Errorf("sync: scratch planning store requires baseline")
-	}
-
-	seed, err := s.readScratchPlanningSeed(ctx, baseline)
+	seed, err := s.readScratchPlanningSeed(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -110,10 +107,7 @@ func (s *SyncStore) CreateScratchPlanningStore(
 	return scratch, cleanup, nil
 }
 
-func (s *SyncStore) readScratchPlanningSeed(
-	ctx context.Context,
-	baseline syncdomain.BaselineView,
-) (seed scratchPlanningSeed, err error) {
+func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPlanningSeed, err error) {
 	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return scratchPlanningSeed{}, fmt.Errorf("sync: beginning scratch planning seed read transaction: %w", err)
@@ -137,9 +131,14 @@ func (s *SyncStore) readScratchPlanningSeed(
 		return scratchPlanningSeed{}, err
 	}
 
+	baselineEntries, err := loadBaselineEntries(ctx, tx, observationState.ContentDriveID)
+	if err != nil {
+		return scratchPlanningSeed{}, fmt.Errorf("sync: reading scratch planning baseline: %w", err)
+	}
+
 	return scratchPlanningSeed{
 		observationState: observationState,
-		baselineEntries:  cloneBaselineEntries(baseline),
+		baselineEntries:  baselineEntries,
 		remoteRows:       remoteRows,
 		keptFolders:      keptFolders,
 	}, nil
@@ -181,26 +180,13 @@ func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPl
 	return nil
 }
 
-func cloneBaselineEntries(baseline syncdomain.BaselineView) []syncdomain.BaselineEntry {
-	if baseline == nil {
-		return nil
-	}
-
-	entries := make([]syncdomain.BaselineEntry, 0, baseline.Len())
-	baseline.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) {
-		entries = append(entries, entry)
-	})
-
-	return entries
-}
-
 func insertScratchBaselineEntries(
 	ctx context.Context,
 	tx SqlTxRunner,
-	entries []syncdomain.BaselineEntry,
+	entries []*syncdomain.BaselineEntry,
 ) error {
 	for i := range entries {
-		if err := upsertBaselineRowTx(ctx, tx, &entries[i]); err != nil {
+		if err := upsertBaselineRowTx(ctx, tx, entries[i]); err != nil {
 			return fmt.Errorf("sync: inserting scratch baseline row for %s: %w", entries[i].Path, err)
 		}
 	}

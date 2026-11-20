@@ -74,9 +74,7 @@ func TestFault_CommitMutationFailureLeavesCacheAndDatabaseAgreeing(t *testing.T)
 		require.Equal(t, 1, fault.Fired(), "%s: the fault fired once and disarmed", tc.name)
 		fault.Hits = 0
 
-		mismatches, checkErr := store.CheckCacheConsistency(ctx)
-		require.NoError(t, checkErr, tc.name)
-		assert.Zero(t, mismatches, "%s: cache and database agree after the failed commit", tc.name)
+		require.NoError(t, store.CheckCacheConsistency(ctx), "%s: cache and database agree after the failed commit", tc.name)
 		_, cached := store.baseline.GetByPath(tc.path)
 		assert.False(t, cached, "%s: the failed outcome is not in the cache", tc.name)
 
@@ -84,9 +82,7 @@ func TestFault_CommitMutationFailureLeavesCacheAndDatabaseAgreeing(t *testing.T)
 		entry, ok := store.baseline.GetByPath(tc.path)
 		require.True(t, ok, "%s: the retried outcome lands", tc.name)
 		assert.Equal(t, "hash-"+tc.item, entry.LocalHash)
-		mismatches, checkErr = store.CheckCacheConsistency(ctx)
-		require.NoError(t, checkErr)
-		assert.Zero(t, mismatches, tc.name)
+		require.NoError(t, store.CheckCacheConsistency(ctx), tc.name)
 	}
 }
 
@@ -111,9 +107,7 @@ func TestFault_RefreshLocalBaselineCommitFailureLeavesTheOldRow(t *testing.T) {
 	entry, ok := store.baseline.GetByPath("a.txt")
 	require.True(t, ok)
 	assert.Equal(t, "hash-old", entry.LocalHash, "the cache was not updated ahead of the failed commit")
-	mismatches, checkErr := store.CheckCacheConsistency(ctx)
-	require.NoError(t, checkErr)
-	assert.Zero(t, mismatches, "the database holds the same old row")
+	require.NoError(t, store.CheckCacheConsistency(ctx), "the database holds the same old row")
 
 	require.NoError(t, store.RefreshLocalBaseline(ctx, &localBaselineRefresh{
 		Path: "a.txt", DriveID: driveid.New(syncfixture.EngineTestDriveID), ItemID: "item-a", ItemType: syncdomain.ItemTypeFile,
@@ -121,6 +115,47 @@ func TestFault_RefreshLocalBaselineCommitFailureLeavesTheOldRow(t *testing.T) {
 	}))
 	entry, _ = store.baseline.GetByPath("a.txt")
 	assert.Equal(t, "hash-new", entry.LocalHash)
+}
+
+// Validates: R-6.5.1, R-6.5.2
+//
+// A folder move re-paths a subtree, so its commit rebuilds the cache from
+// the database. That read happens inside the transaction, before COMMIT: a
+// failing read fails the commit with nothing written, and nothing that
+// follows COMMIT can fail. Before, the read followed the commit, so a
+// committed move was reported failed and left the cache on the old paths.
+func TestFault_FolderMoveCacheReloadFailureCommitsNothing(t *testing.T) {
+	t.Parallel()
+
+	store, fault := newFaultStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	for _, m := range []syncdomain.BaselineMutation{
+		{Action: syncdomain.ActionFolderCreate, Success: true, Path: "src", DriveID: driveID, ItemID: "dir", ParentID: "root", ItemType: syncdomain.ItemTypeFolder},
+		{Action: syncdomain.ActionUpload, Success: true, Path: "src/a.txt", DriveID: driveID, ItemID: "a", ParentID: "dir", ItemType: syncdomain.ItemTypeFile},
+	} {
+		require.NoError(t, store.CommitMutation(ctx, &m))
+	}
+	move := syncdomain.BaselineMutation{
+		Action: syncdomain.ActionRemoteMove, Success: true, Path: "dst", OldPath: "src",
+		DriveID: driveID, ItemID: "dir", ParentID: "root", ItemType: syncdomain.ItemTypeFolder,
+	}
+
+	fault.Arm(sqlLoadBaseline, syncfixture.ErrInjectedFault)
+	err := store.CommitMutation(ctx, &move)
+	require.ErrorIs(t, err, syncfixture.ErrInjectedFault)
+	require.Equal(t, 1, fault.Fired())
+
+	require.NoError(t, store.CheckCacheConsistency(ctx), "cache and database agree after the failed move")
+	_, moved := store.cachedBaseline().GetByPath("dst/a.txt")
+	assert.False(t, moved, "the failed move is in neither the database nor the cache")
+	_, kept := store.cachedBaseline().GetByPath("src/a.txt")
+	assert.True(t, kept)
+
+	require.NoError(t, store.CommitMutation(ctx, &move))
+	_, moved = store.cachedBaseline().GetByPath("dst/a.txt")
+	assert.True(t, moved, "the retried move lands in the cache")
+	require.NoError(t, store.CheckCacheConsistency(ctx))
 }
 
 // Validates: R-6.5.2

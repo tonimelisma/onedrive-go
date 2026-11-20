@@ -105,14 +105,15 @@ func (b *baselineCache) ForEachPath(fn func(path string, entry syncdomain.Baseli
 	}
 }
 
-// put records entry in all three indexes, the way the item_id-keyed row
-// does: a path taken over by a new item ID drops the old ID, and an item at a
-// new path leaves its old one.
-func (b *baselineCache) put(entry syncdomain.BaselineEntry) {
+// put records a copy of entry in all three indexes, the way the
+// item_id-keyed row does: a path taken over by a new item ID drops the old
+// ID, and an item at a new path leaves its old one.
+func (b *baselineCache) put(entry *syncdomain.BaselineEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	owned := &entry
+	copied := *entry
+	owned := &copied
 	if old, ok := b.idx.byPath[owned.Path]; ok && old.ItemID != owned.ItemID {
 		delete(b.idx.byID, old.ItemID)
 	}

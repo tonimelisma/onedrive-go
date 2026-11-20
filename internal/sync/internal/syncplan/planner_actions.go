@@ -32,7 +32,7 @@ func (p *Planner) PlanCurrentState(
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
-	baseline syncdomain.BaselineView,
+	baseline *syncdomain.BaselineSnapshot,
 	mount PlannerMountContext,
 	mode syncdomain.SyncMode,
 ) (*syncdomain.ActionPlan, error) {

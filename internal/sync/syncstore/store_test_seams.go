@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -55,7 +56,24 @@ func (s *SyncStore) SetLoggerForTest(logger *slog.Logger) {
 
 // ReloadBaselineCacheForTest reloads the cached baseline from the database.
 func (s *SyncStore) ReloadBaselineCacheForTest(ctx context.Context) error {
-	return s.reloadBaselineCache(ctx)
+	patch, err := s.reloadPatchTx(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	s.applyBaselineCachePatch(patch)
+
+	return nil
+}
+
+// BaselineSnapshotForTest reads the baseline table as a snapshot, the form
+// planning takes it in.
+func (s *SyncStore) BaselineSnapshotForTest(ctx context.Context) (*syncdomain.BaselineSnapshot, error) {
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return nil, err
+	}
+
+	return LoadBaselineWithRunner(ctx, s.db, contentDriveID)
 }
 
 // UpdateObservationStateForTest applies update to the stored observation

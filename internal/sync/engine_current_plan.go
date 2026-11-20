@@ -32,7 +32,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	}
 	r.deps.perf.RecordObserve(observation.observedPaths, r.deps.since(observeStart))
 
-	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
+	build, err := r.buildCurrentPlanStage(ctx, mode, opts, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 	}
 	r.deps.perf.RecordObserve(observation.observedPaths, r.deps.since(observeStart))
 
-	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
+	build, err := r.buildCurrentPlanStage(ctx, mode, opts, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	}
 	rt.deps.perf.RecordObserve(observation.observedPaths, rt.deps.since(observeStart))
 
-	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
+	build, err := rt.buildCurrentPlanStage(ctx, mode, RunOptions{}, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,6 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 // observed the local tree only.
 func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	ctx context.Context,
-	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 ) (*runtimePlan, error) {
 	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
@@ -103,7 +102,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 		return nil, err
 	}
 
-	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
+	build, err := rt.buildCurrentPlanStage(ctx, mode, RunOptions{}, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +181,11 @@ type currentInputs struct {
 	remoteRows        []syncdomain.RemoteStateRow
 	observationIssues []syncdomain.ObservationIssueRow
 	// baseline is read in the same transaction as the comparison rows, so a
-	// baseline_present row always has its entry. The run's cached baseline
-	// can lag or lead that snapshot when a commit lands between them.
-	baseline syncdomain.BaselineView
+	// baseline_present row always has its entry. It is a snapshot, a type the
+	// run's live baseline view is not: the planner cannot be handed the cache,
+	// which can lag or lead the comparison rows when a commit lands between
+	// them.
+	baseline *syncdomain.BaselineSnapshot
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
@@ -409,7 +410,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 
-	scratchStore, cleanup, err := flow.deps.store.CreateScratchPlanningStore(ctx, bl)
+	scratchStore, cleanup, err := flow.deps.store.CreateScratchPlanningStore(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +619,6 @@ func (flow *engineFlow) queryPlannerRowsTx(
 // does not touch durable retry/scope state.
 func (flow *engineFlow) buildCurrentPlanStage(
 	ctx context.Context,
-	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 	observation *currentObservation,
@@ -631,7 +631,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 
 	planStart := flow.deps.now()
-	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, bl, mode, opts)
+	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, mode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -651,7 +651,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 		return nil, fmt.Errorf("sync: reading the recorded mount points the hold guards: %w", err)
 	}
 	if err := syncplan.ApplyDeleteSafetyHold(plan, &syncplan.DeleteSafetyInput{
-		Baseline:        planningBaseline(&observation.inputs, bl),
+		Baseline:        observation.inputs.baseline,
 		LocalRows:       observation.inputs.localRows,
 		RemoteRows:      observation.inputs.remoteRows,
 		Approved:        approved,
@@ -784,35 +784,22 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]syncdomain.Retr
 	return retryRows, blockScopes, nil
 }
 
-// planningBaseline is the baseline the planner read: the snapshot loaded in
-// the same transaction as the comparison rows when there is one.
-func planningBaseline(inputs *currentInputs, fallback syncdomain.BaselineView) syncdomain.BaselineView {
-	if inputs != nil && inputs.baseline != nil {
-		return inputs.baseline
-	}
-	return fallback
-}
-
 // buildCurrentActionPlanFromInputs plans the run's actions from the inputs
 // one transaction read. A removed shared folder's final drain
 // (RunOptions.ReleaseLocalTree) plans for a mount that releases its local
 // tree, so it creates nothing new locally (leaveOutNewLocalItems).
 func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentInputs,
-	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*syncdomain.ActionPlan, error) {
-	if inputs.baseline != nil {
-		bl = inputs.baseline
-	}
 	return e.planner.PlanCurrentState(
 		inputs.comparisons,
 		inputs.reconciliations,
 		inputs.localRows,
 		inputs.remoteRows,
 		inputs.observationIssues,
-		bl,
+		inputs.baseline,
 		syncplan.PlannerMountContext{
 			DriveID:           e.driveID,
 			ReleasesLocalTree: opts.ReleaseLocalTree,

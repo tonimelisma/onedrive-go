@@ -50,7 +50,7 @@ const (
 // DeleteSafetyInput is the evidence the hold is decided from: the planner's
 // baseline and the planner-visible current snapshots of both sides.
 type DeleteSafetyInput struct {
-	Baseline   syncdomain.BaselineView
+	Baseline   *syncdomain.BaselineSnapshot
 	LocalRows  []syncdomain.LocalStateRow
 	RemoteRows []syncdomain.RemoteStateRow
 	// Approved is the held set the user confirmed with `sync
