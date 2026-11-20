@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -331,7 +332,7 @@ func (o *localObserver) walkObservedEntry(
 	dirStack map[string]struct{},
 	stage string,
 ) error {
-	entryName := nfcNormalize(entry.Name())
+	entryName := namekey.Stored(entry.Name())
 	entryRelPath := joinObservedPath(parentRelPath, entryName)
 	entryFsPath := filepath.Join(parentFsPath, entry.Name())
 
@@ -477,7 +478,7 @@ func (o *localObserver) addObservedDirWatches(
 	}
 
 	if dbRelPath != "." {
-		name := nfcNormalize(filepath.Base(fsPath))
+		name := namekey.Stored(filepath.Base(fsPath))
 		if shouldObserveWithFilter(name, dbRelPath, observedKindDir, o.filterConfig, o.protectedRoots, o.observationRules) != nil {
 			return nil
 		}
@@ -616,7 +617,7 @@ func (o *localObserver) addObservedChildWatch(
 	session *watchAddSession,
 ) error {
 	childFsPath := filepath.Join(parentFsPath, entry.Name())
-	childName := nfcNormalize(entry.Name())
+	childName := namekey.Stored(entry.Name())
 	childRelPath := joinObservedPath(parentRelPath, childName)
 
 	if entry.Type()&fs.ModeSymlink != 0 {

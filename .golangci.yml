@@ -133,6 +133,18 @@ linters:
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/graph$
               desc: multisync owns runner lifecycle only and must not call Graph directly
+        # The stored form of a name is computed in internal/namekey alone
+        # (namekey.Stored, namekey.StoredPath); the test filesystem shim
+        # models a normalizing volume with the normalizer itself.
+        norm-only-namekey:
+          files:
+            - "**/*.go"
+            - "!**/internal/namekey/*.go"
+            - "!**/internal/synctest/*.go"
+            - "!$test"
+          deny:
+            - pkg: golang.org/x/text/unicode/norm
+              desc: compute a stored form with namekey.Stored or namekey.StoredPath
         # Every package that imports no internal package is held to it.
         leaf-internal:
           files:

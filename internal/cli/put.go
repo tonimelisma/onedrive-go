@@ -218,7 +218,9 @@ func uploadFolder(
 
 // putFile uploads localPath as name under parentID with put's semantics: a
 // new name is created (never replacing, R-5.6.14), and an existing file of
-// that name, or of a name OneDrive treats as the same, is overwritten by ID,
+// that name, or else the one file of a name OneDrive treats as the same, is
+// overwritten by ID (two such files and none of that spelling answer the
+// 409: neither is replaced),
 // conditional on the eTag just read, so a concurrent edit answers 412 instead
 // of being replaced blindly. The existing item is found by
 // driveops.FindExistingChild, one read of the name. An existing folder is an
@@ -233,12 +235,15 @@ func putFile(
 		return result, err //nolint:wrapcheck // the caller names the file
 	}
 
-	existing, found, findErr := driveops.FindExistingChild(ctx, lookup, driveID, parentID, name)
+	child, findErr := driveops.FindExistingChild(ctx, lookup, driveID, parentID, name)
+	existing := child.Item
 	switch {
 	case findErr != nil:
 		return nil, errors.Join(err, findErr)
-	case !found:
-		return nil, err //nolint:wrapcheck // the 409 itself: nothing visible holds the name yet
+	case existing == nil:
+		// The 409 itself: nothing visible holds the name yet, or more than
+		// one item does and none is spelled as asked, so none is replaced.
+		return nil, err //nolint:wrapcheck // see above
 	case existing.IsFolder:
 		return nil, fmt.Errorf("%q is a folder on OneDrive", existing.Name)
 	}

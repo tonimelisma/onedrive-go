@@ -1686,6 +1686,40 @@ func TestFindCreatedFolder_MatchesUnderNamespaceKey(t *testing.T) {
 	assert.Equal(t, "folder", item.ID)
 }
 
+// Two folders of names OneDrive treats as the created one and none spelled
+// as asked are not found, wherever the folder spelled as asked is listed; a
+// folder listed twice is one folder.
+//
+// Validates: R-2.12.3
+func TestFindCreatedFolder_TwoFoldedFoldersAreNotFound(t *testing.T) {
+	t.Parallel()
+
+	upper := Item{ID: "upper", Name: "DOCS", IsFolder: true}
+	title := Item{ID: "title", Name: "Docs", IsFolder: true}
+	exact := Item{ID: "exact", Name: "docs", IsFolder: true}
+
+	_, ok := findCreatedFolder([]Item{upper, title}, "docs")
+	assert.False(t, ok, "two other spellings")
+
+	item, ok := findCreatedFolder([]Item{upper, title, exact}, "docs")
+	require.True(t, ok, "the exact spelling after two others")
+	assert.Equal(t, "exact", item.ID)
+
+	item, ok = findCreatedFolder([]Item{upper, upper}, "docs")
+	require.True(t, ok, "one folder listed twice")
+	assert.Equal(t, "upper", item.ID)
+}
+
+// Validates: R-2.12.3
+func TestWithoutRepeats_KeepsEachIDOnce(t *testing.T) {
+	t.Parallel()
+
+	items := []Item{{ID: "a", Name: "1"}, {ID: "b"}, {ID: "a", Name: "2"}, {Name: "no id"}, {Name: "no id"}}
+	kept := WithoutRepeats(items)
+	assert.Equal(t, []Item{{ID: "a", Name: "1"}, {ID: "b"}, {Name: "no id"}, {Name: "no id"}}, kept)
+	assert.Len(t, items, 5, "the input is not modified")
+}
+
 // --- ListChildrenByPath tests ---
 
 // Validates: R-1.1

@@ -30,6 +30,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -277,8 +278,8 @@ func (o *localObserver) HandleFsEvent(
 		return
 	}
 
-	dbRelPath := nfcNormalize(filepath.ToSlash(relPath))
-	name := nfcNormalize(filepath.Base(fsEvent.Name))
+	dbRelPath := storedPathOf(relPath)
+	name := namekey.Stored(filepath.Base(fsEvent.Name))
 
 	if reservation, ok := protectedRootPathReservation(dbRelPath, o.protectedRoots); ok {
 		if reservation.Path == dbRelPath {
@@ -384,7 +385,7 @@ func (o *localObserver) handleCreate(
 		// colliding name is the peer's spelling on disk; the peer is
 		// tracked under its stored (NFC) path, the one its own events
 		// carry (R-2.13.1).
-		peerRelPath := o.buildPeerRelPath(dbRelPath, nfcNormalize(collidingName))
+		peerRelPath := o.buildPeerRelPath(dbRelPath, namekey.Stored(collidingName))
 		o.AddCollisionPeer(dbRelPath, peerRelPath)
 
 		o.logger.Debug("case collision detected in watch mode, skipping event",
@@ -591,7 +592,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 	watcher fsWatcher,
 	events chan<- changeEvent,
 ) {
-	entryName := nfcNormalize(entry.Name())
+	entryName := namekey.Stored(entry.Name())
 	entryRelPath := dirRelPath + "/" + entryName
 	entryFsPath := filepath.Join(dirPath, entry.Name())
 
@@ -1243,9 +1244,9 @@ func localPathStillPresent(tree *synctree.Root, dbRelPath, fsPath string) bool {
 		return false
 	}
 	want := filepath.Base(fsPath)
-	wantNFC := nfcNormalize(want)
+	wantNFC := namekey.Stored(want)
 	for _, entry := range entries {
-		if entry.Name() == want || nfcNormalize(entry.Name()) == wantNFC {
+		if entry.Name() == want || namekey.Stored(entry.Name()) == wantNFC {
 			return true
 		}
 	}
@@ -1405,7 +1406,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root, 
 
 	// Clear directory name cache, collision peers, and recent deletes —
 	// safety scan rebuilds state from scratch, so any cached state may be stale.
-	o.DirNameCache = make(map[string]map[string][]string)
+	o.DirNameCache = make(map[string]map[namekey.Key][]string)
 	o.CollisionPeers = make(map[string]map[string]struct{})
 	o.RecentLocalDeletes = make(map[string]struct{})
 	o.pruneWriteChurn(o.clock.Now())

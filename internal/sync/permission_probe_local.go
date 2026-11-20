@@ -191,9 +191,3 @@ func (ph *permissionHandler) readOnlyFilesystemEvidence(r *actionCompletion) per
 		LastError:    "the local filesystem is read-only",
 	}
 }
-
-// storedPathOf turns a rooted path as spelled on disk into the form sync
-// stores paths in: slash-separated NFC (R-2.13.1).
-func storedPathOf(rel string) string {
-	return nfcNormalize(filepath.ToSlash(rel))
-}

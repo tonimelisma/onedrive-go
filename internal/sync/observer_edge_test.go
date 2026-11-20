@@ -232,16 +232,27 @@ func TestAsciiLower(t *testing.T) {
 	}
 }
 
-// TestValidateOneDriveName_MaxLength validates the 255-byte limit.
-func TestValidateOneDriveName_MaxLength(t *testing.T) {
-	validName := strings.Repeat("a", 255)
-	reason, _ := validateOneDriveName(validName)
-	assert.Empty(t, reason, "255 bytes should be valid")
+// A name is never refused for its own length: OneDrive limits only the path,
+// which counts the name in UTF-16 units (oneDrivePathLength).
+//
+// Validates: R-2.11.12
+func TestValidateOneDriveName_NoLimitOnASingleName(t *testing.T) {
+	t.Parallel()
 
-	// 256 bytes is invalid.
-	invalidName := validName + "b"
-	reason, _ = validateOneDriveName(invalidName)
-	assert.NotEmpty(t, reason, "256 bytes should be invalid")
+	tests := []struct {
+		label string
+		name  string
+	}{
+		{label: "256 ASCII bytes", name: strings.Repeat("a", 256)},
+		// U+4E2D CJK UNIFIED IDEOGRAPH-4E2D: three bytes, one unit each.
+		{label: "100 BMP characters of 300 bytes", name: strings.Repeat("\u4e2d", 100)},
+		// U+1F600 GRINNING FACE: four bytes, two units each.
+		{label: "361 units of supplementary-plane characters", name: strings.Repeat("\U0001F600", 180) + "a"},
+	}
+	for _, tt := range tests {
+		reason, detail := validateOneDriveName(tt.name)
+		assert.Empty(t, reason, "%s: %s", tt.label, detail)
+	}
 }
 
 // TestValidateOneDriveName_Empty validates that empty names are rejected.

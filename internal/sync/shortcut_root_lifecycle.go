@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -387,7 +388,7 @@ func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
 	entryName string,
 	identity synctree.FileIdentity,
 ) (string, bool, error) {
-	candidate := nfcNormalize(entryName)
+	candidate := namekey.Stored(entryName)
 	if parent != "" {
 		candidate = path.Join(parent, candidate)
 	}

@@ -1072,8 +1072,8 @@ func TestValidateOneDriveName(t *testing.T) {
 		// Leading space.
 		{"leading space", " file", false},
 
-		// Too long.
-		{"too long", strings.Repeat("a", 256), false},
+		// A long name: only the path is limited.
+		{"256 bytes are not too long", strings.Repeat("a", 256), true},
 
 		// Reserved device names.
 		{"CON upper", "CON", false},

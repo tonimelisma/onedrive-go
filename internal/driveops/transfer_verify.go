@@ -278,8 +278,10 @@ func (tm *TransferManager) settleUploadedItem(
 
 // lookupUploadTarget reads the item an upload wrote: by ID, or, for a create,
 // by its name in the parent (FindExistingChild: one read of the name, the
-// parent's listing only when the read cannot settle it). A folder that holds
-// the name is not the upload's file.
+// parent's listing only when the read cannot settle it). From the listing it
+// takes the child spelled as the upload named it, else the only child of a
+// name OneDrive treats as the same; two such children and none spelled so are
+// not found. A folder that holds the name is not the upload's file.
 func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target uploadTarget) (*graph.Item, error) {
 	reader, ok := tm.uploads.(ItemReader)
 	if !ok {
@@ -295,13 +297,15 @@ func (tm *TransferManager) lookupUploadTarget(ctx context.Context, target upload
 		return item, nil
 	}
 
-	item, found, err := FindExistingChild(ctx, reader, target.driveID, target.parentID, target.name)
+	child, err := FindExistingChild(ctx, reader, target.driveID, target.parentID, target.name)
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("looking %q up in parent %s: %w", target.name, target.parentID, err)
-	case !found || item.IsFolder:
+	case child.Item == nil:
+		return nil, fmt.Errorf("%q is not in its parent folder%s: %w", target.name, child.ambiguity(), graph.ErrNotFound)
+	case child.Item.IsFolder:
 		return nil, fmt.Errorf("%q is not in its parent folder: %w", target.name, graph.ErrNotFound)
 	}
 
-	return item, nil
+	return child.Item, nil
 }
