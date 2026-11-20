@@ -260,7 +260,7 @@ func TestEngineLocks_UnsupportedFilesystemWarnsAndContinues(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, nil))
 			inputs := secondEngineInputs(t, t.TempDir(), logger)
-			inputs.lockFlock = func(int, int) error { return errno }
+			inputs.hooks.lockFlock = func(int, int) error { return errno }
 
 			engine, err := newEngine(t.Context(), inputs)
 			require.NoError(t, err, "a filesystem that cannot lock must not stop the sync")
@@ -309,7 +309,7 @@ func TestEngineLocks_ReleasedInReverseOnlyAfterTheStoreCloses(t *testing.T) {
 	var engine *Engine
 	var unlocked []string
 	var storeOpenAtUnlock []error
-	inputs.lockFlock = func(fd int, how int) error {
+	inputs.hooks.lockFlock = func(fd int, how int) error {
 		if how == syscall.LOCK_UN {
 			unlocked = append(unlocked, lockFileName(t, fd, names))
 			storeOpenAtUnlock = append(storeOpenAtUnlock, engine.baseline.RawDBForTest().PingContext(context.Background()))

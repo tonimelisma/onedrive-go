@@ -204,7 +204,7 @@ func (rt *watchRuntime) initWatchInfra(
 	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
 
 	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, executorStoreOf(rt.deps.store), rt.deps.logger, watchCompletionBuf)
-	pool.SetRuntimeOptions(rt.engine.collector(), rt.engine.serializeWorkers)
+	pool.SetRuntimeOptions(rt.engine.collector(), rt.engine.hooks.serializeWorkers)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
@@ -409,8 +409,8 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 	localObs.SetSafetyScan(syncobserve.LocalWatchHealthySafetyScanInterval, true)
 	localObs.SetDebugEvents(rt.deps.emit)
 
-	if rt.engine.localWatcherFactory != nil {
-		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)
+	if rt.engine.hooks.localWatcherFactory != nil {
+		localObs.SetWatcherFactory(rt.engine.hooks.localWatcherFactory)
 	}
 
 	return localObs, nil
@@ -521,15 +521,11 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	)
 
 	wakeCh := make(chan struct{}, 1)
-	wakeSource := rt.engine.socketIOWakeSourceFactory(
-		rt.engine.socketIOFetcher,
-		rt.engine.driveID,
-		syncobserve.SocketIOWakeSourceOptions{
-			Logger:        rt.deps.logger,
-			Clock:         rt.deps.clock,
-			LifecycleHook: rt.emitSocketIOLifecycleEvent,
-		},
-	)
+	wakeSource := rt.engine.newSocketIOWakeSource(syncobserve.SocketIOWakeSourceOptions{
+		Logger:        rt.deps.logger,
+		Clock:         rt.deps.clock,
+		LifecycleHook: rt.emitSocketIOLifecycleEvent,
+	})
 
 	rt.resources.goroutines.start(ctx, watchGoroutineWakeSource, func(ctx context.Context) {
 		rt.runSocketIOWakeSource(ctx, wakeSource, wakeCh)

@@ -65,7 +65,7 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 			shim := synctest.NewErrnoShim(synctest.ErrnoRule{Op: synctest.FSOpWrite, Path: "dl", Errno: tc.errno})
 			eng, syncRoot := newTestEngineOnFS(t, remote.client(t), shim.Wrap)
 			clock := &modelClock{}
-			eng.clock = clock
+			eng.hooks.clock = clock
 			h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 			h.beginRound(t)
 
@@ -145,7 +145,7 @@ func TestCaseInsensitiveShim_RemoteCaseVariantOfALocalFileKeepsBoth(t *testing.T
 
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngineOnFS(t, remote.client(t), synctest.CaseInsensitive)
-	eng.clock = &modelClock{}
+	eng.hooks.clock = &modelClock{}
 	h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 	syncfixture.WriteLocalFile(t, syncRoot, "notes.txt", "local\n")
 	h.beginRound(t)

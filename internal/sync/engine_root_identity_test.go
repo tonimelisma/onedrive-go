@@ -69,7 +69,7 @@ func openRootSafetyEngine(t *testing.T, paths rootSafetyPaths, mock *syncfixture
 	if err != nil {
 		return nil, err
 	}
-	eng.assertInvariants = true
+	eng.hooks.assertInvariants = true
 
 	return newFlowBackedTestEngine(eng), nil
 }

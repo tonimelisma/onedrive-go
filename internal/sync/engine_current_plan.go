@@ -584,8 +584,8 @@ func (flow *engineFlow) queryPlannerRowsTx(
 		return nil, nil, err
 	}
 	reconciliationQuery := syncstore.SqlQueryReconciliationState
-	if flow.engine.reconciliationQueryOverride != "" {
-		reconciliationQuery = flow.engine.reconciliationQueryOverride
+	if flow.engine.hooks.reconciliationQuery != "" {
+		reconciliationQuery = flow.engine.hooks.reconciliationQuery
 	}
 	reconciliations, err := syncstore.QueryReconciliationRows(ctx, tx, syncstore.SqlQueryForStateTables(
 		reconciliationQuery,

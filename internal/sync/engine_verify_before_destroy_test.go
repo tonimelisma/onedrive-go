@@ -177,7 +177,7 @@ func syncedFolderScenario(t *testing.T, client *syncfixture.EngineMockClient, re
 	remote.addFolder("item-x", "root", "X")
 	remote.addFile(t, "item-a", "item-x", "a.txt", "a\n")
 	eng, syncRoot := newTestEngine(t, client)
-	eng.serializeWorkers = true
+	eng.hooks.serializeWorkers = true
 	runScenarioPass(t, eng)
 	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "X")))
 

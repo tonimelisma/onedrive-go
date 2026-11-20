@@ -44,7 +44,7 @@ func (noRuntimeSignals) markReplanNeeded()   {}
 // watchInspector is the debug-only view the invariant pass needs into watch
 // state. It is separate from runtimeSignals because the two have different
 // lifetimes: signals are a production path, while these reads happen only when
-// engine.assertInvariants is enabled, which production leaves off.
+// engine.hooks.assertInvariants is enabled, which production leaves off.
 type watchInspector interface {
 	phase() watchRuntimePhase
 	isDraining() bool

@@ -310,8 +310,8 @@ func (r *oneShotRunner) countWorkBlockedUnderPause(ctx context.Context) int {
 // waitFor blocks for d or until ctx ends, through the engine's wait seam so
 // tests advance their clock instead of sleeping.
 func (e *Engine) waitFor(ctx context.Context, d time.Duration) error {
-	if e.waitFn != nil {
-		return e.waitFn(ctx, d)
+	if e.hooks.wait != nil {
+		return e.hooks.wait(ctx, d)
 	}
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -325,8 +325,8 @@ func (e *Engine) waitFor(ctx context.Context, d time.Duration) error {
 
 // oneShotPasses is the most passes one RunOnce makes.
 func (e *Engine) oneShotPasses() int {
-	if e.oneShotPassLimit > 0 {
-		return min(e.oneShotPassLimit, oneShotMaxPasses)
+	if e.hooks.oneShotPassLimit > 0 {
+		return min(e.hooks.oneShotPassLimit, oneShotMaxPasses)
 	}
 
 	return oneShotMaxPasses
@@ -461,7 +461,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	}
 
 	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.sched.dispatchCh, executorStoreOf(r.deps.store), r.deps.logger, len(plan.Actions))
-	pool.SetRuntimeOptions(r.engine.collector(), r.engine.serializeWorkers)
+	pool.SetRuntimeOptions(r.engine.collector(), r.engine.hooks.serializeWorkers)
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.
 	runCtx, cancelPass := context.WithCancelCause(ctx)

@@ -124,8 +124,8 @@ func applyRegisteredDispatchOrder(t *testing.T, eng *Engine) {
 	if order == "" {
 		return
 	}
-	eng.dispatchOrder = parseDispatchOrder(t, order)
-	eng.serializeWorkers = true
+	eng.hooks.dispatchOrder = parseDispatchOrder(t, order)
+	eng.hooks.serializeWorkers = true
 }
 
 func parentTestName(name string) string {

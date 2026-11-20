@@ -277,7 +277,7 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	remote.addFile(t, "item-r", "item-docs", "r.txt", crashReplacingContent)
 	remote.addFile(t, "item-s", "item-docs", path.Base(crashReplacedPath), crashReplacedContent)
 	h := newSyncHarness(t, remote)
-	h.eng.serializeWorkers = true
+	h.eng.hooks.serializeWorkers = true
 	runScenarioPass(t, h.eng)
 	// The synced state reaches the main database file; the round's commits
 	// stay in the WAL, which the lost-WAL variant then loses.

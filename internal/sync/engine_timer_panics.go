@@ -15,8 +15,8 @@ import (
 func (e *Engine) beginRun(ctx context.Context) (context.Context, func(error) error) {
 	runCtx, cancel := context.WithCancel(e.withOwnCollector(ctx))
 	e.wallClock.Panics().Bind(cancel)
-	if e.ownerCheckFactory != nil {
-		e.runOwnerCheck = e.ownerCheckFactory()
+	if e.hooks.ownerCheckFactory != nil {
+		e.runOwnerCheck = e.hooks.ownerCheckFactory()
 	}
 
 	return runCtx, func(err error) error {

@@ -282,7 +282,7 @@ func stalledOutageEngine(t *testing.T, folders int, logger *slog.Logger) (*testE
 		return stalled.CreateFolder(ctx, driveID, parentID, name)
 	}
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
-	eng.oneShotPassLimit = 1
+	eng.hooks.oneShotPassLimit = 1
 	for i := range folders {
 		require.NoError(t, os.Mkdir(filepath.Join(syncRoot, fmt.Sprintf("folder-%d", i)), 0o750))
 	}

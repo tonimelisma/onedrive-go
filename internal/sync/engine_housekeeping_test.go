@@ -559,7 +559,7 @@ func TestPurgeExpiredTrash_WarnsOncePerFailureStreak(t *testing.T) {
 	eng := &Engine{
 		trash:  localtrash.Open(trashPath, nil),
 		logger: logger,
-		clock:  syncfixture.NewManualClock(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		hooks:  engineHooks{clock: syncfixture.NewManualClock(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC))},
 	}
 
 	const warnLine = "Could not remove expired files from the sync trash"

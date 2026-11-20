@@ -536,7 +536,7 @@ func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.I
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.reconciliationQueryOverride = reconciliationQueryWithoutLocalUploadRule(t)
+	eng.hooks.reconciliationQuery = reconciliationQueryWithoutLocalUploadRule(t)
 
 	return eng, syncRoot, &uploads
 }

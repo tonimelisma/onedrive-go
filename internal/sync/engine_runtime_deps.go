@@ -30,7 +30,7 @@ func newRuntimeDeps(engine *Engine) runtimeDeps {
 	return runtimeDeps{
 		logger: engine.logger,
 		store:  engine.baseline,
-		clock:  engine.clock,
+		clock:  engine.runClock(),
 		events: engine.emitDebugEvent,
 	}
 }

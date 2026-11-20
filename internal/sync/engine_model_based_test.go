@@ -317,13 +317,13 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 // and the seed's dispatch order, recorded.
 func (r *modelRun) adoptEngine(eng *testEngine) {
 	r.eng = eng
-	eng.clock = r.clock
-	order := eng.dispatchOrder
+	eng.hooks.clock = r.clock
+	order := eng.hooks.dispatchOrder
 	if order == nil {
 		order = dispatchOrderShuffle(r.seed)
 	}
-	eng.serializeWorkers = true
-	eng.dispatchOrder = func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
+	eng.hooks.serializeWorkers = true
+	eng.hooks.dispatchOrder = func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 		frontier = order(frontier)
 		r.recordDispatch(frontier)
 		return frontier

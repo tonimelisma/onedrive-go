@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -86,72 +85,23 @@ type Engine struct {
 	// syncs with, the one whose sign-in requirement a 401 marks and the
 	// startup proof clears; zero leaves the catalog alone.
 	accountCanonicalID driveid.CanonicalID
-	// ownerCheckFactory, when set, is called on the goroutine that starts a
-	// run (beginRun) and returns the owner check of that run, which the run's
-	// scope ledger, watch timers and every dependency graph it builds carry;
-	// nil in production. Test-only: a test proves the run touches them from
-	// its own goroutine alone.
-	ownerCheckFactory func() func()
 	// runOwnerCheck is the current run's owner check, nil outside a run and
 	// in production. Written by beginRun on the run's goroutine.
 	runOwnerCheck func()
-	// clearAccountAuthRequirement replaces config.ClearAccountAuthRequirement
-	// for the startup proof's clear; nil in production. Tests return a held
-	// catalog lock through it without waiting out the lock's timeout.
-	clearAccountAuthRequirement func(dataDir string, account driveid.CanonicalID) error
 
 	localRules            syncdomain.LocalObservationRules
 	shortcutNamespaceID   string
 	shortcutChildWorkSink syncshortcut.ShortcutChildWorkSink
 	enableWebsocket       bool
 
-	// Test/debug-only invariant checks. Production keeps this disabled;
-	// tests enable it to catch lifecycle and scope regressions immediately.
-	assertInvariants bool
-	debugEventHook   func(syncdomain.DebugEvent)
-	activityHook     func(Activity)
+	debugEventHook func(syncdomain.DebugEvent)
+	activityHook   func(Activity)
 
-	// dispatchOrder reorders every ready frontier before it is dispatched
-	// (D-090). Tests run scenarios forward, reversed or in a seeded shuffle
-	// so a bug that depends on dispatch order cannot pass by timing; nil, as
-	// in production, keeps the dependency graph's order.
-	dispatchOrder func([]*syncdomain.TrackedAction) []*syncdomain.TrackedAction
-	// serializeWorkers runs one worker instead of the pool, so with a
-	// dispatch order execution is deterministic. Test-only.
-	serializeWorkers bool
-	// oneShotPassLimit, when positive, lowers the passes one RunOnce makes
-	// below oneShotMaxPasses. Test-only: a test that inspects what a single
-	// pass committed sets it to 1.
-	oneShotPassLimit int
-	// waitFn is how a one-shot sync waits out a scope's pause before its
-	// next pass (oneShotScopeWait); nil waits on a real timer. Test-only: a
-	// test advances its manual clock instead.
-	waitFn func(ctx context.Context, d time.Duration) error
-	// reconciliationQueryOverride, when set, replaces
-	// SqlQueryReconciliationState in planning. Test-only: no reachable state
-	// is outside the decision table, so a test removes one rule from it to
-	// prove the pass fails closed on the row that rule classified (R-6.2.16).
-	reconciliationQueryOverride string
+	// hooks are the engine's test seams; the zero value is production.
+	hooks engineHooks
 
-	// localWatcherFactory overrides the default fsnotify watcher factory
-	// for the local observer. Tests inject a mock factory to simulate
-	// inotify watch limit exhaustion (ENOSPC).
-	localWatcherFactory func() (syncobserve.FsWatcher, error)
-
-	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
-	// wakeups. Production uses NewSocketIOWakeSourceWithOptions.
-	socketIOWakeSourceFactory func(
-		syncdomain.SocketIOEndpointFetcher,
-		driveid.ID,
-		syncobserve.SocketIOWakeSourceOptions,
-	) socketIOWakeSourceRunner
-
-	// clock is the engine's single time capability: now, delayed callbacks,
-	// tickers, sleeps, and retry jitter. See SyncClock for why these are one
-	// value rather than five injectable fields.
-	clock syncdomain.SyncClock
-	// wallClock is the engine's real clock: clock is it unless a test
-	// replaced clock, and every observer the engine builds runs on it, except
+	// wallClock is the engine's real clock: the run clock (runClock) is it
+	// unless a test replaced it, and every observer the engine builds runs on it, except
 	// that a pass's full local scan, which runs no timer, measures its
 	// racily-clean window on the run's clock (observeLocal). Its timer panics
 	// carry a timer callback's panic to the run it ends (beginRun).
@@ -215,7 +165,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	storeOwnedByEngine := false
 	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
-	bm, err := syncstore.OpenEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.storeDriverName())
+	bm, err := syncstore.OpenEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.hooks.storeDriverName())
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -283,15 +233,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		shortcutChildWorkSink:  cfg.ShortcutChildWorkSink,
 		enableWebsocket:        cfg.EnableWebsocket,
 		wallClock:              syncdomain.NewRealClock(cfg.Logger, &syncdomain.TimerPanics{}),
-		socketIOWakeSourceFactory: func(
-			fetcher syncdomain.SocketIOEndpointFetcher,
-			driveID driveid.ID,
-			opts syncobserve.SocketIOWakeSourceOptions,
-		) socketIOWakeSourceRunner {
-			return syncobserve.NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
-		},
+		hooks:                  cfg.hooks,
 	}
-	e.clock = e.wallClock
 
 	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
@@ -397,8 +340,8 @@ func openBoundSyncTree(
 	if err != nil {
 		return nil, syncdomain.ResolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
-	if cfg.interposeSyncTree != nil {
-		syncTree = syncTree.Interpose(cfg.interposeSyncTree)
+	if cfg.hooks.interposeSyncTree != nil {
+		syncTree = syncTree.Interpose(cfg.hooks.interposeSyncTree)
 	}
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)
@@ -494,16 +437,6 @@ func (e *Engine) commitLocalSnapshotUnbound(
 		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
 	return result, nil
-}
-
-// storeDriverName is the database/sql driver the engine opens its store
-// through: the SQLite driver unless a test named another.
-func (cfg *engineInputs) storeDriverName() string {
-	if cfg.storeDriver == "" {
-		return syncstore.SqliteDriverName
-	}
-
-	return cfg.storeDriver
 }
 
 func (e *Engine) collector() *perf.Collector {
@@ -649,7 +582,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if proofErr != nil {
 		return proofErr
 	}
-	clearRequirement := e.clearAccountAuthRequirement
+	clearRequirement := e.hooks.clearAccountAuthRequirement
 	if clearRequirement == nil {
 		clearRequirement = config.ClearAccountAuthRequirement
 	}

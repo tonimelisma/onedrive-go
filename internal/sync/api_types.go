@@ -159,16 +159,6 @@ type engineInputs struct {
 	MinFreeSpace             int64
 	PerfCollector            *perf.Collector
 
-	// lockFlock replaces syscall.Flock for the engine's two locks, on its sync
-	// folder and on its state store; nil in production. Tests inject
-	// unsupported-filesystem errnos through it and watch the unlocks.
-	lockFlock func(fd int, how int) error
-	// interposeSyncTree wraps the sync tree's filesystem handle; nil in
-	// production. Tests put an emulated filesystem under the engine through
-	// it: a case-insensitive volume, injected errno (D-094).
-	interposeSyncTree func(synctree.Handle) synctree.Handle
-	// storeDriver names the database/sql driver the engine opens its store
-	// through; empty in production, which uses the SQLite driver. Tests open
-	// it through a fault-injecting driver.
-	storeDriver string
+	// hooks are the engine's test seams; the zero value is production.
+	hooks engineHooks
 }

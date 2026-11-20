@@ -388,7 +388,7 @@ func (rt *watchRuntime) totalWorkers() int {
 	if rt == nil || rt.engine == nil || rt.engine.transferWorkers < 1 {
 		return 0
 	}
-	if rt.engine.serializeWorkers {
+	if rt.engine.hooks.serializeWorkers {
 		return 1
 	}
 	return rt.engine.transferWorkers

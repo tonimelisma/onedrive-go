@@ -199,14 +199,9 @@ func (f *engineFlow) logFailureSummary() {
 	}
 }
 
-// nowFunc returns the current time from the engine's clock capability.
-// Always set by newEngine; tests install a manual clock.
+// nowFunc returns the current time from the engine's run clock.
 func (e *Engine) nowFunc() time.Time {
-	if e == nil || e.clock == nil {
-		panic("sync: engine clock is not initialized")
-	}
-
-	return e.clock.Now()
+	return e.runClock().Now()
 }
 
 func (e *Engine) since(start time.Time) time.Duration {
@@ -217,7 +212,7 @@ func (e *Engine) since(start time.Time) time.Duration {
 // transfer workers with the pool's floor, or one when serialized (D-090). It
 // is the ceiling a fresh plan's slow start doubles toward (R-6.8.25).
 func (e *Engine) workerPoolSize() int {
-	return syncexec.PoolWorkerCount(e.transferWorkers, e.serializeWorkers)
+	return syncexec.PoolWorkerCount(e.transferWorkers, e.hooks.serializeWorkers)
 }
 
 // resultStats returns the engine-owned counters and error list.

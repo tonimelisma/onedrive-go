@@ -155,7 +155,7 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 
 	remote := remoteWithReplacedFolder()
 	h := newSyncHarness(t, remote)
-	h.eng.serializeWorkers = true
+	h.eng.hooks.serializeWorkers = true
 	runScenarioPass(t, h.eng)
 	// The synced folder reaches the main database file; the round's commits
 	// stay in the WAL, which the lost-WAL variant then loses.
