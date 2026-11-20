@@ -131,7 +131,7 @@ func TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName(t *test
 
 			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 			trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-			cfg.SetTrash(trash)
+			cfg.trash = trash
 			cfg.hooks.CrashAt = func(point string) error {
 				if point == syncdomain.CrashPointLocalMoveDestinationTrashed {
 					syncfixture.WriteExecTestFile(t, syncRoot, entry.dst, "saved meanwhile\n")
@@ -176,7 +176,7 @@ func TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened(t *tes
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	capture, logger := synctest.NewLogCapture()
-	e.SetLoggerForTest(logger)
+	e.logger = logger
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName("a.txt")
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	moving := syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "a.txt"))

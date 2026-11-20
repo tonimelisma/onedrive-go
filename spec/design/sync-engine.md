@@ -177,7 +177,11 @@ interposer, plus the hooks of the packages the engine builds from:
 bounds), `syncstore.Hooks` (crash points, the database driver) and
 `syncobserve.Hooks` (the watcher factory, hashing, the safety-scan and watch
 loop callbacks, the write cooldown), which `newEngine` and
-`buildLocalObserver` pass through unchanged. Each zero value is production
+`buildLocalObserver` pass through unchanged. `newEngine` builds the executor
+configuration in one call from `syncexec.ExecutorInputs` (R-6.10.30), with
+the store as its pending-create record, the trash and transfer manager it
+built and the run clock (`nowFunc`), and every worker pool from
+`syncexec.WorkerPoolInputs`; neither has a setter. Each zero value is production
 behavior (`TestEngineHooks_ZeroValueIsProduction`, and a
 `TestHooks_ZeroValueIsProduction` in each package). Production code passes a
 hooks value through and reads its fields but never sets one: `devtool verify`'s

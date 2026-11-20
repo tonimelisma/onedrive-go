@@ -780,11 +780,12 @@ func runFinishIntoPlaceholderCase(t *testing.T, tc *finishIntoPlaceholderCase) (
 		return &graph.Item{ID: testPlaceholderID}, nil
 	}
 	_, logger := syncfixture.NewDebugLogBuffer()
-	e, _, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
-	e.SetItemsForTest(&syncfixture.ExecutorMockItemClient{GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
-		item := tc.item
-		return &item, nil
-	}})
+	e, _, syncRoot := newPendingCreateTestExecutorWith(t, ul, logger, func(in *syncexec.ExecutorInputs) {
+		in.Items = &syncfixture.ExecutorMockItemClient{GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+			item := tc.item
+			return &item, nil
+		}}
+	})
 	local := syncfixture.WriteExecTestFile(t, syncRoot, tc.path, "my words\n")
 
 	_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: tc.path},
@@ -810,10 +811,11 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 		t.Helper()
 
 		_, logger := syncfixture.NewDebugLogBuffer()
-		e, _, syncRoot := newPendingCreateTestExecutor(t, &syncfixture.CreatingTestUploader{}, logger)
-		e.SetItemsForTest(&syncfixture.ExecutorMockItemClient{GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
-			return nil, readErr
-		}})
+		e, _, syncRoot := newPendingCreateTestExecutorWith(t, &syncfixture.CreatingTestUploader{}, logger, func(in *syncexec.ExecutorInputs) {
+			in.Items = &syncfixture.ExecutorMockItemClient{GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+				return nil, readErr
+			}}
+		})
 
 		return e, syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 	}

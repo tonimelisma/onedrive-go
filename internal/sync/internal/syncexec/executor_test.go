@@ -95,11 +95,41 @@ func newTestExecutorConfigWithPathConvergence(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence, Hooks{})
-	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
-	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
+	cfg := mustNewExecutorConfig(t, &ExecutorInputs{
+		Items: items, Downloads: dl, Uploads: ul, SyncTree: syncTree, DriveID: driveID, Logger: logger,
+		PathConvergence: pathConvergence,
+		Now:             func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) },
+	})
 
 	return cfg, syncRoot
+}
+
+// testMountRootID is the remote root item of a mount-root executor in tests.
+const testMountRootID = "mount-root-id"
+
+// mustNewExecutorConfig builds a configuration from in, filling what it
+// leaves zero of the transfer manager (over its downloader and uploader) and
+// the clock (the wall clock).
+func mustNewExecutorConfig(t *testing.T, in *ExecutorInputs) *ExecutorConfig {
+	t.Helper()
+
+	if in.Transfers == nil {
+		in.Transfers = driveops.NewTransferManager(in.Downloads, in.Uploads, nil, in.Logger)
+	}
+	if in.Now == nil {
+		in.Now = time.Now
+	}
+	cfg, err := NewExecutorConfig(in)
+	require.NoError(t, err)
+
+	return cfg
+}
+
+// setTestContentFilter replaces cfg's content filter as NewExecutorConfig
+// installs one.
+func setTestContentFilter(cfg *ExecutorConfig, filter syncdomain.ContentFilterConfig) {
+	cfg.ignoreJunkFiles = filter.IgnoreJunkFiles
+	cfg.contentFilter = syncdomain.NewContentFilter(syncdomain.CloneContentFilterConfig(filter))
 }
 
 func TestNewExecutorConfig_AllowsNilPathConvergence(t *testing.T) {
@@ -340,7 +370,7 @@ func TestExecutor_CreateRemoteFolder_MountRootUsesMountLocalPathConvergence(t *t
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, _ := newTestExecutorConfigWithPathConvergence(t, items, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, pathConvergence)
-	cfg.SetRemoteRootItemID(sharedParent)
+	cfg.remoteRootItemID = sharedParent
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	action := &syncdomain.Action{
@@ -821,7 +851,7 @@ func TestExecutor_RemoteMove_MountRootUsesMountLocalPathConvergence(t *testing.T
 		View:    &syncdomain.PathView{Path: "renamed.txt"},
 	}
 
-	cfg.SetRemoteRootItemID("mount-root-id")
+	cfg.remoteRootItemID = testMountRootID
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	o := e.ExecuteMove(t.Context(), action)
@@ -902,7 +932,7 @@ func TestExecutor_Download_MountRootAllowsGraphDriveRootPath(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, items, dl, &syncfixture.ExecutorMockUploader{})
-	cfg.SetRemoteRootItemID("mount-root-id")
+	cfg.remoteRootItemID = testMountRootID
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	action := &syncdomain.Action{
@@ -1494,7 +1524,7 @@ func TestExecutor_Upload_CrossDriveParentUsesTargetScopedPathConvergence(t *test
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, ul, pathConvergence)
-	cfg.SetRemoteRootItemID(sharedParent)
+	cfg.remoteRootItemID = sharedParent
 	e := NewExecution(cfg, syncfixture.BaselineWith(&syncdomain.BaselineEntry{
 		Path:     "folder",
 		ItemID:   "parent-id",
@@ -1531,7 +1561,7 @@ func TestExecutor_Upload_MountRootUsesMountLocalPathConvergence(t *testing.T) {
 	pathConvergence := &executorPathConvergenceStub{}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, ul, pathConvergence)
-	cfg.SetRemoteRootItemID(sharedParent)
+	cfg.remoteRootItemID = sharedParent
 	e := NewExecution(cfg, syncfixture.BaselineWith(&syncdomain.BaselineEntry{
 		Path:     "folder",
 		ItemID:   "parent-id",
@@ -2710,12 +2740,12 @@ func TestExecutor_ResolveParentID_MountRoot(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-	cfg.SetRemoteRootItemID("mount-root-id")
+	cfg.remoteRootItemID = testMountRootID
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	id, err := e.ResolveParentID("exec-file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "mount-root-id", id)
+	assert.Equal(t, testMountRootID, id)
 }
 
 // ---------------------------------------------------------------------------
@@ -3632,7 +3662,7 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 			trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 			if tc.withTrash {
-				cfg.SetTrash(trash)
+				cfg.trash = trash
 			}
 			e := NewExecution(cfg, syncfixture.EmptyBaseline())
 			syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "alpha\n")
@@ -3713,7 +3743,7 @@ func TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName(t
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	fixed := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	cfg.SetNowFunc(func() time.Time { return fixed })
+	cfg.nowFunc = func() time.Time { return fixed }
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	syncfixture.WriteExecTestFile(t, syncRoot, filepath.Join("thing", "child.txt"), "child")
 	firstCandidate := conflictCopyDirPathWithOrdinal(filepath.Join(syncRoot, "thing"), fixed, 1)

@@ -99,7 +99,7 @@ func TestExecuteRemoteDelete_LocalPathReappearedIsSuperseded(t *testing.T) {
 	identity, err := cfg.syncTree.RootIdentity()
 	require.NoError(t, err)
 	identity.Inode++
-	cfg.SetSyncRootIdentity(syncdomain.FixedSyncRootIdentity(&identity))
+	cfg.syncRootIdentity = syncdomain.FixedSyncRootIdentity(&identity)
 	outcome = NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 	syncfixture.RequireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, syncdomain.ErrMountRootUnavailable)
@@ -111,7 +111,7 @@ func TestDeleteLocalFolder_OnlyIgnoredChildrenConverges(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-	cfg.SetContentFilter(syncdomain.ContentFilterConfig{IgnoreDotfiles: true})
+	setTestContentFilter(cfg, syncdomain.ContentFilterConfig{IgnoreDotfiles: true})
 	syncfixture.WriteExecTestFile(t, syncRoot, "X/.env", "secret\n")
 
 	action := &syncdomain.Action{

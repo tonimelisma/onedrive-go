@@ -3,7 +3,6 @@ package syncexec
 import (
 	"context"
 	"io"
-	"log/slog"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -76,21 +75,6 @@ func (cfg *ExecutorConfig) NowForTest() time.Time {
 // remote paths with.
 func (cfg *ExecutorConfig) PathConvergenceForTest() driveops.PathConvergence {
 	return cfg.pathConvergence
-}
-
-// SetItemsForTest replaces the executor's item client.
-func (cfg *ExecutorConfig) SetItemsForTest(items syncdomain.ItemClient) {
-	cfg.items = items
-}
-
-// SetLoggerForTest replaces the executor's logger.
-func (cfg *ExecutorConfig) SetLoggerForTest(logger *slog.Logger) {
-	cfg.logger = logger
-}
-
-// LoggerForTest is the executor's logger.
-func (cfg *ExecutorConfig) LoggerForTest() *slog.Logger {
-	return cfg.logger
 }
 
 // UploadNewFileForTest uploads localPath as a new item (uploadNewFile).

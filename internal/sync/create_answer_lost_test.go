@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
@@ -30,15 +29,32 @@ import (
 func newScenarioCreateExecutor(t *testing.T, remote *moveScenarioRemote) (*syncexec.Executor, *syncstore.SyncStore, string) {
 	t.Helper()
 
+	return newScenarioCreateExecutorOn(t, remote, remote.client(t), nil)
+}
+
+// newScenarioCreateExecutorOn is newScenarioCreateExecutor through client, a
+// client of remote whose functions the test may still replace, on the clock
+// now (nil is the wall clock).
+func newScenarioCreateExecutorOn(
+	t *testing.T, remote *moveScenarioRemote, client *syncfixture.EngineMockClient, now func() time.Time,
+) (*syncexec.Executor, *syncstore.SyncStore, string) {
+	t.Helper()
+
 	syncRoot := t.TempDir()
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
-	client := remote.client(t)
 	_, logger := syncfixture.NewDebugLogBuffer()
-	cfg := syncexec.NewExecutorConfig(client, client, client, syncTree, remote.driveID, logger, nil, syncexec.Hooks{})
-	cfg.SetTransferMgr(driveops.NewTransferManager(client, client, nil, logger))
 	store := syncstoretest.NewTestStore(t)
-	cfg.SetPendingCreates(store)
+	cfg := mustNewTestExecutorConfig(t, &syncexec.ExecutorInputs{
+		Items:          client,
+		Downloads:      client,
+		Uploads:        client,
+		SyncTree:       syncTree,
+		DriveID:        remote.driveID,
+		Logger:         logger,
+		PendingCreates: store,
+		Now:            now,
+	})
 
 	return syncexec.NewExecution(cfg, syncfixture.EmptyBaseline()), store, syncRoot
 }
@@ -107,7 +123,8 @@ func TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent(t *testing
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
-	e, store, syncRoot := newScenarioCreateExecutor(t, remote)
+	client := remote.client(t)
+	e, store, syncRoot := newScenarioCreateExecutorOn(t, remote, client, nil)
 	local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 	action := &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"}
 	loseCreateAnswers(remote, true)
@@ -115,11 +132,9 @@ func TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent(t *testing
 	require.Error(t, lostErr)
 	loseCreateAnswers(remote, false)
 
-	client := remote.client(t)
 	client.ListChildrenFn = func(context.Context, driveid.ID, string) ([]graph.Item, error) {
 		return nil, nil // the folder's listing has not caught up with the create
 	}
-	e.SetItemsForTest(client)
 	_, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, syncexec.GraphRootID, "doc.txt", local)
 	require.ErrorIs(t, err, graph.ErrConflict)
 
@@ -178,7 +193,8 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 				remote.addFile(t, "stranger", syncexec.GraphRootID, tc.remoteName, tc.remoteContent)
 			}
 			before := remote.tree()
-			e, store, syncRoot := newScenarioCreateExecutor(t, remote)
+			now := func() time.Time { return intendedAt.Add(tc.retriedAfter) }
+			e, store, syncRoot := newScenarioCreateExecutorOn(t, remote, remote.client(t), now)
 			local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 			if tc.priorIntent {
 				store.SetNowFunc(func() time.Time { return intendedAt })
@@ -186,9 +202,7 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 					DriveID: remote.driveID, Path: "doc.txt", ParentID: syncexec.GraphRootID,
 				}))
 			}
-			now := func() time.Time { return intendedAt.Add(tc.retriedAfter) }
 			store.SetNowFunc(now)
-			e.SetNowFunc(now)
 			stranger, ok := remote.itemAt("doc.txt")
 			require.True(t, ok)
 
@@ -233,7 +247,8 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 			t.Parallel()
 
 			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
-			e, _, syncRoot := newScenarioCreateExecutor(t, remote)
+			client := remote.client(t)
+			e, _, syncRoot := newScenarioCreateExecutorOn(t, remote, client, nil)
 			local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 			action := &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"}
 			loseCreateAnswers(remote, true)
@@ -241,7 +256,6 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 			require.Error(t, lostErr)
 			loseCreateAnswers(remote, false)
 
-			client := remote.client(t)
 			if tc.afterListing {
 				client.ListChildrenFn = func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
 					children := remote.listChildren(parentID)
@@ -255,7 +269,6 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 					return item, err
 				}
 			}
-			e.SetItemsForTest(client)
 			var attempts []string
 			uploadToItem := client.UploadToItemFn
 			client.UploadToItemFn = func(
@@ -265,7 +278,6 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 				attempts = append(attempts, ifMatch)
 				return uploadToItem(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 			}
-			e.SetTransferMgr(driveops.NewTransferManager(client, client, nil, e.LoggerForTest()))
 
 			_, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, syncexec.GraphRootID, "doc.txt", local)
 			require.ErrorIs(t, err, tc.wantSentinel)

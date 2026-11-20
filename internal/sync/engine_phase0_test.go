@@ -38,7 +38,7 @@ func newBootstrapWatchPipelineForTest(
 	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 
-	pool := syncexec.NewWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: eng.execCfg, Dispatch: rt.sched.dispatchCh, Store: eng.baseline, Logger: eng.logger, CompletionBuffer: 1024})
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	stdsync "sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -175,18 +176,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, err
 	}
 
-	execCfg := syncexec.NewExecutorConfig(
-		cfg.Items,
-		cfg.Downloads,
-		cfg.Uploads,
-		syncTree,
-		cfg.DriveID,
-		cfg.Logger,
-		cfg.PathConvergence,
-		cfg.hooks.exec,
-	)
 	rootIdentity := syncdomain.NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
-	trash := configureEngineExecutor(execCfg, cfg, bm, rootIdentity)
+	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space
@@ -196,16 +187,14 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if cfg.DataDir != "" {
 		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 	}
-
-	execCfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
+	transfers := driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
 		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),
-	))
+	)
 
 	e := &Engine{
 		baseline:               bm,
 		planner:                syncplan.NewPlanner(cfg.Logger),
-		execCfg:                execCfg,
 		fetcher:                cfg.Fetcher,
 		socketIOFetcher:        cfg.SocketIOFetcher,
 		itemsClient:            cfg.Items,
@@ -246,10 +235,52 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	// timestamps read the engine clock, or a retry scheduled by one clock is
 	// judged due by another.
 	bm.SetNowFunc(e.nowFunc)
-	execCfg.SetNowFunc(e.nowFunc)
+	execCfg, execErr := newEngineExecutorConfig(cfg, syncTree, transfers, trash, rootIdentity, bm, e.nowFunc)
+	if execErr != nil {
+		return nil, execErr
+	}
+	e.execCfg = execCfg
 
 	storeOwnedByEngine = true
 	return e, nil
+}
+
+// newEngineExecutorConfig builds the engine's executor configuration: the
+// mount's clients and remote root, the sync tree and its folder identity
+// that remote deletes re-check (D-011), the transfer manager, the local
+// trash (R-6.4.9), the store as the pending-create record (R-5.6.15) and the
+// engine's run clock.
+func newEngineExecutorConfig(
+	cfg *engineInputs,
+	syncTree *synctree.Root,
+	transfers *driveops.TransferManager,
+	trash *localtrash.Trash,
+	rootIdentity *syncdomain.SyncRootIdentity,
+	store *syncstore.SyncStore,
+	now func() time.Time,
+) (*syncexec.ExecutorConfig, error) {
+	execCfg, err := syncexec.NewExecutorConfig(&syncexec.ExecutorInputs{
+		Items:            cfg.Items,
+		Downloads:        cfg.Downloads,
+		Uploads:          cfg.Uploads,
+		Transfers:        transfers,
+		SyncTree:         syncTree,
+		DriveID:          cfg.DriveID,
+		RemoteRootItemID: cfg.RemoteRootItemID,
+		Logger:           cfg.Logger,
+		ContentFilter:    cfg.ContentFilter,
+		SyncRootIdentity: rootIdentity,
+		PathConvergence:  cfg.PathConvergence,
+		Trash:            trash,
+		PendingCreates:   store,
+		Now:              now,
+		Hooks:            cfg.hooks.exec,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
+	}
+
+	return execCfg, nil
 }
 
 // buildLocalObserver builds a local observer on the engine's real clock,
@@ -313,25 +344,6 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 		return ""
 	}
 	return syncdomain.ErrSyncRootRebindHint
-}
-
-// configureEngineExecutor installs the mount-owned executor policy: the remote
-// root, pending-create store, local trash (R-6.4.9), content filter and the sync
-// folder identity remote deletes re-check (D-011). It returns the trash so the
-// engine's housekeeping purges the same one.
-func configureEngineExecutor(
-	execCfg *syncexec.ExecutorConfig,
-	cfg *engineInputs,
-	store *syncstore.SyncStore,
-	rootIdentity *syncdomain.SyncRootIdentity,
-) *localtrash.Trash {
-	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
-	execCfg.SetPendingCreates(store)
-	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
-	execCfg.SetTrash(trash)
-	execCfg.SetContentFilter(cfg.ContentFilter)
-	execCfg.SetSyncRootIdentity(rootIdentity)
-	return trash
 }
 
 // openBoundSyncTree opens the sync tree and resolves the folder identity

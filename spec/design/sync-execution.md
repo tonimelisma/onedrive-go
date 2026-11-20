@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/active_scopes.go, internal/sync/internal/syncexec/dep_graph.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/scope.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.10.30 [verified]
 
 ## Overview
 
@@ -36,6 +36,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Behavior | Evidence |
 | --- | --- |
 | The executor's and its worker pools' test seams are one `Hooks` value (`executor_test_seams.go`), passed to `NewExecutorConfig`; its zero value hashes with QuickXorHash, keeps the full detached store-access and outcome-commit bounds and makes every crash point a no-op (R-6.10.29). | `TestHooks_ZeroValueIsProduction` |
+| The executor configuration is built whole from `ExecutorInputs` or refused, naming the first missing required input (R-6.10.30). | `TestNewExecutorConfig_RejectsEachMissingRequiredField` |
 | A download replaces an existing local file only when its content hashes to the planned version, or to the baseline's local hash when the plan has no hash, so an unsynced edit that kept size and mtime survives (R-2.2.5). | `TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded` |
 | A remote move whose item already sits at the destination succeeds without a Graph call. | `TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving` |
 | Folder eTag churn from descendant changes neither supersedes a folder move nor conditions it, while a file's eTag mismatch still supersedes. | `TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede`, `TestExecutor_RemoteMove_FileETagMismatchStillSupersedes`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
@@ -59,6 +60,16 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | Watch-mode replan keeps old-runtime work out of dispatch once it is no longer current and preserves dirty intent across recoverable local-observation failure. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal`, `TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal` |
 
 ## Worker And Dependency Model
+
+The executor configuration and each worker pool are built in one call:
+`NewExecutorConfig(ExecutorInputs)` and `NewWorkerPool(WorkerPoolInputs)`.
+The configuration's required inputs (item client, downloader, uploader,
+transfer manager, sync tree, drive, logger, clock) are refused when zero,
+naming the field (R-6.10.30, `TestNewExecutorConfig_RejectsEachMissingRequiredField`);
+nothing changes either after it is built, so no worker can see a
+configuration half set up. The engine builds the configuration once in
+`newEngine`, and a pool per pass (one-shot) or per watch session, passing its
+perf collector and its serialize test seam into the pool's inputs.
 
 `DepGraph` is the execution-time dependency graph. It tracks:
 

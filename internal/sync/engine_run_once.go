@@ -460,8 +460,15 @@ func (r *oneShotRunner) executePreparedPlan(
 		return nil
 	}
 
-	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.sched.dispatchCh, executorStoreOf(r.deps.store), r.deps.logger, len(plan.Actions))
-	pool.SetRuntimeOptions(r.engine.collector(), r.engine.hooks.serializeWorkers)
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{
+		Config:           r.engine.execCfg,
+		Dispatch:         r.sched.dispatchCh,
+		Store:            executorStoreOf(r.deps.store),
+		Logger:           r.deps.logger,
+		CompletionBuffer: len(plan.Actions),
+		Perf:             r.engine.collector(),
+		Serialize:        r.engine.hooks.serializeWorkers,
+	})
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.
 	runCtx, cancelPass := context.WithCancelCause(ctx)

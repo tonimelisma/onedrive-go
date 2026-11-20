@@ -38,7 +38,7 @@ func TestHooks_ZeroValueIsProduction(t *testing.T) {
 	assert.Equal(t, want, byReader, "an open descriptor hashes with QuickXorHash")
 
 	assert.Equal(t, syncdomain.OutcomeCommitTimeout, cfg.detachedStoreBound(), "store access keeps the full bound")
-	pool := NewWorkerPool(cfg, nil, nil, cfg.logger, 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Logger: cfg.logger, CompletionBuffer: 1})
 	assert.Equal(t, syncdomain.OutcomeCommitTimeout, pool.outcomeCommitBound(), "outcome commits keep the full bound")
 	for _, point := range syncfixture.AllCrashPoints() {
 		require.NoError(t, cfg.reachCrashPoint(point), "crash point %s does nothing", point)

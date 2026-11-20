@@ -35,8 +35,7 @@ func TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution(t *
 	}}))
 
 	collector := perf.NewCollector(nil)
-	pool := NewWorkerPool(nil, nil, store, syncfixture.TestLogger(t), 1)
-	pool.perfCollector = collector
+	pool := NewWorkerPool(WorkerPoolInputs{Store: store, Logger: syncfixture.TestLogger(t), CompletionBuffer: 1, Perf: collector})
 	pool.ExecuteActionForTest(ctx, &syncdomain.TrackedAction{
 		ID: 1,
 		Action: syncdomain.Action{
@@ -73,8 +72,7 @@ func TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter(t 
 	}}, "delta-1", remoteDriveID))
 
 	collector := perf.NewCollector(nil)
-	pool := NewWorkerPool(nil, nil, store, syncfixture.TestLogger(t), 1)
-	pool.perfCollector = collector
+	pool := NewWorkerPool(WorkerPoolInputs{Store: store, Logger: syncfixture.TestLogger(t), CompletionBuffer: 1, Perf: collector})
 	pool.ExecuteActionForTest(ctx, &syncdomain.TrackedAction{
 		ID: 1,
 		Action: syncdomain.Action{
@@ -106,8 +104,7 @@ func TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability(t *te
 	t.Parallel()
 
 	collector := perf.NewCollector(nil)
-	pool := NewWorkerPool(nil, nil, nil, syncfixture.TestLogger(t), 2)
-	pool.perfCollector = collector
+	pool := NewWorkerPool(WorkerPoolInputs{Logger: syncfixture.TestLogger(t), CompletionBuffer: 2, Perf: collector})
 
 	pool.sendResult(t.Context(), &syncdomain.TrackedAction{
 		ID:     1,
@@ -141,8 +138,7 @@ func TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapabilit
 	t.Parallel()
 
 	collector := perf.NewCollector(nil)
-	pool := NewWorkerPool(nil, nil, nil, syncfixture.TestLogger(t), 2)
-	pool.perfCollector = collector
+	pool := NewWorkerPool(WorkerPoolInputs{Logger: syncfixture.TestLogger(t), CompletionBuffer: 2, Perf: collector})
 
 	pool.sendResult(t.Context(), &syncdomain.TrackedAction{
 		ID:     1,
@@ -183,7 +179,7 @@ func TestWorkerStartFreshness_DownloadDestinationAppearedIsSupersededBeforeExecu
 		Size:     9,
 	}}))
 
-	pool := NewWorkerPool(nil, nil, store, syncfixture.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Store: store, Logger: syncfixture.TestLogger(t), CompletionBuffer: 1})
 	pool.ExecuteActionForTest(ctx, &syncdomain.TrackedAction{
 		ID: 1,
 		Action: syncdomain.Action{
@@ -214,7 +210,7 @@ func TestWorkerStartFreshness_LocalDeleteMissingIsSupersededBeforeExecution(t *t
 
 	require.NoError(t, store.ReplaceLocalState(ctx, nil))
 
-	pool := NewWorkerPool(nil, nil, store, syncfixture.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Store: store, Logger: syncfixture.TestLogger(t), CompletionBuffer: 1})
 	pool.ExecuteActionForTest(ctx, &syncdomain.TrackedAction{
 		ID: 1,
 		Action: syncdomain.Action{
@@ -263,7 +259,7 @@ func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution
 		Size:     7,
 	}}, "delta-1", remoteDriveID))
 
-	pool := NewWorkerPool(nil, nil, store, syncfixture.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Store: store, Logger: syncfixture.TestLogger(t), CompletionBuffer: 1})
 	pool.ExecuteActionForTest(ctx, &syncdomain.TrackedAction{
 		ID: 1,
 		Action: syncdomain.Action{

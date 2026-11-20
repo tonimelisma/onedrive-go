@@ -203,8 +203,15 @@ func (rt *watchRuntime) initWatchInfra(
 	// actually ready to receive it.
 	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
 
-	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, executorStoreOf(rt.deps.store), rt.deps.logger, watchCompletionBuf)
-	pool.SetRuntimeOptions(rt.engine.collector(), rt.engine.hooks.serializeWorkers)
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{
+		Config:           rt.engine.execCfg,
+		Dispatch:         rt.sched.dispatchCh,
+		Store:            executorStoreOf(rt.deps.store),
+		Logger:           rt.deps.logger,
+		CompletionBuffer: watchCompletionBuf,
+		Perf:             rt.engine.collector(),
+		Serialize:        rt.engine.hooks.serializeWorkers,
+	})
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse

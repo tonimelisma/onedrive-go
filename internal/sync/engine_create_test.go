@@ -85,12 +85,11 @@ func TestExecutor_Upload_ListingFailureAfterACreateConflictIsClassifiedByItsOwnA
 
 			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "theirs", "root", "doc.txt", "theirs\n")
-			e, _, syncRoot := newScenarioCreateExecutor(t, remote)
 			client := remote.client(t)
 			client.ListChildrenFn = func(context.Context, driveid.ID, string) ([]graph.Item, error) {
 				return nil, read.err
 			}
-			e.SetItemsForTest(client)
+			e, _, syncRoot := newScenarioCreateExecutorOn(t, remote, client, nil)
 			local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "mine\n")
 
 			_, err := e.UploadNewFileForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},
