@@ -52,7 +52,7 @@ func isStoppingRun(ctx context.Context) bool {
 // stops the recording; the run calls it as it returns.
 func (flow *engineFlow) noteRunCancel(ctx context.Context) func() bool {
 	return context.AfterFunc(ctx, func() {
-		defer flow.engine.wallClock.recoverTimerPanic()
+		defer flow.engine.wallClock.RecoverTimerPanic()
 		canceled := time.Now()
 		flow.canceledAt.CompareAndSwap(nil, &canceled)
 	})
@@ -80,7 +80,7 @@ func (flow *engineFlow) beginStopDrain() {
 // every record was written. The bound runs out when the sync database does
 // not answer within it, or when a completion reaches the drain after it, so
 // both the warning and the error say that the stop's time ran out; the
-// store's error and errStoreAccessTimedOut stay the error's cause.
+// store's error and ErrStoreAccessTimedOut stay the error's cause.
 func (flow *engineFlow) endStopDrain() error {
 	drain := flow.stop
 	if drain == nil {
@@ -118,12 +118,12 @@ func unrecordedResultsMessage(count int) string {
 // short is counted for endStopDrain to say, not returned.
 func (flow *engineFlow) processShutdownCompletion(
 	ctx context.Context,
-	completion *actionCompletion,
+	completion *ActionCompletion,
 	bl *Baseline,
 ) error {
 	flow.beginStopDrain()
 	drain := flow.stop
-	detached, cancel := detachedStoreContext(ctx, drain.deadline)
+	detached, cancel := DetachedStoreContext(ctx, drain.deadline)
 	defer cancel()
 	drainCtx := context.WithValue(detached, stoppingRunKey{}, true)
 
@@ -131,24 +131,24 @@ func (flow *engineFlow) processShutdownCompletion(
 	flow.completeOutboxAsShutdown(ready)
 
 	var fatalErr *fatalCompletionError
-	if err == nil || errors.As(err, &fatalErr) || !errors.Is(context.Cause(drainCtx), errStoreAccessTimedOut) {
+	if err == nil || errors.As(err, &fatalErr) || !errors.Is(context.Cause(drainCtx), ErrStoreAccessTimedOut) {
 		return err
 	}
 	drain.unrecorded++
 	if drain.firstErr == nil {
-		drain.firstErr = storeAccessError(drainCtx, err)
+		drain.firstErr = StoreAccessError(drainCtx, err)
 	}
 
 	return nil
 }
 
-func (flow *engineFlow) completeOutboxAsShutdown(outbox []*trackedAction) {
+func (flow *engineFlow) completeOutboxAsShutdown(outbox []*TrackedAction) {
 	for _, ta := range outbox {
 		flow.completeTrackedActionAsShutdown(ta)
 	}
 }
 
-func (flow *engineFlow) completeTrackedActionAsShutdown(ta *trackedAction) {
+func (flow *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
 	if ta == nil {
 		return
 	}
@@ -159,7 +159,7 @@ func (flow *engineFlow) completeTrackedActionAsShutdown(ta *trackedAction) {
 }
 
 func (flow *engineFlow) logSuppressedShutdownCompletionError(
-	completion *actionCompletion,
+	completion *ActionCompletion,
 	err error,
 ) {
 	if completion == nil || err == nil {
@@ -180,7 +180,7 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 	// not be recorded; the next sync rediscovers it from durable truth
 	// (R-2.5.3).
 	var fatalErr *fatalCompletionError
-	if isCancellationEcho(err) || errors.As(err, &fatalErr) {
+	if IsCancellationEcho(err) || errors.As(err, &fatalErr) {
 		flow.deps.logger.Debug("suppressed action completion error during shutdown", fields...)
 		return
 	}

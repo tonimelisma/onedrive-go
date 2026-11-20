@@ -7,7 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 )
 
-func shortcutChildWorkSnapshotFromRootsWithParentRoot(
+func ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 	namespaceID string,
 	parentSyncRoot string,
 	parentContentFilter ContentFilterConfig,
@@ -18,7 +18,7 @@ func shortcutChildWorkSnapshotFromRootsWithParentRoot(
 		RunCommands: make([]ShortcutChildRunCommand, 0, len(roots)),
 	}
 	for i := range roots {
-		root := normalizeShortcutRootRecord(&roots[i])
+		root := NormalizeShortcutRootRecord(&roots[i])
 		if root.NamespaceID != "" && root.NamespaceID != namespaceID {
 			continue
 		}
@@ -59,12 +59,12 @@ func shortcutChildWorkSnapshotFromRootsWithParentRoot(
 }
 
 func projectShortcutChildContentFilter(parentFilter ContentFilterConfig, aliasPath string) (ContentFilterConfig, bool) {
-	aliasPath = normalizeContentFilterPath(aliasPath)
+	aliasPath = NormalizeContentFilterPath(aliasPath)
 	if aliasPath == "" || aliasPath == "." {
-		return cloneContentFilterConfig(parentFilter), true
+		return CloneContentFilterConfig(parentFilter), true
 	}
 
-	if !newContentFilter(parentFilter).Visible(aliasPath, ItemTypeFolder) {
+	if !NewContentFilter(parentFilter).Visible(aliasPath, ItemTypeFolder) {
 		return ContentFilterConfig{}, false
 	}
 
@@ -83,7 +83,7 @@ func projectShortcutChildContentFilter(parentFilter ContentFilterConfig, aliasPa
 func projectChildIgnoredDirs(parentIgnoredDirs []string, aliasPath string) []string {
 	projected := make([]string, 0, len(parentIgnoredDirs))
 	for _, ignoredDir := range parentIgnoredDirs {
-		ignoredDir = normalizeContentFilterPath(ignoredDir)
+		ignoredDir = NormalizeContentFilterPath(ignoredDir)
 		if ignoredDir == "" || ignoredDir == "." {
 			continue
 		}
@@ -101,11 +101,11 @@ func projectChildIncludedDirs(parentIncludedDirs []string, aliasPath string) []s
 
 	projected := make([]string, 0, len(parentIncludedDirs))
 	for _, includedDir := range parentIncludedDirs {
-		includedDir = normalizeContentFilterPath(includedDir)
+		includedDir = NormalizeContentFilterPath(includedDir)
 		if includedDir == "" || includedDir == "." {
 			continue
 		}
-		if includedDir == aliasPath || isAncestorPath(includedDir, aliasPath) {
+		if includedDir == aliasPath || IsAncestorPath(includedDir, aliasPath) {
 			return nil
 		}
 		if childPath, ok := trimContentFilterPathBelowRoot(aliasPath, includedDir); ok && childPath != "." {
@@ -119,7 +119,7 @@ func projectChildIgnoredPaths(parentIgnoredPaths []string, aliasPath string) []s
 	projected := make([]string, 0, len(parentIgnoredPaths))
 	aliasParts := strings.Split(aliasPath, "/")
 	for _, ignoredPath := range parentIgnoredPaths {
-		ignoredPath = normalizeContentFilterPath(ignoredPath)
+		ignoredPath = NormalizeContentFilterPath(ignoredPath)
 		if ignoredPath == "" || ignoredPath == "." {
 			continue
 		}
@@ -139,12 +139,12 @@ func projectChildIgnoredPaths(parentIgnoredPaths []string, aliasPath string) []s
 }
 
 func trimContentFilterPathBelowRoot(rootPath string, path string) (string, bool) {
-	rootPath = normalizeContentFilterPath(rootPath)
-	path = normalizeContentFilterPath(path)
+	rootPath = NormalizeContentFilterPath(rootPath)
+	path = NormalizeContentFilterPath(path)
 	switch {
 	case path == rootPath:
 		return ".", true
-	case isAncestorPath(rootPath, path):
+	case IsAncestorPath(rootPath, path):
 		return strings.TrimPrefix(path, rootPath+"/"), true
 	default:
 		return "", false

@@ -6,10 +6,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// findBaselineOrphans identifies baseline entries that are not present in the
+// FindBaselineOrphans identifies baseline entries that are not present in the
 // seen set from a full enumeration and synthesizes a deleted row for each.
-func findBaselineOrphans(bl *Baseline, seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []remoteItem {
-	var orphans []remoteItem
+func FindBaselineOrphans(bl *Baseline, seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []RemoteItem {
+	var orphans []RemoteItem
 
 	bl.ForEachPath(func(path string, entry *BaselineEntry) {
 		if entry.DriveID != driveID {
@@ -23,7 +23,7 @@ func findBaselineOrphans(bl *Baseline, seen map[string]struct{}, driveID driveid
 			return
 		}
 
-		orphans = append(orphans, remoteItem{observedItem: observedItem{
+		orphans = append(orphans, RemoteItem{ObservedItem: ObservedItem{
 			Path:      entry.Path,
 			ItemID:    entry.ItemID,
 			DriveID:   entry.DriveID,
@@ -35,21 +35,21 @@ func findBaselineOrphans(bl *Baseline, seen map[string]struct{}, driveID driveid
 	return orphans
 }
 
-// findRemoteStateOrphans synthesizes a deleted row for each remote_state
-// rows that a full enumeration no longer returns and that findBaselineOrphans
+// FindRemoteStateOrphans synthesizes a deleted row for each remote_state
+// rows that a full enumeration no longer returns and that FindBaselineOrphans
 // did not already cover.
-func findRemoteStateOrphans(
-	rows []remoteStateRow,
+func FindRemoteStateOrphans(
+	rows []RemoteStateRow,
 	seen map[string]struct{},
-	alreadyOrphaned []remoteItem,
+	alreadyOrphaned []RemoteItem,
 	driveID driveid.ID,
-) []remoteItem {
+) []RemoteItem {
 	covered := make(map[string]struct{}, len(alreadyOrphaned))
 	for i := range alreadyOrphaned {
 		covered[alreadyOrphaned[i].ItemID] = struct{}{}
 	}
 
-	var orphans []remoteItem
+	var orphans []RemoteItem
 	for i := range rows {
 		row := &rows[i]
 		if !row.DriveID.IsZero() && row.DriveID != driveID {
@@ -62,7 +62,7 @@ func findRemoteStateOrphans(
 			continue
 		}
 
-		orphans = append(orphans, remoteItem{observedItem: observedItem{
+		orphans = append(orphans, RemoteItem{ObservedItem: ObservedItem{
 			Path:      row.Path,
 			ItemID:    row.ItemID,
 			DriveID:   driveID,

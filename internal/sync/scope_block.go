@@ -12,15 +12,15 @@ type BlockScope struct {
 	TrialInterval time.Duration // current interval between trial actions
 	NextTrialAt   time.Time     // when to dispatch the next trial
 	// SlowStartThreshold is the release ramp's memory of the last 429
-	// (activeScope.SlowStartThreshold), persisted because one-shot passes
+	// (ActiveScope.SlowStartThreshold), persisted because one-shot passes
 	// and restarts rebuild the runtime from this row (R-6.8.24).
 	SlowStartThreshold int
 }
 
-// activeScope is the watch-runtime working-set shape. It keeps only the
+// ActiveScope is the watch-runtime working-set shape. It keeps only the
 // mutable timer/admission facts needed for in-memory scope ownership; the
 // persisted scope row remains the durable/read-side shape.
-type activeScope struct {
+type ActiveScope struct {
 	Key           ScopeKey
 	TrialInterval time.Duration
 	NextTrialAt   time.Time
@@ -47,12 +47,12 @@ type activeScope struct {
 	Generation uint64
 }
 
-func activeScopeFromBlockScopeRow(row *BlockScope) activeScope {
+func ActiveScopeFromBlockScopeRow(row *BlockScope) ActiveScope {
 	if row == nil {
-		return activeScope{}
+		return ActiveScope{}
 	}
 
-	return activeScope{
+	return ActiveScope{
 		Key:                row.Key,
 		TrialInterval:      row.TrialInterval,
 		NextTrialAt:        row.NextTrialAt,
@@ -60,8 +60,8 @@ func activeScopeFromBlockScopeRow(row *BlockScope) activeScope {
 	}
 }
 
-func blockScopeRowFromActiveScope(scope activeScope) (*BlockScope, error) {
-	if describeScopeKey(scope.Key).IsZero() {
+func BlockScopeRowFromActiveScope(scope ActiveScope) (*BlockScope, error) {
+	if DescribeScopeKey(scope.Key).IsZero() {
 		return nil, fmt.Errorf("sync: unknown scope key %q", scope.Key.String())
 	}
 	if !scope.Key.PersistsInBlockScopes() {
@@ -76,14 +76,14 @@ func blockScopeRowFromActiveScope(scope activeScope) (*BlockScope, error) {
 	}, nil
 }
 
-// scopeUpdateResult describes the outcome of UpdateScope: whether a new scope
+// ScopeUpdateResult describes the outcome of UpdateScope: whether a new scope
 // block should be created. Does NOT contain the computed trial interval —
 // interval computation is centralized in scope lifecycle policy helpers to
 // prevent divergence between initial block creation and subsequent trial
 // extensions.
-type scopeUpdateResult struct {
+type ScopeUpdateResult struct {
 	Block         bool          // true if threshold crossed → create block
 	ScopeKey      ScopeKey      // scope key for the block
-	ConditionType IssueType     // issueRateLimited, IssueQuotaExceeded, issueServiceOutage
+	ConditionType IssueType     // IssueRateLimited, IssueQuotaExceeded, IssueServiceOutage
 	RetryAfter    time.Duration // server-provided Retry-After (0 if absent)
 }

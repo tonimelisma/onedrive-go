@@ -31,7 +31,7 @@ func nfdShortcutAliasEngine(t *testing.T, mock *engineMockClient, state Shortcut
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", norm.NFD.String("Café")))
 	require.NoError(t, err)
 	stored := "Shared/" + norm.NFC.String("Café")
-	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: stored,
@@ -72,7 +72,7 @@ func TestEngine_ShortcutAliasWithNFDNameOnDiskIsNotARename(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, changed, "the alias is unchanged")
 	assert.DirExists(t, aliasOnDisk)
-	roots, err := eng.baseline.listShortcutRoots(t.Context())
+	roots, err := eng.baseline.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, ShortcutRootStateActive, roots[0].State)

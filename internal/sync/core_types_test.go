@@ -26,12 +26,12 @@ func TestItemType_StoredNamesRoundTrip(t *testing.T) {
 
 	for member, name := range map[ItemType]string{ItemTypeFile: "file", ItemTypeFolder: "folder", ItemTypeRoot: "root"} {
 		assert.Equal(t, name, member.String())
-		parsed, err := parseItemType(name)
+		parsed, err := ParseItemType(name)
 		require.NoError(t, err, name)
 		assert.Equal(t, member, parsed, name)
 	}
 	assert.Equal(t, "ItemType(99)", ItemType(99).String())
-	_, err := parseItemType("unknown")
+	_, err := ParseItemType("unknown")
 	require.ErrorContains(t, err, `unknown item type "unknown"`)
 }
 
@@ -43,7 +43,7 @@ func TestItemType_StoredNamesRoundTrip(t *testing.T) {
 func TestEnumStrings_AreTheStoredAndLoggedNames(t *testing.T) {
 	t.Parallel()
 
-	for member, name := range map[actionType]string{
+	for member, name := range map[ActionType]string{
 		ActionDownload: "download", ActionUpload: "upload", ActionLocalDelete: "local_delete",
 		ActionRemoteDelete: "remote_delete", ActionLocalMove: "local_move", ActionRemoteMove: "remote_move",
 		ActionFolderCreate: "folder_create", ActionConflictCopy: "conflict_copy",
@@ -52,7 +52,7 @@ func TestEnumStrings_AreTheStoredAndLoggedNames(t *testing.T) {
 		value, err := member.Value()
 		require.NoError(t, err, name)
 		assert.Equal(t, name, value)
-		var scanned actionType
+		var scanned ActionType
 		require.NoError(t, scanned.Scan(name))
 		assert.Equal(t, member, scanned, name)
 	}
@@ -60,7 +60,7 @@ func TestEnumStrings_AreTheStoredAndLoggedNames(t *testing.T) {
 	for value, name := range map[fmt.Stringer]string{
 		changeCreate: "create", ChangeModify: "modify", ChangeDelete: "delete", ChangeMove: "move",
 		SyncBidirectional: "bidirectional", SyncDownloadOnly: "download-only", SyncUploadOnly: "upload-only",
-		createLocal: "local", CreateRemote: "remote",
+		CreateLocal: "local", CreateRemote: "remote",
 	} {
 		assert.Equal(t, name, value.String())
 	}
@@ -72,66 +72,37 @@ func TestEnumStrings_AreTheStoredAndLoggedNames(t *testing.T) {
 // exhaustive linter holds. A value outside the enum cannot reach one: the
 // plan refuses it before any rule runs (validatePlannedActions) and the store
 // refuses it on read and write. Should a programming error make one anyway,
-// each decision panics with outsideTheEnum instead of answering with a
-// verdict no case states, as most used to: not admitted, not a local write,
-// creates nothing, fresh, no capability, not blocked, no size.
+// each decision panics with OutsideTheEnum instead of answering with a
+// verdict no case states, as most used to: not blocked, no size. The planner's, the executor's and the engine's decisions have
+// tests of their own (TestPlannerActionTypeDecisions_PanicOnATypeOutsideTheEnum,
+// TestExecutorActionTypeDecisions_PanicOnATypeOutsideTheEnum,
+// TestEngineActionTypeDecisions_PanicOnATypeOutsideTheEnum).
 func TestActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 	t.Parallel()
 
-	const (
-		unlisted     = ActionCleanup + 1
-		unlistedSide = CreateRemote + 1
-	)
+	const unlisted = ActionCleanup + 1
 	outside := func() *Action {
 		return &Action{
 			Type:    unlisted,
 			Path:    "docs/a.txt",
 			OldPath: "docs",
 			ItemID:  "item-a",
-			View:    &pathView{Path: "docs/a.txt", Baseline: &BaselineEntry{Path: "docs", ItemType: ItemTypeFolder}},
+			View:    &PathView{Path: "docs/a.txt", Baseline: &BaselineEntry{Path: "docs", ItemType: ItemTypeFolder}},
 		}
 	}
-	upload := func(p string) *Action { return &Action{Type: ActionUpload, Path: p} }
-	completion := &actionCompletion{ActionType: unlisted, Path: "docs/a.txt"}
-	movedLocally := &moveComposition{moves: []composedMove{{key: "item-a", side: moveCoordLocal}}}
-	mode := SyncBidirectional
 
 	decisions := map[string]func(){
-		"actionAllowedInMode":                 func() { actionAllowedInMode(outside(), SyncBidirectional) },
-		"deletedItemType":                     func() { deletedItemType(outside()) },
-		"writesLocally":                       func() { writesLocally(outside()) },
-		"countRenames":                        func() { countRenames([]Action{*outside()}) },
-		"indexByPath":                         func() { newDependencyIndex([]Action{*outside()}) },
-		"indexVacatedNames":                   func() { (&dependencyIndex{}).indexVacatedNames([]Action{*outside()}) },
-		"isDeleteAction":                      func() { isDeleteAction(outside()) },
-		"isMoveAction":                        func() { isMoveAction(outside()) },
-		"addMoveOutOfDeletedFolderDeps":       func() { addMoveOutOfDeletedFolderDeps(nil, 0, outside(), nil, &dependencyIndex{}) },
-		"addRemoteCaseVariantDeps":            func() { addRemoteCaseVariantDeps(nil, 0, outside(), nil, &dependencyIndex{}) },
-		"vacatesCaseVariantOf":                func() { vacatesCaseVariantOf(outside(), upload("docs/A.txt")) },
-		"underMoveSource":                     func() { underMoveSource(upload("docs/x.txt"), outside()) },
-		"createsAtVacatedSource":              func() { createsAtVacatedSource(upload("docs"), outside()) },
-		"pathsVacatedByPlan":                  func() { pathsVacatedByPlan([]Action{*outside()}) },
-		"createSide":                          func() { createSide(outside()) },
-		"deleteSide":                          func() { deleteSide(outside()) },
-		"dropReconciliationOfComposedMoves":   func() { dropReconciliationOfComposedMoves([]Action{*outside()}, movedLocally, mode) },
-		"DeferredCounts.AddAction":            func() { (&DeferredCounts{}).AddAction(outside()) },
-		"evaluateMoveEndpointFreshness":       func() { evaluateMoveEndpointFreshness(outside(), actionFreshnessInputs{}) },
-		"movePeerPath":                        func() { movePeerPath(outside()) },
-		"activityKindFor":                     func() { activityKindFor(unlisted) },
-		"effectiveRemotePermissionCapability": func() { effectiveRemotePermissionCapability(completion) },
-		"effectiveLocalPermissionCapability":  func() { effectiveLocalPermissionCapability(completion) },
-		"isPublicationOnlyActionType":         func() { isPublicationOnlyActionType(unlisted) },
-		"deleteSafetySideOf":                  func() { deleteSafetySideOf(unlisted) },
-		"localWriteScopeBlocksAction":         func() { localWriteScopeBlocksAction(unlisted) },
-		"remoteWriteScopeBlocksAction":        func() { remoteWriteScopeBlocksAction(unlisted) },
-		"outcomeDisplaySize":                  func() { outcomeDisplaySize(&actionOutcome{Action: unlisted}) },
+		"DeletedItemType":              func() { DeletedItemType(outside()) },
+		"DeferredCounts.AddAction":     func() { (&DeferredCounts{}).AddAction(outside()) },
+		"IsPublicationOnlyActionType":  func() { IsPublicationOnlyActionType(unlisted) },
+		"DeleteSafetySideOf":           func() { DeleteSafetySideOf(unlisted) },
+		"localWriteScopeBlocksAction":  func() { localWriteScopeBlocksAction(unlisted) },
+		"RemoteWriteScopeBlocksAction": func() { RemoteWriteScopeBlocksAction(unlisted) },
+		"outcomeDisplaySize":           func() { outcomeDisplaySize(&ActionOutcome{Action: unlisted}) },
 	}
 	for name, decide := range decisions {
-		assert.PanicsWithValue(t, outsideTheEnum(unlisted), decide, name)
+		assert.PanicsWithValue(t, OutsideTheEnum(unlisted), decide, name)
 	}
-	assert.PanicsWithValue(t, outsideTheEnum(unlistedSide), func() {
-		actionAllowedInMode(&Action{Type: ActionFolderCreate, CreateSide: unlistedSide}, SyncBidirectional)
-	}, "actionAllowedInMode on a folder create side outside its enum")
 }
 
 // enumSwitchExceptions are the switches on the action type or the folder
@@ -139,10 +110,10 @@ func TestActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 // keyed by the function holding them, each with its reason.
 func enumSwitchExceptions() map[string]string {
 	return map[string]string{
-		"actionType.String":         "names the value, a value outside the enum included, for refusals and logs",
-		"actionType.isMember":       "false is the membership answer the refusals ask for",
-		"folderCreateSide.String":   "names the value, a value outside the enum included, for refusals and logs",
-		"folderCreateSide.isMember": "false is the membership answer the refusals ask for",
+		"ActionType.String":         "names the value, a value outside the enum included, for refusals and logs",
+		"ActionType.IsMember":       "false is the membership answer the refusals ask for",
+		"FolderCreateSide.String":   "names the value, a value outside the enum included, for refusals and logs",
+		"FolderCreateSide.IsMember": "false is the membership answer the refusals ask for",
 	}
 }
 
@@ -154,7 +125,7 @@ func enumSwitchExceptions() map[string]string {
 // of whose case clauses names a constant of either type (the constants are
 // read from the const blocks of enums.go), tagged or not. Its default must
 // refuse: the clause ends in a panic or a return, and it calls
-// outsideTheEnum, as panic(outsideTheEnum(v)) where the decision returns a
+// OutsideTheEnum, as panic(OutsideTheEnum(v)) where the decision returns a
 // plain value, or inside the error it returns where it returns one. A switch
 // without a default fails, and so does one whose default answers. The
 // exceptions are named with their reason, and an exception that matches no
@@ -162,7 +133,7 @@ func enumSwitchExceptions() map[string]string {
 func TestActionTypeSwitches_EveryDefaultRefuses(t *testing.T) {
 	t.Parallel()
 
-	members := enumConstantTypes(t, "enums.go", "actionType", "folderCreateSide")
+	members := enumConstantTypes(t, "enums.go", "ActionType", "FolderCreateSide")
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 
@@ -253,23 +224,6 @@ func enumConstantTypes(t *testing.T, file string, typeNames ...string) map[strin
 	return constants
 }
 
-// funcDeclName names a function as the exceptions do: Type.Method for a
-// method, the name alone otherwise.
-func funcDeclName(fn *ast.FuncDecl) string {
-	if fn.Recv == nil || len(fn.Recv.List) == 0 {
-		return fn.Name.Name
-	}
-	receiver := fn.Recv.List[0].Type
-	if star, isStar := receiver.(*ast.StarExpr); isStar {
-		receiver = star.X
-	}
-	if ident, isIdent := receiver.(*ast.Ident); isIdent {
-		return ident.Name + "." + fn.Name.Name
-	}
-
-	return fn.Name.Name
-}
-
 // switchNamesAConstant reports whether a case clause of sw names one of the
 // constants, anywhere in its expressions.
 func switchNamesAConstant(sw *ast.SwitchStmt, constants map[string]string) bool {
@@ -305,14 +259,14 @@ func defaultRefusalProblem(sw *ast.SwitchStmt) string {
 		calls := false
 		for _, bodyStmt := range clause.Body {
 			ast.Inspect(bodyStmt, func(node ast.Node) bool {
-				if call, isCall := node.(*ast.CallExpr); isCall && isCallTo(call, "outsideTheEnum") {
+				if call, isCall := node.(*ast.CallExpr); isCall && isCallTo(call, "OutsideTheEnum") {
 					calls = true
 				}
 				return !calls
 			})
 		}
 		if !calls {
-			return "the default answers instead of refusing with outsideTheEnum"
+			return "the default answers instead of refusing with OutsideTheEnum"
 		}
 
 		return ""
@@ -336,37 +290,6 @@ func endsInPanicOrReturn(stmt ast.Stmt) bool {
 func isCallTo(call *ast.CallExpr, name string) bool {
 	ident, isIdent := call.Fun.(*ast.Ident)
 	return isIdent && ident.Name == name
-}
-
-// Validates: R-6.2.16
-//
-// Where a decision on the action type already returns an error, a value
-// outside the enum is refused with one: the row value, the mutation
-// classification, the publication mutation, the delete ledger, the remote
-// mirror and worker dispatch. The delete ledger used to record nothing and the
-// remote mirror to change nothing, both read as "not mine"; the ledger checks
-// membership before it asks deleteSafetySideOf, which panics on such a value.
-func TestActionTypeRefusals_ATypeOutsideTheEnumIsAnError(t *testing.T) {
-	t.Parallel()
-
-	const unlisted = ActionCleanup + 1
-	store := newTestStore(t)
-	ctx := t.Context()
-	mutation := &BaselineMutation{Action: unlisted, Path: "a.txt", ItemID: "item-a", DriveID: driveid.New("d")}
-
-	_, err := unlisted.Value()
-	require.ErrorContains(t, err, "invalid ActionType 10")
-	_, err = classifyBaselineMutation(unlisted)
-	require.ErrorContains(t, err, outsideTheEnum(unlisted))
-	_, err = publicationMutationFromAction(&Action{Type: unlisted, Path: "a.txt"}, driveid.New("d"))
-	require.ErrorContains(t, err, "ActionType(10) is not publication-only")
-	require.ErrorContains(t, store.recordDeleteLedgerTx(ctx, store.rawDB(), mutation), outsideTheEnum(unlisted))
-	require.ErrorContains(t, updateRemoteStateOnOutcome(ctx, store.rawDB(), mutation), outsideTheEnum(unlisted))
-
-	outcome := (&workerPool{}).dispatchAction(ctx, nil, &trackedAction{Action: Action{Type: unlisted, Path: "a.txt"}})
-	require.ErrorIs(t, outcome.Error, errUnknownActionType)
-	require.ErrorContains(t, outcome.Error, outsideTheEnum(unlisted))
-	assert.False(t, outcome.Success)
 }
 
 func TestBaseline_PutGetByIDDeleteAndLen(t *testing.T) {

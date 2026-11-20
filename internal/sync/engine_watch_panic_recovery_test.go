@@ -87,7 +87,7 @@ func TestRecoverObserverPanic_FullChannelDoesNotBlock(t *testing.T) {
 func TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		panic("watcher factory exploded")
 	}
 
@@ -122,7 +122,7 @@ func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T
 
 	setupWatchEngine(t, e)
 	rt := testWatchRuntime(t, e)
-	rt.resources.dirtyBuf = newDirtyBuffer(e.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
@@ -149,7 +149,7 @@ func TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning(t *testing.T) {
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	eng.enableWebsocket = true
 	entered := make(chan struct{})
-	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			runFn: func(context.Context, chan<- struct{}) error {
 				close(entered)

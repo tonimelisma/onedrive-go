@@ -49,15 +49,15 @@ func (rt *watchRuntime) armRetryTimer() {
 		return
 	}
 
-	rt.deps.emit(engineDebugEvent{
-		Type:  engineDebugEventRetryTimerArmed,
+	rt.deps.emit(EngineDebugEvent{
+		Type:  EngineDebugEventRetryTimerArmed,
 		Delay: delay,
 	})
 	retryCh, emit := rt.timers.retryTimerCh, rt.deps.emit
 	rt.resetRetryTimer(rt.deps.clock.AfterFunc(delay, func() {
-		emit(engineDebugEvent{Type: engineDebugEventRetryTimerFired})
+		emit(EngineDebugEvent{Type: EngineDebugEventRetryTimerFired})
 		if signalTimerChannel(retryCh) {
-			emit(engineDebugEvent{Type: engineDebugEventRetryKicked})
+			emit(EngineDebugEvent{Type: EngineDebugEventRetryKicked})
 		}
 	}))
 }
@@ -77,7 +77,7 @@ func (rt *watchRuntime) stopRetryTimer() {
 // across the engine.
 func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 	if signalTimerChannel(rt.timers.retryTimerCh) {
-		rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryKicked})
+		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRetryKicked})
 	}
 }
 
@@ -94,7 +94,7 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 // (failureAwaitsUser), preserves the raw error for the final SyncReport, and
 // records a failure kept as retry work for the end-of-pass summary
 // (logFailureSummary).
-func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) {
+func (f *engineFlow) recordError(decision *ResultDecision, r *ActionCompletion) {
 	f.results.failed++
 	if decision != nil && failureKeptForRetry(decision.Class) {
 		f.results.keptForRetry++
@@ -110,7 +110,7 @@ func (f *engineFlow) recordError(decision *resultDecision, r *actionCompletion) 
 		f.results.errors = append(f.results.errors, r.Err)
 	}
 
-	if decision == nil || decision.Persistence != persistRetryWork {
+	if decision == nil || decision.Persistence != PersistRetryWork {
 		return
 	}
 
@@ -214,7 +214,7 @@ func (e *Engine) since(start time.Time) time.Duration {
 // transfer workers with the pool's floor, or one when serialized (D-090). It
 // is the ceiling a fresh plan's slow start doubles toward (R-6.8.25).
 func (e *Engine) workerPoolSize() int {
-	return poolWorkerCount(e.transferWorkers, e.serializeWorkers)
+	return PoolWorkerCount(e.transferWorkers, e.serializeWorkers)
 }
 
 // resultStats returns the engine-owned counters and error list.
@@ -284,13 +284,13 @@ func (rt *watchRuntime) armTrialTimer() {
 	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
-	rt.deps.emit(engineDebugEvent{
-		Type:  engineDebugEventTrialTimerArmed,
+	rt.deps.emit(EngineDebugEvent{
+		Type:  EngineDebugEventTrialTimerArmed,
 		Delay: delay,
 	})
 	trialCh, emit := rt.timers.trialCh, rt.deps.emit
 	rt.resetTrialTimer(rt.deps.clock.AfterFunc(delay, func() {
-		emit(engineDebugEvent{Type: engineDebugEventTrialTimerFired})
+		emit(EngineDebugEvent{Type: EngineDebugEventTrialTimerFired})
 		signalTimerChannel(trialCh)
 	}))
 }

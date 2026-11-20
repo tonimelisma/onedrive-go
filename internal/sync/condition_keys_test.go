@@ -14,18 +14,18 @@ func TestConditionKeyForStoredCondition_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, ConditionInvalidFilename,
-		conditionKeyForStoredCondition(IssueInvalidFilename, ScopeKey{}))
+		ConditionKeyForStoredCondition(IssueInvalidFilename, ScopeKey{}))
 	assert.Equal(t, ConditionRemoteWriteDenied,
-		conditionKeyForStoredCondition(IssueRemoteWriteDenied, ScopeKey{}))
+		ConditionKeyForStoredCondition(IssueRemoteWriteDenied, ScopeKey{}))
 	assert.Equal(t, ConditionServiceOutage,
-		conditionKeyForStoredCondition("", SKService()))
+		ConditionKeyForStoredCondition("", SKService()))
 	assert.Equal(t, ConditionQuotaExceeded,
-		conditionKeyForStoredCondition("", SKQuotaOwn()))
+		ConditionKeyForStoredCondition("", SKQuotaOwn()))
 	assert.Equal(t, ConditionRateLimited,
-		conditionKeyForStoredCondition("", SKThrottleDrive(driveid.New("0000000000000001"))))
+		ConditionKeyForStoredCondition("", SKThrottleDrive(driveid.New("0000000000000001"))))
 	assert.Equal(t, ConditionUnexpectedCondition,
-		conditionKeyForStoredCondition("", ScopeKey{Kind: ScopeKeyKind(99)}))
-	assert.Empty(t, conditionKeyForStoredCondition("", ScopeKey{}))
+		ConditionKeyForStoredCondition("", ScopeKey{Kind: ScopeKeyKind(99)}))
+	assert.Empty(t, ConditionKeyForStoredCondition("", ScopeKey{}))
 }
 
 // A condition no IssueType member names is a defect the stores refuse, so it
@@ -35,10 +35,10 @@ func TestConditionKeyForStoredCondition_RepresentativeMappings(t *testing.T) {
 func TestConditionKeyForStoredCondition_ValueOutsideTheEnumIsUnexpectedUnderAnyScope(t *testing.T) {
 	t.Parallel()
 
-	require.False(t, IssueType(issueTypeOutsideTheEnum).isMember())
+	require.False(t, IssueType(issueTypeOutsideTheEnum).IsMember())
 
 	for _, scopeKey := range []ScopeKey{{}, SKQuotaOwn(), SKService(), {Kind: ScopeKeyKind(99)}} {
-		assert.Equal(t, ConditionUnexpectedCondition, conditionKeyForStoredCondition(issueTypeOutsideTheEnum, scopeKey),
+		assert.Equal(t, ConditionUnexpectedCondition, ConditionKeyForStoredCondition(issueTypeOutsideTheEnum, scopeKey),
 			"under scope %q", scopeKey.String())
 	}
 }
@@ -90,9 +90,9 @@ func TestConditionClearsAutomatically_EveryKeyIsDecided(t *testing.T) {
 				ConditionDownloadIntegrity, ConditionUnexpectedCondition,
 			},
 		},
-	), conditionClearsAutomatically)
+	), ConditionClearsAutomatically)
 
-	assert.False(t, conditionClearsAutomatically(conditionKeyOutsideTheSet), "a key outside the set")
+	assert.False(t, ConditionClearsAutomatically(conditionKeyOutsideTheSet), "a key outside the set")
 }
 
 // Validates: R-2.10.4, R-6.8.16
@@ -112,15 +112,15 @@ func TestConditionKeyForIssueType_RepresentativeMappings(t *testing.T) {
 
 	assert.Equal(t, ConditionAuthenticationRequired, mustConditionKeyForIssueType(t, IssueUnauthorized))
 	assert.Equal(t, ConditionQuotaExceeded, mustConditionKeyForIssueType(t, IssueQuotaExceeded))
-	assert.Equal(t, ConditionRemoteReadDenied, mustConditionKeyForIssueType(t, issueRemoteReadDenied))
-	assert.Equal(t, ConditionLocalReadDenied, mustConditionKeyForIssueType(t, issueLocalReadDenied))
-	assert.Equal(t, ConditionLocalWriteDenied, mustConditionKeyForIssueType(t, issueLocalWriteDenied))
+	assert.Equal(t, ConditionRemoteReadDenied, mustConditionKeyForIssueType(t, IssueRemoteReadDenied))
+	assert.Equal(t, ConditionLocalReadDenied, mustConditionKeyForIssueType(t, IssueLocalReadDenied))
+	assert.Equal(t, ConditionLocalWriteDenied, mustConditionKeyForIssueType(t, IssueLocalWriteDenied))
 	assert.Equal(t, ConditionInvalidFilename, mustConditionKeyForIssueType(t, IssueInvalidFilename))
-	assert.Equal(t, ConditionPathTooLong, mustConditionKeyForIssueType(t, issuePathTooLong))
-	assert.Equal(t, ConditionFileTooLarge, mustConditionKeyForIssueType(t, issueFileTooLarge))
-	assert.Equal(t, ConditionCaseCollision, mustConditionKeyForIssueType(t, issueCaseCollision))
-	assert.Equal(t, ConditionDiskFull, mustConditionKeyForIssueType(t, issueDiskFull))
-	assert.Equal(t, ConditionFileTooLargeForSpace, mustConditionKeyForIssueType(t, issueFileTooLargeForSpace))
+	assert.Equal(t, ConditionPathTooLong, mustConditionKeyForIssueType(t, IssuePathTooLong))
+	assert.Equal(t, ConditionFileTooLarge, mustConditionKeyForIssueType(t, IssueFileTooLarge))
+	assert.Equal(t, ConditionCaseCollision, mustConditionKeyForIssueType(t, IssueCaseCollision))
+	assert.Equal(t, ConditionDiskFull, mustConditionKeyForIssueType(t, IssueDiskFull))
+	assert.Equal(t, ConditionFileTooLargeForSpace, mustConditionKeyForIssueType(t, IssueFileTooLargeForSpace))
 }
 
 // The condition family of every issue type. The table must name every
@@ -135,59 +135,59 @@ func TestConditionKeyForIssueType_EveryMemberIsDecided(t *testing.T) {
 
 	families := map[IssueType]ConditionKey{
 		IssueInvalidFilename:            ConditionInvalidFilename,
-		issuePathTooLong:                ConditionPathTooLong,
-		issueFileTooLarge:               ConditionFileTooLarge,
-		issueHashPanic:                  ConditionHashError,
+		IssuePathTooLong:                ConditionPathTooLong,
+		IssueFileTooLarge:               ConditionFileTooLarge,
+		IssueHashPanic:                  ConditionHashError,
 		IssueUnauthorized:               ConditionAuthenticationRequired,
 		IssueRemoteWriteDenied:          ConditionRemoteWriteDenied,
-		issueRemoteReadDenied:           ConditionRemoteReadDenied,
-		issueRemoteRootNotFound:         ConditionRemoteRootNotFound,
+		IssueRemoteReadDenied:           ConditionRemoteReadDenied,
+		IssueRemoteRootNotFound:         ConditionRemoteRootNotFound,
 		IssueQuotaExceeded:              ConditionQuotaExceeded,
-		issueRateLimited:                ConditionRateLimited,
-		issueLocalReadDenied:            ConditionLocalReadDenied,
-		issueLocalWriteDenied:           ConditionLocalWriteDenied,
-		issueCaseCollision:              ConditionCaseCollision,
-		issueRemoteNameTwin:             ConditionRemoteNameTwin,
-		issueDiskFull:                   ConditionDiskFull,
-		issueServiceOutage:              ConditionServiceOutage,
-		issueFileTooLargeForSpace:       ConditionFileTooLargeForSpace,
-		issueLocalNameTooLong:           ConditionLocalNameTooLong,
-		issueLocalReadOnly:              ConditionLocalReadOnly,
-		issueDeletesHeld:                ConditionDeletesHeld,
-		issueLocalUnsyncableReplacement: ConditionLocalUnsyncable,
-		issueLocalMountBoundary:         ConditionLocalMountBoundary,
-		issueLocalMountMissing:          ConditionLocalMountMissing,
-		issueRemoteFolderUnverifiable:   ConditionRemoteFolderUnverified,
-		issueLocalInterruptedRemoval:    ConditionLocalInterrupted,
-		issueRemovedFolderKept:          ConditionRemovedFolderKept,
-		issueLocalFileTooLarge:          ConditionLocalFileTooLarge,
-		issueLocalBusy:                  ConditionLocalBusy,
-		issueLocalCrossDevice:           ConditionLocalCrossDevice,
-		issueUnsupportedOperation:       ConditionUnsupportedOperation,
-		issueMalwareDetected:            ConditionMalwareDetected,
-		issueLocalDatabaseOpen:          ConditionLocalDatabaseOpen,
-		issueUploadVerification:         ConditionUploadVerification,
-		issueDownloadIntegrity:          ConditionDownloadIntegrity,
+		IssueRateLimited:                ConditionRateLimited,
+		IssueLocalReadDenied:            ConditionLocalReadDenied,
+		IssueLocalWriteDenied:           ConditionLocalWriteDenied,
+		IssueCaseCollision:              ConditionCaseCollision,
+		IssueRemoteNameTwin:             ConditionRemoteNameTwin,
+		IssueDiskFull:                   ConditionDiskFull,
+		IssueServiceOutage:              ConditionServiceOutage,
+		IssueFileTooLargeForSpace:       ConditionFileTooLargeForSpace,
+		IssueLocalNameTooLong:           ConditionLocalNameTooLong,
+		IssueLocalReadOnly:              ConditionLocalReadOnly,
+		IssueDeletesHeld:                ConditionDeletesHeld,
+		IssueLocalUnsyncableReplacement: ConditionLocalUnsyncable,
+		IssueLocalMountBoundary:         ConditionLocalMountBoundary,
+		IssueLocalMountMissing:          ConditionLocalMountMissing,
+		IssueRemoteFolderUnverifiable:   ConditionRemoteFolderUnverified,
+		IssueLocalInterruptedRemoval:    ConditionLocalInterrupted,
+		IssueRemovedFolderKept:          ConditionRemovedFolderKept,
+		IssueLocalFileTooLarge:          ConditionLocalFileTooLarge,
+		IssueLocalBusy:                  ConditionLocalBusy,
+		IssueLocalCrossDevice:           ConditionLocalCrossDevice,
+		IssueUnsupportedOperation:       ConditionUnsupportedOperation,
+		IssueMalwareDetected:            ConditionMalwareDetected,
+		IssueLocalDatabaseOpen:          ConditionLocalDatabaseOpen,
+		IssueUploadVerification:         ConditionUploadVerification,
+		IssueDownloadIntegrity:          ConditionDownloadIntegrity,
 		// Transient runtime conditions: no family of their own.
-		issueRequestTimeout:      "",
-		issueTransientConflict:   "",
-		issueTransientNotFound:   "",
-		issueResourceLocked:      "",
-		issueTransferURLRejected: "",
+		IssueRequestTimeout:      "",
+		IssueTransientConflict:   "",
+		IssueTransientNotFound:   "",
+		IssueResourceLocked:      "",
+		IssueTransferURLRejected: "",
 	}
 
 	requireEveryIssueTypeDecided(t, families, func(member IssueType) ConditionKey {
-		key, ok := conditionKeyForIssueType(member)
+		key, ok := ConditionKeyForIssueType(member)
 		assert.Equal(t, key != "", ok, "%q: ok says whether a family is named", member)
 
 		return key
 	})
 
-	key, ok := conditionKeyForIssueType(issueTypeOutsideTheEnum)
+	key, ok := ConditionKeyForIssueType(issueTypeOutsideTheEnum)
 	assert.True(t, ok)
 	assert.Equal(t, ConditionUnexpectedCondition, key, "a value outside the enum")
 
-	key, ok = conditionKeyForIssueType("")
+	key, ok = ConditionKeyForIssueType("")
 	assert.False(t, ok, "the empty value is no condition")
 	assert.Empty(t, key)
 }
@@ -195,7 +195,7 @@ func TestConditionKeyForIssueType_EveryMemberIsDecided(t *testing.T) {
 func mustConditionKeyForIssueType(t *testing.T, issueType IssueType) ConditionKey {
 	t.Helper()
 
-	key, ok := conditionKeyForIssueType(issueType)
+	key, ok := ConditionKeyForIssueType(issueType)
 	assert.True(t, ok)
 
 	return key

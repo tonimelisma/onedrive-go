@@ -8,26 +8,25 @@ import (
 	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 type shortcutTopologyObservationKind string
 
 const (
-	shortcutTopologyObservationIncremental shortcutTopologyObservationKind = "incremental"
-	shortcutTopologyObservationComplete    shortcutTopologyObservationKind = "complete"
+	ShortcutTopologyObservationIncremental shortcutTopologyObservationKind = "incremental"
+	ShortcutTopologyObservationComplete    shortcutTopologyObservationKind = "complete"
 )
 
-type shortcutTopologyBatch struct {
+type ShortcutTopologyBatch struct {
 	NamespaceID string
 	Kind        shortcutTopologyObservationKind
-	Upserts     []shortcutBindingUpsert
-	Deletes     []shortcutBindingDelete
-	Unavailable []shortcutBindingUnavailable
+	Upserts     []ShortcutBindingUpsert
+	Deletes     []ShortcutBindingDelete
+	Unavailable []ShortcutBindingUnavailable
 }
 
-type shortcutBindingUpsert struct {
+type ShortcutBindingUpsert struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalAlias        string
@@ -37,11 +36,11 @@ type shortcutBindingUpsert struct {
 	Complete          bool
 }
 
-type shortcutBindingDelete struct {
+type ShortcutBindingDelete struct {
 	BindingItemID string
 }
 
-type shortcutBindingUnavailable struct {
+type ShortcutBindingUnavailable struct {
 	BindingItemID     string
 	RelativeLocalPath string
 	LocalAlias        string
@@ -114,24 +113,6 @@ func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, 
 	return childMountID, nil
 }
 
-func ApplyShortcutChildRunCommandToEngineMountConfig(
-	command *ShortcutChildRunCommand,
-	cfg *EngineMountConfig,
-) error {
-	if _, err := ValidateShortcutChildRunCommand(command); err != nil {
-		return err
-	}
-	if cfg == nil {
-		return fmt.Errorf("sync: child engine mount config is required")
-	}
-	cfg.SyncRoot = command.Engine.LocalRoot
-	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)
-	cfg.RemoteRootItemID = command.Engine.RemoteItemID
-	cfg.ExpectedSyncRootIdentity = cloneShortcutRootIdentity(command.Engine.LocalRootIdentity)
-	cfg.ContentFilter = cloneContentFilterConfig(command.Engine.ContentFilter)
-	return nil
-}
-
 func ShortcutChildEngineSpecsEqual(a *ShortcutChildEngineSpec, b *ShortcutChildEngineSpec) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -139,11 +120,11 @@ func ShortcutChildEngineSpecsEqual(a *ShortcutChildEngineSpec, b *ShortcutChildE
 	return a.LocalRoot == b.LocalRoot &&
 		a.RemoteDriveID == b.RemoteDriveID &&
 		a.RemoteItemID == b.RemoteItemID &&
-		contentFilterConfigsEqual(a.ContentFilter, b.ContentFilter) &&
+		ContentFilterConfigsEqual(a.ContentFilter, b.ContentFilter) &&
 		shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
 }
 
-func cloneShortcutRootIdentity(identity *ShortcutRootIdentity) *ShortcutRootIdentity {
+func CloneShortcutRootIdentity(identity *ShortcutRootIdentity) *ShortcutRootIdentity {
 	if identity == nil {
 		return nil
 	}
@@ -158,30 +139,30 @@ type ShortcutChildCleanupCommand struct {
 	AckRef       ShortcutChildAckRef
 }
 
-// shortcutChildAckHandle is the live-parent acknowledgement capability that
+// ShortcutChildAckHandle is the live-parent acknowledgement capability that
 // multisync receives from a running parent engine. It is intentionally a value
 // handle instead of an interface so control-plane code can invoke acknowledgements
 // without owning or re-opening parent shortcut lifecycle state.
-type shortcutChildAckHandle struct {
+type ShortcutChildAckHandle struct {
 	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error)
 	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error)
 }
 
-func newShortcutChildAckHandle(
+func NewShortcutChildAckHandle(
 	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error),
 	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error),
-) shortcutChildAckHandle {
-	return shortcutChildAckHandle{
+) ShortcutChildAckHandle {
+	return ShortcutChildAckHandle{
 		ackFinalDrain:      ackFinalDrain,
 		ackArtifactsPurged: ackArtifactsPurged,
 	}
 }
 
-func (h shortcutChildAckHandle) IsZero() bool {
+func (h ShortcutChildAckHandle) IsZero() bool {
 	return h.ackFinalDrain == nil && h.ackArtifactsPurged == nil
 }
 
-func (h shortcutChildAckHandle) AcknowledgeChildFinalDrain(
+func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack ShortcutChildDrainAck,
 ) (ShortcutChildWorkSnapshot, error) {
@@ -191,7 +172,7 @@ func (h shortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	return h.ackFinalDrain(ctx, ack)
 }
 
-func (h shortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
+func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack ShortcutChildArtifactCleanupAck,
 ) (ShortcutChildWorkSnapshot, error) {
@@ -214,6 +195,12 @@ func newShortcutChildAckRef(bindingItemID string) ShortcutChildAckRef {
 
 func (r ShortcutChildAckRef) IsZero() bool {
 	return r.bindingItemID == ""
+}
+
+// Matches reports whether record is the shortcut root this acknowledgement
+// names.
+func (r ShortcutChildAckRef) Matches(record *ShortcutRootRecord) bool {
+	return record.BindingItemID == r.bindingItemID
 }
 
 // ShortcutRootIdentity is the parent-engine-issued local directory identity
@@ -246,7 +233,7 @@ func shortcutRootIdentityFromFileIdentity(identity *synctree.FileIdentity) *Shor
 	}
 }
 
-func shortcutRootIdentityToFileIdentity(identity *ShortcutRootIdentity) *synctree.FileIdentity {
+func ShortcutRootIdentityToFileIdentity(identity *ShortcutRootIdentity) *synctree.FileIdentity {
 	if identity == nil {
 		return nil
 	}
@@ -330,7 +317,7 @@ func cloneShortcutChildRunCommands(commands []ShortcutChildRunCommand) []Shortcu
 			identity := *cloned[i].Engine.LocalRootIdentity
 			cloned[i].Engine.LocalRootIdentity = &identity
 		}
-		cloned[i].Engine.ContentFilter = cloneContentFilterConfig(cloned[i].Engine.ContentFilter)
+		cloned[i].Engine.ContentFilter = CloneContentFilterConfig(cloned[i].Engine.ContentFilter)
 	}
 	return cloned
 }
@@ -343,7 +330,7 @@ func shortcutChildRunCommandEqual(a *ShortcutChildRunCommand, b *ShortcutChildRu
 		return false
 	}
 	return shortcutRootIdentityPointersEqual(a.Engine.LocalRootIdentity, b.Engine.LocalRootIdentity) &&
-		contentFilterConfigsEqual(a.Engine.ContentFilter, b.Engine.ContentFilter)
+		ContentFilterConfigsEqual(a.Engine.ContentFilter, b.Engine.ContentFilter)
 }
 
 type shortcutChildRunCommandComparable struct {
@@ -382,15 +369,15 @@ func shortcutRootIdentityPointersEqual(a *ShortcutRootIdentity, b *ShortcutRootI
 	}
 }
 
-func (b shortcutTopologyBatch) hasFacts() bool {
+func (b ShortcutTopologyBatch) hasFacts() bool {
 	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0
 }
 
-func (b shortcutTopologyBatch) shouldApply() bool {
-	return b.hasFacts() || b.Kind == shortcutTopologyObservationComplete
+func (b ShortcutTopologyBatch) ShouldApply() bool {
+	return b.hasFacts() || b.Kind == ShortcutTopologyObservationComplete
 }
 
-func (b *shortcutTopologyBatch) appendUpsert(fact shortcutBindingUpsert) {
+func (b *ShortcutTopologyBatch) AppendUpsert(fact ShortcutBindingUpsert) {
 	if fact.BindingItemID == "" {
 		return
 	}
@@ -405,13 +392,13 @@ func (b *shortcutTopologyBatch) appendUpsert(fact shortcutBindingUpsert) {
 	b.Upserts = append(b.Upserts, fact)
 }
 
-func (b *shortcutTopologyBatch) appendDelete(fact shortcutBindingDelete) {
+func (b *ShortcutTopologyBatch) AppendDelete(fact ShortcutBindingDelete) {
 	if fact.BindingItemID == "" {
 		return
 	}
 	b.removeUpsert(fact.BindingItemID)
 	b.removeUnavailable(fact.BindingItemID)
-	if slices.ContainsFunc(b.Deletes, func(existing shortcutBindingDelete) bool {
+	if slices.ContainsFunc(b.Deletes, func(existing ShortcutBindingDelete) bool {
 		return existing.BindingItemID == fact.BindingItemID
 	}) {
 		return
@@ -419,7 +406,7 @@ func (b *shortcutTopologyBatch) appendDelete(fact shortcutBindingDelete) {
 	b.Deletes = append(b.Deletes, fact)
 }
 
-func (b *shortcutTopologyBatch) appendUnavailable(fact shortcutBindingUnavailable) {
+func (b *ShortcutTopologyBatch) AppendUnavailable(fact ShortcutBindingUnavailable) {
 	if fact.BindingItemID == "" {
 		return
 	}
@@ -434,25 +421,25 @@ func (b *shortcutTopologyBatch) appendUnavailable(fact shortcutBindingUnavailabl
 	b.Unavailable = append(b.Unavailable, fact)
 }
 
-func (b *shortcutTopologyBatch) removeUpsert(bindingItemID string) {
-	b.Upserts = slices.DeleteFunc(b.Upserts, func(existing shortcutBindingUpsert) bool {
+func (b *ShortcutTopologyBatch) removeUpsert(bindingItemID string) {
+	b.Upserts = slices.DeleteFunc(b.Upserts, func(existing ShortcutBindingUpsert) bool {
 		return existing.BindingItemID == bindingItemID
 	})
 }
 
-func (b *shortcutTopologyBatch) removeDelete(bindingItemID string) {
-	b.Deletes = slices.DeleteFunc(b.Deletes, func(existing shortcutBindingDelete) bool {
+func (b *ShortcutTopologyBatch) removeDelete(bindingItemID string) {
+	b.Deletes = slices.DeleteFunc(b.Deletes, func(existing ShortcutBindingDelete) bool {
 		return existing.BindingItemID == bindingItemID
 	})
 }
 
-func (b *shortcutTopologyBatch) removeUnavailable(bindingItemID string) {
-	b.Unavailable = slices.DeleteFunc(b.Unavailable, func(existing shortcutBindingUnavailable) bool {
+func (b *ShortcutTopologyBatch) removeUnavailable(bindingItemID string) {
+	b.Unavailable = slices.DeleteFunc(b.Unavailable, func(existing ShortcutBindingUnavailable) bool {
 		return existing.BindingItemID == bindingItemID
 	})
 }
 
-func protectedRootByBinding(protectedRoots []ProtectedRoot) map[string]ProtectedRoot {
+func ProtectedRootByBinding(protectedRoots []ProtectedRoot) map[string]ProtectedRoot {
 	byBinding := make(map[string]ProtectedRoot, len(protectedRoots))
 	for i := range protectedRoots {
 		protectedRoot := protectedRoots[i]
@@ -464,7 +451,7 @@ func protectedRootByBinding(protectedRoots []ProtectedRoot) map[string]Protected
 	return byBinding
 }
 
-func protectedRootPrimaryName(relPath string) string {
+func ProtectedRootPrimaryName(relPath string) string {
 	if relPath == "" {
 		return ""
 	}

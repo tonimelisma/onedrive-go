@@ -36,8 +36,8 @@ func installLocalStateWriteCounter(t *testing.T, store *SyncStore) func() int {
 	}
 }
 
-func localSnapshotRows() []localStateRow {
-	return []localStateRow{
+func localSnapshotRows() []LocalStateRow {
+	return []LocalStateRow{
 		{Path: "docs", ItemType: ItemTypeFolder, LocalDevice: 1, LocalInode: 10, LocalHasIdentity: true},
 		{Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "ha", Size: 3, Mtime: 1_700_000_000_000_000_000, LocalDevice: 1, LocalInode: 11, LocalHasIdentity: true},
 		{Path: "docs/b.txt", ItemType: ItemTypeFile, Hash: "hb", Size: 4, Mtime: 1_700_000_001_000_000_000, LocalDevice: 1, LocalInode: 12, LocalHasIdentity: true},
@@ -54,10 +54,10 @@ func TestReplaceLocalState_UnchangedSnapshotWritesNoRows(t *testing.T) {
 	require.NoError(t, store.ReplaceLocalState(ctx, localSnapshotRows()))
 	writes := installLocalStateWriteCounter(t, store)
 
-	result, err := store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: localSnapshotRows()})
+	result, err := store.CommitLocalSnapshot(ctx, &LocalSnapshotCommit{Rows: localSnapshotRows()})
 	require.NoError(t, err)
 
-	assert.False(t, result.rowsChanged)
+	assert.False(t, result.RowsChanged)
 	assert.Zero(t, writes(), "an idle safety scan must not rewrite local_state")
 }
 
@@ -73,11 +73,11 @@ func TestReplaceLocalState_WritesOnlyTheDifference(t *testing.T) {
 	next := localSnapshotRows()
 	next[1].Hash = "ha2" // changed
 	next = next[:3]      // empty.txt removed
-	next = append(next, localStateRow{Path: "new.txt", ItemType: ItemTypeFile, Hash: "hn", Size: 1})
+	next = append(next, LocalStateRow{Path: "new.txt", ItemType: ItemTypeFile, Hash: "hn", Size: 1})
 
-	result, err := store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: next})
+	result, err := store.CommitLocalSnapshot(ctx, &LocalSnapshotCommit{Rows: next})
 	require.NoError(t, err)
-	assert.True(t, result.rowsChanged)
+	assert.True(t, result.RowsChanged)
 	// One REPLACE (counted as one insert; SQLite fires delete triggers for
 	// REPLACE only with recursive_triggers), one insert, one delete.
 	assert.LessOrEqual(t, writes(), 4, "only the changed, added and removed rows are written")
@@ -94,17 +94,17 @@ func TestReplaceLocalState_RestoringCompleteTruthReportsChange(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 	require.NoError(t, store.ReplaceLocalState(ctx, localSnapshotRows()))
-	require.NoError(t, store.MarkLocalTruthSuspect(ctx, localTruthRecoveryWatcherError))
+	require.NoError(t, store.MarkLocalTruthSuspect(ctx, LocalTruthRecoveryWatcherError))
 
-	result, err := store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: localSnapshotRows()})
+	result, err := store.CommitLocalSnapshot(ctx, &LocalSnapshotCommit{Rows: localSnapshotRows()})
 	require.NoError(t, err)
-	assert.True(t, result.rowsChanged, "work held while local truth was suspect must replan once truth is complete again")
+	assert.True(t, result.RowsChanged, "work held while local truth was suspect must replan once truth is complete again")
 
 	state, err := store.ReadObservationState(ctx)
 	require.NoError(t, err)
 	assert.True(t, state.LocalTruthComplete)
 
-	result, err = store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: localSnapshotRows()})
+	result, err = store.CommitLocalSnapshot(ctx, &LocalSnapshotCommit{Rows: localSnapshotRows()})
 	require.NoError(t, err)
-	assert.False(t, result.rowsChanged, "an unchanged snapshot over complete truth is still no change")
+	assert.False(t, result.RowsChanged, "an unchanged snapshot over complete truth is still no change")
 }

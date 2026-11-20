@@ -18,7 +18,7 @@ const pageRetrySecondPage = "page-2"
 
 // pageRetryFixture is a three-page change list whose second page answers
 // with pageErr until it has done so failures times.
-func pageRetryFixture(t *testing.T, pageErr error, failures int) (*remoteObserver, *scriptedDeltaFetcher, *[]time.Duration) {
+func pageRetryFixture(t *testing.T, pageErr error, failures int) (*RemoteObserver, *scriptedDeltaFetcher, *[]time.Duration) {
 	t.Helper()
 
 	failed := 0
@@ -35,9 +35,9 @@ func pageRetryFixture(t *testing.T, pageErr error, failures int) (*remoteObserve
 			return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("three")}, DeltaLink: "done"}, nil
 		}
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 	slept := &[]time.Duration{}
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(_ context.Context, d time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		*slept = append(*slept, d)
 		return nil
 	}}

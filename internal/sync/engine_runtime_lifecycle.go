@@ -23,9 +23,9 @@ func (rt *watchRuntime) loadActiveScopes(ctx context.Context) error {
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
-	activeScopes := make([]activeScope, 0, len(blocks))
+	activeScopes := make([]ActiveScope, 0, len(blocks))
 	for i := range blocks {
-		activeScopes = append(activeScopes, activeScopeFromBlockScopeRow(blocks[i]))
+		activeScopes = append(activeScopes, ActiveScopeFromBlockScopeRow(blocks[i]))
 	}
 	flow.scopes.replaceActiveScopes(activeScopes)
 
@@ -48,7 +48,7 @@ func (flow *engineFlow) normalizePersistedScopes(
 	if err != nil {
 		return fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
-	for _, step := range planPersistedScopeNormalization(blocks, blockedRetries) {
+	for _, step := range PlanPersistedScopeNormalization(blocks, blockedRetries) {
 		if dropErr := flow.dropStartupScopeRow(ctx, step.Key, step.Note); dropErr != nil {
 			return dropErr
 		}
@@ -77,15 +77,15 @@ func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key ScopeKey, n
 	if err := flow.deps.store.DeleteBlockScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: deleting startup scope %s: %w", key.String(), err)
 	}
-	flow.deps.emit(engineDebugEvent{
-		Type:     engineDebugEventStartupScopeNormalized,
+	flow.deps.emit(EngineDebugEvent{
+		Type:     EngineDebugEventStartupScopeNormalized,
 		ScopeKey: key,
 		Note:     note,
 	})
 	return nil
 }
 
-func (flow *engineFlow) activateScope(ctx context.Context, block *activeScope) error {
+func (flow *engineFlow) activateScope(ctx context.Context, block *ActiveScope) error {
 	if block == nil {
 		return fmt.Errorf("sync: activating scope: missing block")
 	}
@@ -93,8 +93,8 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *activeScope) e
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
-	flow.deps.emit(engineDebugEvent{
-		Type:     engineDebugEventScopeActivated,
+	flow.deps.emit(EngineDebugEvent{
+		Type:     EngineDebugEventScopeActivated,
 		ScopeKey: block.Key,
 	})
 
@@ -105,8 +105,8 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *activeScope) e
 
 // persistActiveScope writes a scope's timing to both authorities, the store
 // row and the ledger, without announcing an activation.
-func (flow *engineFlow) persistActiveScope(ctx context.Context, block *activeScope) error {
-	persisted, err := blockScopeRowFromActiveScope(*block)
+func (flow *engineFlow) persistActiveScope(ctx context.Context, block *ActiveScope) error {
+	persisted, err := BlockScopeRowFromActiveScope(*block)
 	if err != nil {
 		return err
 	}
@@ -123,8 +123,8 @@ func (flow *engineFlow) persistActiveScope(ctx context.Context, block *activeSco
 // activating 429 stopped it, or the first generation of a new scope. The
 // trial never moves earlier than a deadline the scope already holds
 // (latestTrialDeadline).
-func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration, now time.Time) *activeScope {
-	block := &activeScope{
+func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration, now time.Time) *ActiveScope {
+	block := &ActiveScope{
 		Key:           key,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
@@ -151,7 +151,7 @@ func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration,
 // extension (R-6.8.24). A scope on probation holds no server deadline: its
 // trial is the stall-recovery re-arm one interval out, and the 429 that
 // ends the probation sets the deadline outright.
-func latestTrialDeadline(current *activeScope, requested time.Time) time.Time {
+func latestTrialDeadline(current *ActiveScope, requested time.Time) time.Time {
 	if current.ReleaseAllowance == 0 && current.NextTrialAt.After(requested) {
 		return current.NextTrialAt
 	}
@@ -169,7 +169,7 @@ func (flow *engineFlow) extendScopeTrial(
 		return nil
 	}
 
-	newInterval := computeTrialInterval(retryAfter)
+	newInterval := ComputeTrialInterval(retryAfter)
 	nextAt := flow.deps.now().Add(newInterval)
 
 	flow.deps.logger.Debug("extending trial interval",
@@ -229,7 +229,7 @@ func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey ScopeKey) 
 // blocked under scopeKey: a count of that scope's rows, not a listing of
 // every blocked row.
 func (flow *engineFlow) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
-	hasBlockedWork, err := flow.deps.store.scopeHasBlockedRetryWork(ctx, scopeKey)
+	hasBlockedWork, err := flow.deps.store.ScopeHasBlockedRetryWork(ctx, scopeKey)
 	if err != nil {
 		return false, fmt.Errorf("sync: checking blocked retry work for scope %s: %w", scopeKey.String(), err)
 	}
@@ -247,10 +247,10 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeK
 		return fmt.Errorf("rearm or discard scope %s: %w", scopeKey.String(), err)
 	}
 
-	switch decideTimedBlockScopeAction(hasBlockedWork) {
-	case timedBlockScopeKeep:
+	switch DecideTimedBlockScopeAction(hasBlockedWork) {
+	case TimedBlockScopeKeep:
 		return flow.rearmScopeTrial(ctx, scopeKey)
-	case timedBlockScopeDiscard:
+	case TimedBlockScopeDiscard:
 		return flow.discardScope(ctx, scopeKey)
 	}
 
@@ -262,9 +262,9 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeK
 // persists the completion's work blocked under that scope before activating
 // it (persistFailureWithScopeEffects). A completion with no status is fed
 // too: a request OneDrive never answered is outage evidence.
-func (flow *engineFlow) detectScope(r *actionCompletion) scopeUpdateResult {
+func (flow *engineFlow) detectScope(r *ActionCompletion) ScopeUpdateResult {
 	if flow.scopes.state == nil {
-		return scopeUpdateResult{}
+		return ScopeUpdateResult{}
 	}
 
 	return flow.scopes.state.UpdateScope(r)
@@ -272,9 +272,9 @@ func (flow *engineFlow) detectScope(r *actionCompletion) scopeUpdateResult {
 
 // applyBlockScope persists and activates a new block scope using the same
 // timing policy as trial extension and rearm.
-func (flow *engineFlow) applyBlockScope(ctx context.Context, sr scopeUpdateResult) error {
+func (flow *engineFlow) applyBlockScope(ctx context.Context, sr ScopeUpdateResult) error {
 	now := flow.deps.now()
-	interval := computeTrialInterval(sr.RetryAfter)
+	interval := ComputeTrialInterval(sr.RetryAfter)
 
 	block := flow.newBlockActivation(sr.ScopeKey, interval, now)
 	wasActive := flow.scopes.hasActiveScope(sr.ScopeKey)
@@ -306,14 +306,14 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	}
 
 	now := flow.deps.now()
-	interval := computeTrialInterval(retryAfter)
+	interval := ComputeTrialInterval(retryAfter)
 	block := flow.newBlockActivation(to, interval, now)
 	wasActive := flow.scopes.hasActiveScope(to)
 	if err := flow.persistActiveScope(ctx, block); err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
-	flow.deps.emit(engineDebugEvent{
-		Type:     engineDebugEventScopeActivated,
+	flow.deps.emit(EngineDebugEvent{
+		Type:     EngineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
 	flow.handOverColdStart(to)
@@ -364,7 +364,7 @@ func (flow *engineFlow) logBlockScopeActivated(
 		return
 	}
 
-	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, waitText(interval))
+	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, WaitText(interval))
 	if clearsAutomatically {
 		flow.deps.logger.Info(line, fields...)
 		return
@@ -376,13 +376,13 @@ func (flow *engineFlow) logBlockScopeActivated(
 // blockScopeActivationLine is the line said when a block scope of a condition
 // starts, and whether the condition clears without the user, which makes the
 // line Info rather than Warn. That verdict is the condition family's
-// (conditionClearsAutomatically), the same one that keeps the watch condition
+// (ConditionClearsAutomatically), the same one that keeps the watch condition
 // summary below a warning, so the two cannot disagree; a condition with no
 // family is not known to clear by itself.
 func blockScopeActivationLine(key ScopeKey, conditionType IssueType, retryIn string) (line string, clearsAutomatically bool) {
-	family, hasFamily := conditionKeyForIssueType(conditionType)
+	family, hasFamily := ConditionKeyForIssueType(conditionType)
 
-	return blockScopeActivationWording(key, conditionType, retryIn), hasFamily && conditionClearsAutomatically(family)
+	return blockScopeActivationWording(key, conditionType, retryIn), hasFamily && ConditionClearsAutomatically(family)
 }
 
 // blockScopeActivationWording words the activation line of a condition's
@@ -392,55 +392,55 @@ func blockScopeActivationLine(key ScopeKey, conditionType IssueType, retryIn str
 // are named in words after the scope.
 func blockScopeActivationWording(key ScopeKey, conditionType IssueType, retryIn string) string {
 	switch conditionType {
-	case issueRateLimited:
+	case IssueRateLimited:
 		return "OneDrive is limiting requests; pausing affected transfers and retrying in " + retryIn
-	case issueServiceOutage:
+	case IssueServiceOutage:
 		return "OneDrive is temporarily unavailable; pausing transfers and retrying in " + retryIn
 	case IssueQuotaExceeded:
 		return "OneDrive storage is full; uploads are paused until space is freed (checking again in " + retryIn + ")"
-	case issueDiskFull:
+	case IssueDiskFull:
 		// The same scope covers the min_free_space reserve and a real
 		// ENOSPC/EDQUOT write (inodes included); the per-file error names
 		// which one, so this line names both limits.
 		return "The local disk is full or below the min_free_space reserve; downloads are paused " +
 			"until there is room (checking again in " + retryIn + ")"
-	case issueLocalReadOnly:
+	case IssueLocalReadOnly:
 		return "The local filesystem holding " + key.Humanize() + " is read-only; local changes there are " +
 			"paused until it is writable again (checking again in " + retryIn + ")"
 	case IssueInvalidFilename,
-		issuePathTooLong,
-		issueFileTooLarge,
-		issueHashPanic,
+		IssuePathTooLong,
+		IssueFileTooLarge,
+		IssueHashPanic,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
-		issueRemoteReadDenied,
-		issueRemoteRootNotFound,
-		issueLocalReadDenied,
-		issueLocalWriteDenied,
-		issueCaseCollision,
-		issueRemoteNameTwin,
-		issueFileTooLargeForSpace,
-		issueLocalNameTooLong,
-		issueDeletesHeld,
-		issueLocalUnsyncableReplacement,
-		issueLocalMountBoundary,
-		issueLocalMountMissing,
-		issueRemoteFolderUnverifiable,
-		issueLocalInterruptedRemoval,
-		issueRemovedFolderKept,
-		issueLocalFileTooLarge,
-		issueLocalBusy,
-		issueLocalCrossDevice,
-		issueUnsupportedOperation,
-		issueMalwareDetected,
-		issueLocalDatabaseOpen,
-		issueUploadVerification,
-		issueDownloadIntegrity,
-		issueRequestTimeout,
-		issueTransientConflict,
-		issueTransientNotFound,
-		issueResourceLocked,
-		issueTransferURLRejected:
+		IssueRemoteReadDenied,
+		IssueRemoteRootNotFound,
+		IssueLocalReadDenied,
+		IssueLocalWriteDenied,
+		IssueCaseCollision,
+		IssueRemoteNameTwin,
+		IssueFileTooLargeForSpace,
+		IssueLocalNameTooLong,
+		IssueDeletesHeld,
+		IssueLocalUnsyncableReplacement,
+		IssueLocalMountBoundary,
+		IssueLocalMountMissing,
+		IssueRemoteFolderUnverifiable,
+		IssueLocalInterruptedRemoval,
+		IssueRemovedFolderKept,
+		IssueLocalFileTooLarge,
+		IssueLocalBusy,
+		IssueLocalCrossDevice,
+		IssueUnsupportedOperation,
+		IssueMalwareDetected,
+		IssueLocalDatabaseOpen,
+		IssueUploadVerification,
+		IssueDownloadIntegrity,
+		IssueRequestTimeout,
+		IssueTransientConflict,
+		IssueTransientNotFound,
+		IssueResourceLocked,
+		IssueTransferURLRejected:
 		return pausedScopeLine(key, conditionType, retryIn)
 	default:
 		return pausedScopeLine(key, conditionType, retryIn)
@@ -476,8 +476,8 @@ func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
 	if len(deleted) > 0 {
 		flow.signals.armRetryTimer()
 	}
-	flow.deps.emit(engineDebugEvent{
-		Type:     engineDebugEventScopeDiscarded,
+	flow.deps.emit(EngineDebugEvent{
+		Type:     EngineDebugEventScopeDiscarded,
 		ScopeKey: key,
 	})
 
@@ -516,11 +516,11 @@ func (flow *engineFlow) clearBlockedRetryWorkForScope(
 // blocked by an active scope. Blocked rows have no retry timing until the
 // scope is released or trialed.
 func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) error {
-	return flow.persistBlockedRetryWork(ctx, retryWorkKeyForAction(action), scopeKey)
+	return flow.persistBlockedRetryWork(ctx, RetryWorkKeyForAction(action), scopeKey)
 }
 
 func (flow *engineFlow) holdActionFromPersistedRetryState(
-	current *trackedAction,
+	current *TrackedAction,
 	work RetryWorkKey,
 ) error {
 	if current == nil {
@@ -537,7 +537,7 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 	}
 
 	nextRetry := time.Time{}
-	if storedTimeIsSet(row.NextRetryAt) {
+	if StoredTimeIsSet(row.NextRetryAt) {
 		nextRetry = time.Unix(0, row.NextRetryAt)
 	}
 	flow.holdAction(current, heldReasonRetry, ScopeKey{}, nextRetry)
@@ -546,15 +546,15 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 
 func (flow *engineFlow) holdActionUnderScope(
 	ctx context.Context,
-	current *trackedAction,
-	r *actionCompletion,
+	current *TrackedAction,
+	r *ActionCompletion,
 	scopeKey ScopeKey,
 ) error {
 	if current == nil {
 		return nil
 	}
 
-	if err := flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey); err != nil {
+	if err := flow.persistBlockedRetryWork(ctx, RetryWorkKeyForCompletion(r), scopeKey); err != nil {
 		return err
 	}
 	flow.holdAction(current, heldReasonScope, scopeKey, time.Time{})
@@ -564,17 +564,17 @@ func (flow *engineFlow) holdActionUnderScope(
 
 func (flow *engineFlow) rehomeBlockedRetryWork(
 	ctx context.Context,
-	r *actionCompletion,
+	r *ActionCompletion,
 	scopeKey ScopeKey,
 ) error {
-	return flow.persistBlockedRetryWork(ctx, retryWorkKeyForCompletion(r), scopeKey)
+	return flow.persistBlockedRetryWork(ctx, RetryWorkKeyForCompletion(r), scopeKey)
 }
 
 func (flow *engineFlow) drainDueHeldWorkNow(
 	ctx context.Context,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	now := flow.deps.now()
-	var ready []*trackedAction
+	var ready []*TrackedAction
 
 	for _, key := range flow.dueRetryKeys(now) {
 		ta := flow.retries.releaseHeldAction(key)

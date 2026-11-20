@@ -42,7 +42,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 		LocalMtime:     info.ModTime().UnixNano(),
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 
 	// Immediately scan — the file's mtime is within 1 second of now.
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
@@ -79,7 +79,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 		LocalMtime:     info.ModTime().UnixNano() - 2*int64(time.Second), // 2 seconds earlier
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestFullScan_NosyncMarkerDoesNotGuardSync(t *testing.T) {
 	writeTestFile(t, syncRoot, "file2.txt", "content2")
 	writeTestFile(t, syncRoot, ".nosync", "")
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -195,35 +195,6 @@ func TestOneDriveValidNames_Accepted(t *testing.T) {
 	}
 }
 
-// TestAsciiLower validates the allocation-free ASCII lowering helper used by
-// bundled junk matching.
-func TestAsciiLower(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"already-lower.txt", "already-lower.txt"},
-		{"ALLCAPS.TXT", "allcaps.txt"},
-		{"MixedCase.Partial", "mixedcase.partial"},
-		{"", ""},
-		{"noext", "noext"},
-		{"café.txt", "café.txt"},       // non-ASCII unchanged
-		{"FILE.DB-WAL", "file.db-wal"}, // matches excluded suffix
-		{"~$Document.docx", "~$document.docx"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			t.Parallel()
-
-			got := asciiLower(tt.input)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // A name is never refused for its own length: OneDrive limits only the path,
 // which counts the name in UTF-16 units (oneDrivePathLength).
 //
@@ -258,7 +229,7 @@ func TestValidateOneDriveName_Empty(t *testing.T) {
 func TestIsOversizedFile(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
 	// Exactly at the limit — should NOT be oversized.
 	assert.False(t, obs.IsOversizedFile(maxOneDriveFileSize, "exactly-250gb.bin"),

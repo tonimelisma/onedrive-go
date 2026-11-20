@@ -36,7 +36,7 @@ func TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch(t *testing.T) 
 		{page: &graph.DeltaPage{Items: append([]graph.Item{{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID}}, children...), NextLink: "page-2"}},
 		{page: &graph.DeltaPage{Items: parents, DeltaLink: "done"}},
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
 	obs.SetItemClient(&engineMockClient{getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 		require.Failf(t, "unexpected read", "the folder %s arrives later in the window", itemID)
 		return nil, graph.ErrNotFound
@@ -74,7 +74,7 @@ func TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching(t *testing.
 
 	var mu stdsync.Mutex
 	reads := map[string]int{}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, testLogger(t))
 	obs.SetItemClient(&engineMockClient{getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 		mu.Lock()
 		reads[itemID]++
@@ -84,7 +84,7 @@ func TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching(t *testing.
 
 	// The first attempt spends the window's budget and stays incomplete.
 	_, _, err := obs.FullDelta(t.Context(), "saved")
-	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 
 	// The replay reuses what it already read and spends the budget only on
 	// the rest; it used to start from zero and fail the same way forever.

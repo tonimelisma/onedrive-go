@@ -19,14 +19,14 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 'old', 1, 1, 1, 1, 'etag-old'),
 			('item-folder', 'folder', 'folder', '', '', NULL, NULL, NULL, NULL, NULL)`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
 			Path:     "upload.txt",
 			ItemType: ItemTypeFile,
@@ -40,7 +40,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		},
 	}))
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item-upload",
@@ -71,7 +71,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 	remoteRows, err := store.ListRemoteState(ctx)
 	require.NoError(t, err)
 
-	planner := newPlanner(testLogger(t))
+	planner := NewPlanner(testLogger(t))
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
@@ -79,7 +79,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		remoteRows,
 		nil,
 		bl,
-		plannerMountContext{DriveID: driveID},
+		PlannerMountContext{DriveID: driveID},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -114,7 +114,7 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 			('item-file', 'Projects/a.txt', 'file', 'hash-a', 'hash-a', 5, 5, 1, 1, 33, 44, 1)`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
 			Path:             "Renamed Projects",
 			ItemType:         ItemTypeFolder,
@@ -134,7 +134,7 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 		},
 	}))
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-folder', 'Projects', 'folder', '', NULL, NULL),
@@ -155,7 +155,7 @@ func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *t
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -164,7 +164,7 @@ func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *t
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 'old-hash', 10, 10, 1, 1, 5, 6, 1)`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "new-hash",
@@ -175,7 +175,7 @@ func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *t
 		LocalHasIdentity: true,
 	}}))
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -209,7 +209,7 @@ func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 'old-hash', 10, 10, 1, 1, 5, 6, 1)`)
 	require.NoError(t, err)
 
-	destination := localStateRow{
+	destination := LocalStateRow{
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Size:             10,
@@ -218,9 +218,9 @@ func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads
 		LocalInode:       6,
 		LocalHasIdentity: true,
 	}
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{destination}))
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{destination}))
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -255,7 +255,7 @@ func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
 		VALUES ('item-file', 'renamed.txt', 'file', 'h', 'h', 2, 2, 3, 3, 5, 6, 1, 'etag-old')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:             "renamed.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "h",
@@ -266,7 +266,7 @@ func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
 		LocalHasIdentity: true,
 	}}))
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-file', 'sub/renamed-remotely.txt', 'file', 'h', 2, 3, 'etag-new')`)
 	require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildM
 	// recorded) cannot pair, so the folder move decomposes. The source folder
 	// must be deleted on OneDrive, never re-created locally, and only after
 	// the child it contains has been moved out of it.
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -304,7 +304,7 @@ func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildM
 			('item-leaf', 'deep/leaf.md', 'file', 'hash-leaf', 'hash-leaf', 5, 5, 1, 1, 33, 44, 1)`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
 			Path:             "moved-deep",
 			ItemType:         ItemTypeFolder,
@@ -324,7 +324,7 @@ func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildM
 		},
 	}))
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-deep', 'deep', 'folder', '', NULL, NULL),
@@ -335,7 +335,7 @@ func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildM
 	indexByKey := make(map[string]int, len(plan.Actions))
 	for i := range plan.Actions {
 		action := plan.Actions[i]
-		assert.False(t, action.Type == ActionFolderCreate && action.CreateSide == createLocal,
+		assert.False(t, action.Type == ActionFolderCreate && action.CreateSide == CreateLocal,
 			"no local folder may be re-created: %+v", action)
 		indexByKey[action.Type.String()+":"+action.Path] = i
 	}
@@ -358,12 +358,12 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-conflict', 'conflict.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "conflict.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-new",
@@ -371,7 +371,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		Mtime:    2,
 	}}))
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-conflict",
 		Path:     "conflict.txt",
@@ -394,7 +394,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	remoteRows, err := store.ListRemoteState(ctx)
 	require.NoError(t, err)
 
-	planner := newPlanner(testLogger(t))
+	planner := NewPlanner(testLogger(t))
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
@@ -402,7 +402,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		remoteRows,
 		nil,
 		bl,
-		plannerMountContext{DriveID: driveID},
+		PlannerMountContext{DriveID: driveID},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)
@@ -428,7 +428,7 @@ func TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions(
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "new-collision.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-new",
@@ -436,7 +436,7 @@ func TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions(
 		Mtime:    2,
 	}}))
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "remote-new",
 		Path:     "new-collision.txt",
@@ -467,12 +467,12 @@ func TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID(t *testing
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('deleted-item', 'edit-delete.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "edit-delete.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-new",
@@ -499,11 +499,11 @@ func TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThr
 	driveID := driveid.New(engineTestDriveID)
 	seedFolderCascadeBaseline(t, store)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "Projects", ItemType: ItemTypeFolder},
 		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "old-hash", Size: 1, Mtime: 1},
 	}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "file-projects",
 		Path:     "Projects/file.txt",
@@ -530,11 +530,11 @@ func TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocal
 	driveID := driveid.New(engineTestDriveID)
 	seedFolderCascadeBaseline(t, store)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "Projects", ItemType: ItemTypeFolder},
 		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "local-new", Size: 2, Mtime: 2},
 	}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "file-projects",
 		Path:     "Projects/file.txt",
@@ -563,11 +563,11 @@ func TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUpl
 	driveID := driveid.New(engineTestDriveID)
 	seedFolderCascadeBaseline(t, store)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "Projects", ItemType: ItemTypeFolder},
 		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "local-new", Size: 2, Mtime: 2},
 	}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "file-projects",
 		Path:     "Projects/file.txt",
@@ -595,11 +595,11 @@ func TestPlannerPlanCurrentState_UploadOnlyPreservesRemoteParentForAdmittedEdite
 	driveID := driveid.New(engineTestDriveID)
 	seedFolderCascadeBaseline(t, store)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "Projects", ItemType: ItemTypeFolder},
 		{Path: "Projects/file.txt", ItemType: ItemTypeFile, Hash: "local-new", Size: 2, Mtime: 2},
 	}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "file-projects",
 		Path:     "Projects/file.txt",
@@ -628,14 +628,14 @@ func TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteC
 	driveID := driveid.New(engineTestDriveID)
 	seedFolderCascadeBaseline(t, store)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "Projects/file.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "old-hash",
 		Size:     1,
 		Mtime:    1,
 	}}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "folder-projects",
@@ -658,7 +658,7 @@ func TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteC
 
 	parentIdx := requireActionIndex(t, plan.Actions, "Projects", ActionFolderCreate)
 	downloadIdx := requireActionIndex(t, plan.Actions, "Projects/file.txt", ActionDownload)
-	assert.Equal(t, createLocal, plan.Actions[parentIdx].CreateSide)
+	assert.Equal(t, CreateLocal, plan.Actions[parentIdx].CreateSide)
 	assert.Contains(t, plan.Deps[downloadIdx], parentIdx)
 }
 
@@ -670,14 +670,14 @@ func TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroug
 	ctx := t.Context()
 	seedFolderCascadeBaseline(t, store)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "Projects/file.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "old-hash",
 		Size:     1,
 		Mtime:    1,
 	}}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveid.New(engineTestDriveID),
 		ItemID:   "file-projects",
 		Path:     "Projects/file.txt",
@@ -702,18 +702,18 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 
 	plan := planCurrentStateForInputs(
 		t,
-		[]sQLiteComparisonRow{{
+		[]SQLiteComparisonRow{{
 			Path:           "Shared/report.txt",
 			RemotePresent:  true,
-			ComparisonKind: comparisonRemoteOnlyCreate,
+			ComparisonKind: ComparisonRemoteOnlyCreate,
 		}},
-		[]sQLiteReconciliationRow{{
+		[]SQLiteReconciliationRow{{
 			Path:               "Shared/report.txt",
-			ComparisonKind:     comparisonRemoteOnlyCreate,
-			ReconciliationKind: reconcileDownload,
+			ComparisonKind:     ComparisonRemoteOnlyCreate,
+			ReconciliationKind: ReconcileDownload,
 		}},
 		nil,
-		[]remoteStateRow{{
+		[]RemoteStateRow{{
 			Path:     "Shared/report.txt",
 			ItemID:   "remote-report",
 			DriveID:  sharedDriveID,
@@ -739,12 +739,12 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-conflict', 'conflict.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "conflict.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-new",
@@ -752,7 +752,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 		Mtime:    2,
 	}}))
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-conflict",
 		Path:     "conflict.txt",
@@ -775,7 +775,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 	remoteRows, err := store.ListRemoteState(ctx)
 	require.NoError(t, err)
 
-	planner := newPlanner(testLogger(t))
+	planner := NewPlanner(testLogger(t))
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
@@ -783,7 +783,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 		remoteRows,
 		nil,
 		bl,
-		plannerMountContext{DriveID: driveID},
+		PlannerMountContext{DriveID: driveID},
 		SyncUploadOnly,
 	)
 	require.NoError(t, err)
@@ -793,13 +793,13 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 	assert.Equal(t, 0, plan.DeferredByMode.Uploads)
 }
 
-func planCurrentStateForStore(t *testing.T, store *SyncStore) *actionPlan {
+func planCurrentStateForStore(t *testing.T, store *SyncStore) *ActionPlan {
 	t.Helper()
 
 	return planCurrentStateForStoreWithMode(t, store, SyncBidirectional)
 }
 
-func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncMode) *actionPlan {
+func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncMode) *ActionPlan {
 	t.Helper()
 
 	return planCurrentStateForStoreWithLogger(t, store, mode, testLogger(t))
@@ -807,56 +807,56 @@ func planCurrentStateForStoreWithMode(t *testing.T, store *SyncStore, mode SyncM
 
 // planCurrentStateForStoreWithLogger plans what store holds, as the engine
 // reads it at the start of a pass, logging to logger.
-func planCurrentStateForStoreWithLogger(t *testing.T, store *SyncStore, mode SyncMode, logger *slog.Logger) *actionPlan {
+func planCurrentStateForStoreWithLogger(t *testing.T, store *SyncStore, mode SyncMode, logger *slog.Logger) *ActionPlan {
 	t.Helper()
 
 	ctx := t.Context()
 	bl, err := store.Load(ctx)
 	require.NoError(t, err)
 
-	tx, err := beginPerfTx(ctx, store.rawDB())
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
-	rawLocalRows, err := listLocalStateRows(ctx, tx)
+	rawLocalRows, err := ListLocalStateRows(ctx, tx)
 	require.NoError(t, err)
 
-	observationState, err := readObservationStateFromTx(ctx, tx)
+	observationState, err := ReadObservationStateFromTx(ctx, tx)
 	require.NoError(t, err)
 	contentDriveID := observationState.ContentDriveID
 	if contentDriveID.IsZero() {
 		contentDriveID = driveid.New(engineTestDriveID)
 	}
 
-	rawRemoteRows, err := queryRemoteStateRowsWithRunner(
+	rawRemoteRows, err := QueryRemoteStateRowsWithRunner(
 		ctx,
 		tx,
-		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
+		`SELECT `+SqlSelectRemoteStateCols+` FROM remote_state`,
 		contentDriveID,
 	)
 	require.NoError(t, err)
 
-	visibleRows, err := replacePlannerVisibleStateTx(ctx, tx, rawLocalRows, rawRemoteRows, contentDriveID)
+	visibleRows, err := ReplacePlannerVisibleStateTx(ctx, tx, rawLocalRows, rawRemoteRows, contentDriveID)
 	require.NoError(t, err)
 
-	comparisons, err := queryComparisonStateWithRunnerForTables(
+	comparisons, err := QueryComparisonStateWithRunnerForTables(
 		ctx,
 		tx,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
+		PlannerVisibleLocalStateTable,
+		PlannerVisibleRemoteStateTable,
 	)
 	require.NoError(t, err)
-	reconciliations, err := queryReconciliationStateWithRunnerForTables(
+	reconciliations, err := QueryReconciliationStateWithRunnerForTables(
 		ctx,
 		tx,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
+		PlannerVisibleLocalStateTable,
+		PlannerVisibleRemoteStateTable,
 	)
 	require.NoError(t, err)
-	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	observationIssues, err := QueryObservationIssueRowsWithRunner(ctx, tx)
 	require.NoError(t, err)
 
-	planner := newPlanner(logger)
+	planner := NewPlanner(logger)
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
@@ -864,7 +864,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *SyncStore, mode Syn
 		visibleRows.Remote,
 		observationIssues,
 		bl,
-		plannerMountContext{DriveID: driveid.New(engineTestDriveID)},
+		PlannerMountContext{DriveID: driveid.New(engineTestDriveID)},
 		mode,
 	)
 	require.NoError(t, err)
@@ -874,16 +874,16 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *SyncStore, mode Syn
 
 func planCurrentStateForInputs(
 	t *testing.T,
-	comparisons []sQLiteComparisonRow,
-	reconciliations []sQLiteReconciliationRow,
-	localRows []localStateRow,
-	remoteRows []remoteStateRow,
+	comparisons []SQLiteComparisonRow,
+	reconciliations []SQLiteReconciliationRow,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
 	observationIssues []ObservationIssueRow,
 	baseline *Baseline,
-) *actionPlan {
+) *ActionPlan {
 	t.Helper()
 
-	planner := newPlanner(testLogger(t))
+	planner := NewPlanner(testLogger(t))
 	plan, err := planner.PlanCurrentState(
 		comparisons,
 		reconciliations,
@@ -891,7 +891,7 @@ func planCurrentStateForInputs(
 		remoteRows,
 		observationIssues,
 		baseline,
-		plannerMountContext{DriveID: driveid.New(engineTestDriveID)},
+		PlannerMountContext{DriveID: driveid.New(engineTestDriveID)},
 		SyncBidirectional,
 	)
 	require.NoError(t, err)
@@ -902,7 +902,7 @@ func planCurrentStateForInputs(
 func seedFolderCascadeBaseline(t *testing.T, store *SyncStore) {
 	t.Helper()
 
-	_, err := store.rawDB().ExecContext(t.Context(), `
+	_, err := store.RawDBForTest().ExecContext(t.Context(), `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime, etag
@@ -913,7 +913,7 @@ func seedFolderCascadeBaseline(t *testing.T, store *SyncStore) {
 	require.NoError(t, err)
 }
 
-func requireActionIndex(t *testing.T, actions []Action, path string, actionType actionType) int {
+func requireActionIndex(t *testing.T, actions []Action, path string, actionType ActionType) int {
 	t.Helper()
 
 	for i := range actions {
@@ -926,7 +926,7 @@ func requireActionIndex(t *testing.T, actions []Action, path string, actionType 
 	return -1
 }
 
-func assertNoAction(t *testing.T, actions []Action, path string, actionType actionType) {
+func assertNoAction(t *testing.T, actions []Action, path string, actionType ActionType) {
 	t.Helper()
 
 	for i := range actions {
@@ -941,18 +941,18 @@ func assertNoAction(t *testing.T, actions []Action, path string, actionType acti
 	}
 }
 
-func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *actionPlan {
+func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-private', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
 	require.NoError(t, err)
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-private",
 		Path:     "Private/sub/file.txt",
@@ -965,25 +965,25 @@ func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *actionPlan {
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Private",
 		DriveID:   driveID,
-		IssueType: issueLocalReadDenied,
-		ScopeKey:  sKPermLocalRead("Private"),
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *actionPlan {
+func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-shared', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "Shared/sub/file.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash",
@@ -993,20 +993,20 @@ func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *actionPlan {
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Shared",
 		DriveID:   driveID,
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  sKPermRemoteRead("Shared"),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableLocalReadBoundaryCleanupCandidate(t *testing.T) *actionPlan {
+func planForUnavailableLocalReadBoundaryCleanupCandidate(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-private-dir', 'Private/sub', 'folder', '', '', 0, 0, 1, 1, ''),
 		       ('item-private-file', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
@@ -1014,26 +1014,26 @@ func planForUnavailableLocalReadBoundaryCleanupCandidate(t *testing.T) *actionPl
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Private",
 		DriveID:   driveid.New(engineTestDriveID),
-		IssueType: issueLocalReadDenied,
-		ScopeKey:  sKPermLocalRead("Private"),
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *actionPlan {
+func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-shared-dir', 'Shared/sub', 'folder', '', '', 0, 0, 1, 1, ''),
 		       ('item-shared-file', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
 			Path:     "Shared/sub",
 			ItemType: ItemTypeFolder,
@@ -1049,46 +1049,46 @@ func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *actionP
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Shared",
 		DriveID:   driveID,
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  sKPermRemoteRead("Shared"),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	return planCurrentStateForStore(t, store)
 }
 
-func planForUnavailableLocalMoveSource(t *testing.T) *actionPlan {
+func planForUnavailableLocalMoveSource(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	return planCurrentStateForInputs(
 		t,
-		[]sQLiteComparisonRow{{
+		[]SQLiteComparisonRow{{
 			Path:            "docs/source.txt",
 			BaselinePresent: true,
 			LocalPresent:    true,
 			RemotePresent:   true,
 			LocalChanged:    true,
 			RemoteChanged:   false,
-			ComparisonKind:  comparisonLocalMoveSource,
+			ComparisonKind:  ComparisonLocalMoveSource,
 		}},
-		[]sQLiteReconciliationRow{{
+		[]SQLiteReconciliationRow{{
 			Path:               "docs/source.txt",
-			ComparisonKind:     comparisonLocalMoveSource,
-			ReconciliationKind: reconcileLocalMove,
+			ComparisonKind:     ComparisonLocalMoveSource,
+			ReconciliationKind: ReconcileLocalMove,
 			LocalMoveTarget:    "docs/dest.txt",
 		}},
-		[]localStateRow{{
+		[]LocalStateRow{{
 			Path:     "docs/source.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "local",
 		}},
-		[]remoteStateRow{{
+		[]RemoteStateRow{{
 			Path:    "docs/source.txt",
 			ItemID:  "remote-source",
 			DriveID: driveid.New(engineTestDriveID),
 		}},
 		[]ObservationIssueRow{{
 			Path:      "docs/source.txt",
-			IssueType: issueLocalReadDenied,
+			IssueType: IssueLocalReadDenied,
 		}},
 		NewBaselineForTest([]*BaselineEntry{{
 			Path:     "docs/source.txt",
@@ -1099,40 +1099,40 @@ func planForUnavailableLocalMoveSource(t *testing.T) *actionPlan {
 	)
 }
 
-func planForUnavailableRemoteMoveDestination(t *testing.T) *actionPlan {
+func planForUnavailableRemoteMoveDestination(t *testing.T) *ActionPlan {
 	t.Helper()
 
 	return planCurrentStateForInputs(
 		t,
-		[]sQLiteComparisonRow{{
+		[]SQLiteComparisonRow{{
 			Path:            "Shared/dest.txt",
 			BaselinePresent: true,
 			LocalPresent:    true,
 			RemotePresent:   true,
 			LocalChanged:    false,
 			RemoteChanged:   true,
-			ComparisonKind:  comparisonRemoteMoveDest,
+			ComparisonKind:  ComparisonRemoteMoveDest,
 		}},
-		[]sQLiteReconciliationRow{{
+		[]SQLiteReconciliationRow{{
 			Path:               "Shared/dest.txt",
-			ComparisonKind:     comparisonRemoteMoveDest,
-			ReconciliationKind: reconcileRemoteMove,
+			ComparisonKind:     ComparisonRemoteMoveDest,
+			ReconciliationKind: ReconcileRemoteMove,
 			RemoteMoveSource:   "Shared/source.txt",
 		}},
-		[]localStateRow{{
+		[]LocalStateRow{{
 			Path:     "Shared/dest.txt",
 			ItemType: ItemTypeFile,
 			Hash:     "local",
 		}},
-		[]remoteStateRow{{
+		[]RemoteStateRow{{
 			Path:    "Shared/dest.txt",
 			ItemID:  "remote-dest",
 			DriveID: driveid.New(engineTestDriveID),
 		}},
 		[]ObservationIssueRow{{
 			Path:      "Shared",
-			IssueType: issueRemoteReadDenied,
-			ScopeKey:  sKPermRemoteRead("Shared"),
+			IssueType: IssueRemoteReadDenied,
+			ScopeKey:  SKPermRemoteRead("Shared"),
 		}},
 		NewBaselineForTest([]*BaselineEntry{{
 			Path:     "Shared/dest.txt",
@@ -1143,7 +1143,7 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *actionPlan {
 	)
 }
 
-func assertNoActionForPath(t *testing.T, plan *actionPlan, path string, actionType actionType) {
+func assertNoActionForPath(t *testing.T, plan *ActionPlan, path string, actionType ActionType) {
 	t.Helper()
 
 	for i := range plan.Actions {
@@ -1165,12 +1165,12 @@ func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testi
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-danger', 'danger.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-danger')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-danger",
 		Path:     "danger.txt",
@@ -1183,7 +1183,7 @@ func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testi
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "danger.txt",
 		DriveID:   driveID,
-		IssueType: issueLocalReadDenied,
+		IssueType: IssueLocalReadDenied,
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1198,12 +1198,12 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryDoesNotDeleteLocalData(t *tes
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-shared', 'Shared/a.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
 	require.NoError(t, err)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "Shared/a.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash",
@@ -1213,8 +1213,8 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryDoesNotDeleteLocalData(t *tes
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Shared",
 		DriveID:   driveid.New(engineTestDriveID),
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  sKPermRemoteRead("Shared"),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1230,11 +1230,11 @@ func TestPlannerPlanCurrentState_LocalReadBoundaryBlocksRemoteDeletesForDescenda
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-private', 'Private/a.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
 	require.NoError(t, err)
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-private",
 		Path:     "Private/a.txt",
@@ -1247,8 +1247,8 @@ func TestPlannerPlanCurrentState_LocalReadBoundaryBlocksRemoteDeletesForDescenda
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Private",
 		DriveID:   driveID,
-		IssueType: issueLocalReadDenied,
-		ScopeKey:  sKPermLocalRead("Private"),
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1263,13 +1263,13 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescenda
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-team-a', 'Team/a.txt', 'file', 'hash-a', 'hash-a', 10, 10, 1, 1, 'etag-team-a'),
 			('item-team-b', 'Team/sub/b.txt', 'file', 'hash-b', 'hash-b', 11, 11, 2, 2, 'etag-team-b')`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
 			Path:     "Team/a.txt",
 			ItemType: ItemTypeFile,
@@ -1288,8 +1288,8 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescenda
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Team",
 		DriveID:   driveid.New(engineTestDriveID),
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  sKPermRemoteRead("Team"),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Team"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1306,7 +1306,7 @@ func TestPlannerPlanCurrentState_LocalReadBoundarySuppressesRemoteOnlySubtreeAct
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item-private-dir",
@@ -1333,8 +1333,8 @@ func TestPlannerPlanCurrentState_LocalReadBoundarySuppressesRemoteOnlySubtreeAct
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Private",
 		DriveID:   driveID,
-		IssueType: issueLocalReadDenied,
-		ScopeKey:  sKPermLocalRead("Private"),
+		IssueType: IssueLocalReadDenied,
+		ScopeKey:  SKPermLocalRead("Private"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1351,7 +1351,7 @@ func TestPlannerPlanCurrentState_RemoteReadBoundarySuppressesLocalOnlySubtreeAct
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{
 			Path:     "Shared",
 			ItemType: ItemTypeFolder,
@@ -1371,8 +1371,8 @@ func TestPlannerPlanCurrentState_RemoteReadBoundarySuppressesLocalOnlySubtreeAct
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "Shared",
 		DriveID:   driveid.New(engineTestDriveID),
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  sKPermRemoteRead("Shared"),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead("Shared"),
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1393,7 +1393,7 @@ func TestPlannerPlanCurrentState_NewUnreadableLocalPathProducesNoActions(t *test
 	seedObservationIssueRowForTest(t, store, &ObservationIssue{
 		Path:      "blocked/new.txt",
 		DriveID:   driveID,
-		IssueType: issueLocalReadDenied,
+		IssueType: IssueLocalReadDenied,
 	})
 
 	plan := planCurrentStateForStore(t, store)
@@ -1491,7 +1491,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes(t 
 
 	// rm -rf many/ while watch mode runs: every baseline row under many is
 	// gone locally and still present remotely.
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime
@@ -1504,7 +1504,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes(t 
 			('item-f002', 'many/sub/f002.txt', 'file', 'h2', 'h2', 1, 1, 1, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-many', 'many', 'folder', '', NULL, NULL),
@@ -1539,7 +1539,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeleteKeepsFolderForNewRemoteChild(t
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime
@@ -1549,7 +1549,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeleteKeepsFolderForNewRemoteChild(t
 			('item-f000', 'many/f000.txt', 'file', 'h0', 'h0', 1, 1, 1, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-many', 'many', 'folder', '', NULL, NULL),
@@ -1565,10 +1565,10 @@ func TestPlannerPlanCurrentState_LocalFolderDeleteKeepsFolderForNewRemoteChild(t
 	assert.NotContains(t, index, "remote_delete:many", "the folder holding the new file is not deleted")
 	folderIdx, ok := index["folder_create:many"]
 	require.True(t, ok, "the folder is re-created locally for the new file")
-	assert.Equal(t, createLocal, plan.Actions[folderIdx].CreateSide)
+	assert.Equal(t, CreateLocal, plan.Actions[folderIdx].CreateSide)
 }
 
-func planActionIndex(t *testing.T, plan *actionPlan) map[string]int {
+func planActionIndex(t *testing.T, plan *ActionPlan) map[string]int {
 	t.Helper()
 
 	index := make(map[string]int, len(plan.Actions))
@@ -1590,15 +1590,15 @@ func TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem(t *
 	ctx := t.Context()
 
 	// rm lowercase.txt; mkdir lowercase.txt; echo > lowercase.txt/inside.txt
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-lower', 'lowercase.txt', 'file', 'h', 'h', 1, 1, 1, 1)`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "lowercase.txt", ItemType: ItemTypeFolder},
 		{Path: "lowercase.txt/inside.txt", ItemType: ItemTypeFile, Hash: "inside", Size: 1, Mtime: 2},
 	}))
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-lower', 'lowercase.txt', 'file', 'h', 1, 1)`)
 	require.NoError(t, err)
@@ -1627,16 +1627,16 @@ func TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem(t *
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES
 			('item-dir', 'thing', 'folder', NULL, NULL, NULL, NULL, NULL, NULL),
 			('item-child', 'thing/child.txt', 'file', 'c', 'c', 1, 1, 1, 1)`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "thing", ItemType: ItemTypeFile, Hash: "now-a-file", Size: 3, Mtime: 4},
 	}))
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-dir', 'thing', 'folder', NULL, NULL, NULL),
@@ -1666,14 +1666,14 @@ func TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem(t *
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-old-file', 'shape', 'file', 'h', 'h', 1, 1, 1, 1)`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "shape", ItemType: ItemTypeFile, Hash: "h", Size: 1, Mtime: 1},
 	}))
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-new-folder', 'shape', 'folder', NULL, NULL, NULL),
@@ -1688,7 +1688,7 @@ func TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem(t *
 	require.True(t, ok, "%v", index)
 	createIdx, ok := index[ActionFolderCreate.String()+":shape"]
 	require.True(t, ok, "%v", index)
-	assert.Equal(t, createLocal, plan.Actions[createIdx].CreateSide)
+	assert.Equal(t, CreateLocal, plan.Actions[createIdx].CreateSide)
 	downloadIdx, ok := index[ActionDownload.String()+":shape/inner.txt"]
 	require.True(t, ok, "%v", index)
 
@@ -1703,14 +1703,14 @@ func TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem(t *
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-old-dir', 'shape', 'folder', NULL, NULL, NULL, NULL, NULL, NULL)`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "shape", ItemType: ItemTypeFolder},
 	}))
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-new-file', 'shape', 'file', 'f', 1, 1)`)
 	require.NoError(t, err)
@@ -1736,14 +1736,14 @@ func TestPlannerPlanCurrentState_CaseOnlyRenameWithEditUploadsAfterOldNameIsDele
 	ctx := t.Context()
 
 	// mv edit.txt EDIT.txt; then rewrite it, so no move can be proven.
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-edit', 'edit.txt', 'file', 'old', 'old', 3, 3, 1, 1)`)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "EDIT.txt", ItemType: ItemTypeFile, Hash: "new", Size: 30, Mtime: 2},
 	}))
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-edit', 'edit.txt', 'file', 'old', 3, 1)`)
 	require.NoError(t, err)
@@ -1788,24 +1788,24 @@ func TestBuildDependencies_CaseVariantMovesDoNotWaitOnEachOther(t *testing.T) {
 func TestLeaveOutNewLocalItems_KeepsTheNewFoldersAnAdmittedMoveNeeds(t *testing.T) {
 	t.Parallel()
 
-	newRemote := func(storedPath string, itemType ItemType) *pathView {
-		return &pathView{Path: storedPath, Remote: &remoteState{ItemID: "item-" + storedPath, ItemType: itemType}}
+	newRemote := func(storedPath string, itemType ItemType) *PathView {
+		return &PathView{Path: storedPath, Remote: &RemoteState{ItemID: "item-" + storedPath, ItemType: itemType}}
 	}
 	folders := []string{"New", "New/Deeper", "New/Deeper/Deepest"}
 	var actions []Action
 	for _, folder := range folders {
-		actions = append(actions, makeFolderCreate(newRemote(folder, ItemTypeFolder), createLocal))
+		actions = append(actions, makeFolderCreate(newRemote(folder, ItemTypeFolder), CreateLocal))
 	}
-	moved := makeAction(ActionLocalMove, &pathView{
+	moved := makeAction(ActionLocalMove, &PathView{
 		Path:     "New/Deeper/Deepest/moved.txt",
 		Baseline: &BaselineEntry{Path: "moved.txt", ItemID: "item-moved", ItemType: ItemTypeFile},
-		Remote:   &remoteState{ItemID: "item-moved", ItemType: ItemTypeFile},
+		Remote:   &RemoteState{ItemID: "item-moved", ItemType: ItemTypeFile},
 	})
 	moved.OldPath = "moved.txt"
 	actions = append(actions, moved, makeAction(ActionDownload, newRemote("New/Deeper/Deepest/beside.txt", ItemTypeFile)))
 	capture, logger := synctest.NewLogCapture()
 
-	kept := newPlanner(logger).leaveOutNewLocalItems(actions, SyncBidirectional)
+	kept := NewPlanner(logger).leaveOutNewLocalItems(actions, SyncBidirectional)
 
 	paths := make([]string, 0, len(kept))
 	for i := range kept {
@@ -1826,4 +1826,56 @@ func TestLeaveOutNewLocalItems_KeepsTheNewFoldersAnAdmittedMoveNeeds(t *testing.
 	require.Len(t, leftOut, 1)
 	assert.Equal(t, slog.LevelDebug, leftOut[0].Level)
 	assert.Equal(t, "1", leftOut[0].Attrs["left_out"])
+}
+
+// Validates: R-6.2.16
+//
+// The planner's decisions on the action type panic with OutsideTheEnum on a
+// value outside the enum, like the vocabulary's
+// (TestActionTypeDecisions_PanicOnATypeOutsideTheEnum): not admitted, not a
+// local write, creates nothing.
+func TestPlannerActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
+	t.Parallel()
+
+	const (
+		unlisted     = ActionCleanup + 1
+		unlistedSide = CreateRemote + 1
+	)
+	outside := func() *Action {
+		return &Action{
+			Type:    unlisted,
+			Path:    "docs/a.txt",
+			OldPath: "docs",
+			ItemID:  "item-a",
+			View:    &PathView{Path: "docs/a.txt", Baseline: &BaselineEntry{Path: "docs", ItemType: ItemTypeFolder}},
+		}
+	}
+	upload := func(p string) *Action { return &Action{Type: ActionUpload, Path: p} }
+	movedLocally := &moveComposition{moves: []composedMove{{key: "item-a", side: moveCoordLocal}}}
+	mode := SyncBidirectional
+
+	decisions := map[string]func(){
+		"actionAllowedInMode":               func() { actionAllowedInMode(outside(), SyncBidirectional) },
+		"writesLocally":                     func() { writesLocally(outside()) },
+		"countRenames":                      func() { countRenames([]Action{*outside()}) },
+		"indexByPath":                       func() { newDependencyIndex([]Action{*outside()}) },
+		"indexVacatedNames":                 func() { (&dependencyIndex{}).indexVacatedNames([]Action{*outside()}) },
+		"isDeleteAction":                    func() { isDeleteAction(outside()) },
+		"isMoveAction":                      func() { isMoveAction(outside()) },
+		"addMoveOutOfDeletedFolderDeps":     func() { addMoveOutOfDeletedFolderDeps(nil, 0, outside(), nil, &dependencyIndex{}) },
+		"addRemoteCaseVariantDeps":          func() { addRemoteCaseVariantDeps(nil, 0, outside(), nil, &dependencyIndex{}) },
+		"vacatesCaseVariantOf":              func() { vacatesCaseVariantOf(outside(), upload("docs/A.txt")) },
+		"underMoveSource":                   func() { underMoveSource(upload("docs/x.txt"), outside()) },
+		"createsAtVacatedSource":            func() { createsAtVacatedSource(upload("docs"), outside()) },
+		"pathsVacatedByPlan":                func() { pathsVacatedByPlan([]Action{*outside()}) },
+		"createSide":                        func() { createSide(outside()) },
+		"deleteSide":                        func() { deleteSide(outside()) },
+		"dropReconciliationOfComposedMoves": func() { dropReconciliationOfComposedMoves([]Action{*outside()}, movedLocally, mode) },
+	}
+	for name, decide := range decisions {
+		assert.PanicsWithValue(t, OutsideTheEnum(unlisted), decide, name)
+	}
+	assert.PanicsWithValue(t, OutsideTheEnum(unlistedSide), func() {
+		actionAllowedInMode(&Action{Type: ActionFolderCreate, CreateSide: unlistedSide}, SyncBidirectional)
+	}, "actionAllowedInMode on a folder create side outside its enum")
 }

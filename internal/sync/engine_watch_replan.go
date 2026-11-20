@@ -21,7 +21,7 @@ import (
 func (rt *watchRuntime) runSteadyStateReplan(
 	ctx context.Context,
 	p *watchPipeline,
-	batch dirtyBatch,
+	batch DirtyBatch,
 ) (bool, error) {
 	if p == nil || p.bl == nil {
 		return false, fmt.Errorf("sync: steady-state replan requires loaded baseline")
@@ -34,27 +34,27 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.engine.collector().RecordWatchBatch(1)
 
 	replanStart := rt.deps.now()
-	rt.emitRuntimeDebugEvent(engineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
+	rt.emitRuntimeDebugEvent(EngineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
 
 	observeStart := rt.deps.now()
-	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
+	rt.emitRuntimeDebugEvent(EngineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
 	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseLocalRefresh, observeStart, rt.totalWorkers())
 	if err != nil {
 		return rt.handleSteadyStateLocalRefreshError(ctx, err)
 	}
-	rt.emitRuntimeDebugEvent(engineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventSteadyStateObservationCompleted})
+	rt.emitRuntimeDebugEvent(EngineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
+	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventSteadyStateObservationCompleted})
 	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.deps.since(observeStart))
 
 	planStart := rt.deps.now()
-	rt.emitRuntimeDebugEvent(engineDebugEventPlanningStarted, "", 0, replanStart)
+	rt.emitRuntimeDebugEvent(EngineDebugEventPlanningStarted, "", 0, replanStart)
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhasePlanning, planStart, rt.totalWorkers())
 	if err != nil {
 		return false, rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
 	}
-	rt.emitRuntimeDebugEvent(engineDebugEventPlanningFinished, "", 0, planStart)
+	rt.emitRuntimeDebugEvent(EngineDebugEventPlanningFinished, "", 0, planStart)
 
 	installStart := rt.deps.now()
 	rt.noteInstalledPlan(runtime.Plan)
@@ -67,7 +67,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.loop.postReplanOutbox = len(dispatch) > 0
 	// A plan of publication-only work has already settled.
 	rt.scheduleFollowUpIfSettled()
-	rt.emitRuntimeDebugEvent(engineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
+	rt.emitRuntimeDebugEvent(EngineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
 
 	return true, nil
 }

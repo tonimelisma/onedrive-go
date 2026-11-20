@@ -7,7 +7,7 @@ import (
 )
 
 func TestContentFilter_IncludedDirsIncludeAncestorsRootsAndDescendants(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{
+	filter := NewContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects/App"},
 	})
 
@@ -21,22 +21,22 @@ func TestContentFilter_IncludedDirsIncludeAncestorsRootsAndDescendants(t *testin
 
 // Validates: R-2.4.11
 func TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{
+	filter := NewContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects/App"},
 	})
 
-	assert.True(t, filter.ShouldObserveLocalPath("Projects", observedKindUnknown),
+	assert.True(t, filter.ShouldObserveLocalPath("Projects", ObservedKindUnknown),
 		"unknown watch events for include ancestors must pass pre-stat filtering")
-	assert.True(t, filter.ShouldObserveLocalPath("Projects/App", observedKindUnknown),
+	assert.True(t, filter.ShouldObserveLocalPath("Projects/App", ObservedKindUnknown),
 		"unknown watch events for exact include roots must pass pre-stat filtering")
-	assert.True(t, filter.ShouldObserveLocalPath("Projects/App/main.go", observedKindUnknown),
+	assert.True(t, filter.ShouldObserveLocalPath("Projects/App/main.go", ObservedKindUnknown),
 		"unknown watch events below include roots must still pass as file-capable")
-	assert.False(t, filter.ShouldObserveLocalPath("Projects/Other", observedKindUnknown),
+	assert.False(t, filter.ShouldObserveLocalPath("Projects/Other", ObservedKindUnknown),
 		"unknown watch events outside included subtrees should stay filtered")
 }
 
 func TestContentFilter_IgnoreWinsOverInclude(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{
+	filter := NewContentFilter(ContentFilterConfig{
 		IncludedDirs: []string{"Projects"},
 		IgnoredDirs:  []string{"Projects/build"},
 	})
@@ -47,7 +47,7 @@ func TestContentFilter_IgnoreWinsOverInclude(t *testing.T) {
 }
 
 func TestContentFilter_IgnoredPathsCoverFilesAndDirectories(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{
+	filter := NewContentFilter(ContentFilterConfig{
 		IgnoredPaths: []string{"*.log", "tmp/*", "Cache"},
 	})
 
@@ -60,7 +60,7 @@ func TestContentFilter_IgnoredPathsCoverFilesAndDirectories(t *testing.T) {
 }
 
 func TestContentFilter_DotfilesAreBidirectionalOptIn(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{IgnoreDotfiles: true})
+	filter := NewContentFilter(ContentFilterConfig{IgnoreDotfiles: true})
 
 	assert.False(t, filter.Visible(".env", ItemTypeFile))
 	assert.False(t, filter.Visible("src/.cache/data", ItemTypeFile))
@@ -68,7 +68,7 @@ func TestContentFilter_DotfilesAreBidirectionalOptIn(t *testing.T) {
 }
 
 func TestContentFilter_JunkFilesAreBidirectionalOptIn(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
+	filter := NewContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	assert.False(t, filter.Visible(".DS_Store", ItemTypeFile))
 	assert.False(t, filter.Visible("Thumbs.db", ItemTypeFile))
@@ -84,7 +84,7 @@ func TestContentFilter_JunkFilesAreBidirectionalOptIn(t *testing.T) {
 
 // Validates: R-2.4.14
 func TestContentFilter_ExtendedJunkList(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
+	filter := NewContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	for _, junk := range []string{
 		"~$office-lock.docx", // Office owner file (P-2)
@@ -106,7 +106,7 @@ func TestContentFilter_ExtendedJunkList(t *testing.T) {
 
 // Validates: R-2.4.14
 func TestContentFilter_FileOnlyJunkRulesKeepFolders(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
+	filter := NewContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	for _, folder := range []string{"~Projects", "notes~", "4913"} {
 		assert.True(t, filter.Visible(folder, ItemTypeFolder), "folder %q syncs", folder)
@@ -122,7 +122,7 @@ func TestContentFilter_FileOnlyJunkRulesKeepFolders(t *testing.T) {
 
 // Validates: R-6.2.7
 func TestContentFilter_JunkFilesDefaultVisible(t *testing.T) {
-	filter := newContentFilter(ContentFilterConfig{})
+	filter := NewContentFilter(ContentFilterConfig{})
 
 	assert.True(t, filter.Visible(".DS_Store", ItemTypeFile))
 	assert.True(t, filter.Visible("Thumbs.db", ItemTypeFile))

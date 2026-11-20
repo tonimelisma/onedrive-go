@@ -23,7 +23,7 @@ func orderTestStore(t *testing.T) (*SyncStore, *syncLockedBuffer) {
 
 	mgr := newTestStore(t)
 	logs := &syncLockedBuffer{}
-	mgr.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	mgr.SetLoggerForTest(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	return mgr, logs
 }
@@ -41,19 +41,19 @@ func remoteStatePathsByID(t *testing.T, mgr *SyncStore) map[string]string {
 	return paths
 }
 
-func obsFile(id, p string) observedItem {
-	return observedItem{
+func obsFile(id, p string) ObservedItem {
+	return ObservedItem{
 		DriveID: driveid.New(testDriveID), ItemID: id, Path: p,
 		ItemType: ItemTypeFile, Hash: "h-" + id, Size: 1,
 	}
 }
 
-func obsFolder(id, p string) observedItem {
-	return observedItem{DriveID: driveid.New(testDriveID), ItemID: id, Path: p, ItemType: ItemTypeFolder}
+func obsFolder(id, p string) ObservedItem {
+	return ObservedItem{DriveID: driveid.New(testDriveID), ItemID: id, Path: p, ItemType: ItemTypeFolder}
 }
 
-func obsDeleted(id string) observedItem {
-	return observedItem{DriveID: driveid.New(testDriveID), ItemID: id, IsDeleted: true}
+func obsDeleted(id string) ObservedItem {
+	return ObservedItem{DriveID: driveid.New(testDriveID), ItemID: id, IsDeleted: true}
 }
 
 func requireNoTransientTwins(t *testing.T, mgr *SyncStore, logs *syncLockedBuffer) {
@@ -69,13 +69,13 @@ func TestCommitObservation_PathSwapInOneWindow(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 	mgr, logs := orderTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFile("a", "a.txt"), obsFile("b", "b.txt"),
 		obsFolder("x", "x"), obsFile("x1", "x/one.txt"),
 		obsFolder("y", "y"), obsFile("y1", "y/two.txt"),
 	}, "t1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFile("a", "b.txt"), obsFile("b", "a.txt"),
 		obsFolder("x", "y"), obsFolder("y", "x"),
 	}, "t2", driveID))
@@ -94,13 +94,13 @@ func TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 	mgr, logs := orderTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFile("old", "doc.txt"),
 	}, "t1", driveID))
 
 	// A save-as-new-then-rename: the new item is reported at the path first,
 	// the old one's move away comes later in the window (another page).
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFile("new", "doc.txt"),
 		obsFile("old", "doc (old).txt"),
 	}, "t2", driveID))
@@ -115,13 +115,13 @@ func TestCommitObservation_DeleteAndRecreateSamePathAcrossPages(t *testing.T) {
 
 	driveID := driveid.New(testDriveID)
 	mgr, logs := orderTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFolder("photos-1", "Photos"), obsFile("p1", "Photos/a.jpg"),
 	}, "t1", driveID))
 
 	// The recreated folder and its child arrive before the old folder's
 	// tombstone, which only comes on a later page.
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFolder("photos-2", "Photos"),
 		{DriveID: driveID, ItemID: "p2", ParentID: "photos-2", Path: "Photos/a.jpg", ItemType: ItemTypeFile, Hash: "h-p2", Size: 1},
 		obsDeleted("p1"),
@@ -138,7 +138,7 @@ func TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart(t *testing.T
 
 	driveID := driveid.New(testDriveID)
 	mgr, _ := orderTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFolder("src", "src"), obsFile("s1", "src/same.txt"),
 		obsFolder("dst", "dst"), obsFile("d1", "dst/same.txt"),
 	}, "t1", driveID))
@@ -146,7 +146,7 @@ func TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart(t *testing.T
 	// src is renamed onto dst's path while dst is not reported at all in this
 	// window: two live folders now claim one path. That is a real twin, held
 	// for the user, and it must not fail the commit.
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFolder("src", "dst"),
 	}, "t2", driveID))
 
@@ -168,7 +168,7 @@ func TestCommitObservation_WindowResultIsOrderIndependent(t *testing.T) {
 
 	for round := range 40 {
 		// Start: files f0..f7 at n0..n7 plus a folder with one child.
-		initial := []observedItem{obsFolder("dir", "dir"), obsFile("kid", "dir/kid.txt")}
+		initial := []ObservedItem{obsFolder("dir", "dir"), obsFile("kid", "dir/kid.txt")}
 		for i := range fileCount {
 			initial = append(initial, obsFile(fmt.Sprintf("f%d", i), fmt.Sprintf("n%d", i)))
 		}
@@ -178,7 +178,7 @@ func TestCommitObservation_WindowResultIsOrderIndependent(t *testing.T) {
 		// folder renamed onto a name a file gives up.
 		names := rng.Perm(fileCount)
 		deleted := rng.IntN(fileCount)
-		var window []observedItem
+		var window []ObservedItem
 		want := map[string]string{}
 		for i := range fileCount {
 			id := fmt.Sprintf("f%d", i)
@@ -210,7 +210,7 @@ func TestCommitObservation_WindowResultIsOrderIndependent(t *testing.T) {
 	}
 }
 
-func describeWindow(window []observedItem) string {
+func describeWindow(window []ObservedItem) string {
 	parts := make([]string, 0, len(window))
 	for i := range window {
 		if window[i].IsDeleted {
@@ -231,7 +231,7 @@ func TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree(t *test
 	driveID := driveid.New(testDriveID)
 	for _, tombstoneFirst := range []bool{true, false} {
 		mgr, logs := orderTestStore(t)
-		require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+		require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 			obsFolder("old", "old"), obsFolder("keep", "old/keep"), obsFile("g", "old/keep/g.txt"),
 		}, "t1", driveID))
 
@@ -239,7 +239,7 @@ func TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree(t *test
 		// order: when the tombstone was applied first, its subtree delete took
 		// the moved folder's unreported children with it, and those files then
 		// read as deleted on OneDrive.
-		window := []observedItem{obsDeleted("old"), obsFolder("keep", "keep")}
+		window := []ObservedItem{obsDeleted("old"), obsFolder("keep", "keep")}
 		if !tombstoneFirst {
 			window[0], window[1] = window[1], window[0]
 		}
@@ -257,13 +257,13 @@ func TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation(t *test
 
 	driveID := driveid.New(testDriveID)
 	mgr, logs := orderTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFile("a", "a.txt"), obsFile("b", "b.txt"),
 	}, "t1", driveID))
 
 	// a is renamed twice within the window; b takes a's first name between
 	// the two reports.
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFile("a", "b.txt"), obsFile("b", "a.txt"), obsFile("a", "c.txt"),
 	}, "t2", driveID))
 
@@ -283,12 +283,12 @@ func TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder(t *testi
 
 	driveID := driveid.New(testDriveID)
 	mgr, _ := orderTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFolder("p", "P"), obsFile("c", "P/c.txt"),
 	}, "t1", driveID))
 	// c is our own upload: the baseline holds its content, and the pending
 	// create remembers the empty placeholder's eTag.
-	_, err := mgr.rawDB().ExecContext(t.Context(), `
+	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `
 		INSERT INTO baseline (item_id, path, parent_id, item_type, remote_size) VALUES ('c', 'P/c.txt', 'p', 'file', 5);
 		INSERT INTO pending_creates (item_id, drive_id, path, parent_id, created_etag) VALUES ('c', '', 'P/c.txt', 'p', 'placeholder-etag')`)
 	require.NoError(t, err)
@@ -296,7 +296,7 @@ func TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder(t *testi
 	stalePlaceholder := obsFile("c", "Q/c.txt")
 	stalePlaceholder.Size = 0
 	stalePlaceholder.ETag = "placeholder-etag"
-	require.NoError(t, mgr.CommitObservation(t.Context(), []observedItem{
+	require.NoError(t, mgr.CommitObservation(t.Context(), []ObservedItem{
 		obsFolder("p", "Q"), stalePlaceholder,
 	}, "t2", driveID))
 
@@ -308,9 +308,9 @@ func TestRequireNoParkedRemoteRows_FailsTheWindow(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
-	_, err := mgr.rawDB().ExecContext(t.Context(),
+	_, err := mgr.RawDBForTest().ExecContext(t.Context(),
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type) VALUES ('', 'x', ':park:x', 'file')`)
 	require.NoError(t, err)
 
-	require.Error(t, requireNoParkedRemoteRowsTx(t.Context(), mgr.rawDB()))
+	require.Error(t, requireNoParkedRemoteRowsTx(t.Context(), mgr.RawDBForTest()))
 }

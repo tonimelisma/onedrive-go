@@ -23,7 +23,7 @@ func TestPlannerPlanCurrentState_LocalAbsenceDeletesRemoteOnlyWithBaseline(t *te
 		ctx := t.Context()
 		driveID := driveid.New(engineTestDriveID)
 
-		require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+		require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 			DriveID:  driveID,
 			ItemID:   "item-remote-only",
 			Path:     "remote-only.txt",
@@ -47,11 +47,11 @@ func TestPlannerPlanCurrentState_LocalAbsenceDeletesRemoteOnlyWithBaseline(t *te
 		ctx := t.Context()
 		driveID := driveid.New(engineTestDriveID)
 
-		_, err := store.rawDB().ExecContext(ctx, `
+		_, err := store.RawDBForTest().ExecContext(ctx, `
 			INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 			VALUES ('item-synced', 'synced.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-synced')`)
 		require.NoError(t, err)
-		require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+		require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 			DriveID:  driveID,
 			ItemID:   "item-synced",
 			Path:     "synced.txt",
@@ -68,7 +68,7 @@ func TestPlannerPlanCurrentState_LocalAbsenceDeletesRemoteOnlyWithBaseline(t *te
 	})
 }
 
-func assertPlanHasAction(t *testing.T, plan *actionPlan, path string, actionType actionType) {
+func assertPlanHasAction(t *testing.T, plan *ActionPlan, path string, actionType ActionType) {
 	t.Helper()
 
 	for i := range plan.Actions {

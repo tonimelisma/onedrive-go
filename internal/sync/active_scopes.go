@@ -7,29 +7,29 @@ import (
 	"time"
 )
 
-// findBlockingScope returns the highest-priority active scope that blocks the
+// FindBlockingScope returns the highest-priority active scope that blocks the
 // action, or the zero-value key when no scope matches.
 //
 // The caller owns the blocks slice and decides how to persist or mutate it.
 // This function is pure — no locking, no persistence, no callbacks.
-func findBlockingScope(blocks []activeScope, ta *trackedAction) ScopeKey {
+func FindBlockingScope(blocks []ActiveScope, ta *TrackedAction) ScopeKey {
 	if len(blocks) == 0 {
 		return ScopeKey{}
 	}
 
 	throttleTargetKey := ta.Action.ThrottleTargetKey()
 
-	bestRank := scopePriorityMax
+	bestRank := ScopePriorityMax
 	bestSpecificity := -1
 	var best ScopeKey
 
 	for i := range blocks {
 		key := blocks[i].Key
-		if !scopeBlocksTrackedAction(key, ta, throttleTargetKey) {
+		if !ScopeBlocksTrackedAction(key, ta, throttleTargetKey) {
 			continue
 		}
 
-		rank := describeScopeKey(key).Priority
+		rank := DescribeScopeKey(key).Priority
 		specificity := len(key.Param)
 		if rank < bestRank || (rank == bestRank && specificity > bestSpecificity) {
 			bestRank = rank
@@ -41,7 +41,7 @@ func findBlockingScope(blocks []activeScope, ta *trackedAction) ScopeKey {
 	return best
 }
 
-func scopeBlocksTrackedAction(key ScopeKey, ta *trackedAction, throttleTargetKey string) bool {
+func ScopeBlocksTrackedAction(key ScopeKey, ta *TrackedAction, throttleTargetKey string) bool {
 	if ta == nil {
 		return false
 	}
@@ -60,83 +60,83 @@ func scopeBlocksTrackedAction(key ScopeKey, ta *trackedAction, throttleTargetKey
 	return false
 }
 
-// upsertScope returns a copy of blocks with the provided scope inserted or
+// UpsertScope returns a copy of blocks with the provided scope inserted or
 // replaced by key.
-func upsertScope(blocks []activeScope, block *activeScope) []activeScope {
+func UpsertScope(blocks []ActiveScope, block *ActiveScope) []ActiveScope {
 	if block == nil {
-		return append([]activeScope(nil), blocks...)
+		return append([]ActiveScope(nil), blocks...)
 	}
 
 	for i := range blocks {
 		if blocks[i].Key == block.Key {
-			next := append([]activeScope(nil), blocks...)
+			next := append([]ActiveScope(nil), blocks...)
 			next[i] = *block
 			return next
 		}
 	}
 
-	next := append([]activeScope(nil), blocks...)
+	next := append([]ActiveScope(nil), blocks...)
 	next = append(next, *block)
 	return next
 }
 
-// removeScope returns a copy of blocks with the given key removed.
-func removeScope(blocks []activeScope, key ScopeKey) []activeScope {
+// RemoveScope returns a copy of blocks with the given key removed.
+func RemoveScope(blocks []ActiveScope, key ScopeKey) []ActiveScope {
 	for i := range blocks {
 		if blocks[i].Key != key {
 			continue
 		}
 
-		next := append([]activeScope(nil), blocks[:i]...)
+		next := append([]ActiveScope(nil), blocks[:i]...)
 		next = append(next, blocks[i+1:]...)
 		return next
 	}
 
-	return append([]activeScope(nil), blocks...)
+	return append([]ActiveScope(nil), blocks...)
 }
 
-// hasScope reports whether the given scope key is active.
-func hasScope(blocks []activeScope, key ScopeKey) bool {
-	_, ok := lookupScope(blocks, key)
+// HasScope reports whether the given scope key is active.
+func HasScope(blocks []ActiveScope, key ScopeKey) bool {
+	_, ok := LookupScope(blocks, key)
 	return ok
 }
 
-// lookupScope returns a value copy of the active block scope for the key.
-func lookupScope(blocks []activeScope, key ScopeKey) (activeScope, bool) {
+// LookupScope returns a value copy of the active block scope for the key.
+func LookupScope(blocks []ActiveScope, key ScopeKey) (ActiveScope, bool) {
 	for i := range blocks {
 		if blocks[i].Key == key {
 			return blocks[i], true
 		}
 	}
 
-	return activeScope{}, false
+	return ActiveScope{}, false
 }
 
 // extendScopeTrial returns a copy of blocks with the given scope's trial
 // metadata updated. The boolean reports whether the scope existed.
 func extendScopeTrial(
-	blocks []activeScope,
+	blocks []ActiveScope,
 	key ScopeKey,
 	nextAt time.Time,
 	newInterval time.Duration,
-) ([]activeScope, bool) {
+) ([]ActiveScope, bool) {
 	for i := range blocks {
 		if blocks[i].Key != key {
 			continue
 		}
 
-		next := append([]activeScope(nil), blocks...)
+		next := append([]ActiveScope(nil), blocks...)
 		next[i].NextTrialAt = nextAt
 		next[i].TrialInterval = newInterval
 		return next, true
 	}
 
-	return append([]activeScope(nil), blocks...), false
+	return append([]ActiveScope(nil), blocks...), false
 }
 
 // dueTrials returns the active scope keys whose trial is due at now. Scopes
 // with zero NextTrialAt are excluded.
-func dueTrials(blocks []activeScope, now time.Time) []ScopeKey {
+func dueTrials(blocks []ActiveScope, now time.Time) []ScopeKey {
 	var due []ScopeKey
 
 	for i := range blocks {
@@ -153,7 +153,7 @@ func dueTrials(blocks []activeScope, now time.Time) []ScopeKey {
 
 // earliestTrialAt returns the earliest pending trial time across all active
 // scopes. Scopes with zero NextTrialAt are skipped.
-func earliestTrialAt(blocks []activeScope) (time.Time, bool) {
+func earliestTrialAt(blocks []ActiveScope) (time.Time, bool) {
 	var earliest time.Time
 	found := false
 
@@ -171,7 +171,7 @@ func earliestTrialAt(blocks []activeScope) (time.Time, bool) {
 }
 
 // scopeKeys returns the active scope keys in slice order.
-func scopeKeys(blocks []activeScope) []ScopeKey {
+func scopeKeys(blocks []ActiveScope) []ScopeKey {
 	keys := make([]ScopeKey, len(blocks))
 	for i := range blocks {
 		keys[i] = blocks[i].Key

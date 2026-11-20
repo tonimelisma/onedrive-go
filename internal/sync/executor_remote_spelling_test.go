@@ -37,12 +37,12 @@ func TestExecutor_Upload_NFDRemoteSpellingIsNotAMove(t *testing.T) {
 		},
 	}
 	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "café.txt", "content")
 
 	o := e.ExecuteUpload(t.Context(), &Action{
 		Type: ActionUpload, Path: "café.txt", ItemID: "nfd-item",
-		DriveID: driveid.New(synctest.TestDriveID), View: &pathView{Path: "café.txt"},
+		DriveID: driveid.New(synctest.TestDriveID), View: &PathView{Path: "café.txt"},
 	})
 	requireOutcomeSuccess(t, &o)
 }
@@ -69,7 +69,7 @@ func TestExecutor_Upload_PreflightLocatesTheItemByParentIDAndName(t *testing.T) 
 			},
 		}
 	}
-	upload := func(t *testing.T, items *executorMockItemClient) actionOutcome {
+	upload := func(t *testing.T, items *executorMockItemClient) ActionOutcome {
 		t.Helper()
 		ul := &executorMockUploader{
 			uploadToItemFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
@@ -77,13 +77,13 @@ func TestExecutor_Upload_PreflightLocatesTheItemByParentIDAndName(t *testing.T) 
 			},
 		}
 		cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, ul)
-		e := newExecution(cfg, baseline)
+		e := NewExecution(cfg, baseline)
 		require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "a%20b"), 0o700))
 		writeExecTestFile(t, syncRoot, "a%20b/x.txt", "content")
 
 		return e.ExecuteUpload(t.Context(), &Action{
 			Type: ActionUpload, Path: "a%20b/x.txt", ItemID: "x-item",
-			DriveID: driveid.New(synctest.TestDriveID), View: &pathView{Path: "a%20b/x.txt"},
+			DriveID: driveid.New(synctest.TestDriveID), View: &PathView{Path: "a%20b/x.txt"},
 		})
 	}
 
@@ -93,5 +93,5 @@ func TestExecutor_Upload_PreflightLocatesTheItemByParentIDAndName(t *testing.T) 
 	// Same name and same verbatim path, but under another folder ID: moved.
 	o = upload(t, live("another-folder"))
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 }

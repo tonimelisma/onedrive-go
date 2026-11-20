@@ -55,10 +55,10 @@ type ShortcutRootReplacement struct {
 	RemoteIsFolder    bool
 }
 
-func protectedRootsForShortcutRoots(records []ShortcutRootRecord, namespaceID string) []ProtectedRoot {
+func ProtectedRootsForShortcutRoots(records []ShortcutRootRecord, namespaceID string) []ProtectedRoot {
 	protectedRoots := make([]ProtectedRoot, 0)
 	for i := range records {
-		record := normalizeShortcutRootRecord(&records[i])
+		record := NormalizeShortcutRootRecord(&records[i])
 		if record.NamespaceID != "" && record.NamespaceID != namespaceID {
 			continue
 		}
@@ -92,7 +92,7 @@ func shortcutRootStateKeepsProtectedPaths(state ShortcutRootState) bool {
 	return ok && metadata.protectsPath
 }
 
-func normalizeShortcutRootRecord(record *ShortcutRootRecord) ShortcutRootRecord {
+func NormalizeShortcutRootRecord(record *ShortcutRootRecord) ShortcutRootRecord {
 	if record == nil {
 		return ShortcutRootRecord{State: ShortcutRootStateActive}
 	}
@@ -120,7 +120,7 @@ func protectedPathsForShortcutRoot(relativeLocalPath string, paths []string) []s
 	unique := make(map[string]struct{}, len(paths)+1)
 	result := make([]string, 0, len(paths)+1)
 	add := func(value string) {
-		normalized := normalizedProtectedRootPath(value)
+		normalized := NormalizedProtectedRootPath(value)
 		if normalized == "" {
 			return
 		}
@@ -141,8 +141,8 @@ func shortcutRootRecordsEqual(a, b *ShortcutRootRecord) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	normalizedA := normalizeShortcutRootRecord(a)
-	normalizedB := normalizeShortcutRootRecord(b)
+	normalizedA := NormalizeShortcutRootRecord(a)
+	normalizedB := NormalizeShortcutRootRecord(b)
 	if normalizedA.NamespaceID != normalizedB.NamespaceID ||
 		normalizedA.BindingItemID != normalizedB.BindingItemID ||
 		normalizedA.RelativeLocalPath != normalizedB.RelativeLocalPath ||

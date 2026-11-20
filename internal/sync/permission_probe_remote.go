@@ -60,7 +60,7 @@ func (ph *permissionHandler) handle403(
 	ctx context.Context,
 	bl *Baseline,
 	failedPath string,
-	actionType actionType,
+	actionType ActionType,
 ) (permissionEvidence, error) {
 	if ph.permChecker == nil {
 		return permissionEvidence{}, nil
@@ -144,7 +144,7 @@ func (ph *permissionHandler) handlePermissionCheckError(
 	err error,
 	failedPath string,
 	parentFolder string,
-	actionType actionType,
+	actionType ActionType,
 ) permissionEvidence {
 	if errors.Is(err, graph.ErrNotFound) {
 		ph.logger.Debug("handle403: folder not found, recording as permission denied",
@@ -187,7 +187,7 @@ func (ph *permissionHandler) remoteBoundaryEvidence(
 	errMsg string,
 	httpStatus int,
 	failedPath string,
-	actionType actionType,
+	actionType ActionType,
 ) permissionEvidence {
 	_ = actionType
 

@@ -18,7 +18,7 @@ func localDeleteAction(path string, entry *BaselineEntry) *Action {
 		Type:   ActionLocalDelete,
 		Path:   path,
 		ItemID: "item1",
-		View:   &pathView{Baseline: entry},
+		View:   &PathView{Baseline: entry},
 	}
 }
 
@@ -41,7 +41,7 @@ func TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-unhashed.txt", "content the user extended after the failed hash")
 
@@ -54,8 +54,8 @@ func TestExecutor_LocalDelete_NoBaselineHashAndChangedFile_PreservesLocalContent
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
-	assert.Equal(t, permissionCapabilityLocalWrite, o.FailureCapability)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	assert.Equal(t, PermissionCapabilityLocalWrite, o.FailureCapability)
 
 	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-unhashed.txt"))
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestExecutor_LocalDelete_NoBaselineHashAndUnchangedFile_Deletes(t *testing.
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-unhashed-clean.txt", "same")
 	absPath := filepath.Join(syncRoot, "exec-unhashed-clean.txt")
@@ -99,7 +99,7 @@ func TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent(t *testin
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	writeExecTestFile(t, syncRoot, "exec-no-evidence.txt", "irreplaceable")
 
@@ -107,7 +107,7 @@ func TestExecutor_LocalDelete_NoBaselineEvidence_PreservesLocalContent(t *testin
 
 	o := e.ExecuteLocalDelete(t.Context(), action)
 
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 
 	contents, err := localpath.ReadFile(filepath.Join(syncRoot, "exec-no-evidence.txt"))
 	require.NoError(t, err)

@@ -23,7 +23,7 @@ func parentChecksFolderBaseline() *Baseline {
 	})
 }
 
-func uploadIntoFolder(t *testing.T, cfg *executorConfig, syncRoot, name string) actionOutcome {
+func uploadIntoFolder(t *testing.T, cfg *ExecutorConfig, syncRoot, name string) ActionOutcome {
 	t.Helper()
 
 	writeExecTestFile(t, syncRoot, "folder/"+name, "hello "+name)
@@ -31,10 +31,10 @@ func uploadIntoFolder(t *testing.T, cfg *executorConfig, syncRoot, name string) 
 		Type:    ActionUpload,
 		Path:    "folder/" + name,
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Path: "folder/" + name},
+		View:    &PathView{Path: "folder/" + name},
 	}
 
-	return newExecution(cfg, parentChecksFolderBaseline()).ExecuteUpload(t.Context(), action)
+	return NewExecution(cfg, parentChecksFolderBaseline()).ExecuteUpload(t.Context(), action)
 }
 
 // Validates: R-2.8.10
@@ -67,7 +67,7 @@ func TestExecutor_Upload_SiblingCreatesReadTheirParentOncePerPlan(t *testing.T) 
 	assert.Equal(t, 1, getItemCalls, "the parent item is read once per plan")
 	assert.Equal(t, []string{"folder"}, pathConvergence.waitCalls, "the parent path is probed once per plan")
 
-	cfg.resetRemoteParentChecks()
+	cfg.ResetRemoteParentChecks()
 	third := uploadIntoFolder(t, cfg, syncRoot, "c.txt")
 	requireOutcomeSuccess(t, &third)
 	assert.Equal(t, 2, getItemCalls, "a new plan reads the parent live again")
@@ -107,12 +107,12 @@ func TestExecutor_Upload_CreateIntoAParentGoneMidPlanIsAParentGoneFact(t *testin
 	parentGone = true
 	second := uploadIntoFolder(t, cfg, syncRoot, "b.txt")
 	requireOutcomeFailure(t, &second)
-	require.ErrorIs(t, second.Error, errActionPreconditionChanged)
-	var gone *remoteItemGoneError
+	require.ErrorIs(t, second.Error, ErrActionPreconditionChanged)
+	var gone *RemoteItemGoneError
 	require.ErrorAs(t, second.Error, &gone)
-	assert.Equal(t, "parent-id", gone.itemID)
-	assert.Equal(t, "parent", gone.role)
-	assert.Equal(t, permissionCapabilityRemoteRead, second.FailureCapability)
+	assert.Equal(t, "parent-id", gone.ItemID)
+	assert.Equal(t, "parent", gone.Role)
+	assert.Equal(t, PermissionCapabilityRemoteRead, second.FailureCapability)
 	assert.Equal(t, 1, getItemCalls, "the gone parent was not read again before the create")
 }
 
@@ -133,21 +133,21 @@ func TestExecutor_CreateRemoteFolder_IntoAParentGoneMidPlanIsAParentGoneFact(t *
 		},
 	}
 	cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, parentChecksFolderBaseline())
+	e := NewExecution(cfg, parentChecksFolderBaseline())
 
 	action := &Action{
 		Type:       ActionFolderCreate,
 		Path:       "folder/child",
 		CreateSide: CreateRemote,
 		DriveID:    driveID,
-		View:       &pathView{Path: "folder/child"},
+		View:       &PathView{Path: "folder/child"},
 	}
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, errActionPreconditionChanged)
-	var gone *remoteItemGoneError
+	require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
+	var gone *RemoteItemGoneError
 	require.ErrorAs(t, o.Error, &gone)
-	assert.Equal(t, "parent-id", gone.itemID)
-	assert.Equal(t, permissionCapabilityRemoteRead, o.FailureCapability)
+	assert.Equal(t, "parent-id", gone.ItemID)
+	assert.Equal(t, PermissionCapabilityRemoteRead, o.FailureCapability)
 }

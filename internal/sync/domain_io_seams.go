@@ -14,18 +14,18 @@ import (
 // depend on runtime orchestration when they depend only on the shape of the
 // calls they make.
 
-type deltaFetcher interface {
+type DeltaFetcher interface {
 	Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
 }
 
-// socketIOEndpointFetcher fetches the outbound Socket.IO websocket endpoint
+// SocketIOEndpointFetcher fetches the outbound Socket.IO websocket endpoint
 // used for near-real-time remote wakeups in watch mode.
-type socketIOEndpointFetcher interface {
+type SocketIOEndpointFetcher interface {
 	SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error)
 }
 
-// itemClient provides CRUD operations on drive items.
-type itemClient interface {
+// ItemClient provides CRUD operations on drive items.
+type ItemClient interface {
 	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
 	GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
@@ -39,25 +39,25 @@ type itemClient interface {
 	PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error
 }
 
-// driveVerifier verifies that a content drive ID is reachable and matches
+// DriveVerifier verifies that a content drive ID is reachable and matches
 // the remote API.
-type driveVerifier interface {
+type DriveVerifier interface {
 	Drive(ctx context.Context, driveID driveid.ID) (*graph.Drive, error)
 }
 
-// folderDeltaFetcher provides mount-root delta enumeration for engines
+// FolderDeltaFetcher provides mount-root delta enumeration for engines
 // rooted below the remote drive root.
-type folderDeltaFetcher interface {
+type FolderDeltaFetcher interface {
 	DeltaFolderAll(ctx context.Context, driveID driveid.ID, folderID, token string) ([]graph.Item, string, error)
 }
 
-// recursiveLister provides recursive children enumeration for mount-root
+// RecursiveLister provides recursive children enumeration for mount-root
 // observation when mount-root delta is not supported.
-type recursiveLister interface {
+type RecursiveLister interface {
 	ListChildrenRecursive(ctx context.Context, driveID driveid.ID, folderID string) ([]graph.Item, error)
 }
 
-// permissionChecker provides permission queries on drive items.
-type permissionChecker interface {
+// PermissionChecker provides permission queries on drive items.
+type PermissionChecker interface {
 	ListItemPermissions(ctx context.Context, driveID driveid.ID, itemID string) ([]graph.Permission, error)
 }

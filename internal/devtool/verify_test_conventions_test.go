@@ -55,6 +55,78 @@ func testingHelper(t *testing.T) {}
 	assert.NotContains(t, err.Error(), "drives_test.go", "an untagged file is the unit tiers'")
 }
 
+// Validates: R-6.10.17
+//
+// A test seam (a function whose name ends in ForTest) is declared in
+// production code for the tests of another package; using one from
+// production code is refused, from a test file or a sync test-helper package
+// it is not.
+func TestRunTestConventionsRefusesAProductionUseOfATestSeam(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "store.go"),
+		[]byte(`package sync
+
+type Store struct{ rows int }
+
+func (s *Store) RowsForTest() int { return s.rows }
+
+func NewStoreForTest() *Store { return &Store{} }
+
+func count(s *Store) int { return s.RowsForTest() }
+`),
+	))
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "store_test.go"),
+		[]byte("package sync\n\nfunc rows() int { return NewStoreForTest().RowsForTest() }\n"),
+	))
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "internal", "syncfixture", "store.go"),
+		[]byte("package syncfixture\n\nimport \"example/sync\"\n\nvar _ = sync.NewStoreForTest\n"),
+	))
+
+	err := runTestConventions(context.Background(), &fakeRunner{}, repoRoot, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal/sync/store.go:9: RowsForTest is a test seam")
+	assert.NotContains(t, err.Error(), "store.go:5", "declaring a seam is how it exists")
+	assert.NotContains(t, err.Error(), "store.go:7", "declaring a seam is how it exists")
+	assert.NotContains(t, err.Error(), "store_test.go", "a test may use a seam")
+	assert.NotContains(t, err.Error(), "syncfixture", "a sync test-helper package may use a seam")
+}
+
+// Validates: R-6.10.17
+//
+// A sync test-helper package calls seams on its importer's behalf, so a
+// production file that imports one reaches a seam without naming it; the
+// import is refused there, and allowed in a test file and between helpers.
+func TestRunTestConventionsRefusesAProductionImportOfATestHelperPackage(t *testing.T) {
+	t.Parallel()
+
+	const fixture = repoModulePath + "/internal/sync/internal/syncfixture"
+	const storeHelper = repoModulePath + "/internal/sync/internal/syncstoretest"
+	repoRoot := t.TempDir()
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "engine.go"),
+		[]byte("package sync\n\nimport (\n\t\"fmt\"\n\n\t\""+fixture+"\"\n)\n\nvar _ = fmt.Sprint(syncfixture.Store)\n"),
+	))
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "engine_test.go"),
+		[]byte("package sync\n\nimport \""+fixture+"\"\n\nvar _ = syncfixture.Store\n"),
+	))
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "internal", "syncfixture", "store.go"),
+		[]byte("package syncfixture\n\nimport \""+storeHelper+"\"\n\nvar Store = syncstoretest.Open\n"),
+	))
+
+	err := runTestConventions(context.Background(), &fakeRunner{}, repoRoot, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal/sync/engine.go:6: "+fixture+" is a sync test-helper package")
+	assert.NotContains(t, err.Error(), "engine_test.go", "a test may import a test-helper package")
+	assert.NotContains(t, err.Error(), "syncfixture/store.go", "a test-helper package may import another")
+}
+
 // Validates: R-6.10.26
 //
 // The rule follows the constraint, not the word: a tag on either side of an

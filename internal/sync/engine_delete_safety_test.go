@@ -46,7 +46,7 @@ func deleteSafetyFilePath(syncRoot string, i int) string {
 func readHeldDeletes(t *testing.T, eng *testEngine) []HeldDeleteRow {
 	t.Helper()
 
-	rows, err := queryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.rawDB())
+	rows, err := QueryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.RawDBForTest())
 	require.NoError(t, err)
 	return rows
 }
@@ -75,7 +75,7 @@ func TestPlanner_MassRemoteDeleteIsHeldForConfirmation(t *testing.T) {
 	held := readHeldDeletes(t, eng)
 	require.Len(t, held, 60, "status reads the held deletes from the store")
 	assert.Equal(t, "remote", held[0].Side)
-	assert.Equal(t, string(deleteSafetyReasonTooMany), held[0].Reason)
+	assert.Equal(t, string(DeleteSafetyReasonTooMany), held[0].Reason)
 
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld(t *testing.T) {
 	// can tell this from a person deleting everything.
 	remote.mu.Lock()
 	for id := range remote.items {
-		if id != strRoot {
+		if id != StrRoot {
 			delete(remote.items, id)
 		}
 	}
@@ -128,7 +128,7 @@ func TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld(t *testing.T) {
 	held := readHeldDeletes(t, eng)
 	require.NotEmpty(t, held)
 	assert.Equal(t, "local", held[0].Side)
-	assert.Equal(t, string(deleteSafetyReasonSideVanished), held[0].Reason)
+	assert.Equal(t, string(DeleteSafetyReasonSideVanished), held[0].Reason)
 }
 
 // Validates: R-6.2.5, R-6.4.2
@@ -334,7 +334,7 @@ func TestRunOnce_DeletesOlderThanTheWindowStopCounting(t *testing.T) {
 	runScenarioPass(t, eng)
 	require.Len(t, remote.deletes, 40)
 
-	clock.Advance(deleteSafetyWindow + time.Minute)
+	clock.Advance(DeleteSafetyWindow + time.Minute)
 	for i := 40; i < 80; i++ {
 		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
 	}

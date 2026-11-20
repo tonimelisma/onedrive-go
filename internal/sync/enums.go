@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-// outsideTheEnum describes a value none of an enum's constants has: the panic
+// OutsideTheEnum describes a value none of an enum's constants has: the panic
 // value of a decision that met one, and the text of the error a decision that
 // returns errors refuses one with. Neither enum it is used for can carry one
 // to a decision: the planner refuses an action whose type or folder create
@@ -17,7 +17,7 @@ import (
 // decision stops rather than answer with a verdict no case states.
 // TestActionTypeSwitches_EveryDefaultRefuses holds every switch on the two
 // enums to it.
-func outsideTheEnum(value fmt.Stringer) string {
+func OutsideTheEnum(value fmt.Stringer) string {
 	return value.String() + " is outside its enum"
 }
 
@@ -29,10 +29,10 @@ const (
 	strLocal          = "local"
 	strCreate         = "create"
 	strModify         = "modify"
-	strFile           = "file"
-	strFolder         = "folder"
-	strRoot           = "root"
-	strDownload       = "download"
+	StrFile           = "file"
+	StrFolder         = "folder"
+	StrRoot           = "root"
+	StrDownload       = "download"
 	strUpload         = "upload"
 	strDelete         = "delete"
 	strLocalDelete    = "local_delete"
@@ -84,11 +84,11 @@ const (
 func (t ItemType) String() string {
 	switch t {
 	case ItemTypeFile:
-		return strFile
+		return StrFile
 	case ItemTypeFolder:
-		return strFolder
+		return StrFolder
 	case ItemTypeRoot:
-		return strRoot
+		return StrRoot
 	default:
 		return fmt.Sprintf("ItemType(%d)", int(t))
 	}
@@ -103,7 +103,7 @@ func (t *ItemType) Scan(src any) error {
 		return fmt.Errorf("sync: ItemType.Scan: expected string, got %T", src)
 	}
 
-	parsed, err := parseItemType(s)
+	parsed, err := ParseItemType(s)
 	if err != nil {
 		return err
 	}
@@ -119,14 +119,14 @@ func (t ItemType) Value() (driver.Value, error) {
 	return t.String(), nil
 }
 
-// parseItemType converts a database TEXT value to ItemType.
-func parseItemType(s string) (ItemType, error) {
+// ParseItemType converts a database TEXT value to ItemType.
+func ParseItemType(s string) (ItemType, error) {
 	switch s {
-	case strFile:
+	case StrFile:
 		return ItemTypeFile, nil
-	case strFolder:
+	case StrFolder:
 		return ItemTypeFolder, nil
-	case strRoot:
+	case StrRoot:
 		return ItemTypeRoot, nil
 	default:
 		return ItemTypeFile, fmt.Errorf("sync: unknown item type %q", s)
@@ -155,11 +155,11 @@ func (m SyncMode) String() string {
 	}
 }
 
-// actionType classifies what the executor should do for a given action.
-type actionType int
+// ActionType classifies what the executor should do for a given action.
+type ActionType int
 
 const (
-	ActionDownload actionType = iota
+	ActionDownload ActionType = iota
 	ActionUpload
 	ActionLocalDelete
 	ActionRemoteDelete
@@ -171,10 +171,10 @@ const (
 	ActionCleanup
 )
 
-func (a actionType) String() string {
+func (a ActionType) String() string {
 	switch a {
 	case ActionDownload:
-		return strDownload
+		return StrDownload
 	case ActionUpload:
 		return strUpload
 	case ActionLocalDelete:
@@ -198,10 +198,10 @@ func (a actionType) String() string {
 	}
 }
 
-// isMember reports whether a is one of the constants above. The exhaustive
+// IsMember reports whether a is one of the constants above. The exhaustive
 // linter holds this switch, like every other switch on the action type, to
 // every member, so lint passes only once a new member is decided everywhere.
-func (a actionType) isMember() bool {
+func (a ActionType) IsMember() bool {
 	switch a {
 	case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
 		ActionLocalMove, ActionRemoteMove, ActionFolderCreate, ActionConflictCopy,
@@ -213,9 +213,9 @@ func (a actionType) isMember() bool {
 }
 
 // parseActionType converts the SQLite wire value back into an ActionType.
-func parseActionType(s string) (actionType, error) {
+func parseActionType(s string) (ActionType, error) {
 	switch s {
-	case strDownload:
+	case StrDownload:
 		return ActionDownload, nil
 	case strUpload:
 		return ActionUpload, nil
@@ -241,7 +241,7 @@ func parseActionType(s string) (actionType, error) {
 }
 
 // Scan implements sql.Scanner for ActionType TEXT columns.
-func (a *actionType) Scan(src any) error {
+func (a *ActionType) Scan(src any) error {
 	s, ok := src.(string)
 	if !ok {
 		return fmt.Errorf("sync: ActionType.Scan: expected string, got %T", src)
@@ -259,35 +259,35 @@ func (a *actionType) Scan(src any) error {
 
 // Value implements driver.Valuer for ActionType TEXT columns. A value outside
 // the enum is refused, so no store row can carry one.
-func (a actionType) Value() (driver.Value, error) {
-	if !a.isMember() {
+func (a ActionType) Value() (driver.Value, error) {
+	if !a.IsMember() {
 		return nil, fmt.Errorf("sync: invalid ActionType %d", a)
 	}
 
 	return a.String(), nil
 }
 
-// folderCreateSide specifies where a new folder should be created.
-type folderCreateSide int
+// FolderCreateSide specifies where a new folder should be created.
+type FolderCreateSide int
 
 const (
-	createLocal folderCreateSide = iota
+	CreateLocal FolderCreateSide = iota
 	CreateRemote
 )
 
-// isMember reports whether s is one of the constants above.
-func (s folderCreateSide) isMember() bool {
+// IsMember reports whether s is one of the constants above.
+func (s FolderCreateSide) IsMember() bool {
 	switch s {
-	case createLocal, CreateRemote:
+	case CreateLocal, CreateRemote:
 		return true
 	default:
 		return false
 	}
 }
 
-func (s folderCreateSide) String() string {
+func (s FolderCreateSide) String() string {
 	switch s {
-	case createLocal:
+	case CreateLocal:
 		return strLocal
 	case CreateRemote:
 		return strRemote

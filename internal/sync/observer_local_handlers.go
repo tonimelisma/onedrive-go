@@ -9,7 +9,7 @@
 //   - HashAndEmit:   hash computation with retry + row patch
 //
 // Related files:
-//   - observer_local.go:            localObserver struct, constructor, Watch() entry point
+//   - observer_local.go:            LocalObserver struct, constructor, Watch() entry point
 //   - observer_local_collisions.go: case collision detection helpers (cache, peers)
 //   - scanner.go:                   FullScan, walk/hash/filter logic
 
@@ -44,15 +44,15 @@ import (
 // guaranteed priority ordering. This is intentional — the safety scan
 // (every 5 minutes) provides eventual consistency for any events missed
 // or dropped by fsnotify, regardless of select scheduling order.
-func (o *localObserver) watchLoop(
-	ctx context.Context, watcher fsWatcher, tree *synctree.Root,
+func (o *LocalObserver) watchLoop(
+	ctx context.Context, watcher FsWatcher, tree *synctree.Root,
 ) error {
 	syncRoot := tree.Path()
-	interval := o.effectiveSafetyScanInterval()
+	interval := o.EffectiveSafetyScanInterval()
 
 	ticker := o.clock.NewTicker(interval)
-	defer stopTicker(ticker)
-	tickCh := tickerChan(ticker)
+	defer StopTicker(ticker)
+	tickCh := TickerChan(ticker)
 
 	errBackoff := retry.NewBackoff(retry.WatchLocalPolicy())
 
@@ -116,7 +116,7 @@ const maxRewatchPerScan = 256
 // the session, every change in them waiting for the next safety scan. A
 // failed Add is not remembered: the next full scan tries again. A resource
 // limit ends the pass early.
-func (o *localObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []localStateRow) {
+func (o *LocalObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []LocalStateRow) {
 	if o.activeWatcher == nil || tree == nil {
 		return
 	}
@@ -169,7 +169,7 @@ func (o *localObserver) rewatchUnwatchedDirectories(tree *synctree.Root, rows []
 
 // runDueRecoveryScan runs the recovery scan a fired timer asked for, unless
 // the timer's generation is stale.
-func (o *localObserver) runDueRecoveryScan(
+func (o *LocalObserver) runDueRecoveryScan(
 	ctx context.Context, tree *synctree.Root, gen uint64,
 ) error {
 	if !o.takeRecoveryScanDue(gen) {
@@ -193,13 +193,13 @@ func (o *localObserver) runDueRecoveryScan(
 // rescanUnlessRootGone runs a full rescan, or reports the sync root gone
 // (B-113): a deleted root means the watcher is watching nothing. It reports
 // whether a scan ran.
-func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root) (bool, error) {
-	if !syncRootExists(tree.Path()) {
+func (o *LocalObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree.Root) (bool, error) {
+	if !SyncRootExists(tree.Path()) {
 		// Debug: the returned error is reported once by the watch runtime.
 		o.logger.Debug("sync root deleted, stopping watch",
 			slog.String("sync_root", tree.Path()))
 
-		return false, fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+		return false, fmt.Errorf("%w: %w", ErrMountRootUnavailable, ErrSyncRootDeleted)
 	}
 
 	scanned := o.runSafetyScan(ctx, tree)
@@ -213,7 +213,7 @@ func (o *localObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree
 // handleWatcherError marks local truth suspect, arms a recovery rescan and
 // backs off. It reports stop=true when the watch loop must return err (nil
 // on shutdown).
-func (o *localObserver) handleWatcherError(
+func (o *LocalObserver) handleWatcherError(
 	ctx context.Context, watchErr error, errBackoff *retry.Backoff, syncRoot string,
 ) (bool, error) {
 	// Self-healing: local truth is marked for a rescan. The first error of a
@@ -233,7 +233,7 @@ func (o *localObserver) handleWatcherError(
 		slog.Any("error", watchErr),
 		slog.Duration("backoff", delay),
 	)
-	o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryWatcherError)
+	o.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryWatcherError)
 	o.armRecoveryScan()
 
 	// Exponential backoff prevents a tight loop under sustained errors
@@ -245,11 +245,11 @@ func (o *localObserver) handleWatcherError(
 	}
 
 	// After a watcher error, check that the sync root still exists (B-113).
-	if !syncRootExists(syncRoot) {
+	if !SyncRootExists(syncRoot) {
 		o.logger.Debug("sync root deleted, stopping watch",
 			slog.String("sync_root", syncRoot))
 
-		return true, fmt.Errorf("%w: %w", ErrMountRootUnavailable, errSyncRootDeleted)
+		return true, fmt.Errorf("%w: %w", ErrMountRootUnavailable, ErrSyncRootDeleted)
 	}
 
 	return false, nil
@@ -257,8 +257,8 @@ func (o *localObserver) handleWatcherError(
 
 // HandleFsEvent processes a single fsnotify event and hands it to the handler
 // for its operation, which sends what it observes as a patch (TrySend).
-func (o *localObserver) HandleFsEvent(
-	ctx context.Context, fsEvent fsnotify.Event, watcher fsWatcher,
+func (o *LocalObserver) HandleFsEvent(
+	ctx context.Context, fsEvent fsnotify.Event, watcher FsWatcher,
 	tree *synctree.Root,
 ) {
 	// Ignore chmod events — mode changes are not synced.
@@ -279,13 +279,13 @@ func (o *localObserver) HandleFsEvent(
 		return
 	}
 
-	dbRelPath := storedPathOf(relPath)
+	dbRelPath := StoredPathOf(relPath)
 	name := namekey.Stored(filepath.Base(fsEvent.Name))
 
-	if reservation, ok := protectedRootPathReservation(dbRelPath, o.protectedRoots); ok {
+	if reservation, ok := ProtectedRootPathReservation(dbRelPath, o.protectedRoots); ok {
 		if reservation.Path == dbRelPath {
-			o.reportProtectedRootEvent(protectedRootEvent{
-				Type:         protectedRootEventPathReserved,
+			o.reportProtectedRootEvent(ProtectedRootEvent{
+				Type:         ProtectedRootEventPathReserved,
 				Path:         dbRelPath,
 				ReservedPath: reservation.Path,
 				MountID:      reservation.MountID,
@@ -301,7 +301,7 @@ func (o *localObserver) HandleFsEvent(
 	if skip := shouldObserveWithFilter(
 		name,
 		dbRelPath,
-		observedKindUnknown,
+		ObservedKindUnknown,
 		o.filterConfig,
 		o.protectedRoots,
 		o.observationRules,
@@ -332,10 +332,10 @@ func (o *localObserver) HandleFsEvent(
 }
 
 // handleCreate processes a Create event: stat, hash (files), add watch (dirs).
-func (o *localObserver) handleCreate(
+func (o *LocalObserver) handleCreate(
 	ctx context.Context, tree *synctree.Root,
 	fsPath, dbRelPath, name string,
-	watcher fsWatcher,
+	watcher FsWatcher,
 ) {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
@@ -360,9 +360,9 @@ func (o *localObserver) handleCreate(
 		return
 	}
 
-	if protectedRoot, ok := protectedRootIdentityReservation(dbRelPath, info, o.protectedRoots); ok {
-		o.reportProtectedRootEvent(protectedRootEvent{
-			Type:         protectedRootEventIdentityMatch,
+	if protectedRoot, ok := ProtectedRootIdentityReservation(dbRelPath, info, o.protectedRoots); ok {
+		o.reportProtectedRootEvent(ProtectedRootEvent{
+			Type:         ProtectedRootEventIdentityMatch,
 			Path:         dbRelPath,
 			ReservedPath: protectedRoot.Path,
 			MountID:      protectedRoot.MountID,
@@ -379,7 +379,7 @@ func (o *localObserver) handleCreate(
 	// Early rejection for case collisions in watch mode (R-2.12.2).
 	// Applies to both files and directories — OneDrive's case-insensitive
 	// namespace cannot host both Xyz/ and xyz in the same parent.
-	// The authoritative check is FullScan's post-walk detectCaseCollisions;
+	// The authoritative check is FullScan's post-walk DetectCaseCollisions;
 	// this rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
 		// Track peer for re-emission when the collider is deleted. The
@@ -397,7 +397,7 @@ func (o *localObserver) handleCreate(
 		return
 	}
 
-	ev := changeEvent{
+	ev := ChangeEvent{
 		Path:  dbRelPath,
 		Size:  info.Size(),
 		Mtime: info.ModTime().UnixNano(),
@@ -408,7 +408,7 @@ func (o *localObserver) handleCreate(
 		ev.LocalBirthTime = identity.BirthTime
 		ev.LocalHasIdentity = true
 	}
-	ev.LocalCtime = fileChangeTime(info)
+	ev.LocalCtime = FileChangeTime(info)
 
 	if info.IsDir() {
 		o.handleDirectoryCreate(ctx, tree, fsPath, dbRelPath, name, info, &ev, watcher)
@@ -431,10 +431,10 @@ func (o *localObserver) handleCreate(
 
 // handleDirectoryCreate registers and emits a created directory, then scans
 // what it already holds.
-func (o *localObserver) handleDirectoryCreate(
+func (o *LocalObserver) handleDirectoryCreate(
 	ctx context.Context, tree *synctree.Root,
 	fsPath, dbRelPath, name string, info os.FileInfo,
-	ev *changeEvent, watcher fsWatcher,
+	ev *ChangeEvent, watcher FsWatcher,
 ) {
 	ev.ItemType = ItemTypeFolder
 
@@ -495,7 +495,7 @@ func (o *localObserver) handleDirectoryCreate(
 //
 // Every other create is hashed synchronously, as before: an unknown hash
 // there could only make a replan plan an upload or a conflict copy early.
-func (o *localObserver) watchCreateHash(
+func (o *LocalObserver) watchCreateHash(
 	ctx context.Context, tree *synctree.Root, fsPath, dbRelPath string, info os.FileInfo,
 ) string {
 	if identity, ok := synctree.IdentityFromFileInfo(info); ok && !hasOtherHardLinks(info) {
@@ -506,7 +506,7 @@ func (o *localObserver) watchCreateHash(
 		// unrelated content and is hashed like any create.
 		if entry != nil && entry.Path != dbRelPath && entry.ItemType == ItemTypeFile &&
 			syncedPathGone(tree, entry.Path) {
-			if canReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
+			if CanReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
 				return entry.LocalHash
 			}
 
@@ -536,10 +536,10 @@ func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
 // handling in handleCreate and scanNewDirectory. Both callers emit events
 // with empty hashes on failure because Create events and directory scans
 // have no guaranteed follow-up event (B-203).
-func (o *localObserver) stableHashOrEmpty(ctx context.Context, fsPath, dbRelPath string) string {
+func (o *LocalObserver) stableHashOrEmpty(ctx context.Context, fsPath, dbRelPath string) string {
 	hash, err := computeStableHashWith(ctx, fsPath, o.hashFunc)
 	if err != nil {
-		if errors.Is(err, errFileChangedDuringHash) {
+		if errors.Is(err, ErrFileChangedDuringHash) {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", dbRelPath))
 		} else {
@@ -558,9 +558,9 @@ func (o *localObserver) stableHashOrEmpty(ctx context.Context, fsPath, dbRelPath
 // scanNewDirectory walks a newly-created directory and sends the rows of any
 // entries already present. This catches files created between
 // the directory's creation and the fsnotify watch registration.
-func (o *localObserver) scanNewDirectory(
+func (o *LocalObserver) scanNewDirectory(
 	ctx context.Context, tree *synctree.Root, dirPath, dirRelPath string,
-	watcher fsWatcher,
+	watcher FsWatcher,
 ) {
 	entries, err := localpath.ReadDir(dirPath)
 	if err != nil {
@@ -582,13 +582,13 @@ func (o *localObserver) scanNewDirectory(
 	}
 }
 
-func (o *localObserver) scanNewDirectoryEntry(
+func (o *LocalObserver) scanNewDirectoryEntry(
 	ctx context.Context,
 	tree *synctree.Root,
 	dirPath string,
 	dirRelPath string,
 	entry os.DirEntry,
-	watcher fsWatcher,
+	watcher FsWatcher,
 ) {
 	entryName := namekey.Stored(entry.Name())
 	entryRelPath := dirRelPath + "/" + entryName
@@ -603,9 +603,9 @@ func (o *localObserver) scanNewDirectoryEntry(
 		return
 	}
 
-	if protectedRoot, ok := protectedRootIdentityReservation(entryRelPath, info, o.protectedRoots); ok {
-		o.reportProtectedRootEvent(protectedRootEvent{
-			Type:         protectedRootEventIdentityMatch,
+	if protectedRoot, ok := ProtectedRootIdentityReservation(entryRelPath, info, o.protectedRoots); ok {
+		o.reportProtectedRootEvent(ProtectedRootEvent{
+			Type:         ProtectedRootEventIdentityMatch,
 			Path:         entryRelPath,
 			ReservedPath: protectedRoot.Path,
 			MountID:      protectedRoot.MountID,
@@ -622,7 +622,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		return
 	}
 
-	if kind == observedKindDir {
+	if kind == ObservedKindDir {
 		o.scanNewDirectoryChildDir(ctx, tree, entryFsPath, entryRelPath, watcher)
 		return
 	}
@@ -631,7 +631,7 @@ func (o *localObserver) scanNewDirectoryEntry(
 		return
 	}
 
-	fileEv := changeEvent{
+	fileEv := ChangeEvent{
 		Path:     entryRelPath,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
@@ -644,32 +644,32 @@ func (o *localObserver) scanNewDirectoryEntry(
 		fileEv.LocalBirthTime = identity.BirthTime
 		fileEv.LocalHasIdentity = true
 	}
-	fileEv.LocalCtime = fileChangeTime(info)
+	fileEv.LocalCtime = FileChangeTime(info)
 
 	o.TrySend(ctx, &fileEv)
 }
 
-func (o *localObserver) scanNewDirectoryEntryInfo(
+func (o *LocalObserver) scanNewDirectoryEntryInfo(
 	entry os.DirEntry,
 	entryFsPath string,
 	entryRelPath string,
-) (os.FileInfo, observedKind, bool) {
+) (os.FileInfo, ObservedKind, bool) {
 	if entry.Type()&fs.ModeSymlink != 0 {
 		info, isSymlink, err := statObservedPath(entryFsPath)
 		if err != nil {
 			o.logger.Debug("stat failed during directory scan",
 				slog.String("path", entryRelPath), slog.Any("error", err))
-			return nil, observedKindUnknown, false
+			return nil, ObservedKindUnknown, false
 		}
 
 		if shouldSkipObservedSymlink(isSymlink, o.filterConfig) {
 			o.rememberExcludedSymlink(entryRelPath)
-			return nil, observedKindUnknown, false
+			return nil, ObservedKindUnknown, false
 		}
 
 		o.forgetExcludedSymlink(entryRelPath)
 		if isSpecialFile(info) {
-			return nil, observedKindUnknown, false
+			return nil, ObservedKindUnknown, false
 		}
 		return info, observedKindFromInfo(info), true
 	}
@@ -680,10 +680,10 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 	if err != nil {
 		o.logger.Debug("stat failed during directory scan",
 			slog.String("path", entryRelPath), slog.Any("error", err))
-		return nil, observedKindUnknown, false
+		return nil, ObservedKindUnknown, false
 	}
 	if isSpecialFile(info) {
-		return nil, observedKindUnknown, false
+		return nil, ObservedKindUnknown, false
 	}
 
 	// The listing is by absolute path (localpath), so the birth time that
@@ -691,12 +691,12 @@ func (o *localObserver) scanNewDirectoryEntryInfo(
 	return synctree.AttachBirthTime(info, entryFsPath), dirEntryKind(entry), true
 }
 
-func (o *localObserver) scanNewDirectoryChildDir(
+func (o *LocalObserver) scanNewDirectoryChildDir(
 	ctx context.Context,
 	tree *synctree.Root,
 	entryFsPath string,
 	entryRelPath string,
-	watcher fsWatcher,
+	watcher FsWatcher,
 ) {
 	info, _, statErr := statObservedPath(entryFsPath)
 	if addErr := watcher.Add(entryFsPath); addErr != nil {
@@ -708,7 +708,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 		o.watchedDirs.add(entryFsPath, info)
 	}
 
-	dirEv := changeEvent{
+	dirEv := ChangeEvent{
 		Path:     entryRelPath,
 		ItemType: ItemTypeFolder,
 	}
@@ -739,7 +739,7 @@ func (o *localObserver) scanNewDirectoryChildDir(
 // may re-emit an event for something already being processed. This is safe:
 // the watch loop turns that event into a fresh steady-state replan instead of
 // trying to mutate the currently running graph in place.
-func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath string) {
+func (o *LocalObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath string) {
 	info, isSymlink, err := statObservedPath(fsPath)
 	if err != nil {
 		o.logger.Debug("stat failed for modified path",
@@ -776,7 +776,7 @@ func (o *localObserver) handleWrite(_ *synctree.Root, fsPath, dbRelPath string) 
 //   - a path that keeps producing new content is marked unstable and backs
 //     off exponentially (D-081b): without it a log or database written every
 //     second was hashed, uploaded and superseded every second.
-func (o *localObserver) scheduleWriteHash(fsPath, dbRelPath string) {
+func (o *LocalObserver) scheduleWriteHash(fsPath, dbRelPath string) {
 	now := o.clock.Now()
 	churn := o.writeChurnFor(dbRelPath, now)
 
@@ -802,7 +802,7 @@ func (o *localObserver) scheduleWriteHash(fsPath, dbRelPath string) {
 	o.scheduleDeferredHash(fsPath, dbRelPath, 0, delay)
 }
 
-func (o *localObserver) writeCooldown() time.Duration {
+func (o *LocalObserver) writeCooldown() time.Duration {
 	if o.writeCoalesceCooldown == 0 {
 		return defaultWriteCoalesceCooldown
 	}
@@ -813,8 +813,8 @@ func (o *localObserver) writeCooldown() time.Duration {
 // scheduleDeferredHash arms a timer that hands a hash request to the watch
 // loop. Timer callbacks must not block or touch watch-loop state, so a full
 // channel drops the request and asks for a recovery rescan instead.
-func (o *localObserver) scheduleDeferredHash(fsPath, dbRelPath string, retries int, delay time.Duration) {
-	req := hashRequest{
+func (o *LocalObserver) scheduleDeferredHash(fsPath, dbRelPath string, retries int, delay time.Duration) {
+	req := HashRequest{
 		FsPath:    fsPath,
 		DbRelPath: dbRelPath,
 		Retries:   retries,
@@ -856,7 +856,7 @@ type pathWriteChurn struct {
 
 // writeChurnFor returns the churn record for path, forgetting a path that has
 // been quiet long enough to count as stable again.
-func (o *localObserver) writeChurnFor(path string, now time.Time) *pathWriteChurn {
+func (o *LocalObserver) writeChurnFor(path string, now time.Time) *pathWriteChurn {
 	if o.writeChurn == nil {
 		o.writeChurn = make(map[string]*pathWriteChurn)
 	}
@@ -893,7 +893,7 @@ func (c *pathWriteChurn) isQuiet(now time.Time) bool {
 // emits never fit in the two-minute window, so it stayed pinned at the
 // initial value.) writeChurnFor resets the path once it has been quiet for
 // twice its backoff.
-func (o *localObserver) recordWriteEmit(path, hash string) {
+func (o *LocalObserver) recordWriteEmit(path, hash string) {
 	now := o.clock.Now()
 	churn := o.writeChurnFor(path, now)
 	contentChanged := churn.lastEmit.IsZero() || hash == "" || hash != churn.lastHash
@@ -921,7 +921,7 @@ func (o *localObserver) recordWriteEmit(path, hash string) {
 
 // escalateWriteBackoff marks path unstable, or doubles its backoff, up to the
 // cap, and says so once per path.
-func (o *localObserver) escalateWriteBackoff(path string, churn *pathWriteChurn) {
+func (o *LocalObserver) escalateWriteBackoff(path string, churn *pathWriteChurn) {
 	churn.backoff = min(max(2*churn.backoff, unstableWriteInitialBackoff), unstableWriteMaxBackoff)
 	if churn.warned {
 		return
@@ -938,7 +938,7 @@ func (o *localObserver) escalateWriteBackoff(path string, churn *pathWriteChurn)
 
 // deferStillChangingHash re-arms the hash of a file that kept changing
 // through every coalescing retry, after an escalated backoff.
-func (o *localObserver) deferStillChangingHash(req hashRequest) {
+func (o *LocalObserver) deferStillChangingHash(req HashRequest) {
 	now := o.clock.Now()
 	churn := o.writeChurnFor(req.DbRelPath, now)
 	o.escalateWriteBackoff(req.DbRelPath, churn)
@@ -948,7 +948,7 @@ func (o *localObserver) deferStillChangingHash(req hashRequest) {
 
 // pruneWriteChurn drops records of paths that are stable and idle, so the
 // map does not grow with every file ever written in a long session.
-func (o *localObserver) pruneWriteChurn(now time.Time) {
+func (o *LocalObserver) pruneWriteChurn(now time.Time) {
 	for path, churn := range o.writeChurn {
 		if churn.firstPendingAt.IsZero() && churn.isQuiet(now) {
 			delete(o.writeChurn, path)
@@ -959,7 +959,7 @@ func (o *localObserver) pruneWriteChurn(now time.Time) {
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
 // It hashes the file and sends its row if the content differs from the
 // baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
-func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req hashRequest) {
+func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest) {
 	req = o.prepareDeferredHashRequest(req)
 
 	info, isSymlink, err := statObservedPath(req.FsPath)
@@ -991,7 +991,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	}
 
 	// Early rejection for case collisions in write coalesce (R-2.12.2).
-	// The authoritative check is FullScan's detectCaseCollisions; this
+	// The authoritative check is FullScan's DetectCaseCollisions; this
 	// rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(
 		tree, filepath.Dir(req.FsPath), filepath.Base(req.FsPath), filepath.Dir(req.DbRelPath),
@@ -1010,7 +1010,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 			return
 		}
 
-		if errors.Is(err, errFileChangedDuringHash) {
+		if errors.Is(err, ErrFileChangedDuringHash) {
 			// Still being written after every retry. An empty-hash row
 			// would only plan an upload of a file in mid-write, so the path
 			// stays pending: it is marked unstable and checked again after
@@ -1033,7 +1033,7 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		}
 	}
 
-	ev := changeEvent{
+	ev := ChangeEvent{
 		Path:     req.DbRelPath,
 		ItemType: ItemTypeFile,
 		Size:     info.Size(),
@@ -1046,13 +1046,13 @@ func (o *localObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		ev.LocalBirthTime = identity.BirthTime
 		ev.LocalHasIdentity = true
 	}
-	ev.LocalCtime = fileChangeTime(info)
+	ev.LocalCtime = FileChangeTime(info)
 
 	o.recordWriteEmit(req.DbRelPath, hash)
 	o.TrySend(ctx, &ev)
 }
 
-func (o *localObserver) prepareDeferredHashRequest(req hashRequest) hashRequest {
+func (o *LocalObserver) prepareDeferredHashRequest(req HashRequest) HashRequest {
 	delete(o.PendingTimers, req.DbRelPath)
 	if churn, ok := o.writeChurn[req.DbRelPath]; ok {
 		churn.firstPendingAt = time.Time{}
@@ -1061,8 +1061,8 @@ func (o *localObserver) prepareDeferredHashRequest(req hashRequest) hashRequest 
 	return req
 }
 
-func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bool {
-	if !errors.Is(err, errFileChangedDuringHash) || req.Retries >= maxCoalesceRetries {
+func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
+	if !errors.Is(err, ErrFileChangedDuringHash) || req.Retries >= maxCoalesceRetries {
 		return false
 	}
 
@@ -1082,8 +1082,8 @@ func (o *localObserver) retryDeferredHashOnChange(req hashRequest, err error) bo
 // from syncRoot + dbRelPath. On macOS HFS+, fsnotify delivers NFD-encoded
 // paths while dbRelPath is NFC-normalized. Using the original fsPath for
 // watcher.Remove() ensures the removal matches the path registered by fsnotify.
-func (o *localObserver) HandleDelete(
-	ctx context.Context, watcher fsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
+func (o *LocalObserver) HandleDelete(
+	ctx context.Context, watcher FsWatcher, tree *synctree.Root, fsPath, dbRelPath, name string,
 ) {
 	// A Remove or Rename event names a path, not an inode, and arrives late.
 	// A lone MOVED_FROM, an atomic save (rename over the path) or an event
@@ -1146,7 +1146,7 @@ func (o *localObserver) HandleDelete(
 		o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
 	}
 
-	o.TrySend(ctx, &changeEvent{Path: dbRelPath, IsDeleted: true})
+	o.TrySend(ctx, &ChangeEvent{Path: dbRelPath, IsDeleted: true})
 }
 
 // rescanIfSkippedEntryHidesSyncedItem runs a safety scan now when a created
@@ -1156,7 +1156,7 @@ func (o *localObserver) HandleDelete(
 // half has already reached the runtime; the scan records the synced path as
 // unavailable (scanner_unavailable.go) within the same debounce window, so
 // the replan sees an unavailable path instead of a deleted one (D-004, P-5).
-func (o *localObserver) rescanIfSkippedEntryHidesSyncedItem(
+func (o *LocalObserver) rescanIfSkippedEntryHidesSyncedItem(
 	ctx context.Context,
 	tree *synctree.Root,
 	dbRelPath string,
@@ -1186,7 +1186,7 @@ func (o *localObserver) rescanIfSkippedEntryHidesSyncedItem(
 // reach is caught by the next safety scan instead.
 const watchIdentityIndexMaxAge = time.Minute
 
-func (o *localObserver) watchIdentityIndex() *scanAvailability {
+func (o *LocalObserver) watchIdentityIndex() *scanAvailability {
 	now := o.clock.Now()
 	if o.watchIdentityLookup == nil || now.Sub(o.watchIdentityBuiltAt) > watchIdentityIndexMaxAge {
 		o.watchIdentityLookup = newScanAvailability(0)
@@ -1257,7 +1257,7 @@ func isASCIIName(name string) bool {
 // the moved tree carried the old path (and a tree moved out of the sync root
 // kept reporting changes as if it were still inside). Dropping the whole
 // subtree makes the re-add register fresh paths.
-func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPath string) {
+func (o *LocalObserver) forgetWatchedSubtree(watcher FsWatcher, fsPath, dbRelPath string) {
 	o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
 
 	// The directory itself is removed by its original event path, not the
@@ -1269,7 +1269,7 @@ func (o *localObserver) forgetWatchedSubtree(watcher fsWatcher, fsPath, dbRelPat
 
 // forgetWatchedDescendants removes every watch strictly beneath fsPath,
 // deepest first.
-func (o *localObserver) forgetWatchedDescendants(watcher fsWatcher, fsPath, dbRelPath string) {
+func (o *LocalObserver) forgetWatchedDescendants(watcher FsWatcher, fsPath, dbRelPath string) {
 	for _, watched := range o.watchedDirs.descendants(fsPath) {
 		o.removeWatch(watcher, watched, dbRelPath)
 	}
@@ -1277,7 +1277,7 @@ func (o *localObserver) forgetWatchedDescendants(watcher fsWatcher, fsPath, dbRe
 
 // isRegisteredSameDirectory reports whether fsPath is already watched as the
 // same directory (same device and inode) that info describes.
-func (o *localObserver) isRegisteredSameDirectory(fsPath string, info os.FileInfo) bool {
+func (o *LocalObserver) isRegisteredSameDirectory(fsPath string, info os.FileInfo) bool {
 	registered, ok := o.watchedDirs.get(fsPath)
 	if !ok || !registered.hasIdentity {
 		return false
@@ -1287,7 +1287,7 @@ func (o *localObserver) isRegisteredSameDirectory(fsPath string, info os.FileInf
 	return ok && synctree.SameIdentity(identity, registered.identity)
 }
 
-func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string) {
+func (o *LocalObserver) removeWatch(watcher FsWatcher, fsPath, dbRelPath string) {
 	if rmErr := watcher.Remove(fsPath); rmErr != nil {
 		// Debug: the kernel often removed the watch already (benign).
 		o.logger.Debug("watch removal for deleted directory",
@@ -1305,7 +1305,7 @@ func (o *localObserver) removeWatch(watcher fsWatcher, fsPath, dbRelPath string)
 // cause is warned once with its fix; other failures are per-directory Debug
 // lines (the safety scan still covers those folders). A descriptor-limit
 // failure also records watchUnavailable so the watch loop stops watching.
-func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr error) {
+func (o *LocalObserver) reportWatchAddFailure(msg, dbRelPath string, addErr error) {
 	cause, ok := classifyWatchAddError(addErr)
 	if !ok {
 		o.logger.Debug(msg, slog.String("path", dbRelPath), slog.Any("error", addErr))
@@ -1324,12 +1324,12 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 		return
 	}
 	if o.reportedWatchCauses == nil {
-		o.reportedWatchCauses = make(map[watchUnavailableCause]struct{})
+		o.reportedWatchCauses = make(map[WatchUnavailableCause]struct{})
 	}
 	o.reportedWatchCauses[cause] = struct{}{}
-	o.logger.Warn("Cannot watch new folders for changes ("+watchUnavailableReason(cause)+"); "+
+	o.logger.Warn("Cannot watch new folders for changes ("+WatchUnavailableReason(cause)+"); "+
 		"changes in new folders will be noticed only by the periodic rescan. "+
-		"To fix: "+watchUnavailableFix(cause),
+		"To fix: "+WatchUnavailableFix(cause),
 		slog.String("path", dbRelPath),
 	)
 }
@@ -1347,7 +1347,7 @@ func (o *localObserver) reportWatchAddFailure(msg, dbRelPath string, addErr erro
 // (R-2.8.21). So the scan is deferred instead: one recovery request keeps a
 // paced timer armed until the channel has room, and the first scan after
 // that covers everything the deferred ones would have.
-func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root) bool {
+func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root) bool {
 	if o.localBatchChannelFull() {
 		o.logger.Debug("deferring full scan: the sync runtime has not taken the previous observations yet")
 		o.requestRecoveryScan()
@@ -1376,7 +1376,7 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root) 
 			o.safetyScanFailing = true
 			o.logger.Warn("Could not rescan the sync folder; will retry", slog.Any("error", err))
 		}
-		o.TrySendLocalTruthSuspect(ctx, localTruthRecoveryFullScanFailed)
+		o.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryFullScanFailed)
 		return true
 	}
 	o.safetyScanFailing = false
@@ -1407,10 +1407,10 @@ func (o *localObserver) runSafetyScan(ctx context.Context, tree *synctree.Root) 
 }
 
 // infoKind classifies a stat result for the observation filter.
-func infoKind(info os.FileInfo) observedKind {
+func infoKind(info os.FileInfo) ObservedKind {
 	if info.IsDir() {
-		return observedKindDir
+		return ObservedKindDir
 	}
 
-	return observedKindFile
+	return ObservedKindFile
 }

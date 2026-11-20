@@ -10,7 +10,7 @@ func (flow *engineFlow) startRuntimeStage(
 	ctx context.Context,
 	runtime *runtimePlan,
 	bl *Baseline,
-) ([]*trackedAction, bool, error) {
+) ([]*TrackedAction, bool, error) {
 	if runtime == nil || runtime.Plan == nil {
 		return nil, false, nil
 	}
@@ -21,8 +21,8 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	flow.initializeRuntimeState(runtime)
-	flow.sched.graph = newDepGraph(flow.deps.logger)
-	flow.sched.graph.ownerCheck = flow.engine.runOwnerCheck
+	flow.sched.graph = NewDepGraph(flow.deps.logger)
+	flow.sched.graph.SetOwnerCheck(flow.engine.runOwnerCheck)
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil
@@ -50,8 +50,8 @@ func (flow *engineFlow) startRuntimeStage(
 func (flow *engineFlow) reduceReadyFrontierStage(
 	ctx context.Context,
 	bl *Baseline,
-	ready []*trackedAction,
-) ([]*trackedAction, error) {
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
 	frontier, err := flow.reduceReadyFrontier(ctx, bl, ready)
 	if flow.engine.dispatchOrder != nil && len(frontier) > 1 {
 		frontier = flow.engine.dispatchOrder(frontier)
@@ -67,8 +67,8 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 func (flow *engineFlow) reduceReadyFrontier(
 	ctx context.Context,
 	bl *Baseline,
-	ready []*trackedAction,
-) ([]*trackedAction, error) {
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
 	if isStoppingRun(ctx) {
 		return ready, nil
 	}
@@ -90,7 +90,7 @@ func (flow *engineFlow) reduceReadyFrontier(
 	return append(reduced, released...), err
 }
 
-func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
+func (flow *engineFlow) registerPlanActions(plan *ActionPlan) []*TrackedAction {
 	flow.pruneSupersedeStreaks(plan)
 	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
@@ -98,11 +98,11 @@ func (flow *engineFlow) registerPlanActions(plan *actionPlan) []*trackedAction {
 	if flow.engine != nil {
 		// A new plan reads every parent live again before its first
 		// create into it; the memo is per plan.
-		flow.engine.execCfg.resetRemoteParentChecks()
+		flow.engine.execCfg.ResetRemoteParentChecks()
 	}
 
 	actionIDs := flow.sched.allocatePlanActionIDs(len(plan.Actions))
-	initialReady := make([]*trackedAction, 0, len(plan.Actions))
+	initialReady := make([]*TrackedAction, 0, len(plan.Actions))
 
 	for i := range plan.Actions {
 		flow.sched.graph.Register(&plan.Actions[i], actionIDs[i])

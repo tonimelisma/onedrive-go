@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/store_remote_twins.go, internal/sync/store_pending_creates.go, internal/sync/store_held_deletes.go, internal/sync/store_delete_ledger.go, internal/sync/store_local_hash_cache.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/sqlite_compare_kinds.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/truth_status.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/store_remote_twins.go, internal/sync/store_pending_creates.go, internal/sync/store_held_deletes.go, internal/sync/store_delete_ledger.go, internal/sync/store_local_hash_cache.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/store_sync_root.go, internal/sync/store_test_seams.go
 
 LAYER: 1
 
@@ -58,7 +58,7 @@ for the same reason every other table writer is: it issues the `INSERT` and
 `planner_visible_local_state` and `planner_visible_remote_state` tables, and it
 is the only file outside this family that consumed the store's SQL encoding
 helpers (`boolInt`, `nullString`, `nullKnownInt64`, `nullOptionalInt64`,
-`sqlTxRunner`). Deciding *what* is visible remains planning policy through the
+`SqlTxRunner`). Deciding *what* is visible remains planning policy through the
 compiled `contentFilter`; writing the rows is store work. The rows go in as
 200-row `INSERT ... VALUES` statements (`plannerVisibleInsertChunkRows`): one
 statement per row cost a compile per row, three times a prepared statement and
@@ -72,7 +72,7 @@ each one's subtree by the primary-key range `path >= p || '/' AND path < p ||
 `TestReplacePlannerVisibleStateTx_PruneUsesAPathRangePerMissingFolder`,
 `BenchmarkReplacePlannerVisibleState`).
 
-`shortcut_alias_mutation.go` is no longer claimed here. It declares `*Engine`
+`engine_shortcut_alias_mutation.go` is no longer claimed here. It declares `*Engine`
 methods that perform Graph mutations and persist the resulting shortcut-root
 state, which is engine orchestration, not store truth. It was the only reason
 this family appeared to depend on `Engine` at all. Shortcut status display metadata is sync-owned but derived from
@@ -158,7 +158,7 @@ and every other significant type in the tree already matched its own name
 ### Retry and block state invariants
 
 `retry_work` rows are exact retry obligations. Every row must carry a non-empty
-path, a valid `actionType`, and a positive attempt count. Delayed retry rows
+path, a valid `ActionType`, and a positive attempt count. Delayed retry rows
 must have `next_retry_at`; blocked rows must not have retry timing and must
 reference an existing `block_scopes` row. Every persisted block scope must in
 turn have at least one blocked retry row. These invariants are asserted by the
@@ -193,7 +193,7 @@ nine hours with no issue and no log line.
 
 A stored time that is compared by order (a deadline or a not-before time),
 and a remote modification time, is written through one encoder,
-`storedTimeNano` (`store_sql_encoding.go`): Unix nanoseconds, saturated at
+`StoredTimeNano` (`domain_stored_time.go`): Unix nanoseconds, saturated at
 the ends of the int64 range. A time past 2262 stores `math.MaxInt64`, a time
 before 1678 stores `math.MinInt64`, the zero time stores 0, every such
 column's "no time", and the epoch itself stores 1 ns after it
@@ -211,7 +211,7 @@ restart the trial was due at once
 | `block_scopes.next_trial_at` | the clock plus a server-given wait, or a local 60 s | no |
 | `retry_work.next_retry_at` | the clock plus a backoff of at most an hour (75 minutes with jitter), or the clock at a release | yes |
 | `observation_state.next_full_remote_refresh_at` | the clock plus the refresh cadence or the undecided-orphan backoff, or a clamp to the clock plus a fixed delay | yes |
-| `delete_ledger.committed_at`, and the window bounds compared to it | the clock, and the clock less the 24-hour `deleteSafetyWindow` | yes |
+| `delete_ledger.committed_at`, and the window bounds compared to it | the clock, and the clock less the 24-hour `DeleteSafetyWindow` | yes |
 | `pending_creates.intended_at` | the clock | yes |
 | `remote_state.mtime`, `baseline.remote_mtime` | the item's `lastModifiedDateTime` | no |
 
@@ -221,7 +221,7 @@ Reads need no mapping back: `time.Unix(0, math.MaxInt64)` is 2262, still the
 far future, and `time.Unix(0, math.MinInt64)` is 1677, long past. Every
 reader converts with `time.Unix` and compares or subtracts as `time.Time`,
 which saturates, or compares the stored integers. Zero, and only zero, is
-"no time" (`storedTimeIsSet`, and `<> 0` in SQL): a time before 1970 is
+"no time" (`StoredTimeIsSet`, and `<> 0` in SQL): a time before 1970 is
 negative and a time like any other. Read as none, the runtime hold of
 persisted retry work armed no retry timer, the debug invariant refused the
 row, admission dispatched a pre-1970 retry at once, and a pending create's
@@ -233,9 +233,9 @@ second record replaced its first intent's time
 
 Remote modification times are written by the item converter, the upload
 outcome and the live row an executor precondition compares with the planned
-one, all through `storedTimeNano`, because they are compared with each other
+one, all through `StoredTimeNano`, because they are compared with each other
 (`TestStoredTimeNano_RemoteModificationTimeWritersAgree`). One decoder,
-`remoteModTime`, turns a stored one back into a file time, for a download
+`RemoteModTime`, turns a stored one back into a file time, for a download
 (`driveops.DownloadOpts.RemoteMtime`, a `time.Time` whose zero value sets
 none) and for a local folder create. An item dated 2300 is downloaded with
 the last storable time and one dated 1601 (the Windows file-time epoch) with
@@ -508,13 +508,13 @@ truth availability on their own.
 
 `observation_issues.issue_type` and `retry_work.condition_type` hold an
 `IssueType` (sync-domain.md), and the store is where it meets its stored
-string. A read parses the stored value (`parseIssueType`): a value no member
+string. A read parses the stored value (`ParseIssueType`): a value no member
 has, an empty `issue_type` included, fails the read naming the row, because
 truth availability has no verdict for it and guessing one could read a path
 as absent; an empty `condition_type` is a transient failure and reads as no
 condition. A write refuses the same values, so a row the read would refuse is
 never written. What an issue says about truth is one exhaustive switch,
-`truthVerdictForIssueType` (`truth_status.go`), read through
+`truthVerdictForIssueType` (`domain_truth_status.go`), read through
 `observationIssueBlocksLocalTruth` and `observationIssueBlocksRemoteTruth`:
 every member has a stated verdict on the local and the OneDrive side of its
 path, and on OneDrive's side of everything beneath it (only `remote_name_twin`
@@ -570,8 +570,8 @@ kept, the intent of a zero-byte file (which runs no create hook) outlived a
 file that was already synced
 (`TestUploadNewFile_ZeroByteCreateLeavesNoPendingRow`). The runtime-state
 step that follows planning prunes what no create, upload or observation
-needs any more (`prunePendingCreates`, one transaction), told by its caller
-what the pass observed before it planned (`passObservation`):
+needs any more (`PrunePendingCreates`, one transaction), told by its caller
+what the pass observed before it planned (`PassObservation`):
 
 - after any plan, every intent past the TTL;
 - after a pass that observed OneDrive and then the local tree (a one-shot
@@ -616,7 +616,7 @@ the next replan deletes the placeholder. An intent whose create never landed
 goes once a remote poll that began after the last create attempt at its path
 ended has been applied without claiming it, a poll that returned no items
 included ([sync-engine.md](sync-engine.md), `watchCreateAttempts`;
-`dropGoneCreateIntentsAt` judges such a path as after a pass that observed
+`DropGoneCreateIntentsAt` judges such a path as after a pass that observed
 OneDrive first), at the next start, or once it expires. That record of
 attempts is held in memory by the watch loop, so the row has no column for
 it; after a restart the start pass judges older intents. A path the content
@@ -647,7 +647,7 @@ empty file carries the copy's name
 (`TestCrashRecovery_ConflictCopyWhoseUploadWasCutAfterTheCreate`).
 The executor is the second place
 that claims on an intent, with the same freshness test
-(`PendingCreate.intentIsFresh`, which the prune asks too) and no schema of
+(`PendingCreate.IntentIsFresh`, which the prune asks too) and no schema of
 its own: a
 retry of the create that gets 409, at a path that held an intent without an
 item before the retry and within the same 72 h, records the file of exactly
@@ -853,7 +853,7 @@ still-blocked scope may delete the blocked work under it.
 - `next_trial_at`
 
 `scope_key` remains the durable identity used by `retry_work`, while in-memory
-scope semantics are reconstructed from `describeScopeKey` during read/write
+scope semantics are reconstructed from `DescribeScopeKey` during read/write
 validation. The shared raw block-scope read path therefore validates the
 durable key once and returns a canonical `BlockScope` shape without storing a
 second copy of parsed metadata in SQLite.
@@ -926,15 +926,15 @@ no user-clearable condition refused, with at least three attempts, and
 `RetryingItems` is the number of rows it lists
 (`TestReadDriveStatusSnapshot_RetryingIgnoresBlockedAndLowAttemptRows`).
 
-Unresolved work: `DriveStatusSnapshot.unsyncedIssueCount`
+Unresolved work: `DriveStatusSnapshot.UnsyncedIssueCount`
 (`condition_projection.go`) counts the observation issues in a snapshot that
 keep a file unsynced: an issue counts when `status` lists it
 (`storedConditionListed`, the filter `ProjectStoredConditionGroups` applies)
-and its type leaves a file unsynced (`issueTypeLeavesFileUnsynced`,
+and its type leaves a file unsynced (`IssueTypeLeavesFileUnsynced`,
 sync-domain.md). Retry work is not read, because every retry row a live pass
 leaves belongs to an action of that pass's plan, which the run already counts
 as failed or left; held deletes are a deliberate hold and are not read either.
-`DriveStatusSnapshot.interruptedRemovalCount` counts the listed
+`DriveStatusSnapshot.InterruptedRemovalCount` counts the listed
 `local_interrupted_removal` issues the same way, for
 `Report.InterruptedRemovals`. The engine reads both at the end of a one-shot
 run, for the exit status and for a removed shared folder's final drain
@@ -975,14 +975,14 @@ Two store-owned helpers isolate DB lifecycle policy:
   startup failure, never a reason to reset (`integrityCheckFailure`). Only an
   existing store is incompatible, and a family file that cannot be checked
   (permission denied, an I/O error) is an error, never absent
-  (`stateDBFamilyExists`)
+  (`StateDBFamilyExists`)
 - `store_reset.go` deletes one drive's DB file family and recreates a fresh
   canonical DB in place. The family is `config.StateDBFamily` (config owns it
   with the state DB paths, so its own discovery and the email rename use the
   same list): the `-wal`, `-shm` and `-journal` sidecars, then the database,
   last. Every delete or move
   of a store (reset, purge, a shortcut child's cleanup, an email rename's
-  `moveStateDBFamily`) takes all of them in that order; the reset and the
+  `MoveStateDBFamily`) takes all of them in that order; the reset and the
   purge used to leave the journal, and the email rename moved the database
   alone. The database goes last so that a delete cut short leaves a store
   the rerun still finds and finishes. All of them go because SQLite pairs a
@@ -995,7 +995,7 @@ Two store-owned helpers isolate DB lifecycle policy:
   callers hold the store's offline-change lock (`LockDriveForOfflineChange`)
   (`TestRemoveStateDBFiles_RemovesALeftoverJournal`,
   `TestMoveStateDBs_MovesTheWholeFamily`)
-- `moveStateDBFamily` renames each family file the source has, the database
+- `MoveStateDBFamily` renames each family file the source has, the database
   last, and never deletes or replaces a file at the target: with a journal
   recording the change, a file at the target was moved there by an earlier
   run cut short, and a moved log holds commits its database does not have
@@ -1005,7 +1005,7 @@ Two store-owned helpers isolate DB lifecycle policy:
   `TestMoveStateDBs_AResumedMoveKeepsWhatItAlreadyMoved`). A file at both
   names is refused, naming the one under the old name. Before a store with a
   sidecar moves, and while nothing of its family is at the target,
-  `foldStateDBLog` folds its log into the database (the store opened without
+  `FoldStateDBLog` folds its log into the database (the store opened without
   its schema, a truncating checkpoint, closed), so the family is one file and
   the move one rename; a file without the SQLite header is not opened, since
   SQLite takes up a log beside a file before it reads the header, and a

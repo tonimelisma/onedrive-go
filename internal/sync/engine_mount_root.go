@@ -22,9 +22,9 @@ func (e *Engine) mountRootDeltaSupported() bool {
 
 // mountRootObservation is what one mount-root observation saw.
 type mountRootObservation struct {
-	events []remoteItem
+	events []RemoteItem
 	token  string
-	mode   remoteObservationMode
+	mode   RemoteObservationMode
 	// complete marks a whole-folder enumeration (a delta without a token,
 	// after a requested refresh or an expired token).
 	complete bool
@@ -40,25 +40,25 @@ func (flow *engineFlow) observeMountRootRemote(
 ) (mountRootObservation, error) {
 	eng := flow.engine
 	if !eng.hasRemoteMountRoot() {
-		return mountRootObservation{mode: remoteObservationModeEnumerate},
+		return mountRootObservation{mode: RemoteObservationModeEnumerate},
 			fmt.Errorf("sync: mount-root observation requires a remote root item ID")
 	}
 
-	if eng.preferredMountRootObservationMode() == remoteObservationModeDelta {
+	if eng.preferredMountRootObservationMode() == RemoteObservationModeDelta {
 		token := ""
 		if !fullReconcile {
 			state, err := eng.baseline.ReadObservationState(ctx)
 			if err != nil {
-				return mountRootObservation{mode: remoteObservationModeDelta}, fmt.Errorf("sync: reading observation state: %w", err)
+				return mountRootObservation{mode: RemoteObservationModeDelta}, fmt.Errorf("sync: reading observation state: %w", err)
 			}
 
 			token = state.Cursor
 		}
 
 		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
-		orphanKind := resyncKindApplyDifferences
+		orphanKind := ResyncKindApplyDifferences
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			orphanKind = newDeltaExpiredError(err).kind
+			orphanKind = ResyncKindOf(NewDeltaExpiredError(err))
 			// Self-healing: the next call re-enumerates the shared folder from
 			// scratch, so nothing needs the user's attention.
 			eng.logger.Info("Change history for a shared folder expired; rescanning the folder",
@@ -74,13 +74,13 @@ func (flow *engineFlow) observeMountRootRemote(
 			events, undecided := eng.mountRootEvents(ctx, items, bl, fullReconcile, orphanKind)
 
 			return mountRootObservation{
-				events: events, token: newToken, mode: remoteObservationModeDelta,
+				events: events, token: newToken, mode: RemoteObservationModeDelta,
 				complete: fullReconcile, orphansUndecided: undecided,
 			}, nil
 		}
 
 		if eng.recursiveLister == nil || !shouldFallbackMountRootDelta(err) {
-			return mountRootObservation{mode: remoteObservationModeDelta}, fmt.Errorf("sync: mount-root delta: %w", err)
+			return mountRootObservation{mode: RemoteObservationModeDelta}, fmt.Errorf("sync: mount-root delta: %w", err)
 		}
 
 		// The fallback is retried on every poll, but the condition does not
@@ -100,23 +100,23 @@ func (flow *engineFlow) observeMountRootRemote(
 	}
 
 	if eng.recursiveLister == nil {
-		return mountRootObservation{mode: remoteObservationModeEnumerate},
+		return mountRootObservation{mode: RemoteObservationModeEnumerate},
 			fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
 	}
 
 	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.remoteRootItemID)
 	if err != nil {
-		return mountRootObservation{mode: remoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root recursive listing: %w", err)
+		return mountRootObservation{mode: RemoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
 	if err := validateMountRootListingParents(items, eng.remoteRootItemID); err != nil {
-		return mountRootObservation{mode: remoteObservationModeEnumerate}, err
+		return mountRootObservation{mode: RemoteObservationModeEnumerate}, err
 	}
 
 	// A listing keeps no position: an undecided orphan is judged again by
 	// the next listing, every pass, so it needs no refresh pulled forward.
-	events, _ := eng.mountRootEvents(ctx, items, bl, true, resyncKindApplyDifferences)
+	events, _ := eng.mountRootEvents(ctx, items, bl, true, ResyncKindApplyDifferences)
 
-	return mountRootObservation{events: events, mode: remoteObservationModeEnumerate, complete: true}, nil
+	return mountRootObservation{events: events, mode: RemoteObservationModeEnumerate, complete: true}, nil
 }
 
 // mountRootEvents converts a mount-root enumeration, adding confirmed orphan
@@ -124,14 +124,14 @@ func (flow *engineFlow) observeMountRootRemote(
 // the enumeration, if any: unless it applies differences, confirmed orphans
 // are re-uploads, not deletes (R-2.15.3).
 func (e *Engine) mountRootEvents(
-	ctx context.Context, items []graph.Item, bl *Baseline, complete bool, kind resyncKind,
-) ([]remoteItem, bool) {
+	ctx context.Context, items []graph.Item, bl *Baseline, complete bool, kind ResyncKind,
+) ([]RemoteItem, bool) {
 	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
 	if !complete {
 		return events, false
 	}
 	orphans, undecided := e.confirmMountRootOrphans(ctx, items, detectMountRootOrphans(items, e.driveID, bl))
-	if !kind.orphansAreDeletes() {
+	if !kind.OrphansAreDeletes() {
 		markOrphansForReupload(orphans)
 	}
 
@@ -145,9 +145,9 @@ func convertMountRootItems(
 	remoteDriveID driveid.ID,
 	bl *Baseline,
 	logger *slog.Logger,
-	itemClient itemClient,
-) []remoteItem {
-	converter := newPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
+	itemClient ItemClient,
+) []RemoteItem {
+	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
 	converter.RemoteRootItemID = remoteRootItemID
 	return converter.ConvertItems(ctx, items)
 }
@@ -156,13 +156,13 @@ func shouldFallbackMountRootDelta(err error) bool {
 	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
-func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []remoteItem {
+func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []RemoteItem {
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		seen[items[i].ID] = struct{}{}
 	}
 
-	return findBaselineOrphans(bl, seen, remoteDriveID, "")
+	return FindBaselineOrphans(bl, seen, remoteDriveID, "")
 }
 
 // validateMountRootListingParents rejects a recursive listing whose items do
@@ -184,7 +184,7 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 		}
 		if _, ok := folders[items[i].ParentID]; !ok {
 			return fmt.Errorf("%w: shared folder listing returned %q under a folder it did not list",
-				errRemoteObservationIncomplete, items[i].Name)
+				ErrRemoteObservationIncomplete, items[i].Name)
 		}
 	}
 
@@ -200,8 +200,8 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 // mount; an item still inside, one whose parent cannot be resolved, or a
 // lookup that failed is left for the next listing.
 func (e *Engine) confirmMountRootOrphans(
-	ctx context.Context, listed []graph.Item, orphans []remoteItem,
-) (confirmed []remoteItem, undecided bool) {
+	ctx context.Context, listed []graph.Item, orphans []RemoteItem,
+) (confirmed []RemoteItem, undecided bool) {
 	inside := make(map[string]struct{}, len(listed)+1)
 	inside[e.remoteRootItemID] = struct{}{}
 	for i := range listed {
@@ -221,14 +221,14 @@ func (e *Engine) confirmMountRootOrphans(
 // soon (observeRemoteFullWithShortcutTopology).
 func (e *Engine) confirmEnumerationOrphans(
 	ctx context.Context,
-	orphans []remoteItem,
+	orphans []RemoteItem,
 	inside map[string]struct{},
-) (confirmed []remoteItem, undecided bool) {
+) (confirmed []RemoteItem, undecided bool) {
 	if len(orphans) == 0 || e.itemsClient == nil {
 		return orphans, false
 	}
 
-	confirmed = make([]remoteItem, 0, len(orphans))
+	confirmed = make([]RemoteItem, 0, len(orphans))
 	for i := range orphans {
 		orphan := orphans[i]
 		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
@@ -293,7 +293,7 @@ func (e *Engine) liveItemLeftMount(ctx context.Context, live *graph.Item, inside
 
 func (flow *engineFlow) commitObservedItems(
 	ctx context.Context,
-	observed []observedItem,
+	observed []ObservedItem,
 	token string,
 ) error {
 	eng := flow.engine
@@ -308,7 +308,7 @@ func (flow *engineFlow) commitObservedItems(
 func (rt *watchRuntime) watchMountRootRemote(
 	ctx context.Context,
 	bl *Baseline,
-	batches chan<- remoteObservationBatch,
+	batches chan<- RemoteObservationBatch,
 	interval time.Duration,
 ) error {
 	if interval < MinPollInterval {
@@ -317,12 +317,12 @@ func (rt *watchRuntime) watchMountRootRemote(
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
-	var outage pollOutageLog
+	var outage PollOutageLog
 
 	for {
 		// When the poll began, before its first page was asked for: once the
 		// batch is applied, the watch loop judges create intents by it, as it
-		// does the primary watch's (remoteObservationBatch.pollStartedAt). A
+		// does the primary watch's (RemoteObservationBatch.pollStartedAt). A
 		// poll that saw no events still hands over a batch: its findings
 		// manage the read-denied issue type, to clear it, so
 		// shouldSkipMountRootWatchBatch does not skip it, and a create
@@ -336,10 +336,10 @@ func (rt *watchRuntime) watchMountRootRemote(
 			}
 			continue
 		}
-		outage.recovered(ctx, rt.deps.logger, "Checking the shared folder for changes works again")
-		observationBatch.pollStartedAt = pollStartedAt
+		outage.Recovered(ctx, rt.deps.logger, "Checking the shared folder for changes works again")
+		observationBatch.PollStartedAt = pollStartedAt
 		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
-			if runEnded(ctx, err) {
+			if RunEnded(ctx, err) {
 				return nil
 			}
 			return err
@@ -349,10 +349,10 @@ func (rt *watchRuntime) watchMountRootRemote(
 
 func (rt *watchRuntime) handleMountRootObservationResult(
 	ctx context.Context,
-	batches chan<- remoteObservationBatch,
+	batches chan<- RemoteObservationBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
-	observationBatch *remoteObservationBatch,
+	observationBatch *RemoteObservationBatch,
 ) error {
 	if shouldSkipMountRootWatchBatch(observationBatch) {
 		bo.Reset()
@@ -363,8 +363,8 @@ func (rt *watchRuntime) handleMountRootObservationResult(
 		return nil
 	}
 
-	observationBatch.source = remoteObservationBatchMountRoot
-	observationBatch.applyAck = make(chan error, 1)
+	observationBatch.Source = RemoteObservationBatchMountRoot
+	observationBatch.ApplyAck = make(chan error, 1)
 	if dispatchErr := rt.dispatchMountRootBatch(ctx, batches, observationBatch); dispatchErr != nil {
 		return dispatchErr
 	}
@@ -378,29 +378,29 @@ func (rt *watchRuntime) handleMountRootObservationResult(
 	return nil
 }
 
-func shouldSkipMountRootWatchBatch(batch *remoteObservationBatch) bool {
+func shouldSkipMountRootWatchBatch(batch *RemoteObservationBatch) bool {
 	if batch == nil {
 		return true
 	}
 
-	return len(batch.changes) == 0 &&
-		!batch.hasObservationFindings() &&
-		batch.deferredProgress() == nil &&
-		batch.observationMode != remoteObservationModeEnumerate
+	return len(batch.Changes) == 0 &&
+		!batch.HasObservationFindings() &&
+		batch.DeferredProgress() == nil &&
+		batch.ObservationMode != RemoteObservationModeEnumerate
 }
 
 func (rt *watchRuntime) handleMountRootPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
-	outage *pollOutageLog,
+	outage *PollOutageLog,
 	err error,
 ) (bool, error) {
-	if runEnded(ctx, err) {
+	if RunEnded(ctx, err) {
 		return true, nil
 	}
 
 	delay := bo.Next()
-	outage.failed(rt.deps.logger, "Can't check the shared folder for changes; retrying", err, delay,
+	outage.Failed(rt.deps.logger, "Can't check the shared folder for changes; retrying", err, delay,
 		slog.String("drive_id", rt.engine.driveID.String()),
 		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
 	)
@@ -410,8 +410,8 @@ func (rt *watchRuntime) handleMountRootPollError(
 
 func (rt *watchRuntime) dispatchMountRootBatch(
 	ctx context.Context,
-	batches chan<- remoteObservationBatch,
-	batch *remoteObservationBatch,
+	batches chan<- RemoteObservationBatch,
+	batch *RemoteObservationBatch,
 ) error {
 	if batch == nil {
 		return nil
@@ -423,7 +423,7 @@ func (rt *watchRuntime) dispatchMountRootBatch(
 		return fmt.Errorf("dispatch mount-root watch batch: %w", ctx.Err())
 	}
 
-	return batch.waitApplied(ctx)
+	return batch.WaitApplied(ctx)
 }
 
 func (rt *watchRuntime) sleepMountRootWatch(
@@ -435,7 +435,7 @@ func (rt *watchRuntime) sleepMountRootWatch(
 	if sleepErr == nil {
 		return false, nil
 	}
-	if runEnded(ctx, sleepErr) {
+	if RunEnded(ctx, sleepErr) {
 		return true, nil
 	}
 

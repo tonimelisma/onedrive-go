@@ -47,7 +47,7 @@ type coldStartRamp struct {
 
 // coldStartTarget is the ramp key of an action: its throttle target, or ""
 // for an action that sends nothing to a drive, which no ramp gates.
-func coldStartTarget(ta *trackedAction) string {
+func coldStartTarget(ta *TrackedAction) string {
 	if ta == nil {
 		return ""
 	}
@@ -89,7 +89,7 @@ func (s *actionScheduler) coldStartRampFor(target string) *coldStartRamp {
 // coldStartAdmits reports whether the target's allowance has room for one
 // more action in flight. A scheduler with no ceiling (no plan installed) and
 // an action with no target are never gated.
-func (s *actionScheduler) coldStartAdmits(ta *trackedAction) bool {
+func (s *actionScheduler) coldStartAdmits(ta *TrackedAction) bool {
 	target := coldStartTarget(ta)
 	if target == "" || s.coldStartCeiling <= 0 {
 		return true
@@ -102,7 +102,7 @@ func (s *actionScheduler) coldStartAdmits(ta *trackedAction) bool {
 // noteColdStartSuccess counts a successful completion of an action a worker
 // ran toward the target's round and reports the raised allowance when the
 // round completes (zero when it did not, or the ramp is over).
-func (s *actionScheduler) noteColdStartSuccess(ta *trackedAction) int {
+func (s *actionScheduler) noteColdStartSuccess(ta *TrackedAction) int {
 	target := coldStartTarget(ta)
 	if target == "" || s.coldStartCeiling <= 0 {
 		return 0
@@ -160,8 +160,8 @@ func (s *actionScheduler) handOverColdStart(key ScopeKey) []string {
 // start stops gating it. Said once per target at Debug.
 func (flow *engineFlow) handOverColdStart(key ScopeKey) {
 	for _, target := range flow.sched.handOverColdStart(key) {
-		flow.deps.emit(engineDebugEvent{
-			Type:     engineDebugEventColdStartHandedOver,
+		flow.deps.emit(EngineDebugEvent{
+			Type:     EngineDebugEventColdStartHandedOver,
 			ScopeKey: key,
 			Note:     target,
 		})
@@ -174,13 +174,13 @@ func (flow *engineFlow) handOverColdStart(key ScopeKey) {
 
 // noteColdStartSuccess counts a worker-run action's success toward its
 // target's slow-start round and reports a raised allowance at Debug.
-func (flow *engineFlow) noteColdStartSuccess(ta *trackedAction) {
+func (flow *engineFlow) noteColdStartSuccess(ta *TrackedAction) {
 	allowance := flow.sched.noteColdStartSuccess(ta)
 	if allowance == 0 {
 		return
 	}
-	flow.deps.emit(engineDebugEvent{
-		Type:  engineDebugEventColdStartAllowanceRaised,
+	flow.deps.emit(EngineDebugEvent{
+		Type:  EngineDebugEventColdStartAllowanceRaised,
 		Note:  coldStartTarget(ta),
 		Count: allowance,
 	})
@@ -193,7 +193,7 @@ func (flow *engineFlow) noteColdStartSuccess(ta *trackedAction) {
 
 // nextDispatchable picks the outbox entry to hand to a worker next: the
 // first, in outbox order, that is due (its admission instant has passed,
-// see trackedAction.AdmitAt) and whose target has room under the slow-start
+// see TrackedAction.AdmitAt) and whose target has room under the slow-start
 // allowance. It returns -1 when none is, together with the earliest
 // admission instant still ahead, or the zero time when every held-back
 // entry is waiting on in-flight work rather than on the clock.
@@ -203,7 +203,7 @@ func (flow *engineFlow) noteColdStartSuccess(ta *trackedAction) {
 // taken when the head's target is full and its own is not. The scan is
 // linear in the outbox; the outbox is a plan's ready frontier, and the
 // common case stops at its head.
-func (flow *engineFlow) nextDispatchable(outbox []*trackedAction, now time.Time) (int, time.Time) {
+func (flow *engineFlow) nextDispatchable(outbox []*TrackedAction, now time.Time) (int, time.Time) {
 	var nextAdmitAt time.Time
 	for i, ta := range outbox {
 		if ta == nil {
@@ -225,11 +225,11 @@ func (flow *engineFlow) nextDispatchable(outbox []*trackedAction, now time.Time)
 
 // markDispatched records that outbox entry i is going to a worker and
 // removes it from the outbox, which is returned, order kept.
-func (flow *engineFlow) markDispatched(outbox []*trackedAction, i int) []*trackedAction {
+func (flow *engineFlow) markDispatched(outbox []*TrackedAction, i int) []*TrackedAction {
 	ta := outbox[i]
 	flow.sched.markRunning(ta)
-	flow.deps.emit(engineDebugEvent{
-		Type: engineDebugEventActionDispatched,
+	flow.deps.emit(EngineDebugEvent{
+		Type: EngineDebugEventActionDispatched,
 		Path: ta.Action.Path,
 		Note: coldStartTarget(ta),
 	})

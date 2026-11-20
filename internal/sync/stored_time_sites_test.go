@@ -15,7 +15,7 @@ import (
 
 // A stored time is written by one of two encodings and read back by name.
 // Times compared by order and remote modification times go through
-// storedTimeNano, which saturates; local modification, change and birth
+// StoredTimeNano, which saturates; local modification, change and birth
 // times keep UnixNano, are compared only with themselves and are never turned
 // back into a time. These tests read the product source: a new conversion
 // fails them until it is declared below with what it is, so a new stored time
@@ -28,7 +28,7 @@ const (
 	decodesRangeBound    = "a bound of the stored range"
 
 	// What a plain t.UnixNano() call encodes.
-	encodesThroughTheSaturatingEncoder = "storedTimeNano itself"
+	encodesThroughTheSaturatingEncoder = "StoredTimeNano itself"
 	encodesLocalTimeForEquality        = "a local time compared for equality"
 
 	// A value that lives in memory only, either way: a clock reading, an
@@ -41,12 +41,12 @@ func TestStoredTimes_EveryDecodeIsDeclared(t *testing.T) {
 	t.Parallel()
 
 	declared := map[string]map[string]int{
-		"internal/sync/store_sql_encoding.go":       {decodesRangeBound: 2, decodesRemoteModTime: 1},
+		"internal/sync/domain_stored_time.go":       {decodesRangeBound: 2, decodesRemoteModTime: 1},
 		"internal/sync/block_scope_rows.go":         {decodesOrderedTime: 1},
 		"internal/sync/engine_runtime_lifecycle.go": {decodesOrderedTime: 1},
 		"internal/sync/engine_runtime_owners.go":    {decodesOrderedTime: 1},
 		"internal/sync/engine_watch_maintenance.go": {decodesOrderedTime: 3},
-		"internal/sync/store_pending_creates.go":    {decodesOrderedTime: 1},
+		"internal/sync/domain_pending_create.go":    {decodesOrderedTime: 1},
 		"internal/sync/local_hash_reuse.go":         {inMemoryValue: 1},
 		"internal/sync/engine_housekeeping.go":      {inMemoryValue: 1},
 	}
@@ -61,7 +61,7 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 	t.Parallel()
 
 	declared := map[string]map[string]int{
-		"internal/sync/store_sql_encoding.go":      {encodesThroughTheSaturatingEncoder: 1},
+		"internal/sync/domain_stored_time.go":      {encodesThroughTheSaturatingEncoder: 1},
 		"internal/sync/scanner.go":                 {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
 		"internal/sync/observer_local_handlers.go": {encodesLocalTimeForEquality: 4, inMemoryValue: 1},
 		"internal/sync/executor_preconditions.go":  {encodesLocalTimeForEquality: 3},
@@ -75,7 +75,7 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 
 	found := countProductCalls(t, isPlainUnixNano, "internal/sync")
 	assert.Equal(t, declaredTotals(declared), found,
-		"every plain UnixNano() in internal/sync is declared with what it encodes; a stored ordered or remote time uses storedTimeNano")
+		"every plain UnixNano() in internal/sync is declared with what it encodes; a stored ordered or remote time uses StoredTimeNano")
 }
 
 func declaredTotals(declared map[string]map[string]int) map[string]int {

@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
-func (flow *engineFlow) failAfterControlStateError(current *trackedAction, err error) error {
+func (flow *engineFlow) failAfterControlStateError(current *TrackedAction, err error) error {
 	flow.sched.markFinished(current)
 	return err
 }
@@ -23,9 +23,9 @@ func (flow *engineFlow) failAfterControlStateError(current *trackedAction, err e
 // then release any due held work back into the ready frontier.
 func (flow *engineFlow) applyRuntimeCompletionStage(
 	ctx context.Context,
-	r *actionCompletion,
+	r *ActionCompletion,
 	bl *Baseline,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -47,7 +47,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 	}
 
 	var (
-		dispatched []*trackedAction
+		dispatched []*TrackedAction
 		err        error
 	)
 	// A trial whose scope is gone (the ramp's last batch released it while
@@ -67,11 +67,11 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 
 func (flow *engineFlow) applyNormalCompletionDecision(
 	ctx context.Context,
-	decision *resultDecision,
-	current *trackedAction,
-	r *actionCompletion,
+	decision *ResultDecision,
+	current *TrackedAction,
+	r *ActionCompletion,
 	bl *Baseline,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	handled, err := flow.maybeHandlePermissionFailure(ctx, decision, current, r, bl)
 	if err != nil {
 		return nil, flow.failAfterControlStateError(current, err)
@@ -118,11 +118,11 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 func (flow *engineFlow) applyTrialCompletionDecision(
 	ctx context.Context,
 	trialScopeKey ScopeKey,
-	decision *resultDecision,
-	current *trackedAction,
-	r *actionCompletion,
+	decision *ResultDecision,
+	current *TrackedAction,
+	r *ActionCompletion,
 	bl *Baseline,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	if decision.Class == errclass.ClassSuperseded {
 		flow.noteProbationMemberFinished(trialScopeKey, r.TrialScopeGeneration)
 		if err := flow.applySupersededCompletion(ctx, current, r, "trial superseded action completion"); err != nil {
@@ -134,34 +134,34 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 		return nil, nil
 	}
 
-	outcome := evaluateScopeTrialOutcome(trialScopeKey, decision)
-	if outcome == scopeTrialOutcomeRearmOrDiscard {
+	outcome := EvaluateScopeTrialOutcome(trialScopeKey, decision)
+	if outcome == ScopeTrialOutcomeRearmOrDiscard {
 		flow.noteProbationMemberFinished(trialScopeKey, r.TrialScopeGeneration)
 	}
 
 	switch outcome {
-	case scopeTrialOutcomeRelease:
+	case ScopeTrialOutcomeRelease:
 		dispatched, err := flow.applyTrialReleaseDecision(ctx, current, r, trialScopeKey)
 		if err != nil {
 			return dispatched, flow.failAfterControlStateError(current, err)
 		}
 		return dispatched, nil
-	case scopeTrialOutcomeShutdown:
+	case ScopeTrialOutcomeShutdown:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial shutdown action completion")
 		return nil, nil
-	case scopeTrialOutcomeExtend:
+	case ScopeTrialOutcomeExtend:
 		if err := flow.applyTrialExtendDecision(ctx, current, r, trialScopeKey); err != nil {
 			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
 		return nil, nil
-	case scopeTrialOutcomeRearmOrDiscard:
+	case ScopeTrialOutcomeRearmOrDiscard:
 		if err := flow.applyTrialRearmOrDiscardDecision(ctx, current, decision, r, bl, trialScopeKey); err != nil {
 			return nil, flow.failAfterControlStateError(nil, err)
 		}
 		flow.recordError(decision, r)
 		return nil, nil
-	case scopeTrialOutcomeFatal:
+	case ScopeTrialOutcomeFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial fatal action completion")
 		flow.applyFatalAuthEffects(r, decision.ConditionKey)
 		flow.recordError(decision, r)
@@ -173,8 +173,8 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 
 func (flow *engineFlow) applySupersededCompletion(
 	ctx context.Context,
-	current *trackedAction,
-	r *actionCompletion,
+	current *TrackedAction,
+	r *ActionCompletion,
 	depGraphReason string,
 ) error {
 	if err := flow.forgetRemoteItemProvenGone(ctx, r); err != nil {
@@ -203,13 +203,13 @@ func (flow *engineFlow) applySupersededCompletion(
 }
 
 // forgetRemoteItemProvenGone applies an executor's live 404 to remote truth.
-func (flow *engineFlow) forgetRemoteItemProvenGone(ctx context.Context, r *actionCompletion) error {
-	var gone *remoteItemGoneError
-	if r == nil || !errors.As(r.Err, &gone) || gone.itemID == "" || flow.deps.store == nil {
+func (flow *engineFlow) forgetRemoteItemProvenGone(ctx context.Context, r *ActionCompletion) error {
+	var gone *RemoteItemGoneError
+	if r == nil || !errors.As(r.Err, &gone) || gone.ItemID == "" || flow.deps.store == nil {
 		return nil
 	}
-	if err := flow.deps.store.ForgetRemoteItem(ctx, gone.itemID); err != nil {
-		return fmt.Errorf("sync: forgetting remote item %s proven gone: %w", gone.itemID, err)
+	if err := flow.deps.store.ForgetRemoteItem(ctx, gone.ItemID); err != nil {
+		return fmt.Errorf("sync: forgetting remote item %s proven gone: %w", gone.ItemID, err)
 	}
 
 	return nil
@@ -219,13 +219,13 @@ func (flow *engineFlow) forgetRemoteItemProvenGone(ctx context.Context, r *actio
 // local truth: the file no longer holds what its baseline row records, so the
 // row loses its stored change time and the next scan reads the file instead
 // of trusting the row, and plans the change as the local edit it is.
-func (flow *engineFlow) forgetLocalCtimeProvenChanged(ctx context.Context, r *actionCompletion) error {
-	var changed *localContentChangedError
+func (flow *engineFlow) forgetLocalCtimeProvenChanged(ctx context.Context, r *ActionCompletion) error {
+	var changed *LocalContentChangedError
 	if r == nil || !errors.As(r.Err, &changed) || flow.deps.store == nil {
 		return nil
 	}
-	if err := flow.deps.store.ForgetBaselineLocalCtime(ctx, changed.path); err != nil {
-		return fmt.Errorf("sync: recording the changed content of %s: %w", changed.path, err)
+	if err := flow.deps.store.ForgetBaselineLocalCtime(ctx, changed.Path); err != nil {
+		return fmt.Errorf("sync: recording the changed content of %s: %w", changed.Path, err)
 	}
 
 	return nil
@@ -233,18 +233,18 @@ func (flow *engineFlow) forgetLocalCtimeProvenChanged(ctx context.Context, r *ac
 
 func (flow *engineFlow) applyCompletionSuccess(
 	ctx context.Context,
-	current *trackedAction,
-	r *actionCompletion,
-) ([]*trackedAction, error) {
+	current *TrackedAction,
+	r *ActionCompletion,
+) ([]*TrackedAction, error) {
 	return flow.applyTrackedActionSuccess(ctx, current, r, "successful action completion")
 }
 
 func (flow *engineFlow) applyTrackedActionSuccess(
 	ctx context.Context,
-	current *trackedAction,
-	r *actionCompletion,
+	current *TrackedAction,
+	r *ActionCompletion,
 	depGraphReason string,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	if flow.sched.markFinished(current) {
 		flow.noteColdStartSuccess(current)
 	}
@@ -282,9 +282,9 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 // failure recording or scope detection.
 func (flow *engineFlow) applyOrdinaryFailureEffects(
 	ctx context.Context,
-	current *trackedAction,
-	decision *resultDecision,
-	r *actionCompletion,
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
 ) error {
 	persisted, persistedAs, err := flow.persistFailureWithScopeEffects(ctx, current, decision, r)
 	if err != nil {
@@ -298,17 +298,17 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 
 func (flow *engineFlow) persistAndHoldFailure(
 	ctx context.Context,
-	current *trackedAction,
-	decision *resultDecision,
-	r *actionCompletion,
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
 ) (bool, error) {
-	if decision.Persistence != persistRetryWork {
+	if decision.Persistence != PersistRetryWork {
 		return false, nil
 	}
 	if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
 		return false, err
 	}
-	if err := flow.holdActionFromPersistedRetryState(current, retryWorkKeyForCompletion(r)); err != nil {
+	if err := flow.holdActionFromPersistedRetryState(current, RetryWorkKeyForCompletion(r)); err != nil {
 		return false, err
 	}
 
@@ -328,10 +328,10 @@ func (flow *engineFlow) persistAndHoldFailure(
 // D-092): a scope with nothing to trial is dead state.
 func (flow *engineFlow) persistFailureWithScopeEffects(
 	ctx context.Context,
-	current *trackedAction,
-	decision *resultDecision,
-	r *actionCompletion,
-) (bool, *resultDecision, error) {
+	current *TrackedAction,
+	decision *ResultDecision,
+	r *ActionCompletion,
+) (bool, *ResultDecision, error) {
 	detected := flow.detectFailureScope(decision, r)
 	persistAs := decision
 	switch {
@@ -361,7 +361,7 @@ func (flow *engineFlow) persistFailureWithScopeEffects(
 		err = flow.applyBlockScope(ctx, detected)
 	case !decision.RunScopeDetection &&
 		decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero():
-		err = flow.applyBlockScope(ctx, scopeUpdateResult{
+		err = flow.applyBlockScope(ctx, ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),
@@ -371,21 +371,9 @@ func (flow *engineFlow) persistFailureWithScopeEffects(
 	return true, persistAs, err
 }
 
-// retryWorkScope is the scope a failure's retry row records. Blocked work is
-// recorded under the scope its decision blocks (ScopeKey), the scope that is
-// activated, so the two can never name different scopes; other work records
-// its evidence, which a later activation of that scope may block.
-func (decision *resultDecision) retryWorkScope() ScopeKey {
-	if decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
-		return decision.ScopeKey
-	}
-
-	return decision.ScopeEvidence
-}
-
 // decisionBlockedUnder is decision as work blocked under scopeKey: the
 // failure that activates a scope is that scope's first blocked work.
-func decisionBlockedUnder(decision *resultDecision, scopeKey ScopeKey) *resultDecision {
+func decisionBlockedUnder(decision *ResultDecision, scopeKey ScopeKey) *ResultDecision {
 	blocked := *decision
 	blocked.Class = errclass.ClassScopeBlockingTransient
 	blocked.ScopeKey = scopeKey
@@ -398,7 +386,7 @@ func decisionBlockedUnder(decision *resultDecision, scopeKey ScopeKey) *resultDe
 // scope it would have blocked under as evidence only: the scope is not
 // active, so the row waits on the ordinary retry curve and is blocked when,
 // and if, the scope activates.
-func decisionAsScopeEvidence(decision *resultDecision) *resultDecision {
+func decisionAsScopeEvidence(decision *ResultDecision) *ResultDecision {
 	evidence := *decision
 	evidence.Class = errclass.ClassRetryableTransient
 	evidence.ScopeEvidence = decision.ScopeKey
@@ -409,16 +397,16 @@ func decisionAsScopeEvidence(decision *resultDecision) *resultDecision {
 
 // detectFailureScope feeds a failure that will be persisted as retry work
 // into scope detection and returns the verdict.
-func (flow *engineFlow) detectFailureScope(decision *resultDecision, r *actionCompletion) scopeUpdateResult {
-	if decision.Persistence != persistRetryWork || !decision.RunScopeDetection {
-		return scopeUpdateResult{}
+func (flow *engineFlow) detectFailureScope(decision *ResultDecision, r *ActionCompletion) ScopeUpdateResult {
+	if decision.Persistence != PersistRetryWork || !decision.RunScopeDetection {
+		return ScopeUpdateResult{}
 	}
 
 	return flow.detectScope(r)
 }
 
 func (flow *engineFlow) armFailureTimers(
-	decision *resultDecision,
+	decision *ResultDecision,
 	persisted bool,
 ) {
 	if decision.Class == errclass.ClassScopeBlockingTransient {
@@ -450,7 +438,7 @@ func (e *fatalCompletionError) Unwrap() error {
 	return e.err
 }
 
-func fatalResultError(r *actionCompletion) error {
+func fatalResultError(r *ActionCompletion) error {
 	return &fatalCompletionError{path: r.Path, err: r.Err}
 }
 
@@ -458,7 +446,7 @@ func fatalResultError(r *actionCompletion) error {
 // fatal 401 of a run. The mark is a catalog update under the config lock,
 // whose wait the config package bounds, so it takes no context.
 func (flow *engineFlow) applyFatalAuthEffects(
-	r *actionCompletion,
+	r *ActionCompletion,
 	conditionKey ConditionKey,
 ) {
 	// The first 401 of a run marks the account and ends the run; later
@@ -500,23 +488,23 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	)
 }
 
-func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *trackedAction) error {
-	mutation, err := publicationMutationFromAction(&ta.Action, flow.engine.driveID)
+func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *TrackedAction) error {
+	mutation, err := PublicationMutationFromAction(&ta.Action, flow.engine.driveID)
 	if err == nil {
 		err = flow.deps.store.CommitMutation(ctx, mutation)
 	}
 	return err
 }
 
-func partitionPublicationFrontier(ready []*trackedAction) ([]*trackedAction, []*trackedAction) {
-	concrete := make([]*trackedAction, 0, len(ready))
-	publication := make([]*trackedAction, 0, len(ready))
+func partitionPublicationFrontier(ready []*TrackedAction) ([]*TrackedAction, []*TrackedAction) {
+	concrete := make([]*TrackedAction, 0, len(ready))
+	publication := make([]*TrackedAction, 0, len(ready))
 
 	for _, ta := range ready {
 		if ta == nil {
 			continue
 		}
-		if isPublicationOnlyActionType(ta.Action.Type) {
+		if IsPublicationOnlyActionType(ta.Action.Type) {
 			publication = append(publication, ta)
 			continue
 		}
@@ -529,21 +517,21 @@ func partitionPublicationFrontier(ready []*trackedAction) ([]*trackedAction, []*
 func (flow *engineFlow) failPublicationDrainAction(
 	ctx context.Context,
 	bl *Baseline,
-	current *trackedAction,
+	current *TrackedAction,
 	cause error,
-) ([]*trackedAction, error) {
-	completion := actionCompletionFromTrackedAction(current, nil, cause)
+) ([]*TrackedAction, error) {
+	completion := ActionCompletionFromTrackedAction(current, nil, cause)
 	// The engine runs publication-only actions itself, under the run's
 	// context, so it is the one to say whether that run had ended.
-	completion.RunEnded = runEnded(ctx, cause)
+	completion.RunEnded = RunEnded(ctx, cause)
 	return flow.applyRuntimeCompletionStage(ctx, &completion, bl)
 }
 
 func (flow *engineFlow) applyPublicationDrainAction(
 	ctx context.Context,
 	bl *Baseline,
-	current *trackedAction,
-) ([]*trackedAction, error) {
+	current *TrackedAction,
+) ([]*TrackedAction, error) {
 	if err := flow.applyPublicationMutation(ctx, current); err != nil {
 		return flow.failPublicationDrainAction(ctx, bl, current, err)
 	}
@@ -553,8 +541,8 @@ func (flow *engineFlow) applyPublicationDrainAction(
 
 func (flow *engineFlow) completePublicationDrainAction(
 	ctx context.Context,
-	current *trackedAction,
-) ([]*trackedAction, error) {
+	current *TrackedAction,
+) ([]*TrackedAction, error) {
 	if current == nil {
 		return nil, nil
 	}
@@ -572,10 +560,10 @@ func (flow *engineFlow) completePublicationDrainAction(
 func (flow *engineFlow) runPublicationDrainStage(
 	ctx context.Context,
 	bl *Baseline,
-	ready []*trackedAction,
-) ([]*trackedAction, error) {
+	ready []*TrackedAction,
+) ([]*TrackedAction, error) {
 	concrete, publication := partitionPublicationFrontier(ready)
-	queue := append([]*trackedAction(nil), publication...)
+	queue := append([]*TrackedAction(nil), publication...)
 
 	for len(queue) > 0 {
 		current := queue[0]
@@ -596,11 +584,11 @@ func (flow *engineFlow) runPublicationDrainStage(
 
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
-	decision *resultDecision,
-	r *actionCompletion,
+	decision *ResultDecision,
+	r *ActionCompletion,
 	delayFn func(int) time.Duration,
 ) error {
-	scopeKey := decision.retryWorkScope()
+	scopeKey := decision.RetryWorkScope()
 	blocked := flow.retryWorkShouldBeBlocked(decision.Class, scopeKey)
 
 	if decision.Class == errclass.ClassActionable {
@@ -623,10 +611,10 @@ func (flow *engineFlow) recordRetryWork(
 	var row *RetryWorkRow
 	var recErr error
 	if blocked {
-		row, recErr = flow.retryWork.recordBlocked(ctx, flow.deps.store, retryWorkKeyForCompletion(r), scopeKey)
+		row, recErr = flow.retryWork.recordBlocked(ctx, flow.deps.store, RetryWorkKeyForCompletion(r), scopeKey)
 	} else {
 		failure := &RetryWorkFailure{
-			Work:     retryWorkKeyForCompletion(r),
+			Work:     RetryWorkKeyForCompletion(r),
 			ScopeKey: scopeKey,
 		}
 		if actionable {
@@ -684,13 +672,13 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 
 func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
-	decision *resultDecision,
-	r *actionCompletion,
+	decision *ResultDecision,
+	r *ActionCompletion,
 ) error {
 	switch decision.Persistence {
-	case persistNone:
+	case PersistNone:
 		return nil
-	case persistRetryWork:
+	case PersistRetryWork:
 		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision))
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
@@ -709,7 +697,7 @@ const durableRecheckDelay = 30 * time.Second
 // so it waits on the durable curve whatever the condition; before, only the
 // two conditions named below did, and a folder OneDrive refused as too long
 // was retried every few seconds (soak of 2026-11-02).
-func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
+func retryDelayForDecision(decision *ResultDecision) func(int) time.Duration {
 	if decision == nil {
 		return retry.ReconcilePolicy().Delay
 	}
@@ -734,7 +722,7 @@ func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
 //     does not hold;
 //   - a folder too large to verify before its recursive delete on OneDrive
 //     clears when the user deletes it online or it shrinks. Every retry
-//     relists up to remoteFolderDeleteListLimit items before it fails again,
+//     relists up to RemoteFolderDeleteListLimit items before it fails again,
 //     so on the one-second curve a watch session relisted 10,000 items on
 //     every pass.
 //
@@ -749,45 +737,45 @@ func retryDelayForDecision(decision *resultDecision) func(int) time.Duration {
 // prevent.
 func retryDelayForCondition(condition IssueType) func(int) time.Duration {
 	switch condition {
-	case issueCaseCollision, issueRemoteFolderUnverifiable:
+	case IssueCaseCollision, IssueRemoteFolderUnverifiable:
 		return durableRecheckRetryDelay
 	case IssueInvalidFilename,
-		issuePathTooLong,
-		issueFileTooLarge,
-		issueHashPanic,
+		IssuePathTooLong,
+		IssueFileTooLarge,
+		IssueHashPanic,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
-		issueRemoteReadDenied,
-		issueRemoteRootNotFound,
+		IssueRemoteReadDenied,
+		IssueRemoteRootNotFound,
 		IssueQuotaExceeded,
-		issueRateLimited,
-		issueLocalReadDenied,
-		issueLocalWriteDenied,
-		issueRemoteNameTwin,
-		issueDiskFull,
-		issueServiceOutage,
-		issueFileTooLargeForSpace,
-		issueLocalNameTooLong,
-		issueLocalReadOnly,
-		issueDeletesHeld,
-		issueLocalUnsyncableReplacement,
-		issueLocalMountBoundary,
-		issueLocalMountMissing,
-		issueLocalInterruptedRemoval,
-		issueRemovedFolderKept,
-		issueLocalFileTooLarge,
-		issueLocalBusy,
-		issueLocalCrossDevice,
-		issueUnsupportedOperation,
-		issueMalwareDetected,
-		issueLocalDatabaseOpen,
-		issueUploadVerification,
-		issueDownloadIntegrity,
-		issueRequestTimeout,
-		issueTransientConflict,
-		issueTransientNotFound,
-		issueResourceLocked,
-		issueTransferURLRejected,
+		IssueRateLimited,
+		IssueLocalReadDenied,
+		IssueLocalWriteDenied,
+		IssueRemoteNameTwin,
+		IssueDiskFull,
+		IssueServiceOutage,
+		IssueFileTooLargeForSpace,
+		IssueLocalNameTooLong,
+		IssueLocalReadOnly,
+		IssueDeletesHeld,
+		IssueLocalUnsyncableReplacement,
+		IssueLocalMountBoundary,
+		IssueLocalMountMissing,
+		IssueLocalInterruptedRemoval,
+		IssueRemovedFolderKept,
+		IssueLocalFileTooLarge,
+		IssueLocalBusy,
+		IssueLocalCrossDevice,
+		IssueUnsupportedOperation,
+		IssueMalwareDetected,
+		IssueLocalDatabaseOpen,
+		IssueUploadVerification,
+		IssueDownloadIntegrity,
+		IssueRequestTimeout,
+		IssueTransientConflict,
+		IssueTransientNotFound,
+		IssueResourceLocked,
+		IssueTransferURLRejected,
 		"":
 		return retry.ReconcilePolicy().Delay
 	default:
@@ -838,10 +826,10 @@ func supersedeParkDelay(attempt int) time.Duration {
 // parkWedgedAction persists a wedged action in retry_work, the durable owner
 // of per-action retry timing. The row is keyed by the action, so a replan that
 // plans something else prunes it and a success resolves it.
-func (flow *engineFlow) parkWedgedAction(ctx context.Context, r *actionCompletion, current *trackedAction) error {
-	work := retryWorkKeyForCompletion(r)
+func (flow *engineFlow) parkWedgedAction(ctx context.Context, r *ActionCompletion, current *TrackedAction) error {
+	work := RetryWorkKeyForCompletion(r)
 	if current != nil {
-		work = retryWorkKeyForAction(&current.Action)
+		work = RetryWorkKeyForAction(&current.Action)
 	}
 	if _, err := flow.retryWork.recordFailure(ctx, flow.deps.store, &RetryWorkFailure{Work: work}, supersedeParkDelay); err != nil {
 		return fmt.Errorf("park wedged action %s: %w", r.Path, err)
@@ -856,14 +844,14 @@ func (flow *engineFlow) parkWedgedAction(ctx context.Context, r *actionCompletio
 // on between planning and execution and the replan absorbs it.
 const supersedeStreakWarnThreshold = 3
 
-func supersedeStreakKey(r *actionCompletion) string {
+func supersedeStreakKey(r *ActionCompletion) string {
 	return r.ActionType.String() + "\x00" + r.OldPath + "\x00" + r.Path
 }
 
 // recordSupersede logs every superseded completion at Debug and warns once
 // when the same action keeps being superseded, so a precondition that can
 // never hold is visible instead of a silent stall.
-func (flow *engineFlow) recordSupersede(r *actionCompletion) int {
+func (flow *engineFlow) recordSupersede(r *ActionCompletion) int {
 	if r == nil || flow.supersedeStreaks == nil {
 		return 0
 	}
@@ -911,7 +899,7 @@ func (flow *engineFlow) recordSupersede(r *actionCompletion) int {
 // pruneSupersedeStreaks forgets the streaks of actions a new plan no longer
 // contains: a plan that dropped the action means its supersedes were not
 // consecutive, so it cannot be wedged.
-func (flow *engineFlow) pruneSupersedeStreaks(plan *actionPlan) {
+func (flow *engineFlow) pruneSupersedeStreaks(plan *ActionPlan) {
 	if len(flow.supersedeStreaks) == 0 {
 		return
 	}
@@ -919,7 +907,7 @@ func (flow *engineFlow) pruneSupersedeStreaks(plan *actionPlan) {
 	if plan != nil {
 		for i := range plan.Actions {
 			action := &plan.Actions[i]
-			planned[supersedeStreakKey(&actionCompletion{ActionType: action.Type, OldPath: action.OldPath, Path: action.Path})] = true
+			planned[supersedeStreakKey(&ActionCompletion{ActionType: action.Type, OldPath: action.OldPath, Path: action.Path})] = true
 		}
 	}
 	for key := range flow.supersedeStreaks {
@@ -929,7 +917,7 @@ func (flow *engineFlow) pruneSupersedeStreaks(plan *actionPlan) {
 	}
 }
 
-func (flow *engineFlow) clearSupersedeStreak(r *actionCompletion) {
+func (flow *engineFlow) clearSupersedeStreak(r *ActionCompletion) {
 	if r == nil || flow.supersedeStreaks == nil {
 		return
 	}

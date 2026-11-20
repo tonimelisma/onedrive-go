@@ -69,22 +69,13 @@ const (
 	modelRaceSeeds           = 2
 	modelInitialFolders      = 3
 	modelInitialFiles        = 5
-	modelFolderSentinel      = "/"
 	modelSeedEnv             = "ONEDRIVE_GO_MODEL_SEED"
 	modelSeedCountEnv        = "ONEDRIVE_GO_MODEL_SEEDS"
 	modelSeedStartEnv        = "ONEDRIVE_GO_MODEL_SEED_START"
 	modelTraceEnv            = "ONEDRIVE_GO_MODEL_TRACE"
 	modelConflictMarker      = ".conflict-"
-	modelLocalSide           = "local"
-	modelRemoteSide          = "remote"
 	modelFileNamePool        = "a.txt b.txt c.md 50%.txt a+b.txt"
 	modelFolderNamePool      = "docs photos x q%20r"
-	modelOpCreateFile        = "create-file"
-	modelOpEditFile          = "edit-file"
-	modelOpDelete            = "delete"
-	modelOpMove              = "move"
-	modelOpMakeFolder        = "mkdir"
-	modelOpReplace           = "replace"
 	modelOpConcurrentWrite   = "concurrent-write"
 	modelReplaceChildName    = "inside.txt"
 	modelMirroredMoveOdds    = 3
@@ -188,29 +179,6 @@ func modelSeeds(t *testing.T) []uint64 {
 	}
 
 	return seedsFromEnv(t, modelSeedVars(), count)
-}
-
-// modelEdit is one operation a side applied, recorded for the invariants.
-type modelEdit struct {
-	side    string
-	kind    string
-	path    string
-	to      string // destination of a move
-	content string // bytes written by create/edit
-}
-
-// touches reports whether the edit affected p, its ancestors or its subtree.
-func (e modelEdit) touches(p string) bool {
-	for _, affected := range []string{e.path, e.to} {
-		if affected == "" {
-			continue
-		}
-		if p == affected || strings.HasPrefix(p, affected+"/") || strings.HasPrefix(affected, p+"/") {
-			return true
-		}
-	}
-
-	return false
 }
 
 type modelRun struct {
@@ -353,7 +321,7 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 		order = dispatchOrderShuffle(r.seed)
 	}
 	eng.serializeWorkers = true
-	eng.dispatchOrder = func(frontier []*trackedAction) []*trackedAction {
+	eng.dispatchOrder = func(frontier []*TrackedAction) []*TrackedAction {
 		frontier = order(frontier)
 		r.recordDispatch(frontier)
 		return frontier
@@ -372,11 +340,11 @@ func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
 		remote:  r.remote,
 	}
 	if capture.lostWAL {
-		_, err := r.eng.baseline.rawDB().ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+		_, err := r.eng.baseline.RawDBForTest().ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 		require.NoError(r.t, err)
 	}
-	r.eng.execCfg.crashAt = capture.hook
-	r.eng.baseline.crashAt = capture.hook
+	r.eng.execCfg.SetCrashHookForTest(capture.hook)
+	r.eng.baseline.SetCrashHookForTest(capture.hook)
 
 	return capture
 }
@@ -419,7 +387,7 @@ func (r *modelRun) recordf(format string, args ...any) {
 	r.transcript = append(r.transcript, line)
 }
 
-func (r *modelRun) recordDispatch(frontier []*trackedAction) {
+func (r *modelRun) recordDispatch(frontier []*TrackedAction) {
 	for _, ta := range frontier {
 		r.recordf("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
 	}
@@ -564,7 +532,7 @@ const modelPassInterval = time.Hour + time.Minute
 
 // modelClock is the wall clock plus an offset the model advances.
 type modelClock struct {
-	realClock
+	RealClock
 	mu     stdsync.Mutex
 	offset time.Duration
 }
@@ -637,21 +605,6 @@ func (r *modelRun) requireWrittenContentSurvives(label string, edits []modelEdit
 		assert.True(r.t, present[edit.content],
 			"%s: %s %s of %s was lost; %s", label, edit.side, edit.kind, edit.path, r.failureContext())
 	}
-}
-
-// modelOverwrittenLater reports whether the same side later replaced or
-// removed what edits[i] wrote, in which case losing it is correct.
-func modelOverwrittenLater(edits []modelEdit, i int) bool {
-	for _, later := range edits[i+1:] {
-		if later.side != edits[i].side {
-			continue
-		}
-		if later.touches(edits[i].path) && later.kind != modelOpMakeFolder {
-			return true
-		}
-	}
-
-	return false
 }
 
 // retainedContents is every content kept outside both trees: OneDrive's

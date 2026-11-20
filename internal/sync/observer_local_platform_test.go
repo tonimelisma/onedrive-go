@@ -28,14 +28,14 @@ func TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles(
 	}
 
 	watcher := newRecordingFsWatcher()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	// kqueue would hold root + sub + six files = eight descriptors.
 	obs.descriptorBudget = 5
 
 	err := obs.AddWatchesRecursive(t.Context(), watcher, mustOpenSyncTree(t, root))
 
-	require.ErrorIs(t, err, errLocalWatchUnavailable)
-	cause, ok := watchUnavailableCauseOf(err)
+	require.ErrorIs(t, err, ErrLocalWatchUnavailable)
+	cause, ok := WatchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseDescriptorBudget, cause)
 	assert.Empty(t, obs.watchedDirs.paths(), "watches added before the budget was exceeded are rolled back")
@@ -48,7 +48,7 @@ func TestAddWatchesRecursive_WithinDescriptorBudgetWatches(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "sub/a.txt", "x")
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.descriptorBudget = 100
 
 	require.NoError(t, obs.AddWatchesRecursive(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, root)))
@@ -65,11 +65,11 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 
 	dir := t.TempDir()
 	watcher := newMockFsWatcher()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	clock := newManualClock(time.Now())
 	obs.clock = clock
-	obs.watcherFactory = func() (fsWatcher, error) { return watcher, nil }
-	obs.safetyScanInterval = localWatchHealthySafetyScanInterval
+	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
 	obs.filesystemKind = func(string) (filesystemInfo, error) {
 		return filesystemInfo{kind: "cifs", remote: true}, nil
 	}
@@ -86,15 +86,15 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 func TestAdaptToRootFilesystem_LocalRootKeepsInterval(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.safetyScanInterval = localWatchHealthySafetyScanInterval
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
 	obs.filesystemKind = func(string) (filesystemInfo, error) {
 		return filesystemInfo{kind: "ext4"}, nil
 	}
 
 	obs.adaptToRootFilesystem(t.TempDir())
 
-	assert.Equal(t, localWatchHealthySafetyScanInterval, obs.safetyScanInterval)
+	assert.Equal(t, LocalWatchHealthySafetyScanInterval, obs.safetyScanInterval)
 }
 
 // Validates: R-2.8.19
@@ -126,7 +126,7 @@ func TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden(t *testing.T)
 	t.Parallel()
 
 	for _, chosen := range []time.Duration{time.Minute, 10 * time.Minute} {
-		obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+		obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 		obs.safetyScanInterval = chosen
 		obs.filesystemKind = func(string) (filesystemInfo, error) {
 			return filesystemInfo{kind: "nfs", remote: true}, nil
@@ -147,7 +147,7 @@ func TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce(t *tes
 		writeTestFile(t, root, fmt.Sprintf("sub/f%d.txt", i), "x")
 	}
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	// root + sub + six files: kqueue holds exactly eight descriptors (the
 	// watch on sub reuses the descriptor of sub's entry in root).
 	obs.descriptorBudget = 8

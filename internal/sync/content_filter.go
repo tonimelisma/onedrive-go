@@ -26,18 +26,18 @@ type ContentFilterConfig struct {
 	CrossFilesystems bool
 }
 
-// contentFilter answers whether a root-relative path belongs to the current
+// ContentFilter answers whether a root-relative path belongs to the current
 // sync-visible content set.
-type contentFilter struct {
+type ContentFilter struct {
 	config ContentFilterConfig
 }
 
-// newContentFilter compiles a content filter from already-validated config.
-func newContentFilter(config ContentFilterConfig) contentFilter {
-	return contentFilter{config: config}
+// NewContentFilter compiles a content filter from already-validated config.
+func NewContentFilter(config ContentFilterConfig) ContentFilter {
+	return ContentFilter{config: config}
 }
 
-func cloneContentFilterConfig(config ContentFilterConfig) ContentFilterConfig {
+func CloneContentFilterConfig(config ContentFilterConfig) ContentFilterConfig {
 	return ContentFilterConfig{
 		IgnoredDirs:      slices.Clone(config.IgnoredDirs),
 		IncludedDirs:     slices.Clone(config.IncludedDirs),
@@ -49,7 +49,7 @@ func cloneContentFilterConfig(config ContentFilterConfig) ContentFilterConfig {
 	}
 }
 
-func contentFilterConfigsEqual(a ContentFilterConfig, b ContentFilterConfig) bool {
+func ContentFilterConfigsEqual(a ContentFilterConfig, b ContentFilterConfig) bool {
 	return slices.Equal(a.IgnoredDirs, b.IgnoredDirs) &&
 		slices.Equal(a.IncludedDirs, b.IncludedDirs) &&
 		slices.Equal(a.IgnoredPaths, b.IgnoredPaths) &&
@@ -61,8 +61,8 @@ func contentFilterConfigsEqual(a ContentFilterConfig, b ContentFilterConfig) boo
 
 // Visible reports whether path should be present in planner-visible current
 // sync truth for the given item type.
-func (f contentFilter) Visible(path string, itemType ItemType) bool {
-	normalized := normalizeContentFilterPath(path)
+func (f ContentFilter) Visible(path string, itemType ItemType) bool {
+	normalized := NormalizeContentFilterPath(path)
 	if normalized == "" || normalized == "." {
 		return true
 	}
@@ -80,16 +80,16 @@ func (f contentFilter) Visible(path string, itemType ItemType) bool {
 }
 
 // ShouldObserveLocalPath reports whether local observation should descend into
-// or emit the path. It uses observedKind because local observation can know the
+// or emit the path. It uses ObservedKind because local observation can know the
 // path kind before the sync ItemType has been built.
-func (f contentFilter) ShouldObserveLocalPath(path string, kind observedKind) bool {
+func (f ContentFilter) ShouldObserveLocalPath(path string, kind ObservedKind) bool {
 	resolvedType := ItemTypeFile
 	switch kind {
-	case observedKindFile:
+	case ObservedKindFile:
 		resolvedType = ItemTypeFile
-	case observedKindDir:
+	case ObservedKindDir:
 		resolvedType = ItemTypeFolder
-	case observedKindUnknown:
+	case ObservedKindUnknown:
 		return f.Visible(path, ItemTypeFile) || f.Visible(path, ItemTypeFolder)
 	}
 
@@ -98,17 +98,17 @@ func (f contentFilter) ShouldObserveLocalPath(path string, kind observedKind) bo
 
 // ShouldFollowSymlinks reports whether local observation may follow symlink
 // targets. OneDrive has no symlink item type, so this is local-only policy.
-func (f contentFilter) ShouldFollowSymlinks() bool {
+func (f ContentFilter) ShouldFollowSymlinks() bool {
 	return f.config.FollowSymlinks
 }
 
-func (f contentFilter) inIncludedScope(path string, isDir bool) bool {
+func (f ContentFilter) inIncludedScope(path string, isDir bool) bool {
 	if len(f.config.IncludedDirs) == 0 {
 		return true
 	}
 
 	for _, includeDir := range f.config.IncludedDirs {
-		includeDir = normalizeContentFilterPath(includeDir)
+		includeDir = NormalizeContentFilterPath(includeDir)
 		if includeDir == "" || includeDir == "." {
 			continue
 		}
@@ -121,7 +121,7 @@ func (f contentFilter) inIncludedScope(path string, isDir bool) bool {
 			return true
 		}
 
-		if isDir && isAncestorPath(path, includeDir) {
+		if isDir && IsAncestorPath(path, includeDir) {
 			return true
 		}
 	}
@@ -129,7 +129,7 @@ func (f contentFilter) inIncludedScope(path string, isDir bool) bool {
 	return false
 }
 
-func (f contentFilter) isIgnored(path string, isDir bool) bool {
+func (f ContentFilter) isIgnored(path string, isDir bool) bool {
 	if matchesExactSubtree(path, f.config.IgnoredDirs) {
 		return true
 	}
@@ -153,7 +153,7 @@ func (f contentFilter) isIgnored(path string, isDir bool) bool {
 	return matchesIgnoredPathPattern(path, parts, f.config.IgnoredPaths)
 }
 
-func normalizeContentFilterPath(path string) string {
+func NormalizeContentFilterPath(path string) string {
 	normalized := filepath.ToSlash(path)
 	normalized = strings.TrimPrefix(normalized, "/")
 	normalized = strings.TrimSuffix(normalized, "/")
@@ -164,13 +164,13 @@ func normalizeContentFilterPath(path string) string {
 	return normalized
 }
 
-func isAncestorPath(parent, child string) bool {
+func IsAncestorPath(parent, child string) bool {
 	return child != parent && strings.HasPrefix(child, parent+"/")
 }
 
 func matchesExactSubtree(path string, roots []string) bool {
 	for _, root := range roots {
-		normalizedRoot := normalizeContentFilterPath(root)
+		normalizedRoot := NormalizeContentFilterPath(root)
 		if normalizedRoot == "" || normalizedRoot == "." {
 			continue
 		}
@@ -185,7 +185,7 @@ func matchesExactSubtree(path string, roots []string) bool {
 
 func matchesIgnoredPathPattern(path string, parts []string, patterns []string) bool {
 	for _, pattern := range patterns {
-		normalizedPattern := normalizeContentFilterPath(pattern)
+		normalizedPattern := NormalizeContentFilterPath(pattern)
 		if normalizedPattern == "" || normalizedPattern == "." {
 			continue
 		}
@@ -231,10 +231,10 @@ func pathOrAncestorMatchesSlashPattern(path, pattern string) bool {
 // user's, while the same name on a file is an editor temporary.
 func hasJunkComponent(parts []string, leafIsFile bool) bool {
 	for i, part := range parts {
-		if isBundledJunkName(part) {
+		if IsBundledJunkName(part) {
 			return true
 		}
-		if i == len(parts)-1 && leafIsFile && isBundledJunkFileName(part) {
+		if i == len(parts)-1 && leafIsFile && IsBundledJunkFileName(part) {
 			return true
 		}
 	}
@@ -242,12 +242,12 @@ func hasJunkComponent(parts []string, leafIsFile bool) bool {
 	return false
 }
 
-// isBundledJunkName reports names that ignore_junk_files excludes: OS
+// IsBundledJunkName reports names that ignore_junk_files excludes: OS
 // metadata, editor and IDE temporaries, browser partials, Office owner
 // files, and SQLite sidecars. Each is either rewritten constantly while its
 // owner runs, meaningless on another device, or (sidecars) harmful when
 // synced apart from its database (D-084, P-2, P-3).
-func isBundledJunkName(name string) bool {
+func IsBundledJunkName(name string) bool {
 	lower := asciiLower(name)
 
 	switch lower {
@@ -274,10 +274,10 @@ func isBundledJunkName(name string) bool {
 	return isSQLiteSidecarName(lower)
 }
 
-// isBundledJunkFileName adds the rules that are junk only on a file: vim's
+// IsBundledJunkFileName adds the rules that are junk only on a file: vim's
 // 4913 write probe, "~"-prefixed temporaries and Office "~$" owner files,
 // and "file~" editor backups. On a folder these are ordinary user names.
-func isBundledJunkFileName(name string) bool {
+func IsBundledJunkFileName(name string) bool {
 	return name == "4913" || strings.HasPrefix(name, "~") || strings.HasSuffix(name, "~")
 }
 
@@ -305,9 +305,9 @@ func isSQLiteSidecarName(lower string) bool {
 	return false
 }
 
-// spellingRenameArtifactPrefix starts the temporary sibling of a
+// SpellingRenameArtifactPrefix starts the temporary sibling of a
 // spelling-only local rename (executor renameLocal).
-const spellingRenameArtifactPrefix = ".onedrive-go.spelling."
+const SpellingRenameArtifactPrefix = ".onedrive-go.spelling."
 
 // isSpellingRenameArtifactName reports the temporary sibling of a
 // spelling-only local rename. It is excluded whatever the filter settings,
@@ -315,5 +315,5 @@ const spellingRenameArtifactPrefix = ".onedrive-go.spelling."
 // unlike partials it is never deleted by cleanup, because it holds a user's
 // file.
 func isSpellingRenameArtifactName(name string) bool {
-	return strings.HasPrefix(name, spellingRenameArtifactPrefix)
+	return strings.HasPrefix(name, SpellingRenameArtifactPrefix)
 }

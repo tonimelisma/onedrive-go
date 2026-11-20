@@ -325,6 +325,14 @@ Static verification is a first-class architectural constraint, not a best-effort
   instead of never running. The tag counts on either side of `&&` and `||`
   and not under a negation: a `!integration` file is built exactly when the
   tier is off (`TestFileBuildConstraintNames_FollowsNegationAndBothOperands`).
+  The same check refuses a production use of a test seam: a function whose
+  name ends in `ForTest` exists so the tests of another package can reach
+  state they could not reach otherwise (`export_test.go` serves only its own
+  package's tests), so only test files and the sync test-helper packages may
+  use one (`TestRunTestConventionsRefusesAProductionUseOfATestSeam`). A
+  helper package calls seams on its importer's behalf, so a production
+  file outside the helpers may not import one
+  (`TestRunTestConventionsRefusesAProductionImportOfATestHelperPackage`).
 - A test's wait for an event that must come (a debug event, an observer
   batch, a pass result, a goroutine's return) is bounded by one named wait,
   long enough for a loaded two-core host under the race detector: `eventWait`
@@ -804,16 +812,16 @@ Static verification is a first-class architectural constraint, not a best-effort
   | `observer*` + `scanner*` | 13 | 5,771 | 100 | 47 |
   | `engine*` | 38 | 8,605 | 213 | 39 |
 
-  Every slice is bidirectionally coupled, so none is a leaf and none can be extracted as a file move. The inbound direction is usually a legitimate interface — what the rest needs from `planner*`, for example, is `planner`, `newPlanner`, `plannerMountContext`, and the `plannerVisible*` helpers, which is exactly the surface a planner package would export. The outbound direction is the problem: each slice consumes a large shared vocabulary (`Action`, `ScopeKey`, `ItemType`, `BaselineEntry`, `pathView`, the `*Row` types) that lives at the centre of the package.
+  Every slice is bidirectionally coupled, so none is a leaf and none can be extracted as a file move. The inbound direction is usually a legitimate interface — what the rest needs from `planner*`, for example, is `planner`, `NewPlanner`, `PlannerMountContext`, and the `plannerVisible*` helpers, which is exactly the surface a planner package would export. The outbound direction is the problem: each slice consumes a large shared vocabulary (`Action`, `ScopeKey`, `ItemType`, `BaselineEntry`, `PathView`, the `*Row` types) that lives at the centre of the package.
 
   So the prerequisite for **any** split is extracting that vocabulary into its own package, giving a hypothetical `syncdomain` <- `syncstore`/`syncplanner`/... <- `sync` (names used for illustration only; no such packages exist, and the earlier packages of similar names were collapsed into `internal/sync`). That is a design decision rather than a refactor, and it has a real cost: a vocabulary package risks being the "fake intermediate boundary" this doc warns against. It is defensible only if the domain types keep their invariant-preserving behavior and the package owns the sync domain model rather than acting as a DTO bag. Two further constraints: 14 test files reach into store internals (`rawDB()`, direct `m.db`) from `package sync` and must be re-homed, and cross-package tests will need explicit seams, which pushes back against the export-surface reduction already done.
 
-  Concretely: `store_types.go` declares row types the rest of the package references 133 times, while the store's own method signatures need ten domain types back. That specific pair is a hard import cycle today.
+  Concretely: `domain_row_types.go` declares row types the rest of the package references 133 times, while the store's own method signatures need ten domain types back. That specific pair is a hard import cycle today.
 
 - Watch-ordering stress probes. The stress profile previously claimed to run watch-ordering stress probes in `internal/sync` behind a dedicated run pattern; no such tests, and no `stress`-tagged test of any kind, has ever existed in the repo, so the step verified nothing and the claim has been removed rather than left standing. Deterministic watch-ordering probes are still worth writing — the fifty-times sync step (`sync-concurrency-race-repeated`) surfaced a roughly 1-in-50 shutdown flake that isolated runs do not reproduce. One concrete instance has now been observed and recorded: `TestRunWatch_FallbackSleepHonorsCancellation` failing with "fallback jitter sleep did not start" under `-race -count=50 -run 'TestRunWatch|TestWatchRuntime|TestOneShot|Shutdown|Drain'`. It did not reproduce in two further 50-iteration runs of the same pattern, nor in 20 isolated iterations, which is the signature the entry describes. The failing wait is for the degraded local-observer fallback to begin its jittered sleep after the manual clock advances, so the probe to write is one that pins the ordering between the fallback ticker firing and the sleep starting, rather than waiting on a signal. [planned]
 - Resource consumption guarantees documented per component. [planned]
 - Representative benchmark scenarios, reporting, and publication policy are defined in [performance-benchmarking.md](performance-benchmarking.md). The repo-owned `devtool bench` runner, the `startup-empty-config` harness-validation scenario, and the manual `sync-bidirectional-catchup-100m` live representative scenario are implemented; fixture-slot preparation, release artifact promotion, and published benchmark reports remain planned. [planned]
-- Production ignored-return audit complete: invariant-bearing results such as `depGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
+- Production ignored-return audit complete: invariant-bearing results such as `DepGraph.Complete` and dispatch admission booleans are handled explicitly, baseline/account metadata lookups now use explicit helpers or `found` checks, and the remaining ignored returns are limited to explicit value-only helper drops plus documented impossible-error builder writes. [verified]
 - Bare `assert.NoError` audit complete: remaining sites are intentional cleanup, test-plumbing, or pure error-contract assertions, while weak CLI happy-path tests now assert rendered text, JSON shape, and preserved config/state. [verified]
 - Write-path `Close` audit complete: sync-store close failures now propagate on internal baseline verification helpers and explicit sync-state reset flows, while read-only inspector close paths remain best-effort debug logged by design. [verified]
 - Direct command/workflow coverage across the flattened `internal/cli/` command flows remains above the current target. [verified]

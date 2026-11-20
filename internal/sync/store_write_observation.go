@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	sqlGetRemoteStateRow = `SELECT ` + sqlSelectRemoteStateCols + `
+	sqlGetRemoteStateRow = `SELECT ` + SqlSelectRemoteStateCols + `
 		FROM remote_state WHERE item_id = ?`
 
 	sqlInsertRemoteState = `INSERT INTO remote_state
@@ -40,17 +40,17 @@ const (
 
 // CommitObservation atomically persists observed remote mirror state and may
 // also advance the primary observation cursor in the same transaction.
-func (s *SyncStore) CommitObservation(ctx context.Context, events []observedItem, newToken string, driveID driveid.ID) error {
+func (s *SyncStore) CommitObservation(ctx context.Context, events []ObservedItem, newToken string, driveID driveid.ID) error {
 	return s.commitObservation(ctx, events, newToken, driveID)
 }
 
 func (s *SyncStore) commitObservation(
 	ctx context.Context,
-	events []observedItem,
+	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
 ) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation transaction: %w", err)
 	}
@@ -63,7 +63,7 @@ func (s *SyncStore) commitObservation(
 		err = commitErr
 		return err
 	}
-	if crashErr := s.reachCrashPoint(crashPointCommitObservation); crashErr != nil {
+	if crashErr := s.reachCrashPoint(CrashPointCommitObservation); crashErr != nil {
 		err = crashErr
 		return err
 	}
@@ -88,12 +88,12 @@ func (s *SyncStore) commitObservation(
 
 func (s *SyncStore) commitObservationTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	events []observedItem,
+	tx SqlTxRunner,
+	events []ObservedItem,
 	newToken string,
 	driveID driveid.ID,
 ) ([]*BaselineEntry, error) {
-	state, err := readObservationStateFromTx(ctx, tx)
+	state, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (s *SyncStore) commitObservationTx(
 // Only the last observation of an item in the window counts: each one is a
 // full snapshot of the item, so an earlier one is superseded, not a step.
 func (s *SyncStore) applyObservationWindowTx(
-	ctx context.Context, tx sqlTxRunner, events []observedItem,
+	ctx context.Context, tx SqlTxRunner, events []ObservedItem,
 ) ([]*BaselineEntry, error) {
 	window := latestObservationPerItem(events)
 
@@ -180,13 +180,13 @@ func (s *SyncStore) applyObservationWindowTx(
 
 // latestObservationPerItem returns the window's items with only the last
 // observation of each item ID, in the position of that last observation.
-func latestObservationPerItem(events []observedItem) []*observedItem {
+func latestObservationPerItem(events []ObservedItem) []*ObservedItem {
 	last := make(map[string]int, len(events))
 	for i := range events {
 		last[events[i].ItemID] = i
 	}
 
-	window := make([]*observedItem, 0, len(last))
+	window := make([]*ObservedItem, 0, len(last))
 	for i := range events {
 		if last[events[i].ItemID] == i {
 			window = append(window, &events[i])
@@ -222,7 +222,7 @@ type parkedRemoteRow struct {
 // its old path stranded the child at a parked path whenever the window did
 // not place it.
 func (s *SyncStore) parkMovingRemoteRowsTx(
-	ctx context.Context, tx sqlTxRunner, window []*observedItem,
+	ctx context.Context, tx SqlTxRunner, window []*ObservedItem,
 ) ([]parkedRemoteRow, error) {
 	var parked []parkedRemoteRow
 	for _, item := range window {
@@ -270,7 +270,7 @@ func (s *SyncStore) parkMovingRemoteRowsTx(
 // where it now belongs -- its old path, under the current path of the
 // nearest parked ancestor the window did place -- then offers every path
 // parking freed to a shadowed twin. No parked path may outlive the window.
-func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner, parked []parkedRemoteRow) error {
+func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx SqlTxRunner, parked []parkedRemoteRow) error {
 	for _, p := range parked {
 		row, found, err := remoteStateRowByIDTx(ctx, tx, "", p.itemID)
 		if err != nil {
@@ -283,7 +283,7 @@ func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunne
 		if err != nil {
 			return err
 		}
-		back := observedItem{
+		back := ObservedItem{
 			DriveID: row.DriveID, ItemID: row.ItemID, Path: restored, ItemType: row.ItemType,
 			Hash: row.Hash, Size: row.Size, SizeUnknown: !row.SizeKnown, Mtime: row.Mtime, ETag: row.ETag,
 		}
@@ -302,7 +302,7 @@ func (s *SyncStore) restoreParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunne
 
 // restoredParkPathTx is p's old path re-rooted under the current path of its
 // nearest parked ancestor, which the window may have moved.
-func restoredParkPathTx(ctx context.Context, tx sqlTxRunner, p parkedRemoteRow, parked []parkedRemoteRow) (string, error) {
+func restoredParkPathTx(ctx context.Context, tx SqlTxRunner, p parkedRemoteRow, parked []parkedRemoteRow) (string, error) {
 	var ancestor *parkedRemoteRow
 	for i := range parked {
 		q := &parked[i]
@@ -330,7 +330,7 @@ func restoredParkPathTx(ctx context.Context, tx sqlTxRunner, p parkedRemoteRow, 
 // requireNoParkedRemoteRowsTx fails the observation transaction when a
 // parked row survived the window: committed, it would hold a path no real
 // item has, and the item would read as gone from its real path.
-func requireNoParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner) error {
+func requireNoParkedRemoteRowsTx(ctx context.Context, tx SqlTxRunner) error {
 	var parkedPath string
 	err := tx.QueryRowContext(ctx,
 		`SELECT path FROM remote_state WHERE substr(path, 1, length(?)) = ? COLLATE BINARY LIMIT 1`,
@@ -349,7 +349,7 @@ func requireNoParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner) error {
 // processObservedItemWithPlaceholders applies pending-create recognition
 // (store_pending_creates.go) around processObservedItem.
 func (s *SyncStore) processObservedItemWithPlaceholders(
-	ctx context.Context, tx sqlTxRunner, item *observedItem, adopted *[]*BaselineEntry,
+	ctx context.Context, tx SqlTxRunner, item *ObservedItem, adopted *[]*BaselineEntry,
 ) error {
 	pending, decision, err := classifyObservedPlaceholderTx(ctx, tx, item, s.nowFunc())
 	if err != nil {
@@ -400,7 +400,7 @@ func (s *SyncStore) cacheAdoptedPlaceholders(adopted []*BaselineEntry) {
 	}
 }
 
-func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+func (s *SyncStore) processObservedItem(ctx context.Context, tx SqlTxRunner, item *ObservedItem) error {
 	existing, found, err := remoteStateRowByIDTx(ctx, tx, item.DriveID.String(), item.ItemID)
 	if err != nil {
 		return err
@@ -441,7 +441,7 @@ func (s *SyncStore) processObservedItem(ctx context.Context, tx sqlTxRunner, ite
 
 // windowForgetsBaseline reports whether the window forgets synced agreement
 // for some item, which the in-memory baseline must then follow.
-func windowForgetsBaseline(events []observedItem) bool {
+func windowForgetsBaseline(events []ObservedItem) bool {
 	for i := range events {
 		if events[i].IsDeleted && events[i].ReuploadLocal {
 			return true
@@ -456,7 +456,7 @@ func windowForgetsBaseline(events []observedItem) bool {
 // planner reads a surviving local copy as a new local item and uploads it;
 // with them it read as "deleted on OneDrive" and planned a local delete
 // (R-2.15.3).
-func forgetBaselineForReuploadTx(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+func forgetBaselineForReuploadTx(ctx context.Context, tx SqlTxRunner, item *ObservedItem) error {
 	if !item.IsDeleted || !item.ReuploadLocal {
 		return nil
 	}
@@ -492,7 +492,7 @@ func forgetBaselineForReuploadTx(ctx context.Context, tx sqlTxRunner, item *obse
 
 // deleteObservedRemoteStateTree removes a deleted item's row and, for a
 // folder, its subtree, then hands the freed path to a shadowed twin.
-func deleteObservedRemoteStateTree(ctx context.Context, tx sqlTxRunner, item *observedItem, existing *remoteStateRow) error {
+func deleteObservedRemoteStateTree(ctx context.Context, tx SqlTxRunner, item *ObservedItem, existing *RemoteStateRow) error {
 	if err := deleteObservedRemoteState(ctx, tx, item, existing.Path); err != nil {
 		return err
 	}
@@ -517,7 +517,7 @@ func deleteObservedRemoteStateTree(ctx context.Context, tx sqlTxRunner, item *ob
 // every child keeps its old path: once the move is applied locally the
 // children look moved back on OneDrive, and sync moved them back into a
 // re-created old folder.
-func followObservedPathChangeTx(ctx context.Context, tx sqlTxRunner, existing *remoteStateRow, item *observedItem) error {
+func followObservedPathChangeTx(ctx context.Context, tx SqlTxRunner, existing *RemoteStateRow, item *ObservedItem) error {
 	if item.Path == "" || item.Path == existing.Path {
 		return nil
 	}
@@ -535,7 +535,7 @@ func followObservedPathChangeTx(ctx context.Context, tx sqlTxRunner, existing *r
 
 // insertObservedRemoteState inserts a newly observed item at its stored path
 // (store_remote_twins.go).
-func (s *SyncStore) insertObservedRemoteState(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+func (s *SyncStore) insertObservedRemoteState(ctx context.Context, tx SqlTxRunner, item *ObservedItem) error {
 	stored, err := s.storedPathForObservedItem(ctx, tx, item)
 	if err != nil {
 		return err
@@ -547,8 +547,8 @@ func (s *SyncStore) insertObservedRemoteState(ctx context.Context, tx sqlTxRunne
 
 func deleteObservedRemoteState(
 	ctx context.Context,
-	tx sqlTxRunner,
-	item *observedItem,
+	tx SqlTxRunner,
+	item *ObservedItem,
 	existingPath string,
 ) error {
 	if _, err := tx.ExecContext(ctx,
@@ -564,7 +564,7 @@ func deleteObservedRemoteState(
 // ForgetRemoteItem removes itemID, and its subtree when it is a folder, from
 // remote_state after a live read proved it gone.
 func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning forget-remote-item transaction: %w", err)
 	}
@@ -586,7 +586,7 @@ func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err er
 	}
 	// An item type that cannot be read fails the removal: taken for a file,
 	// a folder's subtree stayed behind.
-	parsed, err := parseItemType(itemType)
+	parsed, err := ParseItemType(itemType)
 	if err != nil {
 		return fmt.Errorf("sync: reading remote_state of %s at %s: %w", itemID, path, err)
 	}
@@ -609,7 +609,7 @@ func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err er
 // deleteRemoteStateSubtreeTx deletes the rows below a deleted folder, except
 // remote twins shadowed at the folder's own path: they are its siblings and
 // one of them takes the freed path (promoteRemoteTwinTx).
-func deleteRemoteStateSubtreeTx(ctx context.Context, tx sqlTxRunner, folderPath string) error {
+func deleteRemoteStateSubtreeTx(ctx context.Context, tx SqlTxRunner, folderPath string) error {
 	descendantPrefix := folderPath + "/"
 	twinPrefix := folderPath + "/" + remoteTwinShadowMarker
 	if _, err := tx.ExecContext(ctx,
@@ -624,8 +624,8 @@ func deleteRemoteStateSubtreeTx(ctx context.Context, tx sqlTxRunner, folderPath 
 }
 
 func observedRemoteStateUpdate(
-	existing *remoteStateRow,
-	item *observedItem,
+	existing *RemoteStateRow,
+	item *ObservedItem,
 ) bool {
 	pathChanged := item.Path != "" && item.Path != existing.Path
 	driveChanged := !item.DriveID.IsZero() && item.DriveID != existing.DriveID
@@ -645,8 +645,8 @@ func observedRemoteStateUpdate(
 // read turned its item's delete into a no-op that left the row for good, and
 // a change to it into a second insert.
 func remoteStateRowByIDTx(
-	ctx context.Context, tx sqlTxRunner, driveID, itemID string,
-) (row *remoteStateRow, found bool, err error) {
+	ctx context.Context, tx SqlTxRunner, driveID, itemID string,
+) (row *RemoteStateRow, found bool, err error) {
 	row, err = scanRemoteStateRowWithQuerier(
 		driveid.New(driveID),
 		func(dest ...any) error {
@@ -663,7 +663,7 @@ func remoteStateRowByIDTx(
 	}
 }
 
-func (s *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item *observedItem) error {
+func (s *SyncStore) insertRemoteState(ctx context.Context, tx SqlTxRunner, item *ObservedItem) error {
 	_, err := tx.ExecContext(ctx, sqlInsertRemoteState,
 		item.DriveID.String(),
 		item.ItemID, item.Path,
@@ -680,8 +680,8 @@ func (s *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 
 func (s *SyncStore) updateRemoteStateFromObs(
 	ctx context.Context,
-	tx sqlTxRunner,
-	item *observedItem,
+	tx SqlTxRunner,
+	item *ObservedItem,
 ) error {
 	_, err := tx.ExecContext(ctx, sqlUpdateRemoteState,
 		item.DriveID.String(),

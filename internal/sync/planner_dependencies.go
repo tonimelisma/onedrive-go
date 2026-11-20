@@ -146,7 +146,7 @@ func (index *dependencyIndex) indexByPath(i int, a *Action, folderDeletesByPath 
 		}
 	case ActionBaselineUpdate:
 	default:
-		panic(outsideTheEnum(a.Type))
+		panic(OutsideTheEnum(a.Type))
 	}
 }
 
@@ -201,7 +201,7 @@ func (index *dependencyIndex) indexVacatedNames(actions []Action) {
 		case ActionDownload, ActionUpload, ActionLocalDelete, ActionLocalMove,
 			ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		default:
-			panic(outsideTheEnum(a.Type))
+			panic(OutsideTheEnum(a.Type))
 		}
 	}
 }
@@ -227,7 +227,7 @@ func isSubtreeDelete(a *Action) bool {
 		return false
 	}
 
-	return deletedItemType(a) == ItemTypeFolder
+	return DeletedItemType(a) == ItemTypeFolder
 }
 
 // addParentFolderDep adds a dependency on a parent folder create if present.
@@ -300,7 +300,7 @@ func addChildDeleteDeps(deps []int, idx int, a *Action, index *dependencyIndex) 
 // its children would take the child with it (and a local folder delete would
 // do the same to a child a remote move is relocating locally).
 func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Action, index *dependencyIndex) []int {
-	var sameSideMove actionType
+	var sameSideMove ActionType
 	switch a.Type {
 	case ActionRemoteDelete:
 		sameSideMove = ActionRemoteMove
@@ -310,7 +310,7 @@ func addMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Act
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return deps
 	default:
-		panic(outsideTheEnum(a.Type))
+		panic(OutsideTheEnum(a.Type))
 	}
 	if !isSubtreeDelete(a) {
 		return deps
@@ -345,7 +345,7 @@ func addRemoteCaseVariantDeps(deps []int, idx int, a *Action, actions []Action, 
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return deps
 	default:
-		panic(outsideTheEnum(a.Type))
+		panic(OutsideTheEnum(a.Type))
 	}
 	if len(index.vacatedByNameKey) == 0 {
 		return deps
@@ -379,7 +379,7 @@ func vacatesCaseVariantOf(other, a *Action) bool {
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return false
 	default:
-		panic(outsideTheEnum(other.Type))
+		panic(OutsideTheEnum(other.Type))
 	}
 	if vacated == a.Path || vacated == a.OldPath || !namekey.EqualPath(vacated, a.Path) {
 		return false
@@ -530,7 +530,7 @@ func carriedContentKey(create *Action) (contentKey, bool) {
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return contentKey{}, false
 	default:
-		panic(outsideTheEnum(create.Type))
+		panic(OutsideTheEnum(create.Type))
 	}
 }
 
@@ -551,7 +551,7 @@ func deletedContentKey(deleted *Action) (contentKey, bool) {
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return contentKey{}, false
 	default:
-		panic(outsideTheEnum(deleted.Type))
+		panic(OutsideTheEnum(deleted.Type))
 	}
 }
 
@@ -692,7 +692,7 @@ func isDeleteAction(a *Action) bool {
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate:
 		return false
 	default:
-		panic(outsideTheEnum(a.Type))
+		panic(OutsideTheEnum(a.Type))
 	}
 }
 
@@ -705,7 +705,7 @@ func isMoveAction(a *Action) bool {
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return false
 	default:
-		panic(outsideTheEnum(a.Type))
+		panic(OutsideTheEnum(a.Type))
 	}
 }
 
@@ -780,7 +780,7 @@ func underMoveSource(a, move *Action) bool {
 		// Not a move: it vacates no source for anything to lie below.
 		return false
 	default:
-		panic(outsideTheEnum(move.Type))
+		panic(OutsideTheEnum(move.Type))
 	}
 }
 
@@ -812,7 +812,7 @@ func createsAtVacatedSource(a, move *Action) bool {
 		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return false
 	default:
-		panic(outsideTheEnum(move.Type))
+		panic(OutsideTheEnum(move.Type))
 	}
 }
 
@@ -823,5 +823,5 @@ func movedItemIsFolder(move *Action) bool {
 		return move.View.Baseline.ItemType == ItemTypeFolder
 	}
 
-	return actionItemType(move) == ItemTypeFolder
+	return ActionItemType(move) == ItemTypeFolder
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Scenarios on the real filesystem with names whose bytes are in Unicode NFD
@@ -25,40 +23,6 @@ import (
 // fails with ENOENT, so every operation on an existing entry has to find the
 // spelling on disk. The emulated case-insensitive volume (internal/synctest)
 // folds the two forms like macOS does and could not catch this.
-
-// darwinGOOS is runtime.GOOS on macOS.
-const darwinGOOS = "darwin"
-
-const (
-	// nfdCafe is "café" spelled as e + U+0301 COMBINING ACUTE ACCENT.
-	nfdCafe = "café"
-	// nfcCafe is the same name, precomposed (U+00E9).
-	nfcCafe = "café"
-)
-
-// skipUnlessByteExactNames skips on macOS, whose volumes resolve either
-// spelling to the same entry, so the scenario's premise does not hold.
-func skipUnlessByteExactNames(t *testing.T) {
-	t.Helper()
-
-	if runtime.GOOS == darwinGOOS {
-		t.Skip("macOS volumes are normalization-insensitive; both spellings name one entry")
-	}
-}
-
-// localNames lists the raw names in dir, so a test sees the spelling on disk.
-func localNames(t *testing.T, dir string) []string {
-	t.Helper()
-
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		names = append(names, entry.Name())
-	}
-
-	return names
-}
 
 // syncedNFDFileHarness syncs a local corpus/<NFD café> nfd.txt to an empty
 // fake OneDrive and returns the harness once the upload has converged.
@@ -265,52 +229,6 @@ func TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth(t *testing.T) {
 	assertNFDConverged(t, h)
 }
 
-// Validates: R-2.13.2
-//
-// Watch-mode re-checks look an NFD-named file up by its spelling on disk: a
-// delete event for it while it still exists (an atomic save) is not a
-// delete, and its synced path is not gone.
-func TestWatchRechecks_FindTheNFDNamedLocalFile(t *testing.T) {
-	t.Parallel()
-	skipUnlessByteExactNames(t)
-
-	syncRoot := t.TempDir()
-	writeLocalFile(t, syncRoot, filepath.Join(nfdCafe+" dir", nfdCafe+".txt"), "x")
-	tree, err := synctree.Open(syncRoot)
-	require.NoError(t, err)
-	stored := nfcCafe + " dir/" + nfcCafe + ".txt"
-	fsPath := filepath.Join(syncRoot, nfdCafe+" dir", nfdCafe+".txt")
-
-	assert.True(t, localPathStillPresent(tree, stored, fsPath), "the event's file still exists")
-	assert.False(t, syncedPathGone(tree, stored), "the synced file is still there")
-
-	require.NoError(t, os.Remove(fsPath))
-	assert.False(t, localPathStillPresent(tree, stored, fsPath))
-	assert.True(t, syncedPathGone(tree, stored))
-}
-
-// Validates: R-2.13.2, R-2.8.13
-//
-// A full scan's rows carry the stored NFC path; the watch on an NFD-named
-// folder is added on its spelling on disk. Adding the NFC spelling failed
-// with ENOENT on every scan and left the folder unwatched.
-func TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder(t *testing.T) {
-	t.Parallel()
-	skipUnlessByteExactNames(t)
-
-	dir := t.TempDir()
-	onDisk := filepath.Join(dir, nfdCafe+" dir")
-	require.NoError(t, os.Mkdir(onDisk, 0o700))
-	watcher := newAddErrWatcher(nil, nil)
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.activeWatcher = watcher
-
-	obs.rewatchUnwatchedDirectories(mustOpenSyncTree(t, dir), []localStateRow{{Path: nfcCafe + " dir", ItemType: ItemTypeFolder}})
-
-	assert.Contains(t, watcher.addedPaths(), onDisk)
-	assert.NotContains(t, watcher.addedPaths(), filepath.Join(dir, nfcCafe+" dir"))
-}
-
 // Validates: R-2.13.2, R-2.10.61
 //
 // The local permission probe inspects an NFD-named folder by its spelling on
@@ -326,7 +244,7 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 		ph, syncRoot := newTestPermHandler(t, nil)
 		require.NoError(t, os.Mkdir(filepath.Join(syncRoot, nfdCafe), 0o750))
 
-		evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 			Path:       nfcCafe + "/file.txt",
 			ActionType: ActionDownload,
 			ErrMsg:     "permission denied",
@@ -346,7 +264,7 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 			return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
 		}
 
-		evidence := ph.handleLocalPermission(t.Context(), &actionCompletion{
+		evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
 			Path:       nfcCafe + "/photos/a.jpg",
 			ActionType: ActionDownload,
 			Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
@@ -383,15 +301,15 @@ func TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded(t *testing.T) {
 
 	action := &Action{
 		Type: ActionRemoteDelete, Path: stored, ItemID: "item-a", DriveID: driveID,
-		View: &pathView{
+		View: &PathView{
 			Path:   stored,
-			Remote: &remoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
+			Remote: &RemoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
 		},
 	}
-	outcome := newExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
+	outcome := NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 
 	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, errActionPreconditionChanged)
+	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
 	assert.Empty(t, deleted, "a file that is back locally must not be deleted on OneDrive")
 }
 
@@ -423,7 +341,7 @@ func TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, twinSyncedName, issues[0].Path)
-	assert.Equal(t, issueCaseCollision, issues[0].IssueType)
+	assert.Equal(t, IssueCaseCollision, issues[0].IssueType)
 
 	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, twinSecondName)))
 	writeLocalFile(t, h.syncRoot, twinSyncedName, "edited after the twin went\n")
@@ -453,21 +371,21 @@ func syncedFileWithRemovedTwin(t *testing.T) *syncHarness {
 
 // handleTwinDelete runs the watch observer's delete of the removed twin and
 // returns the observations it sent.
-func handleTwinDelete(t *testing.T, h *syncHarness) []localObservation {
+func handleTwinDelete(t *testing.T, h *syncHarness) []LocalObservation {
 	t.Helper()
 
 	bl, err := h.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	obs := newLocalObserver(bl, h.eng.logger, 0)
-	obs.PendingTimers = make(map[string]syncTimer)
-	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
-	batches := make(chan localObservation, 1)
+	obs := NewLocalObserver(bl, h.eng.logger, 0)
+	obs.PendingTimers = make(map[string]SyncTimer)
+	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
+	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), h.eng.syncTree,
 		filepath.Join(h.syncRoot, twinSecondName), twinSyncedName, twinSyncedName)
 
-	var sent []localObservation
+	var sent []LocalObservation
 	for len(batches) > 0 {
 		sent = append(sent, <-batches)
 	}
@@ -512,5 +430,5 @@ func TestRunOnce_UnicodeFormFolderTwinOfSyncedFileFailsNothing(t *testing.T) {
 	issues, err := h.eng.baseline.ListObservationIssues(t.Context())
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, issueCaseCollision, issues[0].IssueType)
+	assert.Equal(t, IssueCaseCollision, issues[0].IssueType)
 }

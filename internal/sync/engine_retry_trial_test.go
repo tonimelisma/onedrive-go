@@ -17,7 +17,7 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 	ta := rt.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "retry.txt",
-		View: &pathView{Path: "retry.txt"},
+		View: &PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, ta)
 
@@ -72,12 +72,12 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	first := rt.sched.graph.Add(&Action{
 		Type: ActionUpload,
 		Path: "first.txt",
-		View: &pathView{Path: "first.txt"},
+		View: &PathView{Path: "first.txt"},
 	}, 1, nil)
 	second := rt.sched.graph.Add(&Action{
 		Type: ActionDownload,
 		Path: "second.txt",
-		View: &pathView{Path: "second.txt"},
+		View: &PathView{Path: "second.txt"},
 	}, 2, nil)
 	require.NotNil(t, first)
 	require.NotNil(t, second)
@@ -93,7 +93,7 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
 
 	require.Len(t, rt.retries.heldByKey, 1)
-	assert.Contains(t, rt.retries.heldByKey, retryWorkKeyForAction(&second.Action))
+	assert.Contains(t, rt.retries.heldByKey, RetryWorkKeyForAction(&second.Action))
 }
 
 // Validates: R-2.10.5
@@ -157,7 +157,7 @@ func TestClearRetryWorkOnSuccess_RemovesResolvedRetryRow(t *testing.T) {
 		NextRetryAt:  now,
 	}))
 
-	require.NoError(t, flow.clearRetryWorkOnSuccess(t.Context(), &actionCompletion{
+	require.NoError(t, flow.clearRetryWorkOnSuccess(t.Context(), &ActionCompletion{
 		Path:       "done.txt",
 		ActionType: ActionUpload,
 	}))
@@ -178,7 +178,7 @@ func TestClearRetryWorkOnSuccess_StoreFailureIsReturned(t *testing.T) {
 		deps: runtimeDeps{store: closedTestStore(t), logger: testLogger(t)},
 	}
 
-	err := flow.clearRetryWorkOnSuccess(t.Context(), &actionCompletion{
+	err := flow.clearRetryWorkOnSuccess(t.Context(), &ActionCompletion{
 		Path:       "done.txt",
 		ActionType: ActionUpload,
 	})

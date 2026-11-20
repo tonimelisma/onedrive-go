@@ -17,10 +17,10 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan actionCompletion,
-	initialOutbox []*trackedAction,
+	completions <-chan ActionCompletion,
+	initialOutbox []*TrackedAction,
 ) error {
-	r.outbox = append([]*trackedAction(nil), initialOutbox...)
+	r.outbox = append([]*TrackedAction(nil), initialOutbox...)
 	stopNoting := r.noteRunCancel(ctx)
 	defer stopNoting()
 	err := r.runResultsLoop(ctx, cancel, bl, completions)
@@ -36,7 +36,7 @@ func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan actionCompletion,
+	completions <-chan ActionCompletion,
 ) error {
 	var fatalErr error
 
@@ -82,7 +82,7 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan actionCompletion,
+	completions <-chan ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
 	if len(r.outbox) != 0 || r.sched.runningCount != 0 {
@@ -119,7 +119,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan actionCompletion,
+	completions <-chan ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
 	if nextFatal, handled := r.releaseIdleDueHeldWork(ctx, bl); handled {
@@ -163,7 +163,7 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	bl *Baseline,
-	completions <-chan actionCompletion,
+	completions <-chan ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
 	// A finished outcome may change what the next dispatch is allowed to be
@@ -183,8 +183,8 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	now := r.deps.now()
 	next, admitAt := r.nextDispatchable(r.outbox, now)
 	var (
-		dispatchCh chan<- *trackedAction
-		nextAction *trackedAction
+		dispatchCh chan<- *TrackedAction
+		nextAction *TrackedAction
 		admitDue   <-chan struct{}
 	)
 	switch {
@@ -233,7 +233,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 	cancel context.CancelFunc,
 	bl *Baseline,
 	fatalErr error,
-	completion *actionCompletion,
+	completion *ActionCompletion,
 ) error {
 	if fatalErr != nil || ctx.Err() != nil {
 		if err := r.processShutdownCompletion(ctx, completion, bl); err != nil {

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -117,7 +116,7 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 				return
 			case <-refreshed:
 				_, err := ack.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-					Ref: newShortcutChildAckRef("binding-1"),
+					Ref: NewShortcutChildAckRefForTest("binding-1"),
 				})
 				acked <- err
 			}
@@ -170,7 +169,7 @@ func seedRemovedSharedFolders(t *testing.T, eng *Engine, syncRoot string) {
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Docs"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Notes"), 0o700))
-	require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{
 		{
 			NamespaceID:       shortcutNamespaceTestID,
 			BindingItemID:     "binding-1",
@@ -231,17 +230,11 @@ func closedTestStore(t *testing.T) *SyncStore {
 
 	dbPath := filepath.Join(t.TempDir(), "closed.db")
 	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600))
-	store, err := openSyncStore(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
+	store, err := OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 
 	return store
-}
-
-func newDebugLogBuffer() (*bytes.Buffer, *slog.Logger) {
-	var buf bytes.Buffer
-
-	return &buf, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 // Validates: R-5.2

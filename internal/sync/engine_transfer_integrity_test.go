@@ -105,7 +105,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 		size, mtime, ctime, birth int64
 		device, inode             uint64
 	}
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
 		`SELECT hash, size, mtime, ctime, local_birth_time, local_device, local_inode
 		FROM local_state WHERE path = ?`, fileName).Scan(
 		&observed.hash, &observed.size, &observed.mtime, &observed.ctime, &observed.birth, &observed.device, &observed.inode))
@@ -137,12 +137,12 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
 	t.Parallel()
 
-	err := uploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
+	err := UploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
 
 	// Another writer changed the item mid-upload: re-observe and replan,
 	// never upload over the change.
-	require.ErrorIs(t, err, errActionPreconditionChanged)
-	assert.Equal(t, resultSuperseded, classifyResult(&actionCompletion{Err: err}).Class)
+	require.ErrorIs(t, err, ErrActionPreconditionChanged)
+	assert.Equal(t, resultSuperseded, classifyResult(&ActionCompletion{Err: err}).Class)
 }
 
 // Validates: R-6.7.34
@@ -157,7 +157,7 @@ func TestExecutor_Download_RecordsObservedLocalMtime(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	// No remote mtime to apply: the file keeps the time it was written.
 	o := e.ExecuteDownload(t.Context(), &Action{
@@ -165,7 +165,7 @@ func TestExecutor_Download_RecordsObservedLocalMtime(t *testing.T) {
 		Path:    "observed.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Remote: &remoteState{}},
+		View:    &PathView{Remote: &RemoteState{}},
 	})
 	requireOutcomeSuccess(t, &o)
 
@@ -184,12 +184,12 @@ func TestClassifyResult_StalledTransferIsRetryableNotShutdown(t *testing.T) {
 	// even if a caller wrapped it with a cancellation, it is retry work.
 	stalled := fmt.Errorf("downloading a.bin: %w: %w", graph.ErrTransferStalled, context.Canceled)
 
-	decision := classifyResult(&actionCompletion{Err: stalled})
+	decision := classifyResult(&ActionCompletion{Err: stalled})
 
 	// A shutdown classification dropped the action and its dependents
 	// without recording anything to retry.
 	assert.Equal(t, resultRequeue, decision.Class)
-	assert.Equal(t, persistRetryWork, decision.Persistence)
+	assert.Equal(t, PersistRetryWork, decision.Persistence)
 }
 
 // Validates: R-5.5.1
@@ -204,7 +204,7 @@ func TestExecutor_Download_KnownEmptyItemRejectsNonEmptyBody(t *testing.T) {
 	}
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	// remote_state holds a real size of 0 (not NULL) for this hashless item.
 	o := e.ExecuteDownload(t.Context(), &Action{
@@ -212,7 +212,7 @@ func TestExecutor_Download_KnownEmptyItemRejectsNonEmptyBody(t *testing.T) {
 		Path:    "empty.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &pathView{Remote: &remoteState{Size: 0, SizeKnown: true, Mtime: 1}},
+		View:    &PathView{Remote: &RemoteState{Size: 0, SizeKnown: true, Mtime: 1}},
 	})
 
 	// A size of 0 used to read as "unknown", so any body was accepted.

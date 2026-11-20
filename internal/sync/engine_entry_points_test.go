@@ -70,8 +70,8 @@ func TestRunWatch_CountsOnTheEngineCollectorWithoutAnOwnerWrap(t *testing.T) {
 	recorder := attachDebugEventRecorder(eng)
 
 	cancel, done := runWatchInBackground(t, eng, SyncBidirectional, quietWatchOptions())
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	stopWatch(t, cancel, done)
 

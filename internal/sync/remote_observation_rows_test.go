@@ -21,7 +21,7 @@ func TestRemoteObservation_RowsAndChangesForEveryItemKind(t *testing.T) {
 
 	driveID := driveid.New(synctest.TestDriveID)
 	modified := time.Date(2026, time.November, 19, 12, 0, 0, 0, time.UTC)
-	mtime := storedTimeNano(modified)
+	mtime := StoredTimeNano(modified)
 	baseline := baselineWith(
 		&BaselineEntry{Path: "old", DriveID: driveID, ItemID: "old", ParentID: "root", ItemType: ItemTypeFolder},
 		&BaselineEntry{Path: "new", DriveID: driveID, ItemID: "new", ParentID: "root", ItemType: ItemTypeFolder},
@@ -47,36 +47,36 @@ func TestRemoteObservation_RowsAndChangesForEveryItemKind(t *testing.T) {
 		file("", "no-id.txt", "root", "hx"),
 		file("lost", "", "", "hl"),
 	}
-	row := func(id, path, parent, hash string) observedItem {
-		return observedItem{
+	row := func(id, path, parent, hash string) ObservedItem {
+		return ObservedItem{
 			DriveID: driveID, ItemID: id, ParentID: parent, Path: path, ItemType: ItemTypeFile,
 			Hash: hash, Size: 7, Mtime: mtime, ETag: "e-" + id,
 		}
 	}
 
-	converter := newPrimaryConverter(baseline, driveID, synctest.TestLogger(t), nil, nil)
+	converter := NewPrimaryConverter(baseline, driveID, synctest.TestLogger(t), nil, nil)
 	events := converter.ConvertItems(t.Context(), items)
-	events = append(events, findBaselineOrphans(baseline, map[string]struct{}{
+	events = append(events, FindBaselineOrphans(baseline, map[string]struct{}{
 		"old": {}, "new": {}, "doc": {}, "gone": {}, "m": {}, "mc": {},
 	}, driveID, "")...)
-	result := projectRemoteObservations(synctest.TestLogger(t), events)
+	result := ProjectRemoteObservations(synctest.TestLogger(t), events)
 
-	assert.Equal(t, []observedItem{
+	assert.Equal(t, []ObservedItem{
 		row("created", "created.txt", "root", "hc"),
 		row("doc", "doc.txt", "root", "h1"),
 		{DriveID: driveID, ItemID: "gone", Path: "gone.txt", ItemType: ItemTypeFile, IsDeleted: true},
 		row("m", "new/m.txt", "new", "hm"),
 		row("mc", "new/mc.txt", "new", "h2"),
 		{DriveID: driveID, ItemID: "orphan", Path: "orphan.txt", ItemType: ItemTypeFile, IsDeleted: true},
-	}, result.observed)
-	assert.Equal(t, []remoteChange{
+	}, result.Observed)
+	assert.Equal(t, []RemoteChange{
 		{Path: "created.txt", ItemType: ItemTypeFile},
 		{Path: "doc.txt", ItemType: ItemTypeFile},
 		{Path: "gone.txt", ItemType: ItemTypeFile},
 		{Path: "new/m.txt", OldPath: "old/m.txt", ItemType: ItemTypeFile},
 		{Path: "new/mc.txt", OldPath: "old/mc.txt", ItemType: ItemTypeFile},
 		{Path: "orphan.txt", ItemType: ItemTypeFile},
-	}, result.changes, "an item without an ID and one that cannot be placed are neither rows nor changes")
+	}, result.Changes, "an item without an ID and one that cannot be placed are neither rows nor changes")
 }
 
 // Validates: R-2.8.8
@@ -87,12 +87,12 @@ func TestRemoteBatch_AChangeWithoutAnItemIDStillCountsForTheCursor(t *testing.T)
 	t.Parallel()
 
 	engine := &Engine{logger: synctest.TestLogger(t)}
-	withoutID := buildRemoteObservationBatch(engine, remoteObservationModeDelta,
-		[]remoteItem{{observedItem: observedItem{Path: "a.txt", ItemType: ItemTypeFile}}}, "token", false, ObservationFindingsBatch{})
-	empty := buildRemoteObservationBatch(engine, remoteObservationModeDelta, nil, "token", false, ObservationFindingsBatch{})
+	withoutID := buildRemoteObservationBatch(engine, RemoteObservationModeDelta,
+		[]RemoteItem{{ObservedItem: ObservedItem{Path: "a.txt", ItemType: ItemTypeFile}}}, "token", false, ObservationFindingsBatch{})
+	empty := buildRemoteObservationBatch(engine, RemoteObservationModeDelta, nil, "token", false, ObservationFindingsBatch{})
 
-	assert.Empty(t, withoutID.observed, "an item without an ID stores no row")
-	assert.Equal(t, []remoteChange{{Path: "a.txt", ItemType: ItemTypeFile}}, withoutID.changes, "it is still a change")
-	assert.Equal(t, "token", withoutID.cursorToken, "and the cursor advances over it")
-	assert.Empty(t, empty.cursorToken, "a window with no change keeps the cursor where it was")
+	assert.Empty(t, withoutID.Observed, "an item without an ID stores no row")
+	assert.Equal(t, []RemoteChange{{Path: "a.txt", ItemType: ItemTypeFile}}, withoutID.Changes, "it is still a change")
+	assert.Equal(t, "token", withoutID.CursorToken, "and the cursor advances over it")
+	assert.Empty(t, empty.CursorToken, "a window with no change keeps the cursor where it was")
 }

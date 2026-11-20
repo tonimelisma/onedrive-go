@@ -40,24 +40,24 @@ func TestBlockScopeActivationLine_EveryMemberIsDecided(t *testing.T) {
 	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
 		issueTypeVerdictGroup[scopeLine]{
 			verdict: scopeLine{clearsAutomatically: true},
-			members: []IssueType{issueRateLimited, issueServiceOutage},
+			members: []IssueType{IssueRateLimited, IssueServiceOutage},
 		},
 		issueTypeVerdictGroup[scopeLine]{
 			// Worded for what the user can do about it.
 			verdict: scopeLine{},
-			members: []IssueType{IssueQuotaExceeded, issueDiskFull, issueLocalReadOnly},
+			members: []IssueType{IssueQuotaExceeded, IssueDiskFull, IssueLocalReadOnly},
 		},
 		issueTypeVerdictGroup[scopeLine]{
 			verdict: scopeLine{generic: true},
 			members: []IssueType{
-				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
-				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueRemoteRootNotFound, issueLocalReadDenied,
-				issueLocalWriteDenied, issueCaseCollision, issueRemoteNameTwin, issueFileTooLargeForSpace,
-				issueLocalNameTooLong, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
-				issueLocalMountMissing, issueRemoteFolderUnverifiable, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge, issueLocalBusy,
-				issueLocalCrossDevice, issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen,
-				issueUploadVerification, issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict,
-				issueTransientNotFound, issueResourceLocked, issueTransferURLRejected,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic,
+				IssueUnauthorized, IssueRemoteWriteDenied, IssueRemoteReadDenied, IssueRemoteRootNotFound, IssueLocalReadDenied,
+				IssueLocalWriteDenied, IssueCaseCollision, IssueRemoteNameTwin, IssueFileTooLargeForSpace,
+				IssueLocalNameTooLong, IssueDeletesHeld, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary,
+				IssueLocalMountMissing, IssueRemoteFolderUnverifiable, IssueLocalInterruptedRemoval, IssueRemovedFolderKept, IssueLocalFileTooLarge, IssueLocalBusy,
+				IssueLocalCrossDevice, IssueUnsupportedOperation, IssueMalwareDetected, IssueLocalDatabaseOpen,
+				IssueUploadVerification, IssueDownloadIntegrity, IssueRequestTimeout, IssueTransientConflict,
+				IssueTransientNotFound, IssueResourceLocked, IssueTransferURLRejected,
 			},
 		},
 	), lineFor)
@@ -75,8 +75,8 @@ func TestBlockScopeActivationLine_AgreesWithTheFamilyVerdict(t *testing.T) {
 	const retryIn = "1m"
 	for _, member := range issueTypeConstantsInSource(t) {
 		_, clearsAutomatically := blockScopeActivationLine(SKService(), member, retryIn)
-		key, hasFamily := conditionKeyForIssueType(member)
-		assert.Equal(t, hasFamily && conditionClearsAutomatically(key), clearsAutomatically, "%q", member)
+		key, hasFamily := ConditionKeyForIssueType(member)
+		assert.Equal(t, hasFamily && ConditionClearsAutomatically(key), clearsAutomatically, "%q", member)
 	}
 }
 
@@ -197,7 +197,7 @@ func persistBlockedRetryViaHeldScope(scopeKey ScopeKey) func(*testing.T, *testEn
 			DriveID: driveid.New("drive1"),
 		}, 1, nil)
 		require.NotNil(t, current)
-		require.NoError(t, flow.holdActionUnderScope(t.Context(), current, &actionCompletion{
+		require.NoError(t, flow.holdActionUnderScope(t.Context(), current, &ActionCompletion{
 			Path:       "Shared/Docs/file.txt",
 			OldPath:    "Shared/Docs/old.txt",
 			ActionType: ActionUpload,
@@ -209,7 +209,7 @@ func persistBlockedRetryViaHeldScope(scopeKey ScopeKey) func(*testing.T, *testEn
 func persistBlockedRetryViaTrialRehome(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
-		require.NoError(t, flow.rehomeBlockedRetryWork(t.Context(), &actionCompletion{
+		require.NoError(t, flow.rehomeBlockedRetryWork(t.Context(), &ActionCompletion{
 			Path:       "Shared/Docs/file.txt",
 			OldPath:    "Shared/Docs/old.txt",
 			ActionType: ActionUpload,
@@ -221,7 +221,7 @@ func persistBlockedRetryViaTrialRehome(scopeKey ScopeKey) func(*testing.T, *test
 func persistBlockedRetryViaPermissionEvidence(scopeKey ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
-		err := flow.applyPermissionFailureEvidence(t.Context(), nil, &actionCompletion{
+		err := flow.applyPermissionFailureEvidence(t.Context(), nil, &ActionCompletion{
 			Path:       "Shared/Docs/file.txt",
 			OldPath:    "Shared/Docs/old.txt",
 			ActionType: ActionUpload,
@@ -242,10 +242,10 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	handled, err := flow.applyTrialReclassification(t.Context(), &resultDecision{
+	handled, err := flow.applyTrialReclassification(t.Context(), &ResultDecision{
 		Class:    errclass.ClassScopeBlockingTransient,
 		ScopeKey: SKDiskLocal(),
-	}, &actionCompletion{
+	}, &ActionCompletion{
 		Path:       "disk.txt",
 		ActionType: ActionUpload,
 		ErrMsg:     "disk full",
@@ -280,7 +280,7 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		AttemptCount: 1,
 	}))
 
-	handled, err := flow.applyTrialReclassification(t.Context(), &resultDecision{}, &actionCompletion{
+	handled, err := flow.applyTrialReclassification(t.Context(), &ResultDecision{}, &ActionCompletion{
 		Path:          "accessible/file.txt",
 		ActionType:    ActionDownload,
 		Err:           os.ErrPermission,
@@ -421,7 +421,7 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 	}, 1, nil)
 	require.NotNil(t, ready)
 
-	dispatched, err := flow.admitReady(t.Context(), []*trackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
@@ -461,14 +461,14 @@ func TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope(t *testing.T)
 		Type:    ActionDownload,
 		Path:    "moved.txt",
 		DriveID: eng.driveID,
-		View:    &pathView{Path: "moved.txt"},
+		View:    &PathView{Path: "moved.txt"},
 	}, 1, nil)
 	require.NotNil(t, ready)
 	ready.IsTrial = true
 	ready.TrialScopeKey = SKService()
 	require.Equal(t, testThrottleScope(), rt.scopes.findBlockingScope(ready), "the throttle scope outranks the service scope")
 
-	dispatched, err := flow.admitReady(t.Context(), []*trackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
@@ -496,13 +496,13 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 		Type:    ActionDownload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
-		View:    &pathView{Path: "trial.txt"},
+		View:    &PathView{Path: "trial.txt"},
 	}, 1, nil)
 	require.NotNil(t, ready)
 	ready.IsTrial = true
 	ready.TrialScopeKey = scopeKey
 
-	dispatched, err := flow.admitReady(t.Context(), []*trackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	require.Len(t, dispatched, 1)
@@ -526,13 +526,13 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 		Type:    ActionUpload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
-		View:    &pathView{Path: "trial.txt"},
+		View:    &PathView{Path: "trial.txt"},
 	}, 1, nil)
 	require.NotNil(t, ready)
 	ready.IsTrial = true
 	ready.TrialScopeKey = scopeKey
 
-	dispatched, err := flow.admitReady(t.Context(), []*trackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), []*TrackedAction{ready})
 	require.NoError(t, err)
 
 	require.Len(t, dispatched, 1)
@@ -569,7 +569,7 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	dispatched, err := flow.admitReady(t.Context(), []*trackedAction{ready})
+	dispatched, err := flow.admitReady(t.Context(), []*TrackedAction{ready})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "blocked retry_work")
 	assert.Empty(t, dispatched)
@@ -601,7 +601,7 @@ func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t 
 			flow := testEngineFlow(t, eng)
 			held := rt.sched.graph.Add(&Action{Type: ActionUpload, Path: "retry.txt", DriveID: eng.driveID}, 1, nil)
 			require.NotNil(t, held)
-			work := retryWorkKeyForAction(&held.Action)
+			work := RetryWorkKeyForAction(&held.Action)
 			flow.retryWork.rows[work] = RetryWorkRow{
 				Path:         work.Path,
 				ActionType:   work.ActionType,
@@ -629,14 +629,14 @@ func TestRetryLedger_ADelayedRowTimedBefore1970IsHeldUntilItsTime(t *testing.T) 
 	now := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
 	due := now.Add(time.Hour)
 	ledger := newRetryLedger()
-	held := &trackedAction{Action: Action{Type: ActionUpload, Path: "moon.txt"}}
-	work := retryWorkKeyForAction(&held.Action)
+	held := &TrackedAction{Action: Action{Type: ActionUpload, Path: "moon.txt"}}
+	work := RetryWorkKeyForAction(&held.Action)
 	var rows retryWork
 	rows.install([]RetryWorkRow{{
 		Path:         work.Path,
 		ActionType:   work.ActionType,
 		AttemptCount: 1,
-		NextRetryAt:  storedTimeNano(due),
+		NextRetryAt:  StoredTimeNano(due),
 	}})
 	decision := admissionDecision{Action: held, RetryWorkKey: work}
 

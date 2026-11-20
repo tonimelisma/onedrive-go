@@ -23,9 +23,9 @@ func (s *SyncStore) ReleaseScopeWork(
 	now time.Time,
 ) (released []RetryWorkRow, scopeRemoved bool, err error) {
 	wire := scopeKey.String()
-	nowNano := storedTimeNano(now)
+	nowNano := StoredTimeNano(now)
 
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
@@ -70,7 +70,7 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey ScopeKey) (delete
 
 	wire := scopeKey.String()
 
-	tx, err := beginPerfTx(ctx, s.db)
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
 	}
@@ -103,7 +103,7 @@ func (s *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 	}
 
 	for _, block := range blocks {
-		hasBlockedRetryWork, keepErr := s.scopeHasBlockedRetryWork(ctx, block.Key)
+		hasBlockedRetryWork, keepErr := s.ScopeHasBlockedRetryWork(ctx, block.Key)
 		if keepErr != nil {
 			return fmt.Errorf("sync: pruning block scope %s: %w", block.Key.String(), keepErr)
 		}
@@ -119,9 +119,9 @@ func (s *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) erro
 	return nil
 }
 
-// scopeHasBlockedRetryWork reports whether any retry_work row is blocked
+// ScopeHasBlockedRetryWork reports whether any retry_work row is blocked
 // under scopeKey, from a count of that scope's blocked rows.
-func (s *SyncStore) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
+func (s *SyncStore) ScopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
 	blocked, err := countBlockedRetryWorkForScopeTx(ctx, s.db, scopeKey.String())
 	if err != nil {
 		return false, err

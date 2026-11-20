@@ -40,7 +40,7 @@ Implements: R-6.2.3 [verified]
    rename it over the target, then fsync the directory (best effort where the
    filesystem answers EINVAL, ENOTSUP or EOPNOTSUPP: FUSE, SMB). The mtime is
    `DownloadOpts.RemoteMtime`, a `time.Time` the caller decodes (sync's
-   stored value through `remoteModTime`, sync-store.md "Stored times"); its
+   stored value through `RemoteModTime`, sync-store.md "Stored times"); its
    zero value sets none, and driveops decodes no stored integer
    (`TestDownloadToFile_SetsTheGivenModificationTimeAndLeavesAZeroOneAlone`)
 

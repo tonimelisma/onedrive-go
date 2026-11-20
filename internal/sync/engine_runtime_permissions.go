@@ -16,14 +16,14 @@ import (
 // server-answer table, not the bare 403, so a full drive (403
 // quotaLimitReached) goes to the quota scope and blocked content (403
 // malwareDetected) stays a per-file issue instead of a probed write boundary.
-func shouldHandleRemote403Permission(r *actionCompletion) bool {
-	return r != nil && r.serverAnswer() == serverAnswerForbidden && remoteWriteScopeBlocksAction(r.ActionType)
+func shouldHandleRemote403Permission(r *ActionCompletion) bool {
+	return r != nil && r.ServerAnswer() == ServerAnswerForbidden && RemoteWriteScopeBlocksAction(r.ActionType)
 }
 
 // shouldHandleLocalPermission selects completions the local probe owns:
 // permission denials, and EROFS, which is not os.ErrPermission but is the
 // same "this subtree cannot be written" fact at a filesystem boundary.
-func shouldHandleLocalPermission(r *actionCompletion) bool {
+func shouldHandleLocalPermission(r *ActionCompletion) bool {
 	return r != nil && (errors.Is(r.Err, os.ErrPermission) ||
 		driveops.ClassifyLocalError(r.Err) == driveops.LocalErrorReadOnly)
 }
@@ -37,9 +37,9 @@ func shouldHandleLocalPermission(r *actionCompletion) bool {
 // is, and leaves the probe to the next sync.
 func (flow *engineFlow) maybeHandlePermissionFailure(
 	ctx context.Context,
-	decision *resultDecision,
-	current *trackedAction,
-	r *actionCompletion,
+	decision *ResultDecision,
+	current *TrackedAction,
+	r *ActionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	switch {
@@ -56,9 +56,9 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 
 func (flow *engineFlow) handleRemote403PermissionFailure(
 	ctx context.Context,
-	decision *resultDecision,
-	current *trackedAction,
-	r *actionCompletion,
+	decision *ResultDecision,
+	current *TrackedAction,
+	r *ActionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	if bl == nil || flow.engine.permHandler.permChecker == nil {
@@ -84,9 +84,9 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 
 func (flow *engineFlow) handleLocalPermissionFailure(
 	ctx context.Context,
-	decision *resultDecision,
-	current *trackedAction,
-	r *actionCompletion,
+	decision *ResultDecision,
+	current *TrackedAction,
+	r *ActionCompletion,
 ) (bool, error) {
 	evidence := flow.engine.permHandler.handleLocalPermission(ctx, r)
 	if evidence.Kind == permissionEvidenceNone {
@@ -104,12 +104,12 @@ func (flow *engineFlow) handleLocalPermissionFailure(
 
 func (flow *engineFlow) applyPermissionFailureEvidence(
 	ctx context.Context,
-	current *trackedAction,
-	r *actionCompletion,
+	current *TrackedAction,
+	r *ActionCompletion,
 	evidence permissionEvidence,
 	remote bool,
 ) error {
-	work := retryWorkKeyForCompletion(r)
+	work := RetryWorkKeyForCompletion(r)
 
 	switch evidence.Kind {
 	case permissionEvidenceNone:
@@ -129,7 +129,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, scopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, ScopeUpdateResult{
 				Block:         true,
 				ScopeKey:      scopeKey,
 				ConditionType: scopeKey.ConditionType(),
@@ -161,7 +161,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 // trial either (isStoppingRun): the trial falls back to the retry work it is.
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
-	r *actionCompletion,
+	r *ActionCompletion,
 	bl *Baseline,
 ) (bool, error) {
 	if isStoppingRun(ctx) {
@@ -179,7 +179,7 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 		return false, nil
 	}
 
-	work := retryWorkKeyForCompletion(r)
+	work := RetryWorkKeyForCompletion(r)
 	if err := flow.clearBlockedRetryWorkForScope(ctx, work, r.TrialScopeKey); err != nil {
 		return false, err
 	}
@@ -194,7 +194,7 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 
 func (flow *engineFlow) permissionEvidenceForCompletion(
 	ctx context.Context,
-	r *actionCompletion,
+	r *ActionCompletion,
 	bl *Baseline,
 ) (permissionEvidence, bool, error) {
 	switch {
@@ -241,7 +241,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, scopeUpdateResult{
+			if err := flow.applyBlockScope(ctx, ScopeUpdateResult{
 				Block:         true,
 				ScopeKey:      scopeKey,
 				ConditionType: scopeKey.ConditionType(),
@@ -267,49 +267,49 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 // back to its own scope (applyTrialPermissionEvidence).
 func scopeKeyForPermissionEvidence(evidence permissionEvidence) ScopeKey {
 	switch evidence.IssueType {
-	case issueLocalReadDenied:
-		return sKPermLocalRead(evidence.BoundaryPath)
-	case issueLocalWriteDenied:
+	case IssueLocalReadDenied:
+		return SKPermLocalRead(evidence.BoundaryPath)
+	case IssueLocalWriteDenied:
 		return SKPermLocalWrite(evidence.BoundaryPath)
-	case issueLocalReadOnly:
+	case IssueLocalReadOnly:
 		return SKLocalReadOnly(evidence.BoundaryPath)
 	case IssueRemoteWriteDenied:
 		return SKPermRemoteWrite(evidence.BoundaryPath)
-	case issueRemoteReadDenied,
-		issueRemoteRootNotFound,
+	case IssueRemoteReadDenied,
+		IssueRemoteRootNotFound,
 		IssueInvalidFilename,
-		issuePathTooLong,
-		issueFileTooLarge,
-		issueHashPanic,
+		IssuePathTooLong,
+		IssueFileTooLarge,
+		IssueHashPanic,
 		IssueUnauthorized,
 		IssueQuotaExceeded,
-		issueRateLimited,
-		issueCaseCollision,
-		issueRemoteNameTwin,
-		issueDiskFull,
-		issueServiceOutage,
-		issueFileTooLargeForSpace,
-		issueLocalNameTooLong,
-		issueDeletesHeld,
-		issueLocalUnsyncableReplacement,
-		issueLocalMountBoundary,
-		issueLocalMountMissing,
-		issueRemoteFolderUnverifiable,
-		issueLocalInterruptedRemoval,
-		issueRemovedFolderKept,
-		issueLocalFileTooLarge,
-		issueLocalBusy,
-		issueLocalCrossDevice,
-		issueUnsupportedOperation,
-		issueMalwareDetected,
-		issueLocalDatabaseOpen,
-		issueUploadVerification,
-		issueDownloadIntegrity,
-		issueRequestTimeout,
-		issueTransientConflict,
-		issueTransientNotFound,
-		issueResourceLocked,
-		issueTransferURLRejected:
+		IssueRateLimited,
+		IssueCaseCollision,
+		IssueRemoteNameTwin,
+		IssueDiskFull,
+		IssueServiceOutage,
+		IssueFileTooLargeForSpace,
+		IssueLocalNameTooLong,
+		IssueDeletesHeld,
+		IssueLocalUnsyncableReplacement,
+		IssueLocalMountBoundary,
+		IssueLocalMountMissing,
+		IssueRemoteFolderUnverifiable,
+		IssueLocalInterruptedRemoval,
+		IssueRemovedFolderKept,
+		IssueLocalFileTooLarge,
+		IssueLocalBusy,
+		IssueLocalCrossDevice,
+		IssueUnsupportedOperation,
+		IssueMalwareDetected,
+		IssueLocalDatabaseOpen,
+		IssueUploadVerification,
+		IssueDownloadIntegrity,
+		IssueRequestTimeout,
+		IssueTransientConflict,
+		IssueTransientNotFound,
+		IssueResourceLocked,
+		IssueTransferURLRejected:
 		return ScopeKey{}
 	default:
 		return ScopeKey{}
@@ -322,7 +322,7 @@ func (flow *engineFlow) logRemotePermissionBoundary(
 ) {
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
-		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
+		ConditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		evidence.TriggerPath,
 		scopeKey,
 	),
@@ -338,7 +338,7 @@ func (flow *engineFlow) logLocalPermissionBoundary(
 ) {
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
-		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
+		ConditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		evidence.TriggerPath,
 		scopeKey,
 	),
@@ -373,7 +373,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	}
 	fields := append(flow.summaryLogFields(
 		errclass.ClassActionable,
-		conditionKeyForStoredCondition(conditionType, scopeKey),
+		ConditionKeyForStoredCondition(conditionType, scopeKey),
 		work.Path,
 		scopeKey,
 	),
@@ -393,7 +393,7 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	}
 	fields := append(flow.summaryLogFields(
 		errclass.ClassScopeBlockingTransient,
-		conditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
+		ConditionKeyForStoredCondition(scopeKey.ConditionType(), scopeKey),
 		work.Path,
 		scopeKey,
 	),

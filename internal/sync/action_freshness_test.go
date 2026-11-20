@@ -18,13 +18,13 @@ func TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution(t *
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "upload.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "planned",
 		Size:     7,
 	}}))
-	require.NoError(t, store.UpsertLocalStateRows(ctx, []localStateRow{{
+	require.NoError(t, store.UpsertLocalStateRows(ctx, []LocalStateRow{{
 		Path:     "upload.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "changed",
@@ -32,23 +32,23 @@ func TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution(t *
 	}}))
 
 	collector := perf.NewCollector(nil)
-	pool := newWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
 	pool.perfCollector = collector
-	pool.executeAction(ctx, &trackedAction{
+	pool.ExecuteActionForTest(ctx, &TrackedAction{
 		ID: 1,
 		Action: Action{
 			Type: ActionUpload,
 			Path: "upload.txt",
-			View: &pathView{
+			View: &PathView{
 				Path:  "upload.txt",
-				Local: &localState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
+				Local: &LocalState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
 			},
 		},
 	})
 
 	completion := <-pool.Completions()
 	assert.False(t, completion.Success)
-	require.ErrorIs(t, completion.Err, errActionPreconditionChanged)
+	require.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
 	assert.Equal(t, 1, collector.Snapshot().SupersededWorkerStartLocalTruthCount)
 }
 
@@ -60,7 +60,7 @@ func TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter(t 
 	ctx := t.Context()
 	remoteDriveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  remoteDriveID,
 		ItemID:   "remote-1",
 		Path:     "remote.txt",
@@ -70,18 +70,18 @@ func TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter(t 
 	}}, "delta-1", remoteDriveID))
 
 	collector := perf.NewCollector(nil)
-	pool := newWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
 	pool.perfCollector = collector
-	pool.executeAction(ctx, &trackedAction{
+	pool.ExecuteActionForTest(ctx, &TrackedAction{
 		ID: 1,
 		Action: Action{
 			Type:    ActionDownload,
 			Path:    "remote.txt",
 			ItemID:  "remote-1",
 			DriveID: remoteDriveID,
-			View: &pathView{
+			View: &PathView{
 				Path: "remote.txt",
-				Remote: &remoteState{
+				Remote: &RemoteState{
 					DriveID:  remoteDriveID,
 					ItemID:   "remote-1",
 					ItemType: ItemTypeFile,
@@ -94,7 +94,7 @@ func TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter(t 
 
 	completion := <-pool.Completions()
 	assert.False(t, completion.Success)
-	require.ErrorIs(t, completion.Err, errActionPreconditionChanged)
+	require.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
 	assert.Equal(t, 1, collector.Snapshot().SupersededWorkerStartRemoteTruthCount)
 }
 
@@ -103,27 +103,27 @@ func TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability(t *te
 	t.Parallel()
 
 	collector := perf.NewCollector(nil)
-	pool := newWorkerPool(nil, nil, nil, testLogger(t), 2)
+	pool := NewWorkerPool(nil, nil, nil, testLogger(t), 2)
 	pool.perfCollector = collector
 
-	pool.sendResult(t.Context(), &trackedAction{
+	pool.sendResult(t.Context(), &TrackedAction{
 		ID:     1,
 		Action: Action{Type: ActionUpload, Path: "local.txt"},
-	}, &actionOutcome{
+	}, &ActionOutcome{
 		Action:            ActionUpload,
 		Path:              "local.txt",
 		Error:             stalePreconditionError("upload source changed"),
-		FailureCapability: permissionCapabilityLocalRead,
-	}, errActionPreconditionChanged)
-	pool.sendResult(t.Context(), &trackedAction{
+		FailureCapability: PermissionCapabilityLocalRead,
+	}, ErrActionPreconditionChanged)
+	pool.sendResult(t.Context(), &TrackedAction{
 		ID:     2,
 		Action: Action{Type: ActionRemoteDelete, Path: "remote.txt"},
-	}, &actionOutcome{
+	}, &ActionOutcome{
 		Action:            ActionRemoteDelete,
 		Path:              "remote.txt",
 		Error:             stalePreconditionError("remote source changed"),
-		FailureCapability: permissionCapabilityRemoteRead,
-	}, errActionPreconditionChanged)
+		FailureCapability: PermissionCapabilityRemoteRead,
+	}, ErrActionPreconditionChanged)
 
 	<-pool.Completions()
 	<-pool.Completions()
@@ -138,25 +138,25 @@ func TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapabilit
 	t.Parallel()
 
 	collector := perf.NewCollector(nil)
-	pool := newWorkerPool(nil, nil, nil, testLogger(t), 2)
+	pool := NewWorkerPool(nil, nil, nil, testLogger(t), 2)
 	pool.perfCollector = collector
 
-	pool.sendResult(t.Context(), &trackedAction{
+	pool.sendResult(t.Context(), &TrackedAction{
 		ID:     1,
 		Action: Action{Type: ActionUpload, Path: "local.txt"},
-	}, &actionOutcome{
+	}, &ActionOutcome{
 		Action: ActionUpload,
 		Path:   "local.txt",
 		Error:  stalePreconditionError("upload source changed"),
-	}, errActionPreconditionChanged)
-	pool.sendResult(t.Context(), &trackedAction{
+	}, ErrActionPreconditionChanged)
+	pool.sendResult(t.Context(), &TrackedAction{
 		ID:     2,
 		Action: Action{Type: ActionDownload, Path: "remote.txt"},
-	}, &actionOutcome{
+	}, &ActionOutcome{
 		Action: ActionDownload,
 		Path:   "remote.txt",
 		Error:  stalePreconditionError("download target changed"),
-	}, errActionPreconditionChanged)
+	}, ErrActionPreconditionChanged)
 
 	<-pool.Completions()
 	<-pool.Completions()
@@ -173,22 +173,22 @@ func TestWorkerStartFreshness_DownloadDestinationAppearedIsSupersededBeforeExecu
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "download.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "local-now",
 		Size:     9,
 	}}))
 
-	pool := newWorkerPool(nil, nil, store, testLogger(t), 1)
-	pool.executeAction(ctx, &trackedAction{
+	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool.ExecuteActionForTest(ctx, &TrackedAction{
 		ID: 1,
 		Action: Action{
 			Type: ActionDownload,
 			Path: "download.txt",
-			View: &pathView{
+			View: &PathView{
 				Path: "download.txt",
-				Remote: &remoteState{
+				Remote: &RemoteState{
 					ItemType: ItemTypeFile,
 					Hash:     "remote-planned",
 					Size:     9,
@@ -199,7 +199,7 @@ func TestWorkerStartFreshness_DownloadDestinationAppearedIsSupersededBeforeExecu
 
 	completion := <-pool.Completions()
 	assert.False(t, completion.Success)
-	assert.ErrorIs(t, completion.Err, errActionPreconditionChanged)
+	assert.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
 }
 
 // Validates: R-2.8.9
@@ -211,22 +211,22 @@ func TestWorkerStartFreshness_LocalDeleteMissingIsSupersededBeforeExecution(t *t
 
 	require.NoError(t, store.ReplaceLocalState(ctx, nil))
 
-	pool := newWorkerPool(nil, nil, store, testLogger(t), 1)
-	pool.executeAction(ctx, &trackedAction{
+	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool.ExecuteActionForTest(ctx, &TrackedAction{
 		ID: 1,
 		Action: Action{
 			Type: ActionLocalDelete,
 			Path: "delete.txt",
-			View: &pathView{
+			View: &PathView{
 				Path:  "delete.txt",
-				Local: &localState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
+				Local: &LocalState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
 			},
 		},
 	})
 
 	completion := <-pool.Completions()
 	assert.False(t, completion.Success)
-	assert.ErrorIs(t, completion.Err, errActionPreconditionChanged)
+	assert.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
 }
 
 // Validates: R-2.8.9
@@ -242,7 +242,7 @@ func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution
 	ctx := t.Context()
 	remoteDriveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:             "old.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "changed",
@@ -251,7 +251,7 @@ func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution
 		LocalInode:       99,
 		LocalHasIdentity: true,
 	}}))
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  remoteDriveID,
 		ItemID:   "remote-1",
 		Path:     "new.txt",
@@ -260,8 +260,8 @@ func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution
 		Size:     7,
 	}}, "delta-1", remoteDriveID))
 
-	pool := newWorkerPool(nil, nil, store, testLogger(t), 1)
-	pool.executeAction(ctx, &trackedAction{
+	pool := NewWorkerPool(nil, nil, store, testLogger(t), 1)
+	pool.ExecuteActionForTest(ctx, &TrackedAction{
 		ID: 1,
 		Action: Action{
 			Type:    ActionLocalMove,
@@ -269,9 +269,9 @@ func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution
 			OldPath: "old.txt",
 			ItemID:  "remote-1",
 			DriveID: remoteDriveID,
-			View: &pathView{
+			View: &PathView{
 				Path: "new.txt",
-				Remote: &remoteState{
+				Remote: &RemoteState{
 					DriveID:  remoteDriveID,
 					ItemID:   "remote-1",
 					ItemType: ItemTypeFile,
@@ -296,7 +296,7 @@ func TestWorkerStartFreshness_LocalMoveSourceReplacedIsSupersededBeforeExecution
 
 	completion := <-pool.Completions()
 	assert.False(t, completion.Success)
-	assert.ErrorIs(t, completion.Err, errActionPreconditionChanged)
+	assert.ErrorIs(t, completion.Err, ErrActionPreconditionChanged)
 }
 
 // Validates: R-2.8.9
@@ -306,26 +306,26 @@ func TestWorkerStartFreshness_SuspectLocalTruthDoesNotSupersedeFromLocalState(t 
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "upload.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "planned",
 		Size:     7,
 	}}))
-	require.NoError(t, store.UpsertLocalStateRows(ctx, []localStateRow{{
+	require.NoError(t, store.UpsertLocalStateRows(ctx, []LocalStateRow{{
 		Path:     "upload.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "changed",
 		Size:     7,
 	}}))
-	require.NoError(t, store.MarkLocalTruthSuspect(ctx, localTruthRecoveryDroppedEvents))
+	require.NoError(t, store.MarkLocalTruthSuspect(ctx, LocalTruthRecoveryDroppedEvents))
 
-	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+	decision, err := EvaluateActionFreshnessFromStore(ctx, store, &Action{
 		Type: ActionUpload,
 		Path: "upload.txt",
-		View: &pathView{
+		View: &PathView{
 			Path:  "upload.txt",
-			Local: &localState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
+			Local: &LocalState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
 		},
 	})
 
@@ -343,77 +343,17 @@ func TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead(t *testing.T
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+	decision, err := EvaluateActionFreshnessFromStore(ctx, store, &Action{
 		Type: ActionUpload,
 		Path: "upload.txt",
-		View: &pathView{
+		View: &PathView{
 			Path:  "upload.txt",
-			Local: &localState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
+			Local: &LocalState{ItemType: ItemTypeFile, Hash: "planned", Size: 7},
 		},
 	})
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, decision.Fresh)
-}
-
-// Validates: R-2.8.9, R-6.6.17
-func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	eng.perfCollector = perf.NewCollector(nil)
-	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
-	flow := testEngineFlow(t, eng)
-	ctx := t.Context()
-	remoteDriveID := driveid.New(testDriveID)
-
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
-		DriveID:  remoteDriveID,
-		ItemID:   "remote-1",
-		Path:     "download.txt",
-		ItemType: ItemTypeFile,
-		Hash:     "changed",
-		Size:     12,
-		ETag:     "etag-changed",
-	}}, "delta-1", remoteDriveID))
-
-	flow.initializeRuntimeState(&runtimePlan{})
-	flow.sched.graph = newDepGraph(eng.logger)
-
-	root := flow.sched.graph.Add(&Action{
-		Type:    ActionDownload,
-		Path:    "download.txt",
-		ItemID:  "remote-1",
-		DriveID: remoteDriveID,
-		View: &pathView{
-			Path: "download.txt",
-			Remote: &remoteState{
-				DriveID:  remoteDriveID,
-				ItemID:   "remote-1",
-				ItemType: ItemTypeFile,
-				Hash:     "planned",
-				Size:     12,
-				ETag:     "etag-planned",
-			},
-		},
-	}, 1, nil)
-	require.NotNil(t, root)
-
-	child := flow.sched.graph.Add(&Action{
-		Type: ActionUpload,
-		Path: "dependent.txt",
-		View: &pathView{Path: "dependent.txt"},
-	}, 2, []int64{1})
-	assert.Nil(t, child)
-
-	outbox, err := flow.admitReady(ctx, []*trackedAction{root})
-	require.NoError(t, err)
-	assert.Empty(t, outbox)
-	assert.Equal(t, 0, flow.sched.graph.InFlightCount())
-	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
-	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
-	assert.Equal(t, 1, eng.collector().Snapshot().SupersededEngineAdmissionCount)
 }
 
 // Validates: R-2.8.9
@@ -424,7 +364,7 @@ func TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange(t *tes
 	ctx := t.Context()
 	remoteDriveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  remoteDriveID,
 		ItemID:   "item-file",
 		Path:     "new.txt",
@@ -435,14 +375,14 @@ func TestActionFreshness_PostRemoteMoveUploadAllowsMoveProducedETagChange(t *tes
 		ETag:     "etag-after-move",
 	}}, "delta-1", remoteDriveID))
 
-	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+	decision, err := EvaluateActionFreshnessFromStore(ctx, store, &Action{
 		Type:    ActionUpload,
 		Path:    "new.txt",
 		ItemID:  "item-file",
 		DriveID: remoteDriveID,
-		View: &pathView{
+		View: &PathView{
 			Path: "new.txt",
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  remoteDriveID,
 				ItemID:   "item-file",
 				ItemType: ItemTypeFile,
@@ -472,7 +412,7 @@ func TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange(t *testi
 	ctx := t.Context()
 	remoteDriveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  remoteDriveID,
 		ItemID:   "item-file",
 		Path:     "new.txt",
@@ -483,14 +423,14 @@ func TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange(t *testi
 		ETag:     "etag-after-move",
 	}}, "delta-1", remoteDriveID))
 
-	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+	decision, err := EvaluateActionFreshnessFromStore(ctx, store, &Action{
 		Type:    ActionUpload,
 		Path:    "new.txt",
 		ItemID:  "item-file",
 		DriveID: remoteDriveID,
-		View: &pathView{
+		View: &PathView{
 			Path: "new.txt",
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  remoteDriveID,
 				ItemID:   "item-file",
 				ItemType: ItemTypeFile,
@@ -522,7 +462,7 @@ func TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction(t *tes
 
 	require.NoError(t, store.ReplaceLocalState(ctx, nil))
 
-	decision, err := evaluateActionFreshnessFromStore(ctx, store, &Action{
+	decision, err := EvaluateActionFreshnessFromStore(ctx, store, &Action{
 		Type: ActionUpload,
 		Path: "upload.txt",
 	})
@@ -541,13 +481,13 @@ func TestActionFreshness_LocalOriginMoveRejectsChangedDestination(t *testing.T) 
 		Path:    "secret.txt",
 		OldPath: "vim.swp",
 		ItemID:  "item-swap",
-		View:    &pathView{Path: "vim.swp"},
-		MovedLocal: &localState{
+		View:    &PathView{Path: "vim.swp"},
+		MovedLocal: &LocalState{
 			ItemType: ItemTypeFile, Size: 5, Mtime: 100,
 			LocalDevice: 7, LocalInode: 8, LocalHasIdentity: true,
 		},
 	}
-	planned := &localStateRow{
+	planned := &LocalStateRow{
 		Path: "secret.txt", ItemType: ItemTypeFile, Size: 5, Mtime: 100,
 		LocalDevice: 7, LocalInode: 8, LocalHasIdentity: true,
 	}
@@ -583,8 +523,8 @@ func TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain(t *testing.
 		Path:    "new",
 		OldPath: "old",
 		ItemID:  "item-old",
-		View:    &pathView{Path: "old"},
-		MovedLocal: &localState{
+		View:    &PathView{Path: "old"},
+		MovedLocal: &LocalState{
 			ItemType: ItemTypeFolder, LocalDevice: 7, LocalInode: 8, LocalBirthTime: born, LocalHasIdentity: true,
 		},
 	}
@@ -597,7 +537,7 @@ func TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain(t *testing.
 		{name: "born again", birthTime: born + 1},
 		{name: "no birth time observed", fresh: true},
 	} {
-		destination := &localStateRow{
+		destination := &LocalStateRow{
 			Path: "new", ItemType: ItemTypeFolder,
 			LocalDevice: 7, LocalInode: 8, LocalBirthTime: tc.birthTime, LocalHasIdentity: true,
 		}
@@ -607,5 +547,33 @@ func TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain(t *testing.
 			LocalAtMovePeerFound: true,
 		})
 		assert.Equal(t, tc.fresh, got.Fresh, tc.name)
+	}
+}
+
+// Validates: R-6.2.16
+//
+// The executor's decisions on the action type panic with OutsideTheEnum on a
+// value outside the enum, like the vocabulary's
+// (TestActionTypeDecisions_PanicOnATypeOutsideTheEnum): never fresh.
+func TestExecutorActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
+	t.Parallel()
+
+	const unlisted = ActionCleanup + 1
+	outside := func() *Action {
+		return &Action{
+			Type:    unlisted,
+			Path:    "docs/a.txt",
+			OldPath: "docs",
+			ItemID:  "item-a",
+			View:    &PathView{Path: "docs/a.txt", Baseline: &BaselineEntry{Path: "docs", ItemType: ItemTypeFolder}},
+		}
+	}
+
+	decisions := map[string]func(){
+		"evaluateMoveEndpointFreshness": func() { evaluateMoveEndpointFreshness(outside(), actionFreshnessInputs{}) },
+		"movePeerPath":                  func() { movePeerPath(outside()) },
+	}
+	for name, decide := range decisions {
+		assert.PanicsWithValue(t, OutsideTheEnum(unlisted), decide, name)
 	}
 }

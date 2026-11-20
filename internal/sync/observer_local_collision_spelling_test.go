@@ -20,8 +20,8 @@ type collisionSpellingFixture struct {
 	upperDisk string // NFD spelling on disk
 	upperNFC  string // stored spelling of the same file
 	lowerNFC  string // stored and on-disk spelling of the other file
-	obs       *localObserver
-	batches   chan localObservation
+	obs       *LocalObserver
+	batches   chan LocalObservation
 }
 
 func newCollisionSpellingFixture(t *testing.T) *collisionSpellingFixture {
@@ -44,7 +44,7 @@ func newCollisionSpellingFixture(t *testing.T) *collisionSpellingFixture {
 		t.Skip("the test filesystem finds an NFD name by its NFC spelling")
 	}
 
-	f.obs = newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	f.obs = NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	f.batches = localBatches(f.obs, 10)
 
 	return f

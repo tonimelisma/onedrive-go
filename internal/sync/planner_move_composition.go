@@ -199,7 +199,7 @@ type moveComposition struct {
 	// deferredMoves holds, for each deferred item, the moves its relocation
 	// still needs: ActionLocalMove for this computer, ActionRemoteMove for
 	// OneDrive, none when only the baseline is behind (a re-key).
-	deferredMoves map[string][]actionType
+	deferredMoves map[string][]ActionType
 	// ownLandings holds, per side and under OneDrive's name folding
 	// (namekey.OfPath), the path of each new folder a deferred item moves into
 	// at its own path there (holdOwnLandings): a later pass makes it, once
@@ -659,7 +659,7 @@ func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveE
 	e := &moveEmitter{
 		moveComposer: c,
 		state:        make(map[string]moveEmitState, len(c.keys)),
-		result:       moveComposition{deferred: map[string]bool{}, deferredMoves: map[string][]actionType{}},
+		result:       moveComposition{deferred: map[string]bool{}, deferredMoves: map[string][]ActionType{}},
 		landings:     map[string]string{},
 		loopHeld:     map[string]string{},
 		remoteHeld:   map[string]bool{},
@@ -729,8 +729,8 @@ func (e *moveEmitter) resolvePending(order []string) {
 	}
 }
 
-// moveSwapInfix names the temporary path a parked item waits at.
-const moveSwapInfix = ".swap-"
+// MoveSwapInfix names the temporary path a parked item waits at.
+const MoveSwapInfix = ".swap-"
 
 // moveNameMaxBytes is the longest name a local filesystem stores (NAME_MAX).
 // A parking name cuts its stem to fit the infix: a swap of two names at the
@@ -925,7 +925,7 @@ func (e *moveEmitter) freeParkingPath(p string) string {
 	stem := strings.TrimSuffix(name, ext)
 	taken := e.takenPathsFolded()
 	for i := 1; i <= len(e.keys)+1; i++ {
-		suffix := moveSwapInfix + strconv.Itoa(i) + ext
+		suffix := MoveSwapInfix + strconv.Itoa(i) + ext
 		candidate := joinMovePath(dir, truncateNameBytes(stem, moveNameMaxBytes-len(suffix))+suffix)
 		if !taken[namekey.OfPath(candidate)] {
 			return candidate
@@ -1023,9 +1023,9 @@ func (e *moveEmitter) relocated(n *moveNode) bool {
 // relocationMoves is the moves that bring n to its target: a local move
 // when it is elsewhere on this computer, a remote move when it is elsewhere
 // on OneDrive.
-func (e *moveEmitter) relocationMoves(n *moveNode) []actionType {
+func (e *moveEmitter) relocationMoves(n *moveNode) []ActionType {
 	target := e.target[n.key]
-	var moves []actionType
+	var moves []ActionType
 	if n.present(moveCoordLocal) && !sameLocation(e.location(n, moveCoordLocal), target) {
 		moves = append(moves, ActionLocalMove)
 	}
@@ -1616,12 +1616,12 @@ type moveInputs struct {
 }
 
 func moveCompositionInputs(
-	comparisons []sQLiteComparisonRow,
-	views map[string]*pathView,
-	remoteRows []remoteStateRow,
-	localRows []localStateRow,
+	comparisons []SQLiteComparisonRow,
+	views map[string]*PathView,
+	remoteRows []RemoteStateRow,
+	localRows []LocalStateRow,
 ) moveInputs {
-	cmpByPath := make(map[string]*sQLiteComparisonRow, len(comparisons))
+	cmpByPath := make(map[string]*SQLiteComparisonRow, len(comparisons))
 	for i := range comparisons {
 		cmpByPath[comparisons[i].Path] = &comparisons[i]
 	}
@@ -1645,7 +1645,7 @@ func moveCompositionInputs(
 		if moveNodeTouchesUnavailableTruth(&node, views) {
 			frozen[node.key] = true
 		}
-		if cmp.ComparisonKind == comparisonLocalMoveSource && cmp.LocalPresent && cmp.LocalMoveTarget != "" {
+		if cmp.ComparisonKind == ComparisonLocalMoveSource && cmp.LocalPresent && cmp.LocalMoveTarget != "" {
 			recreated[node.key] = cmp.Path
 		}
 		nodes = append(nodes, node)
@@ -1654,8 +1654,8 @@ func moveCompositionInputs(
 	return moveInputs{nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated}
 }
 
-func indexMoveSnapshot(remoteRows []remoteStateRow, localRows []localStateRow) (map[string]*remoteStateRow, moveOccupancy) {
-	remoteByID := make(map[string]*remoteStateRow, len(remoteRows))
+func indexMoveSnapshot(remoteRows []RemoteStateRow, localRows []LocalStateRow) (map[string]*RemoteStateRow, moveOccupancy) {
+	remoteByID := make(map[string]*RemoteStateRow, len(remoteRows))
 	occupancy := moveOccupancy{
 		local:       make(map[string]bool, len(localRows)),
 		remote:      make(map[string]bool, len(remoteRows)),
@@ -1675,7 +1675,7 @@ func indexMoveSnapshot(remoteRows []remoteStateRow, localRows []localStateRow) (
 	return remoteByID, occupancy
 }
 
-func moveNodeTouchesUnavailableTruth(node *moveNode, views map[string]*pathView) bool {
+func moveNodeTouchesUnavailableTruth(node *moveNode, views map[string]*PathView) bool {
 	for coord := range moveCoordCount {
 		if p := node.paths[coord]; p != "" && views[p] != nil && plannerSuppressesUnavailableTruth(&views[p].TruthStatus) {
 			return true
@@ -1690,7 +1690,7 @@ func moveNodeTouchesUnavailableTruth(node *moveNode, views map[string]*pathView)
 // local copy is provably the synced version, renamed to a conflict copy when
 // it was edited, never otherwise (a folder, unknown content, or an item that
 // still exists online somewhere).
-func composedDisplacement(node *moveNode, entry *BaselineEntry, view *pathView, remoteByID map[string]*remoteStateRow) moveDisplacement {
+func composedDisplacement(node *moveNode, entry *BaselineEntry, view *PathView, remoteByID map[string]*RemoteStateRow) moveDisplacement {
 	if node.paths[moveCoordLocal] != node.paths[moveCoordBaseline] || entry.ItemType != ItemTypeFile || view.Local == nil {
 		return moveDisplaceNever
 	}
@@ -1707,8 +1707,8 @@ func composedDisplacement(node *moveNode, entry *BaselineEntry, view *pathView, 
 	return moveDisplaceReplace
 }
 
-func composedLocalPosition(cmp *sQLiteComparisonRow, view *pathView) string {
-	if cmp.ComparisonKind == comparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
+func composedLocalPosition(cmp *SQLiteComparisonRow, view *PathView) string {
+	if cmp.ComparisonKind == ComparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
 		return cmp.LocalMoveTarget
 	}
 	if view.Local != nil && localEntryIsBaselineItem(view.Local, view.Baseline) {
@@ -1719,12 +1719,12 @@ func composedLocalPosition(cmp *sQLiteComparisonRow, view *pathView) string {
 }
 
 // localEntryIsBaselineItem applies the source check a local move's freshness
-// and executor make (localRowIsBaselineItem) to a planner view, so
+// and executor make (LocalRowIsBaselineItem) to a planner view, so
 // composition never plans a move of an entry they would refuse: a file
 // replaced at the path by a different one (new identity, other content) is a
 // new local entry, and its move was superseded on every pass.
-func localEntryIsBaselineItem(local *localState, baseline *BaselineEntry) bool {
-	return localRowIsBaselineItem(&localStateRow{
+func localEntryIsBaselineItem(local *LocalState, baseline *BaselineEntry) bool {
+	return LocalRowIsBaselineItem(&LocalStateRow{
 		ItemType:         local.ItemType,
 		Hash:             local.Hash,
 		Size:             local.Size,
@@ -1736,10 +1736,10 @@ func localEntryIsBaselineItem(local *localState, baseline *BaselineEntry) bool {
 }
 
 func composedRemotePosition(
-	cmp *sQLiteComparisonRow,
+	cmp *SQLiteComparisonRow,
 	entry *BaselineEntry,
-	remoteByID map[string]*remoteStateRow,
-	cmpByPath map[string]*sQLiteComparisonRow,
+	remoteByID map[string]*RemoteStateRow,
+	cmpByPath map[string]*SQLiteComparisonRow,
 	localPosition string,
 ) string {
 	row, ok := remoteByID[entry.ItemID]
@@ -1754,15 +1754,15 @@ func composedRemotePosition(
 		return ""
 	}
 	switch {
-	case at.ComparisonKind == comparisonRemoteMoveShadowed:
+	case at.ComparisonKind == ComparisonRemoteMoveShadowed:
 		return row.Path
 	// The path is another synced item's, which OneDrive moved away (a swap
 	// or a chain): the item ID proves this item now sits there, and the
 	// path's own item is composed too. Without it a local rename of an item
 	// OneDrive swapped had no remote position and was copied, not moved.
-	case at.ComparisonKind == comparisonRemoteMoveSource && at.RemoteItemID == entry.ItemID:
+	case at.ComparisonKind == ComparisonRemoteMoveSource && at.RemoteItemID == entry.ItemID:
 		return row.Path
-	case at.ComparisonKind == comparisonLocalMoveDest && row.Path == localPosition:
+	case at.ComparisonKind == ComparisonLocalMoveDest && row.Path == localPosition:
 		return row.Path
 	default:
 		return ""
@@ -1801,7 +1801,7 @@ func remoteToLocalFolderPrefixes(nodes []moveNode) []graphFolderMoveBoundary {
 func buildComposedMoveActions(
 	composition *moveComposition,
 	inputs *moveInputs,
-	views map[string]*pathView,
+	views map[string]*PathView,
 	baseline *Baseline,
 ) (actions, waiting []Action) {
 	nodes := inputs.nodes
@@ -1809,11 +1809,11 @@ func buildComposedMoveActions(
 	for i := range nodes {
 		nodeByKey[nodes[i].key] = &nodes[i]
 	}
-	viewAt := func(p string) *pathView {
+	viewAt := func(p string) *PathView {
 		if v := views[p]; v != nil {
 			return v
 		}
-		return &pathView{Path: p}
+		return &PathView{Path: p}
 	}
 
 	for i := range composition.moves {
@@ -1841,7 +1841,7 @@ func buildComposedMoveActions(
 		if node == nil || !ok {
 			continue
 		}
-		view := &pathView{
+		view := &PathView{
 			Path:        rekey.newPath,
 			Remote:      viewAt(node.paths[moveCoordRemote]).Remote,
 			Local:       viewAt(node.paths[moveCoordLocal]).Local,
@@ -1859,8 +1859,8 @@ func buildComposedMoveActions(
 // composedLocalMoveActions builds a remote-origin local move, preceded by the
 // conflict copy of an edited file it displaces (buildDependencies orders the
 // move after the copy at its destination).
-func composedLocalMoveActions(move *composedMove, entry *BaselineEntry, remote *remoteState, viewAt func(string) *pathView) []Action {
-	view := &pathView{
+func composedLocalMoveActions(move *composedMove, entry *BaselineEntry, remote *RemoteState, viewAt func(string) *PathView) []Action {
+	view := &PathView{
 		Path:        move.newPath,
 		Remote:      remote,
 		Local:       viewAt(move.newPath).Local,
@@ -1887,9 +1887,9 @@ func composedLocalMoveActions(move *composedMove, entry *BaselineEntry, remote *
 // content could not be proven unchanged (no hash) also uploads what now sits
 // at the destination, but only when the item is already there locally: the
 // upload reads local truth at its path.
-func composedRemoteMoveActions(move *composedMove, entry *BaselineEntry, remote *remoteState, viewAt func(string) *pathView) []Action {
+func composedRemoteMoveActions(move *composedMove, entry *BaselineEntry, remote *RemoteState, viewAt func(string) *PathView) []Action {
 	movedLocal := viewAt(move.localPath).Local
-	view := &pathView{
+	view := &PathView{
 		Path:        move.oldPath,
 		Remote:      remote,
 		Local:       viewAt(move.oldPath).Local,
@@ -1905,8 +1905,8 @@ func composedRemoteMoveActions(move *composedMove, entry *BaselineEntry, remote 
 	}
 	actions := []Action{action}
 
-	if move.localPath == move.newPath && localFileDiffersFromBaseline(movedLocal, entry) {
-		uploadView := &pathView{
+	if move.localPath == move.newPath && LocalFileDiffersFromBaseline(movedLocal, entry) {
+		uploadView := &PathView{
 			Path:        move.newPath,
 			Local:       movedLocal,
 			Remote:      remote,
@@ -1931,7 +1931,7 @@ func recreatedSourceCreates(
 	composition *moveComposition,
 	inputs *moveInputs,
 	nodeByKey map[string]*moveNode,
-	viewAt func(string) *pathView,
+	viewAt func(string) *PathView,
 ) (creates, waiting []Action) {
 	keys := make([]string, 0, len(inputs.recreated))
 	for key := range inputs.recreated {
@@ -1946,7 +1946,7 @@ func recreatedSourceCreates(
 		if node == nil || sourceView.Local == nil || plannerSuppressesUnavailableTruth(&sourceView.TruthStatus) {
 			continue
 		}
-		createView := &pathView{Path: source, Local: sourceView.Local, TruthStatus: sourceView.TruthStatus}
+		createView := &PathView{Path: source, Local: sourceView.Local, TruthStatus: sourceView.TruthStatus}
 		create := makeCreateUploadAction(createView)
 		if sourceView.Local.ItemType == ItemTypeFolder {
 			create = makeFolderCreate(createView, CreateRemote)
@@ -2026,7 +2026,7 @@ func dropCreatesOntoComposedItems(
 			dropped = append(dropped, *action)
 			continue
 		}
-		if action.Path == actionViewPath(action) {
+		if action.Path == ActionViewPath(action) {
 			kept = append(kept, *action)
 			continue
 		}
@@ -2102,7 +2102,7 @@ func heldFolderRebases(actions []Action, inputs *moveInputs, composition *moveCo
 // rebasedThroughHeldFolder reports the held folder a create here was rebased
 // through: from below its path on OneDrive to below where it sits here.
 func rebasedThroughHeldFolder(action *Action, held []graphFolderMoveBoundary) (graphFolderMoveBoundary, bool) {
-	viewPath := actionViewPath(action)
+	viewPath := ActionViewPath(action)
 	for _, folder := range held {
 		if strings.HasPrefix(viewPath, folder.oldPrefix) && strings.HasPrefix(action.Path, folder.newPrefix) {
 			return folder, true
@@ -2458,7 +2458,7 @@ func keysStillToMove(actions []Action, composition *moveComposition) map[moveCoo
 
 // moveSide is the side a move of moveType, ActionLocalMove or
 // ActionRemoteMove, moves an item on.
-func moveSide(moveType actionType) moveCoord {
+func moveSide(moveType ActionType) moveCoord {
 	if moveType == ActionRemoteMove {
 		return moveCoordRemote
 	}
@@ -2506,7 +2506,7 @@ func pathsVacatedByPlan(actions []Action) map[moveCoord]map[string]bool {
 			vacated[moveCoordRemote][actions[i].Path] = true
 		case ActionDownload, ActionUpload, ActionFolderCreate, ActionBaselineUpdate, ActionCleanup:
 		default:
-			panic(outsideTheEnum(actions[i].Type))
+			panic(OutsideTheEnum(actions[i].Type))
 		}
 	}
 
@@ -2543,18 +2543,18 @@ func createSide(action *Action) (moveCoord, bool) {
 		return moveCoordRemote, true
 	case ActionFolderCreate:
 		switch action.CreateSide {
-		case createLocal:
+		case CreateLocal:
 			return moveCoordLocal, true
 		case CreateRemote:
 			return moveCoordRemote, true
 		default:
-			panic(outsideTheEnum(action.CreateSide))
+			panic(OutsideTheEnum(action.CreateSide))
 		}
 	case ActionLocalMove, ActionRemoteMove, ActionLocalDelete, ActionRemoteDelete,
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return moveCoordBaseline, false
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
@@ -2570,7 +2570,7 @@ func deleteSide(action *Action) (moveCoord, bool) {
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return moveCoordBaseline, false
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
@@ -2624,7 +2624,7 @@ func dropReconciliationOfComposedMoves(actions []Action, composition *moveCompos
 		case ActionUpload, ActionLocalDelete, ActionRemoteDelete, ActionLocalMove, ActionRemoteMove,
 			ActionFolderCreate, ActionCleanup:
 		default:
-			panic(outsideTheEnum(action.Type))
+			panic(OutsideTheEnum(action.Type))
 		}
 		kept = append(kept, *action)
 	}

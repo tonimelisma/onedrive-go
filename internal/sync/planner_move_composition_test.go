@@ -128,7 +128,7 @@ func TestComposeMoves_ParkingNameFitsTheNameLimit(t *testing.T) {
 		assert.LessOrEqual(t, len(move.newPath), 255, move.newPath)
 		assert.True(t, utf8.ValidString(move.newPath), move.newPath)
 	}
-	assert.Contains(t, c.moves[0].newPath, moveSwapInfix)
+	assert.Contains(t, c.moves[0].newPath, MoveSwapInfix)
 }
 
 // Validates: R-2.17.6
@@ -426,7 +426,7 @@ func composedMoveActions(c *moveComposition, nodes []moveNode) []Action {
 		}
 		actions = append(actions, Action{
 			Type: moveType, OldPath: c.moves[i].oldPath, Path: c.moves[i].newPath,
-			View: &pathView{Baseline: &BaselineEntry{ItemType: itemTypes[c.moves[i].key]}},
+			View: &PathView{Baseline: &BaselineEntry{ItemType: itemTypes[c.moves[i].key]}},
 		})
 	}
 
@@ -451,7 +451,7 @@ func composedMoveActions(c *moveComposition, nodes []moveNode) []Action {
 func TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
 	for _, tc := range []struct {
 		name string
 		// subWork is the plan's work on sub after the two moves and the docs
@@ -461,8 +461,8 @@ func TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource(t *testing.T)
 	}{
 		{name: "deleted online", subWork: []Action{{Type: ActionRemoteDelete, Path: "docs/sub", View: folder}}},
 		{name: "made here again", subWork: []Action{
-			{Type: ActionFolderCreate, Path: "archive/sub", CreateSide: createLocal},
-			{Type: ActionDownload, Path: "archive/sub/new.txt", View: &pathView{Path: "archive/sub/new.txt"}},
+			{Type: ActionFolderCreate, Path: "archive/sub", CreateSide: CreateLocal},
+			{Type: ActionDownload, Path: "archive/sub/new.txt", View: &PathView{Path: "archive/sub/new.txt"}},
 		}, wantKept: 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1264,7 +1264,7 @@ func TestDropReconciliationOfComposedMoves_HeldMoveKeepsItsBaselineRow(t *testin
 
 	held := &moveComposition{
 		deferred:      map[string]bool{"item-b": true},
-		deferredMoves: map[string][]actionType{"item-b": {ActionRemoteMove}},
+		deferredMoves: map[string][]ActionType{"item-b": {ActionRemoteMove}},
 	}
 	update := Action{Type: ActionBaselineUpdate, Path: "f/b.txt", ItemID: "item-b"}
 	other := Action{Type: ActionBaselineUpdate, Path: "f/c.txt", ItemID: "item-c"}
@@ -1282,7 +1282,7 @@ type heldSourceDeleteCase struct {
 	node moveNode
 	// held is the moves composition holds for the next pass, nil for none;
 	// moved is the move it composes, built as composed.
-	held     []actionType
+	held     []ActionType
 	moved    []composedMove
 	composed []Action
 	// waiting is the creates that wait with a held move, built aside.
@@ -1296,17 +1296,17 @@ type heldSourceDeleteCase struct {
 }
 
 func heldSourceDeleteCases() []heldSourceDeleteCase {
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
-	remoteDelete := func(p string, view *pathView) Action { return Action{Type: ActionRemoteDelete, Path: p, View: view} }
-	localDelete := func(p string, view *pathView) Action { return Action{Type: ActionLocalDelete, Path: p, View: view} }
-	remoteMove := func(from, to string, view *pathView) Action {
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	remoteDelete := func(p string, view *PathView) Action { return Action{Type: ActionRemoteDelete, Path: p, View: view} }
+	localDelete := func(p string, view *PathView) Action { return Action{Type: ActionLocalDelete, Path: p, View: view} }
+	remoteMove := func(from, to string, view *PathView) Action {
 		return Action{Type: ActionRemoteMove, ItemID: "item-" + from, OldPath: from, Path: to, View: view}
 	}
 	madeHere := func(p string) Action {
-		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{ItemType: ItemTypeFile}}}
+		return Action{Type: ActionUpload, Path: p, View: &PathView{Local: &LocalState{ItemType: ItemTypeFile}}}
 	}
-	onOneDrive, here := []actionType{ActionRemoteMove}, []actionType{ActionLocalMove}
+	onOneDrive, here := []ActionType{ActionRemoteMove}, []ActionType{ActionLocalMove}
 	heldInP := composeNode("f", ItemTypeFolder, "P/f", "x/f", "P/f")
 
 	return append([]heldSourceDeleteCase{
@@ -1354,8 +1354,8 @@ func heldSourceDeleteCases() []heldSourceDeleteCase {
 				Type: ActionRemoteMove, ItemID: "f", OldPath: "P/f", Path: "K/f", View: folder,
 			}},
 			actions: []Action{
-				{Type: ActionConflictCopy, Path: "K", View: &pathView{
-					Local: &localState{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFile},
+				{Type: ActionConflictCopy, Path: "K", View: &PathView{
+					Local: &LocalState{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFile},
 				}},
 				remoteDelete("P", folder),
 			},
@@ -1375,14 +1375,14 @@ func heldSourceDeleteCases() []heldSourceDeleteCase {
 
 // heldWriteDeleteCases are the rows of heldSourceDeleteCases in which a held
 // create writes the content of a synced item another delete removes.
-func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
-	synced := func(inode uint64, itemID string) *pathView {
-		return &pathView{Baseline: &BaselineEntry{
+func heldWriteDeleteCases(folder *PathView) []heldSourceDeleteCase {
+	synced := func(inode uint64, itemID string) *PathView {
+		return &PathView{Baseline: &BaselineEntry{
 			ItemType: ItemTypeFile, ItemID: itemID, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 		}}
 	}
 	uploadOf := func(p string, inode uint64) Action {
-		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{
+		return Action{Type: ActionUpload, Path: p, View: &PathView{Local: &LocalState{
 			ItemType: ItemTypeFile, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 		}}}
 	}
@@ -1391,7 +1391,7 @@ func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 	return []heldSourceDeleteCase{
 		{
 			name: "z renamed here onto P/f, which f's waiting move leaves: OneDrive's delete of z waits with z's upload",
-			node: heldInP, held: []actionType{ActionRemoteMove},
+			node: heldInP, held: []ActionType{ActionRemoteMove},
 			waiting: []Action{uploadOf("P/f", 7)},
 			actions: []Action{
 				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
@@ -1401,7 +1401,7 @@ func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 		},
 		{
 			name: "z renamed here onto P, deleted here: z's delete waits with the upload at P, which waits with P's delete",
-			node: heldInP, held: []actionType{ActionRemoteMove},
+			node: heldInP, held: []ActionType{ActionRemoteMove},
 			actions: []Action{
 				{Type: ActionRemoteDelete, Path: "P", View: folder},
 				uploadOf("P", 7),
@@ -1411,34 +1411,34 @@ func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 		},
 		{
 			name: "y moved on OneDrive onto a path here that f's waiting move leaves: the delete of y here waits with its download",
-			node: composeNode("f", ItemTypeFolder, "P/f", "P/f", "x/f"), held: []actionType{ActionLocalMove},
-			waiting: []Action{{Type: ActionDownload, Path: "P/f", ItemID: "item-y", View: &pathView{}}},
+			node: composeNode("f", ItemTypeFolder, "P/f", "P/f", "x/f"), held: []ActionType{ActionLocalMove},
+			waiting: []Action{{Type: ActionDownload, Path: "P/f", ItemID: "item-y", View: &PathView{}}},
 			actions: []Action{{Type: ActionLocalDelete, Path: "y", View: synced(8, "item-y")}},
 			dropped: 1, unfinished: 2,
 		},
 		{
 			name: "g made on OneDrive in P, whose move into x here waits: g's download, rebased below x, waits with it",
-			node: composeNode("P", ItemTypeFolder, "P", "x/P", "P"), held: []actionType{ActionRemoteMove},
+			node: composeNode("P", ItemTypeFolder, "P", "x/P", "P"), held: []ActionType{ActionRemoteMove},
 			actions: []Action{
-				{Type: ActionDownload, Path: "P/g", ItemID: "item-g", View: &pathView{
-					Path: "P/g", Remote: &remoteState{ItemType: ItemTypeFile},
+				{Type: ActionDownload, Path: "P/g", ItemID: "item-g", View: &PathView{
+					Path: "P/g", Remote: &RemoteState{ItemType: ItemTypeFile},
 				}},
-				{Type: ActionDownload, Path: "y/h", ItemID: "item-h", View: &pathView{
-					Path: "y/h", Remote: &remoteState{ItemType: ItemTypeFile},
+				{Type: ActionDownload, Path: "y/h", ItemID: "item-h", View: &PathView{
+					Path: "y/h", Remote: &RemoteState{ItemType: ItemTypeFile},
 				}},
 			},
 			want: []string{"download y/h"}, dropped: 1, unfinished: 2,
 		},
 		{
 			name: "a waiting upload of another file holds no delete",
-			node: heldInP, held: []actionType{ActionRemoteMove},
+			node: heldInP, held: []ActionType{ActionRemoteMove},
 			waiting: []Action{uploadOf("P/f", 9)},
 			actions: []Action{{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")}},
 			want:    []string{"remote_delete z"}, unfinished: 1,
 		},
 		{
 			name: "z renamed here onto P/f, which f still holds on OneDrive this pass: the upload there waits, and so does z's delete",
-			node: heldInP, held: []actionType{ActionRemoteMove},
+			node: heldInP, held: []ActionType{ActionRemoteMove},
 			actions: []Action{
 				uploadOf("P/f", 7),
 				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
@@ -1449,8 +1449,8 @@ func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 			name: "z renamed here into the folder made at K, where OneDrive edited the file K: the upload trimmed below the keep-both K holds z's delete",
 			node: composeNode("y", ItemTypeFile, "y", "y", "y"),
 			actions: []Action{
-				{Type: ActionConflictCopy, Path: "K", View: &pathView{
-					Local: &localState{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFile},
+				{Type: ActionConflictCopy, Path: "K", View: &PathView{
+					Local: &LocalState{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFile},
 				}},
 				uploadOf("K/z", 7),
 				{Type: ActionRemoteDelete, Path: "z", View: synced(7, "item-z")},
@@ -1464,7 +1464,7 @@ func heldWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 // create writes a deleted file's content but waits for that delete, so the
 // delete cannot wait for it in the plan.
 func aheadOfContentDeleteCases() []heldSourceDeleteCase {
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFolder}}
 	elsewhere := composeNode("y", ItemTypeFile, "y", "y", "y")
 	renamed := func(from, to string) Action {
 		return Action{Type: ActionRemoteMove, ItemID: "item-" + from, OldPath: from, Path: to, View: folder}
@@ -1515,12 +1515,12 @@ func aheadOfContentDeleteCases() []heldSourceDeleteCase {
 // path, whose create waits for the move and the move for the create, or a
 // move into a new folder whose create waits for an item at a name OneDrive
 // takes for the same to move into that move's destination.
-func cycledWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
-	synced := &pathView{Baseline: &BaselineEntry{
+func cycledWriteDeleteCases(folder *PathView) []heldSourceDeleteCase {
+	synced := &PathView{Baseline: &BaselineEntry{
 		ItemType: ItemTypeFile, ItemID: "item-z", LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
 	}}
 	uploadOfZ := func(p string) Action {
-		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{
+		return Action{Type: ActionUpload, Path: p, View: &PathView{Local: &LocalState{
 			ItemType: ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
 		}}}
 	}
@@ -1556,8 +1556,8 @@ func cycledWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 				{Type: ActionRemoteMove, ItemID: "item-y", OldPath: "P/y", Path: "k/y", View: folder},
 				{Type: ActionFolderCreate, Path: "k", CreateSide: CreateRemote},
 				{Type: ActionRemoteMove, ItemID: "item-K", OldPath: "K", Path: "k/y/K", View: folder},
-				{Type: ActionRemoteDelete, Path: "P", View: &pathView{
-					Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder},
+				{Type: ActionRemoteDelete, Path: "P", View: &PathView{
+					Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFolder},
 				}},
 				{Type: ActionRemoteDelete, Path: "P/z", View: synced},
 				uploadOfZ("P"),
@@ -1569,17 +1569,17 @@ func cycledWriteDeleteCases(folder *pathView) []heldSourceDeleteCase {
 
 // carriedHeldDeleteCases are the rows of heldSourceDeleteCases in which a
 // folder's move has a held action below its source.
-func carriedHeldDeleteCases(folder, file *pathView) []heldSourceDeleteCase {
+func carriedHeldDeleteCases(folder, file *PathView) []heldSourceDeleteCase {
 	heldInAP := composeNode("f", ItemTypeFolder, "A/P/f", "x/f", "A/P/f")
 	renameA := composedMove{key: "A", side: moveCoordRemote, oldPath: "A", newPath: "B", localPath: "B"}
 	madeHere := func(p string) Action {
-		return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{ItemType: ItemTypeFile}}}
+		return Action{Type: ActionUpload, Path: p, View: &PathView{Local: &LocalState{ItemType: ItemTypeFile}}}
 	}
 
 	return []heldSourceDeleteCase{
 		{
 			name: "A renamed B here carries P, which holds f, and B/a1.txt edited is uploaded after it",
-			node: heldInAP, held: []actionType{ActionRemoteMove},
+			node: heldInAP, held: []ActionType{ActionRemoteMove},
 			moved:    []composedMove{renameA},
 			composed: []Action{{Type: ActionRemoteMove, ItemID: "A", OldPath: "A", Path: "B", View: folder}},
 			actions: []Action{
@@ -1592,21 +1592,21 @@ func carriedHeldDeleteCases(folder, file *pathView) []heldSourceDeleteCase {
 		},
 		{
 			name: "A renamed B on OneDrive carries P here, which holds f",
-			node: composeNode("f", ItemTypeFolder, "A/P/f", "A/P/f", "x/f"), held: []actionType{ActionLocalMove},
+			node: composeNode("f", ItemTypeFolder, "A/P/f", "A/P/f", "x/f"), held: []ActionType{ActionLocalMove},
 			moved: []composedMove{{key: "A", side: moveCoordLocal, oldPath: "A", newPath: "B", localPath: "A"}},
 			composed: []Action{{
 				Type: ActionLocalMove, ItemID: "A", OldPath: "A", Path: "B", View: folder,
 			}},
 			actions: []Action{
 				{Type: ActionLocalDelete, Path: "A/P", View: folder},
-				{Type: ActionDownload, Path: "B/new.txt", View: &pathView{Remote: &remoteState{ItemType: ItemTypeFile}}},
+				{Type: ActionDownload, Path: "B/new.txt", View: &PathView{Remote: &RemoteState{ItemType: ItemTypeFile}}},
 			},
 			want:    []string{"download B/new.txt", "local_move B"},
 			dropped: 1, unfinished: 2,
 		},
 		{
 			name: "A moved into p/A, where c leaves A for p, the same name as P on OneDrive, waits with c's move",
-			node: composeNode("f", ItemTypeFolder, "P/f", "x/f", "P/f"), held: []actionType{ActionRemoteMove},
+			node: composeNode("f", ItemTypeFolder, "P/f", "x/f", "P/f"), held: []ActionType{ActionRemoteMove},
 			actions: []Action{
 				{Type: ActionRemoteDelete, Path: "P", View: folder},
 				{Type: ActionRemoteMove, ItemID: "c", OldPath: "A/c", Path: "p", View: folder},
@@ -1664,14 +1664,14 @@ func TestPlanBuiltActions_ADeleteAboveAMoveHeldForTheNextPassWaitsWithIt(t *test
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			composition := &moveComposition{moves: tc.moved, deferred: map[string]bool{}, deferredMoves: map[string][]actionType{}}
+			composition := &moveComposition{moves: tc.moved, deferred: map[string]bool{}, deferredMoves: map[string][]ActionType{}}
 			if tc.held != nil {
 				composition.deferred[tc.node.key] = true
 				composition.deferredMoves[tc.node.key] = tc.held
 			}
 			inputs := &moveInputs{nodes: []moveNode{tc.node}}
-			plan, err := newPlanner(nil).planBuiltActions(
-				tc.actions, tc.composed, tc.waiting, composition, inputs, plannerMountContext{}, tc.mode)
+			plan, err := NewPlanner(nil).planBuiltActions(
+				tc.actions, tc.composed, tc.waiting, composition, inputs, PlannerMountContext{}, tc.mode)
 			require.NoError(t, err)
 
 			var kept []string
@@ -1697,10 +1697,10 @@ func TestPlanBuiltActions_ADeleteAboveAMoveHeldForTheNextPassWaitsWithIt(t *test
 func TestPlanBuiltActions_AHeldDeleteLogsTheItemItWaitsFor(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
 	composition := &moveComposition{
 		deferred:      map[string]bool{"f": true},
-		deferredMoves: map[string][]actionType{"f": {ActionRemoteMove}},
+		deferredMoves: map[string][]ActionType{"f": {ActionRemoteMove}},
 	}
 	inputs := &moveInputs{nodes: []moveNode{composeNode("f", ItemTypeFolder, "P/Q/f", "x/f", "P/Q/f")}}
 	actions := []Action{
@@ -1709,14 +1709,14 @@ func TestPlanBuiltActions_AHeldDeleteLogsTheItemItWaitsFor(t *testing.T) {
 		{Type: ActionRemoteDelete, Path: "R", View: folder},
 		{
 			Type: ActionRemoteMove, ItemID: "item-S", OldPath: "S", Path: "T",
-			View: &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}},
+			View: &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFolder}},
 		},
 		{Type: ActionRemoteDelete, Path: "S/g", View: syncedFileView(7, "item-g")},
 		uploadOfIdentity("S", 7),
 	}
 	var logs strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	_, err := newPlanner(logger).planBuiltActions(actions, nil, nil, composition, inputs, plannerMountContext{}, SyncBidirectional)
+	_, err := NewPlanner(logger).planBuiltActions(actions, nil, nil, composition, inputs, PlannerMountContext{}, SyncBidirectional)
 	require.NoError(t, err)
 
 	var held []string
@@ -1744,18 +1744,18 @@ func TestPlanBuiltActions_AHeldRebasedCreateLogsTheFolderItWaitsFor(t *testing.T
 
 	composition := &moveComposition{
 		deferred:      map[string]bool{"P": true},
-		deferredMoves: map[string][]actionType{"P": {ActionRemoteMove}},
+		deferredMoves: map[string][]ActionType{"P": {ActionRemoteMove}},
 	}
 	inputs := &moveInputs{nodes: []moveNode{composeNode("P", ItemTypeFolder, "P", "x/P", "P")}}
 	madeOnOneDrive := func(p, itemID string) Action {
-		return Action{Type: ActionDownload, Path: p, ItemID: itemID, View: &pathView{
-			Path: p, Remote: &remoteState{ItemType: ItemTypeFile},
+		return Action{Type: ActionDownload, Path: p, ItemID: itemID, View: &PathView{
+			Path: p, Remote: &RemoteState{ItemType: ItemTypeFile},
 		}}
 	}
 	actions := []Action{madeOnOneDrive("P/g", "item-g"), madeOnOneDrive("y/h", "item-h")}
 	var logs strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	plan, err := newPlanner(logger).planBuiltActions(actions, nil, nil, composition, inputs, plannerMountContext{}, SyncBidirectional)
+	plan, err := NewPlanner(logger).planBuiltActions(actions, nil, nil, composition, inputs, PlannerMountContext{}, SyncBidirectional)
 	require.NoError(t, err)
 	require.Len(t, plan.Actions, 1)
 	assert.Equal(t, "y/h", plan.Actions[0].Path)
@@ -1778,8 +1778,8 @@ func TestPlanBuiltActions_AHeldRebasedCreateLogsTheFolderItWaitsFor(t *testing.T
 func TestBuildDependencies_NestedMoveEdges(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	actions := []Action{
 		{Type: ActionLocalMove, OldPath: "A", Path: "Z", View: folder},             // 0
 		{Type: ActionLocalMove, OldPath: "A/out.txt", Path: "out.txt", View: file}, // 1: leaves A first
@@ -1787,7 +1787,7 @@ func TestBuildDependencies_NestedMoveEdges(t *testing.T) {
 		{Type: ActionLocalMove, OldPath: "b.txt", Path: "c.txt", View: file},       // 3
 		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},       // 4: onto 3's vacated path
 		{Type: ActionRemoteMove, OldPath: "p.txt", Path: "q.txt", View: file},      // 5
-		{Type: ActionUpload, Path: "p.txt", View: &pathView{Path: "p.txt"}},        // 6: new entry at 5's old path
+		{Type: ActionUpload, Path: "p.txt", View: &PathView{Path: "p.txt"}},        // 6: new entry at 5's old path
 		{Type: ActionDownload, Path: "A/in.txt", View: file},                       // 7: lands before A moves
 	}
 
@@ -1812,7 +1812,7 @@ func TestBuildDependencies_NestedMoveEdges(t *testing.T) {
 func TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove(t *testing.T) {
 	t.Parallel()
 
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	actions := []Action{
 		{Type: ActionLocalMove, OldPath: "r.txt", Path: "b.txt", View: file}, // 0
 		{Type: ActionDownload, Path: "r.txt/inside.txt", View: file},         // 1
@@ -1835,7 +1835,7 @@ func TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove(t *testing.
 func TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
 	actions := []Action{
 		{Type: ActionRemoteMove, OldPath: "q", Path: "docs", View: folder}, // 0
 		{Type: ActionFolderCreate, Path: "q", CreateSide: CreateRemote},    // 1: re-created at 0's old path
@@ -1866,8 +1866,8 @@ func TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate(t 
 func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	folderMove := Action{Type: ActionRemoteMove, OldPath: "docs", Path: "photos/photos", View: folder}
 	recreate := Action{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateRemote}
 	fileMoveTo := func(p string) Action {
@@ -1893,7 +1893,7 @@ func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder
 		},
 		{name: "a folder the plan creates on this computer at the path a local move leaves", actions: []Action{
 			{Type: ActionLocalMove, OldPath: "docs", Path: "photos/photos", View: folder},
-			{Type: ActionFolderCreate, Path: "docs", CreateSide: createLocal},
+			{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateLocal},
 		}, wantDeps: [][]int{nil, {0}}},
 		{name: "one run, into a folder made inside the new one", actions: []Action{
 			folderMove,
@@ -1929,9 +1929,9 @@ func TestBuildDependencies_MovesThroughAFolderRecreatedAtAVacatedPathHaveAnOrder
 func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
-	move := func(moveType actionType, from, to string, view *pathView) Action {
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	move := func(moveType ActionType, from, to string, view *PathView) Action {
 		return Action{Type: moveType, OldPath: from, Path: to, View: view}
 	}
 
@@ -1990,7 +1990,7 @@ func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testin
 func TestBuildDependencies_MoveIntoAFolderMadeAtADeletedPathWaitsForTheDeleteAndTheCreate(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
 	for _, tc := range []struct{ deleted, made string }{
 		{deleted: "x", made: "x"},
 		{deleted: "x", made: "X"},
@@ -2028,8 +2028,8 @@ func TestBuildDependencies_MoveIntoAFolderMadeAtADeletedPathWaitsForTheDeleteAnd
 func TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSource(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	folderMove := Action{Type: ActionRemoteMove, OldPath: "docs", Path: "photos/photos", View: folder}
 	fileMove := Action{Type: ActionRemoteMove, OldPath: "docs/a.txt", Path: "docs/b.txt", View: file}
 	recreate := Action{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateRemote}
@@ -2042,13 +2042,13 @@ func TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSourc
 	}{
 		{name: "no create at the vacated path", actions: []Action{fileMove, folderMove}, wantDeps: [][]int{nil, {0}}},
 		{name: "a create on the other side", actions: []Action{
-			fileMove, folderMove, {Type: ActionFolderCreate, Path: "docs", CreateSide: createLocal},
+			fileMove, folderMove, {Type: ActionFolderCreate, Path: "docs", CreateSide: CreateLocal},
 		}, wantDeps: [][]int{{2}, {0}, nil}},
 		{name: "a move into the folder made there", actions: []Action{fileMove, folderMove, recreate}, wantDeps: [][]int{{2}, nil, {1}}},
 		{name: "the same on this computer", actions: []Action{
 			{Type: ActionLocalMove, OldPath: "docs/a.txt", Path: "docs/b.txt", View: file},
 			{Type: ActionLocalMove, OldPath: "docs", Path: "photos/photos", View: folder},
-			{Type: ActionFolderCreate, Path: "docs", CreateSide: createLocal},
+			{Type: ActionFolderCreate, Path: "docs", CreateSide: CreateLocal},
 		}, wantDeps: [][]int{{2}, nil, {1}}},
 		{name: "a move into a folder made inside the new one", actions: []Action{
 			{Type: ActionRemoteMove, OldPath: "docs/a.txt", Path: "docs/new/a.txt", View: file},
@@ -2074,8 +2074,8 @@ func TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSourc
 			recreate,
 		}, wantDeps: [][]int{{3}, nil, {1}, {1}}},
 		{name: "a file moved out of a subfolder made here again", actions: []Action{
-			{Type: ActionFolderCreate, Path: "archive/sub", CreateSide: createLocal},
-			{Type: ActionDownload, Path: "archive/sub/new.txt", View: &pathView{Path: "archive/sub/new.txt"}},
+			{Type: ActionFolderCreate, Path: "archive/sub", CreateSide: CreateLocal},
+			{Type: ActionDownload, Path: "archive/sub/new.txt", View: &PathView{Path: "archive/sub/new.txt"}},
 			{Type: ActionRemoteMove, OldPath: "docs", Path: "archive", View: folder},
 			innerMove,
 			recreate,
@@ -2102,8 +2102,8 @@ func TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSourc
 func TestBuildDependencies_FileMovedOntoAVacatedPathFromAFolderMadeInsideIt(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	folderMove := Action{Type: ActionLocalMove, OldPath: "docs", Path: "archive", View: folder}
 
 	assertDependencyRows(t, []dependencyRow{
@@ -2161,14 +2161,14 @@ func assertDependencyRows(t *testing.T, rows []dependencyRow) {
 func TestBuildDependencies_FileRebasedBelowAnotherFoldersVacatedPath(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}}
 	moveX := Action{Type: ActionRemoteMove, OldPath: "x", Path: "x2", View: folder}
 	moveF := Action{Type: ActionRemoteMove, OldPath: "f", Path: "x/f", View: folder}
 	createX := Action{Type: ActionFolderCreate, Path: "x", CreateSide: CreateRemote}
 	createF := Action{Type: ActionFolderCreate, Path: "f", CreateSide: CreateRemote}
 	moveB := Action{
 		Type: ActionRemoteMove, OldPath: "x/f/b.txt", Path: "f/d.txt",
-		View: &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}},
+		View: &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}},
 	}
 
 	assertDependencyRows(t, []dependencyRow{
@@ -2193,12 +2193,12 @@ func TestBuildDependencies_FileRebasedBelowAnotherFoldersVacatedPath(t *testing.
 func TestIsolateDependencyCycles_KeepsUnrelatedWork(t *testing.T) {
 	t.Parallel()
 
-	file := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
+	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
 	actions := []Action{
 		// Two local moves that vacate each other's destination: a cycle.
 		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
 		{Type: ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
-		{Type: ActionUpload, Path: "unrelated.txt", View: &pathView{Path: "unrelated.txt"}},
+		{Type: ActionUpload, Path: "unrelated.txt", View: &PathView{Path: "unrelated.txt"}},
 	}
 	require.Error(t, detectDependencyCycle(buildDependencies(actions)), "the fixture must contain a cycle")
 

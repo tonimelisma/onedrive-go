@@ -6,71 +6,71 @@ import "time"
 // (planner_delete_safety.go), the store, which records it for status, and the
 // engine report. The policy itself lives with the planner.
 
-// deleteSafetySide names the side a held delete would remove content from.
-type deleteSafetySide string
+// DeleteSafetySide names the side a held delete would remove content from.
+type DeleteSafetySide string
 
 const (
-	deleteSafetySideLocal  deleteSafetySide = "local"
-	deleteSafetySideRemote deleteSafetySide = "remote"
+	DeleteSafetySideLocal  DeleteSafetySide = "local"
+	DeleteSafetySideRemote DeleteSafetySide = "remote"
 )
 
-// deleteSafetyReason records which rule held a direction's deletes.
-type deleteSafetyReason string
+// DeleteSafetyReason records which rule held a direction's deletes.
+type DeleteSafetyReason string
 
 const (
-	// deleteSafetyReasonSideVanished: the opposite side has no entries.
-	deleteSafetyReasonSideVanished deleteSafetyReason = "side_vanished"
-	// deleteSafetyReasonTooMany: the proportional threshold was exceeded.
-	deleteSafetyReasonTooMany deleteSafetyReason = "too_many"
-	// deleteSafetyReasonMountPointGone: the delete removes a recorded mount
+	// DeleteSafetyReasonSideVanished: the opposite side has no entries.
+	DeleteSafetyReasonSideVanished DeleteSafetyReason = "side_vanished"
+	// DeleteSafetyReasonTooMany: the proportional threshold was exceeded.
+	DeleteSafetyReasonTooMany DeleteSafetyReason = "too_many"
+	// DeleteSafetyReasonMountPointGone: the delete removes a recorded mount
 	// point whose folder is gone from the sync folder, or something below
 	// it, so it is held however few such deletes there are.
-	deleteSafetyReasonMountPointGone deleteSafetyReason = "mount_point_gone"
+	DeleteSafetyReasonMountPointGone DeleteSafetyReason = "mount_point_gone"
 )
 
-// deleteSafetyWindow is how long an executed, unconfirmed delete keeps
+// DeleteSafetyWindow is how long an executed, unconfirmed delete keeps
 // counting toward the proportional rule. A hold that judged each plan alone
 // would never stop a process that removes files below the threshold on every
 // pass (a failing disk, a misbehaving app, a cron job) and so empties a drive
 // one small batch at a time. Deletes the user confirmed with
 // `sync --confirm-deletes` are not counted: the confirmation reviewed them.
-const deleteSafetyWindow = 24 * time.Hour
+const DeleteSafetyWindow = 24 * time.Hour
 
-// heldDelete is one delete the hold kept out of the executable plan.
-type heldDelete struct {
+// HeldDelete is one delete the hold kept out of the executable plan.
+type HeldDelete struct {
 	Path     string
-	Side     deleteSafetySide
-	Reason   deleteSafetyReason
+	Side     DeleteSafetySide
+	Reason   DeleteSafetyReason
 	ItemType ItemType
 	// ItemID binds a confirmation to the item that was held, so the same
 	// path holding a different item later is not covered by it.
 	ItemID string
 }
 
-// deleteSafetySideOf reports whether an action type deletes a synced item, and
+// DeleteSafetySideOf reports whether an action type deletes a synced item, and
 // the side it removes content from: the planner's hold and its confirmation
 // matching, and the store's delete ledger, all ask it. A cleanup removes only
 // the baseline row of an item both sides already lost, so it is no such
 // delete.
-func deleteSafetySideOf(action actionType) (deleteSafetySide, bool) {
+func DeleteSafetySideOf(action ActionType) (DeleteSafetySide, bool) {
 	switch action {
 	case ActionLocalDelete:
-		return deleteSafetySideLocal, true
+		return DeleteSafetySideLocal, true
 	case ActionRemoteDelete:
-		return deleteSafetySideRemote, true
+		return DeleteSafetySideRemote, true
 	case ActionDownload, ActionUpload, ActionLocalMove, ActionRemoteMove, ActionFolderCreate,
 		ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
 		return "", false
 	default:
-		panic(outsideTheEnum(action))
+		panic(OutsideTheEnum(action))
 	}
 }
 
-// countHeldDeletesBySide splits held deletes into the side each would remove
+// CountHeldDeletesBySide splits held deletes into the side each would remove
 // content from, for the pass report.
-func countHeldDeletesBySide(held []heldDelete) (local int, remote int) {
+func CountHeldDeletesBySide(held []HeldDelete) (local int, remote int) {
 	for i := range held {
-		if held[i].Side == deleteSafetySideLocal {
+		if held[i].Side == DeleteSafetySideLocal {
 			local++
 			continue
 		}
@@ -79,10 +79,10 @@ func countHeldDeletesBySide(held []heldDelete) (local int, remote int) {
 	return local, remote
 }
 
-// heldDeleteSides lists the distinct sides of held, in order of first
+// HeldDeleteSides lists the distinct sides of held, in order of first
 // appearance.
-func heldDeleteSides(held []heldDelete) []deleteSafetySide {
-	var sides []deleteSafetySide
+func HeldDeleteSides(held []HeldDelete) []DeleteSafetySide {
+	var sides []DeleteSafetySide
 	for i := range held {
 		seen := false
 		for _, side := range sides {

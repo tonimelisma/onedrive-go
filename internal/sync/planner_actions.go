@@ -24,16 +24,16 @@ var errFolderTransferPlanned = errors.New("sync: folder planned as a content tra
 // decision table did not classify fails the whole plan before any row is
 // planned (validatePlannerKinds), and a built action outside the action enums
 // fails it before any rule reads one (planBuiltActions).
-func (p *planner) PlanCurrentState(
-	comparisons []sQLiteComparisonRow,
-	reconciliations []sQLiteReconciliationRow,
-	localRows []localStateRow,
-	remoteRows []remoteStateRow,
+func (p *Planner) PlanCurrentState(
+	comparisons []SQLiteComparisonRow,
+	reconciliations []SQLiteReconciliationRow,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
 	observationIssues []ObservationIssueRow,
 	baseline *Baseline,
-	mount plannerMountContext,
+	mount PlannerMountContext,
 	mode SyncMode,
-) (*actionPlan, error) {
+) (*ActionPlan, error) {
 	p.logger.Debug("planning current actionable set from sqlite reconciliation",
 		slog.Int("comparison_rows", len(comparisons)),
 		slog.Int("reconciliation_rows", len(reconciliations)),
@@ -47,7 +47,7 @@ func (p *planner) PlanCurrentState(
 	}
 
 	truthPaths := comparisonPaths(comparisons)
-	truthIndex := newTruthAvailabilityIndex(observationIssues)
+	truthIndex := NewTruthAvailabilityIndex(observationIssues)
 	truthStatusByPath := truthIndex.StatusByPath(truthPaths)
 
 	views, comparisonByPath, err := buildSQLitePathViews(comparisons, localRows, remoteRows, baseline, truthStatusByPath)
@@ -92,13 +92,13 @@ func (p *planner) PlanCurrentState(
 // the enums first (validatePlannedActions): an action outside them fails the
 // plan, as a row outside the decision table does, before any step can answer
 // it.
-func (p *planner) planBuiltActions(
+func (p *Planner) planBuiltActions(
 	reconciled, composed, waiting []Action,
 	composition *moveComposition,
 	inputs *moveInputs,
-	mount plannerMountContext,
+	mount PlannerMountContext,
 	mode SyncMode,
-) (*actionPlan, error) {
+) (*ActionPlan, error) {
 	for _, built := range [][]Action{reconciled, composed} {
 		if err := validatePlannedActions(built); err != nil {
 			return nil, err
@@ -126,11 +126,11 @@ func (p *planner) planBuiltActions(
 	withheld += withheldWithCycles
 	withheldInMode += withheldWithCycles
 
-	plan := &actionPlan{
+	plan := &ActionPlan{
 		Actions:        admitted,
 		Deps:           deps,
 		DeferredByMode: deferred,
-		FollowUp: planFollowUp{
+		FollowUp: PlanFollowUp{
 			Renames:    countRenames(admitted),
 			Deferred:   len(composition.deferred),
 			Dropped:    trimmed + droppedCreates + withheld + inCycles,
@@ -152,7 +152,7 @@ func (p *planner) planBuiltActions(
 // and returns the dependencies of what it keeps and how many actions the
 // cycles and the deletes removed; every one of them is admitted, so the mode
 // runs it.
-func (p *planner) admitWithoutCycles(
+func (p *Planner) admitWithoutCycles(
 	admitted, held []Action, inputs *moveInputs, composition *moveComposition, mode SyncMode,
 ) (kept []Action, deps [][]int, inCycles, withheld int) {
 	kept, deps, cycled := isolateDependencyCycles(admitted, p.logger)
@@ -222,7 +222,7 @@ func countRenames(actions []Action) int {
 		case ActionDownload, ActionUpload, ActionLocalDelete, ActionRemoteDelete,
 			ActionFolderCreate, ActionCleanup:
 		default:
-			panic(outsideTheEnum(actions[i].Type))
+			panic(OutsideTheEnum(actions[i].Type))
 		}
 	}
 
@@ -240,7 +240,7 @@ func rebaseRemoteCreatesThroughLocalFolderMoves(actions []Action) []Action {
 	var folderMoves []graphFolderMoveBoundary
 	for i := range actions {
 		action := &actions[i]
-		if action.Type != ActionLocalMove || resolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
+		if action.Type != ActionLocalMove || ResolveItemType(action.View) != ItemTypeFolder || action.OldPath == "" {
 			continue
 		}
 		folderMoves = append(folderMoves, graphFolderMoveBoundary{
@@ -301,11 +301,11 @@ func writesLocally(action *Action) bool {
 	case ActionLocalMove, ActionDownload, ActionLocalDelete, ActionConflictCopy:
 		return true
 	case ActionFolderCreate:
-		return action.CreateSide == createLocal
+		return action.CreateSide == CreateLocal
 	case ActionUpload, ActionRemoteMove, ActionRemoteDelete, ActionBaselineUpdate, ActionCleanup:
 		return false
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
@@ -354,7 +354,7 @@ func logMoveNotices(logger *slog.Logger, notices []moveNotice) {
 	}
 }
 
-func comparisonPaths(rows []sQLiteComparisonRow) []string {
+func comparisonPaths(rows []SQLiteComparisonRow) []string {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -367,12 +367,12 @@ func comparisonPaths(rows []sQLiteComparisonRow) []string {
 	return paths
 }
 
-func logActionPlanSummary(logger *slog.Logger, message string, plan *actionPlan) {
+func logActionPlanSummary(logger *slog.Logger, message string, plan *ActionPlan) {
 	if logger == nil || plan == nil {
 		return
 	}
 
-	counts := countByType(plan.Actions)
+	counts := CountByType(plan.Actions)
 	logger.Info(message,
 		slog.Int("total_actions", len(plan.Actions)),
 		slog.Int("folder_creates", counts[ActionFolderCreate]),
@@ -394,24 +394,24 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *actionPlan)
 }
 
 func buildSQLitePathViews(
-	comparisons []sQLiteComparisonRow,
-	localRows []localStateRow,
-	remoteRows []remoteStateRow,
+	comparisons []SQLiteComparisonRow,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
 	baseline *Baseline,
-	truthStatusByPath map[string]pathTruthStatus,
-) (map[string]*pathView, map[string]*sQLiteComparisonRow, error) {
-	localByPath := make(map[string]localStateRow, len(localRows))
+	truthStatusByPath map[string]PathTruthStatus,
+) (map[string]*PathView, map[string]*SQLiteComparisonRow, error) {
+	localByPath := make(map[string]LocalStateRow, len(localRows))
 	for i := range localRows {
 		localByPath[localRows[i].Path] = localRows[i]
 	}
 
-	remoteByPath := make(map[string]remoteStateRow, len(remoteRows))
+	remoteByPath := make(map[string]RemoteStateRow, len(remoteRows))
 	for i := range remoteRows {
 		remoteByPath[remoteRows[i].Path] = remoteRows[i]
 	}
 
-	views := make(map[string]*pathView, len(comparisons))
-	comparisonByPath := make(map[string]*sQLiteComparisonRow, len(comparisons))
+	views := make(map[string]*PathView, len(comparisons))
+	comparisonByPath := make(map[string]*SQLiteComparisonRow, len(comparisons))
 
 	for i := range comparisons {
 		row := comparisons[i]
@@ -422,7 +422,7 @@ func buildSQLitePathViews(
 			return nil, nil, fmt.Errorf("sync: missing truth status for comparison path %q", row.Path)
 		}
 
-		view := &pathView{
+		view := &PathView{
 			Path:        row.Path,
 			TruthStatus: truthStatus,
 		}
@@ -438,7 +438,7 @@ func buildSQLitePathViews(
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing local_state row for comparison path %q", row.Path)
 			}
-			view.Local = localStateFromSnapshotRow(&localRow)
+			view.Local = LocalStateFromSnapshotRow(&localRow)
 		}
 		if row.RemotePresent {
 			remoteRow, ok := remoteByPath[row.Path]
@@ -455,9 +455,9 @@ func buildSQLitePathViews(
 
 //nolint:gocyclo // One switch maps SQL reconciliation kinds to concrete action constructors.
 func buildActionsForReconciliation(
-	rec *sQLiteReconciliationRow,
-	cmp *sQLiteComparisonRow,
-	views map[string]*pathView,
+	rec *SQLiteReconciliationRow,
+	cmp *SQLiteComparisonRow,
+	views map[string]*PathView,
 ) ([]Action, error) {
 	if rec == nil || cmp == nil {
 		return nil, fmt.Errorf("sync: reconciliation row requires comparison context")
@@ -472,44 +472,44 @@ func buildActionsForReconciliation(
 	}
 
 	switch rec.ReconciliationKind {
-	case reconcileUnclassified:
+	case ReconcileUnclassified:
 		// PlanCurrentState refuses these rows before planning any
 		// (validatePlannerKinds); a direct caller gets the same refusal.
 		return nil, unclassifiedRowError(rec)
-	case reconcileNoop:
+	case ReconcileNoop:
 		return nil, nil
-	case reconcileBaselineRemove:
+	case ReconcileBaselineRemove:
 		return []Action{makeAction(ActionCleanup, view)}, nil
-	case reconcileFolderCreateLocal:
-		return []Action{makeFolderCreate(view, createLocal)}, nil
-	case reconcileFolderCreateRemote:
+	case ReconcileFolderCreateLocal:
+		return []Action{makeFolderCreate(view, CreateLocal)}, nil
+	case ReconcileFolderCreateRemote:
 		return []Action{makeFolderCreate(view, CreateRemote)}, nil
-	case reconcileUpload:
+	case ReconcileUpload:
 		if view.Local != nil && view.Local.ItemType == ItemTypeFolder {
 			return nil, fmt.Errorf("%w: upload of local folder %s", errFolderTransferPlanned, rec.Path)
 		}
 		return []Action{makeAction(ActionUpload, view)}, nil
-	case reconcileDownload:
+	case ReconcileDownload:
 		if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
 			return nil, fmt.Errorf("%w: download of remote folder %s", errFolderTransferPlanned, rec.Path)
 		}
 		return []Action{makeAction(ActionDownload, view)}, nil
-	case reconcileLocalDelete:
+	case ReconcileLocalDelete:
 		return []Action{makeAction(ActionLocalDelete, view)}, nil
-	case reconcileRemoteDelete:
+	case ReconcileRemoteDelete:
 		return []Action{makeAction(ActionRemoteDelete, view)}, nil
-	case reconcileBaselineUpdate:
+	case ReconcileBaselineUpdate:
 		return []Action{makeAction(ActionBaselineUpdate, view)}, nil
-	case reconcileConflictEditEdit:
+	case ReconcileConflictEditEdit:
 		return []Action{
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
-	case reconcileConflictEditDelete:
+	case ReconcileConflictEditDelete:
 		return []Action{
 			makeCreateUploadAction(view),
 		}, nil
-	case reconcileConflictCreateCreate:
+	case ReconcileConflictCreateCreate:
 		if view.Local != nil && view.Remote != nil && view.Local.ItemType != view.Remote.ItemType {
 			return buildKeepBothActions(view), nil
 		}
@@ -517,13 +517,13 @@ func buildActionsForReconciliation(
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
-	case reconcileConflictKeepBoth:
+	case ReconcileConflictKeepBoth:
 		return buildKeepBothActions(view), nil
-	case reconcileReplaceRemote:
+	case ReconcileReplaceRemote:
 		return buildReplaceRemoteActions(view), nil
-	case reconcileReplaceLocal:
+	case ReconcileReplaceLocal:
 		return buildReplaceLocalActions(view), nil
-	case reconcileLocalMove, reconcileRemoteMove:
+	case ReconcileLocalMove, ReconcileRemoteMove:
 		// Moves are composed per item (planner_move_composition.go).
 		return nil, nil
 	default:
@@ -538,10 +538,10 @@ func buildActionsForReconciliation(
 // the now-missing target. No content of either side is deleted.
 // trimKeepBothDescendants removes the planned work below the path that the
 // rename invalidates.
-func buildKeepBothActions(view *pathView) []Action {
+func buildKeepBothActions(view *PathView) []Action {
 	actions := []Action{makeConflictCopyAction(view)}
 	if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
-		return append(actions, makeFolderCreate(view, createLocal))
+		return append(actions, makeFolderCreate(view, CreateLocal))
 	}
 
 	return append(actions, makeDownloadAfterConflictCopyAction(view))
@@ -625,9 +625,9 @@ func keepBothDescendantAction(action *Action, remoteIsFolder bool) (Action, bool
 	return Action{}, false
 }
 
-func restoreRemoteChild(view *pathView) Action {
+func restoreRemoteChild(view *PathView) Action {
 	if view.Remote.ItemType == ItemTypeFolder {
-		return makeFolderCreate(view, createLocal)
+		return makeFolderCreate(view, CreateLocal)
 	}
 	download := makeAction(ActionDownload, view)
 	download.RequireMissingLocalTarget = true
@@ -643,10 +643,10 @@ func restoreRemoteChild(view *pathView) Action {
 // The create's view has no baseline or remote: it is a brand-new item, and by
 // the time it dispatches the delete outcome has removed the old remote_state
 // row, so remote freshness expects absence.
-func buildReplaceRemoteActions(view *pathView) []Action {
+func buildReplaceRemoteActions(view *PathView) []Action {
 	deleteAction := makeAction(ActionRemoteDelete, view)
 
-	createView := &pathView{
+	createView := &PathView{
 		Path:        view.Path,
 		Local:       view.Local,
 		TruthStatus: view.TruthStatus,
@@ -662,12 +662,12 @@ func buildReplaceRemoteActions(view *pathView) []Action {
 // item is now of another type while local truth is unchanged: delete the old
 // local item, then materialize the remote one.
 //
-// The delete's view describes the old local item (resolveItemType prefers the
+// The delete's view describes the old local item (ResolveItemType prefers the
 // remote side, which already has the new type). local_state is refreshed only
 // by observation, so the create keeps the planned local row for freshness, and
 // a download requires its target to be missing, as after a conflict copy.
-func buildReplaceLocalActions(view *pathView) []Action {
-	deleteView := &pathView{
+func buildReplaceLocalActions(view *PathView) []Action {
+	deleteView := &PathView{
 		Path:        view.Path,
 		Local:       view.Local,
 		Remote:      view.Remote,
@@ -676,14 +676,14 @@ func buildReplaceLocalActions(view *pathView) []Action {
 	}
 	deleteAction := makeAction(ActionLocalDelete, deleteView)
 
-	createView := &pathView{
+	createView := &PathView{
 		Path:        view.Path,
 		Local:       view.Local,
 		Remote:      view.Remote,
 		TruthStatus: view.TruthStatus,
 	}
 	if view.Remote != nil && view.Remote.ItemType == ItemTypeFolder {
-		return []Action{deleteAction, makeFolderCreate(createView, createLocal)}
+		return []Action{deleteAction, makeFolderCreate(createView, CreateLocal)}
 	}
 
 	download := makeAction(ActionDownload, createView)
@@ -707,7 +707,7 @@ func partitionCurrentActionsForMode(actions []Action, mode SyncMode) ([]Action, 
 }
 
 // leaveOutNewLocalItems admits what a plan that releases its local tree may
-// run (plannerMountContext.ReleasesLocalTree): it creates nothing new locally.
+// run (PlannerMountContext.ReleasesLocalTree): it creates nothing new locally.
 // A download or a local folder create of an item that has no baseline row and
 // no local entry is left out, so the final drain never fetches an item it has
 // not synced, and an entry an earlier release took is never downloaded back.
@@ -715,7 +715,7 @@ func partitionCurrentActionsForMode(actions []Action, mode SyncMode) ([]Action, 
 // OneDrive moved into a new folder moves there, and the release then takes
 // both. What is left out is neither follow-up work nor work left: the tree it
 // would join is going. The plan logs its count once, at Debug.
-func (p *planner) leaveOutNewLocalItems(actions []Action, mode SyncMode) []Action {
+func (p *Planner) leaveOutNewLocalItems(actions []Action, mode SyncMode) []Action {
 	needed := foldersNeededByAdmittedActions(actions, mode)
 	kept := make([]Action, 0, len(actions))
 	leftOut := 0
@@ -742,7 +742,7 @@ func createsNewLocalItem(action *Action) bool {
 		return false
 	}
 
-	return action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == createLocal)
+	return action.Type == ActionDownload || (action.Type == ActionFolderCreate && action.CreateSide == CreateLocal)
 }
 
 // foldersNeededByAdmittedActions is every folder above an action the mode
@@ -764,12 +764,12 @@ func foldersNeededByAdmittedActions(actions []Action, mode SyncMode) map[string]
 	return needed
 }
 
-func localStateFromSnapshotRow(row *localStateRow) *localState {
+func LocalStateFromSnapshotRow(row *LocalStateRow) *LocalState {
 	if row == nil {
 		return nil
 	}
 
-	return &localState{
+	return &LocalState{
 		Name:             path.Base(row.Path),
 		ItemType:         row.ItemType,
 		Size:             row.Size,
@@ -783,12 +783,12 @@ func localStateFromSnapshotRow(row *localStateRow) *localState {
 	}
 }
 
-func remoteStateFromSnapshotRow(row *remoteStateRow) *remoteState {
+func remoteStateFromSnapshotRow(row *RemoteStateRow) *RemoteState {
 	if row == nil {
 		return nil
 	}
 
-	return &remoteState{
+	return &RemoteState{
 		ItemID:    row.ItemID,
 		DriveID:   row.DriveID,
 		Name:      path.Base(row.Path),

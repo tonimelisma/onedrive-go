@@ -28,7 +28,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &actionCompletion{
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
 					DriveID:    rt.engine.driveID,
@@ -46,7 +46,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
 				rt.enterBootstrap()
-				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &actionCompletion{
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
 					DriveID:    rt.engine.driveID,
@@ -112,7 +112,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	rt.replaceOutbox([]*trackedAction{publication})
+	rt.replaceOutbox([]*TrackedAction{publication})
 	p := &watchPipeline{bl: bl}
 	rt.beginWatchDrain(t.Context(), p)
 
@@ -142,7 +142,7 @@ func TestRuntimeArchitecture_SteadyStatePrepareUsesCommittedTruthOnly(t *testing
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	require.NoError(t, rt.commitObservedItems(ctx, []observedItem{{
+	require.NoError(t, rt.commitObservedItems(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-1",
 		Path:     "remote.txt",
@@ -183,16 +183,16 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 
 	p := &watchPipeline{
 		bl:          bl,
-		replanReady: make(chan dirtyBatch),
+		replanReady: make(chan DirtyBatch),
 	}
-	rt.resources.localBatches = make(chan localObservation)
-	rt.resources.remoteBatches = make(chan remoteObservationBatch)
+	rt.resources.localBatches = make(chan LocalObservation)
+	rt.resources.remoteBatches = make(chan RemoteObservationBatch)
 
 	cancel()
 	rt.beginWatchDrain(ctx, p)
 	require.NoError(t, eng.baseline.Close(context.Background()))
 
-	done, err := rt.handleDrainingCompletion(ctx, p, &actionCompletion{
+	done, err := rt.handleDrainingCompletion(ctx, p, &ActionCompletion{
 		ActionID:   1,
 		Path:       "drain.txt",
 		ActionType: ActionUpload,
@@ -223,7 +223,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *Baseline) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &actionCompletion{
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
 					DriveID:    rt.engine.driveID,
@@ -240,7 +240,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
 				rt.enterBootstrap()
-				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &actionCompletion{
+				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
 					DriveID:    rt.engine.driveID,
@@ -282,8 +282,8 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 
 			tc.run(t, eng, rt, bl)
 
-			recorder.requireEventCount(t, func(event engineDebugEvent) bool {
-				return event.Type == engineDebugEventReadyFrontierAppended
+			recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
+				return event.Type == EngineDebugEventReadyFrontierAppended
 			}, 1, "watch path should re-enter the shared appendReadyFrontier boundary exactly once")
 		})
 	}

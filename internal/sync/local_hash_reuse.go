@@ -7,13 +7,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// racilyCleanWindow is how recent a file's last change may be before a scan
+// RacilyCleanWindow is how recent a file's last change may be before a scan
 // distrusts what is recorded for it: a write in the same clock tick as the
 // recorded hash moves neither size nor time (Git's "racily clean" problem).
-const racilyCleanWindow = time.Second
+const RacilyCleanWindow = time.Second
 
 // modifiedInRacilyCleanWindow reports whether a file was modified, or its
-// inode changed, within racilyCleanWindow before the scan that began at
+// inode changed, within RacilyCleanWindow before the scan that began at
 // scanStartNano (a clock reading), or after it began: either way a recorded
 // hash may predate the file's content. The modification time is taken as a
 // time, never as its stored integer, so a file dated outside 1678 to 2262 is
@@ -22,14 +22,14 @@ const racilyCleanWindow = time.Second
 // the kernel from its own clock, so it lies inside that range and the
 // integer subtraction cannot overflow.
 func modifiedInRacilyCleanWindow(modTime time.Time, ctime, scanStartNano int64) bool {
-	if time.Unix(0, scanStartNano).Sub(modTime) < racilyCleanWindow {
+	if time.Unix(0, scanStartNano).Sub(modTime) < RacilyCleanWindow {
 		return true
 	}
 
-	return scanStartNano-ctime < int64(racilyCleanWindow)
+	return scanStartNano-ctime < int64(RacilyCleanWindow)
 }
 
-// canReuseBaselineHash reports whether a caller can safely trust the cached
+// CanReuseBaselineHash reports whether a caller can safely trust the cached
 // baseline hash for a local file instead of re-reading the file contents.
 //
 // Every fact compared here is a local observation recorded by this host, so
@@ -54,7 +54,7 @@ func modifiedInRacilyCleanWindow(modTime time.Time, ctime, scanStartNano int64) 
 // This keeps the engine's retry/reobserve paths aligned with the main local
 // scanner so we do not hash aggressively in one path while trusting metadata
 // in another.
-func canReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNano int64) bool {
+func CanReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNano int64) bool {
 	if info == nil || base == nil || info.IsDir() || base.ItemType != ItemTypeFile || base.LocalHash == "" {
 		return false
 	}
@@ -80,25 +80,10 @@ func canReuseBaselineHash(info fs.FileInfo, base *BaselineEntry, observeStartNan
 // recorded. A baseline without identity proves nothing.
 func sameBaselineIdentity(info fs.FileInfo, base *BaselineEntry) bool {
 	identity, hasIdentity := synctree.IdentityFromFileInfo(info)
-	baseIdentity, baseHasIdentity := base.fileIdentity()
+	baseIdentity, baseHasIdentity := base.FileIdentity()
 	if !hasIdentity || !baseHasIdentity {
 		return false
 	}
 
 	return synctree.SameIdentity(identity, baseIdentity)
-}
-
-// fileChangeTime returns the ctime a local_state row records for info: the
-// inode change time for a regular file, and zero (unknown) for anything else,
-// because a folder's ctime moves with every child and means nothing here.
-func fileChangeTime(info fs.FileInfo) int64 {
-	if info == nil || !info.Mode().IsRegular() {
-		return 0
-	}
-	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
-	if !ok {
-		return 0
-	}
-
-	return ctime
 }

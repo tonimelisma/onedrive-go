@@ -31,22 +31,22 @@ func TestPermHandler_HandleLocalPermission_UnwritableParentIsAWriteBoundary(t *t
 		assert.NoError(t, os.Chmod(subDir, 0o700)) //nolint:gosec // restoring the folder so the temp dir can be removed
 	})
 
-	write := &actionCompletion{
+	write := &ActionCompletion{
 		Path:              "ro/into-ro.bin",
 		ActionType:        ActionDownload,
-		FailureCapability: permissionCapabilityLocalWrite,
+		FailureCapability: PermissionCapabilityLocalWrite,
 		ErrMsg:            "permission denied",
 	}
 	evidence := ph.handleLocalPermission(t.Context(), write)
 	assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind, "the unwritable folder is the boundary")
-	assert.Equal(t, issueLocalWriteDenied, evidence.IssueType)
+	assert.Equal(t, IssueLocalWriteDenied, evidence.IssueType)
 	assert.Equal(t, "ro", evidence.BoundaryPath)
 	assert.Equal(t, "ro/into-ro.bin", evidence.TriggerPath)
 
-	read := &actionCompletion{
+	read := &ActionCompletion{
 		Path:              "ro/secret.bin",
 		ActionType:        ActionUpload,
-		FailureCapability: permissionCapabilityLocalRead,
+		FailureCapability: PermissionCapabilityLocalRead,
 		ErrMsg:            "permission denied",
 	}
 	assert.Equal(t, permissionEvidenceFileDenied, ph.handleLocalPermission(t.Context(), read).Kind,

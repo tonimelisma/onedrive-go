@@ -42,8 +42,8 @@ func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T
 		nowOffset int64
 		wantReuse bool
 	}{
-		{name: "metadata_match_outside_racily_clean_window", nowOffset: int64(racilyCleanWindow) + 1, wantReuse: true},
-		{name: "racily_clean_forces_hash", nowOffset: int64(racilyCleanWindow) - 1, wantReuse: false},
+		{name: "metadata_match_outside_racily_clean_window", nowOffset: int64(RacilyCleanWindow) + 1, wantReuse: true},
+		{name: "racily_clean_forces_hash", nowOffset: int64(RacilyCleanWindow) - 1, wantReuse: false},
 	}
 
 	for _, tt := range tests {
@@ -51,7 +51,7 @@ func TestCanReuseBaselineHash_MetadataMatchOutsideRacilyCleanWindow(t *testing.T
 			t.Parallel()
 
 			info, entry, latest := hashReuseFixture(t, "stable.txt")
-			assert.Equal(t, tt.wantReuse, canReuseBaselineHash(info, entry, latest+tt.nowOffset))
+			assert.Equal(t, tt.wantReuse, CanReuseBaselineHash(info, entry, latest+tt.nowOffset))
 		})
 	}
 }
@@ -65,7 +65,7 @@ func TestCanReuseBaselineHash_SubsecondMtimeDifferenceRequiresHash(t *testing.T)
 	// full precision; only comparisons with OneDrive values truncate.
 	entry.LocalMtime = info.ModTime().Add(700 * time.Millisecond).UnixNano()
 
-	assert.False(t, canReuseBaselineHash(info, entry, latest+int64(racilyCleanWindow)+1))
+	assert.False(t, CanReuseBaselineHash(info, entry, latest+int64(RacilyCleanWindow)+1))
 }
 
 // Validates: R-2.2.4
@@ -97,7 +97,7 @@ func TestCanReuseBaselineHash_CtimeOrIdentityMismatchRequiresHash(t *testing.T) 
 			if tt.observedBirthTime != 0 {
 				info = reportedBirthTimeInfo{FileInfo: info, birthTime: tt.observedBirthTime}
 			}
-			assert.False(t, canReuseBaselineHash(info, entry, latest+int64(racilyCleanWindow)+1))
+			assert.False(t, CanReuseBaselineHash(info, entry, latest+int64(RacilyCleanWindow)+1))
 		})
 	}
 }
@@ -120,7 +120,7 @@ func TestCanReuseBaselineHash_MetadataMismatchRequiresHash(t *testing.T) {
 	info, entry, latest := hashReuseFixture(t, "changed.txt")
 	entry.LocalSize = info.Size() + 1
 
-	assert.False(t, canReuseBaselineHash(info, entry, latest+int64(racilyCleanWindow)+1))
+	assert.False(t, CanReuseBaselineHash(info, entry, latest+int64(RacilyCleanWindow)+1))
 }
 
 // statedModTimeInfo is a FileInfo stating a modification time the test
@@ -153,7 +153,7 @@ func TestCanReuseBaselineHash_AFileDated1601IsNotRacyAndItsHashIsReused(t *testi
 
 	info, entry, ctime := hashReuseFixtureDated(t, "old.txt", time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC))
 
-	assert.True(t, canReuseBaselineHash(info, entry, ctime+int64(racilyCleanWindow)+1),
+	assert.True(t, CanReuseBaselineHash(info, entry, ctime+int64(RacilyCleanWindow)+1),
 		"centuries before the scan is outside the racily-clean window")
 }
 
@@ -163,7 +163,7 @@ func TestCanReuseBaselineHash_AFileDated2300IsRehashedLikeAnyFutureDatedFile(t *
 
 	info, entry, ctime := hashReuseFixtureDated(t, "far.txt", time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC))
 
-	assert.False(t, canReuseBaselineHash(info, entry, ctime+int64(racilyCleanWindow)+1),
+	assert.False(t, CanReuseBaselineHash(info, entry, ctime+int64(RacilyCleanWindow)+1),
 		"a file modified after the scan began is never trusted")
 }
 

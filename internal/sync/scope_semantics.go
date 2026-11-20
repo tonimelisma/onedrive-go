@@ -31,7 +31,7 @@ const (
 	scopeSubjectKindPath    scopeSubjectKind = "path"
 )
 
-const scopePriorityMax = 99
+const ScopePriorityMax = 99
 
 const (
 	scopePriorityThrottleTarget = 0
@@ -52,7 +52,7 @@ type scopeDescriptor struct {
 	Priority             int
 }
 
-func describeScopeKey(key ScopeKey) scopeDescriptor {
+func DescribeScopeKey(key ScopeKey) scopeDescriptor {
 	switch key.Kind {
 	case ScopeThrottleTarget:
 		return scopeDescriptor{
@@ -61,7 +61,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Access:               scopeAccessNone,
 			SubjectKind:          scopeSubjectKindDrive,
 			SubjectValue:         key.Param,
-			DefaultConditionType: issueRateLimited,
+			DefaultConditionType: IssueRateLimited,
 			Priority:             scopePriorityThrottleTarget,
 		}
 	case ScopeService:
@@ -70,7 +70,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Family:               scopeFamilyService,
 			Access:               scopeAccessNone,
 			SubjectKind:          scopeSubjectKindNone,
-			DefaultConditionType: issueServiceOutage,
+			DefaultConditionType: IssueServiceOutage,
 			Priority:             scopePriorityService,
 		}
 	case ScopeDiskLocal:
@@ -79,7 +79,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Family:               scopeFamilyDiskLocal,
 			Access:               scopeAccessNone,
 			SubjectKind:          scopeSubjectKindNone,
-			DefaultConditionType: issueDiskFull,
+			DefaultConditionType: IssueDiskFull,
 			Priority:             scopePriorityDiskLocal,
 		}
 	case ScopeQuotaOwn:
@@ -98,7 +98,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Access:               scopeAccessRead,
 			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: issueLocalReadDenied,
+			DefaultConditionType: IssueLocalReadDenied,
 			Priority:             scopePriorityPermDir,
 		}
 	case ScopePermDirWrite:
@@ -108,7 +108,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Access:               scopeAccessWrite,
 			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: issueLocalWriteDenied,
+			DefaultConditionType: IssueLocalWriteDenied,
 			Priority:             scopePriorityPermDir,
 		}
 	case ScopeLocalReadOnly:
@@ -121,7 +121,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Access:               scopeAccessWrite,
 			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: issueLocalReadOnly,
+			DefaultConditionType: IssueLocalReadOnly,
 			Priority:             scopePriorityPermDir,
 		}
 	case ScopeDeleteSafety:
@@ -133,7 +133,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 			Access:               scopeAccessRead,
 			SubjectKind:          scopeSubjectKindPath,
 			SubjectValue:         key.Param,
-			DefaultConditionType: issueRemoteReadDenied,
+			DefaultConditionType: IssueRemoteReadDenied,
 			Priority:             scopePriorityPermRemote,
 		}
 	case ScopePermRemoteWrite:
@@ -149,7 +149,7 @@ func describeScopeKey(key ScopeKey) scopeDescriptor {
 	default:
 		return scopeDescriptor{
 			Key:      key,
-			Priority: scopePriorityMax,
+			Priority: ScopePriorityMax,
 		}
 	}
 }
@@ -165,8 +165,8 @@ func deleteSafetyScopeDescriptor(key ScopeKey) scopeDescriptor {
 		Access:               scopeAccessNone,
 		SubjectKind:          scopeSubjectKindNone,
 		SubjectValue:         key.Param,
-		DefaultConditionType: issueDeletesHeld,
-		Priority:             scopePriorityMax,
+		DefaultConditionType: IssueDeletesHeld,
+		Priority:             ScopePriorityMax,
 	}
 }
 
@@ -218,7 +218,7 @@ func (d scopeDescriptor) Humanize() string {
 	case scopeFamilyDiskLocal:
 		return "local disk"
 	case scopeFamilyDeleteSafety:
-		if d.SubjectValue == string(deleteSafetySideLocal) {
+		if d.SubjectValue == string(DeleteSafetySideLocal) {
 			return "deletes on this computer"
 		}
 		return "deletes on OneDrive"
@@ -230,7 +230,7 @@ func (d scopeDescriptor) Humanize() string {
 func (d scopeDescriptor) BlocksAction(
 	path string,
 	throttleTargetKey string,
-	actionType actionType,
+	actionType ActionType,
 ) bool {
 	switch d.Family {
 	case scopeFamilyUnknown:
@@ -254,13 +254,13 @@ func (d scopeDescriptor) BlocksAction(
 		if d.Access == scopeAccessRead {
 			return false
 		}
-		return scopePathMatches(path, d.SubjectValue) && remoteWriteScopeBlocksAction(actionType)
+		return scopePathMatches(path, d.SubjectValue) && RemoteWriteScopeBlocksAction(actionType)
 	default:
 		return false
 	}
 }
 
-func localWriteScopeBlocksAction(actionType actionType) bool {
+func localWriteScopeBlocksAction(actionType ActionType) bool {
 	switch actionType {
 	case ActionDownload,
 		ActionLocalDelete,
@@ -275,11 +275,11 @@ func localWriteScopeBlocksAction(actionType actionType) bool {
 		ActionRemoteMove:
 		return false
 	default:
-		panic(outsideTheEnum(actionType))
+		panic(OutsideTheEnum(actionType))
 	}
 }
 
-func remoteWriteScopeBlocksAction(actionType actionType) bool {
+func RemoteWriteScopeBlocksAction(actionType ActionType) bool {
 	switch actionType {
 	case ActionUpload,
 		ActionRemoteDelete,
@@ -294,6 +294,6 @@ func remoteWriteScopeBlocksAction(actionType actionType) bool {
 		ActionCleanup:
 		return false
 	default:
-		panic(outsideTheEnum(actionType))
+		panic(OutsideTheEnum(actionType))
 	}
 }

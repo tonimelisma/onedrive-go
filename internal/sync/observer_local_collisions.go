@@ -11,7 +11,7 @@
 //
 // Related files:
 //   - observer_local_handlers.go: event handlers that call these methods
-//   - scanner.go:                 FullScan's detectCaseCollisions (authoritative)
+//   - scanner.go:                 FullScan's DetectCaseCollisions (authoritative)
 
 package sync
 
@@ -34,7 +34,7 @@ import (
 //
 // A listing that fails both ways makes the caller report no collision (fail
 // open), as it always has: the event's own handling meets the same failure,
-// and the full scan's detectCaseCollisions, which is authoritative, judges
+// and the full scan's DetectCaseCollisions, which is authoritative, judges
 // the directory again.
 func readDirForCollisionCheck(tree *synctree.Root, dirPath string) ([]os.DirEntry, error) {
 	if tree != nil {
@@ -48,7 +48,7 @@ func readDirForCollisionCheck(tree *synctree.Root, dirPath string) ([]os.DirEntr
 
 // buildPeerRelPath constructs the db-relative path for a collision peer
 // given the current file's dbRelPath and the colliding file's name.
-func (o *localObserver) buildPeerRelPath(dbRelPath, collidingName string) string {
+func (o *LocalObserver) buildPeerRelPath(dbRelPath, collidingName string) string {
 	dir := filepath.Dir(dbRelPath)
 	if dir == "." {
 		return collidingName
@@ -62,7 +62,7 @@ func (o *localObserver) buildPeerRelPath(dbRelPath, collidingName string) string
 // holding an NFD name. It reads the directory name cache, listing the
 // directory on a miss, and returns name itself when no single entry matches:
 // the caller's stat then finds nothing, or finds the entry spelled as given.
-func (o *localObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name string) string {
+func (o *LocalObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name string) string {
 	cache, ok := o.DirNameCache[dirPath]
 	if !ok {
 		entries, err := readDirForCollisionCheck(tree, dirPath)
@@ -99,7 +99,7 @@ func (o *localObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name str
 // (a caller outside the engine) it lists the path directly. The dbDir
 // parameter is the db-relative directory path used for baseline cross-check.
 // Single-goroutine (watchLoop) access — no mutex needed.
-func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name, dbDir string) (string, bool) {
+func (o *LocalObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name, dbDir string) (string, bool) {
 	if o.DirNameCache == nil {
 		o.DirNameCache = make(map[string]map[namekey.Key][]string)
 	}
@@ -164,14 +164,14 @@ func (o *localObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, nam
 // that the entry at dbRelPath was skipped because its name collides with
 // collidingName's (R-2.12.2). It is how a test learns that the observer
 // handled the entry, instead of waiting out a window with no event.
-func (o *localObserver) reportCaseCollisionSkip(dbRelPath, collidingName string) {
+func (o *LocalObserver) reportCaseCollisionSkip(dbRelPath, collidingName string) {
 	if o.debugEvents == nil {
 		return
 	}
 
-	o.debugEvents(engineDebugEvent{
-		Type:     engineDebugEventLocalCaseCollisionSkipped,
-		Observer: engineDebugObserverLocal,
+	o.debugEvents(EngineDebugEvent{
+		Type:     EngineDebugEventLocalCaseCollisionSkipped,
+		Observer: EngineDebugObserverLocal,
 		Path:     dbRelPath,
 		Note:     collidingName,
 	})
@@ -179,7 +179,7 @@ func (o *localObserver) reportCaseCollisionSkip(dbRelPath, collidingName string)
 
 // updateDirNameCache adds a name to the cache for the given directory.
 // Called after successfully processing a Create event.
-func (o *localObserver) updateDirNameCache(dirPath, name string) {
+func (o *LocalObserver) updateDirNameCache(dirPath, name string) {
 	cache, ok := o.DirNameCache[dirPath]
 	if !ok {
 		return // not cached yet — will be populated lazily on next check
@@ -195,7 +195,7 @@ func (o *localObserver) updateDirNameCache(dirPath, name string) {
 
 // removeDirNameCache removes a name from the cache for the given directory.
 // Called after processing a Delete event.
-func (o *localObserver) removeDirNameCache(dirPath, name string) {
+func (o *LocalObserver) removeDirNameCache(dirPath, name string) {
 	cache, ok := o.DirNameCache[dirPath]
 	if !ok {
 		return
@@ -220,7 +220,7 @@ func (o *localObserver) removeDirNameCache(dirPath, name string) {
 // populateDirNameCache pre-populates the directory name cache from an already-
 // read set of directory entries. Called by scanNewDirectory after os.ReadDir
 // to avoid a redundant filesystem read in HasCaseCollisionCached.
-func (o *localObserver) populateDirNameCache(dirPath string, entries []os.DirEntry) {
+func (o *LocalObserver) populateDirNameCache(dirPath string, entries []os.DirEntry) {
 	if o.DirNameCache == nil {
 		o.DirNameCache = make(map[string]map[namekey.Key][]string)
 	}
@@ -238,7 +238,7 @@ func (o *localObserver) populateDirNameCache(dirPath string, entries []os.DirEnt
 // AddCollisionPeer records a bidirectional collision relationship between
 // two paths. Creates inner sets lazily. Idempotent — safe to call multiple
 // times for the same pair. Single-goroutine (watchLoop) access.
-func (o *localObserver) AddCollisionPeer(a, b string) {
+func (o *LocalObserver) AddCollisionPeer(a, b string) {
 	if o.CollisionPeers == nil {
 		return
 	}
@@ -259,7 +259,7 @@ func (o *localObserver) AddCollisionPeer(a, b string) {
 // removeCollisionPeersFor removes dbRelPath from the peer map and from all
 // peers' sets. Returns the set of former peers (for re-emission via
 // handleCreate). Returns nil if no peers existed.
-func (o *localObserver) removeCollisionPeersFor(dbRelPath string) map[string]struct{} {
+func (o *LocalObserver) removeCollisionPeersFor(dbRelPath string) map[string]struct{} {
 	if o.CollisionPeers == nil {
 		return nil
 	}

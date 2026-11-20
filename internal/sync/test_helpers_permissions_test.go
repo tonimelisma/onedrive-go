@@ -7,12 +7,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-const (
-	sharedTestFileItemID = "f1"
-	sharedTestNFDResume  = "re\u0301sume\u0301.txt"
-	sharedTestNFCResume  = "r\u00e9sum\u00e9.txt"
-)
-
 type mockPermChecker struct {
 	perms map[string][]graph.Permission
 	errs  map[string]error

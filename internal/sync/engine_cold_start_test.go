@@ -163,14 +163,14 @@ func newColdStartTrace() *coldStartTrace {
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
 func (tr *coldStartTrace) record(event DebugEvent) {
 	var line string
-	if event.Type == engineDebugEventColdStartAllowanceRaised {
+	if event.Type == EngineDebugEventColdStartAllowanceRaised {
 		line = fmt.Sprintf("raised(%d)", event.Count)
 		select {
 		case tr.raised <- event.Count:
 		default:
 		}
 	}
-	if event.Type == engineDebugEventColdStartHandedOver {
+	if event.Type == EngineDebugEventColdStartHandedOver {
 		line = "handed-over"
 		select {
 		case tr.handedOver <- struct{}{}:
@@ -244,7 +244,7 @@ func TestColdStart_AllowanceDoublesPerRoundToThePoolSize(t *testing.T) {
 
 			s := newActionScheduler()
 			s.resetColdStart(tc.ceiling)
-			ta := &trackedAction{Action: Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID)}}
+			ta := &TrackedAction{Action: Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID)}}
 			assert.Equal(t, min(2, tc.ceiling), s.coldStartRampFor(coldStartTarget(ta)).allowance)
 
 			var raised []int
@@ -266,25 +266,25 @@ func TestColdStart_HandOverOpensTheTargetToTheScope(t *testing.T) {
 	driveB := driveid.New("other-drive")
 	s := newActionScheduler()
 	s.resetColdStart(8)
-	a := &trackedAction{Action: Action{Type: ActionUpload, Path: "a.txt", DriveID: driveA}}
-	b := &trackedAction{Action: Action{Type: ActionUpload, Path: "b.txt", DriveID: driveB}}
-	local := &trackedAction{Action: Action{Type: ActionLocalDelete, Path: "c.txt"}}
+	a := &TrackedAction{Action: Action{Type: ActionUpload, Path: "a.txt", DriveID: driveA}}
+	b := &TrackedAction{Action: Action{Type: ActionUpload, Path: "b.txt", DriveID: driveB}}
+	local := &TrackedAction{Action: Action{Type: ActionLocalDelete, Path: "c.txt"}}
 
-	a2 := &trackedAction{ID: 2, Action: Action{Type: ActionUpload, Path: "a2.txt", DriveID: driveA}}
+	a2 := &TrackedAction{ID: 2, Action: Action{Type: ActionUpload, Path: "a2.txt", DriveID: driveA}}
 	s.markRunning(a)
 	s.markRunning(a2)
-	assert.False(t, s.coldStartAdmits(&trackedAction{ID: 3, Action: a.Action}), "two in flight is the opening allowance")
+	assert.False(t, s.coldStartAdmits(&TrackedAction{ID: 3, Action: a.Action}), "two in flight is the opening allowance")
 	assert.True(t, s.coldStartAdmits(b), "each target ramps on its own")
 	assert.True(t, s.coldStartAdmits(local), "an action that sends nothing to a drive is never gated")
 
 	assert.Equal(t, []string{a.Action.ThrottleTargetKey()}, s.handOverColdStart(SKThrottleDrive(driveA)))
-	assert.True(t, s.coldStartAdmits(&trackedAction{ID: 3, Action: a.Action}), "the scope owns the drive's admission now")
+	assert.True(t, s.coldStartAdmits(&TrackedAction{ID: 3, Action: a.Action}), "the scope owns the drive's admission now")
 	assert.Empty(t, s.handOverColdStart(SKThrottleDrive(driveA)), "said once")
 	assert.Empty(t, s.handOverColdStart(SKQuotaOwn()), "a quota scope says nothing about request rate")
 	assert.Zero(t, s.noteColdStartSuccess(a), "a handed-over target no longer ramps")
 
 	assert.ElementsMatch(t, []string{b.Action.ThrottleTargetKey()}, s.handOverColdStart(SKService()))
-	c := &trackedAction{Action: Action{Type: ActionUpload, Path: "d.txt", DriveID: driveid.New("third-drive")}}
+	c := &TrackedAction{Action: Action{Type: ActionUpload, Path: "d.txt", DriveID: driveid.New("third-drive")}}
 	assert.True(t, s.coldStartRampFor(coldStartTarget(c)).handedOver, "a service scope takes every later target too")
 
 	s.resetColdStart(8)
@@ -536,20 +536,20 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 	rt.sched.resetColdStart(eng.workerPoolSize())
 	ctx := t.Context()
 
-	uploads := make([]*trackedAction, 0, 7)
+	uploads := make([]*TrackedAction, 0, 7)
 	for i := range 7 {
 		ta := rt.sched.graph.Add(&Action{
 			Type:    ActionUpload,
 			Path:    fmt.Sprintf("file-%d.txt", i),
 			DriveID: eng.driveID,
-			View:    &pathView{Path: fmt.Sprintf("file-%d.txt", i)},
+			View:    &PathView{Path: fmt.Sprintf("file-%d.txt", i)},
 		}, int64(i+1), nil)
 		require.NotNil(t, ta)
 		uploads = append(uploads, ta)
 	}
 	rt.replaceOutbox(uploads)
 
-	dispatch := func() *trackedAction {
+	dispatch := func() *TrackedAction {
 		ch, next := rt.dispatchChannelForOutbox()
 		if ch == nil {
 			return nil
@@ -558,7 +558,7 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 		rt.handleWatchDispatch(next)
 		return ta
 	}
-	complete := func(ta *trackedAction) {
+	complete := func(ta *TrackedAction) {
 		t.Helper()
 		ready, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(ta), &Baseline{})
 		require.NoError(t, err)

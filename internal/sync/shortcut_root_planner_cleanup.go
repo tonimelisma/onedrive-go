@@ -19,7 +19,7 @@ func planShortcutRootChildCleanupPending(record *ShortcutRootRecord) ShortcutRoo
 	if record == nil {
 		return ShortcutRootRecord{}
 	}
-	normalized := normalizeShortcutRootRecord(record)
+	normalized := NormalizeShortcutRootRecord(record)
 	normalized = plannedShortcutRootTransition(&normalized,
 		shortcutRootEventProjectionCleanupSucceeded,
 		ShortcutRootStateRemovedChildCleanupPending,
@@ -47,26 +47,26 @@ func planShortcutRootFinalDrainAgain(record *ShortcutRootRecord) ShortcutRootRec
 	return plannedShortcutRootTransition(record, shortcutRootEventProjectionNotEmpty, target, "")
 }
 
-// shortcutRootReleaseResult is what removing a released alias root found:
+// ShortcutRootReleaseResult is what removing a released alias root found:
 // the root is gone (removed now or already absent), it still holds
 // something, or the removal failed for a reason no final drain can fix.
-type shortcutRootReleaseResult struct {
+type ShortcutRootReleaseResult struct {
 	NotEmpty bool
 	Err      error
 }
 
-// planShortcutRootReleaseCleanup is the deterministic core for the parent
+// PlanShortcutRootReleaseCleanup is the deterministic core for the parent
 // release-cleanup phase. The engine shell owns filesystem removal; this helper
 // only translates that outcome into the next durable shortcut-root records.
-func planShortcutRootReleaseCleanup(
+func PlanShortcutRootReleaseCleanup(
 	record *ShortcutRootRecord,
-	result shortcutRootReleaseResult,
+	result ShortcutRootReleaseResult,
 ) shortcutRootReleaseCleanupPlan {
 	if record == nil {
 		return shortcutRootReleaseCleanupPlan{}
 	}
-	normalized := normalizeShortcutRootRecord(record)
-	if !shortcutRootStateAwaitsReleaseCleanup(normalized.State) {
+	normalized := NormalizeShortcutRootRecord(record)
+	if !ShortcutRootStateAwaitsReleaseCleanup(normalized.State) {
 		return shortcutRootReleaseCleanupPlan{
 			Records: []ShortcutRootRecord{normalized},
 		}

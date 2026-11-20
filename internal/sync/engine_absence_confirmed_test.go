@@ -49,7 +49,7 @@ func TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete(t *testing.T)
 	ctx := t.Context()
 	writeLocalFile(t, syncRoot, "keep.txt", "keep")
 	writeLocalFile(t, syncRoot, "notes.txt", "my notes")
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
 		{
 			Action: ActionDownload, Success: true, Path: "keep.txt", DriveID: driveID, ItemID: "item-keep",
 			ItemType: ItemTypeFile, LocalHash: keepHash, RemoteHash: keepHash,
@@ -111,14 +111,14 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		},
 	}
 	listed := []graph.Item{{ID: "sub", Name: "sub", ParentID: "mount-root", IsFolder: true}}
-	orphans := []remoteItem{
-		{observedItem: observedItem{ItemID: "skipped", Path: "sub/a.txt", IsDeleted: true}},
-		{observedItem: observedItem{ItemID: "moved-out", Path: "b.txt", IsDeleted: true}},
-		{observedItem: observedItem{ItemID: "trashed", Path: "c.txt", IsDeleted: true}},
-		{observedItem: observedItem{ItemID: "gone", Path: "d.txt", IsDeleted: true}},
-		{observedItem: observedItem{ItemID: "unknown", Path: "e.txt", IsDeleted: true}},
-		{observedItem: observedItem{ItemID: "no-parent", Path: "f.txt", IsDeleted: true}},
-		{observedItem: observedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
+	orphans := []RemoteItem{
+		{ObservedItem: ObservedItem{ItemID: "skipped", Path: "sub/a.txt", IsDeleted: true}},
+		{ObservedItem: ObservedItem{ItemID: "moved-out", Path: "b.txt", IsDeleted: true}},
+		{ObservedItem: ObservedItem{ItemID: "trashed", Path: "c.txt", IsDeleted: true}},
+		{ObservedItem: ObservedItem{ItemID: "gone", Path: "d.txt", IsDeleted: true}},
+		{ObservedItem: ObservedItem{ItemID: "unknown", Path: "e.txt", IsDeleted: true}},
+		{ObservedItem: ObservedItem{ItemID: "no-parent", Path: "f.txt", IsDeleted: true}},
+		{ObservedItem: ObservedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
 	}
 
 	confirmed, _ := eng.confirmMountRootOrphans(t.Context(), listed, orphans)
@@ -143,7 +143,7 @@ func TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing(t
 
 	bad := append(append([]graph.Item(nil), ok...), graph.Item{ID: "x", Name: "x.txt", ParentID: "some-other-folder"})
 	err := validateMountRootListingParents(bad, "mount-root")
-	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 }
 
 // Validates: R-2.4.3, R-6.2.2
@@ -189,7 +189,7 @@ func TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive(t *te
 					return tc.live(itemID)
 				},
 			})
-			require.NoError(t, eng.baseline.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 				NamespaceID:       shortcutNamespaceTestID,
 				BindingItemID:     "binding-1",
 				RelativeLocalPath: "Shared/Docs",
@@ -202,12 +202,12 @@ func TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive(t *te
 			}}))
 
 			// A complete enumeration that omitted the placeholder.
-			topology := shortcutTopologyBatch{NamespaceID: shortcutNamespaceTestID, Kind: shortcutTopologyObservationComplete}
+			topology := ShortcutTopologyBatch{NamespaceID: shortcutNamespaceTestID, Kind: ShortcutTopologyObservationComplete}
 			require.NoError(t, eng.confirmShortcutCompleteOmissions(t.Context(), &topology))
-			_, err := eng.baseline.applyShortcutTopology(t.Context(), topology)
+			_, err := eng.baseline.ApplyShortcutTopology(t.Context(), topology)
 			require.NoError(t, err)
 
-			roots, err := eng.baseline.listShortcutRoots(t.Context())
+			roots, err := eng.baseline.ListShortcutRoots(t.Context())
 			require.NoError(t, err)
 			require.Len(t, roots, 1)
 			assert.Equal(t, tc.state, roots[0].State)
@@ -288,7 +288,7 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 	require.NoError(t, err)
 	failLookup = false
 
-	clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+	clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
 	for range 2 {
 		runScenarioPass(t, h.eng)
 	}
@@ -342,7 +342,7 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 		passes, minRefreshes, maxRefreshes = 6, 2, 3
 	}
 	for range passes {
-		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+		clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
 		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
@@ -354,27 +354,16 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 	// delay on) decides the orphan, and the daily cadence returns.
 	failLookup = false
 	for range 2 * passes {
-		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+		clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
 		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	assert.NoFileExists(t, filepath.Join(h.syncRoot, "a.txt"), "the decided orphan is applied")
 	settled := remote.fullDeltaCount()
 	for range passes {
-		clock.advance(fullRefreshAfterFolderDeleteDelay + time.Minute)
+		clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
 		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	assert.Equal(t, settled, remote.fullDeltaCount(), "no early refresh once nothing is undecided")
-}
-
-// Validates: R-2.15.3
-func TestUndecidedRefreshDelay_DoublesToTheDailyCadence(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, 15*time.Minute, undecidedRefreshDelay(1))
-	assert.Equal(t, 30*time.Minute, undecidedRefreshDelay(2))
-	assert.Equal(t, 2*time.Hour, undecidedRefreshDelay(4))
-	assert.Equal(t, fullRemoteRefreshInterval, undecidedRefreshDelay(8))
-	assert.Equal(t, fullRemoteRefreshInterval, undecidedRefreshDelay(1000))
 }

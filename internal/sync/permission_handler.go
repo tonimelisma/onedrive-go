@@ -14,7 +14,7 @@ import (
 // durable retry/scope mutations.
 type permissionHandler struct {
 	store            *SyncStore
-	permChecker      permissionChecker
+	permChecker      PermissionChecker
 	syncTree         *synctree.Root
 	driveID          driveid.ID
 	accountEmail     string

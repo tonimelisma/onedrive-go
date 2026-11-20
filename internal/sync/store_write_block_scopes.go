@@ -9,7 +9,7 @@
 //
 // Related files:
 //   - active_scopes.go: stateless active-scope helper functions
-//   - scope_key.go:     ScopeKey, parseScopeKey, ScopeKey.String()
+//   - scope_key.go:     ScopeKey, ParseScopeKey, ScopeKey.String()
 
 package sync
 
@@ -22,7 +22,7 @@ func validateBlockScope(block *BlockScope) error {
 	if block.Key.IsZero() {
 		return fmt.Errorf("sync: upserting block scope: missing scope key")
 	}
-	if describeScopeKey(block.Key).IsZero() {
+	if DescribeScopeKey(block.Key).IsZero() {
 		return fmt.Errorf("sync: upserting block scope %s: unknown scope key", block.Key.String())
 	}
 	if !block.Key.PersistsInBlockScopes() {
@@ -41,13 +41,13 @@ func validateBlockScope(block *BlockScope) error {
 // UpsertBlockScope persists a block scope to the block_scopes table.
 // INSERT OR REPLACE — the scope_key is the primary key, so this handles
 // both insert and update. All fields are serialized: ScopeKey.String() for
-// the key, storedTimeNano for the trial time (a server's Retry-After can put
+// the key, StoredTimeNano for the trial time (a server's Retry-After can put
 // it past 2262), nanoseconds for Duration.
 func (s *SyncStore) UpsertBlockScope(ctx context.Context, block *BlockScope) error {
 	return upsertBlockScopeWithRunner(ctx, s.db, block)
 }
 
-func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *BlockScope) error {
+func upsertBlockScopeWithRunner(ctx context.Context, runner SqlTxRunner, block *BlockScope) error {
 	if err := validateBlockScope(block); err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 		VALUES (?, ?, ?, ?)`,
 		block.Key.String(),
 		int64(block.TrialInterval),
-		storedTimeNano(block.NextTrialAt),
+		StoredTimeNano(block.NextTrialAt),
 		block.SlowStartThreshold,
 	)
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *SyncStore) DeleteBlockScope(ctx context.Context, key ScopeKey) error {
 	return deleteBlockScopeWithRunner(ctx, s.db, key)
 }
 
-func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key ScopeKey) error {
+func deleteBlockScopeWithRunner(ctx context.Context, runner SqlTxRunner, key ScopeKey) error {
 	_, err := runner.ExecContext(ctx,
 		`DELETE FROM block_scopes WHERE scope_key = ?`,
 		key.String(),

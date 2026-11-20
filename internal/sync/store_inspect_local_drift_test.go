@@ -54,7 +54,7 @@ func TestReadDriveStatusSnapshot_LocalDriftUsesPlannerContentTest(t *testing.T) 
 	// What the local observer reports: the folder as it is, same.txt touched
 	// but with the same content, edited.txt with new content, gone.txt
 	// deleted, and new.txt not yet uploaded.
-	require.NoError(t, store.ReplaceLocalState(t.Context(), []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(t.Context(), []LocalStateRow{
 		{Path: "Docs", ItemType: ItemTypeFolder, Mtime: 1777605693000000000},
 		{Path: "same.txt", ItemType: ItemTypeFile, Hash: "abc", Size: 3, Mtime: 1700000999},
 		{Path: "edited.txt", ItemType: ItemTypeFile, Hash: "def", Size: 4, Mtime: 1700000999},
@@ -68,7 +68,7 @@ func TestReadDriveStatusSnapshot_LocalDriftUsesPlannerContentTest(t *testing.T) 
 	assert.Equal(t, 3, snapshot.LocalDriftItems)
 
 	// Once everything is uploaded and local_state matches, nothing drifts.
-	require.NoError(t, store.ReplaceLocalState(t.Context(), []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(t.Context(), []LocalStateRow{
 		{Path: "Docs", ItemType: ItemTypeFolder},
 		{Path: "same.txt", ItemType: ItemTypeFile, Hash: "abc", Size: 3, Mtime: 1700000000},
 		{Path: "edited.txt", ItemType: ItemTypeFile, Hash: "abc", Size: 3, Mtime: 1700000000},

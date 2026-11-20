@@ -17,15 +17,15 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// projectRemoteObservations projection tests
+// ProjectRemoteObservations projection tests
 // ---------------------------------------------------------------------------
 
 func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []remoteItem{
-		{observedItem: observedItem{
+	events := []RemoteItem{
+		{ObservedItem: ObservedItem{
 			ItemID:    "item1",
 			ParentID:  "parent1",
 			DriveID:   driveID,
@@ -37,7 +37,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 			ETag:      "etag1",
 			IsDeleted: false,
 		}},
-		{observedItem: observedItem{
+		{ObservedItem: ObservedItem{
 			ItemID:    "item2",
 			DriveID:   driveID,
 			Path:      "docs/folder",
@@ -46,7 +46,7 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 		}},
 	}
 
-	items := projectRemoteObservations(slog.Default(), events).observed
+	items := ProjectRemoteObservations(slog.Default(), events).Observed
 	require.Len(t, items, 2)
 
 	assert.Equal(t, driveID, items[0].DriveID)
@@ -176,7 +176,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	assert.Len(t, remoteRows, 1, "the one changed item is committed (root is skipped)")
 
 	require.NotNil(t, pendingCursor)
-	assert.Equal(t, "new-token", pendingCursor.cursorToken, "pending cursor should be returned")
+	assert.Equal(t, "new-token", pendingCursor.CursorToken, "pending cursor should be returned")
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken,
@@ -205,7 +205,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 		"id-c": {},
 	}
 
-	orphans := findBaselineOrphans(bl, seen, driveID, "")
+	orphans := FindBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should detect 1 orphan")
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
@@ -230,7 +230,7 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 		"id-b": {},
 	}
 
-	orphans := findBaselineOrphans(bl, seen, driveID, "")
+	orphans := FindBaselineOrphans(bl, seen, driveID, "")
 	assert.Empty(t, orphans, "should find no orphans when all items are in seen set")
 }
 
@@ -249,7 +249,7 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	// Empty seen set — only driveID's items should be orphaned.
 	seen := map[string]struct{}{}
 
-	orphans := findBaselineOrphans(bl, seen, driveID, "")
+	orphans := FindBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should only detect orphans for the specified drive")
 	assert.Equal(t, "a.txt", orphans[0].Path)
 }
@@ -271,7 +271,7 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 		"id-a": {},
 	}
 
-	orphans := findBaselineOrphans(bl, seen, driveID, "SharedFolder")
+	orphans := FindBaselineOrphans(bl, seen, driveID, "SharedFolder")
 	require.Len(t, orphans, 1, "should detect only orphans under the prefix")
 	assert.Equal(t, "SharedFolder/sub/b.txt", orphans[0].Path)
 }
@@ -313,7 +313,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
-	full, err := testEngineFlow(t, e).observeRemoteFullWithShortcutTopology(ctx, bl, resyncKindApplyDifferences)
+	full, err := testEngineFlow(t, e).observeRemoteFullWithShortcutTopology(ctx, bl, ResyncKindApplyDifferences)
 	require.NoError(t, err)
 	assert.Equal(t, "full-token", full.token)
 
@@ -336,7 +336,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// projectRemoteObservations — empty ItemID guard
+// ProjectRemoteObservations — empty ItemID guard
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.7.28
@@ -344,13 +344,13 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []remoteItem{
-		{observedItem: observedItem{ItemID: "valid-1", Path: "a.txt", DriveID: driveID}},
-		{observedItem: observedItem{ItemID: "", Path: "bad.txt", DriveID: driveID}},
-		{observedItem: observedItem{ItemID: "valid-2", Path: "b.txt", DriveID: driveID}},
+	events := []RemoteItem{
+		{ObservedItem: ObservedItem{ItemID: "valid-1", Path: "a.txt", DriveID: driveID}},
+		{ObservedItem: ObservedItem{ItemID: "", Path: "bad.txt", DriveID: driveID}},
+		{ObservedItem: ObservedItem{ItemID: "valid-2", Path: "b.txt", DriveID: driveID}},
 	}
 
-	items := projectRemoteObservations(slog.Default(), events).observed
+	items := ProjectRemoteObservations(slog.Default(), events).Observed
 	require.Len(t, items, 2, "empty ItemID event should be skipped")
 	assert.Equal(t, "valid-1", items[0].ItemID)
 	assert.Equal(t, "valid-2", items[1].ItemID)
@@ -378,8 +378,8 @@ func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
-		clock.Now().Add(-fullRemoteRefreshInterval-time.Minute),
-		remoteObservationModeDelta,
+		clock.Now().Add(-FullRemoteRefreshInterval-time.Minute),
+		RemoteObservationModeDelta,
 	))
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
@@ -399,7 +399,7 @@ func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
-		remoteObservationModeDelta,
+		RemoteObservationModeDelta,
 	))
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
@@ -418,7 +418,7 @@ func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
-		remoteObservationModeDelta,
+		RemoteObservationModeDelta,
 	))
 
 	delay, err := e.fullRemoteRefreshDelay(t.Context())
@@ -464,7 +464,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
-	require.NoError(t, e.baseline.CommitObservation(ctx, []observedItem{
+	require.NoError(t, e.baseline.CommitObservation(ctx, []ObservedItem{
 		{DriveID: driveID, ItemID: "f1", Path: "file1.txt", ItemType: ItemTypeFile},
 		{DriveID: driveID, ItemID: "f2", Path: "file2.txt", ItemType: ItemTypeFile},
 	}, "", driveID))
@@ -487,7 +487,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	require.NotNil(t, pendingCursor)
 
 	// Cursor should be returned as pending — NOT committed to DB.
-	assert.Equal(t, "full-token", pendingCursor.cursorToken, "pending cursor should be returned")
+	assert.Equal(t, "full-token", pendingCursor.CursorToken, "pending cursor should be returned")
 
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeAndCommitRemoteCurrentState — it is deferred")
@@ -538,8 +538,8 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "/", issues[0].Path)
-	assert.Equal(t, issueRemoteReadDenied, issues[0].IssueType)
-	assert.Equal(t, sKPermRemoteRead(""), issues[0].ScopeKey)
+	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
 
 	scopes, err := e.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -613,7 +613,7 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
@@ -649,7 +649,7 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
@@ -682,7 +682,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
@@ -716,7 +716,7 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Pre-set refreshActive — simulates a full remote refresh already in progress.
 	testWatchRuntime(t, e).resources.refreshActive = true
@@ -742,7 +742,7 @@ func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		rt.finishFullRemoteRefresh(context.Background(), &remoteObservationBatch{})
+		rt.finishFullRemoteRefresh(context.Background(), &RemoteObservationBatch{})
 		close(done)
 	}()
 
@@ -795,7 +795,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
 	// a coarse dirty signal back from the remote refresh.
@@ -814,11 +814,11 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{dirty: true}))
-	rt.markDirtyFromRemoteBatch(&remoteObservationBatch{
-		changes: []remoteChange{
+	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{Dirty: true}))
+	rt.markDirtyFromRemoteBatch(&RemoteObservationBatch{
+		Changes: []RemoteChange{
 			{Path: "alpha.txt"},
 			{OldPath: "beta.txt"},
 			{Path: "gamma.txt", OldPath: "delta.txt"},
@@ -859,7 +859,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	refreshC := make(chan time.Time, 1)
 	rt.resources.refreshCh = refreshC
@@ -873,8 +873,8 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	refreshC <- time.Now()
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventRemoteRefreshApplied
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventRemoteRefreshApplied
 	}, "watch loop applied periodic full remote refresh result")
 
 	batch := rt.resources.dirtyBuf.FlushImmediate()
@@ -933,8 +933,8 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	// remote_refresh_committed event at the exact point between durable
 	// refresh apply and the ctx.Err() check.
 	ctx, cancel := context.WithCancel(t.Context())
-	attachDebugEventRecorderWithHook(e, func(event engineDebugEvent) {
-		if event.Type == engineDebugEventRemoteRefreshCommitted {
+	attachDebugEventRecorderWithHook(e, func(event EngineDebugEvent) {
+		if event.Type == EngineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
 	})
@@ -943,7 +943,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = newDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, ctx, e)

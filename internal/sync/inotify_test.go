@@ -39,7 +39,7 @@ func TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable(t *testing.T) {
 	tests := []struct {
 		name      string
 		err       error
-		wantCause watchUnavailableCause
+		wantCause WatchUnavailableCause
 		wantOK    bool
 	}{
 		{name: "ENOSPC is the watch limit", err: syscall.ENOSPC, wantCause: watchCauseWatchLimit, wantOK: true},

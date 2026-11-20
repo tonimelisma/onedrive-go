@@ -10,9 +10,9 @@ type blockedRetryGroup struct {
 	Paths []string
 }
 
-// groupBlockedRetryWork groups blocked retry_work rows by scope key, keeping a
+// GroupBlockedRetryWork groups blocked retry_work rows by scope key, keeping a
 // stable path list for downstream watch/status projections.
-func groupBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]blockedRetryGroup {
+func GroupBlockedRetryWork(rows []RetryWorkRow) map[ScopeKey]blockedRetryGroup {
 	grouped := make(map[ScopeKey]blockedRetryGroup)
 	for i := range rows {
 		scopeKey := rows[i].ScopeKey

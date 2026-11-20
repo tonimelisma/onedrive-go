@@ -23,10 +23,10 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn(t *testing.T)
 	flow := testEngineFlow(t, eng)
 
 	for i := range 11 {
-		flow.recordError(&resultDecision{
-			Persistence:   persistRetryWork,
-			ConditionType: issueServiceOutage,
-		}, &actionCompletion{
+		flow.recordError(&ResultDecision{
+			Persistence:   PersistRetryWork,
+			ConditionType: IssueServiceOutage,
+		}, &ActionCompletion{
 			Path:   fmt.Sprintf("retry-%02d.txt", i),
 			Err:    errors.New("boom"),
 			ErrMsg: "boom",
@@ -68,11 +68,11 @@ func TestEngineFlow_LogFailureSummary_GroupsFailuresWithNoConditionApart(t *test
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	for i, condition := range []IssueType{"", issueServiceOutage, ""} {
-		flow.recordError(&resultDecision{
-			Persistence:   persistRetryWork,
+	for i, condition := range []IssueType{"", IssueServiceOutage, ""} {
+		flow.recordError(&ResultDecision{
+			Persistence:   PersistRetryWork,
 			ConditionType: condition,
-		}, &actionCompletion{
+		}, &ActionCompletion{
 			Path:   fmt.Sprintf("unclassified-%02d.txt", i),
 			ErrMsg: "connection reset",
 		})
@@ -92,7 +92,7 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	now := eng.nowFunc()
-	rt.holdAction(&trackedAction{
+	rt.holdAction(&TrackedAction{
 		Action: Action{
 			Path: "due.txt",
 			Type: ActionUpload,
@@ -119,7 +119,7 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()
 
-	rt.holdAction(&trackedAction{
+	rt.holdAction(&TrackedAction{
 		Action: Action{
 			Path: "later.txt",
 			Type: ActionUpload,

@@ -21,8 +21,8 @@ type HeldDeleteRow struct {
 // the table is what `status` shows and the exact set a later
 // `sync --confirm-deletes` approves. An empty list (the hold released,
 // confirmed, or no longer warranted) clears it.
-func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []heldDelete) (err error) {
-	tx, err := beginPerfTx(ctx, s.db)
+func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []HeldDelete) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin held deletes transaction: %w", err)
 	}
@@ -49,7 +49,7 @@ func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []heldDelete) (
 	return nil
 }
 
-func queryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]HeldDeleteRow, error) {
+func QueryHeldDeleteRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]HeldDeleteRow, error) {
 	rows, err := runner.QueryContext(ctx,
 		`SELECT path, side, reason, item_type, item_id FROM held_deletes ORDER BY side, path`)
 	if err != nil {
@@ -66,7 +66,7 @@ func queryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]H
 		if err := rows.Scan(&row.Path, &row.Side, &row.Reason, &itemType, &row.ItemID); err != nil {
 			return nil, fmt.Errorf("scan held delete: %w", err)
 		}
-		parsed, parseErr := parseItemType(itemType)
+		parsed, parseErr := ParseItemType(itemType)
 		if parseErr != nil {
 			return nil, fmt.Errorf("scan held delete %s: %w", row.Path, parseErr)
 		}
@@ -80,19 +80,19 @@ func queryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]H
 	return result, nil
 }
 
-// listHeldDeletes returns the recorded held set, the deletes a
+// ListHeldDeletes returns the recorded held set, the deletes a
 // `sync --confirm-deletes` pass may release.
-func (s *SyncStore) listHeldDeletes(ctx context.Context) ([]heldDelete, error) {
-	rows, err := queryHeldDeleteRowsWithRunner(ctx, s.db)
+func (s *SyncStore) ListHeldDeletes(ctx context.Context) ([]HeldDelete, error) {
+	rows, err := QueryHeldDeleteRowsWithRunner(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
-	held := make([]heldDelete, 0, len(rows))
+	held := make([]HeldDelete, 0, len(rows))
 	for i := range rows {
-		held = append(held, heldDelete{
+		held = append(held, HeldDelete{
 			Path:     rows[i].Path,
-			Side:     deleteSafetySide(rows[i].Side),
-			Reason:   deleteSafetyReason(rows[i].Reason),
+			Side:     DeleteSafetySide(rows[i].Side),
+			Reason:   DeleteSafetyReason(rows[i].Reason),
 			ItemType: rows[i].ItemType,
 			ItemID:   rows[i].ItemID,
 		})

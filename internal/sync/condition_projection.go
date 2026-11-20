@@ -27,7 +27,7 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 		return nil
 	}
 
-	blockedByScope := groupBlockedRetryWork(snapshot.BlockedRetryWork)
+	blockedByScope := GroupBlockedRetryWork(snapshot.BlockedRetryWork)
 	groupIndex := make(map[storedConditionGroupKey]int)
 	groups := make([]StoredConditionGroup, 0, len(snapshot.ObservationIssues)+len(snapshot.BlockScopes)+1)
 
@@ -36,7 +36,7 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 		group := ensureStoredConditionGroup(
 			&groups,
 			groupIndex,
-			conditionKeyForStoredCondition(issue.IssueType, issue.ScopeKey),
+			ConditionKeyForStoredCondition(issue.IssueType, issue.ScopeKey),
 			issue.IssueType,
 			issue.ScopeKey,
 		)
@@ -59,7 +59,7 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 
 		projection := blockedByScope[block.Key]
 		groupKey := storedConditionGroupKey{
-			conditionKey: conditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
+			conditionKey: ConditionKeyForStoredCondition(block.Key.ConditionType(), block.Key),
 			scopeKey:     block.Key.String(),
 		}
 		existingCount := 0
@@ -92,12 +92,12 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 
 	for i := range snapshot.HeldDeletes {
 		held := snapshot.HeldDeletes[i]
-		scopeKey := sKDeleteSafety(deleteSafetySide(held.Side))
+		scopeKey := SKDeleteSafety(DeleteSafetySide(held.Side))
 		group := ensureStoredConditionGroup(
 			&groups,
 			groupIndex,
 			ConditionDeletesHeld,
-			issueDeletesHeld,
+			IssueDeletesHeld,
 			scopeKey,
 		)
 		if group == nil {
@@ -111,14 +111,14 @@ func ProjectStoredConditionGroups(snapshot *DriveStatusSnapshot) []StoredConditi
 	return groups
 }
 
-// unsyncedIssueCount is how many observation issues in the snapshot keep a
+// UnsyncedIssueCount is how many observation issues in the snapshot keep a
 // file unsynced: an issue counts when status lists it (storedConditionListed,
 // the filter ProjectStoredConditionGroups applies) and its type leaves a file
-// unsynced (issueTypeLeavesFileUnsynced). Retry work is not read: every
+// unsynced (IssueTypeLeavesFileUnsynced). Retry work is not read: every
 // retry row a live pass leaves belongs to an action of that pass's plan, so
 // the run's own failed and left-for-next-sync counts already hold it. Held
 // deletes are a deliberate hold and are not read either.
-func (s *DriveStatusSnapshot) unsyncedIssueCount() int {
+func (s *DriveStatusSnapshot) UnsyncedIssueCount() int {
 	if s == nil {
 		return 0
 	}
@@ -126,7 +126,7 @@ func (s *DriveStatusSnapshot) unsyncedIssueCount() int {
 	count := 0
 	for i := range s.ObservationIssues {
 		issue := &s.ObservationIssues[i]
-		if storedConditionListed(issue.IssueType, issue.ScopeKey) && issueTypeLeavesFileUnsynced(issue.IssueType) {
+		if storedConditionListed(issue.IssueType, issue.ScopeKey) && IssueTypeLeavesFileUnsynced(issue.IssueType) {
 			count++
 		}
 	}
@@ -134,11 +134,11 @@ func (s *DriveStatusSnapshot) unsyncedIssueCount() int {
 	return count
 }
 
-// interruptedRemovalCount is how many files in the snapshot sync set aside
+// InterruptedRemovalCount is how many files in the snapshot sync set aside
 // while removing them and never moved out (local_interrupted_removal), as
 // status lists them: the user's content, which keeps a local tree that would
 // be removed (Report.LocalTreeHolds).
-func (s *DriveStatusSnapshot) interruptedRemovalCount() int {
+func (s *DriveStatusSnapshot) InterruptedRemovalCount() int {
 	if s == nil {
 		return 0
 	}
@@ -146,7 +146,7 @@ func (s *DriveStatusSnapshot) interruptedRemovalCount() int {
 	count := 0
 	for i := range s.ObservationIssues {
 		issue := &s.ObservationIssues[i]
-		if issue.IssueType == issueLocalInterruptedRemoval && storedConditionListed(issue.IssueType, issue.ScopeKey) {
+		if issue.IssueType == IssueLocalInterruptedRemoval && storedConditionListed(issue.IssueType, issue.ScopeKey) {
 			count++
 		}
 	}
@@ -158,7 +158,7 @@ func (s *DriveStatusSnapshot) interruptedRemovalCount() int {
 // record: ProjectStoredConditionGroups leaves out a record with no condition
 // family (ensureStoredConditionGroup).
 func storedConditionListed(conditionType IssueType, scopeKey ScopeKey) bool {
-	return conditionKeyForStoredCondition(conditionType, scopeKey) != ""
+	return ConditionKeyForStoredCondition(conditionType, scopeKey) != ""
 }
 
 // projectActionableRetryWork adds the work the executor could not do because
@@ -175,7 +175,7 @@ func projectActionableRetryWork(
 		group := ensureStoredConditionGroup(
 			groups,
 			groupIndex,
-			conditionKeyForStoredCondition(row.ConditionType, ScopeKey{}),
+			ConditionKeyForStoredCondition(row.ConditionType, ScopeKey{}),
 			row.ConditionType,
 			ScopeKey{},
 		)

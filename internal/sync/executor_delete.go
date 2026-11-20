@@ -23,15 +23,15 @@ import (
 // when configured junk filtering makes them non-content. Invalid OneDrive
 // names are user-actionable observation issues, not disposable trash.
 func isDisposable(name string, isDir bool) bool {
-	return isBundledJunkName(name) || (!isDir && isBundledJunkFileName(name))
+	return IsBundledJunkName(name) || (!isDir && IsBundledJunkFileName(name))
 }
 
-func (e *executor) isDisposable(name string, isDir bool) bool {
+func (e *Executor) IsDisposable(name string, isDir bool) bool {
 	return e.ignoreJunkFiles && isDisposable(name, isDir)
 }
 
-func (e *executor) findNonDisposable(dirPath string) string {
-	return findNonDisposable(e.syncTree, dirPath, e.isDisposable)
+func (e *Executor) FindNonDisposable(dirPath string) string {
+	return findNonDisposable(e.syncTree, dirPath, e.IsDisposable)
 }
 
 func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(string, bool) bool) string {
@@ -64,10 +64,10 @@ func findNonDisposable(tree *synctree.Root, dirPath string, isDisposable func(st
 // it and supersedes the delete, so the next plan uploads the newer content
 // instead of deleting it. A removed shared folder's release drives the same
 // delete (engine_shortcut_release.go).
-func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actionOutcome {
+func (e *Executor) ExecuteLocalDelete(ctx context.Context, action *Action) ActionOutcome {
 	// The entry is removed by its spelling on disk (R-2.13.2).
 	local := e.syncTree.Spelling(action.Path)
-	if boundary, ok, err := e.symlinkBoundaryForPath(local); err != nil {
+	if boundary, ok, err := e.SymlinkBoundaryForPath(local); err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
 	} else if ok {
 		cleanLocalPath := slashpath.Clean(filepath.ToSlash(local))
@@ -87,7 +87,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 				ActionLocalDelete,
 				stalePreconditionError("local delete source %s is already absent", action.Path),
 				action.Path,
-				permissionCapabilityLocalWrite,
+				PermissionCapabilityLocalWrite,
 			)
 		}
 
@@ -106,7 +106,7 @@ func (e *executor) ExecuteLocalDelete(ctx context.Context, action *Action) actio
 	return e.DeleteLocalFile(ctx, action, local)
 }
 
-func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutcome {
+func (e *Executor) DeleteLocalSymlink(action *Action, relPath string) ActionOutcome {
 	if err := e.syncTree.Remove(relPath); err != nil {
 		return e.failedOutcome(
 			action,
@@ -124,7 +124,7 @@ func (e *executor) DeleteLocalSymlink(action *Action, relPath string) actionOutc
 // planner-facing blocker check: the final rooted RemoveEmptyDirNoFollow call
 // rechecks emptiness, and the underlying rmdir fails closed if a child appears
 // after that recheck.
-func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPath string) actionOutcome {
+func (e *Executor) DeleteLocalFolder(ctx context.Context, action *Action, absPath string) ActionOutcome {
 	relPath, err := e.syncTree.Rel(absPath)
 	if err != nil {
 		return e.failedOutcome(action, ActionLocalDelete, normalizeSyncTreePathError(err))
@@ -132,7 +132,7 @@ func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPat
 
 	preconditionErr := e.validateLocalDeleteFolderPrecondition(ctx, action, relPath)
 	if preconditionErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionLocalDelete, preconditionErr, action.Path, permissionCapabilityLocalWrite)
+		return e.failedOutcomeWithFailure(action, ActionLocalDelete, preconditionErr, action.Path, PermissionCapabilityLocalWrite)
 	}
 
 	entries, err := e.syncTree.ReadDir(relPath)
@@ -147,10 +147,10 @@ func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPat
 		var blockers []string
 		for _, entry := range entries {
 			entryPath := filepath.Join(relPath, entry.Name())
-			if !e.isDisposable(entry.Name(), entry.IsDir()) {
+			if !e.IsDisposable(entry.Name(), entry.IsDir()) {
 				blockers = append(blockers, entry.Name())
 			} else if entry.IsDir() {
-				if nonDisp := e.findNonDisposable(entryPath); nonDisp != "" {
+				if nonDisp := e.FindNonDisposable(entryPath); nonDisp != "" {
 					blockers = append(blockers, entry.Name()+"/"+nonDisp)
 				}
 			}
@@ -179,7 +179,7 @@ func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPat
 		}
 	}
 
-	disposableErr := e.removeDisposableChildren(relPath, entries)
+	disposableErr := e.RemoveDisposableChildren(relPath, entries)
 	if err := e.syncTree.RemoveEmptyDirNoFollow(relPath); err != nil {
 		removeErr := fmt.Errorf("removing dir %s: %w", action.Path, normalizeSyncTreePathError(err))
 		if disposableErr != nil {
@@ -204,23 +204,23 @@ func (e *executor) DeleteLocalFolder(ctx context.Context, action *Action, absPat
 // mismatch means the file changed after planning; the executor keeps it and
 // returns a stale-precondition failure so the engine replans from current
 // truth. local is the file's rooted spelling on disk.
-func (e *executor) DeleteLocalFile(ctx context.Context, action *Action, local string) actionOutcome {
+func (e *Executor) DeleteLocalFile(ctx context.Context, action *Action, local string) ActionOutcome {
 	verify := func(f *os.File, info os.FileInfo) error {
 		return e.verifyLocalDeleteContent(ctx, action, f, info)
 	}
 
 	if err := e.removeVerifiedLocalFile(local, verify); err != nil {
-		if errors.Is(err, errActionPreconditionChanged) || errors.Is(err, synctree.ErrDetachRaced) {
+		if errors.Is(err, ErrActionPreconditionChanged) || errors.Is(err, synctree.ErrDetachRaced) {
 			// Debug: the returned precondition error supersedes the action
 			// and the engine replans; nothing is asked of the user.
 			e.logger.Debug("local delete: file changed, keeping it and requiring replan",
 				slog.String("path", action.Path),
 				slog.Any("error", err),
 			)
-			if !errors.Is(err, errActionPreconditionChanged) {
-				err = fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
+			if !errors.Is(err, ErrActionPreconditionChanged) {
+				err = fmt.Errorf("%w: %w", ErrActionPreconditionChanged, err)
 			}
-			return e.failedOutcomeWithFailure(action, ActionLocalDelete, err, action.Path, permissionCapabilityLocalWrite)
+			return e.failedOutcomeWithFailure(action, ActionLocalDelete, err, action.Path, PermissionCapabilityLocalWrite)
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return e.failedOutcomeWithFailure(
@@ -228,7 +228,7 @@ func (e *executor) DeleteLocalFile(ctx context.Context, action *Action, local st
 				ActionLocalDelete,
 				stalePreconditionError("local delete source %s is already absent", action.Path),
 				action.Path,
-				permissionCapabilityLocalWrite,
+				PermissionCapabilityLocalWrite,
 			)
 		}
 		return e.failedOutcome(action, ActionLocalDelete, fmt.Errorf("removing %s: %w", action.Path, normalizeSyncTreePathError(err)))
@@ -247,7 +247,7 @@ func (e *executor) DeleteLocalFile(ctx context.Context, action *Action, local st
 // They are too weak to prove two files equal, but sound as a guard: any
 // difference is proof the file changed, and a destructive action may not run
 // on no evidence at all.
-func (e *executor) verifyLocalDeleteContent(ctx context.Context, action *Action, f *os.File, info os.FileInfo) error {
+func (e *Executor) verifyLocalDeleteContent(ctx context.Context, action *Action, f *os.File, info os.FileInfo) error {
 	var baselineEntry *BaselineEntry
 	if action.View != nil {
 		baselineEntry = action.View.Baseline
@@ -264,7 +264,7 @@ func (e *executor) verifyLocalDeleteContent(ctx context.Context, action *Action,
 			return nil
 		}
 		return fmt.Errorf("%w: local delete unverifiable for %s (no baseline hash; remote=%s size=%d mtime=%d)",
-			errActionPreconditionChanged,
+			ErrActionPreconditionChanged,
 			action.Path,
 			baselineRemoteHash,
 			info.Size(),
@@ -277,8 +277,8 @@ func (e *executor) verifyLocalDeleteContent(ctx context.Context, action *Action,
 		return fmt.Errorf("hashing %s before delete: %w", action.Path, err)
 	}
 	if currentHash != baselineHash {
-		return &localContentChangedError{
-			path: action.Path,
+		return &LocalContentChangedError{
+			Path: action.Path,
 			detail: fmt.Sprintf("baseline=%s current=%s remote=%s mtime=%d",
 				baselineHash, currentHash, baselineRemoteHash, info.ModTime().UnixNano()),
 		}
@@ -287,28 +287,28 @@ func (e *executor) verifyLocalDeleteContent(ctx context.Context, action *Action,
 	return nil
 }
 
-// localContentChangedError reports that a local delete's content check read
+// LocalContentChangedError reports that a local delete's content check read
 // the file and found it no longer holds the content its baseline row records:
 // a proven fact about the file, which its stat facts may not show. It wraps
-// errActionPreconditionChanged, so the delete is superseded as before, and
+// ErrActionPreconditionChanged, so the delete is superseded as before, and
 // the engine also clears the row's stored change time, so the next scan reads
 // the file instead of trusting the row (forgetLocalCtimeProvenChanged).
-type localContentChangedError struct {
-	path   string
+type LocalContentChangedError struct {
+	Path   string
 	detail string
 }
 
-func (e *localContentChangedError) Error() string {
-	return fmt.Sprintf("%s: local delete hash mismatch for %s (%s)", errActionPreconditionChanged, e.path, e.detail)
+func (e *LocalContentChangedError) Error() string {
+	return fmt.Sprintf("%s: local delete hash mismatch for %s (%s)", ErrActionPreconditionChanged, e.Path, e.detail)
 }
 
-func (e *localContentChangedError) Unwrap() error { return errActionPreconditionChanged }
+func (e *LocalContentChangedError) Unwrap() error { return ErrActionPreconditionChanged }
 
 // removeVerifiedLocalFile takes the verified file at rel out of the sync
 // folder for a local delete: into the trash when the drive has one,
 // otherwise removed.
-func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc) error {
-	return e.takeOutVerifiedLocalFile(rel, verify, localtrash.ReasonDeleted, crashPointLocalDeleteTrashed)
+func (e *Executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc) error {
+	return e.takeOutVerifiedLocalFile(rel, verify, localtrash.ReasonDeleted, CrashPointLocalDeleteTrashed)
 }
 
 // takeOutVerifiedLocalFile takes the verified file at rel out of the sync
@@ -317,7 +317,7 @@ func (e *executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFun
 // local move that replaces its destination both take a file out this way.
 // trashedPoint is the crash point between the file reaching the trash and
 // its entry being committed.
-func (e *executor) takeOutVerifiedLocalFile(
+func (e *Executor) takeOutVerifiedLocalFile(
 	rel string, verify synctree.VerifyFunc, reason localtrash.Reason, trashedPoint string,
 ) error {
 	if e.trash == nil {
@@ -355,7 +355,7 @@ func (e *executor) takeOutVerifiedLocalFile(
 // folder. The file is out of the folder already, so a failure here does not
 // fail the action; the entry keeps its pending record, which lists and
 // restores and is never purged automatically.
-func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placement) {
+func (e *Executor) commitTrashPlacement(rel string, placement *localtrash.Placement) {
 	if _, err := placement.Commit(); err != nil {
 		e.logger.Warn("could not finish recording a trashed file; it stays listed as interrupted and can be restored",
 			slog.String("path", rel),
@@ -367,11 +367,11 @@ func (e *executor) commitTrashPlacement(rel string, placement *localtrash.Placem
 
 // ExecuteRemoteDelete removes an item from OneDrive after checking the planned
 // remote item still exists and matches the action preconditions.
-func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) actionOutcome {
+func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	if err := e.validateRemoteDeleteLocalAbsence(action); err != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, err, action.Path, permissionCapabilityLocalWrite)
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, err, action.Path, PermissionCapabilityLocalWrite)
 	}
 
 	sourceETag, err := e.remoteSourcePreconditionETag(ctx, driveID, action, "remote delete")
@@ -381,11 +381,11 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 			ActionRemoteDelete,
 			err,
 			action.Path,
-			permissionCapabilityRemoteRead,
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	if childErr := e.validateRemoteFolderDeleteChildren(ctx, driveID, action); childErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, childErr, action.Path, permissionCapabilityRemoteRead)
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, childErr, action.Path, PermissionCapabilityRemoteRead)
 	}
 
 	err = e.items.DeleteItemIfMatch(ctx, driveID, action.ItemID, sourceETag)
@@ -396,7 +396,7 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 				ActionRemoteDelete,
 				stalePreconditionError("remote delete item %s disappeared", action.ItemID),
 				action.Path,
-				permissionCapabilityRemoteWrite,
+				PermissionCapabilityRemoteWrite,
 			)
 		}
 		if errors.Is(err, graph.ErrPreconditionFailed) {
@@ -405,7 +405,7 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 				ActionRemoteDelete,
 				stalePreconditionError("remote delete item %s changed before mutation", action.ItemID),
 				action.Path,
-				permissionCapabilityRemoteWrite,
+				PermissionCapabilityRemoteWrite,
 			)
 		}
 
@@ -414,12 +414,12 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 			ActionRemoteDelete,
 			fmt.Errorf("deleting remote %s: %w", action.Path, err),
 			action.Path,
-			inferFailureCapabilityFromError(err, permissionCapabilityUnknown, permissionCapabilityRemoteWrite),
+			inferFailureCapabilityFromError(err, PermissionCapabilityUnknown, PermissionCapabilityRemoteWrite),
 		)
 	}
 
-	if crashErr := e.reachCrashPoint(crashPointRemoteDeleteDone); crashErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, crashErr, action.Path, permissionCapabilityUnknown)
+	if crashErr := e.reachCrashPoint(CrashPointRemoteDeleteDone); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionRemoteDelete, crashErr, action.Path, PermissionCapabilityUnknown)
 	}
 
 	e.logger.Debug("deleted remote item", slog.String("path", action.Path), slog.String("item_id", action.ItemID))
@@ -428,22 +428,22 @@ func (e *executor) ExecuteRemoteDelete(ctx context.Context, action *Action) acti
 }
 
 // DeleteOutcome builds a successful ActionOutcome for a delete action.
-func (e *executor) DeleteOutcome(action *Action, actionType actionType) actionOutcome {
-	return actionOutcome{
+func (e *Executor) DeleteOutcome(action *Action, actionType ActionType) ActionOutcome {
+	return ActionOutcome{
 		Action:          actionType,
 		Success:         true,
 		Path:            action.Path,
 		DriveID:         e.resolveDriveID(action),
 		ItemID:          action.ItemID,
-		ItemType:        actionItemType(action),
+		ItemType:        ActionItemType(action),
 		DeleteConfirmed: action.DeleteConfirmed,
 	}
 }
 
-// removeDisposableChildren removes the junk entries left in a folder about to
+// RemoveDisposableChildren removes the junk entries left in a folder about to
 // be deleted (every entry is disposable when this runs). A failure is logged
 // at Warn and returned, so the folder-removal error that follows names it.
-func (e *executor) removeDisposableChildren(relPath string, entries []os.DirEntry) error {
+func (e *Executor) RemoveDisposableChildren(relPath string, entries []os.DirEntry) error {
 	var errs []error
 	for _, entry := range entries {
 		entryPath := filepath.Join(relPath, entry.Name())
@@ -461,7 +461,7 @@ func (e *executor) removeDisposableChildren(relPath string, entries []os.DirEntr
 
 // allBlockersIgnored reports whether every child blocking a folder delete is
 // hidden by the content filter, so sync never synced it and cannot own it.
-func (e *executor) allBlockersIgnored(relPath string, blockers []string) bool {
+func (e *Executor) allBlockersIgnored(relPath string, blockers []string) bool {
 	for _, blocker := range blockers {
 		childPath := filepath.ToSlash(filepath.Join(relPath, blocker))
 		info, err := e.syncTree.Lstat(childPath)
@@ -497,24 +497,24 @@ func localDeleteUnchangedWithoutHash(entry *BaselineEntry, info os.FileInfo) boo
 // The console prints it after the folder path, so it names at most a few
 // blockers and says what to do instead of dumping the whole list.
 func folderNotEmptyError(blockers []string) error {
-	return errors.New(folderNotEmptyReason(len(blockers), blockers[:min(len(blockers), folderNotEmptyNamedLimit)]))
+	return errors.New(FolderNotEmptyReason(len(blockers), blockers[:min(len(blockers), FolderNotEmptyNamedLimit)]))
 }
 
-// folderNotEmptyNamedLimit is how many blockers the folder-not-empty sentence
+// FolderNotEmptyNamedLimit is how many blockers the folder-not-empty sentence
 // names.
-const folderNotEmptyNamedLimit = 3
+const FolderNotEmptyNamedLimit = 3
 
-// folderNotEmptyReason is folderNotEmptyError's sentence for count blockers
+// FolderNotEmptyReason is folderNotEmptyError's sentence for count blockers
 // of which named are the first few. A removed shared folder's release that
 // keeps content sync does not manage gives the same sentence
 // (LocalTreeHolds.Reasons).
-func folderNotEmptyReason(count int, named []string) string {
+func FolderNotEmptyReason(count int, named []string) string {
 	return fmt.Sprintf("folder still contains files that are not on OneDrive (%s); move or delete them to finish",
-		namedWithMore(count, named))
+		NamedWithMore(count, named))
 }
 
-// namedWithMore lists named and says how many of count it leaves out.
-func namedWithMore(count int, named []string) string {
+// NamedWithMore lists named and says how many of count it leaves out.
+func NamedWithMore(count int, named []string) string {
 	listed := strings.Join(named, ", ")
 	if count > len(named) {
 		return fmt.Sprintf("%s and %d more", listed, count-len(named))
@@ -529,7 +529,7 @@ func namedWithMore(count int, named []string) string {
 // lone MOVED_FROM that was really a move within the folder), and the sync
 // folder itself must still be the one the state belongs to, or "absent"
 // means nothing.
-func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
+func (e *Executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 	if err := e.syncRootIdentity.Validate(e.syncTree); err != nil {
 		return err
 	}
@@ -552,7 +552,7 @@ func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 	// A type-change replacement deletes the old item while the new one, of
 	// the other kind, already sits at the path; that is not a reappearance.
 	isDir := info.IsDir()
-	if (deletedItemType(action) == ItemTypeFolder) != isDir {
+	if (DeletedItemType(action) == ItemTypeFolder) != isDir {
 		return nil
 	}
 	// On a case-insensitive volume, Lstat also finds a differently-cased
@@ -566,7 +566,7 @@ func (e *executor) validateRemoteDeleteLocalAbsence(action *Action) error {
 
 // hasRegularFileAncestor reports whether a parent component of relPath is a
 // regular file (not a link), checked from the sync root down.
-func (e *executor) hasRegularFileAncestor(relPath string) bool {
+func (e *Executor) hasRegularFileAncestor(relPath string) bool {
 	parts := strings.Split(filepath.Clean(relPath), string(filepath.Separator))
 	current := ""
 	for _, part := range parts[:len(parts)-1] {
@@ -589,7 +589,7 @@ func (e *executor) hasRegularFileAncestor(relPath string) bool {
 // exactLocalNameExists reports whether relPath's folder holds an entry of
 // relPath's stored form (namekey.FindStored). Two such entries, a local
 // name collision, are an entry there too.
-func (e *executor) exactLocalNameExists(relPath string) bool {
+func (e *Executor) exactLocalNameExists(relPath string) bool {
 	entries, err := e.syncTree.ReadDir(filepath.Dir(relPath))
 	if err != nil {
 		// Unknown: keep the conservative answer that the path is occupied.
@@ -601,10 +601,10 @@ func (e *executor) exactLocalNameExists(relPath string) bool {
 	return match.Found() || match.Ambiguous
 }
 
-// remoteFolderDeleteListLimit bounds the live listing a folder delete makes
+// RemoteFolderDeleteListLimit bounds the live listing a folder delete makes
 // before it may run. Descendants the plan deleted are already gone by then
 // (child deletes run first), so the listing is normally one empty page.
-const remoteFolderDeleteListLimit = 10000
+const RemoteFolderDeleteListLimit = 10000
 
 // validateRemoteFolderDeleteChildren refuses a recursive folder delete that
 // would take content the planner never saw (D-006). A DELETE of a folder
@@ -615,8 +615,8 @@ const remoteFolderDeleteListLimit = 10000
 // is unchanged; anything else supersedes the delete so the next pass, which
 // observes it, plans from the truth. The If-Match on the folder eTag read
 // before this listing still turns a child added after it into a 412.
-func (e *executor) validateRemoteFolderDeleteChildren(ctx context.Context, driveID driveid.ID, action *Action) error {
-	if action.ItemID == "" || deletedItemType(action) != ItemTypeFolder {
+func (e *Executor) validateRemoteFolderDeleteChildren(ctx context.Context, driveID driveid.ID, action *Action) error {
+	if action.ItemID == "" || DeletedItemType(action) != ItemTypeFolder {
 		return nil
 	}
 
@@ -635,11 +635,11 @@ func (e *executor) validateRemoteFolderDeleteChildren(ctx context.Context, drive
 		}
 		for i := range children {
 			seen++
-			if seen > remoteFolderDeleteListLimit {
+			if seen > RemoteFolderDeleteListLimit {
 				// Not stale: replanning would list the same folder again on
 				// every pass. A durable issue asks the user instead.
-				return fmt.Errorf("%w: %s holds more than %d items", errRemoteFolderTooLargeToVerify,
-					action.Path, remoteFolderDeleteListLimit)
+				return fmt.Errorf("%w: %s holds more than %d items", ErrRemoteFolderTooLargeToVerify,
+					action.Path, RemoteFolderDeleteListLimit)
 			}
 			child := &children[i]
 			if err := e.validateLiveFolderDeleteChild(action, child); err != nil {
@@ -654,7 +654,7 @@ func (e *executor) validateRemoteFolderDeleteChildren(ctx context.Context, drive
 	return nil
 }
 
-func (e *executor) validateLiveFolderDeleteChild(action *Action, child *graph.Item) error {
+func (e *Executor) validateLiveFolderDeleteChild(action *Action, child *graph.Item) error {
 	var known *BaselineEntry
 	if e.baseline != nil {
 		known, _ = e.baseline.GetByID(child.ID)
@@ -687,8 +687,8 @@ func liveFileChangedSinceSync(live *graph.Item, known *BaselineEntry) bool {
 	return known.RemoteSizeKnown && live.Size != known.RemoteSize
 }
 
-// errRemoteFolderTooLargeToVerify reports a folder delete whose live content
+// ErrRemoteFolderTooLargeToVerify reports a folder delete whose live content
 // is too large to list before deleting it recursively. It becomes a durable
 // issue rather than a stale precondition that would replan and relist the
 // folder on every pass.
-var errRemoteFolderTooLargeToVerify = errors.New("folder is too large to verify before deleting it on OneDrive")
+var ErrRemoteFolderTooLargeToVerify = errors.New("folder is too large to verify before deleting it on OneDrive")

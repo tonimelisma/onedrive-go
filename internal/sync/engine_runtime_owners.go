@@ -17,8 +17,8 @@ import (
 // actionScheduler owns dependency-ready dispatch: which actions exist, which
 // are queued, and which are running.
 type actionScheduler struct {
-	graph        *depGraph
-	dispatchCh   chan *trackedAction
+	graph        *DepGraph
+	dispatchCh   chan *TrackedAction
 	nextActionID int64
 	queuedByID   map[int64]struct{}
 	runningByID  map[int64]struct{}
@@ -60,9 +60,9 @@ func newRetryLedger() retryLedger {
 // The ledger has no lock: only the goroutine that runs the engine's RunOnce
 // or RunWatch reads and writes it, admission checks and snapshots included.
 type scopeLedger struct {
-	active []activeScope
+	active []ActiveScope
 
-	state *scopeState
+	state *ScopeState
 
 	// ownerCheck, when set, runs at the top of every accessor of active; nil
 	// in production. Tests install a check that fails when the ledger is
@@ -102,7 +102,7 @@ type runResults struct {
 
 // heldAction is one action waiting for a retry deadline or a blocked scope.
 type heldAction struct {
-	Tracked   *trackedAction
+	Tracked   *TrackedAction
 	Reason    heldReason
 	ScopeKey  ScopeKey
 	NextRetry time.Time
@@ -116,7 +116,7 @@ const (
 	heldReasonScope heldReason = "scope"
 )
 
-func (s *actionScheduler) trackedActionForCompletion(r *actionCompletion) *trackedAction {
+func (s *actionScheduler) trackedActionForCompletion(r *ActionCompletion) *TrackedAction {
 	if r == nil || s.graph == nil {
 		return nil
 	}
@@ -129,14 +129,14 @@ func (s *actionScheduler) trackedActionForCompletion(r *actionCompletion) *track
 	return ta
 }
 
-func (s *actionScheduler) markQueued(ta *trackedAction) {
+func (s *actionScheduler) markQueued(ta *TrackedAction) {
 	if ta == nil {
 		return
 	}
 	s.queuedByID[ta.ID] = struct{}{}
 }
 
-func (s *actionScheduler) markRunning(ta *trackedAction) {
+func (s *actionScheduler) markRunning(ta *TrackedAction) {
 	if ta == nil {
 		return
 	}
@@ -156,7 +156,7 @@ func (s *actionScheduler) markRunning(ta *trackedAction) {
 // reports whether a worker had it: only a worker-run action counts toward
 // the slow start (its success is a request the drive accepted), and its
 // in-flight slot is given back here whatever became of it.
-func (s *actionScheduler) markFinished(ta *trackedAction) bool {
+func (s *actionScheduler) markFinished(ta *TrackedAction) bool {
 	if ta == nil {
 		return false
 	}
@@ -187,7 +187,7 @@ func (s *actionScheduler) allocatePlanActionIDs(count int) []int64 {
 	return actionIDs
 }
 
-func (l *retryLedger) releaseHeldAction(key RetryWorkKey) *trackedAction {
+func (l *retryLedger) releaseHeldAction(key RetryWorkKey) *TrackedAction {
 	held, ok := l.heldByKey[key]
 	if !ok || held == nil {
 		return nil
@@ -231,7 +231,7 @@ func (l *retryLedger) earliestHeldRetryAt() (time.Time, bool) {
 
 func (l *retryLedger) applyPersistedRetryAdmission(
 	now time.Time,
-	ta *trackedAction,
+	ta *TrackedAction,
 	decision *admissionDecision,
 	work *retryWork,
 ) {
@@ -249,7 +249,7 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 		(!ta.IsTrial || ta.TrialScopeKey.IsZero() || row.ScopeKey != ta.TrialScopeKey):
 		decision.Kind = admissionHoldScope
 		decision.ScopeKey = row.ScopeKey
-	case storedTimeIsSet(row.NextRetryAt):
+	case StoredTimeIsSet(row.NextRetryAt):
 		nextRetryAt := time.Unix(0, row.NextRetryAt)
 		if nextRetryAt.After(now) {
 			decision.Kind = admissionHoldRetry
@@ -258,35 +258,35 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 	}
 }
 
-func (l *scopeLedger) replaceActiveScopes(blocks []activeScope) {
+func (l *scopeLedger) replaceActiveScopes(blocks []ActiveScope) {
 	l.checkOwner()
 
 	l.active = l.active[:0]
 	l.active = append(l.active, blocks...)
 }
 
-func (l *scopeLedger) upsertActiveScope(block *activeScope) {
+func (l *scopeLedger) upsertActiveScope(block *ActiveScope) {
 	l.checkOwner()
 
-	l.active = upsertScope(l.active, block)
+	l.active = UpsertScope(l.active, block)
 }
 
 func (l *scopeLedger) removeActiveScope(key ScopeKey) {
 	l.checkOwner()
 
-	l.active = removeScope(l.active, key)
+	l.active = RemoveScope(l.active, key)
 }
 
-func (l *scopeLedger) lookupActiveScope(key ScopeKey) (activeScope, bool) {
+func (l *scopeLedger) lookupActiveScope(key ScopeKey) (ActiveScope, bool) {
 	l.checkOwner()
 
-	return lookupScope(l.active, key)
+	return LookupScope(l.active, key)
 }
 
 func (l *scopeLedger) hasActiveScope(key ScopeKey) bool {
 	l.checkOwner()
 
-	return hasScope(l.active, key)
+	return HasScope(l.active, key)
 }
 
 // earliestPauseTrialAt is the soonest next trial among the active scopes
@@ -318,16 +318,16 @@ func isPauseScope(key ScopeKey) bool {
 	return key.IsThrottleTarget() || key.IsGlobal()
 }
 
-func (l *scopeLedger) findBlockingScope(ta *trackedAction) ScopeKey {
+func (l *scopeLedger) findBlockingScope(ta *TrackedAction) ScopeKey {
 	l.checkOwner()
 
-	return findBlockingScope(l.active, ta)
+	return FindBlockingScope(l.active, ta)
 }
 
-func (l *scopeLedger) snapshotActiveScopes() []activeScope {
+func (l *scopeLedger) snapshotActiveScopes() []ActiveScope {
 	l.checkOwner()
 
-	blocks := make([]activeScope, len(l.active))
+	blocks := make([]ActiveScope, len(l.active))
 	copy(blocks, l.active)
 
 	return blocks

@@ -30,18 +30,18 @@ var errSocketIORefreshRequired = errors.New("sync: socket.io endpoint refresh re
 type socketIOLifecycleEventType string
 
 const (
-	socketIOLifecycleEventStarted           socketIOLifecycleEventType = "started"
-	socketIOLifecycleEventEndpointFetchFail socketIOLifecycleEventType = "endpoint_fetch_failed"
-	socketIOLifecycleEventConnectFail       socketIOLifecycleEventType = "connect_failed"
-	socketIOLifecycleEventConnected         socketIOLifecycleEventType = "connected"
-	socketIOLifecycleEventRefreshRequested  socketIOLifecycleEventType = "refresh_requested"
-	socketIOLifecycleEventConnectionDropped socketIOLifecycleEventType = "connection_dropped"
-	socketIOLifecycleEventNotificationWake  socketIOLifecycleEventType = "notification_wake"
-	socketIOLifecycleEventWakeCoalesced     socketIOLifecycleEventType = "wake_coalesced"
-	socketIOLifecycleEventStopped           socketIOLifecycleEventType = "stopped"
+	SocketIOLifecycleEventStarted           socketIOLifecycleEventType = "started"
+	SocketIOLifecycleEventEndpointFetchFail socketIOLifecycleEventType = "endpoint_fetch_failed"
+	SocketIOLifecycleEventConnectFail       socketIOLifecycleEventType = "connect_failed"
+	SocketIOLifecycleEventConnected         socketIOLifecycleEventType = "connected"
+	SocketIOLifecycleEventRefreshRequested  socketIOLifecycleEventType = "refresh_requested"
+	SocketIOLifecycleEventConnectionDropped socketIOLifecycleEventType = "connection_dropped"
+	SocketIOLifecycleEventNotificationWake  socketIOLifecycleEventType = "notification_wake"
+	SocketIOLifecycleEventWakeCoalesced     socketIOLifecycleEventType = "wake_coalesced"
+	SocketIOLifecycleEventStopped           socketIOLifecycleEventType = "stopped"
 )
 
-type socketIOLifecycleEvent struct {
+type SocketIOLifecycleEvent struct {
 	Type       socketIOLifecycleEventType
 	DriveID    string
 	EndpointID string
@@ -51,15 +51,15 @@ type socketIOLifecycleEvent struct {
 	Error      string
 }
 
-type socketIOWakeSourceOptions struct {
+type SocketIOWakeSourceOptions struct {
 	Logger   *slog.Logger
 	DialFunc func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	// Clock paces the source: the endpoint refresh deadline and timer and
 	// the reconnect backoff sleeps. Nil means wall time. One clock rather
 	// than separate now and sleep hooks, so a test cannot advance one while
 	// the refresh timer keeps running on the other.
-	Clock            syncClock
-	LifecycleHook    func(socketIOLifecycleEvent)
+	Clock            SyncClock
+	LifecycleHook    func(SocketIOLifecycleEvent)
 	HandshakeTimeout time.Duration
 	RefreshLeadTime  time.Duration
 	RefreshInterval  time.Duration
@@ -77,12 +77,12 @@ type socketIOConn struct {
 // wake the remote delta observer. It never interprets change payloads as truth;
 // every notification is reduced to a coalesced wake signal.
 type socketIOWakeSource struct {
-	fetcher          socketIOEndpointFetcher
+	fetcher          SocketIOEndpointFetcher
 	driveID          driveid.ID
 	logger           *slog.Logger
 	dialFunc         func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-	clock            syncClock
-	lifecycleHook    func(socketIOLifecycleEvent)
+	clock            SyncClock
+	lifecycleHook    func(SocketIOLifecycleEvent)
 	handshakeTimeout time.Duration
 	refreshLeadTime  time.Duration
 	refreshInterval  time.Duration
@@ -95,10 +95,10 @@ type socketIOWakeSource struct {
 	retryReported bool
 }
 
-func newSocketIOWakeSourceWithOptions(
-	fetcher socketIOEndpointFetcher,
+func NewSocketIOWakeSourceWithOptions(
+	fetcher SocketIOEndpointFetcher,
 	driveID driveid.ID,
-	opts socketIOWakeSourceOptions,
+	opts SocketIOWakeSourceOptions,
 ) *socketIOWakeSource {
 	logger := opts.Logger
 	if logger == nil {
@@ -112,7 +112,7 @@ func newSocketIOWakeSourceWithOptions(
 
 	clock := opts.Clock
 	if clock == nil {
-		clock = realClock{}
+		clock = RealClock{}
 	}
 
 	handshakeTimeout := opts.HandshakeTimeout
@@ -157,8 +157,8 @@ func (s *socketIOWakeSource) Run(ctx context.Context, wakes chan<- struct{}) err
 		return nil
 	}
 
-	s.emitLifecycleEvent(socketIOLifecycleEvent{Type: socketIOLifecycleEventStarted})
-	defer s.emitLifecycleEvent(socketIOLifecycleEvent{Type: socketIOLifecycleEventStopped})
+	s.emitLifecycleEvent(SocketIOLifecycleEvent{Type: SocketIOLifecycleEventStarted})
+	defer s.emitLifecycleEvent(SocketIOLifecycleEvent{Type: SocketIOLifecycleEventStopped})
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(s.backoffMax)
@@ -190,7 +190,7 @@ func (s *socketIOWakeSource) runIteration(
 		return s.retryAfterError(
 			ctx,
 			bo,
-			socketIOLifecycleEventEndpointFetchFail,
+			SocketIOLifecycleEventEndpointFetchFail,
 			"socket.io endpoint fetch failed",
 			err,
 			"waiting to refetch endpoint",
@@ -208,7 +208,7 @@ func (s *socketIOWakeSource) runIteration(
 		return s.retryAfterError(
 			ctx,
 			bo,
-			socketIOLifecycleEventConnectFail,
+			SocketIOLifecycleEventConnectFail,
 			"socket.io connect failed",
 			err,
 			"waiting to reconnect",
@@ -220,8 +220,8 @@ func (s *socketIOWakeSource) runIteration(
 		s.retryReported = false
 		s.logger.Info("Instant change notifications from OneDrive are working again")
 	}
-	s.emitLifecycleEvent(socketIOLifecycleEvent{
-		Type:       socketIOLifecycleEventConnected,
+	s.emitLifecycleEvent(SocketIOLifecycleEvent{
+		Type:       SocketIOLifecycleEventConnected,
 		EndpointID: endpoint.ID,
 		SID:        sid,
 		Note:       "socket.io connected",
@@ -246,8 +246,8 @@ func (s *socketIOWakeSource) runIteration(
 		s.logger.Info("socket.io endpoint refresh requested",
 			slog.String("drive_id", s.driveID.String()),
 		)
-		s.emitLifecycleEvent(socketIOLifecycleEvent{
-			Type:       socketIOLifecycleEventRefreshRequested,
+		s.emitLifecycleEvent(SocketIOLifecycleEvent{
+			Type:       SocketIOLifecycleEventRefreshRequested,
 			EndpointID: endpoint.ID,
 		})
 		return false, nil
@@ -256,7 +256,7 @@ func (s *socketIOWakeSource) runIteration(
 	return s.retryAfterError(
 		ctx,
 		bo,
-		socketIOLifecycleEventConnectionDropped,
+		SocketIOLifecycleEventConnectionDropped,
 		"socket.io connection dropped",
 		runErr,
 		"waiting to reconnect after drop",
@@ -274,7 +274,7 @@ func (s *socketIOWakeSource) retryAfterError(
 	endpointID string,
 ) (bool, error) {
 	delay := bo.Next()
-	s.emitLifecycleEvent(socketIOLifecycleEvent{
+	s.emitLifecycleEvent(SocketIOLifecycleEvent{
 		Type:       eventType,
 		EndpointID: endpointID,
 		Delay:      delay,
@@ -305,7 +305,7 @@ func (s *socketIOWakeSource) sleepUntilRetry(ctx context.Context, delay time.Dur
 		return false, nil
 	}
 
-	if runEnded(ctx, sleepErr) {
+	if RunEnded(ctx, sleepErr) {
 		return true, nil
 	}
 
@@ -336,7 +336,7 @@ func (s *socketIOWakeSource) logRetry(message string, err error, delay time.Dura
 	s.logger.Debug(message, fields...)
 }
 
-func (s *socketIOWakeSource) emitLifecycleEvent(event socketIOLifecycleEvent) {
+func (s *socketIOWakeSource) emitLifecycleEvent(event SocketIOLifecycleEvent) {
 	if s.lifecycleHook == nil {
 		return
 	}

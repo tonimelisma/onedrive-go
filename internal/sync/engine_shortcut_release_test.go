@@ -66,13 +66,13 @@ func newReleaseScenario(t *testing.T, configure func(*engineInputs)) (*moveScena
 func rewriteBaselineLocalHash(t *testing.T, eng *testEngine, storedPath string) {
 	t.Helper()
 
-	result, err := eng.baseline.rawDB().ExecContext(t.Context(),
+	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
 		`UPDATE baseline SET local_hash = ? WHERE path = ?`, testQuickXor("not what the file holds\n"), storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), rows)
-	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 }
 
 // changeContentUnseen rewrites a synced file to content of the same size and
@@ -92,13 +92,13 @@ func changeContentUnseen(t *testing.T, eng *testEngine, syncRoot, storedPath, co
 	require.NoError(t, err)
 	ctime, ok := synctree.ChangeTimeFromFileInfo(after)
 	require.True(t, ok)
-	result, err := eng.baseline.rawDB().ExecContext(t.Context(),
+	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
 		`UPDATE baseline SET local_ctime = ? WHERE path = ?`, ctime, storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), rows)
-	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 }
 
 // settleReleaseScenario moves the engine's clock well past the synced files'
@@ -190,7 +190,7 @@ func releaseKeptIssuePaths(t *testing.T, eng *testEngine) []string {
 	require.NoError(t, err)
 	var paths []string
 	for i := range issues {
-		if issues[i].IssueType == issueRemovedFolderKept {
+		if issues[i].IssueType == IssueRemovedFolderKept {
 			paths = append(paths, issues[i].Path)
 		}
 	}
@@ -750,7 +750,7 @@ func newSharedFolderReleaseEngine(t *testing.T, answer *rootReadAnswer) (*testEn
 	t.Helper()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFolder(sharedFolderReleaseRootID, strRoot, "Shared")
+	remote.addFolder(sharedFolderReleaseRootID, StrRoot, "Shared")
 	remote.addFolder("item-docs", sharedFolderReleaseRootID, releaseSyncedFolder)
 	remote.addFile(t, "item-a", "item-docs", "a.txt", releaseContentA)
 	remote.addFile(t, "item-top", sharedFolderReleaseRootID, releaseFileTop, "top\n")
@@ -861,7 +861,7 @@ func TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept(t *t
 				assert.Equal(t, LeftWork{NotUploaded: 1}, holds.Left,
 					"pass %d: the run left the change it kept and nothing else", pass)
 				assert.Equal(t, []string{notUploadedReason(1, []string{releaseFileA})}, holds.Reasons(), "pass %d", pass)
-				assert.Equal(t, []string{string(issueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
+				assert.Equal(t, []string{string(IssueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
 					"pass %d: the store holds the kept change and no issue of the folder", pass)
 			}
 			assert.FileExists(t, filepath.Join(syncRoot, filepath.FromSlash(releaseFileA)), "the change stays")
@@ -886,10 +886,10 @@ func TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete(t *testing.T) {
 		point      string
 		occurrence int
 	}{
-		{point: crashPointCommitOutcome, occurrence: 1},
-		{point: crashPointCommitOutcome, occurrence: 3},
-		{point: crashPointLocalDeleteTrashed, occurrence: 1},
-		{point: crashPointLocalDeleteTrashed, occurrence: 2},
+		{point: CrashPointCommitOutcome, occurrence: 1},
+		{point: CrashPointCommitOutcome, occurrence: 3},
+		{point: CrashPointLocalDeleteTrashed, occurrence: 1},
+		{point: CrashPointLocalDeleteTrashed, occurrence: 2},
 	} {
 		for _, lostWAL := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%d", crashCaseName(tc.point, lostWAL), tc.occurrence), func(t *testing.T) {
@@ -921,7 +921,7 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool
 	remote := newReleaseRemote(t)
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
-	_, err := h.eng.baseline.rawDB().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	capture := &crashCapture{
@@ -935,8 +935,8 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool
 		}
 		return nil
 	}
-	h.eng.execCfg.crashAt = hook
-	h.eng.baseline.crashAt = hook
+	h.eng.execCfg.SetCrashHookForTest(hook)
+	h.eng.baseline.SetCrashHookForTest(hook)
 	runReleaseDrain(t, h.eng)
 	recovered := capture.reopen(t)
 

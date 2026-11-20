@@ -1,14 +1,10 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"os"
 	"strings"
-	stdsync "sync"
 	"testing"
 	"time"
 
@@ -25,41 +21,6 @@ import (
 // stays below it because it repeats, heals itself, is shutdown noise, or is
 // already reported elsewhere.
 
-// syncLockedBuffer is a bytes.Buffer safe for slog handlers written from
-// several goroutines.
-type syncLockedBuffer struct {
-	mu  stdsync.Mutex // guards buf
-	buf bytes.Buffer
-}
-
-func (b *syncLockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	n, err := b.buf.Write(p)
-	if err != nil {
-		return n, fmt.Errorf("write log buffer: %w", err)
-	}
-
-	return n, nil
-}
-
-func (b *syncLockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.String()
-}
-
-func newCapturedLogger() (*slog.Logger, *syncLockedBuffer) {
-	buf := &syncLockedBuffer{}
-	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})), buf
-}
-
-func countLevel(output, level string) int {
-	return strings.Count(output, "level="+level+" ")
-}
-
 // Validates: R-6.6.22
 func TestEngineFlow_FatalAuth_ReturnedOnceNotLogged(t *testing.T) {
 	t.Parallel()
@@ -68,13 +29,13 @@ func TestEngineFlow_FatalAuth_ReturnedOnceNotLogged(t *testing.T) {
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	decision := &resultDecision{
+	decision := &ResultDecision{
 		Class:        errclass.ClassFatal,
 		ConditionKey: ConditionAuthenticationRequired,
-		TrialHint:    trialHintFatal,
+		TrialHint:    TrialHintFatal,
 	}
 	for _, path := range []string{"first.txt", "second.txt", "third.txt"} {
-		_, err := flow.applyNormalCompletionDecision(t.Context(), decision, nil, &actionCompletion{
+		_, err := flow.applyNormalCompletionDecision(t.Context(), decision, nil, &ActionCompletion{
 			Path:       path,
 			ActionType: ActionUpload,
 		}, nil)
@@ -97,7 +58,7 @@ func TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRep
 	logger, logs := newCapturedLogger()
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
-	completion := &actionCompletion{Path: "a.txt", ActionType: ActionUpload}
+	completion := &ActionCompletion{Path: "a.txt", ActionType: ActionUpload}
 
 	flow.logSuppressedShutdownCompletionError(completion, fmt.Errorf("commit outcome: %w", context.Canceled))
 	flow.logSuppressedShutdownCompletionError(completion, fatalResultError(completion))
@@ -114,14 +75,14 @@ func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 	t.Parallel()
 
 	logger, logs := newCapturedLogger()
-	var outage pollOutageLog
+	var outage PollOutageLog
 
 	for range 5 {
-		outage.failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
+		outage.Failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
 	}
-	outage.recovered(t.Context(), logger, "Checking OneDrive for changes works again")
-	outage.recovered(t.Context(), logger, "Checking OneDrive for changes works again")
-	outage.failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
+	outage.Recovered(t.Context(), logger, "Checking OneDrive for changes works again")
+	outage.Recovered(t.Context(), logger, "Checking OneDrive for changes works again")
+	outage.Failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
 
 	output := logs.String()
 	assert.Equal(t, 2, countLevel(output, "WARN"), "one warning per outage, not per attempt")
@@ -141,17 +102,17 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	bad := skippedItem{Path: "docs/bad:name.txt", Reason: IssueInvalidFilename, Detail: "name contains ':'"}
-	requireReconcileSkipped(t, flow, []skippedItem{bad})
-	requireReconcileSkipped(t, flow, []skippedItem{bad})
-	requireReconcileSkipped(t, flow, []skippedItem{bad})
+	bad := SkippedItem{Path: "docs/bad:name.txt", Reason: IssueInvalidFilename, Detail: "name contains ':'"}
+	requireReconcileSkipped(t, flow, []SkippedItem{bad})
+	requireReconcileSkipped(t, flow, []SkippedItem{bad})
+	requireReconcileSkipped(t, flow, []SkippedItem{bad})
 
 	output := logs.String()
 	assert.Equal(t, 1, countLevel(output, "WARN"), "an unchanged skipped file warns once, not on every scan")
 	assert.Contains(t, output, "Not syncing docs/bad:name.txt: name contains ':'")
 
-	other := skippedItem{Path: "docs/other?.txt", Reason: IssueInvalidFilename, Detail: "name contains '?'"}
-	requireReconcileSkipped(t, flow, []skippedItem{bad, other})
+	other := SkippedItem{Path: "docs/other?.txt", Reason: IssueInvalidFilename, Detail: "name contains '?'"}
+	requireReconcileSkipped(t, flow, []SkippedItem{bad, other})
 	output = logs.String()
 	assert.Equal(t, 2, countLevel(output, "WARN"), "a newly skipped file still warns")
 	assert.Contains(t, output, "Not syncing docs/other?.txt")
@@ -170,14 +131,14 @@ func TestEngineFlow_SkippedFindings_GroupedWarningNamesTheWholeGroup(t *testing.
 	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	var mixed, same []skippedItem
+	var mixed, same []SkippedItem
 	for i := range 11 {
 		detail := "detail B"
 		if i%2 == 0 {
 			detail = "detail A"
 		}
-		mixed = append(mixed, skippedItem{Path: fmt.Sprintf("mixed/%02d", i), Reason: IssueInvalidFilename, Detail: detail})
-		same = append(same, skippedItem{Path: fmt.Sprintf("same/%02d", i), Reason: IssueInvalidFilename, Detail: "the name ends with a period"})
+		mixed = append(mixed, SkippedItem{Path: fmt.Sprintf("mixed/%02d", i), Reason: IssueInvalidFilename, Detail: detail})
+		same = append(same, SkippedItem{Path: fmt.Sprintf("same/%02d", i), Reason: IssueInvalidFilename, Detail: "the name ends with a period"})
 	}
 	requireReconcileSkipped(t, flow, mixed)
 	requireReconcileSkipped(t, flow, same)
@@ -291,32 +252,6 @@ func TestWatchConditionSummary_AFailedReadIsLoggedOnce(t *testing.T) {
 	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the recovery is not a new failure")
 }
 
-// A file that stats but cannot be opened used to warn "hash computation
-// failed" on every safety scan forever. It is now a skipped local_read_denied
-// item (reported once, listed by status) and the scan logs nothing at WARN.
-//
-// Validates: R-6.6.30
-func TestFullScan_UnreadableFileIsSkippedItemNotWarning(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	writeTestFile(t, dir, "locked.txt", "secret")
-
-	logger, logs := newCapturedLogger()
-	obs := newLocalObserver(emptyBaseline(), logger, 0)
-	obs.hashFunc = func(context.Context, string) (string, error) {
-		return "", fmt.Errorf("open locked.txt: %w", os.ErrPermission)
-	}
-
-	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
-	require.NoError(t, err)
-
-	require.Len(t, result.Skipped, 1)
-	assert.Equal(t, "locked.txt", result.Skipped[0].Path)
-	assert.Equal(t, issueLocalReadDenied, result.Skipped[0].Reason)
-	assert.Zero(t, countLevel(logs.String(), "WARN"))
-}
-
 // Socket.io is a best-effort wake source; watch keeps polling. A long outage
 // used to print one WARN per backoff step (about once a minute forever).
 //
@@ -329,9 +264,9 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 
 	logger, logs := newCapturedLogger()
 	sleeps := 0
-	source := newSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), socketIOWakeSourceOptions{
+	source := NewSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
 		Logger: logger,
-		Clock: &scriptedSleepClock{syncClock: realClock{}, sleep: func(context.Context, time.Duration) error {
+		Clock: &scriptedSleepClock{SyncClock: RealClock{}, sleep: func(context.Context, time.Duration) error {
 			sleeps++
 			if sleeps >= 5 {
 				cancel()
@@ -378,8 +313,8 @@ func TestEngineFlow_BlockScope_ReportedOnceWhenItStarts(t *testing.T) {
 	throttle := SKThrottleDrive(eng.driveID)
 	seedBlockedWork(throttle)
 	for range 4 {
-		require.NoError(t, flow.applyBlockScope(t.Context(), scopeUpdateResult{
-			Block: true, ScopeKey: throttle, ConditionType: issueRateLimited,
+		require.NoError(t, flow.applyBlockScope(t.Context(), ScopeUpdateResult{
+			Block: true, ScopeKey: throttle, ConditionType: IssueRateLimited,
 		}))
 	}
 	output := logs.String()
@@ -388,7 +323,7 @@ func TestEngineFlow_BlockScope_ReportedOnceWhenItStarts(t *testing.T) {
 
 	seedBlockedWork(SKQuotaOwn())
 	for range 3 {
-		require.NoError(t, flow.applyBlockScope(t.Context(), scopeUpdateResult{
+		require.NoError(t, flow.applyBlockScope(t.Context(), ScopeUpdateResult{
 			Block: true, ScopeKey: SKQuotaOwn(), ConditionType: IssueQuotaExceeded,
 		}))
 	}
@@ -455,26 +390,10 @@ func TestWatchConditionSummary_WarnsOnlyForNewActionableKinds(t *testing.T) {
 		formatWatchConditionBreakdown(withBadName))
 }
 
-// The console prints this reason after the folder path; it used to dump the
-// whole blocker list as a Go slice with internal "non-disposable" wording.
-//
-// Validates: R-6.6.11
-func TestFolderNotEmptyError_NamesAFewBlockersAndTheAction(t *testing.T) {
-	t.Parallel()
-
-	err := folderNotEmptyError([]string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"})
-	assert.Equal(t,
-		"folder still contains files that are not on OneDrive (a.txt, b.txt, c.txt and 2 more); move or delete them to finish",
-		err.Error())
-	assert.Equal(t,
-		"folder still contains files that are not on OneDrive (a.txt); move or delete them to finish",
-		folderNotEmptyError([]string{"a.txt"}).Error())
-}
-
 // requireReconcileSkipped commits a scan of no rows with the skipped
 // findings, failing the test on error; the change report is not what these
 // tests observe.
-func requireReconcileSkipped(t *testing.T, flow *engineFlow, skipped []skippedItem) {
+func requireReconcileSkipped(t *testing.T, flow *engineFlow, skipped []SkippedItem) {
 	t.Helper()
 
 	_, err := flow.commitLocalScan(t.Context(), nil, skipped, nil)

@@ -17,14 +17,14 @@ func TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderM
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
 		VALUES
 			('folder-docs', 'docs', 'folder', '', ''),
 			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
 	require.NoError(t, err)
 
-	visible := plannerVisibleRowsForTest(t, store, nil, []remoteStateRow{
+	visible := plannerVisibleRowsForTest(t, store, nil, []RemoteStateRow{
 		{
 			DriveID:  driveid.New(engineTestDriveID),
 			ItemID:   "file-docs",
@@ -50,14 +50,14 @@ func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMi
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
 		VALUES
 			('folder-docs', 'docs', 'folder', '', ''),
 			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
 	require.NoError(t, err)
 
-	visible := plannerVisibleRowsForTest(t, store, []localStateRow{
+	visible := plannerVisibleRowsForTest(t, store, []LocalStateRow{
 		{
 			Path:     "docs/file.txt",
 			ItemType: ItemTypeFile,
@@ -76,17 +76,17 @@ func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMi
 func plannerVisibleRowsForTest(
 	t *testing.T,
 	store *SyncStore,
-	localRows []localStateRow,
-	remoteRows []remoteStateRow,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
 ) plannerVisibleRows {
 	t.Helper()
 
 	ctx := t.Context()
-	tx, err := beginPerfTx(ctx, store.rawDB())
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
-	visible, err := replacePlannerVisibleStateTx(
+	visible, err := ReplacePlannerVisibleStateTx(
 		ctx,
 		tx,
 		localRows,
@@ -98,7 +98,7 @@ func plannerVisibleRowsForTest(
 	return visible
 }
 
-func localStatePaths(rows []localStateRow) []string {
+func localStatePaths(rows []LocalStateRow) []string {
 	paths := make([]string, 0, len(rows))
 	for i := range rows {
 		paths = append(paths, rows[i].Path)
@@ -106,7 +106,7 @@ func localStatePaths(rows []localStateRow) []string {
 	return paths
 }
 
-func remoteStatePaths(rows []remoteStateRow) []string {
+func remoteStatePaths(rows []RemoteStateRow) []string {
 	paths := make([]string, 0, len(rows))
 	for i := range rows {
 		paths = append(paths, rows[i].Path)
@@ -266,7 +266,7 @@ func TestReplacePlannerVisibleStateTx_PruneUsesAPathRangePerMissingFolder(t *tes
 	store := newTestStore(t)
 	plan := explainPlannerVisiblePrunes(t, store)
 
-	for _, table := range []string{plannerVisibleLocalStateTable, plannerVisibleRemoteStateTable} {
+	for _, table := range []string{PlannerVisibleLocalStateTable, PlannerVisibleRemoteStateTable} {
 		assert.Regexp(t, `SEARCH below USING COVERING INDEX sqlite_autoindex_`+table+`_\d+ \(path>\? AND path<\?\)`, plan,
 			"the prune of %s must range-scan the visible rows below each missing folder; query plan:\n%s", table, plan)
 		assert.NotContains(t, plan, "SCAN "+table,
@@ -278,23 +278,23 @@ func seedPlannerVisibleBaseline(t *testing.T, store *SyncStore, baseline map[str
 	t.Helper()
 
 	ctx := t.Context()
-	_, err := store.rawDB().ExecContext(ctx,
+	_, err := store.RawDBForTest().ExecContext(ctx,
 		`INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash) VALUES ('root', '', 'root', '', '')`)
 	require.NoError(t, err)
 	for path, itemType := range baseline {
-		_, err := store.rawDB().ExecContext(ctx,
+		_, err := store.RawDBForTest().ExecContext(ctx,
 			`INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash) VALUES (?, ?, ?, '', '')`,
 			"id-"+path, path, itemType.String())
 		require.NoError(t, err)
 	}
 }
 
-func plannerVisibleRowsFromPaths(visible map[string]ItemType) ([]localStateRow, []remoteStateRow) {
-	localRows := make([]localStateRow, 0, len(visible))
-	remoteRows := make([]remoteStateRow, 0, len(visible))
+func plannerVisibleRowsFromPaths(visible map[string]ItemType) ([]LocalStateRow, []RemoteStateRow) {
+	localRows := make([]LocalStateRow, 0, len(visible))
+	remoteRows := make([]RemoteStateRow, 0, len(visible))
 	for path, itemType := range visible {
-		localRows = append(localRows, localStateRow{Path: path, ItemType: itemType, Hash: "hash"})
-		remoteRows = append(remoteRows, remoteStateRow{
+		localRows = append(localRows, LocalStateRow{Path: path, ItemType: itemType, Hash: "hash"})
+		remoteRows = append(remoteRows, RemoteStateRow{
 			DriveID: driveid.New(engineTestDriveID), ItemID: "id-" + path, Path: path, ItemType: itemType, Hash: "hash",
 		})
 	}
@@ -303,24 +303,24 @@ func plannerVisibleRowsFromPaths(visible map[string]ItemType) ([]localStateRow, 
 }
 
 // plannerVisiblePathsAfterPrune materializes the TEMP tables the way
-// replacePlannerVisibleStateTx does and prunes them with the given
+// ReplacePlannerVisibleStateTx does and prunes them with the given
 // statements, returning the surviving paths in order.
 func plannerVisiblePathsAfterPrune(
 	tb testing.TB,
 	store *SyncStore,
-	localRows []localStateRow,
-	remoteRows []remoteStateRow,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
 	pruneLocal, pruneRemote string,
 ) ([]string, []string) {
 	tb.Helper()
 
 	ctx := tb.Context()
-	tx, err := beginPerfTx(ctx, store.rawDB())
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(tb, err)
 	defer func() { _ = tx.Rollback() }()
 
 	for _, query := range []string{
-		sqlCreatePlannerVisibleLocalState, sqlCreatePlannerVisibleRemoteState,
+		SQLCreatePlannerVisibleLocalStateForTest(), SQLCreatePlannerVisibleRemoteStateForTest(),
 		sqlDeletePlannerVisibleLocalState, sqlDeletePlannerVisibleRemoteState,
 	} {
 		_, err = tx.ExecContext(ctx, query)
@@ -335,7 +335,7 @@ func plannerVisiblePathsAfterPrune(
 
 	local, err := listLocalStateRowsWithQuery(ctx, tx, sqlListPlannerVisibleLocalState)
 	require.NoError(tb, err)
-	remote, err := queryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, driveid.New(engineTestDriveID))
+	remote, err := QueryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, driveid.New(engineTestDriveID))
 	require.NoError(tb, err)
 
 	return localStatePaths(local), remoteStatePaths(remote)
@@ -347,12 +347,12 @@ func explainPlannerVisiblePrunes(t *testing.T, store *SyncStore) string {
 	t.Helper()
 
 	ctx := t.Context()
-	tx, err := beginPerfTx(ctx, store.rawDB())
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
 	for _, query := range []string{
-		sqlCreatePlannerVisibleLocalState, sqlCreatePlannerVisibleRemoteState,
+		SQLCreatePlannerVisibleLocalStateForTest(), SQLCreatePlannerVisibleRemoteStateForTest(),
 	} {
 		_, err = tx.ExecContext(ctx, query)
 		require.NoError(t, err)
@@ -362,7 +362,7 @@ func explainPlannerVisiblePrunes(t *testing.T, store *SyncStore) string {
 		queryPlanText(t, tx, sqlPrunePlannerVisibleRemoteDescendants)
 }
 
-func queryPlanText(t *testing.T, tx sqlTxRunner, query string, args ...any) string {
+func queryPlanText(t *testing.T, tx SqlTxRunner, query string, args ...any) string {
 	t.Helper()
 
 	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)

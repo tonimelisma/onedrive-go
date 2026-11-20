@@ -20,7 +20,7 @@ func TestRecordSupersede_WarnsOnceWhenTheSameActionKeepsGoingStale(t *testing.T)
 		deps:             runtimeDeps{logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))},
 		supersedeStreaks: make(map[string]int),
 	}
-	move := &actionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
+	move := &ActionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
 
 	for range supersedeStreakWarnThreshold + 2 {
 		flow.recordSupersede(move)
@@ -66,7 +66,7 @@ func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) 
 		signals:          signals,
 	}
 	flow.retryWork.rows = map[RetryWorkKey]RetryWorkRow{}
-	stale := &actionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
+	stale := &ActionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
 
 	for range supersedeParkThreshold - 1 {
 		require.NoError(t, flow.applySupersededCompletion(t.Context(), nil, stale, "test"))
@@ -92,12 +92,12 @@ func TestPruneSupersedeStreaks_ForgetsActionsTheNewPlanLacks(t *testing.T) {
 	t.Parallel()
 
 	flow := &engineFlow{supersedeStreaks: make(map[string]int)}
-	kept := &actionCompletion{ActionType: ActionUpload, Path: "kept.txt"}
-	dropped := &actionCompletion{ActionType: ActionRemoteMove, OldPath: "a", Path: "b"}
+	kept := &ActionCompletion{ActionType: ActionUpload, Path: "kept.txt"}
+	dropped := &ActionCompletion{ActionType: ActionRemoteMove, OldPath: "a", Path: "b"}
 	flow.recordSupersede(kept)
 	flow.recordSupersede(dropped)
 
-	flow.pruneSupersedeStreaks(&actionPlan{Actions: []Action{{Type: ActionUpload, Path: "kept.txt"}}})
+	flow.pruneSupersedeStreaks(&ActionPlan{Actions: []Action{{Type: ActionUpload, Path: "kept.txt"}}})
 
 	assert.Equal(t, 1, flow.supersedeStreaks[supersedeStreakKey(kept)])
 	assert.NotContains(t, flow.supersedeStreaks, supersedeStreakKey(dropped))

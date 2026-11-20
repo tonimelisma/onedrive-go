@@ -14,7 +14,7 @@ import (
 // change batch showing it yet. Once a poll that began after the attempt ended
 // has been applied, a create of that attempt that landed has been claimed by
 // then, and an intent still without an item at a path the local tree no
-// longer holds is dropped (SyncStore.dropGoneCreateIntentsAt).
+// longer holds is dropped (SyncStore.DropGoneCreateIntentsAt).
 //
 // It is held in memory only, by the loop goroutine, which owns both dispatch
 // and completions: the row has no column for it, and after a restart the
@@ -41,8 +41,8 @@ type watchCreateAttempts struct {
 
 // dispatched notes ta when it is the create of a new file: an upload with no
 // remote item to overwrite.
-func (a *watchCreateAttempts) dispatched(ta *trackedAction) {
-	if ta == nil || ta.Action.Type != ActionUpload || shouldOverwriteKnownRemoteItem(&ta.Action) {
+func (a *watchCreateAttempts) dispatched(ta *TrackedAction) {
+	if ta == nil || ta.Action.Type != ActionUpload || ShouldOverwriteKnownRemoteItem(&ta.Action) {
 		return
 	}
 	if a.inFlight == nil {
@@ -55,7 +55,7 @@ func (a *watchCreateAttempts) dispatched(ta *trackedAction) {
 // succeeded left no intent (the hook named its item, or a zero-byte file
 // cleared it), so its path is forgotten; one that did not keeps its intent
 // for a poll that begins after now.
-func (a *watchCreateAttempts) completed(c *actionCompletion, now time.Time) {
+func (a *watchCreateAttempts) completed(c *ActionCompletion, now time.Time) {
 	if c == nil {
 		return
 	}
@@ -127,7 +127,7 @@ func (rt *watchRuntime) dropGoneCreateIntentsAfterPoll(ctx context.Context, poll
 		return
 	}
 
-	kept, err := rt.deps.store.dropGoneCreateIntentsAt(ctx, paths, rt.engine.localScanCoverage())
+	kept, err := rt.deps.store.DropGoneCreateIntentsAt(ctx, paths, rt.engine.localScanCoverage())
 	if err != nil {
 		level := slog.LevelDebug
 		if !attempts.dropFailing && ctx.Err() == nil {

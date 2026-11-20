@@ -42,7 +42,7 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 		RetryingItems: 4,
 		ObservationIssues: []ObservationIssueRow{
 			{IssueType: IssueInvalidFilename},
-			{IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead("Shared/Docs")},
+			{IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared/Docs")},
 		},
 		BlockScopes: []*BlockScope{
 			{

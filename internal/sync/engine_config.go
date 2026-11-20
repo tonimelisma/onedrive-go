@@ -79,7 +79,7 @@ func NewMountEngine(
 		AccountCanonicalID:       mountCfg.AccountCanonicalID,
 		RemoteRootItemID:         mountCfg.RemoteRootItemID,
 		RemoteRootDeltaCapable:   mountCfg.RemoteRootDeltaCapable,
-		ExpectedSyncRootIdentity: shortcutRootIdentityToFileIdentity(mountCfg.ExpectedSyncRootIdentity),
+		ExpectedSyncRootIdentity: ShortcutRootIdentityToFileIdentity(mountCfg.ExpectedSyncRootIdentity),
 		Fetcher:                  session.Meta,
 		SocketIOFetcher:          session.Meta,
 		Items:                    session.Meta,

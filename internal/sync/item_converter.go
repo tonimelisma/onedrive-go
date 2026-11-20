@@ -32,7 +32,7 @@ type inflightParent struct {
 	HasUnmaterializableName bool
 }
 
-// itemConverter converts []graph.Item into []remoteItem with full path
+// itemConverter converts []graph.Item into []RemoteItem with full path
 // materialization, NFC normalization, move detection, and deleted-item name
 // recovery. Drive-root and mount-root observation both use this single
 // conversion pipeline, shaped by path-prefix and root-item fields.
@@ -45,8 +45,8 @@ type itemConverter struct {
 	DriveID               driveid.ID
 	Logger                *slog.Logger
 	Stats                 *observerCounters // nil-safe: primary observer provides this
-	Items                 itemClient        // nil-safe: sparse parent enrich is best-effort
-	ShortcutTopology      *shortcutTopologyBatch
+	Items                 ItemClient        // nil-safe: sparse parent enrich is best-effort
+	ShortcutTopology      *ShortcutTopologyBatch
 	ProtectedRootBindings map[string]ProtectedRoot
 
 	// PathPrefix is prepended to materialized paths. Empty for the primary
@@ -117,16 +117,16 @@ const maxCarriedAncestors = 50 * maxAncestorFetchesPerWindow
 // window incomplete and are retried on the next poll.
 const maxAncestorFetchesPerWindow = 200
 
-// newPrimaryConverter creates an ItemConverter for primary-drive or
+// NewPrimaryConverter creates an ItemConverter for primary-drive or
 // mount-root observation. Embedded shared-folder items are ignored here;
 // shared content syncs through explicit standalone mounts or managed child
 // mounts.
-func newPrimaryConverter(
+func NewPrimaryConverter(
 	baseline *Baseline,
 	driveID driveid.ID,
 	logger *slog.Logger,
 	stats *observerCounters,
-	items itemClient,
+	items ItemClient,
 ) *itemConverter {
 	return &itemConverter{
 		Baseline:          baseline,
@@ -141,7 +141,7 @@ func newPrimaryConverter(
 // ConvertItems converts a batch of graph.Items into remote items using
 // two-pass processing: register all items in inflight, then classify all.
 // Used by mount-root observation where all items arrive in a single batch.
-func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []remoteItem {
+func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []RemoteItem {
 	c.resetIncompleteObservation()
 	c.enrichSparseParentRefs(ctx, items)
 
@@ -154,7 +154,7 @@ func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 	c.resolveMissingAncestors(ctx, items, inflight)
 
 	// Pass 2: classify and emit events.
-	var events []remoteItem
+	var events []RemoteItem
 
 	for i := range items {
 		if ev := c.ClassifyItem(&items[i], inflight); ev != nil {
@@ -484,10 +484,10 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 	}
 }
 
-// ClassifyItem converts a single graph.Item into a remoteItem. Returns nil
+// ClassifyItem converts a single graph.Item into a RemoteItem. Returns nil
 // for items that should be skipped (root, vault descendants, mount root,
 // embedded shared-folder items).
-func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]inflightParent) *remoteItem {
+func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]inflightParent) *RemoteItem {
 	itemDriveID := c.resolveItemDriveID(item)
 
 	// Skip root items for both full-drive and mount-root observation.
@@ -627,7 +627,7 @@ func (c *itemConverter) emitShortcutTopologyFact(
 	}
 
 	if item.IsDeleted {
-		c.ShortcutTopology.appendDelete(shortcutBindingDelete{BindingItemID: item.ID})
+		c.ShortcutTopology.AppendDelete(ShortcutBindingDelete{BindingItemID: item.ID})
 		return
 	}
 
@@ -642,7 +642,7 @@ func (c *itemConverter) emitShortcutTopologyFact(
 	}
 	remoteIsFolder := item.RemoteIsFolder || item.IsFolder || fact.RemoteIsFolder
 	if remoteDriveID != "" && remoteItemID != "" && remoteIsFolder && fact.RelativeLocalPath != "" {
-		c.ShortcutTopology.appendUpsert(shortcutBindingUpsert{
+		c.ShortcutTopology.AppendUpsert(ShortcutBindingUpsert{
 			BindingItemID:     item.ID,
 			RelativeLocalPath: fact.RelativeLocalPath,
 			LocalAlias:        fact.LocalAlias,
@@ -655,7 +655,7 @@ func (c *itemConverter) emitShortcutTopologyFact(
 	}
 
 	if fact.HasEvidence {
-		c.ShortcutTopology.appendUnavailable(shortcutBindingUnavailable{
+		c.ShortcutTopology.AppendUnavailable(ShortcutBindingUnavailable{
 			BindingItemID:     item.ID,
 			RelativeLocalPath: fact.RelativeLocalPath,
 			LocalAlias:        fact.LocalAlias,
@@ -689,7 +689,7 @@ func (c *itemConverter) shortcutTopologyFact(
 		relPath = binding.Path
 	}
 	if name == "" && relPath != "" {
-		name = protectedRootPrimaryName(relPath)
+		name = ProtectedRootPrimaryName(relPath)
 	}
 
 	return shortcutTopologyItemFact{
@@ -711,7 +711,7 @@ func (c *itemConverter) shortcutTopologyFact(
 // recovery.
 func (c *itemConverter) classifyAndConvert(
 	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
-) *remoteItem {
+) *RemoteItem {
 	name := effectiveItemName(item, existing)
 
 	hash := driveops.SelectHash(item)
@@ -719,14 +719,14 @@ func (c *itemConverter) classifyAndConvert(
 		c.Stats.hashesComputed.Add(1)
 	}
 
-	ev := remoteItem{observedItem: observedItem{
+	ev := RemoteItem{ObservedItem: ObservedItem{
 		ItemID:    item.ID,
 		ParentID:  item.ParentID,
 		DriveID:   itemDriveID,
 		ItemType:  classifyItemType(item),
 		Size:      item.Size,
 		Hash:      hash,
-		Mtime:     storedTimeNano(item.ModifiedAt),
+		Mtime:     StoredTimeNano(item.ModifiedAt),
 		ETag:      item.ETag,
 		IsDeleted: item.IsDeleted,
 	}}
@@ -779,7 +779,7 @@ func (c *itemConverter) classifyAndConvert(
 // normalizeRemoteFacts repairs facts Graph reports badly (R-2.4.16): a
 // negative size is unknown, and a missing type facet takes the baseline's
 // kind. It reports false when the item cannot be classified at all.
-func (c *itemConverter) normalizeRemoteFacts(ev *remoteItem, item *graph.Item, existing *BaselineEntry) bool {
+func (c *itemConverter) normalizeRemoteFacts(ev *RemoteItem, item *graph.Item, existing *BaselineEntry) bool {
 	if item.Size < 0 {
 		ev.Size = 0
 		ev.SizeUnknown = true
@@ -802,7 +802,7 @@ func (c *itemConverter) normalizeRemoteFacts(ev *remoteItem, item *graph.Item, e
 // instead of the item being skipped for good behind a persisted cursor (the
 // same rule as a parentless item, materializePathPreferringIDChain); a
 // re-read that answered and still names no kind, or found no item, skips it.
-func (c *itemConverter) applyBaselineKind(ev *remoteItem, item *graph.Item, existing *BaselineEntry) bool {
+func (c *itemConverter) applyBaselineKind(ev *RemoteItem, item *graph.Item, existing *BaselineEntry) bool {
 	if existing == nil {
 		if enrichErr, failed := c.sparseEnrichFailed[item.ID]; failed && !errors.Is(enrichErr, graph.ErrNotFound) {
 			c.Logger.Debug("remote item kind unknown and its re-read failed; the change window will be replayed",
@@ -1177,7 +1177,7 @@ func unmaterializableRemoteNameReason(name string) string {
 // else from the tombstone's own name and parent chain. Business deletes may
 // lack a name; Personal has delivered tombstones with neither name nor parent.
 func (c *itemConverter) placeDeletedItem(
-	ev *remoteItem, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
+	ev *RemoteItem, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
 ) {
 	if existing != nil {
 		ev.Path = existing.Path
