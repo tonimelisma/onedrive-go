@@ -71,12 +71,13 @@ func TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing(t *testing.T) {
 	var hashCalls atomic.Int64
 	obs := newSettleTestObserver(t, baseline, clock, &hashCalls)
 	tree := mustOpenSyncTree(t, dir)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
-	obs.handleCreate(t.Context(), tree, fsPath, "new.txt", "new.txt", newMockFsWatcher(), events)
+	obs.handleCreate(t.Context(), tree, fsPath, "new.txt", "new.txt", newMockFsWatcher())
 
-	require.Len(t, events, 1)
-	ev := <-events
+	rows := drainPatchRows(batches)
+	require.Len(t, rows, 1)
+	ev := rows[0]
 	assert.Equal(t, "new.txt", ev.Path)
 	assert.Empty(t, ev.Hash, "the moved file's row goes out before its content is read")
 	assert.True(t, ev.LocalHasIdentity, "identity lets the planner pair the move")
@@ -89,10 +90,11 @@ func TestHandleCreate_MovedChangedFileRowIsNotHeldBackByHashing(t *testing.T) {
 	// The hash follows as a deferred request.
 	clock.Advance(defaultWriteCoalesceCooldown)
 	require.Len(t, obs.HashRequests, 1)
-	obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests, events)
+	obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests)
 
-	require.Len(t, events, 1)
-	followUp := <-events
+	rows = drainPatchRows(batches)
+	require.Len(t, rows, 1)
+	followUp := rows[0]
 	assert.Equal(t, "new.txt", followUp.Path)
 	assert.Equal(t, "hash-from-read-1", followUp.Hash)
 }
@@ -111,12 +113,13 @@ func TestHandleCreate_RenamedUnchangedFileReusesSyncedHash(t *testing.T) {
 	clock := newManualClock(info.ModTime().Add(time.Hour))
 	var hashCalls atomic.Int64
 	obs := newSettleTestObserver(t, baseline, clock, &hashCalls)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
-	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "renamed.bin", "renamed.bin", newMockFsWatcher(), events)
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "renamed.bin", "renamed.bin", newMockFsWatcher())
 
-	require.Len(t, events, 1)
-	ev := <-events
+	rows := drainPatchRows(batches)
+	require.Len(t, rows, 1)
+	ev := rows[0]
 	assert.Equal(t, "synced-hash", ev.Hash, "same inode, size and mtime: the synced hash is reused")
 	assert.Zero(t, hashCalls.Load(), "a renamed file is not re-read")
 	assert.Empty(t, obs.PendingTimers, "nothing left to hash")
@@ -148,12 +151,13 @@ func TestHandleCreate_RenameThatMovedCtimeDefersTheHash(t *testing.T) {
 	clock := newManualClock(after.ModTime().Add(time.Hour))
 	var hashCalls atomic.Int64
 	obs := newSettleTestObserver(t, baseline, clock, &hashCalls)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
-	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "renamed.bin", "renamed.bin", newMockFsWatcher(), events)
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "renamed.bin", "renamed.bin", newMockFsWatcher())
 
-	require.Len(t, events, 1)
-	ev := <-events
+	rows := drainPatchRows(batches)
+	require.Len(t, rows, 1)
+	ev := rows[0]
 	assert.Empty(t, ev.Hash, "the synced hash is not reused across a ctime change")
 	assert.True(t, ev.LocalHasIdentity, "identity still pairs the move")
 	assert.Zero(t, hashCalls.Load(), "no synchronous read on the create path")
@@ -177,12 +181,13 @@ func TestHandleCreate_ReusedInodeWhileSyncedPathExistsIsHashed(t *testing.T) {
 	clock := newManualClock(info.ModTime().Add(time.Hour))
 	var hashCalls atomic.Int64
 	obs := newSettleTestObserver(t, baseline, clock, &hashCalls)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
-	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "new.txt", "new.txt", newMockFsWatcher(), events)
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), fsPath, "new.txt", "new.txt", newMockFsWatcher())
 
-	require.Len(t, events, 1)
-	ev := <-events
+	rows := drainPatchRows(batches)
+	require.Len(t, rows, 1)
+	ev := rows[0]
 	assert.Equal(t, "hash-from-read-1", ev.Hash, "the synced hash is not attached to unrelated content")
 	assert.Equal(t, int64(1), hashCalls.Load())
 	assert.Empty(t, obs.PendingTimers)
@@ -196,15 +201,16 @@ func TestHandleCreate_DirectoryRowPrecedesItsContents(t *testing.T) {
 	writeTestFile(t, dir, "moved/inner.txt", "content")
 
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
-	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), filepath.Join(dir, "moved"), "moved", "moved", newMockFsWatcher(), events)
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), filepath.Join(dir, "moved"), "moved", "moved", newMockFsWatcher())
 
-	require.Len(t, events, 2)
-	first := <-events
+	rows := drainPatchRows(batches)
+	require.Len(t, rows, 2)
+	first := rows[0]
 	assert.Equal(t, "moved", first.Path, "the folder's row, which pairs a folder move, is not held back by its contents")
 	assert.Equal(t, ItemTypeFolder, first.ItemType)
-	assert.Equal(t, "moved/inner.txt", (<-events).Path)
+	assert.Equal(t, "moved/inner.txt", rows[1].Path)
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +232,7 @@ func TestScheduleWriteHash_ContinuousWritesHashWithinMaxWait(t *testing.T) {
 	const writeInterval = 400 * time.Millisecond
 	var elapsed time.Duration
 	for elapsed <= 2*maxWriteCoalesceWait && len(obs.HashRequests) == 0 {
-		obs.handleWrite(nil, fsPath, "busy.log", "busy.log")
+		obs.handleWrite(nil, fsPath, "busy.log")
 		clock.Advance(writeInterval)
 		elapsed += writeInterval
 	}
@@ -245,25 +251,24 @@ func TestWatch_ContinuouslyWrittenFileBacksOff(t *testing.T) {
 	var hashCalls atomic.Int64
 	obs := newSettleTestObserver(t, emptyBaseline(), clock, &hashCalls)
 	tree := mustOpenSyncTree(t, dir)
-	events := make(chan changeEvent, 16)
+	batches := localBatches(obs, 16)
 
 	// writeAndHashAfter writes once and expects the hash exactly delay later,
 	// not one quiet period earlier.
 	writeAndHashAfter := func(delay time.Duration) {
 		t.Helper()
-		obs.handleWrite(tree, fsPath, "app.db", "app.db")
+		obs.handleWrite(tree, fsPath, "app.db")
 		if delay > defaultWriteCoalesceCooldown {
 			clock.Advance(delay - defaultWriteCoalesceCooldown)
 			require.Empty(t, obs.HashRequests, "hashed before the %s backoff passed", delay)
-			obs.handleWrite(tree, fsPath, "app.db", "app.db") // writes during backoff do not restart it
+			obs.handleWrite(tree, fsPath, "app.db") // writes during backoff do not restart it
 			clock.Advance(defaultWriteCoalesceCooldown)
 		} else {
 			clock.Advance(delay)
 		}
 		require.Len(t, obs.HashRequests, 1, "the change is picked up once the %s backoff passes", delay)
-		obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests, events)
-		require.Len(t, events, 1)
-		<-events
+		obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests)
+		require.Len(t, drainPatchRows(batches), 1)
 	}
 
 	for range unstableWriteEmits {
@@ -309,16 +314,16 @@ func TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash(t *test
 		return "partial", nil
 	}
 	tree := mustOpenSyncTree(t, dir)
-	events := make(chan changeEvent, 8)
+	batches := localBatches(obs, 8)
 
-	obs.handleWrite(tree, fsPath, "growing.log", "growing.log")
+	obs.handleWrite(tree, fsPath, "growing.log")
 	for range maxCoalesceRetries + 1 {
 		clock.Advance(defaultWriteCoalesceCooldown)
 		require.Len(t, obs.HashRequests, 1)
-		obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests, events)
+		obs.HashAndEmit(t.Context(), tree, <-obs.HashRequests)
 	}
 
-	assert.Empty(t, events, "a file still being written is not emitted with an empty hash")
+	assert.Empty(t, drainPatchRows(batches), "a file still being written is not emitted with an empty hash")
 	require.Contains(t, obs.PendingTimers, "growing.log", "the path stays pending")
 	assert.Equal(t, unstableWriteInitialBackoff, obs.writeChurn["growing.log"].backoff)
 

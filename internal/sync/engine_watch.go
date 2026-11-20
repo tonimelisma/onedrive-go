@@ -460,7 +460,7 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *lo
 
 	for {
 		watchStart := rt.deps.now()
-		watchErr := localObs.Watch(ctx, tree, nil)
+		watchErr := localObs.Watch(ctx, tree)
 		cause, ok := watchUnavailableCauseOf(watchErr)
 		if !ok {
 			return observerExitError(observerNameLocal, watchErr)
@@ -489,7 +489,7 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *lo
 			)
 		}
 
-		retryDue := rt.runPeriodicFullScan(ctx, localObs, tree, nil, interval, retryDelay)
+		retryDue := rt.runPeriodicFullScan(ctx, localObs, tree, interval, retryDelay)
 		rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal})
 		if !retryDue {
 			return nil // clean exit after context cancel
@@ -613,7 +613,7 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event socketIOLifecycleEvent)
 // and the caller should try to watch again, false when the context ended.
 func (rt *watchRuntime) runPeriodicFullScan(
 	ctx context.Context, obs *localObserver, tree *synctree.Root,
-	events chan<- changeEvent, interval time.Duration, retryAfter time.Duration,
+	interval time.Duration, retryAfter time.Duration,
 ) bool {
 	ticker := rt.deps.clock.NewTicker(interval)
 	defer stopTicker(ticker)
@@ -634,7 +634,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 
 	// scanFailing keeps a persistent scan failure to one Warn per streak.
 	scanFailing := false
-	if !rt.runFallbackScan(ctx, obs, tree, events, &scanFailing) {
+	if !rt.runFallbackScan(ctx, obs, tree, &scanFailing) {
 		return false
 	}
 	for {
@@ -647,7 +647,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 					return false
 				}
 			}
-			if !rt.runFallbackScan(ctx, obs, tree, events, &scanFailing) {
+			if !rt.runFallbackScan(ctx, obs, tree, &scanFailing) {
 				return false
 			}
 		case <-retryCh:
@@ -658,15 +658,12 @@ func (rt *watchRuntime) runPeriodicFullScan(
 	}
 }
 
-// runFallbackScan runs one full scan and hands its snapshot, its events and
-// its finding set to the runtime. The scan stands in for both the watcher and
+// runFallbackScan runs one full scan and hands its snapshot, rows and finding
+// set together, to the runtime. The scan stands in for both the watcher and
 // the safety scan, so its findings go exactly as a safety scan's do, the
-// empty set included; it used to log them only, and while watching was
-// unavailable no finding was recorded or cleared. It returns false when the
-// context ended.
+// empty set included. It returns false when the context ended.
 func (rt *watchRuntime) runFallbackScan(
-	ctx context.Context, obs *localObserver, tree *synctree.Root,
-	events chan<- changeEvent, scanFailing *bool,
+	ctx context.Context, obs *localObserver, tree *synctree.Root, scanFailing *bool,
 ) bool {
 	result, err := obs.FullScan(ctx, tree)
 	if err != nil {
@@ -689,9 +686,6 @@ func (rt *watchRuntime) runFallbackScan(
 	*scanFailing = false
 
 	obs.TrySendFullLocalSnapshot(ctx, result)
-	for i := range result.Events {
-		obs.TrySendChangeEventOnly(ctx, events, &result.Events[i])
-	}
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackScanned, Observer: engineDebugObserverLocal})
 
 	return true

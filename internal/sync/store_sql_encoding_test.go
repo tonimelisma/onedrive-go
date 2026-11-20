@@ -87,7 +87,7 @@ func TestStoredTimeNano_RemoteModificationTimeWritersAgree(t *testing.T) {
 			{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
 			item,
 		})
-		var observed *changeEvent
+		var observed *remoteItem
 		for i := range events {
 			if events[i].ItemID == item.ID {
 				observed = &events[i]

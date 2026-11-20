@@ -244,26 +244,26 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *remoteObservationBatch) 
 }
 
 func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *remoteObservationBatch) bool {
-	if rt == nil || rt.engine == nil || batch == nil || len(batch.emitted) == 0 {
+	if rt == nil || rt.engine == nil || batch == nil || len(batch.changes) == 0 {
 		return false
 	}
 
-	return remoteEventsHavePlannerVisibleEffects(rt.engine.contentFilter, batch.emitted)
+	return remoteChangesHavePlannerVisibleEffects(rt.engine.contentFilter, batch.changes)
 }
 
-func remoteEventsHavePlannerVisibleEffects(filter ContentFilterConfig, events []changeEvent) bool {
-	for i := range events {
-		if remoteEventHasPlannerVisibleEffect(filter, &events[i]) {
+func remoteChangesHavePlannerVisibleEffects(filter ContentFilterConfig, changes []remoteChange) bool {
+	for i := range changes {
+		if remoteChangeHasPlannerVisibleEffect(filter, &changes[i]) {
 			return true
 		}
 	}
 	return false
 }
 
-func remoteEventHasPlannerVisibleEffect(filter ContentFilterConfig, event *changeEvent) bool {
+func remoteChangeHasPlannerVisibleEffect(filter ContentFilterConfig, change *remoteChange) bool {
 	visibility := newContentFilter(filter)
-	if visibility.Visible(event.Path, event.ItemType) {
+	if visibility.Visible(change.Path, change.ItemType) {
 		return true
 	}
-	return event.OldPath != "" && visibility.Visible(event.OldPath, event.ItemType)
+	return change.OldPath != "" && visibility.Visible(change.OldPath, change.ItemType)
 }

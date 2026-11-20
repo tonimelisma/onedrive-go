@@ -142,7 +142,7 @@ func TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete(t *testing.T) {
 		skipped []skippedItem
 	)
 
-	err := obs.processEntry("/sync/a.txt", "a.txt", "a.txt", failingInfoDirEntry{name: "a.txt"},
+	err := obs.processEntry("/sync/a.txt", "a.txt", failingInfoDirEntry{name: "a.txt"},
 		map[string]bool{}, map[string]localStateRow{}, &events, &jobs, &skipped, 0)
 
 	require.NoError(t, err)

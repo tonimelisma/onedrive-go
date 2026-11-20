@@ -66,7 +66,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			batches,
 			pollInterval,
 			wakeCh,
-			func(_ context.Context, polledEvents []changeEvent, newToken string, topology shortcutTopologyBatch) (remoteObservationBatch, error) {
+			func(_ context.Context, polledEvents []remoteItem, newToken string, topology shortcutTopologyBatch) (remoteObservationBatch, error) {
 				batch := buildPrimaryWatchBatch(rt.engine, bl, polledEvents, newToken)
 				batch.shortcutTopology = topology
 				if topology.shouldApply() && batch.cursorToken == "" {

@@ -17,7 +17,7 @@ type remoteObservationBatch struct {
 	source                remoteObservationBatchSource
 	observationMode       remoteObservationMode
 	observed              []observedItem
-	emitted               []changeEvent
+	changes               []remoteChange
 	cursorToken           string
 	markFullRemoteRefresh bool
 	// fullRefreshDueSoon pulls the full remote refresh forward to

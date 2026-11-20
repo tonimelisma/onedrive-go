@@ -158,13 +158,13 @@ func TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty(t *testing.T) {
 	leftover := filepath.Join(syncRoot, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
 
-	require.True(t, obs.runSafetyScan(t.Context(), tree, nil))
+	require.True(t, obs.runSafetyScan(t.Context(), tree))
 	applySnapshot(t, rt, forwardedSnapshot(t, batches))
 	require.Equal(t, []string{leftoverName}, interruptedRemovalStatusPaths(t, eng.baseline))
 	rt.resources.dirtyBuf.FlushImmediate()
 
 	require.NoError(t, os.Remove(leftover))
-	require.True(t, obs.runSafetyScan(t.Context(), tree, nil))
+	require.True(t, obs.runSafetyScan(t.Context(), tree))
 	applySnapshot(t, rt, forwardedSnapshot(t, batches))
 
 	assert.Empty(t, interruptedRemovalStatusPaths(t, eng.baseline))
@@ -192,12 +192,12 @@ func TestWatchRuntime_FallbackScanRecordsAndClearsFindings(t *testing.T) {
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
 	scanFailing := false
 
-	require.True(t, rt.runFallbackScan(ctx, obs, tree, nil, &scanFailing))
+	require.True(t, rt.runFallbackScan(ctx, obs, tree, &scanFailing))
 	applySnapshot(t, rt, forwardedSnapshot(t, batches))
 	assert.Equal(t, []string{leftoverName}, interruptedRemovalStatusPaths(t, eng.baseline))
 
 	require.NoError(t, os.Remove(leftover))
-	require.True(t, rt.runFallbackScan(ctx, obs, tree, nil, &scanFailing))
+	require.True(t, rt.runFallbackScan(ctx, obs, tree, &scanFailing))
 	applySnapshot(t, rt, forwardedSnapshot(t, batches))
 	assert.Empty(t, interruptedRemovalStatusPaths(t, eng.baseline), "the scan that no longer finds it clears it")
 }

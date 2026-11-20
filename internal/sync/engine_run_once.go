@@ -612,20 +612,10 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 	return false, nil
 }
 
-// observeRemoteFull runs a fresh delta with empty token (enumerates ALL remote
-// items) and compares against the baseline to find orphans: items in baseline
-// but not in the full enumeration = deleted remotely but missed by incremental
-// delta. Returns all events (creates/modifies from the full enumeration +
-// synthesized deletes for orphans) and the new delta token.
-func (flow *engineFlow) observeRemoteFull(ctx context.Context, bl *Baseline) ([]changeEvent, string, error) {
-	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, resyncKindApplyDifferences)
-	return full.events, full.token, err
-}
-
 // fullRemoteObservation is what a full enumeration with orphan detection
 // observed.
 type fullRemoteObservation struct {
-	events   []changeEvent
+	events   []remoteItem
 	token    string
 	topology shortcutTopologyBatch
 	// orphansUndecided reports an item missing from the enumeration whose
@@ -707,7 +697,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 // markOrphansForReupload turns confirmed orphans into re-uploads: their
 // remote rows go, and so does their synced agreement, so a surviving local
 // copy plans as an upload rather than a local delete (R-2.15.3).
-func markOrphansForReupload(orphans []changeEvent) {
+func markOrphansForReupload(orphans []remoteItem) {
 	for i := range orphans {
 		orphans[i].ReuploadLocal = true
 	}

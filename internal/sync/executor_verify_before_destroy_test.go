@@ -186,12 +186,12 @@ func TestHandleDelete_PathThatStillExistsEmitsNoDelete(t *testing.T) {
 	syncRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "file.txt"), []byte("still here\n"), 0o600))
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, syncRoot),
-		filepath.Join(syncRoot, "file.txt"), "file.txt", "file.txt", events)
+		filepath.Join(syncRoot, "file.txt"), "file.txt", "file.txt")
 
-	assert.Empty(t, events, "a delete event for a path that still exists must not become a delete")
+	assert.Empty(t, drainLocalPatches(batches), "a delete event for a path that still exists must not become a delete")
 }
 
 // Validates: R-2.8.10

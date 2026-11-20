@@ -49,12 +49,12 @@ type watchStepResult struct {
 // state itself; it blocks until the watch loop applies the batch.
 type remoteWatchBatchHandler func(
 	ctx context.Context,
-	events []changeEvent,
+	events []remoteItem,
 	newToken string,
 	topology shortcutTopologyBatch,
 ) (remoteObservationBatch, error)
 
-// remoteObserver transforms Graph API delta responses into []ChangeEvent.
+// remoteObserver transforms Graph API delta responses into []remoteItem.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
 // an embedded ItemConverter configured for primary drive observation.
@@ -71,10 +71,6 @@ type remoteObserver struct {
 	// The watch loop is the only writer; helper calls may read concurrently.
 	mu         stdsync.Mutex
 	deltaToken string
-
-	// lastActivityNano tracks the most recent successful poll time as Unix
-	// nanoseconds. Used by the engine to detect stalled observers (B-125).
-	lastActivityNano atomic.Int64
 
 	// stats tracks observer-level metrics (B-127).
 	stats observerCounters
@@ -163,9 +159,9 @@ func (o *remoteObserver) SetShortcutTopology(
 	}
 }
 
-// FullDelta fetches all delta pages and returns the accumulated change events
+// FullDelta fetches all delta pages and returns the accumulated reported items
 // plus the new delta token (DeltaLink URL) for the next sync pass.
-func (o *remoteObserver) FullDelta(ctx context.Context, savedToken string) ([]changeEvent, string, error) {
+func (o *remoteObserver) FullDelta(ctx context.Context, savedToken string) ([]remoteItem, string, error) {
 	events, token, _, err := o.FullDeltaWithShortcutTopology(ctx, savedToken)
 	return events, token, err
 }
@@ -173,7 +169,7 @@ func (o *remoteObserver) FullDelta(ctx context.Context, savedToken string) ([]ch
 func (o *remoteObserver) FullDeltaWithShortcutTopology(
 	ctx context.Context,
 	savedToken string,
-) ([]changeEvent, string, shortcutTopologyBatch, error) {
+) ([]remoteItem, string, shortcutTopologyBatch, error) {
 	events, token, topology, _, err := o.fullDelta(ctx, savedToken, nil)
 	return events, token, topology, err
 }
@@ -186,7 +182,7 @@ func (o *remoteObserver) FullDeltaWithShortcutTopology(
 // whose parent it could not fetch, for one) was still there (D-008).
 func (o *remoteObserver) FullEnumerationWithShortcutTopology(
 	ctx context.Context,
-) ([]changeEvent, string, shortcutTopologyBatch, map[string]struct{}, error) {
+) ([]remoteItem, string, shortcutTopologyBatch, map[string]struct{}, error) {
 	enumerated := make(map[string]struct{})
 	events, token, topology, _, err := o.fullDelta(ctx, "", enumerated)
 	if err != nil {
@@ -203,13 +199,13 @@ func (o *remoteObserver) fullDelta(
 	ctx context.Context,
 	savedToken string,
 	enumerated map[string]struct{},
-) ([]changeEvent, string, shortcutTopologyBatch, int, error) {
+) ([]remoteItem, string, shortcutTopologyBatch, int, error) {
 	o.logger.Debug("remote observer starting delta enumeration",
 		slog.String("drive_id", o.driveID.String()),
 		slog.Bool("has_token", savedToken != ""),
 	)
 
-	var events []changeEvent
+	var events []remoteItem
 	windowItems := 0
 	topology := shortcutTopologyBatch{
 		NamespaceID: o.shortcutNamespaceID,
@@ -267,7 +263,6 @@ func (o *remoteObserver) fullDelta(
 				return nil, "", shortcutTopologyBatch{}, 0, errRemoteObservationIncomplete
 			}
 			o.Converter.forgetCarriedAncestors()
-			o.recordActivity()
 			o.stats.pollsCompleted.Add(1)
 			o.stats.eventsEmitted.Add(int64(len(events)))
 
@@ -397,7 +392,7 @@ func (o *remoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- remoteObservationBatch,
 	pollStartedAt time.Time,
-	polledEvents []changeEvent,
+	polledEvents []remoteItem,
 	windowItems int,
 	newToken string,
 	topology shortcutTopologyBatch,
@@ -414,7 +409,7 @@ func (o *remoteObserver) handleWatchBatch(
 	}
 
 	batch := remoteObservationBatch{
-		emitted: append([]changeEvent(nil), polledEvents...),
+		changes: remoteChangesOf(polledEvents),
 	}
 	if handleBatch != nil {
 		var handleErr error
@@ -706,23 +701,6 @@ func (o *remoteObserver) CurrentDeltaToken() string {
 	return o.deltaToken
 }
 
-// LastActivity returns the time of the most recent successful poll.
-// Returns zero time if no poll has completed. Thread-safe — can be called
-// from any goroutine while Watch() is running (B-125).
-func (o *remoteObserver) LastActivity() time.Time {
-	nano := o.lastActivityNano.Load()
-	if nano == 0 {
-		return time.Time{}
-	}
-
-	return time.Unix(0, nano)
-}
-
-// recordActivity updates the liveness timestamp to now.
-func (o *remoteObserver) recordActivity() {
-	o.lastActivityNano.Store(time.Now().UnixNano())
-}
-
 // Stats returns a snapshot of observer metrics. Thread-safe (B-127).
 func (o *remoteObserver) Stats() observerStats {
 	return observerStats{
@@ -881,10 +859,10 @@ func (o *remoteObserver) fetchPage(
 // the window and no baseline row can place (R-2.15.4).
 func (o *remoteObserver) classifyWindow(
 	ctx context.Context, window []graph.Item, inflight map[string]inflightParent,
-) []changeEvent {
+) []remoteItem {
 	o.Converter.resolveMissingAncestors(ctx, window, inflight)
 
-	var events []changeEvent
+	var events []remoteItem
 	for i := range window {
 		if ev := o.Converter.ClassifyItem(&window[i], inflight); ev != nil {
 			events = append(events, *ev)

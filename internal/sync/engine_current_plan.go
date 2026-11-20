@@ -187,7 +187,7 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 	bl *Baseline,
 	fullReconcile bool,
 ) (*remoteObservationBatch, error) {
-	_, pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, fullReconcile)
+	pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -203,19 +203,19 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) ([]changeEvent, *remoteObservationBatch, error) {
+) (*remoteObservationBatch, error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if err := flow.applyShortcutObservationBatch(ctx, &observationBatch); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if len(observationBatch.observed) > 0 {
 		if err := flow.commitObservedItems(ctx, observationBatch.observed, ""); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	if err := flow.applyObservationFindingsBatch(
@@ -224,10 +224,10 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 		recordSkippedOneDriveItems,
 		engineDebugNoteRemoteCurrent,
 	); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return observationBatch.emitted, observationBatch.deferredProgress(), nil
+	return observationBatch.deferredProgress(), nil
 }
 
 func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch *remoteObservationBatch) error {
@@ -306,7 +306,7 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
-) ([]changeEvent, string, shortcutTopologyBatch, error) {
+) ([]remoteItem, string, shortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := eng.baseline.ReadObservationState(ctx)
 	if err != nil {

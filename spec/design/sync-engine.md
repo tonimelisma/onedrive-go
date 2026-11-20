@@ -812,10 +812,11 @@ disables select cases by phase instead of mutating those channel pointers
 mid-shutdown, so asynchronous senders never race the single-owner runtime over
 which signal channel is authoritative.
 
-Local watcher events are scheduler hints plus scoped local-truth updates. The
-local observer re-observes the affected file, directory, or safety-scan
-snapshot and emits a `localObservation`; the watch loop applies it
-to `local_state`/`observation_state` before marking the dirty scheduler. Remote
+The full scan a replan runs is local truth. What a watch observes updates the
+rows in its scope and wakes the replan: the local observer re-observes the
+affected file, directory, or safety-scan snapshot and sends a
+`localObservation`, the only output it has; the watch loop applies it to
+`local_state`/`observation_state` before marking the dirty scheduler. Remote
 delta batches and full remote refresh results similarly arrive as loop-applied
 durable observation batches. Websocket wakes remain scheduler hints only. After
 debounce or wake, watch mode refreshes local truth as a recovery/full-snapshot

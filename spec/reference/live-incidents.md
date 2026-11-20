@@ -56,6 +56,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | `TestE2E_RapidFileChurn` | 2026-11, renamed for its bucket family | renamed to `TestE2E_Edge_RapidFileChurn` |
 | `TestE2E_RecycleBinRoundtrip` | 2026-11, renamed for its bucket family | renamed to `TestE2E_RecycleBin_Roundtrip` |
 | `TestE2E_RecycleBinEmpty` | 2026-11, renamed for its bucket family | renamed to `TestE2E_RecycleBin_Empty` |
+| `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix` | 2026-11, a removal no longer carries a kind | merged into `TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree` |
 
 ## Index
 

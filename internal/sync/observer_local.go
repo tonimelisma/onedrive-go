@@ -5,7 +5,7 @@
 //   - localObserver struct + newLocalObserver constructor
 //   - fsWatcher interface + fsnotifyWrapper adapter
 //   - Watch() entry point + AddWatchesRecursive
-//   - Event channel management (TrySend, DroppedEvents, LastActivity)
+//   - Observation sending (TrySend, TrySendLocalObservationBatch, DroppedEvents)
 //
 // Related files:
 //   - observer_local_handlers.go:  watch event loop + fsnotify event handlers
@@ -79,7 +79,6 @@ const maxCoalesceRetries = 3
 type hashRequest struct {
 	FsPath    string
 	DbRelPath string
-	Name      string
 	Retries   int // number of re-schedules already attempted
 }
 
@@ -466,9 +465,11 @@ func (fw *fsnotifyWrapper) Close() error {
 func (fw *fsnotifyWrapper) Events() <-chan fsnotify.Event { return fw.w.Events }
 func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 
-// localObserver walks the local filesystem and produces []ChangeEvent by
-// comparing each entry against the in-memory baseline. Stateless — syncRoot
-// is a parameter of FullScan, allowing reuse across passes.
+// localObserver observes the local filesystem: full scans that return every
+// row, and watch handlers that send patches to the batch channel. It compares
+// entries against the in-memory baseline only to skip re-reading unchanged
+// content. Stateless — syncRoot is a parameter of FullScan, allowing reuse
+// across passes.
 type localObserver struct {
 	baseline *Baseline
 	logger   *slog.Logger
@@ -512,9 +513,8 @@ type localObserver struct {
 	// warning and a shorter safety-scan interval. Injectable for tests.
 	filesystemKind func(path string) (filesystemInfo, error)
 
-	droppedEvents    atomic.Int64 // events dropped by TrySend due to full channel
-	droppedRetries   atomic.Int64 // hash requests dropped due to full channel
-	lastActivityNano atomic.Int64 // liveness: updated on each event emit (B-125)
+	droppedEvents  atomic.Int64 // observations dropped on a full batch channel
+	droppedRetries atomic.Int64 // hash requests dropped due to full channel
 
 	// reportedWatchCauses and safetyScanFailing let the watch loop report a
 	// persistent condition once instead of per directory or per scan.
@@ -696,38 +696,19 @@ func (o *localObserver) SetWatcherFactory(fn func() (fsWatcher, error)) {
 	o.watcherFactory = fn
 }
 
-// TrySend sends a ChangeEvent to the events channel without blocking. If the
-// channel is full, the event is dropped and logged at Warn. The safety scan
-// (every 5 minutes) catches any dropped events, providing eventual consistency.
-func (o *localObserver) TrySend(ctx context.Context, events chan<- changeEvent, ev *changeEvent) {
+// TrySend hands what a watch handler observed for one path to the runtime as
+// a patch, without blocking (TrySendLocalObservationBatch).
+func (o *localObserver) TrySend(ctx context.Context, ev *changeEvent) {
 	if ev != nil {
 		batch := localObservationBatchForEvent(ev)
 		o.TrySendLocalObservationBatch(ctx, &batch)
 	}
-	o.TrySendChangeEventOnly(ctx, events, ev)
 }
 
-func (o *localObserver) TrySendChangeEventOnly(ctx context.Context, events chan<- changeEvent, ev *changeEvent) {
-	if events == nil || ev == nil {
-		return
-	}
-
-	select {
-	case events <- *ev:
-		o.recordActivity()
-	case <-ctx.Done():
-	default:
-		// Debug per event: a bulk copy can drop thousands. droppedEvents
-		// aggregates them and the maintenance tick schedules one rescan.
-		o.droppedEvents.Add(1)
-		o.requestRecoveryScan()
-		o.logger.Debug("event channel full, dropping event (recovery scan will catch up)",
-			slog.String("path", ev.Path),
-			slog.String("type", ev.Type.String()),
-		)
-	}
-}
-
+// TrySendLocalObservationBatch sends batch to the runtime without blocking.
+// On a full channel the batch is dropped, counted and logged at Debug (a bulk
+// copy can drop thousands), and a recovery scan is requested, which replaces
+// local truth with a full snapshot.
 func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch *localObservation) {
 	if o.localBatchCh == nil {
 		return
@@ -735,7 +716,6 @@ func (o *localObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 
 	select {
 	case o.localBatchCh <- *batch:
-		o.recordActivity()
 	case <-ctx.Done():
 	default:
 		o.droppedEvents.Add(1)
@@ -859,8 +839,8 @@ func (o *localObserver) cancelRecoveryScan() {
 	}
 }
 
-// DroppedEvents returns the cumulative number of events dropped by TrySend
-// due to a full channel. Production code uses ResetDroppedEvents for per-pass
+// DroppedEvents returns the cumulative number of observations dropped on a
+// full batch channel. Production code uses ResetDroppedEvents for per-pass
 // reporting; this accessor is retained for tests and diagnostics.
 func (o *localObserver) DroppedEvents() int64 {
 	return o.droppedEvents.Load()
@@ -883,22 +863,6 @@ func (o *localObserver) ResetDroppedRetries() int64 {
 	return o.droppedRetries.Swap(0)
 }
 
-// LastActivity returns the time of the most recent event emission.
-// Returns zero time if no events have been emitted. Thread-safe (B-125).
-func (o *localObserver) LastActivity() time.Time {
-	nano := o.lastActivityNano.Load()
-	if nano == 0 {
-		return time.Time{}
-	}
-
-	return time.Unix(0, nano)
-}
-
-// recordActivity updates the liveness timestamp to now.
-func (o *localObserver) recordActivity() {
-	o.lastActivityNano.Store(time.Now().UnixNano())
-}
-
 // EstimateDirCount returns the estimated number of directories that will need
 // inotify watches. Counts ItemTypeFolder entries in baseline plus one for the
 // sync root itself.
@@ -915,16 +879,15 @@ func (o *localObserver) EstimateDirCount() int {
 }
 
 // Watch monitors the local filesystem for changes using fsnotify and sends
-// events to the provided channel. It blocks until the context is canceled,
-// returning nil. A periodic safety scan (every 5 minutes) catches any events
-// that fsnotify may miss (e.g., during brief watcher gaps or platform edge
-// cases).
+// what it observes to the batch channel (SetLocalObservationBatchChannel). It
+// blocks until the context is canceled, returning nil. A periodic safety scan
+// (every 5 minutes) catches any events that fsnotify may miss (e.g., during
+// brief watcher gaps or platform edge cases).
 //
-// Channel sizing (B-114): The events channel should be buffered (recommended
-// size: 256). An unbuffered channel blocks on every event. If the channel is
-// full, TrySend drops the event and increments the drop counter — the safety
-// scan provides eventual consistency for any dropped events.
-func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events chan<- changeEvent) error {
+// An observation sent to a full batch channel is dropped and counted, and a
+// recovery scan is requested, which replaces local truth with a full snapshot
+// (B-114).
+func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root) error {
 	syncRoot := tree.Path()
 	o.logger.Info("local observer starting watch",
 		slog.String("sync_root", syncRoot),
@@ -969,7 +932,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		// which fsnotify watches are fully installed. Any local change that lands in
 		// that window is observed here; subsequent changes are covered by the
 		// installed watcher or the periodic safety scan.
-		o.runSafetyScan(ctx, tree, events)
+		o.runSafetyScan(ctx, tree)
 		if o.watchUnavailable != nil {
 			return o.watchUnavailable
 		}
@@ -978,7 +941,7 @@ func (o *localObserver) Watch(ctx context.Context, tree *synctree.Root, events c
 		o.beforeWatchLoop()
 	}
 
-	return o.watchLoop(ctx, watcher, tree, events)
+	return o.watchLoop(ctx, watcher, tree)
 }
 
 // filesystemInfo describes the filesystem holding the sync root.

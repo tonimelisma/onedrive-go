@@ -106,7 +106,7 @@ func TestFullScan_RecordedHashesSpareTheNextScanTheRead(t *testing.T) {
 	second := scanWithCache(t, syncRoot, cache, &reads)
 	assert.Zero(t, reads.Load(), "the second scan reads nothing")
 	assert.Equal(t, hashesByPath(first), hashesByPath(second), "and reports the same hashes")
-	assert.Len(t, second.Events, 4, "three creates and a folder create, as before")
+	assert.Len(t, second.Events, 4, "three new files and a new folder, as before")
 
 	// An edit that moves the mtime, and a same-size rewrite that keeps it
 	// but not the ctime, are both read again; the untouched files are not.
