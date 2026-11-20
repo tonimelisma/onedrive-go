@@ -126,7 +126,7 @@ func parseSeedReplay(command string) (seedReplay, bool) {
 		return seedReplay{}, false
 	}
 	test := seedReplayTestPattern.FindStringSubmatch(words[1])
-	if test == nil || !isSeedFamilyPackage(words[2], test[1]) {
+	if len(test) < 2 || !isSeedFamilyPackage(words[2], test[1]) {
 		return seedReplay{}, false
 	}
 	replay.test, replay.pkg = test[1], words[2]

@@ -98,7 +98,7 @@ func baselineRowArgs(e *syncdomain.BaselineEntry) []any {
 func upsertBaselineRowTx(ctx context.Context, tx SqlTxRunner, e *syncdomain.BaselineEntry) error {
 	_, err := tx.ExecContext(ctx, sqlUpsertBaseline, baselineRowArgs(e)...)
 
-	return err //nolint:wrapcheck // every caller names the path it was recording
+	return err
 }
 
 // localBaselineRefresh is the explicit input for refreshing local baseline

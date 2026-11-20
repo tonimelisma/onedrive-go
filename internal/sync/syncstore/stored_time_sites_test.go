@@ -1,6 +1,7 @@
 package syncstore
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -115,12 +116,12 @@ func countProductCalls(t *testing.T, match func(*ast.CallExpr) bool, dirs ...str
 			}
 			rel, relErr := filepath.Rel(root, path)
 			if relErr != nil {
-				return relErr
+				return fmt.Errorf("relative path of %s: %w", path, relErr)
 			}
 			fset := token.NewFileSet()
 			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 			if parseErr != nil {
-				return parseErr
+				return fmt.Errorf("parse %s: %w", path, parseErr)
 			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				if call, ok := node.(*ast.CallExpr); ok && match(call) {

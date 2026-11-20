@@ -276,11 +276,10 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 						literals = append(literals, owner)
 					}
 				case *ast.CallExpr:
-					name := nameOf(n.Fun)
-					switch {
-					case name == "NewRealClock":
+					switch name := nameOf(n.Fun); name {
+					case "NewRealClock":
 						clocks = append(clocks, owner)
-					case name == "NewLocalObserver" || name == "NewRemoteObserver":
+					case "NewLocalObserver", "NewRemoteObserver":
 						constructorCalls = append(constructorCalls, name+" from "+owner)
 					}
 				}

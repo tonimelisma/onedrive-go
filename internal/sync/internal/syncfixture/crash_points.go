@@ -13,7 +13,7 @@ func CopyFileContent(src, dst string) (err error) {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", src, err)
 	}
-	defer in.Close()
+	defer in.Close() //nolint:errcheck // a reader-side close: nothing was written through it
 	info, err := in.Stat()
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", src, err)

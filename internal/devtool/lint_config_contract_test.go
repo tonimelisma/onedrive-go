@@ -290,7 +290,7 @@ func TestGolangciConfig_EverySyncTreePackageHasItsImportRule(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() && entry.Name() == "testdata" {
+		if entry.IsDir() && entry.Name() == goTestdataDirName {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() && holdsNonTestGoFile(t, path) {

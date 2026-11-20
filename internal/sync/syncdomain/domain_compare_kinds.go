@@ -71,7 +71,7 @@ func (k ComparisonKind) String() string {
 	case comparisonCreateConflict:
 		return "create_conflict"
 	case comparisonUnchanged:
-		return "unchanged" //nolint:goconst // an enum name; the other use in the package is a test file's content
+		return "unchanged"
 	case ComparisonEqualAgain:
 		return "equal_again"
 	case comparisonLocalMissing:

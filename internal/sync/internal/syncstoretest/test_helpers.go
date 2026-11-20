@@ -86,7 +86,7 @@ func LoadTestStoreTemplate(tb testing.TB) []byte {
 			errTestStoreTemplate = fmt.Errorf("create sync store template dir: %w", err)
 			return
 		}
-		defer os.RemoveAll(templateDir)
+		defer os.RemoveAll(templateDir) //nolint:errcheck // a leftover template directory under the test temp root costs nothing
 
 		templatePath := filepath.Join(templateDir, "template.db")
 		store, err := syncstore.NewSyncStore(context.Background(), templatePath, slog.New(slog.DiscardHandler))

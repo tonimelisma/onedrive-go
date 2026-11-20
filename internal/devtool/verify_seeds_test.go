@@ -221,7 +221,7 @@ func syncTreeSources(t *testing.T) []string {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if entry.Name() == "testdata" {
+			if entry.Name() == goTestdataDirName {
 				return filepath.SkipDir
 			}
 

@@ -539,6 +539,24 @@ linters:
         linters:
           - forbidigo
         text: models another system and is for tests only
+      # The sync tree's test-helper packages are test code that is not in
+      # _test.go files: they keep the exemptions tests have.
+      - path: internal/sync/internal/(syncfixture|syncstoretest)/
+        linters:
+          - lll
+          - mnd
+      - path: internal/sync/internal/(syncfixture|syncstoretest)/
+        linters:
+          - forbidigo
+        text: use fsroot, synctree, or localpath filesystem boundaries instead of raw os\.\* calls
+      # A call between two packages of the sync tree was a call inside one
+      # package before the split, and its error was returned as it is; the
+      # exclusion is anchored on the callee, so calls from cli and multisync
+      # into the tree stay checked.
+      - path: internal/sync/
+        linters:
+          - wrapcheck
+        text: 'sig: func \(?\*?github\.com/tonimelisma/onedrive-go/internal/sync(/|\.)'
       # The filesystem boundary packages make the raw os.* calls; every other
       # forbidigo rule holds in them.
       - path: internal/(fsroot|synctree|localpath)/
