@@ -1,9 +1,7 @@
 package sync
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -94,30 +92,6 @@ func TestSeededFamilies_DefaultRunsAreUnchanged(t *testing.T) {
 	})
 }
 
-// fakeSeedReplayTB is a seed's subtest as logSeedReplayOnFailure sees it.
-type fakeSeedReplayTB struct {
-	name     string
-	failed   bool
-	cleanups []func()
-	logs     []string
-}
-
-func (f *fakeSeedReplayTB) Helper()                {}
-func (f *fakeSeedReplayTB) Name() string           { return f.name }
-func (f *fakeSeedReplayTB) Failed() bool           { return f.failed }
-func (f *fakeSeedReplayTB) Cleanup(cleanup func()) { f.cleanups = append(f.cleanups, cleanup) }
-func (f *fakeSeedReplayTB) Logf(format string, args ...any) {
-	f.logs = append(f.logs, fmt.Sprintf(format, args...))
-}
-
-// end runs the registered cleanups as the testing package does when the
-// subtest ends: the last registered first.
-func (f *fakeSeedReplayTB) end() {
-	for i := len(f.cleanups) - 1; i >= 0; i-- {
-		f.cleanups[i]()
-	}
-}
-
 // Validates: R-6.10.25
 //
 // A failing seed of each of this package's families logs exactly one replay
@@ -134,30 +108,30 @@ func TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed(t *testing.T) {
 		"TestModel_CrashAtSeededPointsRecovers":            modelSeedVars().Single,
 		"TestModel_ChaosGraphConverges":                    chaosSeedVars().Single,
 	}
-	sources := packageTestSources(t)
+	sources := syncfixture.PackageTestSources(t)
 	for test, envName := range families {
-		passing := &fakeSeedReplayTB{name: test + "/seed=7003"}
+		passing := &syncfixture.FakeSeedReplayTB{TestName: test + "/seed=7003"}
 		syncfixture.LogSeedReplayOnFailure(passing, envName, seed)
-		passing.end()
-		assert.Empty(t, passing.logs, "a passing seed logs no replay line")
+		passing.End()
+		assert.Empty(t, passing.Logs(), "a passing seed logs no replay line")
 
-		failing := &fakeSeedReplayTB{name: test + "/seed=7003", failed: true}
+		failing := &syncfixture.FakeSeedReplayTB{TestName: test + "/seed=7003", HasFailed: true}
 		syncfixture.LogSeedReplayOnFailure(failing, envName, seed)
-		failing.end()
-		require.Len(t, failing.logs, 1)
-		command, found := strings.CutPrefix(failing.logs[0], syncfixture.SeedReplayPrefix)
+		failing.End()
+		require.Len(t, failing.Logs(), 1)
+		command, found := strings.CutPrefix(failing.Logs()[0], syncfixture.SeedReplayPrefix)
 		require.True(t, found, "the line starts with %q", syncfixture.SeedReplayPrefix)
 
-		replay := parseSeedReplayCommand(t, command)
+		replay := syncfixture.ParseSeedReplayCommand(t, command)
 		want := []string{envName + "=7003"}
 		if order := os.Getenv(syncfixture.DispatchOrderEnv); order != "" {
 			want = append(want, syncfixture.DispatchOrderEnv+"="+order)
 		}
-		assert.Equal(t, want, replay.assignments)
-		assert.Equal(t, syncfixture.RaceDetectorEnabled, replay.race)
-		assert.Equal(t, "^"+test+"$", replay.runPattern)
+		assert.Equal(t, want, replay.Assignments)
+		assert.Equal(t, syncfixture.RaceDetectorEnabled, replay.Race)
+		assert.Equal(t, "^"+test+"$", replay.RunPattern)
 		assert.Contains(t, sources, "func "+test+"(t *testing.T)", "the replay names a test of this package")
-		assertIsThisPackage(t, replay.pkg)
+		syncfixture.AssertIsThisPackage(t, replay.Pkg)
 	}
 
 	assert.Equal(t, "seed-replay: A=1 B=two go test -race -run '^TestX$' ./internal/sync",
@@ -174,120 +148,17 @@ func TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed(t *testing.T) {
 func TestLogSeedReplayOnFailure_CarriesTheDispatchOrder(t *testing.T) {
 	for _, order := range []string{"", "reverse"} {
 		t.Setenv(syncfixture.DispatchOrderEnv, order)
-		failing := &fakeSeedReplayTB{name: "TestModel_CrashAtSeededPointsRecovers/seed=9", failed: true}
+		failing := &syncfixture.FakeSeedReplayTB{TestName: "TestModel_CrashAtSeededPointsRecovers/seed=9", HasFailed: true}
 		syncfixture.LogSeedReplayOnFailure(failing, modelSeedEnv, 9)
-		failing.end()
+		failing.End()
 
-		require.Len(t, failing.logs, 1, order)
-		command, found := strings.CutPrefix(failing.logs[0], syncfixture.SeedReplayPrefix)
-		require.True(t, found, failing.logs[0])
+		require.Len(t, failing.Logs(), 1, order)
+		command, found := strings.CutPrefix(failing.Logs()[0], syncfixture.SeedReplayPrefix)
+		require.True(t, found, failing.Logs()[0])
 		want := []string{modelSeedEnv + "=9"}
 		if order != "" {
 			want = append(want, syncfixture.DispatchOrderEnv+"="+order)
 		}
-		assert.Equal(t, want, parseSeedReplayCommand(t, command).assignments, "order %q", order)
+		assert.Equal(t, want, syncfixture.ParseSeedReplayCommand(t, command).Assignments, "order %q", order)
 	}
-}
-
-// seedReplayCommand is a replay line's command, read as a shell reads it.
-type seedReplayCommand struct {
-	assignments []string
-	race        bool
-	runPattern  string
-	pkg         string
-}
-
-// parseSeedReplayCommand reads the command after the replay prefix: the
-// assignments, then `go test`, -race or not, -run and its single-quoted
-// pattern, and the package, nothing else.
-func parseSeedReplayCommand(t *testing.T, command string) seedReplayCommand {
-	t.Helper()
-
-	words := shellWords(t, command)
-	var replay seedReplayCommand
-	for len(words) > 0 && strings.Contains(words[0], "=") {
-		replay.assignments = append(replay.assignments, words[0])
-		words = words[1:]
-	}
-	goTest := []string{"go", "test"}
-	require.Greater(t, len(words), len(goTest), command)
-	require.Equal(t, goTest, words[:len(goTest)], command)
-	words = words[len(goTest):]
-	if words[0] == "-race" {
-		replay.race = true
-		words = words[1:]
-	}
-	// -run, its pattern and the package, nothing after them.
-	const tail = 3
-	require.Len(t, words, tail, command)
-	require.Equal(t, "-run", words[0], command)
-	replay.runPattern, replay.pkg = words[1], words[2]
-
-	return replay
-}
-
-// shellWords splits command into words as a POSIX shell does for what a
-// replay line holds: blanks separate words, and single quotes keep a word's
-// characters as they are. An unclosed quote fails the test.
-func shellWords(t *testing.T, command string) []string {
-	t.Helper()
-
-	words := []string{}
-	var word strings.Builder
-	inWord, quoted := false, false
-	for _, r := range command {
-		switch {
-		case r == '\'':
-			quoted, inWord = !quoted, true
-		case r == ' ' && !quoted:
-			if inWord {
-				words = append(words, word.String())
-				word.Reset()
-			}
-			inWord = false
-		default:
-			word.WriteRune(r)
-			inWord = true
-		}
-	}
-	require.False(t, quoted, "unclosed quote in %q", command)
-	if inWord {
-		words = append(words, word.String())
-	}
-
-	return words
-}
-
-// packageTestSources is the text of this package's test files.
-func packageTestSources(t *testing.T) string {
-	t.Helper()
-
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-	var sources strings.Builder
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		data, readErr := os.ReadFile(entry.Name())
-		require.NoError(t, readErr)
-		sources.Write(data)
-	}
-
-	return sources.String()
-}
-
-// assertIsThisPackage holds that pkg, a path from the module root, is the
-// package this test runs in: go test runs a package's tests in its directory,
-// two levels below the module root.
-func assertIsThisPackage(t *testing.T, pkg string) {
-	t.Helper()
-
-	here, err := filepath.Abs(".")
-	require.NoError(t, err)
-	named, err := filepath.Abs(filepath.Join("..", "..", pkg))
-	require.NoError(t, err)
-	assert.Equal(t, here, named, "the replay runs this package")
-	_, err = os.Stat(filepath.Join("..", "..", "go.mod"))
-	require.NoError(t, err, "the module root is two levels up")
 }
