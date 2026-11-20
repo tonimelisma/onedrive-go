@@ -59,11 +59,23 @@ type configuredStatusDriveClient interface {
 // A test supplies a context it ends itself, so no test waits for the clock or
 // races it.
 func liveOverlayBudgetContext(ctx context.Context, cc *CLIContext) (context.Context, context.CancelFunc) {
-	if cc.seams.statusLiveBudgetContext != nil {
-		return cc.seams.statusLiveBudgetContext(ctx)
+	return budgetContext(ctx, cc.seams.statusLiveBudgetContext, statusLiveBudget, errStatusLiveBudgetSpent)
+}
+
+// budgetContext is ctx under a budget: it ends with cause once budget has
+// passed. seam, when set, supplies the context instead, so a test ends the
+// budget itself.
+func budgetContext(
+	ctx context.Context,
+	seam func(context.Context) (context.Context, context.CancelFunc),
+	budget time.Duration,
+	cause error,
+) (context.Context, context.CancelFunc) {
+	if seam != nil {
+		return seam(ctx)
 	}
 
-	return context.WithTimeoutCause(ctx, statusLiveBudget, errStatusLiveBudgetSpent)
+	return context.WithTimeoutCause(ctx, budget, cause)
 }
 
 // loadStatusLiveOverlay asks OneDrive for every account's live details at the
