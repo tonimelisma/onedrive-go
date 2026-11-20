@@ -383,7 +383,9 @@ func (flow *engineFlow) logBlockScopeActivated(
 // (ConditionClearsAutomatically), the same one that keeps the watch condition
 // summary below a warning, so the two cannot disagree; a condition with no
 // family is not known to clear by itself.
-func blockScopeActivationLine(key syncdomain.ScopeKey, conditionType syncdomain.IssueType, retryIn string) (line string, clearsAutomatically bool) {
+func blockScopeActivationLine(
+	key syncdomain.ScopeKey, conditionType syncdomain.IssueType, retryIn string,
+) (line string, clearsAutomatically bool) {
 	family, hasFamily := syncdomain.ConditionKeyForIssueType(conditionType)
 
 	return blockScopeActivationWording(key, conditionType, retryIn), hasFamily && syncdomain.ConditionClearsAutomatically(family)

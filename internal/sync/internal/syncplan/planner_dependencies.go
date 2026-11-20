@@ -527,7 +527,8 @@ func carriedContentKey(create *syncdomain.Action) (contentKey, bool) {
 		return contentKey{device: create.View.Local.LocalDevice, inode: create.View.Local.LocalInode}, true
 	case syncdomain.ActionDownload:
 		return contentKey{itemID: create.ItemID}, create.ItemID != ""
-	case syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete, syncdomain.ActionFolderCreate,
+	case syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete,
+		syncdomain.ActionFolderCreate,
 		syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
 		return contentKey{}, false
 	default:
@@ -548,7 +549,8 @@ func deletedContentKey(deleted *syncdomain.Action) (contentKey, bool) {
 		return contentKey{device: synced.LocalDevice, inode: synced.LocalInode}, synced.LocalHasIdentity
 	case syncdomain.ActionLocalDelete:
 		return contentKey{itemID: synced.ItemID}, synced.ItemID != ""
-	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate,
+	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
+		syncdomain.ActionFolderCreate,
 		syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
 		return contentKey{}, false
 	default:

@@ -242,7 +242,9 @@ func rebaseRemoteCreatesThroughLocalFolderMoves(actions []syncdomain.Action) []s
 	var folderMoves []graphFolderMoveBoundary
 	for i := range actions {
 		action := &actions[i]
-		if action.Type != syncdomain.ActionLocalMove || syncdomain.ResolveItemType(action.View) != syncdomain.ItemTypeFolder || action.OldPath == "" {
+		if action.Type != syncdomain.ActionLocalMove ||
+			syncdomain.ResolveItemType(action.View) != syncdomain.ItemTypeFolder ||
+			action.OldPath == "" {
 			continue
 		}
 		folderMoves = append(folderMoves, graphFolderMoveBoundary{
@@ -304,7 +306,8 @@ func writesLocally(action *syncdomain.Action) bool {
 		return true
 	case syncdomain.ActionFolderCreate:
 		return action.CreateSide == syncdomain.CreateLocal
-	case syncdomain.ActionUpload, syncdomain.ActionRemoteMove, syncdomain.ActionRemoteDelete, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
+	case syncdomain.ActionUpload, syncdomain.ActionRemoteMove, syncdomain.ActionRemoteDelete, syncdomain.ActionBaselineUpdate,
+		syncdomain.ActionCleanup:
 		return false
 	default:
 		panic(syncdomain.OutsideTheEnum(action.Type))
@@ -694,7 +697,9 @@ func buildReplaceLocalActions(view *syncdomain.PathView) []syncdomain.Action {
 	return []syncdomain.Action{deleteAction, download}
 }
 
-func partitionCurrentActionsForMode(actions []syncdomain.Action, mode syncdomain.SyncMode) ([]syncdomain.Action, syncdomain.DeferredCounts) {
+func partitionCurrentActionsForMode(
+	actions []syncdomain.Action, mode syncdomain.SyncMode,
+) ([]syncdomain.Action, syncdomain.DeferredCounts) {
 	admitted := make([]syncdomain.Action, 0, len(actions))
 	var deferred syncdomain.DeferredCounts
 	for i := range actions {
@@ -744,7 +749,8 @@ func createsNewLocalItem(action *syncdomain.Action) bool {
 		return false
 	}
 
-	return action.Type == syncdomain.ActionDownload || (action.Type == syncdomain.ActionFolderCreate && action.CreateSide == syncdomain.CreateLocal)
+	return action.Type == syncdomain.ActionDownload ||
+		(action.Type == syncdomain.ActionFolderCreate && action.CreateSide == syncdomain.CreateLocal)
 }
 
 // foldersNeededByAdmittedActions is every folder above an action the mode

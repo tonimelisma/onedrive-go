@@ -115,7 +115,9 @@ func (e *Executor) remoteSourcePrecondition(
 	return live, nil
 }
 
-func (e *Executor) remoteMoveAlreadyApplied(action *syncdomain.Action, item *graph.Item, row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState) bool {
+func (e *Executor) remoteMoveAlreadyApplied(
+	action *syncdomain.Action, item *graph.Item, row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState,
+) bool {
 	if action.Type != syncdomain.ActionRemoteMove {
 		return false
 	}
@@ -165,7 +167,9 @@ func (e *Executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known b
 	return namekey.StoredPath(item.ParentPath) == namekey.StoredPath(parentDir), true
 }
 
-func remoteRowMatchesLivePreconditionForAction(action *syncdomain.Action, row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState) bool {
+func remoteRowMatchesLivePreconditionForAction(
+	action *syncdomain.Action, row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState,
+) bool {
 	if plannedPostRemoteMoveContentUpload(action) {
 		return remoteRowMatchesPostRemoteMoveLivePrecondition(row, planned)
 	}
@@ -881,7 +885,9 @@ func (e *Executor) validateLocalMoveSourceAgainstBaseline(
 
 // localFileHoldsBaselineContent reports whether the file at source provably
 // holds the synced content: the baseline's size and local hash.
-func (e *Executor) localFileHoldsBaselineContent(ctx context.Context, source string, info os.FileInfo, baseline *syncdomain.BaselineEntry) bool {
+func (e *Executor) localFileHoldsBaselineContent(
+	ctx context.Context, source string, info os.FileInfo, baseline *syncdomain.BaselineEntry,
+) bool {
 	if baseline.LocalHash == "" || (baseline.LocalSizeKnown && info.Size() != baseline.LocalSize) {
 		return false
 	}

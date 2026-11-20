@@ -150,7 +150,9 @@ func failureAwaitsUser(decision *syncdomain.ResultDecision, r *syncdomain.Action
 // consumer that the condition that refused this failure starts with it
 // (failureAwaitsUser and conditionStarts): sync's output then says it to the
 // user in the words `status` uses.
-func (e *Engine) activitySaysConditionStarts(decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion, conditionStarts bool) bool {
+func (e *Engine) activitySaysConditionStarts(
+	decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion, conditionStarts bool,
+) bool {
 	return conditionStarts && e.activityHook != nil && decision != nil && failureAwaitsUser(decision, r)
 }
 

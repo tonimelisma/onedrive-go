@@ -138,7 +138,9 @@ func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology 
 	return nil
 }
 
-func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *syncshortcut.ShortcutTopologyBatch, root *syncshortcut.ShortcutRootRecord) {
+func (e *Engine) confirmShortcutOmission(
+	ctx context.Context, topology *syncshortcut.ShortcutTopologyBatch, root *syncshortcut.ShortcutRootRecord,
+) {
 	live, err := e.itemsClient.GetItem(ctx, e.driveID, root.BindingItemID)
 	switch {
 	case errors.Is(err, graph.ErrNotFound):

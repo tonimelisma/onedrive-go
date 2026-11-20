@@ -89,7 +89,9 @@ func (flow *engineFlow) executePrimaryRootObservation(
 // rootReadFailureBatch is the observation batch of a root OneDrive refused
 // to read: no events and no new cursor, only the root's read issue, so the
 // whole tree is unavailable rather than absent.
-func (flow *engineFlow) rootReadFailureBatch(mode syncdomain.RemoteObservationMode, issueType syncdomain.IssueType) syncobserve.RemoteObservationBatch {
+func (flow *engineFlow) rootReadFailureBatch(
+	mode syncdomain.RemoteObservationMode, issueType syncdomain.IssueType,
+) syncobserve.RemoteObservationBatch {
 	return buildRemoteObservationBatch(
 		flow.engine,
 		mode,

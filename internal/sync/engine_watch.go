@@ -426,7 +426,9 @@ func (rt *watchRuntime) startLocalObserver(
 	errs chan<- error,
 ) {
 	rt.resources.goroutines.start(ctx, watchGoroutineLocalObserver, func(ctx context.Context) {
-		defer rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal})
+		defer rt.deps.emit(syncdomain.EngineDebugEvent{
+			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal,
+		})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
 		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
@@ -466,7 +468,9 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *sy
 		}
 
 		interval := localObs.EffectiveSafetyScanInterval()
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverFallbackStarted, Observer: syncdomain.EngineDebugObserverLocal})
+		rt.deps.emit(syncdomain.EngineDebugEvent{
+			Type: syncdomain.EngineDebugEventObserverFallbackStarted, Observer: syncdomain.EngineDebugObserverLocal,
+		})
 		if cause != warnedCause {
 			warnedCause = cause
 			rt.deps.logger.Warn("Cannot watch the sync folder for changes ("+syncobserve.WatchUnavailableReason(cause)+"). "+
@@ -484,7 +488,9 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *sy
 		}
 
 		retryDue := rt.runPeriodicFullScan(ctx, localObs, tree, interval, retryDelay)
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverFallbackStopped, Observer: syncdomain.EngineDebugObserverLocal})
+		rt.deps.emit(syncdomain.EngineDebugEvent{
+			Type: syncdomain.EngineDebugEventObserverFallbackStopped, Observer: syncdomain.EngineDebugObserverLocal,
+		})
 		if !retryDue {
 			return nil // clean exit after context cancel
 		}
@@ -680,7 +686,9 @@ func (rt *watchRuntime) runFallbackScan(
 	*scanFailing = false
 
 	obs.TrySendFullLocalSnapshot(ctx, result)
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverFallbackScanned, Observer: syncdomain.EngineDebugObserverLocal})
+	rt.deps.emit(syncdomain.EngineDebugEvent{
+		Type: syncdomain.EngineDebugEventObserverFallbackScanned, Observer: syncdomain.EngineDebugObserverLocal,
+	})
 
 	return true
 }

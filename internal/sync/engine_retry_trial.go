@@ -18,6 +18,8 @@ const (
 // releaseDueHeldTrialsNow releases due held scope trials that are already
 // present in the runtime. It never rebuilds plan structure or revalidates
 // durable rows.
+//
+//nolint:dupl // the retry twin differs in its events alone; the split's package qualifiers took both over the token threshold
 func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
 	bl *syncdomain.Baseline,
@@ -40,6 +42,8 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 // releaseDueHeldRetriesNow releases due held retry entries that are already
 // present in the runtime. It never rebuilds plan structure or revalidates
 // durable rows.
+//
+//nolint:dupl // the trial twin differs in its events alone; the split's package qualifiers took both over the token threshold
 func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
 	bl *syncdomain.Baseline,
@@ -98,7 +102,9 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	return nil
 }
 
-func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *syncdomain.ActionCompletion, current *syncdomain.TrackedAction) error {
+func (flow *engineFlow) clearRetryWorkOnSuperseded(
+	ctx context.Context, r *syncdomain.ActionCompletion, current *syncdomain.TrackedAction,
+) error {
 	if current != nil {
 		return flow.resolveRetryWorkAndLogResolution(
 			ctx,

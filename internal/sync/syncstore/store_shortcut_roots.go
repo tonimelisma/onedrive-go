@@ -86,7 +86,9 @@ func (s *SyncStore) ShortcutChildWorkSnapshot(
 	if err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, err
 	}
-	return syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(namespaceID, parentSyncRoot, syncdomain.ContentFilterConfig{}, records), nil
+	return syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
+		namespaceID, parentSyncRoot, syncdomain.ContentFilterConfig{}, records,
+	), nil
 }
 
 // ListShortcutRoots returns parent-engine-owned shortcut root state.

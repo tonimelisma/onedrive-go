@@ -390,7 +390,9 @@ func configureEngineExecutor(
 
 // openBoundSyncTree opens the sync tree and resolves the folder identity
 // every scan of it is validated against (D-001).
-func openBoundSyncTree(ctx context.Context, store *syncstore.SyncStore, cfg *engineInputs) (*synctree.Root, syncdomain.ResolvedSyncRoot, error) {
+func openBoundSyncTree(
+	ctx context.Context, store *syncstore.SyncStore, cfg *engineInputs,
+) (*synctree.Root, syncdomain.ResolvedSyncRoot, error) {
 	syncTree, err := openSyncTree(cfg.SyncRoot)
 	if err != nil {
 		return nil, syncdomain.ResolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
@@ -427,7 +429,9 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // alone. Mark-and-bind is serialized: two commits racing would otherwise
 // write two tokens, and the folder would keep the one the store did not
 // record. It reports what the commit changed and marks nothing itself.
-func (e *Engine) commitLocalSnapshot(ctx context.Context, commit syncstore.LocalSnapshotCommit) (syncstore.LocalSnapshotCommitResult, error) {
+func (e *Engine) commitLocalSnapshot(
+	ctx context.Context, commit syncstore.LocalSnapshotCommit,
+) (syncstore.LocalSnapshotCommitResult, error) {
 	var result syncstore.LocalSnapshotCommitResult
 	ran, err := e.syncRootIdentity.CompleteBinding(func(expected *synctree.RootIdentity) (*synctree.RootIdentity, error) {
 		var bindErr error

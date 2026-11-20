@@ -635,7 +635,14 @@ func (o *LocalObserver) addObservedChildWatch(
 		return nil
 	}
 
-	if shouldObserveWithFilter(childName, childRelPath, syncdomain.ObservedKindDir, o.filterConfig, o.protectedRoots, o.observationRules) != nil {
+	if shouldObserveWithFilter(
+		childName,
+		childRelPath,
+		syncdomain.ObservedKindDir,
+		o.filterConfig,
+		o.protectedRoots,
+		o.observationRules,
+	) != nil {
 		return nil
 	}
 

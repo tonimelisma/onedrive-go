@@ -214,7 +214,9 @@ func CountByType(actions []syncdomain.Action) map[syncdomain.ActionType]int {
 // one bad pair of actions stopped every other change from syncing. The rest
 // of the plan runs; the next pass replans the removed work from current truth.
 // It also returns the removed actions.
-func isolateDependencyCycles(actions []syncdomain.Action, logger *slog.Logger) (kept []syncdomain.Action, deps [][]int, removed []syncdomain.Action) {
+func isolateDependencyCycles(
+	actions []syncdomain.Action, logger *slog.Logger,
+) (kept []syncdomain.Action, deps [][]int, removed []syncdomain.Action) {
 	for {
 		deps = buildDependencies(actions)
 		onCycle := dependencyCycleMembers(deps)

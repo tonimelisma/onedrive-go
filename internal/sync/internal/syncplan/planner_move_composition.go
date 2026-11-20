@@ -1655,7 +1655,9 @@ func moveCompositionInputs(
 	return moveInputs{nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated}
 }
 
-func indexMoveSnapshot(remoteRows []syncdomain.RemoteStateRow, localRows []syncdomain.LocalStateRow) (map[string]*syncdomain.RemoteStateRow, moveOccupancy) {
+func indexMoveSnapshot(
+	remoteRows []syncdomain.RemoteStateRow, localRows []syncdomain.LocalStateRow,
+) (map[string]*syncdomain.RemoteStateRow, moveOccupancy) {
 	remoteByID := make(map[string]*syncdomain.RemoteStateRow, len(remoteRows))
 	occupancy := moveOccupancy{
 		local:       make(map[string]bool, len(localRows)),
@@ -1691,7 +1693,9 @@ func moveNodeTouchesUnavailableTruth(node *moveNode, views map[string]*syncdomai
 // local copy is provably the synced version, renamed to a conflict copy when
 // it was edited, never otherwise (a folder, unknown content, or an item that
 // still exists online somewhere).
-func composedDisplacement(node *moveNode, entry *syncdomain.BaselineEntry, view *syncdomain.PathView, remoteByID map[string]*syncdomain.RemoteStateRow) moveDisplacement {
+func composedDisplacement(
+	node *moveNode, entry *syncdomain.BaselineEntry, view *syncdomain.PathView, remoteByID map[string]*syncdomain.RemoteStateRow,
+) moveDisplacement {
 	if node.paths[moveCoordLocal] != node.paths[moveCoordBaseline] || entry.ItemType != syncdomain.ItemTypeFile || view.Local == nil {
 		return moveDisplaceNever
 	}
@@ -1860,7 +1864,9 @@ func buildComposedMoveActions(
 // composedLocalMoveActions builds a remote-origin local move, preceded by the
 // conflict copy of an edited file it displaces (buildDependencies orders the
 // move after the copy at its destination).
-func composedLocalMoveActions(move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView) []syncdomain.Action {
+func composedLocalMoveActions(
+	move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView,
+) []syncdomain.Action {
 	view := &syncdomain.PathView{
 		Path:        move.newPath,
 		Remote:      remote,
@@ -1888,7 +1894,9 @@ func composedLocalMoveActions(move *composedMove, entry *syncdomain.BaselineEntr
 // content could not be proven unchanged (no hash) also uploads what now sits
 // at the destination, but only when the item is already there locally: the
 // upload reads local truth at its path.
-func composedRemoteMoveActions(move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView) []syncdomain.Action {
+func composedRemoteMoveActions(
+	move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView,
+) []syncdomain.Action {
 	movedLocal := viewAt(move.localPath).Local
 	view := &syncdomain.PathView{
 		Path:        move.oldPath,
@@ -2505,7 +2513,8 @@ func pathsVacatedByPlan(actions []syncdomain.Action) map[moveCoord]map[string]bo
 			vacated[moveCoordRemote][actions[i].OldPath] = true
 		case syncdomain.ActionRemoteDelete:
 			vacated[moveCoordRemote][actions[i].Path] = true
-		case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionFolderCreate, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
+		case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionFolderCreate, syncdomain.ActionBaselineUpdate,
+			syncdomain.ActionCleanup:
 		default:
 			panic(syncdomain.OutsideTheEnum(actions[i].Type))
 		}
@@ -2567,7 +2576,8 @@ func deleteSide(action *syncdomain.Action) (moveCoord, bool) {
 		return moveCoordLocal, true
 	case syncdomain.ActionRemoteDelete:
 		return moveCoordRemote, true
-	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate,
+	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
+		syncdomain.ActionFolderCreate,
 		syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
 		return moveCoordBaseline, false
 	default:
@@ -2600,7 +2610,9 @@ func createsOnSide(action *syncdomain.Action, side moveCoord) bool {
 // at the path the item had and waiting for a folder made there, would record
 // it at that path again; the next pass would read the item as moved on the
 // other side and move it back into the folder.
-func dropReconciliationOfComposedMoves(actions []syncdomain.Action, composition *moveComposition, mode syncdomain.SyncMode) []syncdomain.Action {
+func dropReconciliationOfComposedMoves(
+	actions []syncdomain.Action, composition *moveComposition, mode syncdomain.SyncMode,
+) []syncdomain.Action {
 	moved := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range composition.moves {
 		moved[composition.moves[i].side][composition.moves[i].key] = true
@@ -2622,7 +2634,8 @@ func dropReconciliationOfComposedMoves(actions []syncdomain.Action, composition 
 			if moved[moveCoordLocal][action.ItemID] {
 				continue
 			}
-		case syncdomain.ActionUpload, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
+		case syncdomain.ActionUpload, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete, syncdomain.ActionLocalMove,
+			syncdomain.ActionRemoteMove,
 			syncdomain.ActionFolderCreate, syncdomain.ActionCleanup:
 		default:
 			panic(syncdomain.OutsideTheEnum(action.Type))

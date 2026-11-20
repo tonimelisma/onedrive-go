@@ -20,7 +20,9 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	if rt.engine.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
 		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
-			defer rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote})
+			defer rt.deps.emit(syncdomain.EngineDebugEvent{
+				Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
+			})
 			defer close(batches)
 			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
@@ -60,7 +62,9 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	}
 
 	rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
-		defer rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote})
+		defer rt.deps.emit(syncdomain.EngineDebugEvent{
+			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
+		})
 		defer close(batches)
 		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
@@ -70,7 +74,9 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			batches,
 			pollInterval,
 			wakeCh,
-			func(_ context.Context, polledEvents []syncdomain.RemoteItem, newToken string, topology syncshortcut.ShortcutTopologyBatch) (syncobserve.RemoteObservationBatch, error) {
+			func(
+				_ context.Context, polledEvents []syncdomain.RemoteItem, newToken string, topology syncshortcut.ShortcutTopologyBatch,
+			) (syncobserve.RemoteObservationBatch, error) {
 				batch := buildPrimaryWatchBatch(rt.engine, bl, polledEvents, newToken)
 				batch.ShortcutTopology = topology
 				if topology.ShouldApply() && batch.CursorToken == "" {

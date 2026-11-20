@@ -493,7 +493,9 @@ func forgetBaselineForReuploadTx(ctx context.Context, tx SqlTxRunner, item *sync
 
 // deleteObservedRemoteStateTree removes a deleted item's row and, for a
 // folder, its subtree, then hands the freed path to a shadowed twin.
-func deleteObservedRemoteStateTree(ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, existing *syncdomain.RemoteStateRow) error {
+func deleteObservedRemoteStateTree(
+	ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, existing *syncdomain.RemoteStateRow,
+) error {
 	if err := deleteObservedRemoteState(ctx, tx, item, existing.Path); err != nil {
 		return err
 	}
@@ -518,7 +520,9 @@ func deleteObservedRemoteStateTree(ctx context.Context, tx SqlTxRunner, item *sy
 // every child keeps its old path: once the move is applied locally the
 // children look moved back on OneDrive, and sync moved them back into a
 // re-created old folder.
-func followObservedPathChangeTx(ctx context.Context, tx SqlTxRunner, existing *syncdomain.RemoteStateRow, item *syncdomain.ObservedItem) error {
+func followObservedPathChangeTx(
+	ctx context.Context, tx SqlTxRunner, existing *syncdomain.RemoteStateRow, item *syncdomain.ObservedItem,
+) error {
 	if item.Path == "" || item.Path == existing.Path {
 		return nil
 	}

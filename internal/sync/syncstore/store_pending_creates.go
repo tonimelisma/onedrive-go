@@ -833,7 +833,8 @@ func classifyObservedPlaceholderTx(
 // (movePendingCreateOfItemTx): left where it was, it named an item that is no
 // longer there, for a create there to upload into.
 func followAdoptedPlaceholderTx(
-	ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, pending *syncdomain.PendingCreate, adopted *[]*syncdomain.BaselineEntry,
+	ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, pending *syncdomain.PendingCreate,
+	adopted *[]*syncdomain.BaselineEntry,
 ) error {
 	if item.Path != pending.Path {
 		return movePendingCreateOfItemTx(ctx, tx, item.ItemID, item.Path)
@@ -886,7 +887,8 @@ func baselineEntryByItemIDTx(
 // adopted entry is appended to adopted for the in-memory baseline; nothing is
 // adopted when the path is already taken.
 func adoptPlaceholderTx(
-	ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, pending *syncdomain.PendingCreate, adopted *[]*syncdomain.BaselineEntry,
+	ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, pending *syncdomain.PendingCreate,
+	adopted *[]*syncdomain.BaselineEntry,
 ) error {
 	if item.Path != pending.Path {
 		// Moved or renamed meanwhile: not the create this record describes.
@@ -955,7 +957,8 @@ func claimIntendedPlaceholderTx(
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pending_creates SET item_id = ?, created_etag = ? WHERE path = ? AND item_id = ''`,
 		item.ItemID, item.ETag, item.Path); err != nil {
-		return syncdomain.PendingCreate{}, false, fmt.Errorf("sync: claiming placeholder %s for the intent at %s: %w", item.ItemID, item.Path, err)
+		return syncdomain.PendingCreate{}, false, fmt.Errorf(
+			"sync: claiming placeholder %s for the intent at %s: %w", item.ItemID, item.Path, err)
 	}
 	pending.ItemID = item.ItemID
 	pending.CreatedETag = item.ETag

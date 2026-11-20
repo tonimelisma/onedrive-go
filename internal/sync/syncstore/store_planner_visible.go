@@ -138,7 +138,9 @@ func FilterRemoteStateRowsForPlanning(rows []syncdomain.RemoteStateRow, filter s
 	return filtered
 }
 
-func FilterObservationIssueRowsForPlanning(rows []syncdomain.ObservationIssueRow, filter syncdomain.ContentFilterConfig) []syncdomain.ObservationIssueRow {
+func FilterObservationIssueRowsForPlanning(
+	rows []syncdomain.ObservationIssueRow, filter syncdomain.ContentFilterConfig,
+) []syncdomain.ObservationIssueRow {
 	if len(rows) == 0 {
 		return nil
 	}

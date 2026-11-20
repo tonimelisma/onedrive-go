@@ -1179,7 +1179,8 @@ func unmaterializableRemoteNameReason(name string) string {
 // else from the tombstone's own name and parent chain. Business deletes may
 // lack a name; Personal has delivered tombstones with neither name nor parent.
 func (c *itemConverter) placeDeletedItem(
-	ev *syncdomain.RemoteItem, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *syncdomain.BaselineEntry,
+	ev *syncdomain.RemoteItem, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID,
+	existing *syncdomain.BaselineEntry,
 ) {
 	if existing != nil {
 		ev.Path = existing.Path

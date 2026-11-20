@@ -59,7 +59,9 @@ func ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 	return snapshot
 }
 
-func projectShortcutChildContentFilter(parentFilter syncdomain.ContentFilterConfig, aliasPath string) (syncdomain.ContentFilterConfig, bool) {
+func projectShortcutChildContentFilter(
+	parentFilter syncdomain.ContentFilterConfig, aliasPath string,
+) (syncdomain.ContentFilterConfig, bool) {
 	aliasPath = syncdomain.NormalizeContentFilterPath(aliasPath)
 	if aliasPath == "" || aliasPath == "." {
 		return syncdomain.CloneContentFilterConfig(parentFilter), true

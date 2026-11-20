@@ -236,7 +236,9 @@ func (o *LocalObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 // entire scan (defensive coding per eng philosophy).
 //
 //nolint:funlen // The hashing pipeline keeps local-scan concurrency and panic recovery in one explicit owner.
-func (o *LocalObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]syncdomain.ChangeEvent, []syncdomain.LocalStateRow, []syncdomain.SkippedItem, error) {
+func (o *LocalObserver) hashPhase(
+	ctx context.Context, jobs []hashJob,
+) ([]syncdomain.ChangeEvent, []syncdomain.LocalStateRow, []syncdomain.SkippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
 	o.logger.Debug("starting parallel hash phase",

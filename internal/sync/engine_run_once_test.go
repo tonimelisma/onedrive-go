@@ -1325,7 +1325,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	mock := &syncfixture.EngineMockClient{
+	mock := &syncfixture.EngineMockClient{ //nolint:dupl // two recovery scenarios share their mock; the split's package qualifiers took it over the token threshold
 		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
@@ -1461,7 +1461,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	mock := &syncfixture.EngineMockClient{
+	mock := &syncfixture.EngineMockClient{ //nolint:dupl // two recovery scenarios share their mock; the split's package qualifiers took it over the token threshold
 		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},

@@ -89,7 +89,9 @@ func (w *retryWork) recordBlocked(
 
 // resolve deletes work's row after its action succeeded, and drops the
 // cached row whether or not the store had one.
-func (w *retryWork) resolve(ctx context.Context, store *syncstore.SyncStore, work syncdomain.RetryWorkKey) (*syncdomain.RetryWorkRow, bool, error) {
+func (w *retryWork) resolve(
+	ctx context.Context, store *syncstore.SyncStore, work syncdomain.RetryWorkKey,
+) (*syncdomain.RetryWorkRow, bool, error) {
 	row, found, err := store.ResolveRetryWork(ctx, work)
 	if err != nil {
 		return nil, false, fmt.Errorf("resolve retry_work for %s: %w", work.Path, err)
@@ -101,7 +103,9 @@ func (w *retryWork) resolve(ctx context.Context, store *syncstore.SyncStore, wor
 
 // clearBlocked deletes work's row when it is blocked under scope, and drops
 // the cached row when the store deleted one.
-func (w *retryWork) clearBlocked(ctx context.Context, store *syncstore.SyncStore, work syncdomain.RetryWorkKey, scope syncdomain.ScopeKey) error {
+func (w *retryWork) clearBlocked(
+	ctx context.Context, store *syncstore.SyncStore, work syncdomain.RetryWorkKey, scope syncdomain.ScopeKey,
+) error {
 	cleared, err := store.ClearBlockedRetryWork(ctx, work, scope)
 	if err != nil {
 		return fmt.Errorf("clear blocked retry_work for %s under %s: %w", work.Path, scope.String(), err)
@@ -136,7 +140,9 @@ func (w *retryWork) releaseScope(
 
 // discardScope deletes scope and the rows blocked under it, drops the cached
 // rows the store deleted, and returns their keys.
-func (w *retryWork) discardScope(ctx context.Context, store *syncstore.SyncStore, scope syncdomain.ScopeKey) ([]syncdomain.RetryWorkKey, error) {
+func (w *retryWork) discardScope(
+	ctx context.Context, store *syncstore.SyncStore, scope syncdomain.ScopeKey,
+) ([]syncdomain.RetryWorkKey, error) {
 	deleted, err := store.DiscardScope(ctx, scope)
 	if err != nil {
 		return nil, fmt.Errorf("discard scope %s: %w", scope.String(), err)

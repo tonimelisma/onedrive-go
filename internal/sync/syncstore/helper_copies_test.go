@@ -1,8 +1,8 @@
 package syncstore
 
-// Private copies of test helpers whose home (syncexec, syncstoretest) these
-// tests cannot import, because it imports this package or is another
-// package's tests.
+// Private copies of test helpers whose home (syncstoretest) these tests
+// cannot import, because it imports this package or is another package's
+// tests.
 
 import (
 	"context"
@@ -19,31 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
-
-// newPendingCreateTestExecutor returns an executor that uploads through ul and
-// records its pending creates in a real store, plus that store and the sync
-// root.
-func newPendingCreateTestExecutor(t *testing.T, ul driveops.Uploader, logger *slog.Logger) (*syncexec.Executor, *SyncStore, string) {
-	t.Helper()
-
-	syncRoot := t.TempDir()
-	syncTree, err := synctree.Open(syncRoot)
-	require.NoError(t, err)
-	dl := &syncfixture.ExecutorMockDownloader{}
-	cfg := syncexec.NewExecutorConfig(&syncfixture.ExecutorMockItemClient{}, dl, ul, syncTree, driveid.New(syncfixture.TestDriveID), logger, nil)
-	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
-	store := newTestStore(t)
-	cfg.SetPendingCreates(store)
-
-	return syncexec.NewExecution(cfg, syncfixture.EmptyBaseline()), store, syncRoot
-}
 
 // registerFaultDriver registers the fault driver under faultDriverName, once
 // per test binary.

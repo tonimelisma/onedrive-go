@@ -137,7 +137,9 @@ type deviceInode struct {
 	inode  uint64
 }
 
-func (a *scanAvailability) baselineEntryWithIdentity(baseline *syncdomain.Baseline, identity synctree.FileIdentity) *syncdomain.BaselineEntry {
+func (a *scanAvailability) baselineEntryWithIdentity(
+	baseline *syncdomain.Baseline, identity synctree.FileIdentity,
+) *syncdomain.BaselineEntry {
 	if a.baselineByIdentity == nil {
 		a.baselineByIdentity = make(map[deviceInode]*syncdomain.BaselineEntry)
 		if baseline != nil {

@@ -385,7 +385,8 @@ func effectiveRemotePermissionCapability(r *syncdomain.ActionCompletion) syncdom
 		return syncdomain.PermissionCapabilityRemoteRead
 	case syncdomain.ActionUpload, syncdomain.ActionRemoteDelete, syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate:
 		return syncdomain.PermissionCapabilityRemoteWrite
-	case syncdomain.ActionConflictCopy, syncdomain.ActionLocalDelete, syncdomain.ActionLocalMove, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
+	case syncdomain.ActionConflictCopy, syncdomain.ActionLocalDelete, syncdomain.ActionLocalMove, syncdomain.ActionBaselineUpdate,
+		syncdomain.ActionCleanup:
 		return syncdomain.PermissionCapabilityUnknown
 	default:
 		panic(syncdomain.OutsideTheEnum(r.ActionType))
@@ -406,7 +407,8 @@ func effectiveLocalPermissionCapability(r *syncdomain.ActionCompletion) syncdoma
 	switch r.ActionType {
 	case syncdomain.ActionUpload:
 		return syncdomain.PermissionCapabilityLocalRead
-	case syncdomain.ActionDownload, syncdomain.ActionLocalDelete, syncdomain.ActionLocalMove, syncdomain.ActionFolderCreate, syncdomain.ActionConflictCopy, syncdomain.ActionCleanup:
+	case syncdomain.ActionDownload, syncdomain.ActionLocalDelete, syncdomain.ActionLocalMove, syncdomain.ActionFolderCreate,
+		syncdomain.ActionConflictCopy, syncdomain.ActionCleanup:
 		return syncdomain.PermissionCapabilityLocalWrite
 	case syncdomain.ActionRemoteDelete, syncdomain.ActionRemoteMove, syncdomain.ActionBaselineUpdate:
 		return syncdomain.PermissionCapabilityUnknown

@@ -133,7 +133,9 @@ func (e *Executor) DeleteLocalFolder(ctx context.Context, action *syncdomain.Act
 
 	preconditionErr := e.validateLocalDeleteFolderPrecondition(ctx, action, relPath)
 	if preconditionErr != nil {
-		return e.failedOutcomeWithFailure(action, syncdomain.ActionLocalDelete, preconditionErr, action.Path, syncdomain.PermissionCapabilityLocalWrite)
+		return e.failedOutcomeWithFailure(
+			action, syncdomain.ActionLocalDelete, preconditionErr, action.Path, syncdomain.PermissionCapabilityLocalWrite,
+		)
 	}
 
 	entries, err := e.syncTree.ReadDir(relPath)

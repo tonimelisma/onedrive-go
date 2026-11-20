@@ -400,7 +400,9 @@ func decisionAsScopeEvidence(decision *syncdomain.ResultDecision) *syncdomain.Re
 
 // detectFailureScope feeds a failure that will be persisted as retry work
 // into scope detection and returns the verdict.
-func (flow *engineFlow) detectFailureScope(decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion) syncdomain.ScopeUpdateResult {
+func (flow *engineFlow) detectFailureScope(
+	decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion,
+) syncdomain.ScopeUpdateResult {
 	if decision.Persistence != syncdomain.PersistRetryWork || !decision.RunScopeDetection {
 		return syncdomain.ScopeUpdateResult{}
 	}
