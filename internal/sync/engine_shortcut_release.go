@@ -109,11 +109,11 @@ func (e *Engine) releaseLocalTree(ctx context.Context, report *Report) error {
 // would have the user remove is gone, and what could not leave is named by
 // the entries the release kept, each with its own issue. The read failure
 // leaves the store as a root read that succeeds clears it
-// (newRemoteObservationFindingsBatch), and the issues the run left are read
+// (NewRemoteObservationFindingsBatch), and the issues the run left are read
 // again without it, so it is not work the run left. The next run observes the
 // root again before it plans anything.
 func (e *Engine) forgetSharedFolderReadFailure(ctx context.Context, report *Report) error {
-	batch := newRemoteObservationFindingsBatch()
+	batch := NewRemoteObservationFindingsBatch()
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {
 		return fmt.Errorf("sync: clearing the read failure of a released shared folder: %w", err)
 	}
@@ -138,12 +138,12 @@ func releaseMayRun(holds *LocalTreeHolds, sharedFolderUnreachable bool) bool {
 
 // sharedFolderUnreadable reports whether the store holds the read failure of
 // the whole tree: OneDrive answered "not found" or "forbidden" for the folder
-// this engine syncs (issueTypeIsRootReadFailure), recorded at the root read
+// this engine syncs (IssueTypeIsRootReadFailure), recorded at the root read
 // scope, so nothing in it can be uploaded or read.
 func sharedFolderUnreadable(issues []ObservationIssueRow) bool {
-	root := sKPermRemoteRead("")
+	root := SKPermRemoteRead("")
 	for i := range issues {
-		if issueTypeIsRootReadFailure(issues[i].IssueType) && issues[i].ScopeKey == root {
+		if IssueTypeIsRootReadFailure(issues[i].IssueType) && issues[i].ScopeKey == root {
 			return true
 		}
 	}
@@ -246,7 +246,7 @@ func (n releaseSurveyNames) accountsFor(storedPath string) bool {
 
 // addUnmatched files an entry the baseline does not hold as it is: a visible
 // one is work for the next drain, a hidden one is content sync does not sync.
-func (s *releaseSurvey) addUnmatched(filter contentFilter, storedPath string, itemType ItemType) {
+func (s *releaseSurvey) addUnmatched(filter ContentFilter, storedPath string, itemType ItemType) {
 	if filter.Visible(storedPath, itemType) {
 		s.unsynced = append(s.unsynced, storedPath)
 		return
@@ -262,8 +262,8 @@ func (s *releaseSurvey) addUnmatched(filter contentFilter, storedPath string, it
 func (e *Engine) surveyReleaseTree(bl *Baseline) (releaseSurvey, error) {
 	walk := releaseSurveyWalk{
 		engine:   e,
-		exec:     newExecution(e.execCfg, bl),
-		filter:   newContentFilter(e.contentFilter),
+		exec:     NewExecution(e.execCfg, bl),
+		filter:   NewContentFilter(e.contentFilter),
 		baseline: bl,
 	}
 	if err := walk.dir("", ""); err != nil {
@@ -275,8 +275,8 @@ func (e *Engine) surveyReleaseTree(bl *Baseline) (releaseSurvey, error) {
 
 type releaseSurveyWalk struct {
 	engine   *Engine
-	exec     *executor
-	filter   contentFilter
+	exec     *Executor
+	filter   ContentFilter
 	baseline *Baseline
 	survey   releaseSurvey
 }
@@ -326,7 +326,7 @@ func (w *releaseSurveyWalk) entry(stored, onDisk, name string) error {
 		if synced && row.ItemType == ItemTypeFolder {
 			return w.dir(storedPath, diskPath)
 		}
-		if w.exec.isDisposable(name, true) && w.exec.findNonDisposable(diskPath) == "" {
+		if w.exec.IsDisposable(name, true) && w.exec.FindNonDisposable(diskPath) == "" {
 			return nil
 		}
 		w.survey.addUnmatched(w.filter, storedPath, ItemTypeFolder)
@@ -337,7 +337,7 @@ func (w *releaseSurveyWalk) entry(stored, onDisk, name string) error {
 			}
 			return nil
 		}
-		if w.exec.isDisposable(name, false) {
+		if w.exec.IsDisposable(name, false) {
 			return nil
 		}
 		w.survey.addUnmatched(w.filter, storedPath, ItemTypeFile)
@@ -361,7 +361,7 @@ func (w *releaseSurveyWalk) writable(onDisk string) bool {
 }
 
 // releaseFileLooksUnchanged is the survey's stat test of a synced file. It
-// compares the facts canReuseBaselineHash compares, size, modification time,
+// compares the facts CanReuseBaselineHash compares, size, modification time,
 // change time and file identity, so an edit that put the modification time
 // back, or another file renamed over this one, is found before anything is
 // removed. A modification or change time the row lacks reads as changed: the
@@ -384,7 +384,7 @@ func releaseFileLooksUnchanged(row *BaselineEntry, info os.FileInfo) bool {
 		return false
 	}
 	identity, hasIdentity := synctree.IdentityFromFileInfo(info)
-	baseIdentity, baseHasIdentity := row.fileIdentity()
+	baseIdentity, baseHasIdentity := row.FileIdentity()
 
 	return !hasIdentity || !baseHasIdentity || synctree.SameIdentity(identity, baseIdentity)
 }
@@ -406,7 +406,7 @@ func displayReleasePath(stored string) string {
 // as a conflict copy, but never a row without its entry, which it would read
 // as deleted here and delete in the shared folder. An entry the delete
 // refused gets its row back, without its change time when the delete proved
-// its content changed (localContentChangedError), so the next scan reads it.
+// its content changed (LocalContentChangedError), so the next scan reads it.
 // With stopAtFirstRefusal (the shared folder can be read), the first refusal
 // ends the release: the rest of its batch gets its rows back, in the same
 // restore as the refused row, and no later batch starts. What left before it
@@ -420,14 +420,14 @@ func (e *Engine) releaseBaselineRows(ctx context.Context, bl *Baseline, stopAtFi
 	if err != nil {
 		return 0, nil, fmt.Errorf("sync: reading local_state before releasing the local tree: %w", err)
 	}
-	localByPath := make(map[string]*localState, len(localRows))
+	localByPath := make(map[string]*LocalState, len(localRows))
 	for i := range localRows {
-		localByPath[localRows[i].Path] = localStateFromSnapshotRow(&localRows[i])
+		localByPath[localRows[i].Path] = LocalStateFromSnapshotRow(&localRows[i])
 	}
 
 	run := releaseRun{
 		engine:             e,
-		exec:               newExecution(e.execCfg, bl),
+		exec:               NewExecution(e.execCfg, bl),
 		localByPath:        localByPath,
 		stopAtFirstRefusal: stopAtFirstRefusal,
 	}
@@ -444,8 +444,8 @@ func (e *Engine) releaseBaselineRows(ctx context.Context, bl *Baseline, stopAtFi
 // entries it kept and why, and whether a refusal ended it.
 type releaseRun struct {
 	engine             *Engine
-	exec               *executor
-	localByPath        map[string]*localState
+	exec               *Executor
+	localByPath        map[string]*LocalState
 	stopAtFirstRefusal bool
 	released           int
 	refused            []releaseRefusal
@@ -459,7 +459,7 @@ var errReleaseKeptWithoutCause = errors.New("the local delete kept it and gave n
 // releaseRefusal is a synced entry the release's local delete kept: its path,
 // the delete's error (nil for a folder kept for the ignored content in it),
 // and whether that error proves the content changed
-// (localContentChangedError), which the next drain uploads.
+// (LocalContentChangedError), which the next drain uploads.
 type releaseRefusal struct {
 	path           string
 	err            error
@@ -524,7 +524,7 @@ func (r *releaseRun) batch(ctx context.Context, batch []BaselineEntry) error {
 		// folder is not empty) or kept as a folder of ignored content: the
 		// entry stays, and so does its row.
 		e.logger.Debug("release kept a synced entry", slog.String("path", row.Path), slog.Any("error", outcome.Error))
-		var changed *localContentChangedError
+		var changed *LocalContentChangedError
 		refusal := releaseRefusal{path: row.Path, err: outcome.Error, contentChanged: errors.As(outcome.Error, &changed)}
 		r.refused = append(r.refused, refusal)
 		restore := []*BaselineEntry{releaseRowToRestore(row, refusal.contentChanged)}
@@ -593,21 +593,21 @@ func (e *Engine) releaseEntryRemains(storedPath string) bool {
 // releaseRowCrossesSymlink reports whether a row's path is, or lies below, a
 // symbolic link. The release never acts on one (surveyReleaseTree). An
 // unreadable path counts as crossing one: its row stays.
-func releaseRowCrossesSymlink(exec *executor, row *BaselineEntry) bool {
-	_, crosses, err := exec.symlinkBoundaryForPath(exec.syncTree.Spelling(row.Path))
+func releaseRowCrossesSymlink(exec *Executor, row *BaselineEntry) bool {
+	_, crosses, err := exec.SymlinkBoundaryForPath(exec.SyncTree().Spelling(row.Path))
 
 	return crosses || err != nil
 }
 
 // releaseAction is the local delete of one synced entry, planned from its
 // baseline row and, for a folder, the local truth the drain's last scan saw.
-func releaseAction(row *BaselineEntry, local *localState) Action {
+func releaseAction(row *BaselineEntry, local *LocalState) Action {
 	return Action{
 		Type:    ActionLocalDelete,
 		DriveID: row.DriveID,
 		ItemID:  row.ItemID,
 		Path:    row.Path,
-		View: &pathView{
+		View: &PathView{
 			Path:     row.Path,
 			Baseline: row,
 			Local:    local,
@@ -691,18 +691,18 @@ func (e *Engine) emptyReleasedRoot(bl *Baseline) (releaseSurvey, error) {
 	if err != nil {
 		return releaseSurvey{}, fmt.Errorf("sync: reading the sync folder after releasing it: %w", err)
 	}
-	exec := newExecution(e.execCfg, bl)
+	exec := NewExecution(e.execCfg, bl)
 	var junk []os.DirEntry
 	var survey releaseSurvey
 	for _, entry := range entries {
 		name := entry.Name()
-		if exec.isDisposable(name, entry.IsDir()) && (!entry.IsDir() || exec.findNonDisposable(name) == "") {
+		if exec.IsDisposable(name, entry.IsDir()) && (!entry.IsDir() || exec.FindNonDisposable(name) == "") {
 			junk = append(junk, entry)
 			continue
 		}
 		survey.notOnOneDrive = append(survey.notOnOneDrive, namekey.Stored(name))
 	}
-	err = exec.removeDisposableChildren("", junk)
+	err = exec.RemoveDisposableChildren("", junk)
 	// Every drain of a folder whose junk stays fails the same way: one Warn
 	// per streak, repeats at Debug (R-6.6.30); status names the junk.
 	e.reportStreakOutcome(streakReport{
@@ -751,11 +751,11 @@ func (e *Engine) recordReleaseKept(
 
 	otherIssue := make(map[string]bool, len(issues))
 	for i := range issues {
-		if issues[i].IssueType != issueRemovedFolderKept {
+		if issues[i].IssueType != IssueRemovedFolderKept {
 			otherIssue[issues[i].Path] = true
 		}
 	}
-	batch := ObservationFindingsBatch{ManagedIssueTypes: []IssueType{issueRemovedFolderKept}}
+	batch := ObservationFindingsBatch{ManagedIssueTypes: []IssueType{IssueRemovedFolderKept}}
 	for _, keptPath := range kept {
 		if keptPath == "" || otherIssue[keptPath] {
 			continue
@@ -763,7 +763,7 @@ func (e *Engine) recordReleaseKept(
 		batch.Issues = append(batch.Issues, ObservationIssue{
 			Path:      keptPath,
 			DriveID:   e.driveID,
-			IssueType: issueRemovedFolderKept,
+			IssueType: IssueRemovedFolderKept,
 		})
 	}
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {

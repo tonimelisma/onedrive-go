@@ -29,16 +29,16 @@ type ProtectedRoot struct {
 // protectedRootEventType identifies the lifecycle fact the local observer found.
 type protectedRootEventType string
 
-// protectedRootEvent is a narrow parent-engine-internal notification from the
+// ProtectedRootEvent is a narrow parent-engine-internal notification from the
 // local observer to the watch runtime. It never plans child content work; it
 // only wakes the parent shortcut-root lifecycle so parent-owned state can
 // publish updated child work commands promptly.
 const (
-	protectedRootEventPathReserved  protectedRootEventType = "path_reserved"
-	protectedRootEventIdentityMatch protectedRootEventType = "identity_match"
+	ProtectedRootEventPathReserved  protectedRootEventType = "path_reserved"
+	ProtectedRootEventIdentityMatch protectedRootEventType = "identity_match"
 )
 
-type protectedRootEvent struct {
+type ProtectedRootEvent struct {
 	Type         protectedRootEventType
 	Path         string
 	ReservedPath string
@@ -46,10 +46,10 @@ type protectedRootEvent struct {
 	BindingID    string
 }
 
-type protectedRootEventSink func(protectedRootEvent)
+type ProtectedRootEventSink func(ProtectedRootEvent)
 
-// fileIdentity is the identity the shortcut root recorded for the reserved
+// FileIdentity is the identity the shortcut root recorded for the reserved
 // directory; meaningful only when HasIdentity.
-func (r ProtectedRoot) fileIdentity() synctree.FileIdentity {
+func (r ProtectedRoot) FileIdentity() synctree.FileIdentity {
 	return synctree.FileIdentity{Device: r.Device, Inode: r.Inode, BirthTime: r.BirthTime}
 }

@@ -15,12 +15,12 @@ func TestBuildObservationReconcilePlan_DeletesOnlyManagedCurrentIssues(t *testin
 
 	plan, err := buildObservationReconcilePlan(
 		&ObservationFindingsBatch{
-			ManagedIssueTypes: []IssueType{issueLocalReadDenied},
+			ManagedIssueTypes: []IssueType{IssueLocalReadDenied},
 		},
 		observationReconcileStoreState{
 			issues: []ObservationIssueRow{
-				{Path: "Private/file.txt", IssueType: issueLocalReadDenied},
-				{Path: "Other/file.txt", IssueType: issueLocalReadDenied},
+				{Path: "Private/file.txt", IssueType: IssueLocalReadDenied},
+				{Path: "Other/file.txt", IssueType: IssueLocalReadDenied},
 				{Path: "other-issue.txt", IssueType: IssueInvalidFilename},
 			},
 		},
@@ -28,8 +28,8 @@ func TestBuildObservationReconcilePlan_DeletesOnlyManagedCurrentIssues(t *testin
 	require.NoError(t, err)
 
 	assert.Equal(t, []managedObservationIssueKey{
-		{path: "Other/file.txt", issueType: issueLocalReadDenied},
-		{path: "Private/file.txt", issueType: issueLocalReadDenied},
+		{path: "Other/file.txt", issueType: IssueLocalReadDenied},
+		{path: "Private/file.txt", issueType: IssueLocalReadDenied},
 	}, plan.issueDeletes, "every stored issue of the managed type goes, the other type stays")
 }
 
@@ -41,9 +41,9 @@ func TestBuildObservationReconcilePlan_UpsertsCurrentIssuesOnly(t *testing.T) {
 		Issues: []ObservationIssue{{
 			Path:      "same.txt",
 			DriveID:   driveid.New(testDriveID),
-			IssueType: issuePathTooLong,
+			IssueType: IssuePathTooLong,
 		}},
-		ManagedIssueTypes: []IssueType{issuePathTooLong},
+		ManagedIssueTypes: []IssueType{IssuePathTooLong},
 	}
 
 	plan, err := buildObservationReconcilePlan(batch, observationReconcileStoreState{
@@ -68,7 +68,7 @@ func TestBuildObservationReconcilePlan_ReconcilesExactManagedIssueSet(t *testing
 			{
 				Path:      "same.txt",
 				DriveID:   driveid.New(testDriveID),
-				IssueType: issuePathTooLong,
+				IssueType: IssuePathTooLong,
 			},
 			{
 				Path:      "keep.txt",
@@ -76,14 +76,14 @@ func TestBuildObservationReconcilePlan_ReconcilesExactManagedIssueSet(t *testing
 				IssueType: IssueInvalidFilename,
 			},
 		},
-		ManagedIssueTypes: []IssueType{issuePathTooLong, IssueInvalidFilename},
+		ManagedIssueTypes: []IssueType{IssuePathTooLong, IssueInvalidFilename},
 	}
 
 	plan, err := buildObservationReconcilePlan(batch, observationReconcileStoreState{
 		issues: []ObservationIssueRow{
-			{Path: "same.txt", IssueType: issuePathTooLong},
+			{Path: "same.txt", IssueType: IssuePathTooLong},
 			{Path: "removed.txt", IssueType: IssueInvalidFilename},
-			{Path: "unmanaged.txt", IssueType: issueLocalReadDenied},
+			{Path: "unmanaged.txt", IssueType: IssueLocalReadDenied},
 		},
 	})
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestBuildObservationReconcilePlan_RefusesAnIssueOfATypeTheBatchDoesNotManag
 	leftover := ObservationIssue{
 		Path:      "Docs/.onedrive-go.0123456789abcdef.detach",
 		DriveID:   driveid.New(testDriveID),
-		IssueType: issueLocalInterruptedRemoval,
+		IssueType: IssueLocalInterruptedRemoval,
 	}
 	for _, managed := range [][]IssueType{{IssueInvalidFilename}, nil} {
 		plan, err := buildObservationReconcilePlan(&ObservationFindingsBatch{
@@ -137,14 +137,14 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 		IssueType: IssueInvalidFilename,
 	})
 
-	tx, err := beginPerfTx(ctx, store.rawDB())
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 
 	plan := observationReconcilePlan{
 		issueUpserts: []ObservationIssue{{
 			Path:      "same.txt",
 			DriveID:   driveid.New(testDriveID),
-			IssueType: issuePathTooLong,
+			IssueType: IssuePathTooLong,
 		}},
 		issueDeletes: []managedObservationIssueKey{{
 			path:      "same.txt",
@@ -159,5 +159,5 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "same.txt", rows[0].Path)
-	assert.Equal(t, issuePathTooLong, rows[0].IssueType)
+	assert.Equal(t, IssuePathTooLong, rows[0].IssueType)
 }

@@ -46,8 +46,8 @@ func TestStartObservers_LocalSetupFailureStartsNoObserver(t *testing.T) {
 		return ctx.Err()
 	})
 	eng, fault := newTestEngineOnFaultStore(t, mock, nil)
-	recorder := attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
-		if event.Type == engineDebugEventBootstrapQuiesced {
+	recorder := attachDebugEventRecorderWithHook(eng, func(event EngineDebugEvent) {
+		if event.Type == EngineDebugEventBootstrapQuiesced {
 			fault.arm("FROM mount_boundaries ORDER BY path", errInjectedFault)
 		}
 	})
@@ -57,8 +57,8 @@ func TestStartObservers_LocalSetupFailureStartsNoObserver(t *testing.T) {
 	})
 	require.ErrorIs(t, err, errInjectedFault)
 	assert.Equal(t, 1, fault.fired(), "the mount boundaries read failed")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted
 	}), "no observer started")
 	assert.Zero(t, observerCalls.Load(), "the remote fetcher saw no observer poll")
 }
@@ -83,7 +83,7 @@ func TestRunWatch_ReturnsOnlyAfterObserversHaveExited(t *testing.T) {
 		return ctx.Err()
 	})
 	eng, _ := newTestEngine(t, mock)
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		<-polling
 		panic("local watcher exploded")
 	}
@@ -131,8 +131,8 @@ func TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound(t *testing.T
 	receiveWithin(t, polling, "the remote observer's first poll")
 	cancel()
 	receiveWithin(t, stopWaiting, "the watch's stop to wait for its goroutines")
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverExited && event.Observer == engineDebugObserverLocal
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverExited && event.Observer == EngineDebugObserverLocal
 	}, "the local observer, which honors its context, to exit")
 	clock.Advance(watchGoroutineStopTimeout)
 
@@ -163,10 +163,10 @@ func TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree(t *testing.T) {
 
 	runFullRemoteRefreshAsyncForTest(t, eng, t.Context(), bl)
 	_, ackErr := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-		Ref: newShortcutChildAckRef("binding-1"),
+		Ref: NewShortcutChildAckRefForTest("binding-1"),
 	})
 	require.NoError(t, ackErr)
 
 	result := receiveWithin(t, rt.resources.refreshResults, "the full remote refresh's result")
-	require.NoError(t, result.fatalErr)
+	require.NoError(t, result.FatalErr)
 }

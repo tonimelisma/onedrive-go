@@ -100,7 +100,7 @@ func TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent(t *testi
 	t.Parallel()
 
 	downloadOf := func(p, itemID string) Action {
-		return Action{Type: ActionDownload, Path: p, ItemID: itemID, View: &pathView{}}
+		return Action{Type: ActionDownload, Path: p, ItemID: itemID, View: &PathView{}}
 	}
 	actions := []Action{
 		{Type: ActionRemoteDelete, Path: "z", View: syncedFileView(7, "item-z")},
@@ -140,7 +140,7 @@ func TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent(t *testi
 func TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFolder}}
 	actions := []Action{
 		{Type: ActionRemoteMove, OldPath: "A", Path: "B", View: folder},
 		{Type: ActionRemoteDelete, Path: "A/a1.txt", View: syncedFileView(7, "item-a1")},
@@ -214,7 +214,7 @@ func TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstI
 func TestCarriedPath_FollowsTheMovesThatCarryTheDeletedEntry(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &remoteState{ItemType: ItemTypeFolder}}
+	folder := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFolder}, Remote: &RemoteState{ItemType: ItemTypeFolder}}
 	remoteMove := func(from, to string) Action {
 		return Action{Type: ActionRemoteMove, OldPath: from, Path: to, View: folder}
 	}
@@ -283,15 +283,15 @@ func TestCarriedPath_FollowsTheMovesThatCarryTheDeletedEntry(t *testing.T) {
 
 // syncedFileView is the view of a synced file with a local identity on
 // device 1.
-func syncedFileView(inode uint64, itemID string) *pathView {
-	return &pathView{Baseline: &BaselineEntry{
+func syncedFileView(inode uint64, itemID string) *PathView {
+	return &PathView{Baseline: &BaselineEntry{
 		ItemType: ItemTypeFile, ItemID: itemID, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 	}}
 }
 
 // uploadOfIdentity uploads the file here at p that has inode on device 1.
 func uploadOfIdentity(p string, inode uint64) Action {
-	return Action{Type: ActionUpload, Path: p, View: &pathView{Local: &localState{
+	return Action{Type: ActionUpload, Path: p, View: &PathView{Local: &LocalState{
 		ItemType: ItemTypeFile, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 	}}}
 }
@@ -377,14 +377,14 @@ func (pool *dependencyPathPool) pickItemType() ItemType {
 const dependencyContentPool = 4
 
 // pickView draws a view with any combination of sides present, each of
-// either type, so deletedItemType and movedItemIsFolder see every case. The
+// either type, so DeletedItemType and movedItemIsFolder see every case. The
 // baseline and the local side may carry an identity, and the baseline an
 // item ID, drawn from a small pool (addContentCarrierDeps).
-func (pool *dependencyPathPool) pickView(path string) *pathView {
+func (pool *dependencyPathPool) pickView(path string) *PathView {
 	if pool.rng.IntN(4) == 0 {
 		return nil
 	}
-	view := &pathView{Path: path}
+	view := &PathView{Path: path}
 	if pool.rng.IntN(3) > 0 {
 		inode, hasIdentity := pool.pickIdentity()
 		view.Baseline = &BaselineEntry{
@@ -394,10 +394,10 @@ func (pool *dependencyPathPool) pickView(path string) *pathView {
 	}
 	if pool.rng.IntN(3) > 0 {
 		inode, hasIdentity := pool.pickIdentity()
-		view.Local = &localState{ItemType: pool.pickItemType(), LocalInode: inode, LocalHasIdentity: hasIdentity}
+		view.Local = &LocalState{ItemType: pool.pickItemType(), LocalInode: inode, LocalHasIdentity: hasIdentity}
 	}
 	if pool.rng.IntN(3) > 0 {
-		view.Remote = &remoteState{ItemType: pool.pickItemType()}
+		view.Remote = &RemoteState{ItemType: pool.pickItemType()}
 	}
 
 	return view
@@ -438,11 +438,11 @@ func (pool *dependencyPathPool) pickOldPath(path string) string {
 // dependencyPathPool.
 func randomDependencyActions(rng *rand.Rand, actionCount int) []Action {
 	pool := newDependencyPathPool(rng, max(2, actionCount/2))
-	types := []actionType{
+	types := []ActionType{
 		ActionUpload, ActionDownload, ActionFolderCreate, ActionLocalDelete, ActionRemoteDelete, ActionCleanup,
 		ActionLocalMove, ActionRemoteMove, ActionLocalMove, ActionRemoteMove, ActionConflictCopy, ActionBaselineUpdate,
 	}
-	sides := []folderCreateSide{CreateRemote, createLocal}
+	sides := []FolderCreateSide{CreateRemote, CreateLocal}
 
 	actions := make([]Action, 0, actionCount)
 	for range actionCount {
@@ -548,7 +548,7 @@ func oracleAddChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[stri
 	if a.Type != ActionLocalDelete && a.Type != ActionRemoteDelete {
 		return deps
 	}
-	if deletedItemType(a) != ItemTypeFolder {
+	if DeletedItemType(a) != ItemTypeFolder {
 		return deps
 	}
 
@@ -563,7 +563,7 @@ func oracleAddChildDeleteDeps(deps []int, idx int, a *Action, deleteIdx map[stri
 }
 
 func oracleAddMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions []Action) []int {
-	var sameSideMove actionType
+	var sameSideMove ActionType
 	switch a.Type {
 	case ActionRemoteDelete:
 		sameSideMove = ActionRemoteMove
@@ -575,7 +575,7 @@ func oracleAddMoveOutOfDeletedFolderDeps(deps []int, idx int, a *Action, actions
 	default:
 		return deps
 	}
-	if deletedItemType(a) != ItemTypeFolder {
+	if DeletedItemType(a) != ItemTypeFolder {
 		return deps
 	}
 
@@ -672,7 +672,7 @@ func oracleRecreatesMoveSource(move *Action, actions []Action) bool {
 func TestBuildDependencies_OracleDetectsAMissingEdge(t *testing.T) {
 	t.Parallel()
 
-	folder := &pathView{Local: &localState{ItemType: ItemTypeFolder}}
+	folder := &PathView{Local: &LocalState{ItemType: ItemTypeFolder}}
 	actions := []Action{
 		{Type: ActionLocalDelete, Path: "d", View: folder},
 		{Type: ActionLocalDelete, Path: "d/f.txt"},

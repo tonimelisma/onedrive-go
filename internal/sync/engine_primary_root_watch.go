@@ -9,14 +9,14 @@ import (
 func (rt *watchRuntime) startPrimaryRootWatch(
 	ctx context.Context,
 	bl *Baseline,
-	batches chan<- remoteObservationBatch,
+	batches chan<- RemoteObservationBatch,
 	errs chan<- error,
 	pollInterval time.Duration,
 ) {
 	if rt.engine.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
 		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
-			defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+			defer rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverExited, Observer: EngineDebugObserverRemote})
 			defer close(batches)
 			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
@@ -29,18 +29,18 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	remoteObs.SetItemClient(rt.engine.itemsClient)
 	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
 	remoteObs.SetShortcutTopology(rt.engine.shortcutNamespaceID, rt.engine.currentProtectedRoots())
-	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind resyncKind) (remoteObservationBatch, error) {
+	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind ResyncKind) (RemoteObservationBatch, error) {
 		batch, err := rt.executeDriveRootFullObservation(ctx, bl, kind)
 		if err != nil {
-			return remoteObservationBatch{}, err
+			return RemoteObservationBatch{}, err
 		}
-		batch.source = remoteObservationBatchPrimaryWatch
-		batch.armFullRefreshTimer = true
-		batch.applyAck = make(chan error, 1)
+		batch.Source = RemoteObservationBatchPrimaryWatch
+		batch.ArmFullRefreshTimer = true
+		batch.ApplyAck = make(chan error, 1)
 
 		return batch, nil
 	})
-	remoteObs.debugEvents = rt.deps.emit
+	remoteObs.SetDebugEvents(rt.deps.emit)
 	rt.resources.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 
@@ -56,7 +56,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	}
 
 	rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
-		defer rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverExited, Observer: engineDebugObserverRemote})
+		defer rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverExited, Observer: EngineDebugObserverRemote})
 		defer close(batches)
 		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
 
@@ -66,11 +66,11 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			batches,
 			pollInterval,
 			wakeCh,
-			func(_ context.Context, polledEvents []remoteItem, newToken string, topology shortcutTopologyBatch) (remoteObservationBatch, error) {
+			func(_ context.Context, polledEvents []RemoteItem, newToken string, topology ShortcutTopologyBatch) (RemoteObservationBatch, error) {
 				batch := buildPrimaryWatchBatch(rt.engine, bl, polledEvents, newToken)
-				batch.shortcutTopology = topology
-				if topology.shouldApply() && batch.cursorToken == "" {
-					batch.cursorToken = newToken
+				batch.ShortcutTopology = topology
+				if topology.ShouldApply() && batch.CursorToken == "" {
+					batch.CursorToken = newToken
 				}
 				return batch, nil
 			},
@@ -84,8 +84,8 @@ func (rt *watchRuntime) warnMountRootWebsocketFallback() {
 		return
 	}
 
-	rt.deps.emit(engineDebugEvent{
-		Type: engineDebugEventWebsocketFallback,
+	rt.deps.emit(EngineDebugEvent{
+		Type: EngineDebugEventWebsocketFallback,
 		Note: "mount_root",
 	})
 	// Debug: a by-design limitation with nothing for the user to do; it

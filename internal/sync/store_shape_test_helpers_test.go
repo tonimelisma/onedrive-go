@@ -1,35 +1,13 @@
 package sync
 
 import (
-	"context"
-	"testing"
-	"time"
-
-	"github.com/stretchr/testify/require"
-
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
-
-func testDelayedRetryWorkRow(
-	path string,
-	oldPath string,
-	actionType actionType,
-	attemptCount int,
-	nextRetryAt int64,
-) *RetryWorkRow {
-	return &RetryWorkRow{
-		Path:         path,
-		OldPath:      oldPath,
-		ActionType:   actionType,
-		AttemptCount: attemptCount,
-		NextRetryAt:  nextRetryAt,
-	}
-}
 
 func testBlockedRetryWorkRow(
 	path string,
 	oldPath string,
-	actionType actionType,
+	actionType ActionType,
 	scopeKey ScopeKey,
 	attemptCount int,
 ) *RetryWorkRow {
@@ -43,39 +21,14 @@ func testBlockedRetryWorkRow(
 	}
 }
 
-func testBlockScope(
-	scopeKey ScopeKey,
-	trialInterval time.Duration,
-	nextTrialAt time.Time,
-) *BlockScope {
-	return &BlockScope{
-		Key:           scopeKey,
-		TrialInterval: trialInterval,
-		NextTrialAt:   nextTrialAt,
-	}
-}
-
 func testObservationState(
 	contentDriveID driveid.ID,
 	cursor string,
 	nextFullRemoteRefreshAt int64,
-) observationState {
-	return observationState{
+) ObservationState {
+	return ObservationState{
 		ContentDriveID:          contentDriveID,
 		Cursor:                  cursor,
 		NextFullRemoteRefreshAt: nextFullRemoteRefreshAt,
 	}
-}
-
-func readObservationStateForTest(
-	tb testing.TB,
-	store *SyncStore,
-	ctx context.Context,
-) observationState {
-	tb.Helper()
-
-	state, err := store.ReadObservationState(ctx)
-	require.NoError(tb, err)
-	require.NotNil(tb, state)
-	return *state
 }

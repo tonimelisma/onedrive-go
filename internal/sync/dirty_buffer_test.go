@@ -69,7 +69,7 @@ func (t *fakeDirtyDebounceTimer) resetCountSnapshot() int {
 func TestDirtyBuffer_FlushImmediate_CoalescesDirtySignalAndPreservesFullRefresh(t *testing.T) {
 	t.Parallel()
 
-	buf := newDirtyBuffer(synctest.TestLogger(t))
+	buf := NewDirtyBuffer(synctest.TestLogger(t))
 	buf.MarkDirty()
 	buf.MarkDirty()
 	buf.MarkDirty()
@@ -88,7 +88,7 @@ func TestDirtyBuffer_FlushDebounced_UsesLastObservationWindow(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	buf := newDirtyBuffer(synctest.TestLogger(t))
+	buf := NewDirtyBuffer(synctest.TestLogger(t))
 	timer := newFakeDirtyDebounceTimer()
 	buf.newTimer = func(time.Duration) debounceTimer { return timer }
 	out := buf.FlushDebounced(ctx, time.Second)
@@ -114,7 +114,7 @@ func TestDirtyBuffer_FlushDebounced_CoalescesMultipleDirtySignalsIntoOneBatch(t 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	buf := newDirtyBuffer(synctest.TestLogger(t))
+	buf := NewDirtyBuffer(synctest.TestLogger(t))
 	timer := newFakeDirtyDebounceTimer()
 	buf.newTimer = func(time.Duration) debounceTimer { return timer }
 	out := buf.FlushDebounced(ctx, time.Second)
@@ -142,7 +142,7 @@ func TestDirtyBuffer_FlushDebounced_CoalescesMultipleDirtySignalsIntoOneBatch(t 
 	}
 }
 
-func fireDirtyDebounceUntilBatch(t *testing.T, timer *fakeDirtyDebounceTimer, out <-chan dirtyBatch) dirtyBatch {
+func fireDirtyDebounceUntilBatch(t *testing.T, timer *fakeDirtyDebounceTimer, out <-chan DirtyBatch) DirtyBatch {
 	t.Helper()
 
 	timer.Fire()
@@ -167,7 +167,7 @@ func TestDirtyBuffer_FlushDebounced_ContinuousSignalsFlushAtMaxWait(t *testing.T
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	buf := newDirtyBuffer(synctest.TestLogger(t))
+	buf := NewDirtyBuffer(synctest.TestLogger(t))
 	quiet := newFakeDirtyDebounceTimer()
 	deadline := newFakeDirtyDebounceTimer()
 	var deadlineDelay time.Duration
@@ -233,7 +233,7 @@ func TestDirtyBuffer_DebounceLoopPanicClosesTheBatchChannel(t *testing.T) {
 		return
 	}
 
-	buf := newDirtyBuffer(synctest.TestLogger(t))
+	buf := NewDirtyBuffer(synctest.TestLogger(t))
 	buf.newTimer = func(time.Duration) debounceTimer {
 		panic("timer exploded")
 	}

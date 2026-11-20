@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	plannerVisibleLocalStateTable  = "planner_visible_local_state"
-	plannerVisibleRemoteStateTable = "planner_visible_remote_state"
+	PlannerVisibleLocalStateTable  = "planner_visible_local_state"
+	PlannerVisibleRemoteStateTable = "planner_visible_remote_state"
 
 	sqlCreatePlannerVisibleLocalState = `CREATE TEMP TABLE IF NOT EXISTS planner_visible_local_state (
 		path       TEXT    NOT NULL PRIMARY KEY,
@@ -51,7 +51,7 @@ const (
 		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity
 		FROM planner_visible_local_state
 		ORDER BY path`
-	sqlListPlannerVisibleRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
+	sqlListPlannerVisibleRemoteState = `SELECT ` + SqlSelectRemoteStateCols + `
 		FROM planner_visible_remote_state
 		ORDER BY path`
 	// The prunes remove the rows below folders the baseline knows but the
@@ -105,16 +105,16 @@ const (
 )
 
 type plannerVisibleRows struct {
-	Local  []localStateRow
-	Remote []remoteStateRow
+	Local  []LocalStateRow
+	Remote []RemoteStateRow
 }
 
-func filterLocalStateRowsForPlanning(rows []localStateRow, filter ContentFilterConfig) []localStateRow {
+func FilterLocalStateRowsForPlanning(rows []LocalStateRow, filter ContentFilterConfig) []LocalStateRow {
 	if len(rows) == 0 {
 		return nil
 	}
-	visibility := newContentFilter(filter)
-	filtered := make([]localStateRow, 0, len(rows))
+	visibility := NewContentFilter(filter)
+	filtered := make([]LocalStateRow, 0, len(rows))
 	for i := range rows {
 		if visibility.Visible(rows[i].Path, rows[i].ItemType) {
 			filtered = append(filtered, rows[i])
@@ -123,12 +123,12 @@ func filterLocalStateRowsForPlanning(rows []localStateRow, filter ContentFilterC
 	return filtered
 }
 
-func filterRemoteStateRowsForPlanning(rows []remoteStateRow, filter ContentFilterConfig) []remoteStateRow {
+func FilterRemoteStateRowsForPlanning(rows []RemoteStateRow, filter ContentFilterConfig) []RemoteStateRow {
 	if len(rows) == 0 {
 		return nil
 	}
-	visibility := newContentFilter(filter)
-	filtered := make([]remoteStateRow, 0, len(rows))
+	visibility := NewContentFilter(filter)
+	filtered := make([]RemoteStateRow, 0, len(rows))
 	for i := range rows {
 		if visibility.Visible(rows[i].Path, rows[i].ItemType) {
 			filtered = append(filtered, rows[i])
@@ -137,11 +137,11 @@ func filterRemoteStateRowsForPlanning(rows []remoteStateRow, filter ContentFilte
 	return filtered
 }
 
-func filterObservationIssueRowsForPlanning(rows []ObservationIssueRow, filter ContentFilterConfig) []ObservationIssueRow {
+func FilterObservationIssueRowsForPlanning(rows []ObservationIssueRow, filter ContentFilterConfig) []ObservationIssueRow {
 	if len(rows) == 0 {
 		return nil
 	}
-	visibility := newContentFilter(filter)
+	visibility := NewContentFilter(filter)
 	filtered := make([]ObservationIssueRow, 0, len(rows))
 	for i := range rows {
 		if visibility.Visible(rows[i].Path, ItemTypeFile) || visibility.Visible(rows[i].Path, ItemTypeFolder) {
@@ -151,11 +151,11 @@ func filterObservationIssueRowsForPlanning(rows []ObservationIssueRow, filter Co
 	return filtered
 }
 
-func replacePlannerVisibleStateTx(
+func ReplacePlannerVisibleStateTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-	localRows []localStateRow,
-	remoteRows []remoteStateRow,
+	tx SqlTxRunner,
+	localRows []LocalStateRow,
+	remoteRows []RemoteStateRow,
 	contentDriveID driveid.ID,
 ) (plannerVisibleRows, error) {
 	for _, query := range []string{
@@ -189,7 +189,7 @@ func replacePlannerVisibleStateTx(
 	if err != nil {
 		return plannerVisibleRows{}, err
 	}
-	prunedRemoteRows, err := queryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, contentDriveID)
+	prunedRemoteRows, err := QueryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, contentDriveID)
 	if err != nil {
 		return plannerVisibleRows{}, err
 	}
@@ -202,7 +202,7 @@ func replacePlannerVisibleStateTx(
 
 // insertPlannerVisibleLocalRowsTx inserts the rows in multi-row statements
 // of plannerVisibleInsertChunkRows rows each.
-func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx sqlTxRunner, rows []localStateRow) error {
+func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx SqlTxRunner, rows []LocalStateRow) error {
 	for start := 0; start < len(rows); start += plannerVisibleInsertChunkRows {
 		chunk := rows[start:min(start+plannerVisibleInsertChunkRows, len(rows))]
 		args := make([]any, 0, len(chunk)*plannerVisibleLocalStateColumns)
@@ -230,7 +230,7 @@ func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx sqlTxRunner, rows [
 	return nil
 }
 
-func insertPlannerVisibleRemoteRowsTx(ctx context.Context, tx sqlTxRunner, rows []remoteStateRow) error {
+func insertPlannerVisibleRemoteRowsTx(ctx context.Context, tx SqlTxRunner, rows []RemoteStateRow) error {
 	for start := 0; start < len(rows); start += plannerVisibleInsertChunkRows {
 		chunk := rows[start:min(start+plannerVisibleInsertChunkRows, len(rows))]
 		args := make([]any, 0, len(chunk)*plannerVisibleRemoteStateColumns)

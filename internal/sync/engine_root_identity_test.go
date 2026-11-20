@@ -2,12 +2,9 @@ package sync
 
 import (
 	"context"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	stdsync "sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +12,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -226,38 +222,6 @@ func TestClearSyncRootIdentity_RebindAcceptsReplacedFolder(t *testing.T) {
 	closeRootSafetyEngine(t, rebound)
 }
 
-// Validates: R-6.2.13
-func TestFullScan_RootReadDirEIOReturnsError(t *testing.T) {
-	t.Parallel()
-
-	syncRoot := t.TempDir()
-	tree := mustOpenSyncTree(t, syncRoot)
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-
-	var (
-		events  []changeEvent
-		jobs    []hashJob
-		skipped []skippedItem
-	)
-	walkFn := obs.makeWalkFunc(
-		t.Context(), tree, map[string]bool{}, map[string]localStateRow{},
-		&events, &jobs, &skipped, new(atomic.Int64), 0, map[string]struct{}{},
-	)
-
-	err := walkFn(syncRoot, nil, &fs.PathError{Op: "readdirent", Path: syncRoot, Err: errors.New("input/output error")})
-	require.ErrorIs(t, err, ErrMountRootUnavailable, "an unreadable sync folder stops the scan")
-	assert.Empty(t, skipped, "no read boundary at \".\" that would match no path")
-}
-
-// Validates: R-6.2.13
-func TestScopePathMatches_RootBoundaryCoversEverything(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, scopePathMatches("Docs/a.txt", "."))
-	assert.True(t, scopePathMatches("c.txt", ""))
-	assert.False(t, scopePathMatches("Docs2/a.txt", "Docs"))
-}
-
 // Validates: R-6.2.12
 func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testing.T) {
 	t.Parallel()
@@ -284,9 +248,9 @@ func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testin
 func rewriteRecordedSyncRoot(t *testing.T, paths rootSafetyPaths, edit func(*synctree.RootIdentity)) {
 	t.Helper()
 
-	store, err := openSyncStore(t.Context(), paths.dbPath, testLogger(t), false)
+	store, err := OpenSyncStoreForTest(t.Context(), paths.dbPath, testLogger(t), false)
 	require.NoError(t, err)
-	require.NoError(t, store.updateObservationState(t.Context(), func(state *observationState) {
+	require.NoError(t, store.UpdateObservationStateForTest(t.Context(), func(state *ObservationState) {
 		require.NotNil(t, state.SyncRootIdentity)
 		edit(state.SyncRootIdentity)
 	}))
@@ -374,7 +338,7 @@ func TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind(t *testing.T)
 	require.NoError(t, err)
 	runScenarioPass(t, eng)
 	// Simulate a state that holds synced items but never recorded its folder.
-	_, err = eng.baseline.rawDB().ExecContext(t.Context(), `UPDATE observation_state SET sync_root_bound = 0`)
+	_, err = eng.baseline.RawDBForTest().ExecContext(t.Context(), `UPDATE observation_state SET sync_root_bound = 0`)
 	require.NoError(t, err)
 	closeRootSafetyEngine(t, eng)
 
@@ -447,7 +411,7 @@ func TestWatchObserver_SeesBindingMadeAfterItWasBuilt(t *testing.T) {
 
 	rebound := resetAndReopen(t, paths, remote)
 	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
-	watchObserver := newLocalObserver(emptyBaseline(), testLogger(t), 0)
+	watchObserver := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
 	watchObserver.SetSyncRootIdentity(rebound.syncRootIdentity)
 
 	runScenarioPass(t, rebound) // binds, writing a new marker
@@ -472,7 +436,7 @@ func TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, errs[i] = eng.commitLocalSnapshot(t.Context(), localSnapshotCommit{})
+			_, errs[i] = eng.commitLocalSnapshot(t.Context(), LocalSnapshotCommit{})
 		}()
 	}
 	group.Wait()
@@ -499,7 +463,7 @@ func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.
 
 	missing := live
 	missing.Token = "recorded-token"
-	err = validateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
+	err = ValidateExpectedSyncRootIdentity(tree, &missing, ErrSyncRootRebindHint)
 	require.ErrorIs(t, err, ErrMountRootUnavailable)
 	assert.Contains(t, err.Error(), "has no sync folder marker")
 	assert.Contains(t, err.Error(), synctree.RootMarkAttribute)
@@ -507,7 +471,7 @@ func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.
 	assert.Contains(t, err.Error(), "drive rebind-root")
 
 	require.NoError(t, tree.SetRootMark("someone-else"))
-	err = validateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
+	err = ValidateExpectedSyncRootIdentity(tree, &missing, ErrSyncRootRebindHint)
 	assert.Contains(t, err.Error(), "different sync folder marker")
 	assert.Contains(t, err.Error(), "drive rebind-root")
 }

@@ -24,29 +24,29 @@ import (
 // already sits at the planned destination: the work is done, not stale.
 var errRemoteMoveAlreadyApplied = errors.New("remote move already applied")
 
-// remoteItemGoneError reports that a live read found a remote item missing:
+// RemoteItemGoneError reports that a live read found a remote item missing:
 // positive evidence it was deleted, even when delta never said so (an item
 // moved into a folder that was then deleted is not reported again). It wraps
-// errActionPreconditionChanged, so the action is superseded as before, and
+// ErrActionPreconditionChanged, so the action is superseded as before, and
 // the engine also drops the item from remote_state so the next plan stops
 // targeting it instead of superseding the same action on every pass.
-type remoteItemGoneError struct {
-	op     string
-	itemID string
-	role   string
+type RemoteItemGoneError struct {
+	Op     string
+	ItemID string
+	Role   string
 }
 
-func (e *remoteItemGoneError) Error() string {
-	return fmt.Sprintf("%s: %s remote %s %s is missing", errActionPreconditionChanged, e.op, e.role, e.itemID)
+func (e *RemoteItemGoneError) Error() string {
+	return fmt.Sprintf("%s: %s remote %s %s is missing", ErrActionPreconditionChanged, e.Op, e.Role, e.ItemID)
 }
 
-func (e *remoteItemGoneError) Unwrap() error { return errActionPreconditionChanged }
+func (e *RemoteItemGoneError) Unwrap() error { return ErrActionPreconditionChanged }
 
 func stalePreconditionError(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", errActionPreconditionChanged, fmt.Sprintf(format, args...))
+	return fmt.Errorf("%w: %s", ErrActionPreconditionChanged, fmt.Sprintf(format, args...))
 }
 
-func (e *executor) validateRemoteSourcePrecondition(
+func (e *Executor) validateRemoteSourcePrecondition(
 	ctx context.Context,
 	driveID driveid.ID,
 	action *Action,
@@ -56,7 +56,7 @@ func (e *executor) validateRemoteSourcePrecondition(
 	return err
 }
 
-func (e *executor) remoteSourcePreconditionETag(
+func (e *Executor) remoteSourcePreconditionETag(
 	ctx context.Context,
 	driveID driveid.ID,
 	action *Action,
@@ -75,7 +75,7 @@ type liveRemoteSource struct {
 
 // remoteSourcePrecondition checks the planned remote source against the live
 // item. errRemoteMoveAlreadyApplied still carries the live facts.
-func (e *executor) remoteSourcePrecondition(
+func (e *Executor) remoteSourcePrecondition(
 	ctx context.Context,
 	driveID driveid.ID,
 	action *Action,
@@ -88,7 +88,7 @@ func (e *executor) remoteSourcePrecondition(
 	item, err := e.items.GetItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return liveRemoteSource{}, &remoteItemGoneError{op: op, itemID: action.ItemID, role: "item"}
+			return liveRemoteSource{}, &RemoteItemGoneError{Op: op, ItemID: action.ItemID, Role: "item"}
 		}
 		return liveRemoteSource{}, fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
 	}
@@ -114,7 +114,7 @@ func (e *executor) remoteSourcePrecondition(
 	return live, nil
 }
 
-func (e *executor) remoteMoveAlreadyApplied(action *Action, item *graph.Item, row *remoteStateRow, planned *remoteState) bool {
+func (e *Executor) remoteMoveAlreadyApplied(action *Action, item *graph.Item, row *RemoteStateRow, planned *RemoteState) bool {
 	if action.Type != ActionRemoteMove {
 		return false
 	}
@@ -140,7 +140,7 @@ func (e *executor) remoteMoveAlreadyApplied(action *Action, item *graph.Item, ro
 // parentReference.path; L-32 showed Graph does not encode it, so a folder
 // literally named "a%20b" read as "a b", and a remote NFD spelling (L-04)
 // as a move.
-func (e *executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known bool) {
+func (e *Executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known bool) {
 	if item == nil || item.Name == "" {
 		return false, false
 	}
@@ -164,7 +164,7 @@ func (e *executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known b
 	return namekey.StoredPath(item.ParentPath) == namekey.StoredPath(parentDir), true
 }
 
-func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
+func remoteRowMatchesLivePreconditionForAction(action *Action, row *RemoteStateRow, planned *RemoteState) bool {
 	if plannedPostRemoteMoveContentUpload(action) {
 		return remoteRowMatchesPostRemoteMoveLivePrecondition(row, planned)
 	}
@@ -177,11 +177,11 @@ func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateR
 	return remoteRowMatchesLivePrecondition(row, planned, planned.ItemType != ItemTypeFolder)
 }
 
-func remoteRowMatchesPostRemoteMoveLivePrecondition(row *remoteStateRow, planned *remoteState) bool {
+func remoteRowMatchesPostRemoteMoveLivePrecondition(row *RemoteStateRow, planned *RemoteState) bool {
 	return remoteRowMatchesLivePrecondition(row, planned, false)
 }
 
-func remoteRowMatchesLivePrecondition(row *remoteStateRow, planned *remoteState, compareETag bool) bool {
+func remoteRowMatchesLivePrecondition(row *RemoteStateRow, planned *RemoteState, compareETag bool) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -195,7 +195,7 @@ func remoteRowMatchesLivePrecondition(row *remoteStateRow, planned *remoteState,
 	return remoteLiveContentMatches(row, planned)
 }
 
-func remoteLiveIdentityMatches(row *remoteStateRow, planned *remoteState, compareETag bool) bool {
+func remoteLiveIdentityMatches(row *RemoteStateRow, planned *RemoteState, compareETag bool) bool {
 	if planned.ItemID != "" && row.ItemID != planned.ItemID {
 		return false
 	}
@@ -212,7 +212,7 @@ func remoteLiveIdentityMatches(row *remoteStateRow, planned *remoteState, compar
 	return true
 }
 
-func remoteLiveContentMatches(row *remoteStateRow, planned *remoteState) bool {
+func remoteLiveContentMatches(row *RemoteStateRow, planned *RemoteState) bool {
 	if row.Hash != "" && planned.Hash != "" {
 		if row.Hash != planned.Hash {
 			return false
@@ -225,14 +225,14 @@ func remoteLiveContentMatches(row *remoteStateRow, planned *remoteState) bool {
 	if row.Size != 0 && planned.Size != 0 && row.Size != planned.Size {
 		return false
 	}
-	if storedTimeIsSet(row.Mtime) && storedTimeIsSet(planned.Mtime) && row.Mtime != planned.Mtime {
+	if StoredTimeIsSet(row.Mtime) && StoredTimeIsSet(planned.Mtime) && row.Mtime != planned.Mtime {
 		return false
 	}
 
 	return true
 }
 
-func (e *executor) validateRemoteParentPrecondition(
+func (e *Executor) validateRemoteParentPrecondition(
 	ctx context.Context,
 	driveID driveid.ID,
 	parentID string,
@@ -242,7 +242,7 @@ func (e *executor) validateRemoteParentPrecondition(
 	if parentID == "" {
 		return nil
 	}
-	if parentID == graphRootID {
+	if parentID == GraphRootID {
 		return nil
 	}
 	if e.parentChecks.folderRead(driveID, parentID) {
@@ -253,7 +253,7 @@ func (e *executor) validateRemoteParentPrecondition(
 	item, err := e.items.GetItem(ctx, driveID, parentID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return &remoteItemGoneError{op: op, itemID: parentID, role: "parent"}
+			return &RemoteItemGoneError{Op: op, ItemID: parentID, Role: "parent"}
 		}
 		return fmt.Errorf("checking remote %s parent precondition for %s: %w", op, action.Path, err)
 	}
@@ -278,10 +278,10 @@ func remoteCreateParentGone(err error, op, parentID string) error {
 		return nil
 	}
 
-	return &remoteItemGoneError{op: op, itemID: parentID, role: "parent"}
+	return &RemoteItemGoneError{Op: op, ItemID: parentID, Role: "parent"}
 }
 
-func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
+func remoteStateRowFromGraphItem(item *graph.Item) *RemoteStateRow {
 	if item == nil {
 		return nil
 	}
@@ -310,7 +310,7 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		size = 0
 	}
 
-	return &remoteStateRow{
+	return &RemoteStateRow{
 		DriveID:   item.DriveID,
 		ItemID:    item.ID,
 		Path:      path,
@@ -320,12 +320,12 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		SizeKnown: sizeKnown,
 		// Compared with the planned remote time, which the item converter
 		// stored: the same encoding.
-		Mtime: storedTimeNano(item.ModifiedAt),
+		Mtime: StoredTimeNano(item.ModifiedAt),
 		ETag:  item.ETag,
 	}
 }
 
-func plannedRemoteStateForPrecondition(action *Action) *remoteState {
+func plannedRemoteStateForPrecondition(action *Action) *RemoteState {
 	if action == nil || action.View == nil {
 		return nil
 	}
@@ -337,7 +337,7 @@ func plannedRemoteStateForPrecondition(action *Action) *remoteState {
 	}
 
 	baseline := action.View.Baseline
-	return &remoteState{
+	return &RemoteState{
 		DriveID:  baseline.DriveID,
 		ItemID:   baseline.ItemID,
 		ItemType: baseline.ItemType,
@@ -348,7 +348,7 @@ func plannedRemoteStateForPrecondition(action *Action) *remoteState {
 	}
 }
 
-func (e *executor) expectedRemotePreconditionPath(action *Action) string {
+func (e *Executor) expectedRemotePreconditionPath(action *Action) string {
 	// Graph reports GetItem parentReference paths relative to the drive root.
 	// Mount-root engines plan actions relative to the mounted item, so that path
 	// is a different coordinate system unless observation rematerializes it.
@@ -362,12 +362,12 @@ func (e *executor) expectedRemotePreconditionPath(action *Action) string {
 		return action.OldPath
 	}
 
-	return actionViewPath(action)
+	return ActionViewPath(action)
 }
 
 // validateUploadSourcePrecondition requires the file at source, the rooted
 // spelling on disk of action.Path, to still be the file the plan observed.
-func (e *executor) validateUploadSourcePrecondition(action *Action, source string) error {
+func (e *Executor) validateUploadSourcePrecondition(action *Action, source string) error {
 	if action == nil {
 		return nil
 	}
@@ -380,7 +380,7 @@ func (e *executor) validateUploadSourcePrecondition(action *Action, source strin
 		return stalePreconditionError("upload source %s is no longer a regular file", action.Path)
 	}
 
-	planned := (*localState)(nil)
+	planned := (*LocalState)(nil)
 	if action.View != nil {
 		planned = action.View.Local
 	}
@@ -428,13 +428,13 @@ func (e *executor) validateUploadSourcePrecondition(action *Action, source strin
 // walk itself is rooted and no-follow, and a path with no link on it is
 // stated through the rooted capability as before. Writes beneath an alias
 // stay refused by validateNoSymlinkBoundary and by synctree.
-func (e *executor) uploadSourceInfo(path string) (os.FileInfo, error) {
+func (e *Executor) uploadSourceInfo(path string) (os.FileInfo, error) {
 	absPath, err := e.syncTree.Abs(path)
 	if err != nil {
 		return nil, normalizeSyncTreePathError(err)
 	}
 
-	_, readsThroughLink, err := e.symlinkBoundaryForPath(path)
+	_, readsThroughLink, err := e.SymlinkBoundaryForPath(path)
 	if err != nil {
 		return nil, normalizeSyncTreePathError(err)
 	}
@@ -472,7 +472,7 @@ func expectedUploadHash(action *Action) string {
 
 // validateDownloadTargetPrecondition requires target, the rooted path the
 // download writes (downloadTargetSpelling), to still hold what the plan saw.
-func (e *executor) validateDownloadTargetPrecondition(ctx context.Context, action *Action, target string) error {
+func (e *Executor) validateDownloadTargetPrecondition(ctx context.Context, action *Action, target string) error {
 	if action == nil {
 		return nil
 	}
@@ -514,7 +514,7 @@ func actionClearsLocalBeforeDownload(action *Action) bool {
 	return action != nil && action.Type == ActionDownload && action.RequireMissingLocalTarget
 }
 
-func plannedLocalState(action *Action) *localState {
+func plannedLocalState(action *Action) *LocalState {
 	if action == nil || action.View == nil {
 		return nil
 	}
@@ -530,8 +530,8 @@ const (
 	localMoveDestinationNoun = "local move destination"
 )
 
-func (e *executor) validateExistingDownloadTarget(
-	ctx context.Context, action *Action, target string, info os.FileInfo, planned *localState,
+func (e *Executor) validateExistingDownloadTarget(
+	ctx context.Context, action *Action, target string, info os.FileInfo, planned *LocalState,
 ) error {
 	if err := validateExistingTargetMetadata(action, info, planned, downloadTargetNoun); err != nil {
 		return err
@@ -557,7 +557,7 @@ func (e *executor) validateExistingDownloadTarget(
 // version the plan observed, or, when the plan carries no hash for it, the
 // synced version in the baseline (R-2.2.5). Metadata alone never proves a
 // file is the synced version: an in-place edit can keep size and mtime.
-func expectedDownloadTargetHash(action *Action, planned *localState) string {
+func expectedDownloadTargetHash(action *Action, planned *LocalState) string {
 	if planned != nil && planned.Hash != "" {
 		return planned.Hash
 	}
@@ -575,7 +575,7 @@ func expectedDownloadTargetHash(action *Action, planned *localState) string {
 // the file the planner saw must still be a file of the same size and mtime.
 // noun names the file in the refusal (downloadTargetNoun,
 // localMoveDestinationNoun).
-func validateExistingTargetMetadata(action *Action, info os.FileInfo, planned *localState, noun string) error {
+func validateExistingTargetMetadata(action *Action, info os.FileInfo, planned *LocalState, noun string) error {
 	if info.IsDir() || planned.ItemType != ItemTypeFile {
 		return stalePreconditionError("%s %s changed type", noun, action.Path)
 	}
@@ -595,11 +595,11 @@ func validateExistingTargetMetadata(action *Action, info os.FileInfo, planned *l
 // plannedCtimeChanged reports whether the file's inode change time moved since
 // the observation the plan used. An in-place edit that restored size and mtime
 // still moves ctime (R-2.2.4). An unknown planned ctime proves nothing.
-func plannedCtimeChanged(planned *localState, info os.FileInfo) bool {
+func plannedCtimeChanged(planned *LocalState, info os.FileInfo) bool {
 	if planned == nil || planned.LocalCtime == 0 {
 		return false
 	}
-	current := fileChangeTime(info)
+	current := FileChangeTime(info)
 
 	return current != 0 && current != planned.LocalCtime
 }
@@ -609,7 +609,7 @@ func plannedCtimeChanged(planned *localState, info os.FileInfo) bool {
 // through the descriptor of the inode that is then preserved in the trash, so
 // the version kept is exactly the version checked (D-010, P-4); the rename
 // that follows can no longer lose the content it replaces.
-func (e *executor) validateDownloadTargetBeforeReplace(ctx context.Context, action *Action, target string) error {
+func (e *Executor) validateDownloadTargetBeforeReplace(ctx context.Context, action *Action, target string) error {
 	if e.trash == nil {
 		return e.validateDownloadTargetPrecondition(ctx, action, target)
 	}
@@ -632,8 +632,8 @@ func (e *executor) validateDownloadTargetBeforeReplace(ctx context.Context, acti
 // download or a replacing local move is about to replace is still the
 // version the plan saw; its hash stops when ctx ends. noun names the file in
 // the refusal.
-func (e *executor) existingTargetVerifier(
-	ctx context.Context, action *Action, planned *localState, noun string,
+func (e *Executor) existingTargetVerifier(
+	ctx context.Context, action *Action, planned *LocalState, noun string,
 ) synctree.VerifyFunc {
 	return func(f *os.File, current os.FileInfo) error {
 		if metaErr := validateExistingTargetMetadata(action, current, planned, noun); metaErr != nil {
@@ -657,7 +657,7 @@ func (e *executor) existingTargetVerifier(
 // preserveReplacedDownloadTarget keeps the verified version of the file at
 // target (rooted, spelled as on disk) in the trash before a download renames
 // over it; the file stays at target until then.
-func (e *executor) preserveReplacedDownloadTarget(action *Action, target string, verify synctree.VerifyFunc) error {
+func (e *Executor) preserveReplacedDownloadTarget(action *Action, target string, verify synctree.VerifyFunc) error {
 	placement, err := e.trash.Reserve(e.syncTree.Path(), target, localtrash.ReasonReplaced)
 	if err != nil {
 		return fmt.Errorf("keeping the replaced version of %s: %w", action.Path, err)
@@ -679,7 +679,7 @@ func (e *executor) preserveReplacedDownloadTarget(action *Action, target string,
 
 // validateLocalMovePrecondition checks a local move between source and dest,
 // the rooted spellings on disk of action.OldPath and action.Path.
-func (e *executor) validateLocalMovePrecondition(ctx context.Context, action *Action, source, dest string) error {
+func (e *Executor) validateLocalMovePrecondition(ctx context.Context, action *Action, source, dest string) error {
 	if action == nil {
 		return nil
 	}
@@ -703,7 +703,7 @@ func (e *executor) validateLocalMovePrecondition(ctx context.Context, action *Ac
 
 // validateLocalMoveParentExists requires the parent directory of dest (rooted,
 // spelled as on disk) to exist already.
-func (e *executor) validateLocalMoveParentExists(dest string) error {
+func (e *Executor) validateLocalMoveParentExists(dest string) error {
 	parent := filepath.Dir(dest)
 	if parent == "." || parent == "" {
 		return nil
@@ -722,7 +722,7 @@ func (e *executor) validateLocalMoveParentExists(dest string) error {
 	return nil
 }
 
-func (e *executor) validateLocalDeleteFolderPrecondition(ctx context.Context, action *Action, relPath string) error {
+func (e *Executor) validateLocalDeleteFolderPrecondition(ctx context.Context, action *Action, relPath string) error {
 	if action == nil || action.View == nil || action.View.Baseline == nil {
 		return nil
 	}
@@ -749,7 +749,7 @@ func (e *executor) validateLocalDeleteFolderPrecondition(ctx context.Context, ac
 	return e.validateLocalFolderIdentityAgainstPlan("local delete", relPath, action.View.Local)
 }
 
-func (e *executor) validateLocalFolderIdentityAgainstPlan(op, source string, planned *localState) error {
+func (e *Executor) validateLocalFolderIdentityAgainstPlan(op, source string, planned *LocalState) error {
 	if !planned.LocalHasIdentity {
 		return nil
 	}
@@ -779,7 +779,7 @@ func localMoveSourcePath(action *Action) string {
 // finds its destination already "present" as the same inode, and refusing it
 // left the rename stale on every pass forever (D-031). dest is the rooted
 // spelling on disk of action.Path.
-func (e *executor) validateLocalMoveDestinationAbsent(action *Action, dest string, sourceInfo os.FileInfo) error {
+func (e *Executor) validateLocalMoveDestinationAbsent(action *Action, dest string, sourceInfo os.FileInfo) error {
 	destInfo, destErr := e.syncTree.Lstat(dest)
 	if destErr == nil {
 		if isLocalSpellingOnlyMove(localMoveSourcePath(action), action.Path) && synctree.SameFile(sourceInfo, destInfo) {
@@ -803,7 +803,7 @@ func (e *executor) validateLocalMoveDestinationAbsent(action *Action, dest strin
 
 // clearLocalMoveDestination makes way for a replacing local move immediately
 // before its rename, after the source and the parent were validated.
-func (e *executor) clearLocalMoveDestination(ctx context.Context, action *Action, dest string) error {
+func (e *Executor) clearLocalMoveDestination(ctx context.Context, action *Action, dest string) error {
 	if !action.ReplaceLocalTarget {
 		return nil
 	}
@@ -829,7 +829,7 @@ func (e *executor) clearLocalMoveDestination(ctx context.Context, action *Action
 // replaces nothing. A file that takes the name between the two is kept, the
 // rename refuses, and the move is superseded with the displaced file in the
 // trash. A file that left the name on its own leaves nothing to make way for.
-func (e *executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Action, dest string, destInfo os.FileInfo) error {
+func (e *Executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Action, dest string, destInfo os.FileInfo) error {
 	planned := plannedLocalState(action)
 	if !destInfo.Mode().IsRegular() || planned == nil || planned.Hash == "" {
 		return stalePreconditionError("local move destination %s already exists", action.Path)
@@ -839,11 +839,11 @@ func (e *executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Act
 	}
 
 	err := e.takeOutVerifiedLocalFile(dest, e.existingTargetVerifier(ctx, action, planned, localMoveDestinationNoun),
-		localtrash.ReasonReplaced, crashPointLocalMoveDestinationTrashed)
+		localtrash.ReasonReplaced, CrashPointLocalMoveDestinationTrashed)
 	switch {
 	case err == nil, errors.Is(err, os.ErrNotExist):
 		return nil
-	case errors.Is(err, errActionPreconditionChanged):
+	case errors.Is(err, ErrActionPreconditionChanged):
 		return err
 	case errors.Is(err, synctree.ErrDetachRaced):
 		return stalePreconditionError("local move destination %s changed while it was checked", action.Path)
@@ -858,7 +858,7 @@ func (e *executor) clearReplacedLocalMoveTarget(ctx context.Context, action *Act
 // the move outcome keeps the baseline's content facts, and the next pass
 // uploads the local edit at the destination. Requiring unchanged content
 // would supersede the remote move on every pass and strand the edit.
-func (e *executor) validateLocalMoveSourceAgainstBaseline(
+func (e *Executor) validateLocalMoveSourceAgainstBaseline(
 	ctx context.Context,
 	source string,
 	info os.FileInfo,
@@ -880,7 +880,7 @@ func (e *executor) validateLocalMoveSourceAgainstBaseline(
 
 // localFileHoldsBaselineContent reports whether the file at source provably
 // holds the synced content: the baseline's size and local hash.
-func (e *executor) localFileHoldsBaselineContent(ctx context.Context, source string, info os.FileInfo, baseline *BaselineEntry) bool {
+func (e *Executor) localFileHoldsBaselineContent(ctx context.Context, source string, info os.FileInfo, baseline *BaselineEntry) bool {
 	if baseline.LocalHash == "" || (baseline.LocalSizeKnown && info.Size() != baseline.LocalSize) {
 		return false
 	}
@@ -893,7 +893,7 @@ func (e *executor) localFileHoldsBaselineContent(ctx context.Context, source str
 	return err == nil && currentHash == baseline.LocalHash
 }
 
-func (e *executor) validateLocalSourceIdentity(op string, source string, baseline *BaselineEntry) error {
+func (e *Executor) validateLocalSourceIdentity(op string, source string, baseline *BaselineEntry) error {
 	if !baseline.LocalHasIdentity {
 		return nil
 	}
@@ -909,7 +909,7 @@ func (e *executor) validateLocalSourceIdentity(op string, source string, baselin
 	return nil
 }
 
-func (e *executor) validateLocalSourceAgainstBaseline(
+func (e *Executor) validateLocalSourceAgainstBaseline(
 	ctx context.Context,
 	op string,
 	source string,
@@ -947,7 +947,7 @@ func (e *executor) validateLocalSourceAgainstBaseline(
 	return e.validateLocalSourceIdentity(op, source, baseline)
 }
 
-// symlinkBoundaryForPath reports the first component of relPath, the final
+// SymlinkBoundaryForPath reports the first component of relPath, the final
 // one included, that is a symbolic link, walking one component at a time so
 // every Lstat resolves against a fully real prefix. A link as the final
 // component is never followed by that Lstat, so the walk itself cannot leave
@@ -955,7 +955,7 @@ func (e *executor) validateLocalSourceAgainstBaseline(
 //
 // An absent component means nothing beneath it exists yet, so there is no
 // boundary to cross and the walk stops cleanly.
-func (e *executor) symlinkBoundaryForPath(relPath string) (string, bool, error) {
+func (e *Executor) SymlinkBoundaryForPath(relPath string) (string, bool, error) {
 	clean := slashpath.Clean(filepath.ToSlash(relPath))
 	if clean == "." || clean == "" {
 		return "", false, nil
@@ -1000,8 +1000,8 @@ func (e *executor) symlinkBoundaryForPath(relPath string) (string, bool, error) 
 //
 // Deletes do not route through here: ExecuteLocalDelete has to special-case
 // the alias itself, which it removes without following.
-func (e *executor) validateNoSymlinkBoundary(relPath string, verb string) error {
-	boundary, ok, err := e.symlinkBoundaryForPath(relPath)
+func (e *Executor) validateNoSymlinkBoundary(relPath string, verb string) error {
+	boundary, ok, err := e.SymlinkBoundaryForPath(relPath)
 	if err != nil {
 		return normalizeSyncTreePathError(err)
 	}
@@ -1013,13 +1013,13 @@ func (e *executor) validateNoSymlinkBoundary(relPath string, verb string) error 
 	return fmt.Errorf("won't %s %s: %s is a symbolic link, and sync never writes through one", verb, relPath, boundary)
 }
 
-// errDatabaseInUse means a download would replace a SQLite database that an
+// ErrDatabaseInUse means a download would replace a SQLite database that an
 // application has open: its write-ahead log or rollback journal is non-empty.
 // Renaming new bytes over the main file while the sidecar holds uncommitted
 // pages corrupts the database the next time the application checkpoints
 // (P-3, D-084). It is a per-file condition retried later, not a stale plan:
 // superseding would replan the same download at once.
-var errDatabaseInUse = errors.New("the local database is open in an application (it has a live -wal or -journal file)")
+var ErrDatabaseInUse = errors.New("the local database is open in an application (it has a live -wal or -journal file)")
 
 // sqliteLiveSidecarSuffixes are the sidecars whose non-empty presence means
 // uncommitted database state. -shm is only an index and is not checked.
@@ -1027,13 +1027,13 @@ func sqliteLiveSidecarSuffixes() []string {
 	return []string{"-wal", "-journal"}
 }
 
-// refuseLiveDatabaseTarget returns errDatabaseInUse when path has a
+// refuseLiveDatabaseTarget returns ErrDatabaseInUse when path has a
 // non-empty SQLite sidecar beside it. It runs before the download and again
 // just before the rename (ValidateTargetBeforeRename). Only a sidecar that
 // does not exist is "no sidecar": a sidecar that cannot be checked (EACCES,
 // EIO, a name too long) refuses the replacement too, because the download
 // cannot prove the database is closed.
-func (e *executor) refuseLiveDatabaseTarget(path string) error {
+func (e *Executor) refuseLiveDatabaseTarget(path string) error {
 	for _, suffix := range sqliteLiveSidecarSuffixes() {
 		info, err := e.syncTree.Lstat(path + suffix)
 		if err != nil {
@@ -1045,7 +1045,7 @@ func (e *executor) refuseLiveDatabaseTarget(path string) error {
 				path, path, suffix, normalizeSyncTreePathError(err))
 		}
 		if info.Mode().IsRegular() && info.Size() > 0 {
-			return fmt.Errorf("%w: %s%s", errDatabaseInUse, path, suffix)
+			return fmt.Errorf("%w: %s%s", ErrDatabaseInUse, path, suffix)
 		}
 	}
 

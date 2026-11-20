@@ -14,22 +14,22 @@ import (
 // newly skipped file is reported first. It reports what the commit changed.
 func (flow *engineFlow) commitLocalScan(
 	ctx context.Context,
-	rows []localStateRow,
-	skipped []skippedItem,
+	rows []LocalStateRow,
+	skipped []SkippedItem,
 	crossedMounts []string,
-) (localSnapshotCommitResult, error) {
+) (LocalSnapshotCommitResult, error) {
 	eng := flow.engine
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
 	findings := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	eng.emitDebugEvent(engineDebugEvent{
-		Type: engineDebugEventObservationFindingsReconcileStarted,
+	eng.emitDebugEvent(EngineDebugEvent{
+		Type: EngineDebugEventObservationFindingsReconcileStarted,
 		Note: engineDebugNoteLocalSkipped,
 	})
 
-	return eng.commitLocalSnapshot(ctx, localSnapshotCommit{
-		rows:          rows,
-		findings:      &findings,
-		crossedMounts: crossedMounts,
+	return eng.commitLocalSnapshot(ctx, LocalSnapshotCommit{
+		Rows:          rows,
+		Findings:      &findings,
+		CrossedMounts: crossedMounts,
 	})
 }
 
@@ -68,11 +68,11 @@ func (flow *engineFlow) knownObservationIssues(ctx context.Context) map[observat
 // `status`) stay at Debug so a persistent bad name does not warn on every
 // safety scan.
 func (flow *engineFlow) logSkippedObservationFindings(
-	skipped []skippedItem,
+	skipped []SkippedItem,
 	known map[observationIssueKey]struct{},
 ) {
 	eng := flow.engine
-	byReason := make(map[IssueType][]skippedItem)
+	byReason := make(map[IssueType][]SkippedItem)
 	for i := range skipped {
 		_, alreadyReported := known[observationIssueKey{path: skipped[i].Path, issueType: skipped[i].Reason}]
 		if alreadyReported {
@@ -126,13 +126,13 @@ func (flow *engineFlow) logSkippedObservationFindings(
 // when every file shares one detail, otherwise the condition's label ("11
 // files with names OneDrive does not allow"). One file's detail once spoke for
 // eleven different invalid names as "the name starts with a space".
-func aggregateSkippedText(reason IssueType, items []skippedItem) string {
+func aggregateSkippedText(reason IssueType, items []SkippedItem) string {
 	shared := skippedItemReasonText(&items[0])
 	for i := 1; i < len(items); i++ {
 		if skippedItemReasonText(&items[i]) == shared {
 			continue
 		}
-		if key, ok := conditionKeyForIssueType(reason); ok {
+		if key, ok := ConditionKeyForIssueType(reason); ok {
 			return fmt.Sprintf("%d %s", len(items), conditionLabel(key, len(items)))
 		}
 		return fmt.Sprintf("%d files: %s", len(items), strings.ReplaceAll(string(reason), "_", " "))
@@ -143,7 +143,7 @@ func aggregateSkippedText(reason IssueType, items []skippedItem) string {
 
 // skippedItemReasonText is the user-facing reason for a skipped file: the
 // scanner's detail when it has one, otherwise the issue type in words.
-func skippedItemReasonText(item *skippedItem) string {
+func skippedItemReasonText(item *SkippedItem) string {
 	if item.Detail != "" {
 		return item.Detail
 	}
@@ -163,8 +163,8 @@ func (flow *engineFlow) applyObservationFindingsBatch(
 		return nil
 	}
 
-	eng.emitDebugEvent(engineDebugEvent{
-		Type: engineDebugEventObservationFindingsReconcileStarted,
+	eng.emitDebugEvent(EngineDebugEvent{
+		Type: EngineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
 	if err := eng.baseline.ReconcileObservationFindings(ctx, batch); err != nil {

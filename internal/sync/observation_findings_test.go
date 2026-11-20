@@ -20,40 +20,40 @@ import (
 func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
-	batch := localObservationFindingsBatchFromSkippedItems(driveid.New(testDriveID), []skippedItem{{
+	batch := localObservationFindingsBatchFromSkippedItems(driveid.New(testDriveID), []SkippedItem{{
 		Path:               "Private",
-		Reason:             issueLocalReadDenied,
+		Reason:             IssueLocalReadDenied,
 		Detail:             "directory not accessible",
 		BlocksReadBoundary: true,
 	}})
 
 	require.Len(t, batch.Issues, 1)
 	assert.Equal(t, "Private", batch.Issues[0].Path)
-	assert.Equal(t, issueLocalReadDenied, batch.Issues[0].IssueType)
-	assert.Equal(t, sKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
+	assert.Equal(t, IssueLocalReadDenied, batch.Issues[0].IssueType)
+	assert.Equal(t, SKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
 	// Which types are managed is checked against the scanner's source by
 	// TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports.
-	assert.Equal(t, localObservationManagedIssueTypes(), batch.ManagedIssueTypes)
+	assert.Equal(t, LocalObservationManagedIssueTypes(), batch.ManagedIssueTypes)
 }
 
 // Validates: R-2.1.2, R-2.10.4
 func TestRootReadFailureObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
-	for _, issueType := range []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound} {
+	for _, issueType := range []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound} {
 		batch := rootReadFailureObservationFindingsBatch(driveid.New(testDriveID), issueType)
 
 		require.Len(t, batch.Issues, 1)
 		assert.Equal(t, "/", batch.Issues[0].Path)
 		assert.Equal(t, issueType, batch.Issues[0].IssueType)
-		assert.Equal(t, sKPermRemoteRead(""), batch.Issues[0].ScopeKey)
-		assert.Equal(t, []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound}, batch.ManagedIssueTypes,
+		assert.Equal(t, SKPermRemoteRead(""), batch.Issues[0].ScopeKey)
+		assert.Equal(t, []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound}, batch.ManagedIssueTypes,
 			"a root observation replaces whichever root read issue an earlier answer left")
 	}
 }
 
 // localScanIssueTypesInSource returns every IssueType constant named in a
-// production file of this package that builds a skippedItem, with the files
+// production file of this package that builds a SkippedItem, with the files
 // that name it: the issue types a local scan can report. It reads the source,
 // so a type a new finding names is seen the moment a builder names it,
 // without a second hand-kept list. A builder file naming a type for another
@@ -74,7 +74,7 @@ func localScanIssueTypesInSource(t *testing.T) map[IssueType][]string {
 		}
 		src, readErr := os.ReadFile(file) //nolint:gosec // the test reads its own package's source
 		require.NoError(t, readErr)
-		if !bytes.Contains(src, []byte("skippedItem")) {
+		if !bytes.Contains(src, []byte("SkippedItem")) {
 			// Only a file that names the type can build one; skipping the
 			// rest keeps the parse to a handful of files.
 			continue
@@ -108,14 +108,14 @@ func localScanIssueTypesInSource(t *testing.T) map[IssueType][]string {
 }
 
 // namesSkippedItemType reports whether a composite literal's type is
-// skippedItem or a slice or array of it.
+// SkippedItem or a slice or array of it.
 func namesSkippedItemType(expr ast.Expr) bool {
 	if array, ok := expr.(*ast.ArrayType); ok {
 		expr = array.Elt
 	}
 	ident, ok := expr.(*ast.Ident)
 
-	return ok && ident.Name == "skippedItem"
+	return ok && ident.Name == "SkippedItem"
 }
 
 // The local findings batch replaces the stored conditions of the types it
@@ -137,17 +137,17 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 	// clearedOnly names each type the local findings batch manages though no
 	// scan reports it, with the reason a scan must clear it.
 	clearedOnly := map[IssueType]string{
-		issueRemovedFolderKept: "a removed shared folder's release records it after the run's last plan; " +
+		IssueRemovedFolderKept: "a removed shared folder's release records it after the run's last plan; " +
 			"the next full scan clears it, so a release that runs again records what is still there " +
 			"and a folder shared again keeps no stale report",
 	}
 
 	reported := localScanIssueTypesInSource(t)
-	require.Contains(t, reported, issueLocalInterruptedRemoval, "the source reading must see the scanner's findings")
+	require.Contains(t, reported, IssueLocalInterruptedRemoval, "the source reading must see the scanner's findings")
 	require.Contains(t, reported, IssueInvalidFilename, "the source reading must see the scanner's findings")
 
 	managed := make(map[IssueType]struct{})
-	for _, issueType := range localObservationManagedIssueTypes() {
+	for _, issueType := range LocalObservationManagedIssueTypes() {
 		_, duplicate := managed[issueType]
 		assert.False(t, duplicate, "%s is listed twice", issueType)
 		managed[issueType] = struct{}{}
@@ -158,7 +158,7 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 			continue
 		}
 		assert.NotEmpty(t, keptUnmanaged[issueType],
-			"%v build skipped items naming %s, which localObservationManagedIssueTypes leaves out: "+
+			"%v build skipped items naming %s, which LocalObservationManagedIssueTypes leaves out: "+
 				"add it, so the next full scan that no longer reports it clears it, "+
 				"or record in keptUnmanaged why it must stay", files, issueType)
 	}

@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +29,7 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &BlockScope{
 		Key:           SKService(),
 		TrialInterval: time.Minute,
-		NextTrialAt:   store.nowFunc().Add(time.Minute),
+		NextTrialAt:   store.NowForTest().Add(time.Minute),
 	}))
 	require.NoError(t, store.Close(context.Background()))
 
@@ -40,7 +38,7 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 
 	require.NoError(t, ResetStateDB(t.Context(), dbPath, newTestLogger(t)))
 
-	reopened, err := openSyncStore(t.Context(), dbPath, newTestLogger(t), false)
+	reopened, err := OpenSyncStoreForTest(t.Context(), dbPath, newTestLogger(t), false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(context.Background()))
@@ -71,74 +69,15 @@ func TestRemoveStateDBFiles_RemovesALeftoverJournal(t *testing.T) {
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a database"), 0o600))
 	require.NoError(t, os.WriteFile(dbPath+"-journal", []byte("journal of the old file"), 0o600))
 
-	require.NoError(t, removeStateDBFiles(dbPath))
+	require.NoError(t, RemoveStateDBFiles(dbPath))
 
 	assert.NoFileExists(t, dbPath+"-journal")
 	assert.NoFileExists(t, dbPath)
 }
 
-// staleMarkerTable is the table a walDonor keeps only in its log.
-const staleMarkerTable = "stale_marker"
-
-// walDonor creates a WAL-mode database in dir whose one table lives only in
-// its write-ahead log (no checkpoint has run), and returns the database's
-// path. The donor stays open until the test ends, so its files can be copied
-// as an interrupted writer would leave them.
-func walDonor(t *testing.T, dir string) string {
-	t.Helper()
-
-	donorPath := filepath.Join(dir, "donor.db")
-	donor, err := sql.Open(sqliteDriverName,
-		sqliteFileURI(donorPath, url.Values{sqlitePragmaParam: {"journal_mode(WAL)", "wal_autocheckpoint(0)"}}))
-	require.NoError(t, err)
-	donor.SetMaxOpenConns(1)
-	t.Cleanup(func() {
-		assert.NoError(t, donor.Close())
-	})
-	_, err = donor.ExecContext(t.Context(), "CREATE TABLE "+staleMarkerTable+" (x INTEGER)")
-	require.NoError(t, err)
-
-	return donorPath
-}
-
-// copyStateFile copies one non-empty file of a test's own temp tree.
-func copyStateFile(t *testing.T, from, to string) {
-	t.Helper()
-
-	info, err := os.Stat(from)
-	require.NoError(t, err)
-	require.Positive(t, info.Size())
-	require.NoError(t, copyFileContent(from, to))
-}
-
-// sqliteHasTable reports whether db has a table called name.
-func sqliteHasTable(t *testing.T, db *sql.DB, name string) bool {
-	t.Helper()
-
-	var count int
-	require.NoError(t, db.QueryRowContext(t.Context(),
-		"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count))
-
-	return count == 1
-}
-
-// openPlainSQLite opens the database at dbPath as SQLite does by default,
-// without the store's schema or pragmas.
-func openPlainSQLite(t *testing.T, dbPath string) *sql.DB {
-	t.Helper()
-
-	db, err := sql.Open(sqliteDriverName, sqliteFileURI(dbPath, nil))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.NoError(t, db.Close())
-	})
-
-	return db
-}
-
 // SQLite pairs a write-ahead log with a database by file name alone, and the
 // rules for a store's file family rest on what it then does
-// (config.StateDBFamily, moveStateDBFamily). A log left without its database
+// (config.StateDBFamily, MoveStateDBFamily). A log left without its database
 // is deleted when a database is created at that name, so a store created
 // where an older delete left sidecars starts empty. A log beside a database
 // that did not write it is replayed into that database, which is why a new
@@ -164,8 +103,8 @@ func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
 			assert.NoError(t, store.Close(context.Background()))
 		})
 
-		assert.False(t, sqliteHasTable(t, store.rawDB(), staleMarkerTable))
-		assert.True(t, sqliteHasTable(t, store.rawDB(), "baseline"))
+		assert.False(t, sqliteHasTable(t, store.RawDBForTest(), staleMarkerTable))
+		assert.True(t, sqliteHasTable(t, store.RawDBForTest(), "baseline"))
 	})
 
 	t.Run("control: a log beside its own database is replayed", func(t *testing.T) {
@@ -207,7 +146,7 @@ func TestMoveStateDBFamily_ResumeAfterSidecarsMovedKeepsTheLog(t *testing.T) {
 	copyStateFile(t, donorPath, from)
 	copyStateFile(t, donorPath+"-wal", to+"-wal")
 
-	require.NoError(t, moveStateDBFamily(from, to))
+	require.NoError(t, MoveStateDBFamily(from, to))
 
 	assert.NoFileExists(t, from)
 	assert.True(t, sqliteHasTable(t, openPlainSQLite(t, to), staleMarkerTable),

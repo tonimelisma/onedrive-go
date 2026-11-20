@@ -23,12 +23,12 @@ const goneItemID = "gone-item"
 // failedUploads registers an upload for each path in actions, numbered from
 // firstID, and returns what each reported as its run stopped: a 502 from
 // OneDrive, a result that already happened.
-func failedUploads(actions *depGraph, firstID int64, paths ...string) []actionCompletion {
-	completions := make([]actionCompletion, 0, len(paths))
+func failedUploads(actions *DepGraph, firstID int64, paths ...string) []ActionCompletion {
+	completions := make([]ActionCompletion, 0, len(paths))
 	for i, path := range paths {
 		id := firstID + int64(i)
-		actions.Add(&Action{Type: ActionUpload, Path: path, View: &pathView{Path: path}}, id, nil)
-		completions = append(completions, actionCompletion{
+		actions.Add(&Action{Type: ActionUpload, Path: path, View: &PathView{Path: path}}, id, nil)
+		completions = append(completions, ActionCompletion{
 			ActionID: id, Path: path, ActionType: ActionUpload, RunEnded: true,
 			HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError, ErrMsg: "bad gateway",
 		})
@@ -42,10 +42,10 @@ func failedUploads(actions *depGraph, firstID int64, paths ...string) []actionCo
 // its run stopped: an upload OneDrive answered with a 502, a download whose
 // item is gone, and a folder create whose outcome commit outlasted its bound.
 // Each is a result that already happened.
-func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *depGraph) []actionCompletion {
+func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *DepGraph) []ActionCompletion {
 	t.Helper()
 
-	require.NoError(t, eng.baseline.CommitObservation(t.Context(), []observedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(t.Context(), []ObservedItem{{
 		DriveID:  eng.driveID,
 		ItemID:   goneItemID,
 		Path:     "gone.txt",
@@ -57,18 +57,18 @@ func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *depGraph) []
 
 	completions := failedUploads(actions, 1, "report.txt")
 	actions.Add(&Action{
-		Type: ActionDownload, Path: "gone.txt", ItemID: goneItemID, DriveID: eng.driveID, View: &pathView{Path: "gone.txt"},
+		Type: ActionDownload, Path: "gone.txt", ItemID: goneItemID, DriveID: eng.driveID, View: &PathView{Path: "gone.txt"},
 	}, 2, nil)
-	actions.Add(&Action{Type: ActionFolderCreate, Path: "Projects", View: &pathView{Path: "Projects"}}, 3, nil)
+	actions.Add(&Action{Type: ActionFolderCreate, Path: "Projects", View: &PathView{Path: "Projects"}}, 3, nil)
 
 	return append(completions,
-		actionCompletion{
+		ActionCompletion{
 			ActionID: 2, Path: "gone.txt", ActionType: ActionDownload, RunEnded: true,
-			Err: &remoteItemGoneError{op: "download", itemID: goneItemID, role: "item"},
+			Err: &RemoteItemGoneError{Op: "download", ItemID: goneItemID, Role: "item"},
 		},
-		actionCompletion{
+		ActionCompletion{
 			ActionID: 3, Path: "Projects", ActionType: ActionFolderCreate, RunEnded: true,
-			Err: fmt.Errorf("sync: commit outcome: %w: %w", context.DeadlineExceeded, errStoreAccessTimedOut),
+			Err: fmt.Errorf("sync: commit outcome: %w: %w", context.DeadlineExceeded, ErrStoreAccessTimedOut),
 		},
 	)
 }
@@ -101,8 +101,8 @@ func requireStoppingRunRecorded(t *testing.T, eng *testEngine) {
 }
 
 // closedCompletions returns a closed channel that holds completions.
-func closedCompletions(completions []actionCompletion) chan actionCompletion {
-	ch := make(chan actionCompletion, len(completions))
+func closedCompletions(completions []ActionCompletion) chan ActionCompletion {
+	ch := make(chan ActionCompletion, len(completions))
 	for i := range completions {
 		ch <- completions[i]
 	}
@@ -143,7 +143,7 @@ func runWatchDrain(ctx context.Context, rt *watchRuntime, p *watchPipeline) erro
 func holdStoreConnection(t *testing.T, store *SyncStore) func() {
 	t.Helper()
 
-	conn, err := store.db.Conn(t.Context())
+	conn, err := store.RawDBForTest().Conn(t.Context())
 	require.NoError(t, err)
 	released := false
 	release := func() {
@@ -182,8 +182,8 @@ func TestOneShotEngineLoop_ACanceledPassRecordsTheCompletionsItDrains(t *testing
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = newDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *trackedAction, 1)
+	runner.sched.graph = NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
 	completions := closedCompletions(stoppingRunCompletions(t, eng, runner.sched.graph))
 
 	err := runWithin(t, stoppedContext(t), "the canceled pass to drain its completions", func(ctx context.Context) error {
@@ -235,7 +235,7 @@ func TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound(t *testing.T
 	})
 	release()
 
-	require.ErrorIs(t, err, errStoreAccessTimedOut)
+	require.ErrorIs(t, err, ErrStoreAccessTimedOut)
 	require.ErrorContains(t, err, "the stop's time ran out before recording 2 of its results")
 	assert.Empty(t, retryWorkPaths(t, eng.baseline), "the bound cut both records")
 	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the loss is said once: %s", logs.String())
@@ -254,14 +254,14 @@ func TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound(t *testing.T) {
 
 	eng, rt, logs := stoppingWatchRuntime(t)
 	succeeded := []string{"first.txt", "second.txt"}
-	completions := make([]actionCompletion, 0, len(succeeded))
+	completions := make([]ActionCompletion, 0, len(succeeded))
 	for i, path := range succeeded {
 		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), testRetryWorkFailure(path, "", ActionUpload),
 			retryDelayForDecision(nil))
 		require.NoError(t, err)
 		id := int64(i + 1)
-		rt.sched.graph.Add(&Action{Type: ActionUpload, Path: path, View: &pathView{Path: path}}, id, nil)
-		completions = append(completions, actionCompletion{
+		rt.sched.graph.Add(&Action{Type: ActionUpload, Path: path, View: &PathView{Path: path}}, id, nil)
+		completions = append(completions, ActionCompletion{
 			ActionID: id, Path: path, ActionType: ActionUpload, Success: true, RunEnded: true,
 		})
 	}
@@ -277,7 +277,7 @@ func TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, succeeded, retryWorkPaths(t, eng.baseline), "no clear ran past the stop's one bound")
-	require.ErrorIs(t, rt.endStopDrain(), errStoreAccessTimedOut)
+	require.ErrorIs(t, rt.endStopDrain(), ErrStoreAccessTimedOut)
 	assert.Contains(t, logs.String(), "The stop's time ran out before 2 results were recorded")
 }
 
@@ -297,14 +297,14 @@ func TestWatchRuntime_AStopsBoundStartsAtItsCancel(t *testing.T) {
 	defer stopNoting()
 
 	release := holdStoreConnection(t, eng.baseline)
-	err := runDetachedStoreAccess(run, workerTestCommitBound, func(ctx context.Context) error {
+	err := RunDetachedStoreAccess(run, workerTestCommitBound, func(ctx context.Context) error {
 		cancelRun()
 		_, listErr := eng.baseline.ListBlockScopes(ctx)
 
 		return listErr
 	})
 	release()
-	require.ErrorIs(t, err, errStoreAccessTimedOut, "the run's goroutine waited out the store")
+	require.ErrorIs(t, err, ErrStoreAccessTimedOut, "the run's goroutine waited out the store")
 	require.Eventually(t, func() bool { return rt.canceledAt.Load() != nil }, eventWait, time.Millisecond,
 		"the cancel is recorded")
 
@@ -330,13 +330,13 @@ func TestRunDetachedStoreAccess_ANestedAccessKeepsTheOuterBound(t *testing.T) {
 	type runValueKey struct{}
 	run, stop := context.WithCancel(context.WithValue(t.Context(), runValueKey{}, "kept"))
 	stop()
-	outer, cancel := detachedStoreContext(run, time.Now().Add(time.Hour))
+	outer, cancel := DetachedStoreContext(run, time.Now().Add(time.Hour))
 	defer cancel()
 	outerDeadline, bounded := outer.Deadline()
 	require.True(t, bounded, "a detached context has a deadline")
 
 	var innerDeadline time.Time
-	require.NoError(t, runDetachedStoreAccess(outer, OutcomeCommitTimeout, func(ctx context.Context) error {
+	require.NoError(t, RunDetachedStoreAccess(outer, OutcomeCommitTimeout, func(ctx context.Context) error {
 		innerDeadline, _ = ctx.Deadline()
 		assert.Equal(t, "kept", ctx.Value(runValueKey{}), "the run's values are kept")
 
@@ -356,13 +356,13 @@ func TestOneShotEngineLoop_ACanceledPassSealsItsOutbox(t *testing.T) {
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = newDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *trackedAction)
-	admitted := runner.sched.graph.Add(&Action{Type: ActionUpload, Path: "queued.txt", View: &pathView{Path: "queued.txt"}}, 1, nil)
+	runner.sched.graph = NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *TrackedAction)
+	admitted := runner.sched.graph.Add(&Action{Type: ActionUpload, Path: "queued.txt", View: &PathView{Path: "queued.txt"}}, 1, nil)
 	require.NotNil(t, admitted)
 
 	err := runWithin(t, stoppedContext(t), "the canceled pass to seal its outbox", func(ctx context.Context) error {
-		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, make(chan actionCompletion), []*trackedAction{admitted})
+		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, make(chan ActionCompletion), []*TrackedAction{admitted})
 	})
 	require.NoError(t, err)
 
@@ -390,8 +390,8 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothing(t *testing.T) {
 	eng.permHandler.remoteRootItemID = mountRoot
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "Shared/file.txt", View: &pathView{Path: "Shared/file.txt"}}, 1, nil)
-	refused := actionCompletion{
+	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "Shared/file.txt", View: &PathView{Path: "Shared/file.txt"}}, 1, nil)
+	refused := ActionCompletion{
 		ActionID: 1, Path: "Shared/file.txt", ActionType: ActionUpload, RunEnded: true,
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
 	}
@@ -431,8 +431,8 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial(t *testing.T) {
 	blocked := &RetryWorkRow{Path: trialPath, ActionType: ActionUpload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
 	flow.retryWork.rows[blocked.WorkKey()] = *blocked
-	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: trialPath, View: &pathView{Path: trialPath}}, 1, nil)
-	refused := actionCompletion{
+	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: trialPath, View: &PathView{Path: trialPath}}, 1, nil)
+	refused := ActionCompletion{
 		ActionID: 1, Path: trialPath, ActionType: ActionUpload, RunEnded: true,
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
 		IsTrial: true, TrialScopeKey: scopeKey,
@@ -478,10 +478,10 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolder(t *testing.T) {
 	makeUnwritableStopFolder(t, syncRoot)
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: refusedPath, View: &pathView{Path: refusedPath}}, 1, nil)
-	refused := actionCompletion{
+	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: refusedPath, View: &PathView{Path: refusedPath}}, 1, nil)
+	refused := ActionCompletion{
 		ActionID: 1, Path: refusedPath, ActionType: ActionDownload, RunEnded: true,
-		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: permissionCapabilityLocalWrite,
+		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: PermissionCapabilityLocalWrite,
 	}
 
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &Baseline{}))
@@ -513,10 +513,10 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolderForATrial(t *testing.T) {
 	blocked := &RetryWorkRow{Path: trialPath, ActionType: ActionDownload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
 	flow.retryWork.rows[blocked.WorkKey()] = *blocked
-	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: trialPath, View: &pathView{Path: trialPath}}, 1, nil)
-	refused := actionCompletion{
+	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: trialPath, View: &PathView{Path: trialPath}}, 1, nil)
+	refused := ActionCompletion{
 		ActionID: 1, Path: trialPath, ActionType: ActionDownload, RunEnded: true,
-		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: permissionCapabilityLocalWrite,
+		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: PermissionCapabilityLocalWrite,
 		IsTrial: true, TrialScopeKey: scopeKey,
 	}
 
@@ -557,12 +557,12 @@ func TestEngineFlow_AStoppingRunReleasesNoHeldWork(t *testing.T) {
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
 	completions := failedUploads(flow.sched.graph, 1, "report.txt")
-	held := flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "held.txt", View: &pathView{Path: "held.txt"}}, 2, nil)
+	held := flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "held.txt", View: &PathView{Path: "held.txt"}}, 2, nil)
 	require.NotNil(t, held)
 	flow.holdAction(held, heldReasonRetry, ScopeKey{}, flow.deps.now().Add(-time.Minute))
 
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &completions[0], &Baseline{}))
 	require.NoError(t, flow.endStopDrain())
 
-	assert.Contains(t, flow.retries.heldByKey, retryWorkKeyForAction(&held.Action), "the due action stays held")
+	assert.Contains(t, flow.retries.heldByKey, RetryWorkKeyForAction(&held.Action), "the due action stays held")
 }

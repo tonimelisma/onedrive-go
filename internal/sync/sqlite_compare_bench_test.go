@@ -62,7 +62,7 @@ func seedComparisonBench(b *testing.B, store *SyncStore, items int, shape compar
 	b.Helper()
 
 	ctx := context.Background()
-	tx, err := store.rawDB().BeginTx(ctx, nil)
+	tx, err := store.RawDBForTest().BeginTx(ctx, nil)
 	require.NoError(b, err)
 
 	insertBaseline, err := tx.PrepareContext(ctx, sqlUpsertBaseline)
@@ -105,7 +105,7 @@ func seedComparisonBench(b *testing.B, store *SyncStore, items int, shape compar
 	folders := items / benchFilesPerFolder
 	for top, topName := range []string{"moved", "still"} {
 		topID := "top-" + strconv.Itoa(top)
-		add(topName, strRoot, topID, ItemTypeFolder, "", 0)
+		add(topName, StrRoot, topID, ItemTypeFolder, "", 0)
 		for f := range folders / 2 {
 			folderPath := fmt.Sprintf("%s/folder-%05d", topName, f)
 			folderID := fmt.Sprintf("%s-%d", topID, f)

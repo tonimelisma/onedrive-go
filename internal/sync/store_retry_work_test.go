@@ -187,7 +187,7 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing path")
 
 	err = func() error {
-		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("bad-action.txt", "", actionType(-1)), func(int) time.Duration { return time.Minute })
+		_, recordErr := store.RecordRetryWorkFailure(ctx, testRetryWorkFailure("bad-action.txt", "", ActionType(-1)), func(int) time.Duration { return time.Minute })
 		return recordErr
 	}()
 	require.Error(t, err)
@@ -386,7 +386,7 @@ func TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember(t *testing.T) {
 	ctx := t.Context()
 
 	actionable := testDelayedRetryWorkRow("refused.txt", "", ActionUpload, 1, 0)
-	actionable.ConditionType = issuePathTooLong
+	actionable.ConditionType = IssuePathTooLong
 	require.NoError(t, store.UpsertRetryWork(ctx, actionable))
 	require.NoError(t, store.UpsertRetryWork(ctx, testDelayedRetryWorkRow("transient.txt", "", ActionDownload, 1, 0)))
 
@@ -396,9 +396,9 @@ func TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember(t *testing.T) {
 	for i := range rows {
 		byPath[rows[i].Path] = rows[i].ConditionType
 	}
-	assert.Equal(t, map[string]IssueType{"refused.txt": issuePathTooLong, "transient.txt": ""}, byPath)
+	assert.Equal(t, map[string]IssueType{"refused.txt": IssuePathTooLong, "transient.txt": ""}, byPath)
 
-	_, err = store.rawDB().ExecContext(ctx,
+	_, err = store.RawDBForTest().ExecContext(ctx,
 		`UPDATE retry_work SET condition_type = ? WHERE path = ?`, "path_too_long_v2", "refused.txt")
 	require.NoError(t, err)
 

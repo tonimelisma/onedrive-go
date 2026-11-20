@@ -84,20 +84,20 @@ func slowStartThresholdAfterThrottle(transferWorkers, allowanceAtThrottle, previ
 // them under the scope. Only the loop goroutine that owns the outbox calls
 // it, from inside a completion it is applying.
 type admittedWorkOwner interface {
-	takeAdmittedWorkBlockedBy(key ScopeKey) []*trackedAction
+	takeAdmittedWorkBlockedBy(key ScopeKey) []*TrackedAction
 }
 
 // noAdmittedWork is the owner of a flow that has no outbox of its own.
 type noAdmittedWork struct{}
 
-func (noAdmittedWork) takeAdmittedWorkBlockedBy(ScopeKey) []*trackedAction { return nil }
+func (noAdmittedWork) takeAdmittedWorkBlockedBy(ScopeKey) []*TrackedAction { return nil }
 
 // takeOutboxBlockedBy splits an outbox into the actions key blocks, which are
 // returned, and the rest, which is the new outbox. Order is kept on both
 // sides.
-func takeOutboxBlockedBy(outbox []*trackedAction, key ScopeKey) (taken, kept []*trackedAction) {
+func takeOutboxBlockedBy(outbox []*TrackedAction, key ScopeKey) (taken, kept []*TrackedAction) {
 	for _, ta := range outbox {
-		if ta != nil && scopeBlocksTrackedAction(key, ta, ta.Action.ThrottleTargetKey()) {
+		if ta != nil && ScopeBlocksTrackedAction(key, ta, ta.Action.ThrottleTargetKey()) {
 			taken = append(taken, ta)
 			continue
 		}
@@ -123,15 +123,15 @@ func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key Sco
 			Action:       ta,
 			Kind:         admissionHoldScope,
 			ScopeKey:     key,
-			RetryWorkKey: retryWorkKeyForAction(&ta.Action),
+			RetryWorkKey: RetryWorkKeyForAction(&ta.Action),
 		})
 	}
 	if _, err := flow.applyAdmissionDecisions(ctx, decisions); err != nil {
 		return fmt.Errorf("retire %d admitted actions under %s: %w", len(taken), key.String(), err)
 	}
 
-	flow.deps.emit(engineDebugEvent{
-		Type:     engineDebugEventAdmittedWorkRetired,
+	flow.deps.emit(EngineDebugEvent{
+		Type:     EngineDebugEventAdmittedWorkRetired,
 		ScopeKey: key,
 		Count:    len(taken),
 	})
@@ -188,7 +188,7 @@ func (flow *engineFlow) releaseScopeBatch(
 	ctx context.Context,
 	key ScopeKey,
 	generation uint64,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	scope, active := flow.scopes.lookupActiveScope(key)
 	if !active || scope.Generation != generation {
 		flow.deps.logger.Debug("trial succeeded for a scope that was re-blocked or released meanwhile; releasing nothing",
@@ -214,7 +214,7 @@ func (flow *engineFlow) releaseScopeBatch(
 		return nil, fmt.Errorf("sync: releasing %d blocked actions under %s: %w", len(batchKeys), key.String(), err)
 	}
 
-	batch := make([]*trackedAction, 0, len(batchKeys))
+	batch := make([]*TrackedAction, 0, len(batchKeys))
 	for _, work := range batchKeys {
 		ta := flow.retries.releaseHeldAction(work)
 		if ta == nil {
@@ -229,8 +229,8 @@ func (flow *engineFlow) releaseScopeBatch(
 
 	if removed {
 		flow.scopes.removeActiveScope(key)
-		flow.deps.emit(engineDebugEvent{
-			Type:     engineDebugEventScopeReleased,
+		flow.deps.emit(EngineDebugEvent{
+			Type:     EngineDebugEventScopeReleased,
 			ScopeKey: key,
 			Count:    len(batch),
 		})
@@ -250,8 +250,8 @@ func (flow *engineFlow) releaseScopeBatch(
 		if err := flow.persistActiveScope(ctx, &scope); err != nil {
 			return batch, fmt.Errorf("keep scope %s on probation: %w", key.String(), err)
 		}
-		flow.deps.emit(engineDebugEvent{
-			Type:     engineDebugEventScopeBatchReleased,
+		flow.deps.emit(EngineDebugEvent{
+			Type:     EngineDebugEventScopeBatchReleased,
 			ScopeKey: key,
 			Count:    len(batch),
 		})

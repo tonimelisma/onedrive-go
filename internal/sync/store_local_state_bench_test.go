@@ -36,7 +36,7 @@ const sqlSubstrLocalStateSubtreeDelete = `DELETE FROM local_state
 	WHERE path = ? COLLATE BINARY
 	   OR substr(path, 1, length(?)) = ? COLLATE BINARY`
 
-func substrDeleteLocalStateSubtreeTx(ctx context.Context, tx sqlTxRunner, prefix string) error {
+func substrDeleteLocalStateSubtreeTx(ctx context.Context, tx SqlTxRunner, prefix string) error {
 	descendantPrefix := prefix + "/"
 	if _, err := tx.ExecContext(ctx, sqlSubstrLocalStateSubtreeDelete, prefix, descendantPrefix, descendantPrefix); err != nil {
 		return fmt.Errorf("substr subtree delete %s: %w", prefix, err)
@@ -49,7 +49,7 @@ func substrDeleteLocalStateSubtreeTx(ctx context.Context, tx sqlTxRunner, prefix
 func BenchmarkDeleteLocalStateSubtree(b *testing.B) {
 	forms := []struct {
 		name   string
-		delete func(context.Context, sqlTxRunner, string) error
+		delete func(context.Context, SqlTxRunner, string) error
 	}{
 		{name: "substr", delete: substrDeleteLocalStateSubtreeTx},
 		{name: "range", delete: deleteLocalStatePrefixTx},
@@ -73,7 +73,7 @@ func BenchmarkDeleteLocalStateSubtree(b *testing.B) {
 			b.Run(fmt.Sprintf("rows=%d/%s/%s", rows, form.name, shape.name), func(b *testing.B) {
 				ctx := b.Context()
 				for b.Loop() {
-					tx, err := beginPerfTx(ctx, store.rawDB())
+					tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 					require.NoError(b, err)
 					for _, path := range shape.paths {
 						require.NoError(b, form.delete(ctx, tx, path))
@@ -98,16 +98,16 @@ func benchLocalStateFilePath(top, folder, file int) string {
 func seedLocalStateBench(b *testing.B, store *SyncStore) int {
 	b.Helper()
 
-	rows := make([]localStateRow, 0,
+	rows := make([]LocalStateRow, 0,
 		benchLocalStateTopFolders*(1+benchLocalStateFoldersPerTop*(1+benchLocalStateFilesPerFolder)))
 	for top := range benchLocalStateTopFolders {
-		rows = append(rows, localStateRow{Path: benchLocalStateTopPath(top), ItemType: ItemTypeFolder})
+		rows = append(rows, LocalStateRow{Path: benchLocalStateTopPath(top), ItemType: ItemTypeFolder})
 		for folder := range benchLocalStateFoldersPerTop {
-			rows = append(rows, localStateRow{
+			rows = append(rows, LocalStateRow{
 				Path: fmt.Sprintf("%s/folder-%02d", benchLocalStateTopPath(top), folder), ItemType: ItemTypeFolder,
 			})
 			for file := range benchLocalStateFilesPerFolder {
-				rows = append(rows, localStateRow{
+				rows = append(rows, LocalStateRow{
 					Path: benchLocalStateFilePath(top, folder, file), ItemType: ItemTypeFile, Hash: "hash",
 				})
 			}

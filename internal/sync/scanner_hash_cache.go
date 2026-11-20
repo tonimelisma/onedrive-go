@@ -17,13 +17,13 @@ const hashCacheBatch = 256
 // baseline fast path (R-2.2.4), size, full-precision mtime, ctime, identity
 // and the racily-clean window. A record that fails any of them is ignored,
 // and the hash phase overwrites it.
-func (o *localObserver) cachedHashForNewFile(
-	dbRelPath string, info fs.FileInfo, observed *localStateRow, scanStartNano int64,
+func (o *LocalObserver) cachedHashForNewFile(
+	dbRelPath string, info fs.FileInfo, observed *LocalStateRow, scanStartNano int64,
 ) (string, bool) {
 	if o.hashCache == nil || info.IsDir() {
 		return "", false
 	}
-	entry, ok := o.hashCache.lookup(dbRelPath)
+	entry, ok := o.hashCache.Lookup(dbRelPath)
 	if !ok || entry.Hash == "" {
 		return "", false
 	}
@@ -49,16 +49,16 @@ func (o *localObserver) cachedHashForNewFile(
 // and writes them to the cache. A write that fails is logged once and the
 // scan goes on: the cache only saves work, it never decides anything.
 type hashCacheRecorder struct {
-	cache  localHashCache
+	cache  LocalHashCache
 	logger *slog.Logger
 	// mu guards batch and failed: hash workers add concurrently, and the
 	// first failed write is the one logged.
 	mu     stdsync.Mutex
-	batch  []localHashCacheEntry
+	batch  []LocalHashCacheEntry
 	failed bool
 }
 
-func newHashCacheRecorder(cache localHashCache, logger *slog.Logger) *hashCacheRecorder {
+func newHashCacheRecorder(cache LocalHashCache, logger *slog.Logger) *hashCacheRecorder {
 	return &hashCacheRecorder{cache: cache, logger: logger}
 }
 
@@ -69,19 +69,19 @@ func (r *hashCacheRecorder) addJob(ctx context.Context, job *hashJob, hash strin
 	if r.cache == nil || !job.isNew || hash == "" {
 		return
 	}
-	r.add(ctx, localHashCacheEntry{
+	r.add(ctx, LocalHashCacheEntry{
 		Path: job.dbRelPath, Hash: hash, Size: job.size, Mtime: job.mtime, Ctime: job.ctime,
 		Device: job.localDevice, Inode: job.localInode, BirthTime: job.localBirthTime,
 	})
 }
 
-func (r *hashCacheRecorder) add(ctx context.Context, entry localHashCacheEntry) {
+func (r *hashCacheRecorder) add(ctx context.Context, entry LocalHashCacheEntry) {
 	if r.cache == nil {
 		return
 	}
 	r.mu.Lock()
 	r.batch = append(r.batch, entry)
-	var full []localHashCacheEntry
+	var full []LocalHashCacheEntry
 	if len(r.batch) >= hashCacheBatch {
 		full, r.batch = r.batch, nil
 	}
@@ -107,8 +107,8 @@ func (r *hashCacheRecorder) flush(ctx context.Context) {
 	}
 }
 
-func (r *hashCacheRecorder) write(ctx context.Context, entries []localHashCacheEntry) {
-	if err := r.cache.record(ctx, entries); err != nil {
+func (r *hashCacheRecorder) write(ctx context.Context, entries []LocalHashCacheEntry) {
+	if err := r.cache.Record(ctx, entries); err != nil {
 		r.mu.Lock()
 		first := !r.failed
 		r.failed = true

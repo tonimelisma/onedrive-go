@@ -44,29 +44,29 @@ const (
 	ConditionUnexpectedCondition    ConditionKey = "unexpected_condition"
 )
 
-// conditionKeyForStoredCondition maps one durable sync-condition record
+// ConditionKeyForStoredCondition maps one durable sync-condition record
 // (observation issue, retry_work row, or block scope) into the shared
 // condition family consumed by logs, watch summaries, and CLI status.
-func conditionKeyForStoredCondition(conditionType IssueType, scopeKey ScopeKey) ConditionKey {
+func ConditionKeyForStoredCondition(conditionType IssueType, scopeKey ScopeKey) ConditionKey {
 	return conditionKeyForIssueTypeOrScope(
 		conditionType,
 		scopeKey,
-		describeScopeKey(scopeKey).DefaultConditionType,
+		DescribeScopeKey(scopeKey).DefaultConditionType,
 	)
 }
 
-// conditionKeyForRuntimeResult maps one execution-time classified result into
+// ConditionKeyForRuntimeResult maps one execution-time classified result into
 // the shared condition family used by logs, watch summaries, and status. A
 // transient runtime condition (a timeout, a conflict, a locked item) is an
 // expected failure that is retried, so it has no family; it used to be filed
 // as the unexpected condition. A failure with no condition at all is the
 // unexpected condition, and a result that is not a failure has none.
-func conditionKeyForRuntimeResult(class errclass.Class, conditionType IssueType) ConditionKey {
-	if key, ok := conditionKeyForIssueType(conditionType); ok {
+func ConditionKeyForRuntimeResult(class errclass.Class, conditionType IssueType) ConditionKey {
+	if key, ok := ConditionKeyForIssueType(conditionType); ok {
 		return key
 	}
 	if conditionType != "" {
-		// conditionKeyForIssueType names no family only for the transient
+		// ConditionKeyForIssueType names no family only for the transient
 		// members and the empty value.
 		return ""
 	}
@@ -87,14 +87,14 @@ func conditionKeyForRuntimeResult(class errclass.Class, conditionType IssueType)
 	}
 }
 
-// conditionClearsAutomatically reports whether a condition of this family
+// ConditionClearsAutomatically reports whether a condition of this family
 // clears without the user: OneDrive limiting requests or being unavailable,
 // which sync waits out. Such a condition is said at Info and never makes the
 // watch condition summary a warning. The switch names every ConditionKey (the
 // exhaustive linter holds it to that), so a new family is decided on purpose;
 // a key outside the set is not known to clear by itself, so it is reported as
 // something the user may need to act on.
-func conditionClearsAutomatically(key ConditionKey) bool {
+func ConditionClearsAutomatically(key ConditionKey) bool {
 	switch key {
 	case ConditionRateLimited, ConditionServiceOutage:
 		return true
@@ -160,11 +160,11 @@ func conditionKeyForIssueTypeOrScope(
 	scopeKey ScopeKey,
 	scopeFallbackIssueType IssueType,
 ) ConditionKey {
-	if key, ok := conditionKeyForIssueType(issueType); ok {
+	if key, ok := ConditionKeyForIssueType(issueType); ok {
 		return key
 	}
 
-	if key, ok := conditionKeyForIssueType(scopeFallbackIssueType); ok {
+	if key, ok := ConditionKeyForIssueType(scopeFallbackIssueType); ok {
 		return key
 	}
 
@@ -226,93 +226,93 @@ func conditionKeyRank(key ConditionKey) int {
 	return len(ordered)
 }
 
-// conditionKeyForIssueType is the condition family an issue type belongs to,
+// ConditionKeyForIssueType is the condition family an issue type belongs to,
 // in one switch that names every IssueType (the exhaustive linter holds it to
 // that), so a new member gets a family, or none, on purpose. ok is false only
 // where no family is named: for the transient runtime members, which no store
-// keeps and whose results conditionKeyForRuntimeResult groups by their class,
+// keeps and whose results ConditionKeyForRuntimeResult groups by their class,
 // and for the empty value, which means "no condition". A value outside the
 // enum, which the stores refuse and so only a programming error makes, is
 // ConditionUnexpectedCondition: a lookup used to miss it and let a caller
 // file it under whatever it tried next, a scope's condition included.
 //
 //nolint:gocyclo,funlen // one case per member: the family table of the enum
-func conditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
+func ConditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
 	switch issueType {
 	case IssueInvalidFilename:
 		return ConditionInvalidFilename, true
-	case issuePathTooLong:
+	case IssuePathTooLong:
 		return ConditionPathTooLong, true
-	case issueFileTooLarge:
+	case IssueFileTooLarge:
 		return ConditionFileTooLarge, true
-	case issueHashPanic:
+	case IssueHashPanic:
 		// The stored name is narrower than its use (issue_types.go).
 		return ConditionHashError, true
 	case IssueUnauthorized:
 		return ConditionAuthenticationRequired, true
 	case IssueRemoteWriteDenied:
 		return ConditionRemoteWriteDenied, true
-	case issueRemoteReadDenied:
+	case IssueRemoteReadDenied:
 		return ConditionRemoteReadDenied, true
-	case issueRemoteRootNotFound:
+	case IssueRemoteRootNotFound:
 		return ConditionRemoteRootNotFound, true
 	case IssueQuotaExceeded:
 		return ConditionQuotaExceeded, true
-	case issueRateLimited:
+	case IssueRateLimited:
 		return ConditionRateLimited, true
-	case issueLocalReadDenied:
+	case IssueLocalReadDenied:
 		return ConditionLocalReadDenied, true
-	case issueLocalWriteDenied:
+	case IssueLocalWriteDenied:
 		return ConditionLocalWriteDenied, true
-	case issueCaseCollision:
+	case IssueCaseCollision:
 		return ConditionCaseCollision, true
-	case issueRemoteNameTwin:
+	case IssueRemoteNameTwin:
 		return ConditionRemoteNameTwin, true
-	case issueDiskFull:
+	case IssueDiskFull:
 		return ConditionDiskFull, true
-	case issueServiceOutage:
+	case IssueServiceOutage:
 		return ConditionServiceOutage, true
-	case issueFileTooLargeForSpace:
+	case IssueFileTooLargeForSpace:
 		return ConditionFileTooLargeForSpace, true
-	case issueLocalNameTooLong:
+	case IssueLocalNameTooLong:
 		return ConditionLocalNameTooLong, true
-	case issueLocalReadOnly:
+	case IssueLocalReadOnly:
 		return ConditionLocalReadOnly, true
-	case issueDeletesHeld:
+	case IssueDeletesHeld:
 		return ConditionDeletesHeld, true
-	case issueLocalUnsyncableReplacement:
+	case IssueLocalUnsyncableReplacement:
 		return ConditionLocalUnsyncable, true
-	case issueLocalMountBoundary:
+	case IssueLocalMountBoundary:
 		return ConditionLocalMountBoundary, true
-	case issueLocalMountMissing:
+	case IssueLocalMountMissing:
 		return ConditionLocalMountMissing, true
-	case issueRemoteFolderUnverifiable:
+	case IssueRemoteFolderUnverifiable:
 		return ConditionRemoteFolderUnverified, true
-	case issueLocalInterruptedRemoval:
+	case IssueLocalInterruptedRemoval:
 		return ConditionLocalInterrupted, true
-	case issueRemovedFolderKept:
+	case IssueRemovedFolderKept:
 		return ConditionRemovedFolderKept, true
-	case issueLocalFileTooLarge:
+	case IssueLocalFileTooLarge:
 		return ConditionLocalFileTooLarge, true
-	case issueLocalBusy:
+	case IssueLocalBusy:
 		return ConditionLocalBusy, true
-	case issueLocalCrossDevice:
+	case IssueLocalCrossDevice:
 		return ConditionLocalCrossDevice, true
-	case issueUnsupportedOperation:
+	case IssueUnsupportedOperation:
 		return ConditionUnsupportedOperation, true
-	case issueMalwareDetected:
+	case IssueMalwareDetected:
 		return ConditionMalwareDetected, true
-	case issueLocalDatabaseOpen:
+	case IssueLocalDatabaseOpen:
 		return ConditionLocalDatabaseOpen, true
-	case issueUploadVerification:
+	case IssueUploadVerification:
 		return ConditionUploadVerification, true
-	case issueDownloadIntegrity:
+	case IssueDownloadIntegrity:
 		return ConditionDownloadIntegrity, true
-	case issueRequestTimeout,
-		issueTransientConflict,
-		issueTransientNotFound,
-		issueResourceLocked,
-		issueTransferURLRejected,
+	case IssueRequestTimeout,
+		IssueTransientConflict,
+		IssueTransientNotFound,
+		IssueResourceLocked,
+		IssueTransferURLRejected,
 		"":
 		return "", false
 	default:

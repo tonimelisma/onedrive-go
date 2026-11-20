@@ -28,7 +28,7 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	timers := make(chan capturedTimer, 8)
 	watcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, watcher, watchObserverTestOptions{
-		AfterFunc: func(delay time.Duration, fn func()) syncTimer {
+		AfterFunc: func(delay time.Duration, fn func()) SyncTimer {
 			timers <- capturedTimer{delay: delay, fn: fn}
 			return noopSyncTimer{}
 		},
@@ -36,8 +36,8 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	})
 	// One undelivered batch is all it takes: the runtime has not drained
 	// what it was already sent.
-	batches := make(chan localObservation, 1)
-	batches <- localObservation{deletedPaths: []string{"queued"}}
+	batches := make(chan LocalObservation, 1)
+	batches <- LocalObservation{DeletedPaths: []string{"queued"}}
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
@@ -59,8 +59,8 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	second.fn()
 
 	snapshot := receiveWithin(t, batches, "recovery full snapshot once the runtime has room")
-	require.Equal(t, localSnapshot, snapshot.kind)
-	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
+	require.Equal(t, LocalSnapshot, snapshot.Kind)
+	assert.True(t, containsLocalRow(snapshot.Rows, "missed.txt"))
 	// The after-scan hook runs once the snapshot is handed over, on the
 	// observer's goroutine; the receive above does not wait for it.
 	assert.Eventually(t, func() bool { return scans.Load() == 1 }, eventWait, 10*time.Millisecond)
@@ -83,15 +83,15 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 	tick := make(chan time.Time)
 	watcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, watcher, watchObserverTestOptions{
-		AfterFunc: func(delay time.Duration, fn func()) syncTimer {
+		AfterFunc: func(delay time.Duration, fn func()) SyncTimer {
 			timers <- capturedTimer{delay: delay, fn: fn}
 			return noopSyncTimer{}
 		},
 		AfterSafetyScan: func() { scans.Add(1) },
 		TickCh:          tick,
 	})
-	batches := make(chan localObservation, 1)
-	batches <- localObservation{deletedPaths: []string{"queued"}}
+	batches := make(chan LocalObservation, 1)
+	batches <- LocalObservation{DeletedPaths: []string{"queued"}}
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
@@ -106,8 +106,8 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 	recovery.fn()
 
 	snapshot := receiveWithin(t, batches, "full snapshot once the runtime has room")
-	require.Equal(t, localSnapshot, snapshot.kind)
-	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
+	require.Equal(t, LocalSnapshot, snapshot.Kind)
+	assert.True(t, containsLocalRow(snapshot.Rows, "missed.txt"))
 	assert.Eventually(t, func() bool { return scans.Load() == 1 }, eventWait, 10*time.Millisecond,
 		"the after-scan hook runs once the snapshot is handed over")
 	stopWatch(t, cancel, done)

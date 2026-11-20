@@ -44,7 +44,7 @@ func TestProductCode_RemovesATreeOnlyByTheVerifiedLocalDelete(t *testing.T) {
 
 	allowed := treeRemovalCall{
 		file:     "internal/sync/executor_delete.go",
-		function: "removeDisposableChildren",
+		function: "RemoveDisposableChildren",
 		call:     "e.syncTree.RemoveAll",
 	}
 	assert.Equal(t, []treeRemovalCall{allowed}, removals,

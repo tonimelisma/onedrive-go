@@ -876,7 +876,7 @@ func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.
 	for i := range attempts {
 		name := fmt.Sprintf("doc-%d.txt", i)
 		hookRan := false
-		_, err := client.uploadCreatingFn(t.Context(), graphRootID, name, strings.NewReader(content), int64(len(content)),
+		_, err := client.uploadCreatingFn(t.Context(), GraphRootID, name, strings.NewReader(content), int64(len(content)),
 			func(*graph.Item) error {
 				hookRan = true
 				return nil
@@ -921,7 +921,7 @@ func TestChaosGraph_TimeoutAfterCreateCanMoveThePlaceholderETag(t *testing.T) {
 	for i := range attempts {
 		name := fmt.Sprintf("doc-%d.txt", i)
 		var recorded *graph.Item
-		_, err := client.uploadCreatingFn(t.Context(), graphRootID, name, strings.NewReader(content), int64(len(content)),
+		_, err := client.uploadCreatingFn(t.Context(), GraphRootID, name, strings.NewReader(content), int64(len(content)),
 			func(created *graph.Item) error {
 				recorded = created
 				return nil

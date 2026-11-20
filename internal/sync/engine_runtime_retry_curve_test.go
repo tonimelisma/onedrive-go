@@ -18,14 +18,14 @@ import (
 func TestRetryDelayForCondition_ConditionsThatDoNotClearByThemselvesWaitOnTheDurableCurve(t *testing.T) {
 	t.Parallel()
 
-	for _, condition := range []IssueType{issueCaseCollision, issueRemoteFolderUnverifiable} {
+	for _, condition := range []IssueType{IssueCaseCollision, IssueRemoteFolderUnverifiable} {
 		delay := retryDelayForCondition(condition)
 		assert.Equal(t, durableRecheckDelay, delay(0), condition)
 		assert.Equal(t, 2*durableRecheckDelay, delay(1), condition)
 		assert.Equal(t, time.Hour, delay(20), "%s caps at an hour", condition)
 	}
 
-	transient := retryDelayForCondition(issueRequestTimeout)
+	transient := retryDelayForCondition(IssueRequestTimeout)
 	assert.Less(t, transient(0), durableRecheckDelay, "a condition that clears by itself keeps the transient curve, which starts at a second")
 	assert.LessOrEqual(t, transient(0), 2*retry.ReconcilePolicy().Delay(0)+time.Second)
 }
@@ -47,7 +47,7 @@ func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
 		issueTypeVerdictGroup[bool]{
 			verdict: true,
-			members: []IssueType{issueCaseCollision, issueRemoteFolderUnverifiable},
+			members: []IssueType{IssueCaseCollision, IssueRemoteFolderUnverifiable},
 		},
 		issueTypeVerdictGroup[bool]{
 			// Every other condition clears by itself, is held under its block
@@ -56,15 +56,15 @@ func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 			// durable curve, or never becomes retry work.
 			verdict: false,
 			members: []IssueType{
-				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueHashPanic,
-				IssueUnauthorized, IssueRemoteWriteDenied, issueRemoteReadDenied, issueRemoteRootNotFound, IssueQuotaExceeded,
-				issueRateLimited, issueLocalReadDenied, issueLocalWriteDenied, issueRemoteNameTwin,
-				issueDiskFull, issueServiceOutage, issueFileTooLargeForSpace, issueLocalNameTooLong,
-				issueLocalReadOnly, issueDeletesHeld, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
-				issueLocalMountMissing, issueLocalInterruptedRemoval, issueRemovedFolderKept, issueLocalFileTooLarge, issueLocalBusy, issueLocalCrossDevice,
-				issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen, issueUploadVerification,
-				issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict, issueTransientNotFound,
-				issueResourceLocked, issueTransferURLRejected,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic,
+				IssueUnauthorized, IssueRemoteWriteDenied, IssueRemoteReadDenied, IssueRemoteRootNotFound, IssueQuotaExceeded,
+				IssueRateLimited, IssueLocalReadDenied, IssueLocalWriteDenied, IssueRemoteNameTwin,
+				IssueDiskFull, IssueServiceOutage, IssueFileTooLargeForSpace, IssueLocalNameTooLong,
+				IssueLocalReadOnly, IssueDeletesHeld, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary,
+				IssueLocalMountMissing, IssueLocalInterruptedRemoval, IssueRemovedFolderKept, IssueLocalFileTooLarge, IssueLocalBusy, IssueLocalCrossDevice,
+				IssueUnsupportedOperation, IssueMalwareDetected, IssueLocalDatabaseOpen, IssueUploadVerification,
+				IssueDownloadIntegrity, IssueRequestTimeout, IssueTransientConflict, IssueTransientNotFound,
+				IssueResourceLocked, IssueTransferURLRejected,
 			},
 		},
 	), waitsOnTheDurableCurve)

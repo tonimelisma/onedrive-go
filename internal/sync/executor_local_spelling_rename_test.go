@@ -72,7 +72,7 @@ func TestExecutor_LocalMove_SpellingRenameWhoseSecondStepFindsTheNameTakenFails(
 	skipUnlessNamesCoexist(t, "Notes.txt", "notes.txt")
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "Notes.txt", "content")
 	require.NoError(t, os.Link(filepath.Join(syncRoot, "Notes.txt"), filepath.Join(syncRoot, "notes.txt")))
 	e.syncTree = e.syncTree.Interpose(func(h synctree.Handle) synctree.Handle {
@@ -80,12 +80,12 @@ func TestExecutor_LocalMove_SpellingRenameWhoseSecondStepFindsTheNameTakenFails(
 	})
 
 	o := e.ExecuteMove(t.Context(), &Action{
-		Type: ActionLocalMove, Path: "notes.txt", OldPath: "Notes.txt", View: &pathView{Path: "notes.txt"},
+		Type: ActionLocalMove, Path: "notes.txt", OldPath: "Notes.txt", View: &PathView{Path: "notes.txt"},
 	})
 
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, synctree.ErrTargetExists)
-	require.NotErrorIs(t, o.Error, errActionPreconditionChanged)
+	require.NotErrorIs(t, o.Error, ErrActionPreconditionChanged)
 	require.ErrorContains(t, o.Error, "renaming Notes.txt -> notes.txt")
 	requireExecFileContent(t, syncRoot, "Notes.txt", "content")
 	assert.ElementsMatch(t, []string{"Notes.txt", "notes.txt"}, localNames(t, syncRoot), "the entry is back under its old spelling")
@@ -103,13 +103,13 @@ func TestExecutor_RenameLocal_SpellingRenameOntoAnotherFileKeepsBoth(t *testing.
 	skipUnlessNamesCoexist(t, "Plan.txt", "plan.txt")
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "Plan.txt", "moving\n")
 	writeExecTestFile(t, syncRoot, "plan.txt", "another file\n")
 
 	err := e.renameLocal("Plan.txt", "plan.txt", true)
 
-	require.ErrorIs(t, err, errActionPreconditionChanged)
+	require.ErrorIs(t, err, ErrActionPreconditionChanged)
 	require.ErrorIs(t, err, synctree.ErrTargetExists)
 	requireExecFileContent(t, syncRoot, "Plan.txt", "moving\n")
 	requireExecFileContent(t, syncRoot, "plan.txt", "another file\n")
@@ -128,10 +128,10 @@ func TestExecutor_RenameLocal_SpellingRenameThatLeavesItsTemporaryNameIsDone(t *
 	synctest.SkipWithoutHardLinks(t)
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	capture, logger := synctest.NewLogCapture()
-	e.logger = logger
-	temporary := spellingRenameArtifactPrefix + "docs.txt"
+	e.SetLoggerForTest(logger)
+	temporary := SpellingRenameArtifactPrefix + "docs.txt"
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName(temporary)
 	writeExecTestFile(t, syncRoot, "Docs.txt", "content")
 
@@ -154,7 +154,7 @@ func TestExecutor_StoredNameSpelling_TwoKeyEqualEntriesAreAnError(t *testing.T) 
 	skipUnlessNamesCoexist(t, "Docs.txt", "DOCS.txt")
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "Docs.txt", "first")
 
 	stored, err := e.storedNameSpelling("docs.txt")
@@ -165,7 +165,7 @@ func TestExecutor_StoredNameSpelling_TwoKeyEqualEntriesAreAnError(t *testing.T) 
 	_, err = e.storedNameSpelling("docs.txt")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "holds more than one entry OneDrive treats as that name")
-	require.NotErrorIs(t, err, errActionPreconditionChanged, "a collision the user sees, not a replan")
+	require.NotErrorIs(t, err, ErrActionPreconditionChanged, "a collision the user sees, not a replan")
 
 	require.Error(t, e.respellLocal("docs.txt"))
 	requireExecFileContent(t, syncRoot, "Docs.txt", "first")
@@ -192,7 +192,7 @@ func TestExecutor_ExactLocalNameExists_TwoEntriesOfOneStoredForm(t *testing.T) {
 	skipUnlessNamesCoexist(t, nfc, nfd)
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 
 	assert.False(t, e.exactLocalNameExists(nfc), "no entry")
 	writeExecTestFile(t, syncRoot, nfd, "decomposed")

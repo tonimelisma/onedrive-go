@@ -54,22 +54,6 @@ func (m localMoveEntry) requireAtSource(t *testing.T, syncRoot string) {
 	requireExecFileContent(t, syncRoot, filepath.Join(m.src, "child.txt"), "moving\n")
 }
 
-// requireTrashHoldsOnce asserts that trash holds exactly one entry, for path,
-// whose file holds content.
-func requireTrashHoldsOnce(t *testing.T, trash *localtrash.Trash, path, content string) localtrash.Entry {
-	t.Helper()
-
-	entries, err := trash.List()
-	require.NoError(t, err)
-	require.Len(t, entries, 1, "the displaced file is in the trash exactly once")
-	assert.Equal(t, path, entries[0].Path)
-	data, err := localpath.ReadFile(entries[0].ItemPath)
-	require.NoError(t, err)
-	assert.Equal(t, content, string(data))
-
-	return entries[0]
-}
-
 // Validates: R-6.4.8, R-2.17.9
 //
 // A local move never replaces what it did not expect at its destination: an
@@ -98,7 +82,7 @@ func TestExecutor_LocalMove_DestinationTakenAfterTheCheckIsKept(t *testing.T) {
 			}
 
 			cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-			e := newExecution(cfg, emptyBaseline())
+			e := NewExecution(cfg, emptyBaseline())
 			entry.create(t, syncRoot)
 			if entry.itemType == ItemTypeFile {
 				writeExecTestFile(t, syncRoot, entry.dst, "appeared\n")
@@ -110,11 +94,11 @@ func TestExecutor_LocalMove_DestinationTakenAfterTheCheckIsKept(t *testing.T) {
 
 			o := e.ExecuteMove(t.Context(), &Action{
 				Type: ActionLocalMove, Path: entry.dst, OldPath: entry.src,
-				View: &pathView{Path: entry.dst},
+				View: &PathView{Path: entry.dst},
 			})
 
 			requireOutcomeFailure(t, &o)
-			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+			require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 			require.ErrorIs(t, o.Error, synctree.ErrTargetExists)
 			entry.requireAtSource(t, syncRoot)
 			if entry.itemType == ItemTypeFile {
@@ -146,27 +130,27 @@ func TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName(t *test
 			cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 			trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 			cfg.SetTrash(trash)
-			cfg.crashAt = func(point string) error {
-				if point == crashPointLocalMoveDestinationTrashed {
+			cfg.SetCrashHookForTest(func(point string) error {
+				if point == CrashPointLocalMoveDestinationTrashed {
 					writeExecTestFile(t, syncRoot, entry.dst, "saved meanwhile\n")
 				}
 				return nil
-			}
-			e := newExecution(cfg, emptyBaseline())
+			})
+			e := NewExecution(cfg, emptyBaseline())
 			entry.create(t, syncRoot)
 			writeExecTestFile(t, syncRoot, entry.dst, "bravo\n")
 			planned := plannedDestination(t, e, syncRoot, entry.dst)
 
 			o := e.ExecuteMove(t.Context(), &Action{
 				Type: ActionLocalMove, Path: entry.dst, OldPath: entry.src, ReplaceLocalTarget: true,
-				View: &pathView{
+				View: &PathView{
 					Path: entry.dst, Local: planned,
 					Baseline: &BaselineEntry{Path: entry.src, ItemType: entry.itemType},
 				},
 			})
 
 			requireOutcomeFailure(t, &o)
-			require.ErrorIs(t, o.Error, errActionPreconditionChanged)
+			require.ErrorIs(t, o.Error, ErrActionPreconditionChanged)
 			require.ErrorIs(t, o.Error, synctree.ErrTargetExists)
 			requireExecFileContent(t, syncRoot, entry.dst, "saved meanwhile\n")
 			entry.requireAtSource(t, syncRoot)
@@ -188,15 +172,15 @@ func TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened(t *tes
 	synctest.SkipWithoutHardLinks(t)
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	capture, logger := synctest.NewLogCapture()
-	e.logger = logger
+	e.SetLoggerForTest(logger)
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName("a.txt")
 	writeExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	moving := entryIdentity(t, filepath.Join(syncRoot, "a.txt"))
 
 	o := e.ExecuteMove(t.Context(), &Action{
-		Type: ActionLocalMove, Path: "b.txt", OldPath: "a.txt", View: &pathView{Path: "b.txt"},
+		Type: ActionLocalMove, Path: "b.txt", OldPath: "a.txt", View: &PathView{Path: "b.txt"},
 	})
 
 	requireOutcomeSuccess(t, &o)
@@ -221,7 +205,7 @@ func TestExecutor_LocalMove_DestinationHashStopsWhenTheContextEnds(t *testing.T)
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, "b.txt", "bravo\n")
 	planned := plannedDestination(t, e, syncRoot, "b.txt")
 	file, err := localpath.OpenRegular(filepath.Join(syncRoot, "b.txt"))
@@ -237,20 +221,8 @@ func TestExecutor_LocalMove_DestinationHashStopsWhenTheContextEnds(t *testing.T)
 	require.ErrorIs(t, verify(file, info), context.Canceled)
 }
 
-// entryIdentity is the device and inode of the entry at path, not followed.
-func entryIdentity(t *testing.T, path string) synctree.FileIdentity {
-	t.Helper()
-
-	info, err := os.Lstat(path)
-	require.NoError(t, err)
-	identity, ok := synctree.IdentityFromFileInfo(info)
-	require.True(t, ok)
-
-	return synctree.FileIdentity{Device: identity.Device, Inode: identity.Inode}
-}
-
 // plannedDestination is the local state a plan saw of the file at rel.
-func plannedDestination(t *testing.T, e *executor, syncRoot, rel string) *localState {
+func plannedDestination(t *testing.T, e *Executor, syncRoot, rel string) *LocalState {
 	t.Helper()
 
 	hash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, rel))
@@ -258,5 +230,5 @@ func plannedDestination(t *testing.T, e *executor, syncRoot, rel string) *localS
 	info, err := os.Stat(filepath.Join(syncRoot, rel))
 	require.NoError(t, err)
 
-	return &localState{ItemType: ItemTypeFile, Hash: hash, Size: info.Size()}
+	return &LocalState{ItemType: ItemTypeFile, Hash: hash, Size: info.Size()}
 }

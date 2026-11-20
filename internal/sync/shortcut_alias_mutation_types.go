@@ -9,14 +9,14 @@ package sync
 type shortcutAliasMutationKind string
 
 const (
-	shortcutAliasMutationRename shortcutAliasMutationKind = "rename"
-	shortcutAliasMutationDelete shortcutAliasMutationKind = "delete"
+	ShortcutAliasMutationRename shortcutAliasMutationKind = "rename"
+	ShortcutAliasMutationDelete shortcutAliasMutationKind = "delete"
 )
 
-// shortcutAliasMutation is intentionally scoped to one shortcut placeholder by
+// ShortcutAliasMutation is intentionally scoped to one shortcut placeholder by
 // binding item ID. It is not a discovery API and cannot address content inside
 // the child target.
-type shortcutAliasMutation struct {
+type ShortcutAliasMutation struct {
 	Kind              shortcutAliasMutationKind
 	BindingItemID     string
 	RelativeLocalPath string

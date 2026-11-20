@@ -12,17 +12,17 @@ type actionFreshnessInputs struct {
 	LocalTruthComplete bool
 	RemoteTruthKnown   bool
 
-	LocalAtView          *localStateRow
+	LocalAtView          *LocalStateRow
 	LocalAtViewFound     bool
-	LocalAtMovePeer      *localStateRow
+	LocalAtMovePeer      *LocalStateRow
 	LocalAtMovePeerFound bool
 
-	RemoteAtView          *remoteStateRow
+	RemoteAtView          *RemoteStateRow
 	RemoteAtViewFound     bool
-	RemoteAtMovePeer      *remoteStateRow
+	RemoteAtMovePeer      *RemoteStateRow
 	RemoteAtMovePeerFound bool
 
-	RemoteByID      *remoteStateRow
+	RemoteByID      *RemoteStateRow
 	RemoteByIDFound bool
 }
 
@@ -40,9 +40,21 @@ const (
 	actionFreshnessSourceRemoteTruth
 )
 
-func evaluateActionFreshnessFromStore(
+// ExecutorStore is the executor's view of the sync store: the reads that
+// check an action is still fresh and the commit of its outcome. *SyncStore
+// implements it; the engine hands it over (executorStoreOf).
+type ExecutorStore interface {
+	CommitMutation(ctx context.Context, outcome *BaselineMutation) error
+	GetLocalStateByPath(ctx context.Context, path string) (*LocalStateRow, bool, error)
+	GetRemoteStateByID(ctx context.Context, driveID driveid.ID, itemID string) (*RemoteStateRow, bool, error)
+	GetRemoteStateByPath(ctx context.Context, path string, driveID driveid.ID) (*RemoteStateRow, bool, error)
+	Load(ctx context.Context) (*Baseline, error)
+	ReadObservationState(ctx context.Context) (*ObservationState, error)
+}
+
+func EvaluateActionFreshnessFromStore(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 ) (actionFreshnessDecision, error) {
 	// Worker and admission validation fail closed on cancellation. A stopping
@@ -74,7 +86,7 @@ func evaluateActionFreshnessFromStore(
 
 func loadActionFreshnessInputs(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 ) (actionFreshnessInputs, error) {
 	inputs := actionFreshnessInputs{}
@@ -100,7 +112,7 @@ func loadActionFreshnessInputs(
 
 func loadLocalActionFreshnessInputs(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 	inputs *actionFreshnessInputs,
 ) error {
@@ -109,7 +121,7 @@ func loadLocalActionFreshnessInputs(
 	}
 
 	if actionUsesLocalFreshness(action) {
-		viewPath := actionViewPath(action)
+		viewPath := ActionViewPath(action)
 		row, found, err := store.GetLocalStateByPath(ctx, viewPath)
 		if err != nil {
 			return fmt.Errorf("sync: reading local truth for action freshness: %w", err)
@@ -132,7 +144,7 @@ func loadLocalActionFreshnessInputs(
 
 func loadRemoteActionFreshnessInputs(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 	inputs *actionFreshnessInputs,
 ) error {
@@ -176,7 +188,7 @@ func loadRemoteActionFreshnessInputs(
 // and re-paths the subtree. Looked up by path, a download or local move into
 // a folder renamed earlier in the same pass was declared stale and replanned
 // on the next pass. Absence (a planned create) is still checked by path.
-func loadPlannedRemoteTruth(ctx context.Context, store *SyncStore, action *Action) (*remoteStateRow, bool, error) {
+func loadPlannedRemoteTruth(ctx context.Context, store ExecutorStore, action *Action) (*RemoteStateRow, bool, error) {
 	if planned := action.View.Remote; planned != nil && !planned.IsDeleted && planned.ItemID != "" {
 		row, found, err := store.GetRemoteStateByID(ctx, driveid.ID{}, planned.ItemID)
 		if err != nil {
@@ -185,7 +197,7 @@ func loadPlannedRemoteTruth(ctx context.Context, store *SyncStore, action *Actio
 		return row, found, nil
 	}
 
-	row, found, err := store.GetRemoteStateByPath(ctx, actionViewPath(action), driveid.ID{})
+	row, found, err := store.GetRemoteStateByPath(ctx, ActionViewPath(action), driveid.ID{})
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: reading remote truth for action freshness: %w", err)
 	}
@@ -223,7 +235,7 @@ func evaluateLocalActionFreshness(action *Action, inputs actionFreshnessInputs) 
 	}
 
 	planned := action.View.Local
-	viewPath := actionViewPath(action)
+	viewPath := ActionViewPath(action)
 	if planned == nil {
 		if inputs.LocalAtViewFound {
 			return staleLocalAction("%s has current local truth but was absent when planned", viewPath)
@@ -246,7 +258,7 @@ func evaluateRemoteActionFreshness(action *Action, inputs actionFreshnessInputs)
 	}
 
 	planned := action.View.Remote
-	viewPath := actionViewPath(action)
+	viewPath := ActionViewPath(action)
 	if planned == nil || planned.IsDeleted {
 		if inputs.RemoteAtViewFound {
 			return staleRemoteAction("%s has current remote truth but was absent when planned", viewPath)
@@ -279,7 +291,7 @@ func evaluateMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs)
 		ActionCleanup:
 		return freshAction()
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
@@ -290,7 +302,7 @@ func evaluateLocalMoveEndpointFreshness(action *Action, inputs actionFreshnessIn
 		}
 		// The source must still be the synced item; its content may have
 		// changed (D-053), which the rename carries and the next pass uploads.
-		if action.View.Baseline != nil && !localRowIsBaselineItem(inputs.LocalAtMovePeer, action.View.Baseline) {
+		if action.View.Baseline != nil && !LocalRowIsBaselineItem(inputs.LocalAtMovePeer, action.View.Baseline) {
 			return staleLocalAction("%s local move source is no longer the synced item", action.OldPath)
 		}
 	}
@@ -306,7 +318,7 @@ func evaluateLocalMoveEndpointFreshness(action *Action, inputs actionFreshnessIn
 }
 
 func evaluateRemoteMoveEndpointFreshness(action *Action, inputs actionFreshnessInputs) actionFreshnessDecision {
-	if inputs.LocalTruthComplete && action.Path != "" && action.Path != actionViewPath(action) {
+	if inputs.LocalTruthComplete && action.Path != "" && action.Path != ActionViewPath(action) {
 		peer, _ := localMovePeerPath(action)
 		if !inputs.LocalAtMovePeerFound || inputs.LocalAtMovePeer == nil {
 			return staleLocalAction("%s local move destination is missing from current local truth", peer)
@@ -318,7 +330,7 @@ func evaluateRemoteMoveEndpointFreshness(action *Action, inputs actionFreshnessI
 	// The same item at the destination means the move already happened (the
 	// other side made the same rename, or an earlier attempt's outcome was
 	// lost): the executor records it without a mutation (D-050).
-	if inputs.RemoteTruthKnown && action.Path != "" && action.Path != actionViewPath(action) &&
+	if inputs.RemoteTruthKnown && action.Path != "" && action.Path != ActionViewPath(action) &&
 		inputs.RemoteAtMovePeerFound && (inputs.RemoteAtMovePeer == nil || inputs.RemoteAtMovePeer.ItemID != action.ItemID) {
 		return staleRemoteAction("%s remote move destination already exists in current remote truth", action.Path)
 	}
@@ -331,13 +343,13 @@ func evaluateRemoteIdentityFreshness(action *Action, inputs actionFreshnessInput
 		return freshAction()
 	}
 	if !inputs.RemoteByIDFound || inputs.RemoteByID == nil {
-		return staleRemoteAction("%s remote item %s is missing from current remote truth", actionViewPath(action), action.ItemID)
+		return staleRemoteAction("%s remote item %s is missing from current remote truth", ActionViewPath(action), action.ItemID)
 	}
 	if inputs.RemoteByID.Path != expectedRemoteIdentityPath(action) {
-		return staleRemoteAction("%s remote item %s moved to %s", actionViewPath(action), action.ItemID, inputs.RemoteByID.Path)
+		return staleRemoteAction("%s remote item %s moved to %s", ActionViewPath(action), action.ItemID, inputs.RemoteByID.Path)
 	}
 	if !remoteRowMatchesPlannedForAction(action, inputs.RemoteByID, action.View.Remote) {
-		return staleRemoteAction("%s remote item %s changed since planning", actionViewPath(action), action.ItemID)
+		return staleRemoteAction("%s remote item %s changed since planning", ActionViewPath(action), action.ItemID)
 	}
 
 	return freshAction()
@@ -370,7 +382,7 @@ func actionNeedsRemoteIdentityFreshness(action *Action) bool {
 }
 
 func actionHasPlannerView(action *Action) bool {
-	return action != nil && action.View != nil && actionViewPath(action) != ""
+	return action != nil && action.View != nil && ActionViewPath(action) != ""
 }
 
 // localMovePeerPath is where freshness reads a move's other endpoint in
@@ -393,7 +405,7 @@ func movePeerPath(action *Action) (string, bool) {
 	case ActionLocalMove:
 		return action.OldPath, action.OldPath != ""
 	case ActionRemoteMove:
-		return action.Path, action.Path != "" && action.Path != actionViewPath(action)
+		return action.Path, action.Path != "" && action.Path != ActionViewPath(action)
 	case ActionDownload,
 		ActionUpload,
 		ActionLocalDelete,
@@ -404,7 +416,7 @@ func movePeerPath(action *Action) (string, bool) {
 		ActionCleanup:
 		return "", false
 	default:
-		panic(outsideTheEnum(action.Type))
+		panic(OutsideTheEnum(action.Type))
 	}
 }
 
@@ -427,18 +439,18 @@ func expectedRemoteIdentityPath(action *Action) string {
 		}
 	}
 
-	return actionViewPath(action)
+	return ActionViewPath(action)
 }
 
-func localRowMatchesPlanned(row *localStateRow, planned *localState) bool {
+func localRowMatchesPlanned(row *LocalStateRow, planned *LocalState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
 	if row.ItemType != planned.ItemType {
 		return false
 	}
-	if rowIdentity, rowKnown := row.fileIdentity(); rowKnown {
-		if plannedIdentity, plannedKnown := planned.fileIdentity(); plannedKnown &&
+	if rowIdentity, rowKnown := row.FileIdentity(); rowKnown {
+		if plannedIdentity, plannedKnown := planned.FileIdentity(); plannedKnown &&
 			!synctree.SameIdentity(rowIdentity, plannedIdentity) {
 			return false
 		}
@@ -453,9 +465,9 @@ func localRowMatchesPlanned(row *localStateRow, planned *localState) bool {
 	return row.Size == planned.Size && row.Mtime == planned.Mtime
 }
 
-// localRowIsBaselineItem reports whether a local row is still the synced item:
+// LocalRowIsBaselineItem reports whether a local row is still the synced item:
 // the same type and, when both sides know it, the same filesystem identity.
-func remoteRowMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
+func remoteRowMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -466,7 +478,7 @@ func remoteRowMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
 	return remoteContentMatchesPlanned(row, planned)
 }
 
-func remoteRowMatchesPlannedForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
+func remoteRowMatchesPlannedForAction(action *Action, row *RemoteStateRow, planned *RemoteState) bool {
 	if plannedPostRemoteMoveContentUpload(action) {
 		return remoteRowMatchesPostRemoteMoveUpload(row, planned)
 	}
@@ -474,7 +486,7 @@ func remoteRowMatchesPlannedForAction(action *Action, row *remoteStateRow, plann
 	return remoteRowMatchesPlanned(row, planned)
 }
 
-func remoteRowMatchesPostRemoteMoveUpload(row *remoteStateRow, planned *remoteState) bool {
+func remoteRowMatchesPostRemoteMoveUpload(row *RemoteStateRow, planned *RemoteState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -500,14 +512,14 @@ func actionUploadHasMovedBaseline(action *Action) bool {
 	if action.View.Baseline == nil || action.View.Remote == nil {
 		return false
 	}
-	if action.View.Baseline.Path == "" || action.View.Baseline.Path == actionViewPath(action) {
+	if action.View.Baseline.Path == "" || action.View.Baseline.Path == ActionViewPath(action) {
 		return false
 	}
 
 	return true
 }
 
-func plannedPostMoveRemoteMatchesBaseline(remote *remoteState, baseline *BaselineEntry) bool {
+func plannedPostMoveRemoteMatchesBaseline(remote *RemoteState, baseline *BaselineEntry) bool {
 	if baseline == nil || remote == nil {
 		return false
 	}
@@ -525,7 +537,7 @@ func plannedPostMoveRemoteMatchesBaseline(remote *remoteState, baseline *Baselin
 	return true
 }
 
-func remoteContentMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
+func remoteContentMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
 	if planned.ItemType == ItemTypeFolder {
 		return true
 	}
@@ -535,14 +547,14 @@ func remoteContentMatchesPlanned(row *remoteStateRow, planned *remoteState) bool
 	if row.Size != planned.Size {
 		return false
 	}
-	if storedTimeIsSet(row.Mtime) && storedTimeIsSet(planned.Mtime) {
+	if StoredTimeIsSet(row.Mtime) && StoredTimeIsSet(planned.Mtime) {
 		return row.Mtime == planned.Mtime
 	}
 
 	return true
 }
 
-func remoteIdentityMatchesPlanned(row *remoteStateRow, planned *remoteState) bool {
+func remoteIdentityMatchesPlanned(row *RemoteStateRow, planned *RemoteState) bool {
 	if !remoteIdentityMatchesPlannedExceptETag(row, planned) {
 		return false
 	}
@@ -555,7 +567,7 @@ func remoteIdentityMatchesPlanned(row *remoteStateRow, planned *remoteState) boo
 	return true
 }
 
-func remoteIdentityMatchesPlannedExceptETag(row *remoteStateRow, planned *remoteState) bool {
+func remoteIdentityMatchesPlannedExceptETag(row *RemoteStateRow, planned *RemoteState) bool {
 	if planned.ItemID != "" && row.ItemID != planned.ItemID {
 		return false
 	}

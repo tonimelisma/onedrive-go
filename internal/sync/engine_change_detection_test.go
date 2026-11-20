@@ -105,7 +105,7 @@ func TestRunOnce_TransfersRecordLocalCtimeAndIdentity(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, ctime, entry.LocalCtime, "%s baseline ctime", name)
 		assert.True(t, entry.LocalHasIdentity, "%s baseline identity", name)
-		assert.True(t, canReuseBaselineHash(info, entry, ctime+2*int64(racilyCleanWindow)), "%s fast path applies", name)
+		assert.True(t, CanReuseBaselineHash(info, entry, ctime+2*int64(RacilyCleanWindow)), "%s fast path applies", name)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestRunOnce_FullRescanWithItemReplacedAtSamePath(t *testing.T) {
 	remote.removeUnreported("item-old")
 	remote.addFile(t, "item-new", "root", "doc.txt", "new version")
 	logs := &syncLockedBuffer{}
-	eng.baseline.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	eng.baseline.SetLoggerForTest(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)

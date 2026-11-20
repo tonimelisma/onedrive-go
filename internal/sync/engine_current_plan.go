@@ -32,7 +32,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 		return nil, err
 	}
 
-	return r.reconcileRuntimeStateStage(ctx, build, passObservedRemoteThenLocal)
+	return r.reconcileRuntimeStateStage(ctx, build, PassObservedRemoteThenLocal)
 }
 
 func (r *oneShotRunner) runDryRunCurrentPlan(
@@ -82,7 +82,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 		return nil, err
 	}
 
-	return rt.reconcileRuntimeStateStage(ctx, build, passObservedRemoteThenLocal)
+	return rt.reconcileRuntimeStateStage(ctx, build, PassObservedRemoteThenLocal)
 }
 
 // runSteadyStateCurrentPlan plans on the local truth the replan just
@@ -103,13 +103,13 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 		return nil, err
 	}
 
-	return rt.reconcileRuntimeStateStage(ctx, build, passRefreshedLocalOnly)
+	return rt.reconcileRuntimeStateStage(ctx, build, PassRefreshedLocalOnly)
 }
 
 type currentObservation struct {
 	inputs                   currentInputs
 	observedPaths            int
-	pendingRemoteObservation *remoteObservationBatch
+	pendingRemoteObservation *RemoteObservationBatch
 	childPublication         ShortcutChildWorkSnapshot
 }
 
@@ -155,26 +155,26 @@ func currentLocalRefreshStep(err error) (localCurrentRefreshStep, bool) {
 }
 
 type builtCurrentPlan struct {
-	Plan                     *actionPlan
+	Plan                     *ActionPlan
 	Report                   *Report
-	PendingRemoteObservation *remoteObservationBatch
+	PendingRemoteObservation *RemoteObservationBatch
 	ChildPublication         ShortcutChildWorkSnapshot
 }
 
 type runtimePlan struct {
-	Plan                     *actionPlan
+	Plan                     *ActionPlan
 	Report                   *Report
-	PendingRemoteObservation *remoteObservationBatch
+	PendingRemoteObservation *RemoteObservationBatch
 	ChildPublication         ShortcutChildWorkSnapshot
 	RetryRows                []RetryWorkRow
 	BlockScopes              []*BlockScope
 }
 
 type currentInputs struct {
-	comparisons       []sQLiteComparisonRow
-	reconciliations   []sQLiteReconciliationRow
-	localRows         []localStateRow
-	remoteRows        []remoteStateRow
+	comparisons       []SQLiteComparisonRow
+	reconciliations   []SQLiteReconciliationRow
+	localRows         []LocalStateRow
+	remoteRows        []RemoteStateRow
 	observationIssues []ObservationIssueRow
 	// baseline is read in the same transaction as the comparison rows, so a
 	// baseline_present row always has its entry. The run's cached baseline
@@ -186,7 +186,7 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (*remoteObservationBatch, error) {
+) (*RemoteObservationBatch, error) {
 	pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, err
@@ -203,7 +203,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	fullReconcile bool,
-) (*remoteObservationBatch, error) {
+) (*RemoteObservationBatch, error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
 	if err != nil {
 		return nil, err
@@ -213,38 +213,38 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 		return nil, err
 	}
 
-	if len(observationBatch.observed) > 0 {
-		if err := flow.commitObservedItems(ctx, observationBatch.observed, ""); err != nil {
+	if len(observationBatch.Observed) > 0 {
+		if err := flow.commitObservedItems(ctx, observationBatch.Observed, ""); err != nil {
 			return nil, err
 		}
 	}
 	if err := flow.applyObservationFindingsBatch(
 		ctx,
-		&observationBatch.findings,
+		&observationBatch.Findings,
 		recordSkippedOneDriveItems,
 		engineDebugNoteRemoteCurrent,
 	); err != nil {
 		return nil, err
 	}
 
-	return observationBatch.deferredProgress(), nil
+	return observationBatch.DeferredProgress(), nil
 }
 
-func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch *remoteObservationBatch) error {
+func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch *RemoteObservationBatch) error {
 	if flow == nil || flow.engine == nil || batch == nil {
 		return nil
 	}
 
-	topology := batch.shortcutTopology
+	topology := batch.ShortcutTopology
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.engine.shortcutNamespaceID
 	}
 	if err := flow.engine.confirmShortcutCompleteOmissions(ctx, &topology); err != nil {
 		return err
 	}
-	remoteChanged := topology.shouldApply()
+	remoteChanged := topology.ShouldApply()
 	if remoteChanged {
-		if _, err := flow.deps.store.applyShortcutTopology(ctx, topology); err != nil {
+		if _, err := flow.deps.store.ApplyShortcutTopology(ctx, topology); err != nil {
 			return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
 		}
 	}
@@ -258,14 +258,14 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if refreshErr := flow.engine.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	parentRoots, err := flow.deps.store.listShortcutRoots(ctx)
+	parentRoots, err := flow.deps.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
 	if flow.engine.shortcutChildWorkSink == nil {
 		return nil
 	}
-	return flow.engine.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
+	return flow.engine.shortcutChildWorkSink(ctx, ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		topology.NamespaceID,
 		flow.engine.syncRoot,
 		flow.engine.contentFilter,
@@ -277,10 +277,10 @@ func (flow *engineFlow) observeLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 	recordHashes bool,
-) (scanResult, error) {
+) (ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl, recordHashes)
 	if err != nil {
-		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
+		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepObservation, err)
 	}
 
 	return localResult, nil
@@ -289,15 +289,15 @@ func (flow *engineFlow) observeLocalCurrentState(
 func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
-) (scanResult, error) {
+) (ScanResult, error) {
 	localResult, err := flow.observeLocalCurrentState(ctx, bl, true)
 	if err != nil {
-		return scanResult{}, err
+		return ScanResult{}, err
 	}
 	if _, err := flow.commitLocalScan(
-		ctx, buildLocalStateRows(localResult), localResult.Skipped, localResult.CrossedMounts,
+		ctx, BuildLocalStateRows(localResult), localResult.Skipped, localResult.CrossedMounts,
 	); err != nil {
-		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
+		return ScanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
 	}
 
 	return localResult, nil
@@ -306,11 +306,11 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	ctx context.Context,
 	bl *Baseline,
-) ([]remoteItem, string, shortcutTopologyBatch, error) {
+) ([]RemoteItem, string, ShortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := eng.baseline.ReadObservationState(ctx)
 	if err != nil {
-		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: reading observation state: %w", err)
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: reading observation state: %w", err)
 	}
 	savedToken := state.Cursor
 
@@ -318,18 +318,18 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	obs.SetItemClient(eng.itemsClient)
 	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
 	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
-		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
 	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.currentProtectedRoots())
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
-		if errors.Is(err, errDeltaExpired) {
+		if errors.Is(err, ErrDeltaExpired) {
 			// The caller recovers through the full refresh with orphan
 			// detection (R-2.15.3); keep the resync flavor in the chain.
-			return nil, "", shortcutTopologyBatch{}, err
+			return nil, "", ShortcutTopologyBatch{}, err
 		}
-		return nil, "", shortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
+		return nil, "", ShortcutTopologyBatch{}, fmt.Errorf("sync: observing remote delta: %w", err)
 	}
 
 	return events, token, topology, nil
@@ -347,22 +347,22 @@ func (flow *engineFlow) observeLocal(
 	ctx context.Context,
 	bl *Baseline,
 	recordHashes bool,
-) (scanResult, error) {
+) (ScanResult, error) {
 	eng := flow.engine
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
-		return scanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
+		return ScanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 
 	obs := eng.buildLocalObserver(bl, eng.logger)
 	// This scan runs no timers. Its racily-clean window is measured on the
 	// run's clock, the one every other time decision of the run reads.
 	if flow.deps.clock != nil {
-		obs.clock = flow.deps.clock
+		obs.SetClock(flow.deps.clock)
 	}
 	if recordHashes {
-		cache, cacheErr := eng.baseline.newLocalHashCache(ctx)
+		cache, cacheErr := eng.baseline.NewLocalHashCache(ctx)
 		if cacheErr != nil {
-			return scanResult{}, cacheErr
+			return ScanResult{}, cacheErr
 		}
 		obs.SetLocalHashCache(cache)
 	}
@@ -370,15 +370,15 @@ func (flow *engineFlow) observeLocal(
 	obs.SetProtectedRoots(eng.currentProtectedRoots())
 	obs.SetObservationRules(eng.localRules)
 	obs.SetSyncRootIdentity(eng.syncRootIdentity)
-	mountFlags, err := eng.baseline.listMountBoundaries(ctx)
+	mountFlags, err := eng.baseline.ListMountBoundaries(ctx)
 	if err != nil {
-		return scanResult{}, err
+		return ScanResult{}, err
 	}
 	obs.SetMountBoundaryFlags(mountFlags)
 
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	if err != nil {
-		return scanResult{}, fmt.Errorf("sync: local scan: %w", err)
+		return ScanResult{}, fmt.Errorf("sync: local scan: %w", err)
 	}
 
 	return result, nil
@@ -404,7 +404,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 
-	scratchStore, cleanup, err := flow.deps.store.createScratchPlanningStore(ctx, bl)
+	scratchStore, cleanup, err := flow.deps.store.CreateScratchPlanningStore(ctx, bl)
 	if err != nil {
 		return nil, err
 	}
@@ -416,19 +416,19 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		}
 	}()
 
-	commitErr := scratchStore.CommitObservation(ctx, observationBatch.observed, "", flow.engine.driveID)
+	commitErr := scratchStore.CommitObservation(ctx, observationBatch.Observed, "", flow.engine.driveID)
 	if commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run remote snapshot to scratch store: %w", commitErr)
 	}
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.findings); reconcileErr != nil {
+	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &observationBatch.Findings); reconcileErr != nil {
 		return nil, fmt.Errorf("sync: reconciling dry-run remote observation findings in scratch store: %w", reconcileErr)
 	}
 	flow.logSkippedObservationFindings(localResult.Skipped, flow.knownObservationIssues(ctx))
 	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
-	if _, commitErr := scratchStore.CommitLocalSnapshot(ctx, &localSnapshotCommit{
-		rows:          buildLocalStateRows(localResult),
-		findings:      &localFindings,
-		crossedMounts: localResult.CrossedMounts,
+	if _, commitErr := scratchStore.CommitLocalSnapshot(ctx, &LocalSnapshotCommit{
+		Rows:          BuildLocalStateRows(localResult),
+		Findings:      &localFindings,
+		CrossedMounts: localResult.CrossedMounts,
 	}); commitErr != nil {
 		return nil, fmt.Errorf("sync: committing dry-run local snapshot to scratch store: %w", commitErr)
 	}
@@ -446,7 +446,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 
 func (flow *engineFlow) loadCommittedCurrentObservation(
 	ctx context.Context,
-	pendingRemoteObservation *remoteObservationBatch,
+	pendingRemoteObservation *RemoteObservationBatch,
 ) (*currentObservation, error) {
 	inputs, err := flow.loadCurrentInputs(ctx, flow.deps.store, flow.engine.driveID)
 	if err != nil {
@@ -472,11 +472,11 @@ func (flow *engineFlow) currentShortcutChildPublication(
 		flow.engine.shortcutNamespaceID == "" {
 		return ShortcutChildWorkSnapshot{}, nil
 	}
-	roots, err := flow.deps.store.listShortcutRoots(ctx)
+	roots, err := flow.deps.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read current shortcut child publication: %w", err)
 	}
-	return shortcutChildWorkSnapshotFromRootsWithParentRoot(
+	return ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		flow.engine.shortcutNamespaceID,
 		flow.engine.syncRoot,
 		flow.engine.contentFilter,
@@ -489,7 +489,7 @@ func (flow *engineFlow) loadCurrentInputs(
 	store *SyncStore,
 	defaultDriveID driveid.ID,
 ) (currentInputs, error) {
-	tx, err := beginPerfTx(ctx, store.db)
+	tx, err := store.BeginPerfTx(ctx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
 	}
@@ -506,14 +506,14 @@ func (flow *engineFlow) loadCurrentInputs(
 
 func (flow *engineFlow) loadCurrentInputsTx(
 	ctx context.Context,
-	tx sqlTxRunner,
+	tx SqlTxRunner,
 	defaultDriveID driveid.ID,
 ) (currentInputs, error) {
-	rawLocalRows, err := listLocalStateRows(ctx, tx)
+	rawLocalRows, err := ListLocalStateRows(ctx, tx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
 	}
-	observationState, err := readObservationStateFromTx(ctx, tx)
+	observationState, err := ReadObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
 	}
@@ -521,18 +521,18 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	if contentDriveID.IsZero() {
 		contentDriveID = defaultDriveID
 	}
-	remoteRows, err := queryRemoteStateRowsWithRunner(
+	remoteRows, err := QueryRemoteStateRowsWithRunner(
 		ctx,
 		tx,
-		`SELECT `+sqlSelectRemoteStateCols+` FROM remote_state`,
+		`SELECT `+SqlSelectRemoteStateCols+` FROM remote_state`,
 		contentDriveID,
 	)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
 	}
-	localRows := filterLocalStateRowsForPlanning(rawLocalRows, flow.engine.contentFilter)
-	remoteRows = filterRemoteStateRowsForPlanning(remoteRows, flow.engine.contentFilter)
-	plannerVisibleRows, err := replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
+	localRows := FilterLocalStateRowsForPlanning(rawLocalRows, flow.engine.contentFilter)
+	remoteRows = FilterRemoteStateRowsForPlanning(remoteRows, flow.engine.contentFilter)
+	plannerVisibleRows, err := ReplacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
 	if err != nil {
 		return currentInputs{}, err
 	}
@@ -540,12 +540,12 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	if err != nil {
 		return currentInputs{}, err
 	}
-	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	observationIssues, err := QueryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
 	}
-	observationIssues = filterObservationIssueRowsForPlanning(observationIssues, flow.engine.contentFilter)
-	snapshotBaseline, err := loadBaselineWithRunner(ctx, tx, contentDriveID)
+	observationIssues = FilterObservationIssueRowsForPlanning(observationIssues, flow.engine.contentFilter)
+	snapshotBaseline, err := LoadBaselineWithRunner(ctx, tx, contentDriveID)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: loading planning baseline snapshot: %w", err)
 	}
@@ -567,39 +567,39 @@ func (flow *engineFlow) loadCurrentInputsTx(
 // rows are all classified pays nothing for it.
 func (flow *engineFlow) queryPlannerRowsTx(
 	ctx context.Context,
-	tx sqlTxRunner,
-) ([]sQLiteComparisonRow, []sQLiteReconciliationRow, error) {
-	comparisons, err := queryComparisonStateWithRunnerForTables(
+	tx SqlTxRunner,
+) ([]SQLiteComparisonRow, []SQLiteReconciliationRow, error) {
+	comparisons, err := QueryComparisonStateWithRunnerForTables(
 		ctx,
 		tx,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
+		PlannerVisibleLocalStateTable,
+		PlannerVisibleRemoteStateTable,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	reconciliationQuery := sqlQueryReconciliationState
+	reconciliationQuery := SqlQueryReconciliationState
 	if flow.engine.reconciliationQueryOverride != "" {
 		reconciliationQuery = flow.engine.reconciliationQueryOverride
 	}
-	reconciliations, err := queryReconciliationRows(ctx, tx, sqlQueryForStateTables(
+	reconciliations, err := QueryReconciliationRows(ctx, tx, SqlQueryForStateTables(
 		reconciliationQuery,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
+		PlannerVisibleLocalStateTable,
+		PlannerVisibleRemoteStateTable,
 	))
 	if err != nil {
 		return nil, nil, err
 	}
-	first := firstUnclassifiedRow(reconciliations)
+	first := FirstUnclassifiedRow(reconciliations)
 	if first < 0 {
 		return comparisons, reconciliations, nil
 	}
-	reconciliations[first].DecisionInputs, err = queryPlannerDecisionInputs(
+	reconciliations[first].DecisionInputs, err = QueryPlannerDecisionInputs(
 		ctx,
 		tx,
 		reconciliations[first].Path,
-		plannerVisibleLocalStateTable,
-		plannerVisibleRemoteStateTable,
+		PlannerVisibleLocalStateTable,
+		PlannerVisibleRemoteStateTable,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync: reading the decision inputs of unclassified %q: %w", reconciliations[first].Path, err)
@@ -630,22 +630,22 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
-	var approved []heldDelete
+	var approved []HeldDelete
 	if opts.ConfirmDeletes {
-		approved, err = flow.engine.baseline.listHeldDeletes(ctx)
+		approved, err = flow.engine.baseline.ListHeldDeletes(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("sync: reading the held deletes to confirm: %w", err)
 		}
 	}
-	recentDeletes, err := flow.engine.baseline.recentUnconfirmedDeletes(ctx, flow.deps.now().Add(-deleteSafetyWindow))
+	recentDeletes, err := flow.engine.baseline.RecentUnconfirmedDeletes(ctx, flow.deps.now().Add(-DeleteSafetyWindow))
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading the recent deletes the hold counts: %w", err)
 	}
-	mountBoundaries, err := flow.engine.baseline.listMountBoundaries(ctx)
+	mountBoundaries, err := flow.engine.baseline.ListMountBoundaries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading the recorded mount points the hold guards: %w", err)
 	}
-	if err := applyDeleteSafetyHold(plan, &deleteSafetyInput{
+	if err := ApplyDeleteSafetyHold(plan, &DeleteSafetyInput{
 		Baseline:        planningBaseline(&observation.inputs, bl),
 		LocalRows:       observation.inputs.localRows,
 		RemoteRows:      observation.inputs.remoteRows,
@@ -658,16 +658,16 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if len(approved) > 0 {
 		// The confirmation reviewed the deletes that went before it on
 		// those sides: they stop counting toward the next hold.
-		if err := flow.engine.baseline.clearDeleteLedger(ctx, heldDeleteSides(approved)); err != nil {
+		if err := flow.engine.baseline.ClearDeleteLedger(ctx, HeldDeleteSides(approved)); err != nil {
 			return nil, fmt.Errorf("sync: clearing the confirmed sides of the delete ledger: %w", err)
 		}
 	}
 	logDeleteSafetyHold(flow.deps.logger, plan.HeldDeletes)
 	flow.engine.collector().RecordPlan(len(plan.Actions), flow.deps.since(planStart))
 
-	counts := countByType(plan.Actions)
+	counts := CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
-	report.HeldLocalDeletes, report.HeldRemoteDeletes = countHeldDeletesBySide(plan.HeldDeletes)
+	report.HeldLocalDeletes, report.HeldRemoteDeletes = CountHeldDeletesBySide(plan.HeldDeletes)
 
 	return &builtCurrentPlan{
 		Plan:                     plan,
@@ -684,7 +684,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 func (flow *engineFlow) reconcileRuntimeStateStage(
 	ctx context.Context,
 	build *builtCurrentPlan,
-	observed passObservation,
+	observed PassObservation,
 ) (*runtimePlan, error) {
 	if build == nil {
 		return nil, fmt.Errorf("sync: reconciling runtime state: missing current plan build")
@@ -723,7 +723,7 @@ func (flow *engineFlow) keepBuiltCurrentPlan(build *builtCurrentPlan) *runtimePl
 	}
 }
 
-func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionPlan, observed passObservation) error {
+func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *ActionPlan, observed PassObservation) error {
 	if err := flow.deps.store.ReplaceHeldDeletes(ctx, plan.HeldDeletes); err != nil {
 		return fmt.Errorf("sync: recording held deletes: %w", err)
 	}
@@ -741,7 +741,7 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionP
 	// the change batch that shows a landed create still claims it. The record
 	// of an adopted placeholder whose local file is empty too, and the record
 	// of an item at a path the scan does not visit, go after any plan.
-	if err := flow.deps.store.prunePendingCreates(ctx, observed, flow.engine.localScanCoverage()); err != nil {
+	if err := flow.deps.store.PrunePendingCreates(ctx, observed, flow.engine.localScanCoverage()); err != nil {
 		return fmt.Errorf("sync: pruning pending creates: %w", err)
 	}
 
@@ -753,11 +753,11 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *actionP
 // subtree for the shortcut's own sync (shouldObserveWithFilter). local_state
 // never holds such a path, which says nothing about a file there.
 func (e *Engine) localScanCoverage() func(path string) bool {
-	filter := newContentFilter(e.contentFilter)
+	filter := NewContentFilter(e.contentFilter)
 	protectedRoots := e.currentProtectedRoots()
 
 	return func(path string) bool {
-		if _, reserved := protectedRootPathReservation(path, protectedRoots); reserved {
+		if _, reserved := ProtectedRootPathReservation(path, protectedRoots); reserved {
 			return false
 		}
 
@@ -797,7 +797,7 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 	bl *Baseline,
 	mode SyncMode,
 	opts RunOptions,
-) (*actionPlan, error) {
+) (*ActionPlan, error) {
 	if inputs.baseline != nil {
 		bl = inputs.baseline
 	}
@@ -808,7 +808,7 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.remoteRows,
 		inputs.observationIssues,
 		bl,
-		plannerMountContext{
+		PlannerMountContext{
 			DriveID:           e.driveID,
 			ReleasesLocalTree: opts.ReleaseLocalTree,
 		},
@@ -821,7 +821,7 @@ func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
 	seen := make(map[RetryWorkKey]struct{}, len(actions))
 
 	for i := range actions {
-		key := retryWorkKeyForAction(&actions[i])
+		key := RetryWorkKeyForAction(&actions[i])
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -836,11 +836,11 @@ func retryWorkKeysForActions(actions []Action) []RetryWorkKey {
 // watch mode replans on every batch while the hold stands, and the durable
 // condition (status, the watch condition summary, the one-shot summary line)
 // is the user-facing report.
-func logDeleteSafetyHold(logger *slog.Logger, held []heldDelete) {
+func logDeleteSafetyHold(logger *slog.Logger, held []HeldDelete) {
 	if logger == nil || len(held) == 0 {
 		return
 	}
-	local, remote := countHeldDeletesBySide(held)
+	local, remote := CountHeldDeletesBySide(held)
 	logger.Info("deletes held for confirmation; run 'onedrive-go sync --confirm-deletes' to apply them",
 		slog.Int("held_local_deletes", local),
 		slog.Int("held_remote_deletes", remote),

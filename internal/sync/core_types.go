@@ -8,21 +8,21 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
-// skippedItem records a local filesystem entry that was rejected at
+// SkippedItem records a local filesystem entry that was rejected at
 // observation time. The scanner collects these alongside events so the
 // engine can persist them as durable observation issues.
-type skippedItem struct {
+type SkippedItem struct {
 	Path               string    // NFC-normalized, relative to sync root
 	Reason             IssueType // the observation issue type it is stored under
 	Detail             string    // human-readable explanation
-	FileSize           int64     // populated for issueFileTooLarge (after stat)
+	FileSize           int64     // populated for IssueFileTooLarge (after stat)
 	BlocksReadBoundary bool      // true when observation proved an unreadable subtree boundary
 }
 
-// changeEvent is an immutable observation fact the local observer produces.
+// ChangeEvent is an immutable observation fact the local observer produces.
 // It is not the durable sync truth and is never stored in the database; it
 // reaches the runtime only through the local observer's own paths (scan
-// results, localObservation). The remote side reports remoteItem values
+// results, LocalObservation). The remote side reports RemoteItem values
 // instead.
 //
 // Field contract:
@@ -32,7 +32,7 @@ type skippedItem struct {
 //	  Hash, Mtime, filesystem identity when available), or Path and
 //	  IsDeleted for a removal. Never sets: Type, Name, ItemID, ParentID,
 //	  DriveID, ETag, CTag.
-type changeEvent struct {
+type ChangeEvent struct {
 	Type     changeType
 	Path     string     // NFC-normalized, relative to sync root
 	OldPath  string     // for moves only
@@ -95,23 +95,23 @@ type BaselineEntry struct {
 
 // DirNameKey groups baseline entries by (directory, OneDrive namespace key of
 // the name) for O(1) sibling lookups under OneDrive's name equivalence. Used
-// by detectCaseCollisions to find collisions between new files and
+// by DetectCaseCollisions to find collisions between new files and
 // already-synced baseline entries.
 type DirNameKey struct {
 	Dir     string
 	NameKey namekey.Key
 }
 
-// storedPathOf turns a path relative to the sync tree, as spelled on disk
+// StoredPathOf turns a path relative to the sync tree, as spelled on disk
 // with the host's separator, into the form sync stores paths in:
 // slash-separated, in stored form (namekey.StoredPath, R-2.13.1). It is the
 // one place that conversion is written.
-func storedPathOf(rel string) string {
+func StoredPathOf(rel string) string {
 	return namekey.StoredPath(filepath.ToSlash(rel))
 }
 
-// dirNameKeyFromPath computes the namespace grouping key for a path.
-func dirNameKeyFromPath(path string) DirNameKey {
+// DirNameKeyFromPath computes the namespace grouping key for a path.
+func DirNameKeyFromPath(path string) DirNameKey {
 	return DirNameKey{
 		Dir:     filepath.Dir(path),
 		NameKey: namekey.Of(filepath.Base(path)),
@@ -159,7 +159,7 @@ func (b *Baseline) GetByID(itemID string) (*BaselineEntry, bool) {
 
 // GetCaseVariants returns all baseline entries in the same directory whose
 // name OneDrive treats as the same name (namekey: case, Unicode form,
-// ignored emoji). Used by detectCaseCollisions to find
+// ignored emoji). Used by DetectCaseCollisions to find
 // collisions between new files and already-synced baseline entries.
 // The caller must filter out exact path matches (same casing = not a collision).
 // Thread-safe: holds a read lock during access and returns a copy of the
@@ -204,7 +204,7 @@ func (b *Baseline) Put(entry *BaselineEntry) {
 	b.ByID[entry.ItemID] = entry
 
 	// Maintain ByDirNameKey index: update existing entry or append new one.
-	dnk := dirNameKeyFromPath(entry.Path)
+	dnk := DirNameKeyFromPath(entry.Path)
 	found := false
 
 	for i, e := range b.ByDirNameKey[dnk] {
@@ -239,7 +239,7 @@ func (b *Baseline) deleteLocked(path string) {
 	delete(b.ByPath, path)
 
 	// Maintain ByDirNameKey index: remove the entry for this exact path.
-	dnk := dirNameKeyFromPath(path)
+	dnk := DirNameKeyFromPath(path)
 	entries := b.ByDirNameKey[dnk]
 
 	for i, e := range entries {
@@ -254,9 +254,9 @@ func (b *Baseline) deleteLocked(path string) {
 	}
 }
 
-// replaceContents swaps in other's indexes so every holder of b sees them.
+// ReplaceContents swaps in other's indexes so every holder of b sees them.
 // other must not be used afterwards.
-func (b *Baseline) replaceContents(other *Baseline) {
+func (b *Baseline) ReplaceContents(other *Baseline) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -299,16 +299,16 @@ func NewBaselineForTest(entries []*BaselineEntry) *Baseline {
 		bl.ByPath[e.Path] = e
 		bl.ByID[e.ItemID] = e
 
-		dnk := dirNameKeyFromPath(e.Path)
+		dnk := DirNameKeyFromPath(e.Path)
 		bl.ByDirNameKey[dnk] = append(bl.ByDirNameKey[dnk], e)
 	}
 
 	return bl
 }
 
-// remoteState captures the current state of a path as observed from
+// RemoteState captures the current state of a path as observed from
 // the Graph API delta response.
-type remoteState struct {
+type RemoteState struct {
 	ItemID   string
 	DriveID  driveid.ID // normalized (lowercase, zero-padded to 16 chars)
 	Name     string
@@ -324,9 +324,9 @@ type remoteState struct {
 	IsDeleted bool
 }
 
-// localState captures the current state of a path as observed from
+// LocalState captures the current state of a path as observed from
 // the local filesystem.
-type localState struct {
+type LocalState struct {
 	Name             string
 	ItemType         ItemType
 	Size             int64
@@ -344,8 +344,8 @@ type localState struct {
 type truthAvailability string
 
 const (
-	truthAvailabilityAvailable               truthAvailability = "available"
-	truthAvailabilityBlockedObservationIssue truthAvailability = "blocked_observation_issue"
+	TruthAvailabilityAvailable               truthAvailability = "available"
+	TruthAvailabilityBlockedObservationIssue truthAvailability = "blocked_observation_issue"
 )
 
 // pathTruthSource captures which durable authority proved that one side of
@@ -354,7 +354,7 @@ type pathTruthSource string
 
 const (
 	pathTruthSourceNone             pathTruthSource = ""
-	pathTruthSourceObservationIssue pathTruthSource = "observation_issue"
+	PathTruthSourceObservationIssue pathTruthSource = "observation_issue"
 )
 
 // pathTruthSideStatus is the raw current-truth availability status for one
@@ -368,19 +368,19 @@ type pathTruthSideStatus struct {
 }
 
 func (s pathTruthSideStatus) IsAvailable() bool {
-	return s.Availability == "" || s.Availability == truthAvailabilityAvailable
+	return s.Availability == "" || s.Availability == TruthAvailabilityAvailable
 }
 
-// pathTruthStatus carries the raw current-truth availability status for both
+// PathTruthStatus carries the raw current-truth availability status for both
 // the local and remote side of one path. Planner attaches it after SQLite
 // computes structural diff so structural absence stays distinct from
 // unavailable truth, but the type itself is not planner-owned policy.
-type pathTruthStatus struct {
+type PathTruthStatus struct {
 	Local  pathTruthSideStatus
 	Remote pathTruthSideStatus
 }
 
-func (s *pathTruthStatus) SuppressesStructuralActions() bool {
+func (s *PathTruthStatus) SuppressesStructuralActions() bool {
 	if s == nil {
 		return false
 	}
@@ -388,22 +388,22 @@ func (s *pathTruthStatus) SuppressesStructuralActions() bool {
 	return !s.Local.IsAvailable() || !s.Remote.IsAvailable()
 }
 
-// pathView is a unified three-way view of a single path built from the
+// PathView is a unified three-way view of a single path built from the
 // authoritative snapshots plus baseline. It is the in-memory planning view the
 // current actionable-set builder reasons over after SQLite computes structural
 // diff and reconciliation outcomes.
-type pathView struct {
+type PathView struct {
 	Path        string
-	Remote      *remoteState   // nil = absent from current remote snapshot
-	Local       *localState    // nil = absent from current local snapshot
+	Remote      *RemoteState   // nil = absent from current remote snapshot
+	Local       *LocalState    // nil = absent from current local snapshot
 	Baseline    *BaselineEntry // nil = never synced
-	TruthStatus pathTruthStatus
+	TruthStatus PathTruthStatus
 }
 
-// remoteContentDiffersFromBaseline reports whether remote content facts prove
+// RemoteContentDiffersFromBaseline reports whether remote content facts prove
 // the item's content changed since the baseline. eTag and mtime churn alone
 // (a Graph move rewrites both) are not content changes.
-func remoteContentDiffersFromBaseline(remote *remoteState, baseline *BaselineEntry) bool {
+func RemoteContentDiffersFromBaseline(remote *RemoteState, baseline *BaselineEntry) bool {
 	if remote == nil || baseline == nil || baseline.ItemType != ItemTypeFile {
 		return false
 	}
@@ -414,10 +414,10 @@ func remoteContentDiffersFromBaseline(remote *remoteState, baseline *BaselineEnt
 	return baseline.RemoteSizeKnown && remote.Size != baseline.RemoteSize
 }
 
-// localFileDiffersFromBaseline reports whether a local file's content facts
+// LocalFileDiffersFromBaseline reports whether a local file's content facts
 // show it changed since the baseline: the hash when either side has one,
 // otherwise size, then modification time.
-func localFileDiffersFromBaseline(local *localState, baseline *BaselineEntry) bool {
+func LocalFileDiffersFromBaseline(local *LocalState, baseline *BaselineEntry) bool {
 	if local == nil || baseline == nil {
 		return false
 	}

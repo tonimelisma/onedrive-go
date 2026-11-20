@@ -11,7 +11,7 @@ import (
 func TestTruthAvailabilityIndex_StatusByPath_ReturnsAvailableStatusForUnblockedPaths(t *testing.T) {
 	t.Parallel()
 
-	statuses := newTruthAvailabilityIndex(nil).StatusByPath([]string{"docs/readme.txt"})
+	statuses := NewTruthAvailabilityIndex(nil).StatusByPath([]string{"docs/readme.txt"})
 	require.Len(t, statuses, 1)
 
 	status, ok := statuses["docs/readme.txt"]
@@ -24,10 +24,10 @@ func TestTruthAvailabilityIndex_StatusByPath_ReturnsAvailableStatusForUnblockedP
 func TestTruthAvailabilityIndex_StatusByPath_ReadBoundariesApplyToDescendants(t *testing.T) {
 	t.Parallel()
 
-	statuses := newTruthAvailabilityIndex(
+	statuses := NewTruthAvailabilityIndex(
 		[]ObservationIssueRow{
-			{Path: "Private", IssueType: issueLocalReadDenied, ScopeKey: sKPermLocalRead("Private")},
-			{Path: "Shared", IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead("Shared")},
+			{Path: "Private", IssueType: IssueLocalReadDenied, ScopeKey: SKPermLocalRead("Private")},
+			{Path: "Shared", IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared")},
 		},
 	).StatusByPath(
 		[]string{"Private/sub/file.txt", "Shared/Docs/file.txt"},
@@ -35,16 +35,16 @@ func TestTruthAvailabilityIndex_StatusByPath_ReadBoundariesApplyToDescendants(t 
 
 	localStatus, ok := statuses["Private/sub/file.txt"]
 	require.True(t, ok)
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, localStatus.Local.Availability)
-	assert.Equal(t, pathTruthSourceObservationIssue, localStatus.Local.Source)
-	assert.Equal(t, sKPermLocalRead("Private"), localStatus.Local.ScopeKey)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, localStatus.Local.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, localStatus.Local.Source)
+	assert.Equal(t, SKPermLocalRead("Private"), localStatus.Local.ScopeKey)
 	assert.True(t, localStatus.Remote.IsAvailable())
 
 	remoteStatus, ok := statuses["Shared/Docs/file.txt"]
 	require.True(t, ok)
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, remoteStatus.Remote.Availability)
-	assert.Equal(t, pathTruthSourceObservationIssue, remoteStatus.Remote.Source)
-	assert.Equal(t, sKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, remoteStatus.Remote.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, remoteStatus.Remote.Source)
+	assert.Equal(t, SKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
 	assert.True(t, remoteStatus.Local.IsAvailable())
 }
 
@@ -52,23 +52,23 @@ func TestTruthAvailabilityIndex_StatusByPath_ReadBoundariesApplyToDescendants(t 
 func TestTruthAvailabilityIndex_StatusForPath_UsesObservationEvidence(t *testing.T) {
 	t.Parallel()
 
-	index := newTruthAvailabilityIndex(
+	index := NewTruthAvailabilityIndex(
 		[]ObservationIssueRow{
 			{Path: "blocked-local.txt", IssueType: IssueInvalidFilename},
-			{Path: "Shared", IssueType: issueRemoteReadDenied, ScopeKey: sKPermRemoteRead("Shared")},
+			{Path: "Shared", IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared")},
 		},
 	)
 
 	localStatus := index.StatusForPath("blocked-local.txt")
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, localStatus.Local.Availability)
-	assert.Equal(t, pathTruthSourceObservationIssue, localStatus.Local.Source)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, localStatus.Local.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, localStatus.Local.Source)
 	assert.Equal(t, IssueInvalidFilename, localStatus.Local.IssueType)
 	assert.True(t, localStatus.Remote.IsAvailable())
 
 	remoteStatus := index.StatusForPath("Shared/Docs/file.txt")
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, remoteStatus.Remote.Availability)
-	assert.Equal(t, pathTruthSourceObservationIssue, remoteStatus.Remote.Source)
-	assert.Equal(t, sKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, remoteStatus.Remote.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, remoteStatus.Remote.Source)
+	assert.Equal(t, SKPermRemoteRead("Shared"), remoteStatus.Remote.ScopeKey)
 	assert.True(t, remoteStatus.Local.IsAvailable())
 }
 
@@ -85,22 +85,22 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 			// The scan found the path but cannot represent it: unknown, not absent.
 			verdict: observationIssueTruthVerdict{blocksLocal: true},
 			members: []IssueType{
-				IssueInvalidFilename, issuePathTooLong, issueFileTooLarge, issueCaseCollision,
-				issueHashPanic, issueLocalReadDenied, issueLocalUnsyncableReplacement, issueLocalMountBoundary,
-				issueLocalMountMissing,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueCaseCollision,
+				IssueHashPanic, IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary,
+				IssueLocalMountMissing,
 			},
 		},
 		issueTypeVerdictGroup[observationIssueTruthVerdict]{
 			// OneDrive's side of the path is the unknown one; a folder's subtree
 			// is covered by the issue's read scope key, not by its type.
 			verdict: observationIssueTruthVerdict{blocksRemote: true},
-			members: []IssueType{issueRemoteReadDenied, issueRemoteRootNotFound},
+			members: []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound},
 		},
 		issueTypeVerdictGroup[observationIssueTruthVerdict]{
 			// OneDrive keeps two items under the path, so its side of the path
 			// and of everything beneath it is unknown; a twin has no scope key.
 			verdict: observationIssueTruthVerdict{blocksRemote: true, boundsRemoteSubtree: true},
-			members: []IssueType{issueRemoteNameTwin},
+			members: []IssueType{IssueRemoteNameTwin},
 		},
 		issueTypeVerdictGroup[observationIssueTruthVerdict]{
 			// An internal name the content filter hides from planning on both
@@ -108,18 +108,18 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 			// carries and observation never stores.
 			verdict: observationIssueTruthVerdict{},
 			members: []IssueType{
-				issueLocalInterruptedRemoval, issueRemovedFolderKept, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded,
-				issueRateLimited, issueLocalWriteDenied, issueDiskFull, issueServiceOutage,
-				issueFileTooLargeForSpace, issueLocalNameTooLong, issueLocalReadOnly, issueDeletesHeld,
-				issueRemoteFolderUnverifiable, issueLocalFileTooLarge, issueLocalBusy, issueLocalCrossDevice,
-				issueUnsupportedOperation, issueMalwareDetected, issueLocalDatabaseOpen, issueUploadVerification,
-				issueDownloadIntegrity, issueRequestTimeout, issueTransientConflict, issueTransientNotFound,
-				issueResourceLocked, issueTransferURLRejected,
+				IssueLocalInterruptedRemoval, IssueRemovedFolderKept, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded,
+				IssueRateLimited, IssueLocalWriteDenied, IssueDiskFull, IssueServiceOutage,
+				IssueFileTooLargeForSpace, IssueLocalNameTooLong, IssueLocalReadOnly, IssueDeletesHeld,
+				IssueRemoteFolderUnverifiable, IssueLocalFileTooLarge, IssueLocalBusy, IssueLocalCrossDevice,
+				IssueUnsupportedOperation, IssueMalwareDetected, IssueLocalDatabaseOpen, IssueUploadVerification,
+				IssueDownloadIntegrity, IssueRequestTimeout, IssueTransientConflict, IssueTransientNotFound,
+				IssueResourceLocked, IssueTransferURLRejected,
 			},
 		},
 	), func(member IssueType) observationIssueTruthVerdict {
 		verdict := truthVerdictForIssueType(member)
-		assert.Equal(t, verdict.blocksLocal, observationIssueBlocksLocalTruth(member), "local truth under %q", member)
+		assert.Equal(t, verdict.blocksLocal, ObservationIssueBlocksLocalTruth(member), "local truth under %q", member)
 		assert.Equal(t, verdict.blocksRemote, observationIssueBlocksRemoteTruth(member), "remote truth under %q", member)
 
 		return verdict
@@ -137,14 +137,14 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 func TestTruthAvailabilityIndex_OnlyASubtreeBoundingTypeBlocksDescendants(t *testing.T) {
 	t.Parallel()
 
-	index := newTruthAvailabilityIndex([]ObservationIssueRow{
-		{Path: "Twins", IssueType: issueRemoteNameTwin},
+	index := NewTruthAvailabilityIndex([]ObservationIssueRow{
+		{Path: "Twins", IssueType: IssueRemoteNameTwin},
 		{Path: "Odd", IssueType: issueTypeOutsideTheEnum},
 	})
 
 	twinChild := index.StatusForPath("Twins/inner/file.txt")
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, twinChild.Remote.Availability)
-	assert.Equal(t, issueRemoteNameTwin, twinChild.Remote.IssueType)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, twinChild.Remote.Availability)
+	assert.Equal(t, IssueRemoteNameTwin, twinChild.Remote.IssueType)
 	assert.True(t, twinChild.Local.IsAvailable())
 
 	oddChild := index.StatusForPath("Odd/file.txt")
@@ -161,13 +161,13 @@ func TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable(t *te
 	t.Parallel()
 
 	const outsideTheEnum IssueType = issueTypeOutsideTheEnum
-	require.False(t, outsideTheEnum.isMember())
-	assert.True(t, observationIssueBlocksLocalTruth(outsideTheEnum))
+	require.False(t, outsideTheEnum.IsMember())
+	assert.True(t, ObservationIssueBlocksLocalTruth(outsideTheEnum))
 
-	status := newTruthAvailabilityIndex([]ObservationIssueRow{
+	status := NewTruthAvailabilityIndex([]ObservationIssueRow{
 		{Path: "docs/report.txt", IssueType: outsideTheEnum},
 	}).StatusForPath("docs/report.txt")
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Local.Availability)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, status.Local.Availability)
 	assert.Equal(t, outsideTheEnum, status.Local.IssueType)
 }
 
@@ -180,17 +180,17 @@ func TestObservationIssueBlocksRemoteTruth_ValueOutsideTheEnumIsUnavailable(t *t
 	t.Parallel()
 
 	const outsideTheEnum IssueType = issueTypeOutsideTheEnum
-	require.False(t, outsideTheEnum.isMember())
+	require.False(t, outsideTheEnum.IsMember())
 	assert.True(t, observationIssueBlocksRemoteTruth(outsideTheEnum))
 
-	index := newTruthAvailabilityIndex([]ObservationIssueRow{
+	index := NewTruthAvailabilityIndex([]ObservationIssueRow{
 		{Path: "docs/report.txt", IssueType: outsideTheEnum},
 	})
 	status := index.StatusForPath("docs/report.txt")
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Remote.Availability)
-	assert.Equal(t, pathTruthSourceObservationIssue, status.Remote.Source)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, status.Remote.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, status.Remote.Source)
 	assert.Equal(t, outsideTheEnum, status.Remote.IssueType)
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, status.Local.Availability)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, status.Local.Availability)
 
 	sibling := index.StatusForPath("docs/other.txt")
 	assert.True(t, sibling.Local.IsAvailable(), "the value blocks the path it names, not its neighbors")

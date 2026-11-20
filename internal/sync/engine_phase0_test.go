@@ -29,11 +29,11 @@ func newBootstrapWatchPipelineForTest(
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.scopes.state = newScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
 	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 
-	pool := newWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
+	pool := NewWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -72,36 +72,36 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	eng, syncRoot := newTestEngine(t, mock)
 	writeLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
 	recorder := attachDebugEventRecorder(eng)
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return newEnospcWatcher(1 << 20), nil
 	}
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 	receiveWithin(t, uploadStarted, "the bootstrap upload to start before the observers")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap upload is blocked")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}), "local observer must not start before bootstrap quiesces")
 
 	close(allowUpload)
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	stopWatch(t, cancel, done)
 
-	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventBootstrapQuiesced
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 		},
 	}, "bootstrap quiescence must precede local observer startup")
 }
@@ -158,30 +158,30 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 
 	assert.Equal(t, int32(1), deltaCalls.Load(),
 		"remote observer must not start polling until bootstrap has drained")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap download is blocked")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
 	}), "remote observer must not start before bootstrap quiesces")
 
 	close(allowDownload)
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
 	}, "remote observer started")
 
 	stopWatch(t, cancel, done)
 
-	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventBootstrapQuiesced
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
 		},
 	}, "bootstrap quiescence must precede remote observer startup")
 }
@@ -218,11 +218,11 @@ func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) 
 	recorder := attachDebugEventRecorder(eng)
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	assert.Equal(t, int32(0), uploadCalls.Load(), "future-held retry work must not dispatch during bootstrap")
@@ -281,20 +281,20 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 
 	receiveWithin(t, uploadStarted, "the due trial to dispatch bootstrap work before the observers start")
 
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the due trial action is still running")
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}), "observers must not start before the due trial action drains")
 
 	close(allowUpload)
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	stopWatch(t, cancel, done)
@@ -416,7 +416,7 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 
 	writeLocalFile(t, syncRoot, "gone.txt", "delete me")
 	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "gone.txt",
@@ -473,7 +473,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- actionCompletion{
+	results <- ActionCompletion{
 		ActionID:      99,
 		Path:          "trial.txt",
 		ActionType:    ActionDownload,
@@ -486,8 +486,8 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		TrialScopeKey: SKService(),
 	}
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventTrialTimerArmed
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventTrialTimerArmed
 	}, "trial timer re-armed after trial failure")
 	cancel()
 
@@ -514,7 +514,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	ctx := t.Context()
 	driveID := driveid.New(engineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []observedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "blocked-item",
 		Path:     "blocked.txt",
@@ -535,9 +535,9 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		Path:    blockedPath,
 		DriveID: driveID,
 		ItemID:  "blocked-item",
-		View: &pathView{
+		View: &PathView{
 			Path: blockedPath,
-			Remote: &remoteState{
+			Remote: &RemoteState{
 				DriveID:  driveID,
 				ItemID:   "blocked-item",
 				ItemType: ItemTypeFile,
@@ -557,7 +557,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	results <- actionCompletion{
+	results <- ActionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
 		ActionType:    ActionUpload,
@@ -567,8 +567,8 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		TrialScopeKey: testThrottleScope(),
 	}
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
 	}, "trial success released blocked scope")
 
 	retried := readReadyAction(t, rt.sched.dispatchCh)
@@ -594,7 +594,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:      "docs/file.txt",
 		DriveID:   eng.driveID,
-		IssueType: issueLocalReadDenied,
+		IssueType: IssueLocalReadDenied,
 	})
 
 	retryRow := testRetryWorkRow("docs/file.txt", "", ActionUpload)
@@ -650,7 +650,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt.sched.dispatchCh <- parent
 	readReady(t, rt.sched.dispatchCh)
 
-	results <- actionCompletion{
+	results <- ActionCompletion{
 		ActionID:   1,
 		Path:       "parent.txt",
 		ActionType: ActionUpload,
@@ -662,8 +662,8 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 		ErrMsg:     "rate limited",
 	}
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
 	}, "block scope activated from action completion")
 
 	select {
@@ -713,7 +713,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
 
 	rt.runFullRemoteRefreshAsync(ctx, bl)
 	waitForRefreshDone(t, t.Context(), eng)

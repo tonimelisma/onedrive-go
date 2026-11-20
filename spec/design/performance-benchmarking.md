@@ -726,7 +726,7 @@ the actions times their depth (10k to 100k is 8x), and the equivalence test
 oracle's edges, duplicates included, over random plans of every shape.
 
 `BenchmarkReplacePlannerVisibleState` (`internal/sync/store_planner_visible_bench_test.go`)
-times `replacePlannerVisibleStateTx`, the TEMP-table build inside every
+times `ReplacePlannerVisibleStateTx`, the TEMP-table build inside every
 plan's read transaction, over 9,910 rows a side against a baseline of the
 same tree (ten top folders of 90 folders of 10 files): a quiet tree, and one
 whose first top folder is gone from both sides while its 991 descendants are

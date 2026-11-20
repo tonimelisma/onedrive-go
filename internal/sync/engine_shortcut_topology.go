@@ -26,11 +26,11 @@ func (e *Engine) publishShortcutChildWorkSnapshot(
 	return nil
 }
 
-func (e *Engine) ShortcutChildAckHandle() shortcutChildAckHandle {
+func (e *Engine) ShortcutChildAckHandle() ShortcutChildAckHandle {
 	if e == nil {
-		return shortcutChildAckHandle{}
+		return ShortcutChildAckHandle{}
 	}
-	return newShortcutChildAckHandle(
+	return NewShortcutChildAckHandle(
 		e.acknowledgeChildFinalDrain,
 		e.acknowledgeChildArtifactsPurged,
 	)
@@ -46,7 +46,7 @@ func (e *Engine) acknowledgeChildFinalDrain(
 	if e == nil || e.baseline == nil || e.shortcutNamespaceID == "" {
 		return ShortcutChildWorkSnapshot{}, nil
 	}
-	if _, err := e.baseline.markShortcutChildFinalDrainReleasePending(ctx, ack); err != nil {
+	if _, err := e.baseline.MarkShortcutChildFinalDrainReleasePending(ctx, ack); err != nil {
 		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: mark shortcut child final drain release pending: %w", err)
 	}
 	if err := e.releaseShortcutRootProjectionAfterDrain(ctx, ack); err != nil {
@@ -60,11 +60,11 @@ func (e *Engine) acknowledgeChildFinalDrain(
 		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read shortcut child work snapshot after final drain: %w", err)
 	}
 	if e.shortcutChildWorkSink != nil {
-		roots, rootErr := e.baseline.listShortcutRoots(ctx)
+		roots, rootErr := e.baseline.ListShortcutRoots(ctx)
 		if rootErr != nil {
 			return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
 		}
-		if err := e.shortcutChildWorkSink(ctx, shortcutChildWorkSnapshotFromRootsWithParentRoot(
+		if err := e.shortcutChildWorkSink(ctx, ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 			e.shortcutNamespaceID,
 			e.syncRoot,
 			e.contentFilter,
@@ -86,7 +86,7 @@ func (e *Engine) acknowledgeChildArtifactsPurged(
 	if e == nil || e.baseline == nil || e.shortcutNamespaceID == "" {
 		return ShortcutChildWorkSnapshot{}, nil
 	}
-	if _, err := e.baseline.acknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
+	if _, err := e.baseline.AcknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
 		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: acknowledge shortcut child artifact cleanup: %w", err)
 	}
 	snapshot, err := e.baseline.ShortcutChildWorkSnapshot(ctx, e.shortcutNamespaceID, e.syncRoot)
@@ -113,18 +113,18 @@ func (e *Engine) acknowledgeChildArtifactsPurged(
 //   - 404, deleted, or now pointing elsewhere: it stays omitted and drains;
 //   - the lookup failed: it is marked target-unavailable, which keeps local
 //     data until a later observation settles it.
-func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology *shortcutTopologyBatch) error {
-	if e == nil || topology == nil || topology.Kind != shortcutTopologyObservationComplete || e.itemsClient == nil {
+func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology *ShortcutTopologyBatch) error {
+	if e == nil || topology == nil || topology.Kind != ShortcutTopologyObservationComplete || e.itemsClient == nil {
 		return nil
 	}
-	roots, err := e.baseline.listShortcutRoots(ctx)
+	roots, err := e.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots to confirm omissions: %w", err)
 	}
-	seen := shortcutRootCompleteBatchSeenBindings(*topology)
+	seen := ShortcutRootCompleteBatchSeenBindings(*topology)
 	for i := range roots {
 		root := &roots[i]
-		if _, ok := seen[root.BindingItemID]; ok || shortcutRootCompleteOmissionKeepsState(root.State) {
+		if _, ok := seen[root.BindingItemID]; ok || ShortcutRootCompleteOmissionKeepsState(root.State) {
 			continue
 		}
 		if root.NamespaceID != "" && topology.NamespaceID != "" && root.NamespaceID != topology.NamespaceID {
@@ -136,7 +136,7 @@ func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology 
 	return nil
 }
 
-func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *shortcutTopologyBatch, root *ShortcutRootRecord) {
+func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *ShortcutTopologyBatch, root *ShortcutRootRecord) {
 	live, err := e.itemsClient.GetItem(ctx, e.driveID, root.BindingItemID)
 	switch {
 	case errors.Is(err, graph.ErrNotFound):
@@ -144,7 +144,7 @@ func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *shortcut
 	case err != nil:
 		e.logger.Debug("could not confirm an omitted shortcut is gone; keeping its files",
 			slog.String("path", root.RelativeLocalPath), slog.Any("error", err))
-		topology.Unavailable = append(topology.Unavailable, shortcutBindingUnavailable{
+		topology.Unavailable = append(topology.Unavailable, ShortcutBindingUnavailable{
 			BindingItemID:     root.BindingItemID,
 			RelativeLocalPath: root.RelativeLocalPath,
 			LocalAlias:        root.LocalAlias,
@@ -163,7 +163,7 @@ func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *shortcut
 
 	e.logger.Info("OneDrive's listing omitted a shared-folder shortcut that still exists; keeping it",
 		slog.String("path", root.RelativeLocalPath))
-	topology.Upserts = append(topology.Upserts, shortcutBindingUpsert{
+	topology.Upserts = append(topology.Upserts, ShortcutBindingUpsert{
 		BindingItemID:     root.BindingItemID,
 		RelativeLocalPath: root.RelativeLocalPath,
 		LocalAlias:        root.LocalAlias,
@@ -172,4 +172,22 @@ func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *shortcut
 		RemoteIsFolder:    root.RemoteIsFolder,
 		Complete:          true,
 	})
+}
+
+func ApplyShortcutChildRunCommandToEngineMountConfig(
+	command *ShortcutChildRunCommand,
+	cfg *EngineMountConfig,
+) error {
+	if _, err := ValidateShortcutChildRunCommand(command); err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("sync: child engine mount config is required")
+	}
+	cfg.SyncRoot = command.Engine.LocalRoot
+	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)
+	cfg.RemoteRootItemID = command.Engine.RemoteItemID
+	cfg.ExpectedSyncRootIdentity = CloneShortcutRootIdentity(command.Engine.LocalRootIdentity)
+	cfg.ContentFilter = CloneContentFilterConfig(command.Engine.ContentFilter)
+	return nil
 }

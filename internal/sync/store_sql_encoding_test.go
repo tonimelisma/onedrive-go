@@ -1,18 +1,11 @@
 package sync
 
 import (
-	"context"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-2.10.7, R-2.10.14
@@ -42,12 +35,12 @@ func TestStoredTimeNano_SaturatesAtBothEndsOfTheRange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			stored := storedTimeNano(tc.at)
+			stored := StoredTimeNano(tc.at)
 			assert.Equal(t, tc.want, stored)
-			assert.Equal(t, !tc.at.IsZero(), storedTimeIsSet(stored), "only the zero time stores no time")
+			assert.Equal(t, !tc.at.IsZero(), StoredTimeIsSet(stored), "only the zero time stores no time")
 			if !tc.at.IsZero() {
 				// Order against a time in range survives the round trip.
-				readBack := remoteModTime(stored)
+				readBack := RemoteModTime(stored)
 				assert.Equal(t, tc.at.Compare(inRange), readBack.Compare(inRange))
 			}
 		})
@@ -58,50 +51,9 @@ func TestStoredTimeNano_SaturatesAtBothEndsOfTheRange(t *testing.T) {
 func TestRemoteModTime_DecodesAStoredRemoteModificationTime(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, remoteModTime(0).IsZero(), "no time is known: the zero time, which nothing sets")
-	assert.True(t, remoteModTime(math.MaxInt64).Equal(time.Unix(0, math.MaxInt64)))
-	assert.True(t, remoteModTime(math.MinInt64).Equal(time.Unix(0, math.MinInt64)))
+	assert.True(t, RemoteModTime(0).IsZero(), "no time is known: the zero time, which nothing sets")
+	assert.True(t, RemoteModTime(math.MaxInt64).Equal(time.Unix(0, math.MaxInt64)))
+	assert.True(t, RemoteModTime(math.MinInt64).Equal(time.Unix(0, math.MinInt64)))
 	at := time.Date(2025, 6, 15, 12, 0, 0, 123456789, time.UTC)
-	assert.True(t, remoteModTime(storedTimeNano(at)).Equal(at))
-}
-
-// Every writer of a remote modification time stores the same value for the
-// same time: the item converter, the upload outcome and the live row an
-// executor precondition compares with the planned one. They are compared with
-// each other, so one encoding at both ends of the range, and at the epoch.
-//
-// Validates: R-6.7.34
-func TestStoredTimeNano_RemoteModificationTimeWritersAgree(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-	for _, modified := range []time.Time{
-		time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Unix(0, 0),
-		time.Date(2025, 6, 15, 12, 0, 0, 123456789, time.UTC),
-	} {
-		item := graph.Item{ID: "item-f", Name: "f.txt", ParentID: "root", DriveID: driveID, ModifiedAt: modified}
-		converter := newPrimaryConverter(emptyBaseline(), driveID, synctest.TestLogger(t), nil, nil)
-		events := converter.ConvertItems(context.Background(), []graph.Item{
-			{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
-			item,
-		})
-		var observed *remoteItem
-		for i := range events {
-			if events[i].ItemID == item.ID {
-				observed = &events[i]
-			}
-		}
-		require.NotNil(t, observed, "%s", modified)
-
-		uploaded := (&executor{}).uploadOutcome(&Action{Type: ActionUpload, Path: "f.txt"}, driveID, "root",
-			&driveops.UploadResult{Item: &item, Mtime: modified})
-		live := remoteStateRowFromGraphItem(&item)
-
-		want := storedTimeNano(modified)
-		assert.Equal(t, want, observed.Mtime, "converter, %s", modified)
-		assert.Equal(t, want, uploaded.RemoteMtime, "upload outcome, %s", modified)
-		assert.Equal(t, want, live.Mtime, "live precondition row, %s", modified)
-	}
+	assert.True(t, RemoteModTime(StoredTimeNano(at)).Equal(at))
 }

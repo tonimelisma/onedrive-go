@@ -18,7 +18,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	tables, err := listUserTables(ctx, store.rawDB())
+	tables, err := listUserTables(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"baseline",
@@ -38,7 +38,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"store_metadata",
 	}, tables)
 
-	columns, err := listTableColumns(ctx, store.rawDB(), "observation_state")
+	columns, err := listTableColumns(ctx, store.RawDBForTest(), "observation_state")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"content_drive_id",
@@ -69,7 +69,7 @@ func requireNewSyncStoreRefusesSchema(t *testing.T, ddl string) {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), ddl)
 	require.NoError(t, err)
@@ -102,13 +102,13 @@ func TestApplySchema_SeedsObservationStateRowForCurrentSchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Close())
 	})
 
-	_, err = db.ExecContext(t.Context(), canonicalSchemaSQL)
+	_, err = db.ExecContext(t.Context(), CanonicalSchemaSQLForTest())
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), sqlEnsureStoreMetadataRow, currentSyncStoreGeneration)
 	require.NoError(t, err)
@@ -126,10 +126,10 @@ func TestApplySchema_RejectsGeneration6RemoteStateDriveOwnership(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
-	legacySchema := strings.Replace(canonicalSchemaSQL, "    drive_id      TEXT    NOT NULL DEFAULT '',\n", "", 1)
+	legacySchema := strings.Replace(CanonicalSchemaSQLForTest(), "    drive_id      TEXT    NOT NULL DEFAULT '',\n", "", 1)
 	_, err = db.ExecContext(t.Context(), legacySchema)
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), sqlEnsureStoreMetadataRow, 6)

@@ -28,7 +28,7 @@ func TestExecutor_DirectoryConflictCopy_ParentSwappedForSymlinkStaysInside(t *te
 	require.NoError(t, os.MkdirAll(outsideDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "child.txt"), []byte(outsideContent), 0o600))
 
-	action := &Action{Type: ActionConflictCopy, Path: "alias/photos", View: &pathView{Path: "alias/photos"}}
+	action := &Action{Type: ActionConflictCopy, Path: "alias/photos", View: &PathView{Path: "alias/photos"}}
 	o := f.exec.renameToConflictCopy(action, action.Path, action.Path, conflictCopyDirPathWithOrdinal)
 	requireOutcomeFailure(t, &o)
 
@@ -46,8 +46,8 @@ func TestExecutor_DirectoryConflictCopy_VanishedSourceIsTheVanishedFileOutcome(t
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
-	action := &Action{Type: ActionConflictCopy, Path: "gone", ItemID: "item-gone", View: &pathView{Path: "gone"}}
+	e := NewExecution(cfg, emptyBaseline())
+	action := &Action{Type: ActionConflictCopy, Path: "gone", ItemID: "item-gone", View: &PathView{Path: "gone"}}
 
 	vanishedFile := e.ExecuteConflictCopy(t.Context(), action)
 	requireOutcomeSuccess(t, &vanishedFile)
@@ -131,12 +131,12 @@ func TestExecutor_ConflictCopy_UncheckableSourceFailsWithItsReason(t *testing.T)
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
-	e := newExecution(cfg, emptyBaseline())
+	e := NewExecution(cfg, emptyBaseline())
 	writeExecTestFile(t, syncRoot, filepath.Join("thing", "child.txt"), "child")
 	shim := synctest.NewErrnoShim(synctest.ErrnoRule{Op: synctest.FSOpStat, Path: "thing", Errno: syscall.EACCES})
 	e.syncTree = e.syncTree.Interpose(shim.Wrap)
 
-	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &pathView{Path: "thing"}})
+	o := e.ExecuteConflictCopy(t.Context(), &Action{Type: ActionConflictCopy, Path: "thing", View: &PathView{Path: "thing"}})
 	requireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, syscall.EACCES)
 

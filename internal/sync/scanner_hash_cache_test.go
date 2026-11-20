@@ -18,20 +18,20 @@ import (
 
 // mapHashCache is the in-memory cache the scanner tests feed and consult.
 type mapHashCache struct {
-	entries map[string]localHashCacheEntry
+	entries map[string]LocalHashCacheEntry
 	records int
 }
 
 func newMapHashCache() *mapHashCache {
-	return &mapHashCache{entries: map[string]localHashCacheEntry{}}
+	return &mapHashCache{entries: map[string]LocalHashCacheEntry{}}
 }
 
-func (c *mapHashCache) lookup(path string) (localHashCacheEntry, bool) {
+func (c *mapHashCache) Lookup(path string) (LocalHashCacheEntry, bool) {
 	e, ok := c.entries[path]
 	return e, ok
 }
 
-func (c *mapHashCache) record(_ context.Context, entries []localHashCacheEntry) error {
+func (c *mapHashCache) Record(_ context.Context, entries []LocalHashCacheEntry) error {
 	c.records++
 	for _, e := range entries {
 		c.entries[e.Path] = e
@@ -56,9 +56,9 @@ func writeAgedFile(t *testing.T, path, content string) {
 	require.NoError(t, os.Chtimes(path, old, old))
 }
 
-func scanWithCache(t *testing.T, syncRoot string, cache localHashCache, reads *atomic.Int32) scanResult {
+func scanWithCache(t *testing.T, syncRoot string, cache LocalHashCache, reads *atomic.Int32) ScanResult {
 	t.Helper()
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.hashFunc = countingHasher(reads)
 	obs.SetLocalHashCache(cache)
 	// ctime cannot be aged, so the racily-clean guard on it is satisfied
@@ -69,7 +69,7 @@ func scanWithCache(t *testing.T, syncRoot string, cache localHashCache, reads *a
 	return result
 }
 
-func hashesByPath(result scanResult) map[string]string {
+func hashesByPath(result ScanResult) map[string]string {
 	out := map[string]string{}
 	for i := range result.Rows {
 		if result.Rows[i].ItemType == ItemTypeFile {
@@ -137,7 +137,7 @@ func TestFullScan_RecordedHashIsNotTrustedInsideTheRacilyCleanWindow(t *testing.
 	cache := newMapHashCache()
 
 	var reads atomic.Int32
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.hashFunc = countingHasher(&reads)
 	obs.SetLocalHashCache(cache)
 	_, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
@@ -146,7 +146,7 @@ func TestFullScan_RecordedHashIsNotTrustedInsideTheRacilyCleanWindow(t *testing.
 	require.Len(t, cache.entries, 1)
 
 	reads.Store(0)
-	obs = newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs = NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.hashFunc = countingHasher(&reads)
 	obs.SetLocalHashCache(cache)
 	_, err = obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
@@ -164,44 +164,44 @@ func TestLocalHashCache_StoreRoundTripAndPrune(t *testing.T) {
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	cache, err := store.newLocalHashCache(ctx)
+	cache, err := store.NewLocalHashCache(ctx)
 	require.NoError(t, err)
-	_, ok := cache.lookup("a.txt")
+	_, ok := cache.Lookup("a.txt")
 	assert.False(t, ok, "empty to begin with")
 
-	entries := []localHashCacheEntry{
+	entries := []LocalHashCacheEntry{
 		{Path: "a.txt", Hash: "hash-a", Size: 1, Mtime: 10, Ctime: 11, Device: 7, Inode: 70, BirthTime: 1},
 		{Path: "b.txt", Hash: "hash-b", Size: 2, Mtime: 20, Ctime: 21, Device: 7, Inode: 71},
 		{Path: "gone.txt", Hash: "hash-gone", Size: 3, Mtime: 30, Ctime: 31, Device: 7, Inode: 72},
 	}
-	require.NoError(t, cache.record(ctx, entries))
+	require.NoError(t, cache.Record(ctx, entries))
 
-	reloaded, err := store.newLocalHashCache(ctx)
+	reloaded, err := store.NewLocalHashCache(ctx)
 	require.NoError(t, err)
-	got, ok := reloaded.lookup("a.txt")
+	got, ok := reloaded.Lookup("a.txt")
 	require.True(t, ok)
 	assert.Equal(t, entries[0], got, "every field survives the round trip")
 
 	// a.txt gets a baseline row; the snapshot still lists a.txt and b.txt,
 	// gone.txt is no longer on disk.
 	require.NoError(t, store.CommitMutation(ctx, faultSeedOutcomeForCache("a.txt", "item-a")))
-	require.NoError(t, store.ReplaceLocalState(ctx, []localStateRow{
+	require.NoError(t, store.ReplaceLocalState(ctx, []LocalStateRow{
 		{Path: "a.txt", ItemType: ItemTypeFile, Hash: "hash-a", Size: 1, Mtime: 10},
 		{Path: "b.txt", ItemType: ItemTypeFile, Hash: "hash-b", Size: 2, Mtime: 20},
 	}))
 
-	pruned, err := store.newLocalHashCache(ctx)
+	pruned, err := store.NewLocalHashCache(ctx)
 	require.NoError(t, err)
-	_, ok = pruned.lookup("a.txt")
+	_, ok = pruned.Lookup("a.txt")
 	assert.False(t, ok, "the baseline owns a.txt now")
-	_, ok = pruned.lookup("gone.txt")
+	_, ok = pruned.Lookup("gone.txt")
 	assert.False(t, ok, "gone.txt is not in the snapshot")
-	_, ok = pruned.lookup("b.txt")
+	_, ok = pruned.Lookup("b.txt")
 	assert.True(t, ok, "b.txt is still waiting for its pass")
 }
 
 func faultSeedOutcomeForCache(path, itemID string) *BaselineMutation {
-	return mutationFromActionOutcome(&actionOutcome{
+	return MutationFromActionOutcome(&ActionOutcome{
 		Action: ActionUpload, Success: true, Path: path,
 		DriveID: driveid.New(engineTestDriveID), ItemID: itemID, ParentID: "root", ItemType: ItemTypeFile,
 		LocalHash: "hash-" + path, RemoteHash: "hash-" + path,

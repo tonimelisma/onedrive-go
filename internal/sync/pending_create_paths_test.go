@@ -35,16 +35,16 @@ func TestPrunePendingCreates_DropsTheRecordOfAnItemAtAPathTheScanDoesNotVisit(t 
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 	require.NoError(t, store.RecordPendingCreate(ctx, &PendingCreate{
-		ItemID: testPlaceholderID, DriveID: driveID, Path: "hidden.txt", ParentID: graphRootID,
+		ItemID: testPlaceholderID, DriveID: driveID, Path: "hidden.txt", ParentID: GraphRootID,
 		CreatedETag: placeholderCreatedETag,
 	}))
 	require.NoError(t, store.RecordPendingCreateIntent(ctx, &PendingCreate{
-		DriveID: driveID, Path: "hidden-intent.txt", ParentID: graphRootID,
+		DriveID: driveID, Path: "hidden-intent.txt", ParentID: GraphRootID,
 	}))
 	require.NoError(t, store.ReplaceLocalState(ctx, nil))
 	scanned := func(path string) bool { return path != "hidden.txt" && path != "hidden-intent.txt" }
 
-	require.NoError(t, store.prunePendingCreates(ctx, passObservedRemoteThenLocal, scanned))
+	require.NoError(t, store.PrunePendingCreates(ctx, PassObservedRemoteThenLocal, scanned))
 
 	requireNoPendingCreateAt(t, store, "hidden.txt", "a record nothing will upload into ends")
 	_, found, err := store.PendingCreateAt(ctx, "hidden-intent.txt")
@@ -104,12 +104,12 @@ func TestCommitObservation_AdoptedPlaceholderRenamedOntoARecordedPathLeavesNoRec
 	driveID := driveid.New(testDriveID)
 	placeholder := adoptTestPlaceholder(t, store)
 	require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &PendingCreate{
-		DriveID: driveID, Path: renamedPath, ParentID: graphRootID,
+		DriveID: driveID, Path: renamedPath, ParentID: GraphRootID,
 	}))
 
 	renamed := placeholder
 	renamed.Path, renamed.ETag = renamedPath, placeholderMovedETag
-	require.NoError(t, store.CommitObservation(t.Context(), []observedItem{renamed}, "t-renamed", driveID))
+	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{renamed}, "t-renamed", driveID))
 
 	requireNoPendingCreateAt(t, store, "doc.txt", "no record stays at the path the item left")
 	pending, found, err := store.PendingCreateAt(t.Context(), renamedPath)
@@ -133,16 +133,16 @@ func TestCommitObservation_APlaceholderTakingAFreedPathEndsTheRecordOfTheItemTha
 	driveID := driveid.New(testDriveID)
 	left := adoptTestPlaceholder(t, store)
 	left.Path, left.ETag = renamedPath, placeholderMovedETag
-	require.NoError(t, store.CommitObservation(t.Context(), []observedItem{left}, "t-renamed", driveID))
+	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{left}, "t-renamed", driveID))
 	_, followed, err := store.PendingCreateAt(t.Context(), renamedPath)
 	require.NoError(t, err)
 	require.True(t, followed, "the record followed the renamed item")
 
 	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-		ItemID: "new-placeholder", DriveID: driveID, Path: "doc.txt", ParentID: graphRootID, CreatedETag: `"n,1"`,
+		ItemID: "new-placeholder", DriveID: driveID, Path: "doc.txt", ParentID: GraphRootID, CreatedETag: `"n,1"`,
 	}))
-	require.NoError(t, store.CommitObservation(t.Context(), []observedItem{{
-		DriveID: driveID, ItemID: "new-placeholder", ParentID: graphRootID, Path: "doc.txt", ItemType: ItemTypeFile,
+	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
+		DriveID: driveID, ItemID: "new-placeholder", ParentID: GraphRootID, Path: "doc.txt", ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: `"n,1"`,
 	}}, "t-new", driveID))
 
@@ -170,10 +170,10 @@ func TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong(t *testing.T) {
 	// from doc.txt to renamedPath: ActionRemoteMove when this client moved the
 	// item online to match a local rename, ActionLocalMove when it moved the
 	// local file to match a rename made online.
-	renameOfPlaceholder := func(action actionType) *BaselineMutation {
+	renameOfPlaceholder := func(action ActionType) *BaselineMutation {
 		return &BaselineMutation{
 			Action: action, Success: true, Path: renamedPath, OldPath: "doc.txt", DriveID: driveID,
-			ItemID: testPlaceholderID, ParentID: graphRootID, ItemType: ItemTypeFile,
+			ItemID: testPlaceholderID, ParentID: GraphRootID, ItemType: ItemTypeFile,
 			LocalSize: 0, LocalSizeKnown: true, RemoteSize: 0, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 		}
 	}
@@ -210,10 +210,10 @@ func TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong(t *testing.T) {
 		store := newTestStore(t)
 		adoptTestPlaceholder(t, store)
 		require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-			ItemID: displacedID, DriveID: driveID, Path: renamedPath, ParentID: graphRootID, CreatedETag: displacedETag,
+			ItemID: displacedID, DriveID: driveID, Path: renamedPath, ParentID: GraphRootID, CreatedETag: displacedETag,
 		}))
-		require.NoError(t, store.CommitObservation(t.Context(), []observedItem{{
-			DriveID: driveID, ItemID: displacedID, ParentID: graphRootID, Path: renamedPath, ItemType: ItemTypeFile,
+		require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
+			DriveID: driveID, ItemID: displacedID, ParentID: GraphRootID, Path: renamedPath, ItemType: ItemTypeFile,
 			Hash: emptyQuickXor, Size: 0, ETag: displacedETag,
 		}}, "t-displaced", driveID))
 		_, _, adopted := readBaselineRow(t, store, displacedID)
@@ -264,7 +264,7 @@ func newStoreWithDocsFolderMovedToPapers(t *testing.T, intentPath string) *SyncS
 
 	driveID := driveid.New(testDriveID)
 	store := newTestStore(t)
-	_, err := store.rawDB().ExecContext(t.Context(), `INSERT INTO baseline (item_id, path, parent_id, item_type, etag)
+	_, err := store.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline (item_id, path, parent_id, item_type, etag)
 		VALUES ('folder-docs', 'docs', 'root', 'folder', '"f,1"')`)
 	require.NoError(t, err)
 	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
@@ -276,7 +276,7 @@ func newStoreWithDocsFolderMovedToPapers(t *testing.T, intentPath string) *SyncS
 	}))
 	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
 		Action: ActionRemoteMove, Success: true, Path: "papers", OldPath: "docs", DriveID: driveID,
-		ItemID: "folder-docs", ParentID: graphRootID, ItemType: ItemTypeFolder, ETag: `"f,2"`,
+		ItemID: "folder-docs", ParentID: GraphRootID, ItemType: ItemTypeFolder, ETag: `"f,2"`,
 	}))
 
 	return store

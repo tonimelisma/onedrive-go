@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*trackedAction {
+func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*TrackedAction {
 	if flow.sched.graph == nil {
 		panic(fmt.Sprintf("dep_graph: complete action %d during %s with nil graph", actionID, reason))
 	}
@@ -19,7 +19,7 @@ func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []
 }
 
 func (flow *engineFlow) applyCompletedSubtree(
-	current *trackedAction,
+	current *TrackedAction,
 	actionID int64,
 	reason string,
 ) {
@@ -35,7 +35,7 @@ func (flow *engineFlow) applyCompletedSubtree(
 // completeSubtree silently completes all transitive dependents without
 // success, retry, or failure-recording semantics. Used when the current runtime
 // must retire old graph work instead of admitting its dependents.
-func (flow *engineFlow) completeSubtree(ready []*trackedAction) {
+func (flow *engineFlow) completeSubtree(ready []*TrackedAction) {
 	seen := make(map[int64]bool)
 	queue := ready
 
@@ -57,7 +57,7 @@ func (flow *engineFlow) admitReadyAfterSuccessfulAction(
 	ctx context.Context,
 	actionID int64,
 	reason string,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	ready := flow.completeDepGraphAction(actionID, reason)
 	return flow.admitReady(ctx, ready)
 }

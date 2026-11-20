@@ -25,22 +25,17 @@ import (
 // A test can pin the order -- forward, reversed or a seeded shuffle -- and
 // serialize the workers so the order is also the execution order.
 
-// dispatchOrderEnv runs every engine the package's tests build under one
-// order: "forward", "reverse" or "shuffle:<seed>". Unset, engines keep the
-// graph order and the worker pool, as in production.
-const dispatchOrderEnv = "ONEDRIVE_GO_DISPATCH_ORDER"
-
 // dispatchOrderForward sorts a frontier by action ID, which is plan order:
 // the canonical order the other two permute.
-func dispatchOrderForward(frontier []*trackedAction) []*trackedAction {
-	slices.SortStableFunc(frontier, func(a, b *trackedAction) int {
+func dispatchOrderForward(frontier []*TrackedAction) []*TrackedAction {
+	slices.SortStableFunc(frontier, func(a, b *TrackedAction) int {
 		return compareInt64(a.ID, b.ID)
 	})
 
 	return frontier
 }
 
-func dispatchOrderReverse(frontier []*trackedAction) []*trackedAction {
+func dispatchOrderReverse(frontier []*TrackedAction) []*TrackedAction {
 	dispatchOrderForward(frontier)
 	slices.Reverse(frontier)
 
@@ -49,11 +44,11 @@ func dispatchOrderReverse(frontier []*trackedAction) []*trackedAction {
 
 // dispatchOrderShuffle permutes each frontier with one seeded generator, so
 // the same seed reproduces the same order run after run.
-func dispatchOrderShuffle(seed uint64) func([]*trackedAction) []*trackedAction {
+func dispatchOrderShuffle(seed uint64) func([]*TrackedAction) []*TrackedAction {
 	var mu stdsync.Mutex
 	rng := rand.New(rand.NewPCG(seed, seed^0x5851f42d4c957f2d)) //nolint:gosec // deterministic test RNG
 
-	return func(frontier []*trackedAction) []*trackedAction {
+	return func(frontier []*TrackedAction) []*TrackedAction {
 		dispatchOrderForward(frontier)
 		mu.Lock()
 		defer mu.Unlock()
@@ -75,7 +70,7 @@ func compareInt64(a, b int64) int {
 }
 
 // parseDispatchOrder turns an order name into the engine hook.
-func parseDispatchOrder(t *testing.T, name string) func([]*trackedAction) []*trackedAction {
+func parseDispatchOrder(t *testing.T, name string) func([]*TrackedAction) []*TrackedAction {
 	t.Helper()
 
 	switch {

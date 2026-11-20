@@ -27,7 +27,7 @@ const maxHashRetries = 2
 
 // ExecuteDownload downloads a remote file via TransferManager with .partial
 // safety, hash verification with retry, and atomic rename.
-func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOutcome {
+func (e *Executor) ExecuteDownload(ctx context.Context, action *Action) ActionOutcome {
 	target := e.downloadTargetSpelling(action)
 
 	// The download itself runs through the rooted sync tree, which refuses
@@ -39,7 +39,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 			ActionDownload,
 			err,
 			action.Path,
-			permissionCapabilityLocalWrite,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
@@ -52,7 +52,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 			ActionDownload,
 			sourcePreconditionErr,
 			action.Path,
-			permissionCapabilityRemoteRead,
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	targetPreconditionErr := e.validateDownloadTargetPrecondition(ctx, action, target)
@@ -62,7 +62,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 			ActionDownload,
 			targetPreconditionErr,
 			action.Path,
-			permissionCapabilityLocalWrite,
+			PermissionCapabilityLocalWrite,
 		)
 	}
 
@@ -86,7 +86,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 
 	if action.View != nil && action.View.Remote != nil {
 		opts.RemoteHash = action.View.Remote.Hash
-		opts.RemoteMtime = remoteModTime(action.View.Remote.Mtime)
+		opts.RemoteMtime = RemoteModTime(action.View.Remote.Mtime)
 		opts.RemoteSize = action.View.Remote.Size
 		opts.RemoteSizeKnown = action.View.Remote.SizeKnown
 		opts.RemoteETag = action.View.Remote.ETag
@@ -103,8 +103,8 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 		)
 	}
 
-	if crashErr := e.reachCrashPoint(crashPointDownloadRenamed); crashErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionDownload, crashErr, action.Path, permissionCapabilityUnknown)
+	if crashErr := e.reachCrashPoint(CrashPointDownloadRenamed); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionDownload, crashErr, action.Path, PermissionCapabilityUnknown)
 	}
 
 	outcome := e.downloadOutcome(action, target, driveID, result.LocalHash, result.EffectiveRemoteHash, result.Size)
@@ -117,7 +117,7 @@ func (e *executor) ExecuteDownload(ctx context.Context, action *Action) actionOu
 // stored spelling would leave a second, NFC-named file beside it (R-2.13.2).
 // A new file is written under the stored spelling inside its parent folders'
 // spellings on disk, and its own folder is not listed to find it.
-func (e *executor) downloadTargetSpelling(action *Action) string {
+func (e *Executor) downloadTargetSpelling(action *Action) string {
 	if plannedLocalState(action) != nil {
 		return e.syncTree.Spelling(action.Path)
 	}
@@ -125,12 +125,12 @@ func (e *executor) downloadTargetSpelling(action *Action) string {
 	return e.syncTree.SpellingOfParent(action.Path)
 }
 
-// downloadOutcome builds a successful actionOutcome after a download wrote
+// downloadOutcome builds a successful ActionOutcome after a download wrote
 // target, the rooted spelling on disk of action.Path.
-func (e *executor) downloadOutcome(
+func (e *Executor) downloadOutcome(
 	action *Action, target string, driveID driveid.ID, localHash, remoteHash string, size int64,
-) actionOutcome {
-	o := actionOutcome{
+) ActionOutcome {
+	o := ActionOutcome{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            action.Path,
@@ -147,7 +147,7 @@ func (e *executor) downloadOutcome(
 
 	if action.View != nil && action.View.Remote != nil {
 		o.ETag = action.View.Remote.ETag
-		// The time the download set is remoteModTime of the stored value,
+		// The time the download set is RemoteModTime of the stored value,
 		// whose Unix nanoseconds are that value again.
 		o.LocalMtime = action.View.Remote.Mtime
 		o.RemoteMtime = action.View.Remote.Mtime
@@ -178,7 +178,7 @@ func (e *executor) downloadOutcome(
 // A pre-upload freshness check prevents silently overwriting concurrent remote
 // changes. When current remote truth no longer matches the planned overwrite,
 // the upload is aborted as superseded so the engine replans from fresh truth.
-func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutcome {
+func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutcome {
 	driveID := e.resolveDriveID(action)
 
 	// Always check the planned remote item against its live state before
@@ -192,13 +192,13 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 			ActionUpload,
 			freshnessErr,
 			action.Path,
-			permissionCapabilityRemoteRead,
+			PermissionCapabilityRemoteRead,
 		)
 	}
 	// Read by its spelling on disk, not the stored NFC path (R-2.13.2).
 	source := e.syncTree.Spelling(action.Path)
 	if sourceErr := e.validateUploadSourcePrecondition(action, source); sourceErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionUpload, sourceErr, action.Path, permissionCapabilityLocalRead)
+		return e.failedOutcomeWithFailure(action, ActionUpload, sourceErr, action.Path, PermissionCapabilityLocalRead)
 	}
 
 	localPath, err := e.syncTree.Abs(source)
@@ -208,7 +208,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 			ActionUpload,
 			normalizeSyncTreePathError(err),
 			action.Path,
-			permissionCapabilityUnknown,
+			PermissionCapabilityUnknown,
 		)
 	}
 
@@ -217,7 +217,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		result   *driveops.UploadResult
 	)
 
-	if shouldOverwriteKnownRemoteItem(action) {
+	if ShouldOverwriteKnownRemoteItem(action) {
 		// Conditional on the eTag the preflight just read: a remote edit made
 		// while a long upload runs answers 412 instead of being replaced
 		// (D-022, L-02). Not the planned eTag: a planned remote move bumps it
@@ -225,7 +225,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		opts := e.uploadOpts(action, source)
 		opts.IfMatch = liveETag
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, opts)
-		err = uploadTransferError(err)
+		err = UploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -239,7 +239,7 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 	} else {
 		parentID, err = e.ResolveParentID(action.Path)
 		if err != nil {
-			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, permissionCapabilityUnknown)
+			return e.failedOutcomeWithFailure(action, ActionUpload, err, action.Path, PermissionCapabilityUnknown)
 		}
 		waitErr := e.waitRemoteParentVisible(ctx, action)
 		parentPreconditionErr := e.validateRemoteParentPrecondition(ctx, driveID, parentID, action, "upload create")
@@ -249,18 +249,18 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 				ActionUpload,
 				parentPreconditionErr,
 				action.Path,
-				permissionCapabilityRemoteRead,
+				PermissionCapabilityRemoteRead,
 			)
 		}
 		if waitErr != nil {
-			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, permissionCapabilityUnknown)
+			return e.failedOutcomeWithFailure(action, ActionUpload, waitErr, action.Path, PermissionCapabilityUnknown)
 		}
 
 		result, err = e.uploadNewFile(ctx, action, driveID, parentID, source, localPath)
 		if gone := remoteCreateParentGone(err, "upload create", parentID); gone != nil {
-			return e.failedOutcomeWithFailure(action, ActionUpload, gone, action.Path, permissionCapabilityRemoteRead)
+			return e.failedOutcomeWithFailure(action, ActionUpload, gone, action.Path, PermissionCapabilityRemoteRead)
 		}
-		err = uploadTransferError(err)
+		err = UploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -272,8 +272,8 @@ func (e *executor) ExecuteUpload(ctx context.Context, action *Action) actionOutc
 		}
 	}
 
-	if crashErr := e.reachCrashPoint(crashPointUploadRemoteDone); crashErr != nil {
-		return e.failedOutcomeWithFailure(action, ActionUpload, crashErr, action.Path, permissionCapabilityUnknown)
+	if crashErr := e.reachCrashPoint(CrashPointUploadRemoteDone); crashErr != nil {
+		return e.failedOutcomeWithFailure(action, ActionUpload, crashErr, action.Path, PermissionCapabilityUnknown)
 	}
 
 	// No visibility probe of the uploaded path: the upload's own response
@@ -347,27 +347,27 @@ func (t syncDownloadTarget) Abs(name string) (string, error) {
 	return t.tree.Abs(name) //nolint:wrapcheck // synctree names the path
 }
 
-func downloadTransferFailureCapability(err error) permissionCapability {
-	if errors.Is(err, errActionPreconditionChanged) {
-		return permissionCapabilityLocalWrite
+func downloadTransferFailureCapability(err error) PermissionCapability {
+	if errors.Is(err, ErrActionPreconditionChanged) {
+		return PermissionCapabilityLocalWrite
 	}
 
-	return inferFailureCapabilityFromError(err, permissionCapabilityLocalWrite, permissionCapabilityRemoteRead)
+	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead)
 }
 
-// uploadTransferError turns the upload answers that mean "remote truth moved
+// UploadTransferError turns the upload answers that mean "remote truth moved
 // on" (isRemoteTruthMovedOn) into a stale precondition, so the engine replans
 // from fresh truth instead of retrying the same request. A durable name
 // collision stays what it is. The Graph error stays in the chain for the
 // log; the engine classifies the stale precondition before any status it
 // carries (classifyResult).
-func uploadTransferError(err error) error {
-	var nameTaken *remoteNameTakenError
+func UploadTransferError(err error) error {
+	var nameTaken *RemoteNameTakenError
 	if errors.As(err, &nameTaken) {
 		return err
 	}
 	if isRemoteTruthMovedOn(err) {
-		return fmt.Errorf("%w: %w", errActionPreconditionChanged, err)
+		return fmt.Errorf("%w: %w", ErrActionPreconditionChanged, err)
 	}
 
 	return err
@@ -393,26 +393,26 @@ func isRemoteTruthMovedOn(err error) bool {
 // remote-write precondition, as a remote delete's or move's post-preflight
 // 412 is; one the source check proved (the file changed while it was read)
 // is a local-read one. Both were counted as local-read before.
-func uploadTransferFailureCapability(err error) permissionCapability {
+func uploadTransferFailureCapability(err error) PermissionCapability {
 	switch {
-	case errors.Is(err, errActionPreconditionChanged) && isRemoteTruthMovedOn(err):
-		return permissionCapabilityRemoteWrite
-	case errors.Is(err, errActionPreconditionChanged):
-		return permissionCapabilityLocalRead
+	case errors.Is(err, ErrActionPreconditionChanged) && isRemoteTruthMovedOn(err):
+		return PermissionCapabilityRemoteWrite
+	case errors.Is(err, ErrActionPreconditionChanged):
+		return PermissionCapabilityLocalRead
 	}
 
-	return inferFailureCapabilityFromError(err, permissionCapabilityLocalRead, permissionCapabilityRemoteWrite)
+	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalRead, PermissionCapabilityRemoteWrite)
 }
 
-func (e *executor) uploadOutcome(
+func (e *Executor) uploadOutcome(
 	action *Action,
 	driveID driveid.ID,
 	parentID string,
 	result *driveops.UploadResult,
-) actionOutcome {
+) ActionOutcome {
 	remoteHash := driveops.SelectHash(result.Item)
 
-	outcome := actionOutcome{
+	outcome := ActionOutcome{
 		Action:          ActionUpload,
 		Success:         true,
 		Path:            action.Path,
@@ -429,7 +429,7 @@ func (e *executor) uploadOutcome(
 		LocalMtime:      result.Mtime.UnixNano(),
 		// The encoding the item converter stores for the next observation
 		// of this item, so the two compare equal.
-		RemoteMtime: storedTimeNano(result.Item.ModifiedAt),
+		RemoteMtime: StoredTimeNano(result.Item.ModifiedAt),
 		ETag:        result.Item.ETag,
 	}
 	if action.View != nil && action.View.Local != nil {
@@ -445,7 +445,7 @@ func (e *executor) uploadOutcome(
 
 // uploadOpts are the transfer options of action's upload, whose source is the
 // rooted path source (its spelling on disk).
-func (e *executor) uploadOpts(action *Action, source string) driveops.UploadOpts {
+func (e *Executor) uploadOpts(action *Action, source string) driveops.UploadOpts {
 	plannedETag := ""
 	if action.View != nil && action.View.Remote != nil {
 		plannedETag = action.View.Remote.ETag
@@ -471,14 +471,14 @@ func (e *executor) uploadOpts(action *Action, source string) driveops.UploadOpts
 // validateRemoteUploadPrecondition checks an overwrite against live remote
 // truth and returns the eTag it read, which the overwrite then sends as
 // If-Match. A create has nothing to check.
-func (e *executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) (string, error) {
-	if !shouldOverwriteKnownRemoteItem(action) {
+func (e *Executor) validateRemoteUploadPrecondition(ctx context.Context, driveID driveid.ID, action *Action) (string, error) {
+	if !ShouldOverwriteKnownRemoteItem(action) {
 		return "", nil
 	}
 	return e.remoteSourcePreconditionETag(ctx, driveID, action, "upload overwrite")
 }
 
-func shouldOverwriteKnownRemoteItem(action *Action) bool {
+func ShouldOverwriteKnownRemoteItem(action *Action) bool {
 	if action == nil || action.ItemID == "" {
 		return false
 	}
@@ -490,9 +490,9 @@ func shouldOverwriteKnownRemoteItem(action *Action) bool {
 	return true
 }
 
-// pendingCreateStore is the executor's narrow view of the sync store's
+// PendingCreateStore is the executor's narrow view of the sync store's
 // pending-create records (store_pending_creates.go).
-type pendingCreateStore interface {
+type PendingCreateStore interface {
 	RecordPendingCreateIntent(ctx context.Context, pending *PendingCreate) error
 	RecordPendingCreate(ctx context.Context, pending *PendingCreate) error
 	ClearPendingCreateIntent(ctx context.Context, path string) error
@@ -516,12 +516,12 @@ type pendingCreateStore interface {
 // finishes the upload into it (resolveCreateConflict). When the user renames
 // or deletes the file instead, no retry comes, and the intent is dropped once
 // OneDrive has been observed after the attempt and the file found gone (the
-// step after planning, prunePendingCreates, or in watch mode the next remote
-// poll, dropGoneCreateIntentsAt), or once it expires. An intent cleared here
+// step after planning, PrunePendingCreates, or in watch mode the next remote
+// poll, DropGoneCreateIntentsAt), or once it expires. An intent cleared here
 // on such an answer made the file read as someone else's: a create conflict,
 // the user's file renamed to a conflict copy and the empty one downloaded in
 // its place (live, 2026-11-11, during a network outage).
-func (e *executor) uploadNewFile(
+func (e *Executor) uploadNewFile(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
 ) (*driveops.UploadResult, error) {
 	// Read before this attempt records its own intent, which would otherwise
@@ -561,10 +561,10 @@ func (e *executor) uploadNewFile(
 
 // priorCreateIntent reports whether an earlier attempt left an intent to
 // create action's file that never learned an item ID and is still within
-// pendingCreateIntentTTL: the one state in which an empty file at the path
+// PendingCreateIntentTTL: the one state in which an empty file at the path
 // can be that attempt's own (resolveCreateConflict). The store stamps intents
 // with the engine's clock, which is the executor's too.
-func (e *executor) priorCreateIntent(ctx context.Context, action *Action) (bool, error) {
+func (e *Executor) priorCreateIntent(ctx context.Context, action *Action) (bool, error) {
 	if e.pendingCreates == nil {
 		return false, nil
 	}
@@ -577,7 +577,7 @@ func (e *executor) priorCreateIntent(ctx context.Context, action *Action) (bool,
 		return false, nil
 	}
 
-	return pending.intentIsFresh(e.nowFunc()), nil
+	return pending.IntentIsFresh(e.nowFunc()), nil
 }
 
 // pendingCreateOf describes the create of action for the pending-create
@@ -595,7 +595,7 @@ func pendingCreateOf(action *Action, driveID driveid.ID, parentID string) *Pendi
 // recordPendingCreateIntent records that a create at action.Path is about to
 // be requested (R-5.6.15): the one record that survives a process dying with
 // the creating request in flight.
-func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action, driveID driveid.ID, parentID string) error {
+func (e *Executor) recordPendingCreateIntent(ctx context.Context, action *Action, driveID driveid.ID, parentID string) error {
 	if e.pendingCreates == nil {
 		return nil
 	}
@@ -615,11 +615,11 @@ func (e *executor) recordPendingCreateIntent(ctx context.Context, action *Action
 // happens to the action after, so the record is written on a context that
 // keeps the action's values but not its cancellation, bounded by
 // detachedStoreBound like a finished action's outcome commit
-// (runDetachedStoreAccess, so an expired bound is a store failure and never a
+// (RunDetachedStoreAccess, so an expired bound is a store failure and never a
 // request that timed out). On the action's own context, a shutdown landing
 // right after the create would fail the write and leave only the intent (e2e
 // TestE2E_SyncWatch_PauseResume).
-func (e *executor) recordPendingCreate(
+func (e *Executor) recordPendingCreate(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID string, created *bool,
 ) func(itemID, createdETag string) error {
 	if e.pendingCreates == nil {
@@ -628,13 +628,13 @@ func (e *executor) recordPendingCreate(
 
 	return func(itemID, createdETag string) error {
 		*created = true
-		if crashErr := e.reachCrashPoint(crashPointUploadCreatedUnrecorded); crashErr != nil {
+		if crashErr := e.reachCrashPoint(CrashPointUploadCreatedUnrecorded); crashErr != nil {
 			return crashErr
 		}
 		pending := pendingCreateOf(action, driveID, parentID)
 		pending.ItemID, pending.CreatedETag = itemID, createdETag
 
-		return runDetachedStoreAccess(ctx, e.detachedStoreBound(), func(recordCtx context.Context) error {
+		return RunDetachedStoreAccess(ctx, e.detachedStoreBound(), func(recordCtx context.Context) error {
 			return e.pendingCreates.RecordPendingCreate(recordCtx, pending)
 		})
 	}
@@ -643,7 +643,7 @@ func (e *executor) recordPendingCreate(
 // detachedStoreBound is the bound of every store access the executor runs
 // detached from its action's context: OutcomeCommitTimeout unless a test
 // shortened it.
-func (cfg *executorConfig) detachedStoreBound() time.Duration {
+func (cfg *ExecutorConfig) detachedStoreBound() time.Duration {
 	if cfg.storeAccessTimeout > 0 {
 		return cfg.storeAccessTimeout
 	}
@@ -668,7 +668,7 @@ func (cfg *executorConfig) detachedStoreBound() time.Duration {
 // nothing left in flight, so its intent is cleared on a context detached from
 // the action's and bounded like an outcome's commit: kept, it outlived a file
 // that was already synced.
-func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action, succeeded bool) {
+func (e *Executor) clearPendingCreateIntent(ctx context.Context, action *Action, succeeded bool) {
 	if e.pendingCreates == nil {
 		return
 	}
@@ -692,7 +692,7 @@ func (e *executor) clearPendingCreateIntent(ctx context.Context, action *Action,
 // and bounded like an outcome's commit, since the removal already happened
 // whatever became of the action. Best effort: a record left behind ends when
 // observation sees the item's delete.
-func (e *executor) forgetRemovedPlaceholder(ctx context.Context, action *Action, itemID string) {
+func (e *Executor) forgetRemovedPlaceholder(ctx context.Context, action *Action, itemID string) {
 	if e.pendingCreates == nil {
 		return
 	}
@@ -734,7 +734,7 @@ func (e *executor) forgetRemovedPlaceholder(ctx context.Context, action *Action,
 // status, which hid a throttled or failing listing.
 //
 // keepIntent tells the caller to leave the intent of this path in place.
-func (e *executor) resolveCreateConflict(
+func (e *Executor) resolveCreateConflict(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
 	conflictErr error, priorIntent bool,
 ) (result *driveops.UploadResult, keepIntent bool, err error) {
@@ -761,7 +761,7 @@ func (e *executor) resolveCreateConflict(
 	child, found := classifyCreateConflict(children, name)
 	switch found {
 	case createConflictRival:
-		return nil, false, &remoteNameTakenError{localName: name, remoteName: child.Name, err: conflictErr}
+		return nil, false, &RemoteNameTakenError{localName: name, remoteName: child.Name, err: conflictErr}
 	case createConflictWanted:
 		if priorIntent && isEmptyLiveFile(child) {
 			return e.claimLostCreate(ctx, action, driveID, parentID, source, localPath, child, conflictErr)
@@ -830,7 +830,7 @@ func classifyCreateConflict(children []graph.Item, name string) (*graph.Item, cr
 // classified by its own answer like every read made while resolving the 409,
 // and it settles the attempt (finished, with the error): taken for "no
 // placeholder", it came back as a stale plan under the 409's status.
-func (e *executor) finishIntoPlaceholder(
+func (e *Executor) finishIntoPlaceholder(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, itemID, source, localPath string,
 ) (result *driveops.UploadResult, finished bool, err error) {
 	item, getErr := e.items.GetItem(ctx, driveID, itemID)
@@ -864,7 +864,7 @@ func (e *executor) finishIntoPlaceholder(
 // TTL. An empty file someone else created under that name in that window is
 // taken for the lost one; it held nothing, and content written to it since it
 // was read changes its eTag and refuses the upload.
-func (e *executor) claimLostCreate(
+func (e *Executor) claimLostCreate(
 	ctx context.Context, action *Action, driveID driveid.ID, parentID, source, localPath string,
 	child *graph.Item, conflictErr error,
 ) (result *driveops.UploadResult, keepIntent bool, err error) {
@@ -886,14 +886,14 @@ func (e *executor) claimLostCreate(
 
 // placeholderIsAtCreate reports whether item sits where the create of relPath
 // under parentID puts the file: relPath's name in NFC, under parentID. The
-// drive root's alias graphRootID names no item, so an item read back for a
+// drive root's alias GraphRootID names no item, so an item read back for a
 // create in the drive root is placed by remoteItemIsAt, and only a location
 // it knows to be elsewhere refuses it.
-func (e *executor) placeholderIsAtCreate(item *graph.Item, relPath, parentID string) bool {
+func (e *Executor) placeholderIsAtCreate(item *graph.Item, relPath, parentID string) bool {
 	if namekey.Stored(item.Name) != namekey.Stored(slashpath.Base(relPath)) {
 		return false
 	}
-	if parentID != "" && parentID != graphRootID {
+	if parentID != "" && parentID != GraphRootID {
 		return item.ParentID == parentID
 	}
 	at, known := e.remoteItemIsAt(item, relPath)
@@ -909,18 +909,18 @@ func isEmptyLiveFile(item *graph.Item) bool {
 		!item.IsPackage && !item.IsBundle && !item.TypeFacetMissing && item.Size == 0
 }
 
-// remoteNameTakenError is a create refused because OneDrive already holds a
+// RemoteNameTakenError is a create refused because OneDrive already holds a
 // sibling whose name it treats as the same, spelled differently. It is a
 // durable name-collision condition naming both (classifyResult), not work to
 // retry as is.
-type remoteNameTakenError struct {
+type RemoteNameTakenError struct {
 	localName  string
 	remoteName string
 	err        error
 }
 
-func (e *remoteNameTakenError) Error() string {
+func (e *RemoteNameTakenError) Error() string {
 	return fmt.Sprintf("OneDrive already has %q, which it treats as the same name as %q; rename one of them", e.remoteName, e.localName)
 }
 
-func (e *remoteNameTakenError) Unwrap() error { return e.err }
+func (e *RemoteNameTakenError) Unwrap() error { return e.err }

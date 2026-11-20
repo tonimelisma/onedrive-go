@@ -18,7 +18,7 @@ func TestNewDebugEventFileHook_WritesNDJSON(t *testing.T) {
 	require.NoError(t, err)
 
 	hook(DebugEvent{
-		Type:    engineDebugEventWebsocketConnected,
+		Type:    EngineDebugEventWebsocketConnected,
 		DriveID: "drive-123",
 		Note:    "sid=sid-1",
 	})
@@ -29,7 +29,7 @@ func TestNewDebugEventFileHook_WritesNDJSON(t *testing.T) {
 	require.NoError(t, err)
 	var event DebugEvent
 	require.NoError(t, json.Unmarshal(data, &event))
-	assert.Equal(t, engineDebugEventWebsocketConnected, event.Type)
+	assert.Equal(t, EngineDebugEventWebsocketConnected, event.Type)
 	assert.Equal(t, "drive-123", event.DriveID)
 	assert.Equal(t, "sid=sid-1", event.Note)
 }

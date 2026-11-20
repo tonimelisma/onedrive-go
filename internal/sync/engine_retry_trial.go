@@ -17,17 +17,17 @@ const (
 func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
 	bl *Baseline,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldTrialsNow", "release due held trials")
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
+	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventTrialHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
 	rt.armHeldTimers()
-	rt.deps.emit(engineDebugEvent{
-		Type:  engineDebugEventTrialHeldReleaseCompleted,
+	rt.deps.emit(EngineDebugEvent{
+		Type:  EngineDebugEventTrialHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil
@@ -39,17 +39,17 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
 	bl *Baseline,
-) ([]*trackedAction, error) {
+) ([]*TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldRetriesNow", "release due held retries")
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
+	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRetryHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
 	rt.armHeldTimers()
-	rt.deps.emit(engineDebugEvent{
-		Type:  engineDebugEventRetryHeldReleaseCompleted,
+	rt.deps.emit(EngineDebugEvent{
+		Type:  EngineDebugEventRetryHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil
@@ -61,7 +61,7 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 // failure is returned like any other store write failure in the completion
 // path: left behind, the row keeps `status` listing a file that just synced
 // as retrying and schedules a redundant retry.
-func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *actionCompletion) error {
+func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *ActionCompletion) error {
 	if r == nil {
 		return nil
 	}
@@ -78,13 +78,13 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	// a finished effect: like the outcome commit it runs detached from
 	// cancellation, or a shutdown that lands between the effect and this
 	// write would leave the row behind and fail the completion. It has the
-	// outcome commit's bound too (runDetachedStoreAccess), so a wedged store
+	// outcome commit's bound too (RunDetachedStoreAccess), so a wedged store
 	// cannot hold a shutdown; in a stopping run's drain that is the drain's
 	// one bound.
-	if err := runDetachedStoreAccess(ctx, OutcomeCommitTimeout, func(clearCtx context.Context) error {
+	if err := RunDetachedStoreAccess(ctx, OutcomeCommitTimeout, func(clearCtx context.Context) error {
 		return flow.resolveRetryWorkAndLogResolution(
 			clearCtx,
-			retryWorkKeyForAction(action),
+			RetryWorkKeyForAction(action),
 			retryResolutionSourceActionSuccess,
 		)
 	}); err != nil {
@@ -94,11 +94,11 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	return nil
 }
 
-func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *actionCompletion, current *trackedAction) error {
+func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *ActionCompletion, current *TrackedAction) error {
 	if current != nil {
 		return flow.resolveRetryWorkAndLogResolution(
 			ctx,
-			retryWorkKeyForAction(&current.Action),
+			RetryWorkKeyForAction(&current.Action),
 			retryResolutionSourceActionSuperseded,
 		)
 	}
@@ -108,7 +108,7 @@ func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *actio
 
 	return flow.resolveRetryWorkAndLogResolution(
 		ctx,
-		retryWorkKeyForCompletion(r),
+		RetryWorkKeyForCompletion(r),
 		retryResolutionSourceActionSuperseded,
 	)
 }
@@ -130,7 +130,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 
 	flow.deps.logger.Debug("retry_work resolved",
 		slog.String("path", row.Path),
-		slog.String("condition_type", string(retryConditionTypeForRow(row))),
+		slog.String("condition_type", string(RetryConditionTypeForRow(row))),
 		slog.String("action_type", row.ActionType.String()),
 		slog.Int("attempt_count", row.AttemptCount),
 		slog.String("resolution_source", resolutionSource),

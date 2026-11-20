@@ -14,7 +14,7 @@ func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 	rt.recoverDroppedLocalObservation(ctx)
 	rt.engine.purgeExpiredTrash(false)
 	rt.logWatchSummary(ctx)
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventMaintenanceTickHandled})
+	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventMaintenanceTickHandled})
 }
 
 func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
@@ -28,12 +28,11 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		return
 	}
 
-	if err := rt.handleWatchLocalObservationBatch(ctx, &localObservation{
-		kind:           localTruthSuspect,
-		recoveryReason: localTruthRecoveryDroppedEvents,
+	if err := rt.handleWatchLocalObservationBatch(ctx, &LocalObservation{
+		Kind:           LocalTruthSuspect,
+		RecoveryReason: LocalTruthRecoveryDroppedEvents,
 	}); err != nil {
-		rt.resources.localObs.droppedEvents.Add(droppedEvents)
-		rt.resources.localObs.droppedRetries.Add(droppedRetries)
+		rt.resources.localObs.RestoreDropped(droppedEvents, droppedRetries)
 		level := slog.LevelWarn
 		if errText := err.Error(); errText == rt.loop.lastDroppedRescanErr {
 			// Already reported; the next maintenance tick retries it.
@@ -62,7 +61,7 @@ func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, err
 	if err != nil {
 		return 0, fmt.Errorf("sync: reading observation state for remote refresh cadence: %w", err)
 	}
-	if !storedTimeIsSet(state.NextFullRemoteRefreshAt) {
+	if !StoredTimeIsSet(state.NextFullRemoteRefreshAt) {
 		return 0, nil
 	}
 
@@ -84,7 +83,7 @@ func (e *Engine) shouldRunFullRemoteRefresh(ctx context.Context, requested bool)
 	if err != nil {
 		return false, fmt.Errorf("sync: reading observation state for full remote refresh: %w", err)
 	}
-	if state.Cursor == "" || !storedTimeIsSet(state.NextFullRemoteRefreshAt) {
+	if state.Cursor == "" || !StoredTimeIsSet(state.NextFullRemoteRefreshAt) {
 		return true, nil
 	}
 
@@ -128,7 +127,7 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Basel
 		return
 	}
 	rt.resources.refreshActive = true
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshStarted})
+	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshStarted})
 
 	rt.resources.goroutines.start(ctx, watchGoroutineFullRefresh, func(ctx context.Context) {
 		defer rt.recoverFullRemoteRefreshPanic(ctx)
@@ -153,9 +152,9 @@ func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 	}
 
 	panicErr := panicguard.Recovered(rt.deps.logger, "in the full remote refresh", r)
-	result := remoteObservationBatch{
-		source:   remoteObservationBatchFullRefresh,
-		fatalErr: fmt.Errorf("sync: %w", panicErr),
+	result := RemoteObservationBatch{
+		Source:   RemoteObservationBatchFullRefresh,
+		FatalErr: fmt.Errorf("sync: %w", panicErr),
 	}
 	rt.finishFullRemoteRefresh(ctx, &result)
 }
@@ -163,13 +162,13 @@ func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 func (rt *watchRuntime) performFullRemoteRefresh(
 	ctx context.Context,
 	bl *Baseline,
-) remoteObservationBatch {
-	result := remoteObservationBatch{
-		source: remoteObservationBatchFullRefresh,
+) RemoteObservationBatch {
+	result := RemoteObservationBatch{
+		Source: RemoteObservationBatchFullRefresh,
 	}
 	start := rt.deps.now()
 	defer func() {
-		rt.engine.collector().RecordRefresh(len(result.changes), rt.deps.since(start))
+		rt.engine.collector().RecordRefresh(len(result.Changes), rt.deps.since(start))
 	}()
 
 	rt.deps.logger.Info("periodic full remote refresh starting")
@@ -182,15 +181,15 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 				slog.Any("error", err),
 			)
 		}
-		result.markFullRefreshIfIdle = true
+		result.MarkFullRefreshIfIdle = true
 		return result
 	}
 
-	observationBatch.source = remoteObservationBatchFullRefresh
-	observationBatch.armFullRefreshTimer = true
-	observationBatch.markFullRefreshIfIdle = len(observationBatch.changes) == 0
+	observationBatch.Source = RemoteObservationBatchFullRefresh
+	observationBatch.ArmFullRefreshTimer = true
+	observationBatch.MarkFullRefreshIfIdle = len(observationBatch.Changes) == 0
 	result = observationBatch
-	if len(result.changes) == 0 {
+	if len(result.Changes) == 0 {
 		rt.deps.logger.Info("periodic full remote refresh complete: no changes",
 			slog.Duration("duration", rt.deps.since(start)),
 		)
@@ -198,14 +197,14 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	}
 
 	rt.deps.logger.Info("periodic full remote refresh complete",
-		slog.Int("changes", len(result.changes)),
+		slog.Int("changes", len(result.Changes)),
 		slog.Duration("duration", rt.deps.since(start)),
 	)
 
 	return result
 }
 
-func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *remoteObservationBatch) {
+func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *RemoteObservationBatch) {
 	select {
 	case rt.resources.refreshResults <- *result:
 	case <-ctx.Done():
@@ -218,11 +217,11 @@ func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *rem
 
 func (rt *watchRuntime) applyRemoteRefreshResult(
 	ctx context.Context,
-	result *remoteObservationBatch,
+	result *RemoteObservationBatch,
 ) error {
-	if result.fatalErr != nil {
+	if result.FatalErr != nil {
 		rt.resources.refreshActive = false
-		return result.fatalErr
+		return result.FatalErr
 	}
 
 	return rt.handleRemoteObservationBatch(ctx, result)
@@ -230,5 +229,5 @@ func (rt *watchRuntime) applyRemoteRefreshResult(
 
 func (rt *watchRuntime) dropRemoteRefreshResultOnShutdown() {
 	rt.resources.refreshActive = false
-	rt.deps.emit(engineDebugEvent{Type: engineDebugEventRemoteRefreshDroppedOnShutdown})
+	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshDroppedOnShutdown})
 }

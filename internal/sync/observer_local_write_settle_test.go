@@ -21,10 +21,10 @@ import (
 // newSettleTestObserver returns an observer driven entirely by a manual clock
 // and a counting hash function, for handler-level tests that call the watch
 // handlers directly instead of running the watch loop.
-func newSettleTestObserver(t *testing.T, baseline *Baseline, clock *manualClock, hashCalls *atomic.Int64) *localObserver {
+func newSettleTestObserver(t *testing.T, baseline *Baseline, clock *manualClock, hashCalls *atomic.Int64) *LocalObserver {
 	t.Helper()
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.clock = clock
 	// Each read returns a new hash: every write in these tests changes the
 	// content.
@@ -200,7 +200,7 @@ func TestHandleCreate_DirectoryRowPrecedesItsContents(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, dir, "moved/inner.txt", "content")
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 
 	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), filepath.Join(dir, "moved"), "moved", "moved", newMockFsWatcher())
@@ -304,7 +304,7 @@ func TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash(t *test
 	dir := t.TempDir()
 	fsPath := writeTestFile(t, dir, "growing.log", "x")
 	clock := newManualClock(time.Now())
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.clock = clock
 	// The file grows during every read, as a log being appended to does.
 	grow := 0

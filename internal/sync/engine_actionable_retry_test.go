@@ -62,7 +62,7 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	require.Len(t, rows, 1)
 	assert.Equal(t, "deep", rows[0].Path)
 	assert.Equal(t, ActionFolderCreate, rows[0].ActionType)
-	assert.Equal(t, issuePathTooLong, rows[0].ConditionType, "the refusal is kept with the row")
+	assert.Equal(t, IssuePathTooLong, rows[0].ConditionType, "the refusal is kept with the row")
 	assert.GreaterOrEqual(t, rows[0].NextRetryAt-clock.Now().UnixNano(), int64(durableRecheckDelay),
 		"a condition the user must clear waits on the durable curve")
 
@@ -88,7 +88,7 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 2, rows[0].AttemptCount)
-	assert.Equal(t, issuePathTooLong, rows[0].ConditionType)
+	assert.Equal(t, IssuePathTooLong, rows[0].ConditionType)
 	assert.Equal(t, 1, strings.Count(logBuf.String(), "Not syncing deep:"), "a retry of the same refusal is not re-announced")
 }
 
@@ -132,7 +132,7 @@ func TestRunOnce_ARefusalOnlyTheUserCanClearIsLeftAsItsCondition(t *testing.T) {
 		require.Len(t, activities, 1, run)
 		assert.Equal(t, "deep", activities[0].Path, run)
 		assert.Equal(t, ConditionPathTooLong, activities[0].ConditionKey, run)
-		assert.Equal(t, issuePathTooLong, activities[0].ConditionType, run)
+		assert.Equal(t, IssuePathTooLong, activities[0].ConditionType, run)
 		assert.False(t, activities[0].WillRetry, run)
 		assert.Equal(t, run == "the first refusal", activities[0].ConditionStarts, run)
 		assert.Equal(t, 1, report.Failed, "%s: every failed action is still counted as done work", run)
@@ -222,15 +222,15 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 	refused := errors.New("refused")
 	for _, tc := range []struct {
 		name       string
-		decision   resultDecision
-		action     actionType
+		decision   ResultDecision
+		action     ActionType
 		httpStatus int
 		err        error
 		awaits     bool
 	}{
 		{
 			name:     "a condition only the user can clear",
-			decision: actionableDecision(issuePathTooLong, ConditionPathTooLong),
+			decision: actionableDecision(IssuePathTooLong, ConditionPathTooLong),
 			err:      refused,
 			awaits:   true,
 		},
@@ -241,15 +241,15 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 		},
 		{
 			name: "a transient failure",
-			decision: resultDecision{
-				Class: errclass.ClassRetryableTransient, Persistence: persistRetryWork,
-				ConditionType: issueServiceOutage, ConditionKey: ConditionServiceOutage,
+			decision: ResultDecision{
+				Class: errclass.ClassRetryableTransient, Persistence: PersistRetryWork,
+				ConditionType: IssueServiceOutage, ConditionKey: ConditionServiceOutage,
 			},
 			err: refused,
 		},
 		{
 			name:     "a denial the local permission probe owns",
-			decision: actionableDecision(issueLocalWriteDenied, ConditionLocalWriteDenied),
+			decision: actionableDecision(IssueLocalWriteDenied, ConditionLocalWriteDenied),
 			err:      fmt.Errorf("write file: %w", os.ErrPermission),
 		},
 		{
@@ -261,20 +261,20 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 		},
 		{
 			name:     "an upload OneDrive stored differently than it was sent",
-			decision: actionableDecision(issueUploadVerification, ConditionUploadVerification),
+			decision: actionableDecision(IssueUploadVerification, ConditionUploadVerification),
 			action:   ActionUpload,
 			err:      fmt.Errorf("upload: %w", driveops.ErrUploadVerificationFailed),
 		},
 		{
 			name:     "a download OneDrive served differently than it describes",
-			decision: actionableDecision(issueDownloadIntegrity, ConditionDownloadIntegrity),
+			decision: actionableDecision(IssueDownloadIntegrity, ConditionDownloadIntegrity),
 			err:      fmt.Errorf("download: %w", driveops.ErrDownloadIntegrity),
 		},
 	} {
 		flow.resetResultStats()
 		activities = nil
 		// The zero action is ActionDownload.
-		completion := &actionCompletion{ActionType: tc.action, Path: "a.txt", HTTPStatus: tc.httpStatus, Err: tc.err}
+		completion := &ActionCompletion{ActionType: tc.action, Path: "a.txt", HTTPStatus: tc.httpStatus, Err: tc.err}
 		require.Equal(t, tc.httpStatus == http.StatusForbidden, shouldHandleRemote403Permission(completion), tc.name)
 
 		eng.emitActivity(completion, &tc.decision, true)
@@ -293,10 +293,10 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 
 // actionableDecision is the decision for an action refused per item, recorded
 // as retry work with conditionType.
-func actionableDecision(conditionType IssueType, key ConditionKey) resultDecision {
-	return resultDecision{
+func actionableDecision(conditionType IssueType, key ConditionKey) ResultDecision {
+	return ResultDecision{
 		Class:         errclass.ClassActionable,
-		Persistence:   persistRetryWork,
+		Persistence:   PersistRetryWork,
 		ConditionType: conditionType,
 		ConditionKey:  key,
 	}
@@ -311,7 +311,7 @@ func assertStatusListsRefusalUnderItsCondition(t *testing.T, eng *testEngine) {
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
 	require.Len(t, snapshot.ActionableRetryWork, 1, "status reads the row as a condition")
-	assert.Equal(t, issuePathTooLong, snapshot.ActionableRetryWork[0].ConditionType)
+	assert.Equal(t, IssuePathTooLong, snapshot.ActionableRetryWork[0].ConditionType)
 	assert.Zero(t, snapshot.RetryingItems, "not counted as retrying")
 	groups := ProjectStoredConditionGroups(&snapshot)
 	require.Len(t, groups, 1)

@@ -20,15 +20,15 @@ func TestEmitActivity_ClassifiesOutcomesForDisplay(t *testing.T) {
 	eng.SetActivityHook(func(a Activity) { got = append(got, a) })
 
 	failure := errors.New("boom")
-	emit := func(r *actionCompletion, class errclass.Class) {
-		eng.emitActivity(r, &resultDecision{Class: class}, true)
+	emit := func(r *ActionCompletion, class errclass.Class) {
+		eng.emitActivity(r, &ResultDecision{Class: class}, true)
 	}
-	emit(&actionCompletion{Path: "a.txt", ActionType: ActionDownload, Size: 5, SizeKnown: true}, errclass.ClassSuccess)
-	emit(&actionCompletion{Path: "b.txt", ActionType: ActionUpload, Err: failure}, errclass.ClassRetryableTransient)
-	emit(&actionCompletion{Path: "c.txt", ActionType: ActionRemoteDelete, Err: failure}, errclass.ClassActionable)
-	emit(&actionCompletion{Path: "d.txt", ActionType: ActionUpload}, errclass.ClassShutdown)
-	emit(&actionCompletion{Path: "e.txt", ActionType: ActionUpload}, errclass.ClassSuperseded)
-	emit(&actionCompletion{Path: "f.txt", ActionType: ActionBaselineUpdate}, errclass.ClassSuccess)
+	emit(&ActionCompletion{Path: "a.txt", ActionType: ActionDownload, Size: 5, SizeKnown: true}, errclass.ClassSuccess)
+	emit(&ActionCompletion{Path: "b.txt", ActionType: ActionUpload, Err: failure}, errclass.ClassRetryableTransient)
+	emit(&ActionCompletion{Path: "c.txt", ActionType: ActionRemoteDelete, Err: failure}, errclass.ClassActionable)
+	emit(&ActionCompletion{Path: "d.txt", ActionType: ActionUpload}, errclass.ClassShutdown)
+	emit(&ActionCompletion{Path: "e.txt", ActionType: ActionUpload}, errclass.ClassSuperseded)
+	emit(&ActionCompletion{Path: "f.txt", ActionType: ActionBaselineUpdate}, errclass.ClassSuccess)
 
 	require.Len(t, got, 3, "shutdown, superseded and bookkeeping completions are not user activity")
 

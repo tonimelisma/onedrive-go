@@ -4,7 +4,7 @@
 // Contents:
 //   - SyncStore:    struct definition (db handle, baseline cache, logger, clock)
 //   - NewSyncStore: open database, apply canonical schema, return ready store
-//   - sqliteFileURI: the database's SQLite URI, path percent-encoded
+//   - SqliteFileURI: the database's SQLite URI, path percent-encoded
 //   - Close:        WAL checkpoint + close database
 //   - Checkpoint:   WAL checkpoint
 //   - nullString:   empty string → SQL NULL
@@ -20,7 +20,7 @@
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
 //   - store_reset.go:              explicit delete-and-recreate helper
-//   - store_sql_encoding.go:       column encodings, stored times among them
+//   - store_sql_encoding.go:       column encodings (stored times: domain_stored_time.go)
 
 package sync
 
@@ -94,15 +94,15 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 	return openSyncStore(ctx, dbPath, logger, true)
 }
 
-// sqliteDriverName is the database/sql driver the store opens its database
+// SqliteDriverName is the database/sql driver the store opens its database
 // with. Tests open through a fault-injecting wrapper of the same driver
 // (openSyncStoreWithDriver) to reach the store's failure branches.
-const sqliteDriverName = "sqlite"
+const SqliteDriverName = "sqlite"
 
 const (
-	// sqlitePragmaParam is the URI parameter whose values the SQLite driver
+	// SqlitePragmaParam is the URI parameter whose values the SQLite driver
 	// runs as PRAGMA statements on every connection it opens.
-	sqlitePragmaParam = "_pragma"
+	SqlitePragmaParam = "_pragma"
 	// storeBusyTimeout is how long a statement waits for a lock another
 	// connection holds before it fails with SQLITE_BUSY.
 	storeBusyTimeout = 5 * time.Second
@@ -112,13 +112,13 @@ const (
 	storeJournalSizeLimitBytes = 64 << 20
 )
 
-// sqliteFileURI is the SQLite URI of the database file at path, carrying
+// SqliteFileURI is the SQLite URI of the database file at path, carrying
 // query. The path is percent-encoded: SQLite reads a '?' in a "file:" URI
 // as the start of the query and a '#' as the start of a fragment, so a data
 // folder named with either would open a different file. An absolute path
 // gets an empty authority ("file:///abs"); a relative one has none
 // ("file:rel"), which SQLite resolves against the working directory.
-func sqliteFileURI(path string, query url.Values) string {
+func SqliteFileURI(path string, query url.Values) string {
 	uri := url.URL{
 		Scheme:   "file",
 		Path:     path,
@@ -130,7 +130,7 @@ func sqliteFileURI(path string, query url.Values) string {
 }
 
 func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
-	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, sqliteDriverName)
+	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, SqliteDriverName)
 }
 
 func openSyncStoreWithDriver(
@@ -145,7 +145,7 @@ func openSyncStoreWithDriver(
 	}
 
 	// DSN parameters ensure pragmas apply to every connection from the pool.
-	db, err := sql.Open(driverName, sqliteFileURI(dbPath, url.Values{sqlitePragmaParam: {
+	db, err := sql.Open(driverName, SqliteFileURI(dbPath, url.Values{SqlitePragmaParam: {
 		"journal_mode(WAL)",
 		"synchronous(FULL)",
 		"foreign_keys(ON)",
@@ -238,11 +238,11 @@ func (s *SyncStore) rawDB() *sql.DB {
 	return s.db
 }
 
-// setNowFunc overrides the store's clock, which dates delete-ledger rows,
+// SetNowFunc overrides the store's clock, which dates delete-ledger rows,
 // retry timing and pending-create intents. Used in tests to produce
 // deterministic times without mocking the real clock; call it before the
 // writes it should date.
-func (s *SyncStore) setNowFunc(fn func() time.Time) {
+func (s *SyncStore) SetNowFunc(fn func() time.Time) {
 	s.nowFunc = fn
 }
 

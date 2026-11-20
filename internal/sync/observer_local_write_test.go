@@ -41,7 +41,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -118,14 +118,14 @@ func TestHandleWrite_DifferentPathsNotCoalesced(t *testing.T) {
 	clock.Advance(50 * time.Millisecond)
 
 	// Collect both rows.
-	collected := make(map[string]localStateRow)
+	collected := make(map[string]LocalStateRow)
 	timeout := time.After(eventWait)
 
 	for len(collected) < 2 {
 		select {
 		case batch := <-batches:
-			for _, row := range batch.rows {
-				if batch.kind == localPatch {
+			for _, row := range batch.Rows {
+				if batch.Kind == LocalPatch {
 					collected[row.Path] = row
 				}
 			}
@@ -191,9 +191,9 @@ func TestHandleWrite_DeleteClearsTimer(t *testing.T) {
 	}, eventWait, time.Millisecond)
 
 	// Should get only the removal, not a row for the write.
-	patch := waitForLocalPatch(t, batches, func(*localObservation) bool { return true }, "the delete's patch")
-	require.Equal(t, []string{"doomed.txt"}, patch.deletedPrefixes, "the first patch is the removal")
-	require.Empty(t, patch.rows)
+	patch := waitForLocalPatch(t, batches, func(*LocalObservation) bool { return true }, "the delete's patch")
+	require.Equal(t, []string{"doomed.txt"}, patch.DeletedPrefixes, "the first patch is the removal")
+	require.Empty(t, patch.Rows)
 
 	clock.Advance(400 * time.Millisecond)
 
@@ -283,24 +283,24 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: "old-hash",
 	})
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline:              baseline,
 		logger:                synctest.TestLogger(t),
 		writeCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan hashRequest, 10),
+			PendingTimers: make(map[string]SyncTimer),
+			HashRequests:  make(chan HashRequest, 10),
 		},
-		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realClock{}.AfterFunc},
+		clock: &observerTestClock{SyncClock: RealClock{}, afterFunc: RealClock{}.AfterFunc},
 	}
 
 	batches := localBatches(obs, 5)
 	ctx := t.Context()
 
 	// Call hashAndEmit with retries at the cap. Even though the file is
-	// stable (no errFileChangedDuringHash), this verifies the code path
+	// stable (no ErrFileChangedDuringHash), this verifies the code path
 	// works correctly at the retry boundary.
-	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), hashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,
 		DbRelPath: "exhausted.txt",
 		Retries:   maxCoalesceRetries,
@@ -328,21 +328,21 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		ItemType: ItemTypeFile, LocalHash: hash,
 	})
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline:              baseline,
 		logger:                synctest.TestLogger(t),
 		writeCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
-			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan hashRequest, 10),
+			PendingTimers: make(map[string]SyncTimer),
+			HashRequests:  make(chan HashRequest, 10),
 		},
-		clock: &observerTestClock{syncClock: realClock{}, afterFunc: realClock{}.AfterFunc},
+		clock: &observerTestClock{SyncClock: RealClock{}, afterFunc: RealClock{}.AfterFunc},
 	}
 
 	batches := localBatches(obs, 5)
 	ctx := t.Context()
 
-	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), hashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,
 		DbRelPath: "noop.txt",
 	})
@@ -420,7 +420,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 
 	mockWatcher := newMockFsWatcher()
 	recorder := newDebugEventRecorder()
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline:    emptyBaseline(),
 		logger:      synctest.TestLogger(t),
 		debugEvents: recorder.record,
@@ -433,19 +433,19 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 					"existing.txt": {"existing.txt", "Existing.txt"},
 				},
 			},
-			PendingTimers: make(map[string]syncTimer),
-			HashRequests:  make(chan hashRequest, hashRequestBufSize),
+			PendingTimers: make(map[string]SyncTimer),
+			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
 		writeCoalesceCooldown: 50 * time.Millisecond,
 		clock: &observerTestClock{
-			syncClock: realClock{},
-			afterFunc: realClock{}.AfterFunc,
+			SyncClock: RealClock{},
+			afterFunc: RealClock{}.AfterFunc,
 			sleep: func(_ context.Context, _ time.Duration) error {
 				return nil
 			},
 			tickCh: make(chan time.Time),
 		},
-		watcherFactory: func() (fsWatcher, error) {
+		watcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
 		},
 	}

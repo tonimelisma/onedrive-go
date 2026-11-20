@@ -164,8 +164,8 @@ func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "dir", "a.txt"), []byte("below the folder\n"), 0o600))
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "the bootstrap to settle and the local observer to start")
 	require.Equal(t, int32(1), creates.Load(), "the bootstrap's create timed out")
 	assert.NotContains(t, remote.tree(), "dir/a.txt", "the upload waits for its folder")
@@ -237,7 +237,7 @@ func TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain(t *testing.T) {
 	bo.SetMaxOverride(MinPollInterval)
 	backoff := bo.Next()
 	backoffEnds := w.clock.Now().Add(backoff)
-	batches := make(chan remoteObservationBatch)
+	batches := make(chan RemoteObservationBatch)
 	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
 		return w.rt.watchMountRootRemote(ctx, w.bl, batches, MinPollInterval)
 	})
@@ -248,7 +248,7 @@ func TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain(t *testing.T) {
 	w.clock.Advance(backoff)
 	batch := receiveWithin(t, batches, "the batch of the poll after the backoff")
 
-	assert.Equal(t, remoteObservationBatchMountRoot, batch.source)
+	assert.Equal(t, RemoteObservationBatchMountRoot, batch.Source)
 	assert.Equal(t, polledBefore+2, w.polls.Load())
 	stopWatch(t, cancel, done)
 }

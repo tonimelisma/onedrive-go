@@ -22,13 +22,13 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	// run's cached view and its planning transaction).
 	cached, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	_, err = eng.baseline.rawDB().ExecContext(ctx, `
+	_, err = eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type) VALUES ('item-fm2', 'fm2', 'folder')`)
 	require.NoError(t, err)
 	_, found := cached.GetByPath("fm2")
 	require.False(t, found)
 
-	tx, err := beginPerfTx(ctx, eng.baseline.db)
+	tx, err := eng.baseline.BeginPerfTx(ctx)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, tx.Rollback())

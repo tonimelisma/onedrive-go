@@ -17,11 +17,11 @@ import (
 func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 1)
 	ctx := t.Context()
 
-	ev := changeEvent{
+	ev := ChangeEvent{
 		Path: "test.txt", ItemType: ItemTypeFile, Hash: "h", Size: 3,
 	}
 
@@ -29,9 +29,9 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 
 	select {
 	case got := <-batches:
-		assert.Equal(t, localPatch, got.kind)
-		assert.Equal(t, []localStateRow{{Path: "test.txt", ItemType: ItemTypeFile, Hash: "h", Size: 3}}, got.rows)
-		assert.True(t, got.dirty)
+		assert.Equal(t, LocalPatch, got.Kind)
+		assert.Equal(t, []LocalStateRow{{Path: "test.txt", ItemType: ItemTypeFile, Hash: "h", Size: 3}}, got.Rows)
+		assert.True(t, got.Dirty)
 	default:
 		require.Fail(t, "expected a patch on the channel")
 	}
@@ -42,16 +42,16 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 1)
 	ctx := t.Context()
 
 	// Fill the channel.
-	first := changeEvent{Path: "first.txt", ItemType: ItemTypeFile}
+	first := ChangeEvent{Path: "first.txt", ItemType: ItemTypeFile}
 	obs.TrySend(ctx, &first)
 
 	// This should be dropped (channel full).
-	second := changeEvent{Path: "second.txt", ItemType: ItemTypeFile}
+	second := ChangeEvent{Path: "second.txt", ItemType: ItemTypeFile}
 
 	obs.TrySend(ctx, &second)
 
@@ -70,15 +70,15 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	t.Parallel()
 
-	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	batches := localBatches(obs, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Fill the channel so default branch would fire, but ctx is canceled.
-	batches <- localObservation{rows: []localStateRow{{Path: "fill.txt"}}}
+	batches <- LocalObservation{Rows: []LocalStateRow{{Path: "fill.txt"}}}
 
-	ev := changeEvent{Path: "test.txt", ItemType: ItemTypeFile}
+	ev := ChangeEvent{Path: "test.txt", ItemType: ItemTypeFile}
 
 	obs.TrySend(ctx, &ev)
 

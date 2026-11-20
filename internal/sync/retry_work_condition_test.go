@@ -22,7 +22,7 @@ func TestRecordRetryWorkFailure_KeepsTheConditionItWasRefusedFor(t *testing.T) {
 
 	refused := &RetryWorkFailure{
 		Work:          RetryWorkKey{Path: "faults/deep", ActionType: ActionFolderCreate},
-		ConditionType: issuePathTooLong,
+		ConditionType: IssuePathTooLong,
 	}
 	transient := &RetryWorkFailure{
 		Work: RetryWorkKey{Path: "docs/a.txt", ActionType: ActionUpload},
@@ -30,7 +30,7 @@ func TestRecordRetryWorkFailure_KeepsTheConditionItWasRefusedFor(t *testing.T) {
 	for range 3 {
 		row, err := store.RecordRetryWorkFailure(ctx, refused, delay)
 		require.NoError(t, err)
-		assert.Equal(t, issuePathTooLong, row.ConditionType)
+		assert.Equal(t, IssuePathTooLong, row.ConditionType)
 		_, err = store.RecordRetryWorkFailure(ctx, transient, delay)
 		require.NoError(t, err)
 	}
@@ -41,7 +41,7 @@ func TestRecordRetryWorkFailure_KeepsTheConditionItWasRefusedFor(t *testing.T) {
 	for _, row := range rows {
 		byPath[row.Path] = row
 	}
-	assert.Equal(t, issuePathTooLong, byPath["faults/deep"].ConditionType, "the condition survives the round trip")
+	assert.Equal(t, IssuePathTooLong, byPath["faults/deep"].ConditionType, "the condition survives the round trip")
 	assert.Empty(t, byPath["docs/a.txt"].ConditionType)
 
 	actionable, err := queryActionableRetryWorkRowsWithRunner(ctx, store.db)
@@ -71,11 +71,11 @@ func TestProjectStoredConditionGroups_ActionableRetryWorkJoinsItsCondition(t *te
 
 	snapshot := &DriveStatusSnapshot{
 		ObservationIssues: []ObservationIssueRow{
-			{Path: "faults/seven-levels", IssueType: issuePathTooLong},
+			{Path: "faults/seven-levels", IssueType: IssuePathTooLong},
 		},
 		ActionableRetryWork: []RetryWorkRow{
-			{Path: "faults/six-levels", ActionType: ActionFolderCreate, ConditionType: issuePathTooLong, AttemptCount: 21},
-			{Path: "perm/ro/into-ro.bin", ActionType: ActionDownload, ConditionType: issueLocalWriteDenied, AttemptCount: 1},
+			{Path: "faults/six-levels", ActionType: ActionFolderCreate, ConditionType: IssuePathTooLong, AttemptCount: 21},
+			{Path: "perm/ro/into-ro.bin", ActionType: ActionDownload, ConditionType: IssueLocalWriteDenied, AttemptCount: 1},
 		},
 	}
 

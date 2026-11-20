@@ -47,9 +47,9 @@ type RetryWorkFailure struct {
 	ConditionType IssueType
 }
 
-// observedItem represents a single item from a delta API response, ready
+// ObservedItem represents a single item from a delta API response, ready
 // for CommitObservation to process against existing remote_state.
-type observedItem struct {
+type ObservedItem struct {
 	DriveID  driveid.ID
 	ItemID   string
 	ParentID string // places the children of a shadowed remote twin (store_remote_twins.go)
@@ -67,8 +67,8 @@ type observedItem struct {
 	ReuploadLocal bool
 }
 
-// remoteStateRow represents a row from the remote_state table.
-type remoteStateRow struct {
+// RemoteStateRow represents a row from the remote_state table.
+type RemoteStateRow struct {
 	DriveID  driveid.ID
 	ItemID   string
 	Path     string
@@ -82,8 +82,8 @@ type remoteStateRow struct {
 	ETag      string
 }
 
-// localStateRow represents a row from the local_state table.
-type localStateRow struct {
+// LocalStateRow represents a row from the local_state table.
+type LocalStateRow struct {
 	Path             string
 	ItemType         ItemType
 	Hash             string
@@ -100,11 +100,11 @@ type localStateRow struct {
 type RetryWorkRow struct {
 	Path         string
 	OldPath      string
-	ActionType   actionType
+	ActionType   ActionType
 	ScopeKey     ScopeKey
 	Blocked      bool
 	AttemptCount int
-	// NextRetryAt is when a delayed row is next due, as storedTimeNano
+	// NextRetryAt is when a delayed row is next due, as StoredTimeNano
 	// encodes it; zero, and only zero, means no time (a blocked row).
 	NextRetryAt int64
 	// ConditionType names the condition only the user can clear that refused
@@ -117,7 +117,7 @@ type RetryWorkRow struct {
 // the synced item too: identity is a pairing hint, never a change signal
 // (D-057). A folder rebuilt with the same files gives each a new inode, and
 // requiring the old one superseded every move of them forever.
-func localRowIsBaselineItem(row *localStateRow, baseline *BaselineEntry) bool {
+func LocalRowIsBaselineItem(row *LocalStateRow, baseline *BaselineEntry) bool {
 	if row == nil || baseline == nil {
 		return row == nil && baseline == nil
 	}
@@ -130,14 +130,14 @@ func localRowIsBaselineItem(row *localStateRow, baseline *BaselineEntry) bool {
 
 // localRowHoldsBaselineContent reports whether a local file provably holds
 // the synced content: both hashes known and equal, and the same size.
-func localRowHoldsBaselineContent(row *localStateRow, baseline *BaselineEntry) bool {
+func localRowHoldsBaselineContent(row *LocalStateRow, baseline *BaselineEntry) bool {
 	return row.ItemType == ItemTypeFile && row.Hash != "" && row.Hash == baseline.LocalHash &&
 		(!baseline.LocalSizeKnown || row.Size == baseline.LocalSize)
 }
 
-func localRowIdentityMatchesBaseline(row *localStateRow, baseline *BaselineEntry) bool {
-	rowIdentity, rowKnown := row.fileIdentity()
-	baselineIdentity, baselineKnown := baseline.fileIdentity()
+func localRowIdentityMatchesBaseline(row *LocalStateRow, baseline *BaselineEntry) bool {
+	rowIdentity, rowKnown := row.FileIdentity()
+	baselineIdentity, baselineKnown := baseline.FileIdentity()
 	if !rowKnown || !baselineKnown {
 		return true
 	}
@@ -145,15 +145,15 @@ func localRowIdentityMatchesBaseline(row *localStateRow, baseline *BaselineEntry
 	return synctree.SameIdentity(rowIdentity, baselineIdentity)
 }
 
-// fileIdentity is the row's filesystem identity, compared only through
+// FileIdentity is the row's filesystem identity, compared only through
 // synctree.SameIdentity so the birth-time rule applies everywhere (R-2.17.1).
-func (r *localStateRow) fileIdentity() (synctree.FileIdentity, bool) {
+func (r *LocalStateRow) FileIdentity() (synctree.FileIdentity, bool) {
 	return localFileIdentity(r.LocalDevice, r.LocalInode, r.LocalBirthTime, r.LocalHasIdentity)
 }
 
-// recordIdentity sets the row's filesystem identity from info, when the
+// RecordIdentity sets the row's filesystem identity from info, when the
 // platform reports one.
-func (r *localStateRow) recordIdentity(info fs.FileInfo) {
+func (r *LocalStateRow) RecordIdentity(info fs.FileInfo) {
 	identity, ok := synctree.IdentityFromFileInfo(info)
 	if !ok {
 		return
@@ -164,13 +164,13 @@ func (r *localStateRow) recordIdentity(info fs.FileInfo) {
 	r.LocalHasIdentity = true
 }
 
-// fileIdentity is the identity the baseline recorded for the synced item.
-func (b *BaselineEntry) fileIdentity() (synctree.FileIdentity, bool) {
+// FileIdentity is the identity the baseline recorded for the synced item.
+func (b *BaselineEntry) FileIdentity() (synctree.FileIdentity, bool) {
 	return localFileIdentity(b.LocalDevice, b.LocalInode, b.LocalBirthTime, b.LocalHasIdentity)
 }
 
-// fileIdentity is the identity the planner saw for the local entry.
-func (l *localState) fileIdentity() (synctree.FileIdentity, bool) {
+// FileIdentity is the identity the planner saw for the local entry.
+func (l *LocalState) FileIdentity() (synctree.FileIdentity, bool) {
 	return localFileIdentity(l.LocalDevice, l.LocalInode, l.LocalBirthTime, l.LocalHasIdentity)
 }
 
@@ -180,4 +180,9 @@ func localFileIdentity(device, inode uint64, birthTime int64, known bool) (synct
 	}
 
 	return synctree.FileIdentity{Device: device, Inode: inode, BirthTime: birthTime}, true
+}
+
+// WorkKey derives the domain identity of the work this persisted row records.
+func (row RetryWorkRow) WorkKey() RetryWorkKey {
+	return retryWorkKey(row.Path, row.OldPath, row.ActionType)
 }

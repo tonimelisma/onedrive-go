@@ -44,7 +44,7 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, key ScopeK
 }
 
 func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
-	outbox []*trackedAction,
+	outbox []*TrackedAction,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
@@ -117,10 +117,10 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
 
 // detachedInvariantCheckContext keeps ctx's values without its cancellation,
 // so an assertion is not skipped because a shutdown began, bounded like every
-// detached store access (detachedStoreContext) so a wedged store cannot hold
+// detached store access (DetachedStoreContext) so a wedged store cannot hold
 // it; inside a stopping run's drain it keeps the drain's one bound.
 func detachedInvariantCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return detachedStoreContext(ctx, time.Now().Add(OutcomeCommitTimeout))
+	return DetachedStoreContext(ctx, time.Now().Add(OutcomeCommitTimeout))
 }
 
 func (flow *engineFlow) assertWatchRuntimeInvariants() error {
@@ -152,7 +152,7 @@ func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 }
 
 func (flow *engineFlow) assertDispatchAdmissionSealed(
-	outbox []*trackedAction,
+	outbox []*TrackedAction,
 ) error {
 	if !flow.inspect.isDraining() || len(outbox) == 0 {
 		return nil
@@ -246,7 +246,7 @@ func assertPersistedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKe
 }
 
 func assertDelayedRetryWorkInvariant(row *RetryWorkRow) error {
-	if !storedTimeIsSet(row.NextRetryAt) {
+	if !StoredTimeIsSet(row.NextRetryAt) {
 		return fmt.Errorf("retry_work %s is missing retry timing", row.Path)
 	}
 
@@ -260,7 +260,7 @@ func assertBlockedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]
 	if _, ok := seenBlocks[row.ScopeKey]; !ok {
 		return fmt.Errorf("blocked retry_work %s references missing block scope %s", row.Path, row.ScopeKey.String())
 	}
-	if storedTimeIsSet(row.NextRetryAt) {
+	if StoredTimeIsSet(row.NextRetryAt) {
 		return fmt.Errorf("blocked retry_work %s must not have retry timing", row.Path)
 	}
 

@@ -34,12 +34,12 @@ func TestRunOnce_RenumberedDeviceTransfersNothing(t *testing.T) {
 
 	ctx := t.Context()
 	var observedDevice int64
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
 		`SELECT local_device FROM baseline WHERE path = 'b.txt'`).Scan(&observedDevice))
-	_, err := eng.baseline.rawDB().ExecContext(ctx,
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx,
 		`UPDATE baseline SET local_device = ? WHERE local_has_identity = 1`, observedDevice+renumberedDeviceOffset)
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.reloadBaselineCache(ctx))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(ctx))
 
 	report := runScenarioPass(t, eng)
 	assert.Zero(t, report.Uploads+report.Downloads+report.FolderCreates+report.LocalDeletes+report.RemoteDeletes,
@@ -47,7 +47,7 @@ func TestRunOnce_RenumberedDeviceTransfersNothing(t *testing.T) {
 	assert.Zero(t, remote.uploads)
 
 	var stale int
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM baseline WHERE local_has_identity = 1 AND local_device <> ?`, observedDevice).Scan(&stale))
 	assert.Zero(t, stale, "the baseline must learn the observed identity")
 	requireScenarioQuietPlan(t, eng)

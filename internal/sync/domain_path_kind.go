@@ -2,17 +2,17 @@ package sync
 
 import "strings"
 
-// observedKind and the path helpers below are domain vocabulary rather than
+// ObservedKind and the path helpers below are domain vocabulary rather than
 // observation internals: the content filter decides visibility from a kind and
 // a path, and it sits in the domain because every family applies it. Leaving
 // them in the scanner made the domain appear to depend on observation.
 
-type observedKind uint8
+type ObservedKind uint8
 
 const (
-	observedKindUnknown observedKind = iota
-	observedKindFile
-	observedKindDir
+	ObservedKindUnknown ObservedKind = iota
+	ObservedKindFile
+	ObservedKindDir
 )
 
 // asciiLower returns s with ASCII uppercase letters converted to lowercase.

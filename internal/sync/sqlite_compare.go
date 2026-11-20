@@ -264,7 +264,7 @@ followed_local_ancestor_remote_paths AS MATERIALIZED (
 	// sqlComparisonStateCTEs is the one definition of the comparison facts and
 	// the per-path comparison kind. QueryComparisonState and
 	// QueryReconciliationState both read it, on the live tables and on the
-	// planner-visible scratch tables alike (sqlQueryForStateTables), so a fact
+	// planner-visible scratch tables alike (SqlQueryForStateTables), so a fact
 	// such as "local changed" can never mean two things in two queries.
 	sqlComparisonStateCTEs = sqlLocalAndRemoteMoveCTEs + `
 comparison_flags AS (
@@ -508,7 +508,7 @@ comparison_state AS (
 `
 
 	// sqlComparisonKindCase is the first stage of the decision table: the
-	// comparison kind (comparisonKind) of one comparison_flags row. ELSE is
+	// comparison kind (ComparisonKind) of one comparison_flags row. ELSE is
 	// 'unclassified', reached only by a row no side holds, which cannot occur
 	// (the row set is the union of the three tables' paths); any other row
 	// reaching it is a gap in the table, and planning fails on it (R-6.2.16).
@@ -572,7 +572,7 @@ SELECT
 FROM comparison_state
 ORDER BY path`
 
-	sqlQueryReconciliationState = sqlComparisonStateCTEs + `,
+	SqlQueryReconciliationState = sqlComparisonStateCTEs + `,
 reconciliation_state AS (
 	SELECT
 		path,
@@ -598,7 +598,7 @@ FROM reconciliation_state
 ORDER BY path`
 
 	// sqlReconciliationKindCase is the second stage of the decision table:
-	// the decision (reconciliationKind) for one comparison_state row. Every
+	// the decision (ReconciliationKind) for one comparison_state row. Every
 	// genuine "nothing to do" is an explicit 'noop'; ELSE is 'unclassified',
 	// a row no rule covers (an unclassified comparison, a comparison kind
 	// added without a rule, a flag outside 0 and 1), and planning fails on it
@@ -725,64 +725,30 @@ FROM comparison_state
 WHERE path = ?`
 )
 
-type sQLiteComparisonRow struct {
-	Path                    string
-	BaselineItemID          string
-	RemoteItemID            string
-	ItemType                ItemType
-	BaselinePresent         bool
-	LocalPresent            bool
-	RemotePresent           bool
-	LocalChanged            bool
-	RemoteChanged           bool
-	CurrentEqual            bool
-	LocalMoveTarget         string
-	LocalMoveSource         string
-	LocalMoveCandidateCount int
-	RemoteMoveTarget        string
-	RemoteMoveSource        string
-	ComparisonKind          comparisonKind
-}
-
-type sQLiteReconciliationRow struct {
-	Path               string
-	ItemType           ItemType
-	ComparisonKind     comparisonKind
-	ReconciliationKind reconciliationKind
-	LocalMoveTarget    string
-	LocalMoveSource    string
-	RemoteMoveTarget   string
-	RemoteMoveSource   string
-	// DecisionInputs are the decision-table inputs of an unclassified row,
-	// read by the engine for the plan error (queryPlannerDecisionInputs);
-	// nil for every classified row.
-	DecisionInputs []plannerDecisionInput
-}
-
-func (s *SyncStore) QueryComparisonState(ctx context.Context) ([]sQLiteComparisonRow, error) {
+func (s *SyncStore) QueryComparisonState(ctx context.Context) ([]SQLiteComparisonRow, error) {
 	return queryComparisonStateWithRunner(ctx, s.db)
 }
 
 func queryComparisonStateWithRunner(
 	ctx context.Context,
-	runner sqlTxRunner,
-) ([]sQLiteComparisonRow, error) {
-	return queryComparisonStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
+	runner SqlTxRunner,
+) ([]SQLiteComparisonRow, error) {
+	return QueryComparisonStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
 }
 
-func queryComparisonStateWithRunnerForTables(
+func QueryComparisonStateWithRunnerForTables(
 	ctx context.Context,
-	runner sqlTxRunner,
+	runner SqlTxRunner,
 	localStateTable string,
 	remoteStateTable string,
-) ([]sQLiteComparisonRow, error) {
-	return queryComparisonRows(ctx, runner, sqlQueryForStateTables(sqlQueryComparisonState, localStateTable, remoteStateTable))
+) ([]SQLiteComparisonRow, error) {
+	return queryComparisonRows(ctx, runner, SqlQueryForStateTables(sqlQueryComparisonState, localStateTable, remoteStateTable))
 }
 
 // queryComparisonRows runs a query shaped like sqlQueryComparisonState and
 // scans its rows. A comparison kind the enum does not know fails the scan,
 // naming the path.
-func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]sQLiteComparisonRow, error) {
+func queryComparisonRows(ctx context.Context, runner SqlTxRunner, query string) ([]SQLiteComparisonRow, error) {
 	return queryStateRows(ctx, runner, query, "comparison state", scanComparisonRow)
 }
 
@@ -790,7 +756,7 @@ func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) 
 // what names the rows in the query and iteration errors.
 func queryStateRows[T any](
 	ctx context.Context,
-	runner sqlTxRunner,
+	runner SqlTxRunner,
 	query string,
 	what string,
 	scan func(*sql.Rows) (T, error),
@@ -816,9 +782,9 @@ func queryStateRows[T any](
 	return results, nil
 }
 
-func scanComparisonRow(rows *sql.Rows) (sQLiteComparisonRow, error) {
+func scanComparisonRow(rows *sql.Rows) (SQLiteComparisonRow, error) {
 	var (
-		row                                        sQLiteComparisonRow
+		row                                        SQLiteComparisonRow
 		itemType                                   sql.NullString
 		comparison                                 string
 		baselinePresent, localPresent              int
@@ -844,17 +810,17 @@ func scanComparisonRow(rows *sql.Rows) (sQLiteComparisonRow, error) {
 		&comparison,
 	)
 	if err != nil {
-		return sQLiteComparisonRow{}, fmt.Errorf("sync: scanning comparison state row: %w", err)
+		return SQLiteComparisonRow{}, fmt.Errorf("sync: scanning comparison state row: %w", err)
 	}
 	if itemType.Valid {
-		row.ItemType, err = parseItemType(itemType.String)
+		row.ItemType, err = ParseItemType(itemType.String)
 		if err != nil {
-			return sQLiteComparisonRow{}, fmt.Errorf("sync: parsing comparison state item type %q: %w", itemType.String, err)
+			return SQLiteComparisonRow{}, fmt.Errorf("sync: parsing comparison state item type %q: %w", itemType.String, err)
 		}
 	}
-	row.ComparisonKind, err = parseComparisonKind(comparison)
+	row.ComparisonKind, err = ParseComparisonKind(comparison)
 	if err != nil {
-		return sQLiteComparisonRow{}, fmt.Errorf("sync: reading the comparison kind of %q: %w", row.Path, err)
+		return SQLiteComparisonRow{}, fmt.Errorf("sync: reading the comparison kind of %q: %w", row.Path, err)
 	}
 	row.BaselinePresent = baselinePresent != 0
 	row.LocalPresent = localPresent != 0
@@ -866,36 +832,36 @@ func scanComparisonRow(rows *sql.Rows) (sQLiteComparisonRow, error) {
 	return row, nil
 }
 
-func (s *SyncStore) QueryReconciliationState(ctx context.Context) ([]sQLiteReconciliationRow, error) {
+func (s *SyncStore) QueryReconciliationState(ctx context.Context) ([]SQLiteReconciliationRow, error) {
 	return queryReconciliationStateWithRunner(ctx, s.db)
 }
 
 func queryReconciliationStateWithRunner(
 	ctx context.Context,
-	runner sqlTxRunner,
-) ([]sQLiteReconciliationRow, error) {
-	return queryReconciliationStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
+	runner SqlTxRunner,
+) ([]SQLiteReconciliationRow, error) {
+	return QueryReconciliationStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
 }
 
-func queryReconciliationStateWithRunnerForTables(
+func QueryReconciliationStateWithRunnerForTables(
 	ctx context.Context,
-	runner sqlTxRunner,
+	runner SqlTxRunner,
 	localStateTable string,
 	remoteStateTable string,
-) ([]sQLiteReconciliationRow, error) {
-	return queryReconciliationRows(ctx, runner, sqlQueryForStateTables(sqlQueryReconciliationState, localStateTable, remoteStateTable))
+) ([]SQLiteReconciliationRow, error) {
+	return QueryReconciliationRows(ctx, runner, SqlQueryForStateTables(SqlQueryReconciliationState, localStateTable, remoteStateTable))
 }
 
-// queryReconciliationRows runs a query shaped like sqlQueryReconciliationState
+// QueryReconciliationRows runs a query shaped like SqlQueryReconciliationState
 // and scans its rows. A kind the enums do not know fails the scan, naming the
 // path; an 'unclassified' kind parses, and planning refuses the row.
-func queryReconciliationRows(ctx context.Context, runner sqlTxRunner, query string) ([]sQLiteReconciliationRow, error) {
+func QueryReconciliationRows(ctx context.Context, runner SqlTxRunner, query string) ([]SQLiteReconciliationRow, error) {
 	return queryStateRows(ctx, runner, query, "reconciliation state", scanReconciliationRow)
 }
 
-func scanReconciliationRow(rows *sql.Rows) (sQLiteReconciliationRow, error) {
+func scanReconciliationRow(rows *sql.Rows) (SQLiteReconciliationRow, error) {
 	var (
-		row                        sQLiteReconciliationRow
+		row                        SQLiteReconciliationRow
 		itemType                   sql.NullString
 		comparison, reconciliation string
 	)
@@ -910,38 +876,38 @@ func scanReconciliationRow(rows *sql.Rows) (sQLiteReconciliationRow, error) {
 		&row.RemoteMoveSource,
 	)
 	if err != nil {
-		return sQLiteReconciliationRow{}, fmt.Errorf("sync: scanning reconciliation state row: %w", err)
+		return SQLiteReconciliationRow{}, fmt.Errorf("sync: scanning reconciliation state row: %w", err)
 	}
 	if itemType.Valid {
-		row.ItemType, err = parseItemType(itemType.String)
+		row.ItemType, err = ParseItemType(itemType.String)
 		if err != nil {
-			return sQLiteReconciliationRow{}, fmt.Errorf("sync: parsing reconciliation state item type %q: %w", itemType.String, err)
+			return SQLiteReconciliationRow{}, fmt.Errorf("sync: parsing reconciliation state item type %q: %w", itemType.String, err)
 		}
 	}
-	row.ComparisonKind, err = parseComparisonKind(comparison)
+	row.ComparisonKind, err = ParseComparisonKind(comparison)
 	if err != nil {
-		return sQLiteReconciliationRow{}, fmt.Errorf("sync: reading the comparison kind of %q: %w", row.Path, err)
+		return SQLiteReconciliationRow{}, fmt.Errorf("sync: reading the comparison kind of %q: %w", row.Path, err)
 	}
-	row.ReconciliationKind, err = parseReconciliationKind(reconciliation)
+	row.ReconciliationKind, err = ParseReconciliationKind(reconciliation)
 	if err != nil {
-		return sQLiteReconciliationRow{}, fmt.Errorf("sync: reading the reconciliation kind of %q: %w", row.Path, err)
+		return SQLiteReconciliationRow{}, fmt.Errorf("sync: reading the reconciliation kind of %q: %w", row.Path, err)
 	}
 
 	return row, nil
 }
 
-// queryPlannerDecisionInputs reads the decision-table inputs of one path over
+// QueryPlannerDecisionInputs reads the decision-table inputs of one path over
 // the given current-state tables (sqlQueryPlannerDecisionInputs), each value
 // as text and a NULL as "NULL", in the query's column order.
-func queryPlannerDecisionInputs(
+func QueryPlannerDecisionInputs(
 	ctx context.Context,
-	runner sqlTxRunner,
+	runner SqlTxRunner,
 	path string,
 	localStateTable string,
 	remoteStateTable string,
-) ([]plannerDecisionInput, error) {
+) ([]PlannerDecisionInput, error) {
 	rows, err := runner.QueryContext(ctx,
-		sqlQueryForStateTables(sqlQueryPlannerDecisionInputs, localStateTable, remoteStateTable), path)
+		SqlQueryForStateTables(sqlQueryPlannerDecisionInputs, localStateTable, remoteStateTable), path)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying planner decision inputs: %w", err)
 	}
@@ -951,7 +917,7 @@ func queryPlannerDecisionInputs(
 	if err != nil {
 		return nil, fmt.Errorf("sync: reading planner decision input columns: %w", err)
 	}
-	var inputs []plannerDecisionInput
+	var inputs []PlannerDecisionInput
 	if rows.Next() {
 		values := make([]sql.NullString, len(columns))
 		targets := make([]any, len(columns))
@@ -962,13 +928,13 @@ func queryPlannerDecisionInputs(
 		if err != nil {
 			return nil, fmt.Errorf("sync: scanning planner decision inputs: %w", err)
 		}
-		inputs = make([]plannerDecisionInput, 0, len(columns))
+		inputs = make([]PlannerDecisionInput, 0, len(columns))
 		for i, column := range columns {
 			value := "NULL"
 			if values[i].Valid {
 				value = values[i].String
 			}
-			inputs = append(inputs, plannerDecisionInput{Column: column, Value: value})
+			inputs = append(inputs, PlannerDecisionInput{Column: column, Value: value})
 		}
 	}
 	err = rows.Err()
@@ -979,7 +945,7 @@ func queryPlannerDecisionInputs(
 	return inputs, nil
 }
 
-func sqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {
+func SqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {
 	return strings.NewReplacer(
 		"local_state", localStateTable,
 		"remote_state", remoteStateTable,

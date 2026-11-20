@@ -106,7 +106,7 @@ func (s *pmState) setSide(isLocal bool, p string, baseline, want matrixSide) {
 	}
 }
 
-func renderMatrixPlan(plan *actionPlan) string {
+func renderMatrixPlan(plan *ActionPlan) string {
 	lines := make([]string, 0, len(plan.Actions)+len(plan.HeldDeletes))
 	for i := range plan.Actions {
 		lines = append(lines, actionLine(&plan.Actions[i]))
@@ -273,7 +273,7 @@ func referenceSurvivors(baseline, local, remote matrixSide) map[string]bool {
 // must survive (a conflict copy or a download keeps it; a delete of the only
 // copy loses it). The golden file pins what the plan is; this pins that it is
 // safe.
-func assertPlanKeepsReferenceContent(t *testing.T, s *pmState, plan *actionPlan, baseline, local, remote matrixSide) {
+func assertPlanKeepsReferenceContent(t *testing.T, s *pmState, plan *ActionPlan, baseline, local, remote matrixSide) {
 	t.Helper()
 
 	s.apply(plan)
@@ -293,7 +293,7 @@ func assertPlanKeepsReferenceContent(t *testing.T, s *pmState, plan *actionPlan,
 // reference planner: the cell, planned and applied to the pure model until
 // quiet, converges to the file contents the reference says must survive, and
 // nothing else. plan is the cell's first plan.
-func requireReferenceConvergence(t *testing.T, s *pmState, plan *actionPlan, baseline, local, remote matrixSide) {
+func requireReferenceConvergence(t *testing.T, s *pmState, plan *ActionPlan, baseline, local, remote matrixSide) {
 	t.Helper()
 
 	cell := fmt.Sprintf("%s|%s|%s", baseline, local, remote)

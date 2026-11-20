@@ -2,9 +2,7 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 	gosynctest "testing/synctest"
 	"time"
@@ -29,18 +27,6 @@ import (
 // cannot hold a real inotify watcher; the tests below drive the observer
 // through mockFsWatcher, whose channels belong to the bubble.
 
-func inVirtualTime(t *testing.T, fn func(t *testing.T)) {
-	t.Helper()
-
-	gosynctest.Test(t, fn)
-}
-
-// virtualWait lets d of virtual time pass. Only meaningful inside
-// inVirtualTime, where it returns as soon as everything else is idle.
-func virtualWait(d time.Duration) {
-	<-time.After(d)
-}
-
 // Validates: R-2.1.2
 func TestDirtyBuffer_VirtualTime_FlushesOneQuietPeriodAfterTheLastSignal(t *testing.T) {
 	t.Parallel()
@@ -49,7 +35,7 @@ func TestDirtyBuffer_VirtualTime_FlushesOneQuietPeriodAfterTheLastSignal(t *test
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
-		buf := newDirtyBuffer(synctest.TestLogger(t))
+		buf := NewDirtyBuffer(synctest.TestLogger(t))
 		out := buf.FlushDebounced(ctx, 5*time.Second)
 		start := time.Now()
 
@@ -79,7 +65,7 @@ func TestDirtyBuffer_VirtualTime_ContinuousSignalsFlushAtExactlyTheMaxWait(t *te
 		defer cancel()
 
 		const debounce = 5 * time.Second
-		buf := newDirtyBuffer(synctest.TestLogger(t))
+		buf := NewDirtyBuffer(synctest.TestLogger(t))
 		out := buf.FlushDebounced(ctx, debounce)
 		start := time.Now()
 
@@ -123,7 +109,7 @@ func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 		mockWatcher := newMockFsWatcher()
 		obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 			Baseline:              baseline,
-			AfterFunc:             realClock{}.AfterFunc,
+			AfterFunc:             RealClock{}.AfterFunc,
 			WriteCoalesceCooldown: cooldown,
 		})
 		batches := localBatches(obs, 10)
@@ -168,61 +154,9 @@ func TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval(t *testing.T)
 
 		snapshot := <-batches
 		assert.Equal(t, safetyScanInterval, time.Since(start), "found by the first safety scan")
-		require.Equal(t, localSnapshot, snapshot.kind)
-		require.NotNil(t, findRow(snapshot.rows, "missed.txt"), "the snapshot holds the missed file: %+v", snapshot.rows)
+		require.Equal(t, LocalSnapshot, snapshot.Kind)
+		require.NotNil(t, findRow(snapshot.Rows, "missed.txt"), "the snapshot holds the missed file: %+v", snapshot.Rows)
 
 		stopWatch(t, cancel, done)
-	})
-}
-
-// Validates: R-2.17.2, R-2.15.3
-//
-// A tool that deletes a synced folder online on every poll must not cause a
-// full enumeration per poll. A folder deletion makes the full refresh due
-// fullRefreshAfterFolderDeleteDelay later, not at once, so the deletions of
-// one burst share one refresh and refreshes stay that far apart; the item
-// moved into a deleted folder (model test seed 28) is still resolved, by the
-// deferred refresh.
-func TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes(t *testing.T) {
-	skipInShort(t)
-	t.Parallel()
-
-	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
-		remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-		const folders = 6
-		for i := range folders {
-			id := fmt.Sprintf("item-f%d", i)
-			remote.addFolder(id, "root", fmt.Sprintf("f%d", i))
-			remote.addFile(t, id+"-in", id, "in.txt", fmt.Sprintf("in %d\n", i))
-		}
-		remote.addFile(t, "item-moved", "root", "moved.txt", "moved\n")
-		remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
-		h := newSyncHarness(t, remote)
-		runScenarioPass(t, h.eng)
-		start := time.Now()
-
-		remote.move("item-moved", "item-f0", "moved.txt")
-		for minute := range 40 {
-			if minute < folders {
-				remote.deleteRemotely(fmt.Sprintf("item-f%d", minute))
-			}
-			_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
-			require.NoError(t, err)
-			virtualWait(time.Minute)
-		}
-
-		var refreshes []time.Time
-		for _, at := range remote.fullDeltaAt {
-			if at.After(start) {
-				refreshes = append(refreshes, at)
-			}
-		}
-		require.NotEmpty(t, refreshes, "the deferred full refresh ran")
-		for i := 1; i < len(refreshes); i++ {
-			assert.GreaterOrEqual(t, refreshes[i].Sub(refreshes[i-1]), fullRefreshAfterFolderDeleteDelay,
-				"full refreshes %d and %d are too close", i-1, i)
-		}
-		assert.NoFileExists(t, filepath.Join(h.syncRoot, "moved.txt"), "the item moved into a deleted folder is resolved")
-		assertSyncInvariants(t, h)
 	})
 }

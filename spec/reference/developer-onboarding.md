@@ -451,9 +451,9 @@ content-root owner.
 | `permissions.go`, `permission_handler.go`, `permission_capability.go`, `engine_runtime_permissions.go`, `permission_probe_*.go` | Capability-based permission probing, engine-owned permission evidence handling, and write-scope activation/release decisions |
 | `scope.go`, `scope_block.go`, `scope_key.go` | Scope types, block scoping, and scope key canonicalization |
 | `debug_event_sink.go` | Debug event recording for test and diagnostic observability |
-| `store*.go`, `store_inspect.go`, `condition_projection.go`, `blocked_retry_projection.go`, `scope_key.go`, `scope_block.go`, `store_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, shared stored-condition projection, scope-key validation helpers, sync-status/scope admin helpers, and explicit reset support |
+| `store*.go`, `store_inspect.go`, `condition_projection.go`, `blocked_retry_projection.go`, `scope_key.go`, `scope_block.go`, `domain_row_types.go`, `schema.go`, `tx.go` | Durable SQLite state: schema, store-compatibility validation, transactions, raw authority reads, shared stored-condition projection, scope-key validation helpers, sync-status/scope admin helpers, and explicit reset support |
 | `store_read_*.go`, `store_write_*.go` | Store I/O: raw authority reads (remote state, observation state, snapshots) and write operations (baseline, observation, retry work, block scopes) |
-| `condition_keys.go`, `watch_summary.go`, `truth_status.go`, `issue_types.go` | Shared condition taxonomy and ordering, derived truth-availability reads, and raw engine-owned watch-summary aggregation |
+| `condition_keys.go`, `watch_summary.go`, `domain_truth_status.go`, `issue_types.go` | Shared condition taxonomy and ordering, derived truth-availability reads, and raw engine-owned watch-summary aggregation |
 | `core_types.go`, `api_types.go`, `types.go`, `enums.go`, `errors.go`, `tracked_action.go`, `safety_config.go`, `baseline_orphans.go` | Common sync-domain vocabulary, API boundary types, and safety policy |
 | `inotify_*`, `symlink_observation.go` | Platform or feature-specific observation/runtime helpers |
 

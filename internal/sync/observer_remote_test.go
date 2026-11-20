@@ -110,7 +110,7 @@ func TestFullDelta_NewFiles(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -155,13 +155,13 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "prev-token")
 	require.NoError(t, err, "FullDelta")
 
 	// Root and folder produce events too (folder is classified).
 	// Find the file event.
-	var fileEvent *remoteItem
+	var fileEvent *RemoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -197,7 +197,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -232,7 +232,7 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "prev-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -276,11 +276,11 @@ func TestFullDelta_MovedFile(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var moveEvent *remoteItem
+	var moveEvent *RemoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			moveEvent = &events[i]
@@ -325,7 +325,7 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -370,11 +370,11 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var fileEvent *remoteItem
+	var fileEvent *RemoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -397,7 +397,7 @@ func TestFullDelta_MultiPage(t *testing.T) {
 		pages: twoPageDeltaPages("next", "next-page-url", "final-delta-link"),
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -418,7 +418,7 @@ func TestFullDelta_EmptyDelta(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "prev-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -436,10 +436,10 @@ func TestFullDelta_DeltaExpired(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(t.Context(), "expired-token")
 
-	assert.ErrorIs(t, err, errDeltaExpired)
+	assert.ErrorIs(t, err, ErrDeltaExpired)
 }
 
 func TestFullDelta_FetchError(t *testing.T) {
@@ -452,7 +452,7 @@ func TestFullDelta_FetchError(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(t.Context(), "token")
 
 	require.Error(t, err, "expected error")
@@ -473,7 +473,7 @@ func TestFullDelta_SkipsRootItem(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -507,12 +507,12 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
 	// Find file event.
-	var fileEvent *remoteItem
+	var fileEvent *RemoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -545,7 +545,7 @@ func TestFullDelta_PathMaterialization_Baseline(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -577,11 +577,11 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var fileEvent *remoteItem
+	var fileEvent *RemoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -615,7 +615,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -643,7 +643,7 @@ func TestFullDelta_DriveIDNormalization(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(rawDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(rawDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -678,7 +678,7 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -714,7 +714,7 @@ func TestFullDelta_HashSelection(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -743,7 +743,7 @@ func TestFullDelta_TimestampConversion(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -766,7 +766,7 @@ func TestFullDelta_ZeroTimestampRemainsUnknown(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -789,7 +789,7 @@ func TestFullDelta_FolderEvent(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -810,7 +810,7 @@ func TestFullDelta_ContextCanceled(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	_, _, err := obs.FullDelta(ctx, "token")
 
 	require.Error(t, err, "expected error")
@@ -914,9 +914,9 @@ func TestFullDelta_OrphanedItem(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
-	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 
 	assert.Empty(t, events)
 	assert.Empty(t, token)
@@ -940,7 +940,7 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
@@ -974,7 +974,7 @@ func TestFullDelta_SkipsUnrecoverableDeletedItemAbsentFromBaseline(t *testing.T)
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -1007,7 +1007,7 @@ func TestFullDelta_SkipsUntrackedDeletedItemWithKnownParentButEmptyName(t *testi
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
 	require.NoError(t, err, "FullDelta")
 
@@ -1018,7 +1018,7 @@ func TestFullDelta_SkipsUntrackedDeletedItemWithKnownParentButEmptyName(t *testi
 	assert.Equal(t, "delta-link", token)
 }
 
-func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []remoteItem {
+func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []RemoteItem {
 	t.Helper()
 
 	fetcher := &mockDeltaFetcher{
@@ -1033,7 +1033,7 @@ func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []remoteItem {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
 
@@ -1109,7 +1109,7 @@ func TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent(t 
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetShortcutTopology("personal:owner@example.com", nil)
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(t.Context(), "")
 	require.NoError(t, err)
@@ -1117,9 +1117,9 @@ func TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent(t 
 	require.Len(t, events, 1)
 	assert.Equal(t, "Shortcuts", events[0].Path)
 	assert.Equal(t, "personal:owner@example.com", topology.NamespaceID)
-	assert.Equal(t, shortcutTopologyObservationComplete, topology.Kind)
+	assert.Equal(t, ShortcutTopologyObservationComplete, topology.Kind)
 	require.Len(t, topology.Upserts, 1)
-	assert.Equal(t, shortcutBindingUpsert{
+	assert.Equal(t, ShortcutBindingUpsert{
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shortcuts/Docs",
 		LocalAlias:        "Docs",
@@ -1168,7 +1168,7 @@ func TestFullDeltaWithShortcutTopology_EnrichesSparseKnownShortcutMove(t *testin
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
 	obs.SetShortcutTopology("personal:owner@example.com", []ProtectedRoot{{
 		Path:           "Docs",
@@ -1183,7 +1183,7 @@ func TestFullDeltaWithShortcutTopology_EnrichesSparseKnownShortcutMove(t *testin
 	require.Len(t, events, 1)
 	assert.Equal(t, "Moved", events[0].Path)
 	require.Len(t, topology.Upserts, 1)
-	assert.Equal(t, shortcutBindingUpsert{
+	assert.Equal(t, ShortcutBindingUpsert{
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Moved/Docs",
 		LocalAlias:        "Docs",
@@ -1222,17 +1222,17 @@ func TestWatch_TopologyApplyFailureDoesNotAdvanceCursor(t *testing.T) {
 	}
 
 	applyErr := errors.New("persist topology")
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetShortcutTopology("personal:owner@example.com", nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	batches := make(chan remoteObservationBatch, 1)
+	batches := make(chan RemoteObservationBatch, 1)
 	runInBackground(t, ctx, func(consumerCtx context.Context) error {
 		select {
 		case batch := <-batches:
-			assert.True(t, batch.shortcutTopology.shouldApply(), "expected applicable topology in watch batch")
-			batch.finishApplied(applyErr)
+			assert.True(t, batch.ShortcutTopology.ShouldApply(), "expected applicable topology in watch batch")
+			batch.FinishApplied(applyErr)
 		case <-consumerCtx.Done():
 		}
 		return nil
@@ -1262,17 +1262,17 @@ func TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor(t *testing.
 	}
 
 	applyErr := errors.New("persist topology")
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetShortcutTopology("personal:owner@example.com", nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	batches := make(chan remoteObservationBatch, 1)
+	batches := make(chan RemoteObservationBatch, 1)
 	runInBackground(t, ctx, func(consumerCtx context.Context) error {
 		select {
 		case batch := <-batches:
-			assert.True(t, batch.shortcutTopology.shouldApply(), "expected empty complete topology batch to be emitted")
-			batch.finishApplied(applyErr)
+			assert.True(t, batch.ShortcutTopology.ShouldApply(), "expected empty complete topology batch to be emitted")
+			batch.FinishApplied(applyErr)
 		case <-consumerCtx.Done():
 		}
 		return nil
@@ -1301,12 +1301,12 @@ func noopSleep(_ context.Context, _ time.Duration) error {
 func startTestRemoteBatchDrain(
 	t *testing.T,
 	ctx context.Context,
-	batches <-chan remoteObservationBatch,
-	apply func(remoteObservationBatch) error,
-) <-chan remoteChange {
+	batches <-chan RemoteObservationBatch,
+	apply func(RemoteObservationBatch) error,
+) <-chan RemoteChange {
 	t.Helper()
 
-	events := make(chan remoteChange, 32)
+	events := make(chan RemoteChange, 32)
 	runInBackground(t, ctx, func(drainCtx context.Context) error {
 		defer close(events)
 
@@ -1317,9 +1317,9 @@ func startTestRemoteBatchDrain(
 					return nil
 				}
 
-				for i := range batch.changes {
+				for i := range batch.Changes {
 					select {
-					case events <- batch.changes[i]:
+					case events <- batch.Changes[i]:
 					case <-drainCtx.Done():
 						return nil
 					}
@@ -1329,7 +1329,7 @@ func startTestRemoteBatchDrain(
 				if apply != nil {
 					err = apply(batch)
 				}
-				batch.finishApplied(err)
+				batch.FinishApplied(err)
 			case <-drainCtx.Done():
 				return nil
 			}
@@ -1342,19 +1342,19 @@ func startTestRemoteBatchDrain(
 func testPrimaryWatchBatchHandler(driveID driveid.ID) remoteWatchBatchHandler {
 	return func(
 		_ context.Context,
-		events []remoteItem,
+		events []RemoteItem,
 		newToken string,
-		topology shortcutTopologyBatch,
-	) (remoteObservationBatch, error) {
-		projected := projectRemoteObservations(nil, events)
-		return remoteObservationBatch{
-			source:           remoteObservationBatchPrimaryWatch,
-			observationMode:  remoteObservationModeDelta,
-			observed:         projected.observed,
-			changes:          projected.changes,
-			cursorToken:      newToken,
-			shortcutTopology: topology,
-			applyAck:         make(chan error, 1),
+		topology ShortcutTopologyBatch,
+	) (RemoteObservationBatch, error) {
+		projected := ProjectRemoteObservations(nil, events)
+		return RemoteObservationBatch{
+			Source:           RemoteObservationBatchPrimaryWatch,
+			ObservationMode:  RemoteObservationModeDelta,
+			Observed:         projected.Observed,
+			Changes:          projected.Changes,
+			CursorToken:      newToken,
+			ShortcutTopology: topology,
+			ApplyAck:         make(chan error, 1),
 		}, nil
 	}
 }
@@ -1437,11 +1437,11 @@ func TestWatch_PollsAtInterval(t *testing.T) {
 		pages: twoPageDeltaPages("delta", "token-1", "token-2"),
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: noopSleep}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, nil)
@@ -1477,11 +1477,11 @@ func TestWatch_WakeSignalTriggersImmediatePoll(t *testing.T) {
 		}},
 	})
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	wakeCh := make(chan struct{}, 1)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Hour, wakeCh, nil)
@@ -1523,16 +1523,16 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 		}},
 	})
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	recorder := newDebugEventRecorder()
 	obs.debugEvents = recorder.record
 	const burst = 2
 	wakeCh := make(chan struct{}, burst)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	applied := 0
-	events := startTestRemoteBatchDrain(t, ctx, batches, func(remoteObservationBatch) error {
+	events := startTestRemoteBatchDrain(t, ctx, batches, func(RemoteObservationBatch) error {
 		applied++
 		if applied == 1 {
 			for range burst {
@@ -1546,8 +1546,8 @@ func TestWatch_WakeSignalsCoalesce(t *testing.T) {
 	})
 
 	receiveWithin(t, events, "the first poll's event")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventRemoteWakesCoalesced && event.Count == burst-1
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventRemoteWakesCoalesced && event.Count == burst-1
 	}, "the second poll draining the wake left from the burst")
 	receiveWithin(t, events, "the second poll's event")
 	assert.Empty(t, wakeCh, "no wake is left to start a third poll")
@@ -1584,8 +1584,8 @@ func TestWatch_BackoffWithAWakeChannelWaitsOnTheRunClock(t *testing.T) {
 	// are the proof: a backoff armed on wall time records nothing here.
 	var waits []time.Duration
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.clock = &observerTestClock{syncClock: realClock{}, afterFunc: func(d time.Duration, fn func()) syncTimer {
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, afterFunc: func(d time.Duration, fn func()) SyncTimer {
 		waits = append(waits, d)
 		if len(waits) <= 2 {
 			fn()
@@ -1595,7 +1595,7 @@ func TestWatch_BackoffWithAWakeChannelWaitsOnTheRunClock(t *testing.T) {
 	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	wakeCh := make(chan struct{}, 1)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
@@ -1618,14 +1618,14 @@ func TestWatch_BackoffOnError(t *testing.T) {
 
 	var sleepDurations []time.Duration
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(_ context.Context, d time.Duration) error {
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		sleepDurations = append(sleepDurations, d)
 		return nil
 	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Minute, nil, nil)
@@ -1656,19 +1656,19 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 		}},
 	})
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
 	wakeCh := make(chan struct{}, 1)
 
 	ctx, cancel := context.WithTimeout(t.Context(), eventWait)
 	defer cancel()
 
-	batches := make(chan remoteObservationBatch, 1)
+	batches := make(chan RemoteObservationBatch, 1)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-token", batches, time.Hour, wakeCh, testPrimaryWatchBatchHandler(driveID))
 	})
-	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch RemoteObservationBatch) error {
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.Observed, batch.CursorToken, driveID)
 	})
 
 	require.Eventually(t, func() bool {
@@ -1680,7 +1680,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 	}, eventWait, 10*time.Millisecond)
 	stopWatch(t, cancel, done)
 
-	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "zero-event wake polls must not commit observations")
+	assert.Empty(t, readObservationCursor(t, store.RawDBForTest(), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
@@ -1703,11 +1703,11 @@ func TestWatch_DeltaExpiredResets(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: noopSleep}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-expired-token", batches, time.Millisecond, nil, nil)
@@ -1732,9 +1732,9 @@ func TestWatch_ContextCancellation(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	pollStarted := make(chan struct{})
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		select {
 		case <-pollStarted:
 		default:
@@ -1746,7 +1746,7 @@ func TestWatch_ContextCancellation(t *testing.T) {
 	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Hour, nil, nil)
@@ -1783,19 +1783,19 @@ func TestWatch_CurrentDeltaToken(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: noopSleep}
 
 	// Before Watch starts, token is empty.
 	assert.Empty(t, obs.CurrentDeltaToken(), "initial token")
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
 	pollCount := 0
 	origSleep := obs.clock.Sleep
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, d time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(ctx context.Context, d time.Duration) error {
 		pollCount++
 		if pollCount >= 2 {
 			cancel()
@@ -1826,16 +1826,16 @@ func TestWatch_IntervalClamping(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	// Track what interval the sleep function actually receives.
 	var actualSleepDuration time.Duration
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(_ context.Context, d time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		actualSleepDuration = d
 		return errors.New("stop after first sleep")
 	}}
 
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	// Pass zero interval — should be clamped to MinPollInterval (30s).
 	err := runWithin(t, t.Context(), "the first sleep's error to end the watch", func(ctx context.Context) error {
 		return obs.Watch(ctx, "", batches, 0, nil, nil)
@@ -1875,11 +1875,11 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var renameEvent *remoteItem
+	var renameEvent *RemoteItem
 	for i := range events {
 		if events[i].ItemID == "f1" {
 			renameEvent = &events[i]
@@ -1956,7 +1956,7 @@ func TestRemoteObserver_Stats(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2008,7 +2008,7 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, baseline, primaryDrive, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, baseline, primaryDrive, synctest.TestLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2064,7 +2064,7 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2113,7 +2113,7 @@ func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2153,7 +2153,7 @@ func TestObserverStats_HashesComputed(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 
 	_, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "FullDelta")
@@ -2175,7 +2175,7 @@ func TestClassifyItem_RemoteDoesNotApplyProductJunkFiltering(t *testing.T) {
 
 	driveID := driveid.New(synctest.TestDriveID)
 	bl := emptyBaseline()
-	obs := newRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
 
 	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
@@ -2238,7 +2238,7 @@ func TestClassifyItem_SkipsPackageItemsForSync(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	obs := newRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
 	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
 	}
@@ -2274,16 +2274,16 @@ func TestWatch_CommitsObservations(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: noopSleep}
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: noopSleep}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	committed := make(chan struct{})
 	var committedOnce sync.Once
-	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
-		err := store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch RemoteObservationBatch) error {
+		err := store.CommitObservation(context.WithoutCancel(ctx), batch.Observed, batch.CursorToken, driveID)
 		committedOnce.Do(func() { close(committed) })
 		return err
 	})
@@ -2295,8 +2295,8 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	receiveWithin(t, committed, "the watch's first batch to be committed")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, "token-1", readObservationCursor(t, store.rawDB(), driveID.String()))
-	row := readRemoteStateRow(t, store.rawDB(), "f1")
+	assert.Equal(t, "token-1", readObservationCursor(t, store.RawDBForTest(), driveID.String()))
+	row := readRemoteStateRow(t, store.RawDBForTest(), "f1")
 	require.NotNil(t, row, "remote observation should persist mirrored state")
 	assert.Equal(t, driveID, row.DriveID)
 	assert.Equal(t, "a.txt", row.Path)
@@ -2331,20 +2331,20 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 	err := runWithin(t, ctx, "the batch policy failure to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, func(
 			context.Context,
-			[]remoteItem,
+			[]RemoteItem,
 			string,
-			shortcutTopologyBatch,
-		) (remoteObservationBatch, error) {
-			return remoteObservationBatch{}, filepath.ErrBadPattern
+			ShortcutTopologyBatch,
+		) (RemoteObservationBatch, error) {
+			return RemoteObservationBatch{}, filepath.ErrBadPattern
 		})
 	})
 	require.Error(t, err)
@@ -2369,10 +2369,10 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	polledAt := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
-	obs.clock = &observerTestClock{syncClock: newManualClock(polledAt), sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: newManualClock(polledAt), sleep: func(ctx context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 1 {
 			cancel()
@@ -2384,7 +2384,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 
 	// Nothing drains the channel: a batch the watch handed over would still
 	// be in it after the watch returns.
-	batches := make(chan remoteObservationBatch, 10)
+	batches := make(chan RemoteObservationBatch, 10)
 	err := runWithin(t, ctx, "the first poll's sleep to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
 	})
@@ -2392,11 +2392,11 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 
 	require.Len(t, batches, 1, "a poll that returned no events hands over only the time it began")
 	handed := <-batches
-	assert.True(t, handed.pollOnly)
-	assert.Equal(t, polledAt, handed.pollStartedAt)
-	assert.Empty(t, handed.observed, "nothing to commit")
-	assert.Empty(t, handed.changes, "nothing to replan")
-	assert.Empty(t, handed.cursorToken, "no token to save")
+	assert.True(t, handed.PollOnly)
+	assert.Equal(t, polledAt, handed.PollStartedAt)
+	assert.Empty(t, handed.Observed, "nothing to commit")
+	assert.Empty(t, handed.Changes, "nothing to replan")
+	assert.Empty(t, handed.CursorToken, "no token to save")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
 
@@ -2420,11 +2420,11 @@ func TestWatch_EveryPollHandsOverTheTimeItBegan(t *testing.T) {
 		}},
 		{page: &graph.DeltaPage{Items: []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, DeltaLink: "token-2"}},
 	}}
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	firstPoll := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
 	clock := newManualClock(firstPoll)
 	sleeps := 0
-	obs.clock = &observerTestClock{syncClock: clock, sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: clock, sleep: func(ctx context.Context, _ time.Duration) error {
 		sleeps++
 		if sleeps > 1 {
 			<-ctx.Done()
@@ -2435,9 +2435,9 @@ func TestWatch_EveryPollHandsOverTheTimeItBegan(t *testing.T) {
 	}}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	batches := make(chan remoteObservationBatch, 2)
-	handed := make(chan remoteObservationBatch, 2)
-	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
+	batches := make(chan RemoteObservationBatch, 2)
+	handed := make(chan RemoteObservationBatch, 2)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch RemoteObservationBatch) error {
 		handed <- batch
 		return nil
 	})
@@ -2449,11 +2449,11 @@ func TestWatch_EveryPollHandsOverTheTimeItBegan(t *testing.T) {
 	zeroEvent := receiveWithin(t, handed, "the second poll's batch")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, firstPoll, withItems.pollStartedAt)
-	assert.False(t, withItems.pollOnly)
-	assert.NotEmpty(t, withItems.observed)
-	assert.Equal(t, firstPoll.Add(time.Minute), zeroEvent.pollStartedAt)
-	assert.True(t, zeroEvent.pollOnly)
+	assert.Equal(t, firstPoll, withItems.PollStartedAt)
+	assert.False(t, withItems.PollOnly)
+	assert.NotEmpty(t, withItems.Observed)
+	assert.Equal(t, firstPoll.Add(time.Minute), zeroEvent.PollStartedAt)
+	assert.True(t, zeroEvent.PollOnly)
 	assert.Equal(t, "token-1", obs.CurrentDeltaToken(), "the poll that returned nothing keeps the token")
 }
 
@@ -2482,10 +2482,10 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		pollCount++
 		if pollCount >= 1 {
 			cancel()
@@ -2495,9 +2495,9 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 		return nil
 	}}
 
-	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	batches := make(chan RemoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch RemoteObservationBatch) error {
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.Observed, batch.CursorToken, driveID)
 	})
 	err := runWithin(t, ctx, "the first poll's sleep to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
@@ -2506,7 +2506,7 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 
 	assert.Equal(t, "token-after-deletes", obs.CurrentDeltaToken(),
 		"a window that returned items must advance the token even when none converted to events")
-	assert.Equal(t, "token-after-deletes", readObservationCursor(t, store.rawDB(), driveID.String()),
+	assert.Equal(t, "token-after-deletes", readObservationCursor(t, store.RawDBForTest(), driveID.String()),
 		"the advanced token must be committed so a restart does not replay the window")
 }
 
@@ -2544,7 +2544,7 @@ func TestWatch_OrphanWithReadableParent_AdvancesToken(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
 	token, emitted := runSingleWatchPoll(t, obs, driveID)
 
@@ -2587,7 +2587,7 @@ func TestWatch_OrphanUnderFetchedVaultStaysExcluded(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
 	token, emitted := runSingleWatchPoll(t, obs, driveID)
 
@@ -2623,7 +2623,7 @@ func TestWatch_OrphanUnderFetchedPackageStaysExcluded(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
 	token, emitted := runSingleWatchPoll(t, obs, driveID)
 
@@ -2659,7 +2659,7 @@ func TestWatch_OrphanWithUnreachableParent_AdvancesToken(t *testing.T) {
 		},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(itemClient)
 	token, emitted := runSingleWatchPoll(t, obs, driveID)
 
@@ -2688,42 +2688,42 @@ func TestFullDelta_OrphanParentReadTransientFailure_StaysIncomplete(t *testing.T
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	obs.SetItemClient(&testMockItemClient{
 		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 			return nil, errors.New("connection reset")
 		},
 	})
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
-	require.ErrorIs(t, err, errRemoteObservationIncomplete)
+	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 	assert.Empty(t, events)
 	assert.Empty(t, token)
 }
 
 // runSingleWatchPoll runs one Watch poll against a fresh store, commits the
 // batch it produces, and returns the committed cursor and emitted events.
-func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (string, []remoteChange) {
+func runSingleWatchPoll(t *testing.T, obs *RemoteObserver, driveID driveid.ID) (string, []RemoteChange) {
 	t.Helper()
 
 	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	obs.clock = &observerTestClock{syncClock: realClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
+	obs.clock = &observerTestClock{SyncClock: RealClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
 		cancel()
 		return ctx.Err()
 	}}
 
-	var emitted []remoteChange
-	batches := make(chan remoteObservationBatch, 10)
-	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
-		emitted = append(emitted, batch.changes...)
-		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
+	var emitted []RemoteChange
+	batches := make(chan RemoteObservationBatch, 10)
+	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch RemoteObservationBatch) error {
+		emitted = append(emitted, batch.Changes...)
+		return store.CommitObservation(context.WithoutCancel(ctx), batch.Observed, batch.CursorToken, driveID)
 	})
 	err := runWithin(t, ctx, "the poll's sleep to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "old-token", batches, time.Millisecond, nil, testPrimaryWatchBatchHandler(driveID))
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, obs.CurrentDeltaToken(), readObservationCursor(t, store.rawDB(), driveID.String()),
+	assert.Equal(t, obs.CurrentDeltaToken(), readObservationCursor(t, store.RawDBForTest(), driveID.String()),
 		"the in-memory cursor must match the committed one")
 
 	return obs.CurrentDeltaToken(), emitted
@@ -2739,7 +2739,7 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 
 	driveID := driveid.New(synctest.TestDriveID)
 	bl := emptyBaseline()
-	obs := newRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(nil, bl, driveID, synctest.TestLogger(t))
 
 	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
@@ -2766,7 +2766,7 @@ func TestClassifyItem_EmbeddedSharedPlaceholdersIgnored(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(synctest.TestDriveID)
-	obs := newRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(nil, emptyBaseline(), driveID, synctest.TestLogger(t))
 
 	inflight := map[string]inflightParent{
 		"root": {Name: "", IsRoot: true},
@@ -2838,7 +2838,7 @@ func TestFullDelta_EmbeddedSharedLinksIgnored(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err)
 
@@ -2870,7 +2870,7 @@ func TestFullDelta_RejectsUnmaterializableRemoteNames(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	events, token, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err, "an unmaterializable name must not stall the window")
 	assert.Equal(t, "delta-link", token)
@@ -2898,7 +2898,7 @@ func TestFullDelta_ItemWithoutParentReferenceIsNotPlacedAtRoot(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err)
 
@@ -2929,11 +2929,11 @@ func TestFullDelta_ParentIDChainWinsOverParentReferencePath(t *testing.T) {
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t))
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err)
 
-	var child *remoteItem
+	var child *RemoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			child = &events[i]
@@ -2952,7 +2952,7 @@ func TestFullDelta_ParentReferencePathFallbackChecksEverySegment(t *testing.T) {
 	// parentReference.path. A ".." segment there must not climb out, and a
 	// folder literally named "a%20b" keeps its name (L-32).
 	driveID := driveid.New(synctest.TestDriveID)
-	place := func(parentPath string) ([]remoteItem, error) {
+	place := func(parentPath string) ([]RemoteItem, error) {
 		fetcher := &mockDeltaFetcher{pages: []mockDeltaPage{{page: &graph.DeltaPage{
 			Items: []graph.Item{{
 				ID: "child", Name: "x.txt", ParentID: "unknown-parent", DriveID: driveID,
@@ -2960,13 +2960,13 @@ func TestFullDelta_ParentReferencePathFallbackChecksEverySegment(t *testing.T) {
 			}},
 			DeltaLink: "delta-link",
 		}}}}
-		events, _, err := newRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t)).FullDelta(t.Context(), "")
+		events, _, err := NewRemoteObserver(fetcher, emptyBaseline(), driveID, synctest.TestLogger(t)).FullDelta(t.Context(), "")
 		return events, err
 	}
 
 	events, err := place("docs/../..")
 	if err != nil {
-		require.ErrorIs(t, err, errRemoteObservationIncomplete)
+		require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
 	}
 	assert.Empty(t, events)
 
@@ -2996,7 +2996,7 @@ func TestFullDelta_PlacesNamelessUntrackedDeleteByItsRemoteStatePath(t *testing.
 		}},
 	}
 
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
+	obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
 	obs.SetRemotePathLookup(func(itemID string) (string, bool) {
 		if itemID == "deleted-child" {
 			return "Projects/old.txt", true

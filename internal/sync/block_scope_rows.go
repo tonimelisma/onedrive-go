@@ -30,11 +30,11 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 		return nil, fmt.Errorf("scan block scope row: %w", err)
 	}
 
-	key := parseScopeKey(wireKey)
+	key := ParseScopeKey(wireKey)
 	if key.IsZero() {
 		return &BlockScope{Key: ScopeKey{}}, nil
 	}
-	if describeScopeKey(key).IsZero() {
+	if DescribeScopeKey(key).IsZero() {
 		return nil, fmt.Errorf("scan block scope row: unknown scope key %q", wireKey)
 	}
 	if !key.PersistsInBlockScopes() {
@@ -42,7 +42,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	}
 
 	nextTrialAt := time.Time{}
-	if storedTimeIsSet(nextTrialNano) {
+	if StoredTimeIsSet(nextTrialNano) {
 		nextTrialAt = time.Unix(0, nextTrialNano).UTC()
 	}
 
@@ -54,7 +54,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*BlockScope, error) {
 	}, nil
 }
 
-func queryBlockScopeRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]*BlockScope, error) {
+func queryBlockScopeRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]*BlockScope, error) {
 	rows, err := runner.QueryContext(ctx, sqlSelectBlockScopeRows)
 	if err != nil {
 		return nil, fmt.Errorf("query block scope rows: %w", err)

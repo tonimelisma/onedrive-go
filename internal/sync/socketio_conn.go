@@ -147,14 +147,14 @@ func (s *socketIOWakeSource) runConnection(
 				return err
 			}
 			if action.notificationWake {
-				s.emitLifecycleEvent(socketIOLifecycleEvent{
-					Type:       socketIOLifecycleEventNotificationWake,
+				s.emitLifecycleEvent(SocketIOLifecycleEvent{
+					Type:       SocketIOLifecycleEventNotificationWake,
 					EndpointID: endpointID,
 				})
 			}
 			if action.wakeCoalesced {
-				s.emitLifecycleEvent(socketIOLifecycleEvent{
-					Type:       socketIOLifecycleEventWakeCoalesced,
+				s.emitLifecycleEvent(SocketIOLifecycleEvent{
+					Type:       SocketIOLifecycleEventWakeCoalesced,
 					EndpointID: endpointID,
 				})
 			}
@@ -209,7 +209,7 @@ func (s *socketIOWakeSource) readPackets(
 // bounds, for the server's answer. A failure on a connection that already
 // broke, or during shutdown, changes nothing and is only noted.
 func (s *socketIOWakeSource) closeConnection(ctx context.Context, conn *socketIOConn) {
-	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !runEnded(ctx, closeErr) {
+	if closeErr := conn.conn.Close(websocket.StatusNormalClosure, "watch stop"); closeErr != nil && !RunEnded(ctx, closeErr) {
 		s.logger.Debug("socket.io close failed",
 			slog.String("drive_id", s.driveID.String()),
 			slog.Any("error", closeErr),

@@ -143,7 +143,7 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 	pipe := &watchPipeline{bl: bl, mode: SyncBidirectional}
-	applied, err := rt.runSteadyStateReplan(ctx, pipe, dirtyBatch{})
+	applied, err := rt.runSteadyStateReplan(ctx, pipe, DirtyBatch{})
 	require.NoError(t, err)
 	require.True(t, applied)
 	pending, found, err := eng.baseline.PendingCreateAt(ctx, "doc.txt")
@@ -156,9 +156,9 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	remote.addFile(t, "orphan", "root", "doc.txt", "")
 	landed := *remote.items["orphan"]
 	remote.mu.Unlock()
-	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &remoteObservationBatch{
-		source: remoteObservationBatchPrimaryWatch,
-		observed: []observedItem{{
+	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &RemoteObservationBatch{
+		Source: RemoteObservationBatchPrimaryWatch,
+		Observed: []ObservedItem{{
 			DriveID: driveID, ItemID: landed.ID, ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
 			Hash: landed.QuickXorHash, Size: 0, Mtime: landed.ModifiedAt.UnixNano(), ETag: landed.ETag,
 		}},
@@ -168,7 +168,7 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	require.True(t, found)
 	require.Equal(t, landed.ID, pending.ItemID, "the batch claims the empty file for the intent")
 
-	applied, err = rt.runSteadyStateReplan(ctx, pipe, dirtyBatch{})
+	applied, err = rt.runSteadyStateReplan(ctx, pipe, DirtyBatch{})
 	require.NoError(t, err)
 	require.True(t, applied)
 	outbox := rt.currentOutbox()

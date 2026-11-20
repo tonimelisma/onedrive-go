@@ -109,9 +109,9 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
 
-	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -149,9 +149,9 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
 
-	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
@@ -235,7 +235,7 @@ func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 	assert.NotEqual(t, session.DriveID, eng.driveID)
 	assert.NotEqual(t, session.AccountEmail(), eng.permHandler.accountEmail)
 
-	mountSession, ok := eng.execCfg.pathConvergence.(*driveops.MountSession)
+	mountSession, ok := eng.execCfg.PathConvergenceForTest().(*driveops.MountSession)
 	require.True(t, ok)
 	assert.Equal(t, mountCfg.RemoteRootItemID, mountSession.RemoteRootItemID)
 }
@@ -304,12 +304,12 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	executor := newExecution(eng.execCfg, emptyBaseline())
+	executor := NewExecution(eng.execCfg, emptyBaseline())
 	outcome := executor.ExecuteFolderCreate(t.Context(), &Action{
 		Type:       ActionFolderCreate,
 		Path:       "photos",
 		CreateSide: CreateRemote,
-		View:       &pathView{Path: "photos"},
+		View:       &PathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
@@ -329,8 +329,8 @@ func TestEngine_StoreAndExecutorTellTheEngineClocksTime(t *testing.T) {
 	clock := newManualClock(time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 
-	assert.Equal(t, clock.Now(), eng.baseline.nowFunc(), "store")
-	assert.Equal(t, clock.Now(), eng.execCfg.nowFunc(), "executor")
+	assert.Equal(t, clock.Now(), eng.baseline.NowForTest(), "store")
+	assert.Equal(t, clock.Now(), eng.execCfg.NowForTest(), "executor")
 }
 
 // Validates: R-6.3.4
@@ -349,9 +349,9 @@ func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
 
-	store, err := openEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.replaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
 		NamespaceID:       shortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",

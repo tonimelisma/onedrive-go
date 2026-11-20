@@ -76,8 +76,8 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	receiveWithin(t, started, "RunWatch to enter bootstrap observation")
 	stopWatch(t, cancel, done)
 
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted
 	}), "observers must not start after bootstrap cancellation")
 }
 
@@ -98,17 +98,17 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	eng.enableWebsocket = true
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, opts socketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, opts SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			started: started,
 			runFn: func(ctx context.Context, _ chan<- struct{}) error {
 				require.NotNil(t, opts.LifecycleHook)
-				opts.LifecycleHook(socketIOLifecycleEvent{
-					Type:    socketIOLifecycleEventStarted,
+				opts.LifecycleHook(SocketIOLifecycleEvent{
+					Type:    SocketIOLifecycleEventStarted,
 					DriveID: driveID.String(),
 				})
-				opts.LifecycleHook(socketIOLifecycleEvent{
-					Type:    socketIOLifecycleEventConnected,
+				opts.LifecycleHook(SocketIOLifecycleEvent{
+					Type:    SocketIOLifecycleEventConnected,
 					DriveID: driveID.String(),
 					SID:     "sid-1",
 				})
@@ -117,8 +117,8 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 				default:
 				}
 				<-ctx.Done()
-				opts.LifecycleHook(socketIOLifecycleEvent{
-					Type:    socketIOLifecycleEventStopped,
+				opts.LifecycleHook(SocketIOLifecycleEvent{
+					Type:    SocketIOLifecycleEventStopped,
 					DriveID: driveID.String(),
 				})
 				return nil
@@ -128,18 +128,18 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 
 	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
 	}, "websocket wake source started")
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketConnected &&
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventWebsocketConnected &&
 			event.DriveID == driveID.String() &&
 			event.Note == "sid=sid-1"
 	}, "websocket connected")
 
 	stopWatch(t, cancel, done)
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
 	}, "websocket wake source stopped")
 }
 
@@ -167,9 +167,9 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 
 	stopWatch(t, cancel, done)
 	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
-	assert.False(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketWakeSourceStarted ||
-			event.Type == engineDebugEventWebsocketConnected
+	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventWebsocketWakeSourceStarted ||
+			event.Type == EngineDebugEventWebsocketConnected
 	}), "disabled websocket mode must not emit websocket lifecycle events")
 }
 
@@ -182,7 +182,7 @@ const noWakeSourceAfterTheDecision = "no wake source was made for the rest of th
 // made before the source's goroutine runs.
 func countWakeSourcesMade(eng *testEngine) *atomic.Int32 {
 	made := &atomic.Int32{}
-	eng.socketIOWakeSourceFactory = func(_ socketIOEndpointFetcher, _ driveid.ID, _ socketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		made.Add(1)
 		return &stubSocketIOWakeSource{started: make(chan struct{}, 1)}
 	}
@@ -197,8 +197,8 @@ func countWakeSourcesMade(eng *testEngine) *atomic.Int32 {
 func waitForWakeSourceDecision(t *testing.T, recorder *debugEventRecorder) {
 	t.Helper()
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started, after the remote observer and its wake source")
 }
 
@@ -223,8 +223,8 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 
 	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWebsocketFallback && event.Note == "mount_root"
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventWebsocketFallback && event.Note == "mount_root"
 	}, "websocket mount-root fallback")
 	waitForWakeSourceDecision(t, recorder)
 	assert.Zero(t, wakeSourcesMade.Load(), "wake source should not start for mount-root watch")
@@ -251,22 +251,22 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
 	require.NoError(t, receiveWithin(t, done, "RunWatch to return after cancellation"),
 		"RunWatch should prefer graceful shutdown over all-observers-exited")
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverExited && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverExited && event.Observer == EngineDebugObserverLocal
 	}, "local observer exited")
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventWatchStopped
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventWatchStopped
 	}, "watch stopped")
 }
 
@@ -293,18 +293,18 @@ func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 		Debounce:     10 * time.Millisecond,
 	})
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	stopWatch(t, cancel, done)
 
 	assert.Positive(t, deltaCalls.Load(), "upload-only watch should still issue delta calls")
-	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverRemote
+	assert.True(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
 	}), "upload-only watch must start a remote observer")
 }
 
@@ -319,8 +319,8 @@ func TestWatchRuntime_HandleMaintenanceTick_EmitsDebugEventWithoutSQLiteProbe(t 
 
 	testWatchRuntime(t, eng).handleMaintenanceTick(ctx)
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventMaintenanceTickHandled
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventMaintenanceTickHandled
 	}, "maintenance tick handled")
 }
 
@@ -345,7 +345,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	contentHash := hashContentQuickXor(t, content)
 
 	// Seed baseline with a synced file.
-	seedOutcomes := []actionOutcome{{
+	seedOutcomes := []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "already-synced.txt",
@@ -366,7 +366,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []observedItem{{
+	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-as",
 		Path:     "already-synced.txt",
@@ -379,7 +379,7 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, dirtyBatch{})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.True(t, applied)
 	assert.Empty(t, rt.currentOutbox())
@@ -416,7 +416,7 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,
 		mode: SyncBidirectional,
-	}, dirtyBatch{})
+	}, DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.True(t, rt.hasPendingReplan())
@@ -450,14 +450,14 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 		Debounce:     10 * time.Millisecond,
 	})
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventBootstrapQuiesced
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	// Wait for the local observer itself: canceling as soon as the remote one
 	// starts raced its startup (the remote start's state read saw the
 	// cancellation and the runtime stopped before the local observer began).
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	// Create a local file. Download-only still observes it, but upload actions
@@ -470,14 +470,14 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	require.NoError(t, err)
 	_, found := bl.GetByPath("local-only.txt")
 	assert.False(t, found, "download-only watch mode must ignore local-only files created after bootstrap")
-	assert.True(t, recorder.findEvent(func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	assert.True(t, recorder.findEvent(func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}), "download-only watch must start a local observer")
 }
 
 // Validates: R-2.8.22
 // TestRunWatch_WatchLimitExhausted_FallsBackToPolling verifies that when the
-// local observer returns errLocalWatchUnavailable, the engine does NOT consider
+// local observer returns ErrLocalWatchUnavailable, the engine does NOT consider
 // the observer dead. Instead it falls back to periodic full scanning and
 // RunWatch continues until the context is canceled.
 func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
@@ -500,7 +500,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
 	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
 
@@ -543,38 +543,38 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	require.NoError(t, err)
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
-	recorder.waitUntilSeenOrExit(t, done, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventShutdownStarted
+	recorder.waitUntilSeenOrExit(t, done, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventShutdownStarted
 	}, "shutdown started")
 
 	clock.Advance(10 * time.Second)
 	require.NoError(t, receiveWithin(t, done, "the watch loop to exit once its timers were advanced"))
 
-	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventShutdownStarted
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventShutdownStarted
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventWatchStopped
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventWatchStopped
 		},
 	}, "local observer start, shutdown, and watch stop should occur in order")
-	for _, forbidden := range []engineDebugEventType{
-		engineDebugEventRetryTimerFired,
-		engineDebugEventRetryHeldReleaseStarted,
-		engineDebugEventTrialTimerFired,
-		engineDebugEventTrialHeldReleaseStarted,
+	for _, forbidden := range []EngineDebugEventType{
+		EngineDebugEventRetryTimerFired,
+		EngineDebugEventRetryHeldReleaseStarted,
+		EngineDebugEventTrialTimerFired,
+		EngineDebugEventTrialHeldReleaseStarted,
 	} {
-		recorder.requireNoEventAfter(t, func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventShutdownStarted
-		}, func(event engineDebugEvent) bool {
+		recorder.requireNoEventAfter(t, func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventShutdownStarted
+		}, func(event EngineDebugEvent) bool {
 			return event.Type == forbidden
 		}, fmt.Sprintf("%s must not occur after shutdown starts", forbidden))
 	}
@@ -634,7 +634,7 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	watcher := newSignalingWatcher()
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
 	refreshTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
@@ -642,13 +642,13 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		driveid.New(engineTestDriveID),
-		clock.Now().Add(-fullRemoteRefreshInterval+15*time.Minute),
-		remoteObservationModeDelta,
+		clock.Now().Add(-FullRemoteRefreshInterval+15*time.Minute),
+		RemoteObservationModeDelta,
 	))
 
 	watchCtx, cancel := context.WithCancel(t.Context())
-	recorder := attachDebugEventRecorderWithHook(eng, func(event engineDebugEvent) {
-		if event.Type == engineDebugEventRemoteRefreshCommitted {
+	recorder := attachDebugEventRecorderWithHook(eng, func(event EngineDebugEvent) {
+		if event.Type == EngineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
 	})
@@ -658,42 +658,42 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 		return eng.RunWatch(ctx, SyncUploadOnly, quietWatchOptions())
 	})
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
 	}, "local observer started")
 	receiveWithin(t, watcher.Added(), "local watch setup to add a watcher")
 	receiveWithin(t, refreshTimerCreated, "the refresh timer to be created")
 
 	clock.Advance(15 * time.Minute)
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventRemoteRefreshStarted
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventRemoteRefreshStarted
 	}, "full remote refresh started")
 	receiveWithin(t, refreshStarted, "the full remote refresh's delta fetch to start")
 
 	close(refreshReleased)
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventShutdownStarted
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventShutdownStarted
 	}, "shutdown started")
 
 	require.NoError(t, receiveWithin(t, done, "the watch loop to exit after shutdown during committed refresh application"))
 
-	recorder.requireOrderedSubsequence(t, []func(engineDebugEvent) bool{
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventRemoteRefreshStarted
+	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventRemoteRefreshStarted
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventRemoteRefreshApplied
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventRemoteRefreshApplied
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventShutdownStarted
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventShutdownStarted
 		},
-		func(event engineDebugEvent) bool {
-			return event.Type == engineDebugEventWatchStopped
+		func(event EngineDebugEvent) bool {
+			return event.Type == EngineDebugEventWatchStopped
 		},
 	}, "loop-owned refresh application should complete before shutdown drains the watch loop")
-	recorder.requireEventCount(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventRemoteRefreshDroppedOnShutdown
+	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventRemoteRefreshDroppedOnShutdown
 	}, 0, "applied full remote refresh batches should not later be dropped as pending shutdown work")
 }
 
@@ -727,10 +727,10 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	}
 
 	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (fsWatcher, error) {
+	eng.localWatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
-	degradedInterval := localWatchHealthySafetyScanInterval
+	degradedInterval := LocalWatchHealthySafetyScanInterval
 	tickerCreated := installTickerCreatedSignal(eng, degradedInterval)
 
 	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, WatchOptions{
@@ -738,8 +738,8 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 		Debounce:     5 * time.Millisecond,
 	})
 
-	recorder.waitForEvent(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackStarted
+	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	receiveWithin(t, tickerCreated, "the fallback ticker to be created")
 	clock.Advance(degradedInterval)
@@ -748,8 +748,8 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	// The sleep is a manual clock's: only cancellation can end it.
 	stopWatch(t, cancel, done)
 
-	recorder.waitUntilSeen(t, func(event engineDebugEvent) bool {
-		return event.Type == engineDebugEventObserverFallbackStopped
+	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
+		return event.Type == EngineDebugEventObserverFallbackStopped
 	}, "fallback stopped")
 }
 
@@ -767,7 +767,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 
 	// Create a plan with mismatched Actions and Deps.
-	plan := &actionPlan{
+	plan := &ActionPlan{
 		Actions: []Action{
 			{Type: ActionDownload, Path: "file.txt"},
 			{Type: ActionDownload, Path: "file2.txt"},
@@ -829,8 +829,8 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	// only; watch observers now belong to the runtime and are cleaned up by the
 	// watch coordinator, not by Engine.Close.
 	setupWatchEngine(t, testEng)
-	testWatchRuntime(t, testEng).resources.remoteObs = &remoteObserver{}
-	testWatchRuntime(t, testEng).resources.localObs = &localObserver{}
+	testWatchRuntime(t, testEng).resources.remoteObs = &RemoteObserver{}
+	testWatchRuntime(t, testEng).resources.localObs = &LocalObserver{}
 
 	// First Close should succeed.
 	require.NoError(t, eng.Close(t.Context()))

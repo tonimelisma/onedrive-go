@@ -43,7 +43,7 @@ func TestSyncStore_CloseSaysAFailedCheckpointAtWarn(t *testing.T) {
 	store, err := NewSyncStore(t.Context(), filepath.Join(t.TempDir(), "state.db"), logger)
 	require.NoError(t, err)
 	// A checkpoint of a closed database fails.
-	require.NoError(t, store.rawDB().Close())
+	require.NoError(t, store.RawDBForTest().Close())
 
 	require.NoError(t, store.Close(t.Context()))
 

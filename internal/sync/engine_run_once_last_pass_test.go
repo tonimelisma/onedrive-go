@@ -32,10 +32,10 @@ func TestExecutePreparedPlan_APassThatEndsAtItsFirstDispatchLeavesItsWork(t *tes
 	eng, _ := newTestEngine(t, &engineMockClient{})
 	report := &Report{}
 	runtime := &runtimePlan{
-		Plan: &actionPlan{
+		Plan: &ActionPlan{
 			Actions: []Action{
-				{Type: ActionUpload, Path: "a.txt", View: &pathView{Path: "a.txt"}},
-				{Type: ActionUpload, Path: "b.txt", View: &pathView{Path: "b.txt"}},
+				{Type: ActionUpload, Path: "a.txt", View: &PathView{Path: "a.txt"}},
+				{Type: ActionUpload, Path: "b.txt", View: &PathView{Path: "b.txt"}},
 			},
 			Deps: [][]int{nil, nil},
 		},
@@ -422,9 +422,9 @@ func TestFailureKeptForRetry_TheFeedAndThePassCountAgree(t *testing.T) {
 	} {
 		flow.resetResultStats()
 		activities = nil
-		completion := &actionCompletion{ActionType: ActionUpload, Path: "a.txt", Err: errors.New("refused")}
+		completion := &ActionCompletion{ActionType: ActionUpload, Path: "a.txt", Err: errors.New("refused")}
 
-		decision := &resultDecision{Class: class}
+		decision := &ResultDecision{Class: class}
 		eng.emitActivity(completion, decision, true)
 		flow.recordError(decision, completion)
 

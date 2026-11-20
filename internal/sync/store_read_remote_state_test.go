@@ -17,7 +17,7 @@ func TestSyncStore_GetRemoteStateByID(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(testDriveID)
 
-	require.NoError(t, store.CommitObservation(ctx, []observedItem{
+	require.NoError(t, store.CommitObservation(ctx, []ObservedItem{
 		{
 			DriveID:  driveID,
 			ItemID:   "item-1",

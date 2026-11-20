@@ -51,31 +51,6 @@ func skipIfCaseInsensitiveFS(t *testing.T, dir string) {
 	}
 }
 
-// namesCoexist reports whether the test temp filesystem can hold two distinct
-// files named a and b. Case-insensitive volumes fold differently (APFS also
-// folds ß to ss), so tests probe the exact pair they need.
-func namesCoexist(t *testing.T, a, b string) bool {
-	t.Helper()
-
-	probe := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(probe, a), []byte("a"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(probe, b), []byte("b"), 0o600))
-	data, err := localpath.ReadFile(filepath.Join(probe, a))
-	require.NoError(t, err)
-
-	return string(data) == "a"
-}
-
-// skipUnlessNamesCoexist skips a test whose scenario needs both a and b as
-// separate local files, which a case-insensitive volume cannot hold.
-func skipUnlessNamesCoexist(t *testing.T, a, b string) {
-	t.Helper()
-
-	if !namesCoexist(t, a, b) {
-		t.Skipf("skipping: this filesystem cannot hold %q and %q as separate files", a, b)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // hasCaseCollisionCached tests (R-2.12.2)
 // ---------------------------------------------------------------------------
@@ -87,7 +62,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "File.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -109,7 +84,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -124,7 +99,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "same.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -136,7 +111,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	t.Parallel()
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -151,7 +126,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: emptyBaseline(),
 	}
 
@@ -172,7 +147,7 @@ func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
 
 	// Baseline has "File.txt" — no file on disk.
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: bl,
 	}
 
@@ -189,7 +164,7 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 	dir := t.TempDir()
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: bl,
 	}
 
@@ -205,7 +180,7 @@ func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
 	dir := t.TempDir()
 
 	bl := baselineWith(&BaselineEntry{Path: "File.txt"})
-	obs := &localObserver{
+	obs := &LocalObserver{
 		baseline: bl,
 		localWatchState: localWatchState{
 			RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
@@ -478,7 +453,7 @@ func TestWatch_DeleteCollider_ReEmitsSurvivor(t *testing.T) {
 	removal := nextLocalPatch(t, batches, "the removal of file.txt")
 
 	assert.Equal(t, "File.txt", survivor.Path, "should have re-emitted the surviving File.txt")
-	assert.Equal(t, []string{"file.txt"}, removal.deletedPrefixes, "should have removed the deleted file.txt")
+	assert.Equal(t, []string{"file.txt"}, removal.DeletedPrefixes, "should have removed the deleted file.txt")
 
 	stopWatch(t, cancel, done)
 }
@@ -538,8 +513,8 @@ func TestWatch_DeleteCollider_ThreeWay_StillBlocked(t *testing.T) {
 	// reported before the delete, no create precedes the delete, and nothing
 	// follows it.
 	ev := nextLocalPatch(t, batches, "the delete of file.txt")
-	assert.Empty(t, ev.rows, "expected no rows (survivors still collide): got %+v", ev)
-	assert.Equal(t, []string{"file.txt"}, ev.deletedPrefixes)
+	assert.Empty(t, ev.Rows, "expected no rows (survivors still collide): got %+v", ev)
+	assert.Equal(t, []string{"file.txt"}, ev.DeletedPrefixes)
 	require.Equal(t, 2, recorder.countEvents(collisionSkipOf("FILE.txt")),
 		"the re-emitted FILE.txt was skipped again before the delete went out")
 	requireNoLocalPatch(t, batches, "the delete, which the re-emitted peers precede")
@@ -604,7 +579,7 @@ func TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself(t *testing
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "café.txt"), []byte("a"), 0o600))
 
-	obs := &localObserver{baseline: emptyBaseline()}
+	obs := &LocalObserver{baseline: emptyBaseline()}
 
 	_, found := obs.HasCaseCollisionCached(mustOpenSyncTree(t, dir), dir, "café.txt", ".")
 	assert.False(t, found)
@@ -619,7 +594,7 @@ func TestHasCaseCollisionCached_FullCaseFoldingAndEmojiCollide(t *testing.T) {
 	emojiName := "a\U0001F600.txt"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, emojiName), []byte("b"), 0o600))
 
-	obs := &localObserver{baseline: emptyBaseline()}
+	obs := &LocalObserver{baseline: emptyBaseline()}
 	tree := mustOpenSyncTree(t, dir)
 
 	colliding, found := obs.HasCaseCollisionCached(tree, dir, "STRASSE.txt", ".")

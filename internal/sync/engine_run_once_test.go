@@ -223,7 +223,7 @@ func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "edit-delete.txt", "baseline content")
 	baselineHash := hashContentQuickXor(t, "baseline content")
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "edit-delete.txt",
@@ -243,7 +243,7 @@ func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "edit-delete.txt", "locally modified content")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
 
 	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
@@ -323,13 +323,13 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	tx, err := beginPerfTx(ctx, eng.baseline.db)
+	tx, err := eng.baseline.BeginPerfTx(ctx)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, tx.Rollback())
 	}()
 
-	_, err = replaceLocalStateTx(ctx, tx, []localStateRow{{
+	_, err = ReplaceLocalStateTxForTest(ctx, tx, []LocalStateRow{{
 		Path:     "tx-only.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash",
@@ -380,12 +380,12 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 		AttemptCount: 1,
 	}))
 
-	err := flow.reconcileRuntimeState(ctx, &actionPlan{
+	err := flow.reconcileRuntimeState(ctx, &ActionPlan{
 		Actions: []Action{{
 			Type: ActionUpload,
 			Path: "keep.txt",
 		}},
-	}, passObservedRemoteThenLocal)
+	}, PassObservedRemoteThenLocal)
 	require.NoError(t, err)
 
 	retries, err := eng.baseline.ListRetryWork(ctx)
@@ -421,7 +421,7 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 	require.NoError(t, err)
 	require.Len(t, reconciliationRows, 2)
 
-	byPath := make(map[string]sQLiteReconciliationRow, len(reconciliationRows))
+	byPath := make(map[string]SQLiteReconciliationRow, len(reconciliationRows))
 	for _, row := range reconciliationRows {
 		byPath[row.Path] = row
 	}
@@ -492,14 +492,14 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []localStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
 		Path:     "stale-local.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "stale-local-hash",
 		Size:     5,
 		Mtime:    11,
 	}}))
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('stale-remote', 'stale-remote.txt', 'file', 'stale-remote-hash', 6, ?, 'etag-stale')`,
 		time.Now().UnixNano(),
@@ -569,8 +569,8 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
 		Path:      "/",
 		DriveID:   driveID,
-		IssueType: issueRemoteReadDenied,
-		ScopeKey:  sKPermRemoteRead(""),
+		IssueType: IssueRemoteReadDenied,
+		ScopeKey:  SKPermRemoteRead(""),
 	})
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
 		Key:           SKPermRemoteWrite(""),
@@ -587,7 +587,7 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)
 	require.NoError(t, err)
 	require.Len(t, liveObservationIssues, 1)
-	assert.Equal(t, issueRemoteReadDenied, liveObservationIssues[0].IssueType)
+	assert.Equal(t, IssueRemoteReadDenied, liveObservationIssues[0].IssueType)
 	assert.Equal(t, "/", liveObservationIssues[0].Path)
 
 	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
@@ -867,7 +867,7 @@ func TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken
 	state, err := eng.baseline.ReadObservationState(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, state.Cursor)
-	assert.Equal(t, clock.Now().Add(remoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
+	assert.Equal(t, clock.Now().Add(RemoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 }
 
 // Validates: R-6.6.28
@@ -1024,7 +1024,7 @@ func TestNewEngine_RequiresResetForNonSQLiteStateDB(t *testing.T) {
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, stateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
+	assert.Equal(t, StateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -1032,7 +1032,7 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE baseline (
@@ -1082,7 +1082,7 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 
 	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
-	db := store.rawDB()
+	db := store.RawDBForTest()
 	for i := range 200 {
 		_, err = db.ExecContext(t.Context(),
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type) VALUES ('d', ?, ?, 'file')`,
@@ -1107,10 +1107,10 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(t.Context(), canonicalSchemaSQL)
+	_, err = db.ExecContext(t.Context(), CanonicalSchemaSQLForTest())
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `DROP TABLE store_metadata`)
 	require.NoError(t, err)
@@ -1165,7 +1165,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a stale delta token.
-	seedOutcomes := []actionOutcome{{
+	seedOutcomes := []ActionOutcome{{
 		Action:  ActionDownload,
 		Success: true,
 		Path:    "seed.txt",
@@ -1173,7 +1173,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 		ItemID:  "seed-1",
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
 
 	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
@@ -1213,7 +1213,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline so the file appears as already synced with matching hash.
-	seedOutcomes := []actionOutcome{{
+	seedOutcomes := []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "unchanged.txt",
@@ -1337,7 +1337,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	ctx := t.Context()
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-dl', 'retry-download.txt', 'file', NULL, 18, ?)`,
 		now,
@@ -1347,7 +1347,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	// run is a full enumeration, which is authoritative and would rightly
 	// treat a row it does not list as deleted on OneDrive.
 	require.NoError(t, eng.baseline.CommitObservation(ctx, nil, "token-0", driveID))
-	_, err = eng.baseline.rawDB().ExecContext(ctx,
+	_, err = eng.baseline.RawDBForTest().ExecContext(ctx,
 		`UPDATE observation_state SET next_full_remote_refresh_at = ?`, time.Now().Add(time.Hour).UnixNano())
 	require.NoError(t, err)
 
@@ -1388,7 +1388,7 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 
 	editHash := hashContentQuickXor(t, "original remote edit")
 	deleteHash := hashContentQuickXor(t, "original remote delete")
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
 		{
 			Action:          ActionDownload,
 			Success:         true,
@@ -1426,14 +1426,14 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	}, "")
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, 'etag-edit-new')`,
 		now,
 	)
 	require.NoError(t, err, "seed remote mirror edit row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
 
 	report, runErr := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -1474,7 +1474,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 
 	writeLocalFile(t, syncRoot, "retry-download.txt", "recovered-download")
 	downloadHash := hashContentQuickXor(t, "recovered-download")
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-download.txt",
@@ -1494,14 +1494,14 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "retry-download.txt")))
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-dl', 'retry-download.txt', 'file', ?, 18, ?, 'etag-dl')`,
 		downloadHash, now,
 	)
 	require.NoError(t, err, "seed remote mirror row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), remoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
 
 	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
@@ -1538,7 +1538,7 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 
 	writeLocalFile(t, syncRoot, "retry-delete.txt", "delete me")
 	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []actionOutcome{{
+	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
 		Action:          ActionDownload,
 		Success:         true,
 		Path:            "retry-delete.txt",
@@ -1591,7 +1591,7 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('ghost', 'gone/never-synced.txt', 'file', 'h', 1, 1)`)
 	require.NoError(t, err)
@@ -1601,7 +1601,7 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	assert.Zero(t, report.Downloads+report.LocalDeletes+report.RemoteDeletes)
 
 	var count int
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'ghost'`).Scan(&count))
 	assert.Zero(t, count, "a full rescan that no longer lists an item drops its remote_state row")
 }
@@ -1677,7 +1677,7 @@ func TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward(t *testing.T)
 	state, err := eng.baseline.ReadObservationState(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, state.UndecidedRefreshStreak)
-	assert.LessOrEqual(t, state.NextFullRemoteRefreshAt, clock.Now().Add(fullRefreshAfterFolderDeleteDelay).UnixNano(),
+	assert.LessOrEqual(t, state.NextFullRemoteRefreshAt, clock.Now().Add(FullRefreshAfterFolderDeleteDelay).UnixNano(),
 		"the next complete enumeration is pulled forward")
 	assert.FileExists(t, filepath.Join(syncRoot, "gone.txt"), "an undecided orphan is kept")
 }

@@ -64,7 +64,7 @@ type (
 		// completed nor failed (actions a throttle scope took back and holds
 		// for a trial after the pass ended, or parked retry work), plus the
 		// follow-up work of the plan the run ended on
-		// (planFollowUp.leftWhenTheRunEnds). The summary counts it with the
+		// (PlanFollowUp.LeftWhenTheRunEnds). The summary counts it with the
 		// retryable failures as "will be retried".
 		LeftForNextSync int
 		// Superseded counts actions the pass gave up on because the truth
@@ -136,16 +136,16 @@ type engineInputs struct {
 	RemoteRootItemID         string
 	RemoteRootDeltaCapable   bool
 	ExpectedSyncRootIdentity *synctree.FileIdentity
-	Fetcher                  deltaFetcher
-	SocketIOFetcher          socketIOEndpointFetcher
-	Items                    itemClient
+	Fetcher                  DeltaFetcher
+	SocketIOFetcher          SocketIOEndpointFetcher
+	Items                    ItemClient
 	Downloads                driveops.Downloader
 	Uploads                  driveops.Uploader
 	PathConvergence          driveops.PathConvergence
-	DriveVerifier            driveVerifier
-	FolderDelta              folderDeltaFetcher
-	RecursiveLister          recursiveLister
-	PermChecker              permissionChecker
+	DriveVerifier            DriveVerifier
+	FolderDelta              FolderDeltaFetcher
+	RecursiveLister          RecursiveLister
+	PermChecker              PermissionChecker
 	Logger                   *slog.Logger
 	ContentFilter            ContentFilterConfig
 	LocalRules               LocalObservationRules

@@ -34,7 +34,7 @@ func TestCrashRecovery_ConflictCopyWhoseUploadWasCutAfterTheCreate(t *testing.T)
 	t.Parallel()
 
 	for _, lostWAL := range []bool{false, true} {
-		t.Run(crashCaseName(crashPointUploadCreatedUnrecorded, lostWAL), func(t *testing.T) {
+		t.Run(crashCaseName(CrashPointUploadCreatedUnrecorded, lostWAL), func(t *testing.T) {
 			t.Parallel()
 
 			placeholder, placeholderID, recovered := conflictCopyUploadCutAfterCreate(t, lostWAL)
@@ -78,17 +78,17 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 	// The synced state reaches the main database file; the round's commits,
 	// the create's intent among them, stay in the WAL, which the lost-WAL
 	// variant then loses.
-	_, err := h.eng.baseline.rawDB().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	writeLocalFile(t, h.syncRoot, conflictCrashPath, conflictCrashLocalContent)
 	remote.putFileAt(t, conflictCrashPath, conflictCrashRemoteContent)
 	capture := &crashCapture{
-		point: crashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
+		point: CrashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.crashAt = capture.hook
-	h.eng.baseline.crashAt = capture.hook
+	h.eng.execCfg.SetCrashHookForTest(capture.hook)
+	h.eng.baseline.SetCrashHookForTest(capture.hook)
 	h.beginRound(t)
 	syncHarnessUntilQuiet(t, h)
 	require.True(t, capture.captured, "the conflict copy's upload reached %s", capture.point)
