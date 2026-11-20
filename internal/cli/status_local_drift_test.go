@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Live incident, 2026-11-01: 300 edited files waited an hour for a plan while
@@ -38,7 +38,7 @@ func TestFinalizeStatusDriveState_LocalDriftIsNotUpToDate(t *testing.T) {
 func TestBuildSyncStateInfo_CarriesLocalDriftAndRendersIt(t *testing.T) {
 	t.Parallel()
 
-	info := buildSyncStateInfo(&syncengine.DriveStatusSnapshot{
+	info := buildSyncStateInfo(&syncstore.DriveStatusSnapshot{
 		BaselineFileCount: 7,
 		LocalDriftItems:   3,
 	}, statusStoreRootDrive, false, 0)

@@ -3,7 +3,7 @@ package multisync
 import (
 	gosync "sync"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // parentChildWorkSnapshots owns exact parent publications for one runtime. It
@@ -13,20 +13,20 @@ type parentChildWorkSnapshots struct {
 	// mu guards snapshots, which parent mounts publish into while child
 	// mounts read.
 	mu        gosync.Mutex
-	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot
 }
 
 func newParentChildWorkSnapshots() *parentChildWorkSnapshots {
 	return &parentChildWorkSnapshots{
-		snapshots: make(map[mountID]syncengine.ShortcutChildWorkSnapshot),
+		snapshots: make(map[mountID]syncshortcut.ShortcutChildWorkSnapshot),
 	}
 }
 
 func (c *parentChildWorkSnapshots) receive(
 	parentID mountID,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
-) (syncengine.ShortcutChildWorkSnapshot, bool) {
-	snapshot = syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
+	snapshot syncshortcut.ShortcutChildWorkSnapshot,
+) (syncshortcut.ShortcutChildWorkSnapshot, bool) {
+	snapshot = syncshortcut.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
 	if c == nil || parentID == "" {
 		return snapshot, false
 	}
@@ -34,28 +34,28 @@ func (c *parentChildWorkSnapshots) receive(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.snapshots == nil {
-		c.snapshots = make(map[mountID]syncengine.ShortcutChildWorkSnapshot)
+		c.snapshots = make(map[mountID]syncshortcut.ShortcutChildWorkSnapshot)
 	}
 	current, found := c.snapshots[parentID]
-	if found && syncengine.ShortcutChildWorkSnapshotsEqual(current, snapshot) {
+	if found && syncshortcut.ShortcutChildWorkSnapshotsEqual(current, snapshot) {
 		return snapshot, false
 	}
 	c.snapshots[parentID] = snapshot
 	return snapshot, true
 }
 
-func (c *parentChildWorkSnapshots) latestFor(parentID mountID) syncengine.ShortcutChildWorkSnapshot {
+func (c *parentChildWorkSnapshots) latestFor(parentID mountID) syncshortcut.ShortcutChildWorkSnapshot {
 	if c == nil || parentID == "" {
-		return syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), syncengine.ShortcutChildWorkSnapshot{})
+		return syncshortcut.NormalizeShortcutChildWorkSnapshot(parentID.String(), syncshortcut.ShortcutChildWorkSnapshot{})
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snapshot := c.snapshots[parentID]
 	snapshot.NamespaceID = parentID.String()
-	return syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
+	return syncshortcut.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot)
 }
 
-func shortcutChildWorkSnapshotHasWork(snapshot syncengine.ShortcutChildWorkSnapshot) bool {
+func shortcutChildWorkSnapshotHasWork(snapshot syncshortcut.ShortcutChildWorkSnapshot) bool {
 	return len(snapshot.RunCommands) > 0 || len(snapshot.CleanupCommands) > 0
 }
 
@@ -68,8 +68,8 @@ func (c *parentChildWorkSnapshots) forget(parentID mountID) {
 	delete(c.snapshots, parentID)
 }
 
-func (c *parentChildWorkSnapshots) forParents(parents []*mountSpec) map[mountID]syncengine.ShortcutChildWorkSnapshot {
-	snapshots := make(map[mountID]syncengine.ShortcutChildWorkSnapshot)
+func (c *parentChildWorkSnapshots) forParents(parents []*mountSpec) map[mountID]syncshortcut.ShortcutChildWorkSnapshot {
+	snapshots := make(map[mountID]syncshortcut.ShortcutChildWorkSnapshot)
 	for _, parent := range parents {
 		if parent == nil || parent.projectionKind() != MountProjectionStandalone {
 			continue

@@ -14,6 +14,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // requireScenarioBaselineMoved asserts a folder move re-pathed the subtree's
@@ -38,7 +40,7 @@ func requireScenarioBaselineMoved(t *testing.T, eng *testEngine, oldPaths, newPa
 func requireScenarioQuietPlan(t *testing.T, eng *testEngine) {
 	t.Helper()
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates+report.Moves,
 		"converged state must plan nothing: %+v", report)
@@ -47,7 +49,7 @@ func requireScenarioQuietPlan(t *testing.T, eng *testEngine) {
 func runScenarioPass(t *testing.T, eng *testEngine) *Report {
 	t.Helper()
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 0, report.Failed, "errors: %v", report.Errors)
 
@@ -58,7 +60,7 @@ func runScenarioPass(t *testing.T, eng *testEngine) *Report {
 func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-deep", "root", "deep")
 	remote.addFolder("item-er", "item-deep", "er")
@@ -104,7 +106,7 @@ func TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource(t 
 func TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-old", "root", "old")
 	remote.addFolder("item-sub", "item-old", "sub")
@@ -140,7 +142,7 @@ func TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne(t *testing.T) {
 func TestRunOnce_LocalFolderDeleteDeletesRemoteFolder(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-many", "root", "many")
 	// A file outside the deleted folder keeps that side from being empty,
@@ -169,7 +171,7 @@ func TestRunOnce_LocalFolderDeleteDeletesRemoteFolder(t *testing.T) {
 func TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "ünïcødé 日本語 🎉")
 	remote.addFile(t, "item-renamed", "root", "renamed.txt", "ok")
@@ -195,7 +197,7 @@ func TestRunOnce_LocalRenameKeepsTheRemoteModificationTime(t *testing.T) {
 	// Manual test D-150: renaming a synced file locally left its OneDrive
 	// copy with the rename's time as its modification time, because a
 	// rename PATCH that does not carry fileSystemInfo resets it (L-09).
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-old", "root", "old-name.txt", "keep my time\n")
 	before, err := remote.getItem("item-old")
@@ -219,7 +221,7 @@ func TestRunOnce_LocalRenameKeepsTheRemoteModificationTime(t *testing.T) {
 func TestRunOnce_LocalFileReplacedByFolderConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-lower", "root", "lowercase.txt", "x\n")
 
@@ -228,7 +230,7 @@ func TestRunOnce_LocalFileReplacedByFolderConverges(t *testing.T) {
 	require.FileExists(t, filepath.Join(syncRoot, "lowercase.txt"))
 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "lowercase.txt")))
-	writeLocalFile(t, syncRoot, filepath.Join("lowercase.txt", "inside.txt"), "\n")
+	syncfixture.WriteLocalFile(t, syncRoot, filepath.Join("lowercase.txt", "inside.txt"), "\n")
 	runScenarioPass(t, eng)
 
 	assert.Equal(t, []string{"item-lower"}, remote.deletes, "the old file is replaced, not overwritten with a directory")
@@ -244,13 +246,13 @@ func TestRunOnce_LocalFileReplacedByFolderConverges(t *testing.T) {
 func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 
 	// Created locally, so the folders are created remotely before their
 	// children are uploaded into them: the recorded folder eTags go stale.
-	writeLocalFile(t, syncRoot, filepath.Join("movesrc", "inner", "a.txt"), "a\n")
+	syncfixture.WriteLocalFile(t, syncRoot, filepath.Join("movesrc", "inner", "a.txt"), "a\n")
 	runScenarioPass(t, eng)
 	require.Len(t, remote.folderCreates, 2)
 
@@ -276,7 +278,7 @@ func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
 func TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-touch", "root", "touch.txt", "touch me\n")
 
@@ -304,7 +306,7 @@ func TestRunOnce_TimestampOnlyLocalChangeRefreshesBaselineWithoutTransfer(t *tes
 func TestRunOnce_RemoteFolderRenameMovesExistingChildrenOnce(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-links", "root", "links")
 	remote.addFolder("item-sub", "item-links", "sub")
@@ -332,7 +334,7 @@ func TestRunOnce_RemoteFolderRenameMovesExistingChildrenOnce(t *testing.T) {
 func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-probe", "root", "probe")
 	remote.addFolder("item-len", "item-probe", "len")
@@ -370,7 +372,7 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-bin", "root", "bin")
 	remote.addFile(t, "item-moved", "root", "moved.txt", "moved\n")
@@ -381,13 +383,13 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "moved.txt"))
 
-	clock := newManualClock(time.Now())
+	clock := syncfixture.NewManualClock(time.Now())
 	installManualClockForTestEngine(eng, clock)
 	remote.move("item-moved", "item-bin", "moved.txt")
 	remote.deleteRemotely("item-bin")
 	h.beginRound(t)
 	runScenarioPass(t, eng)
-	clock.Advance(FullRefreshAfterFolderDeleteDelay)
+	clock.Advance(syncdomain.FullRefreshAfterFolderDeleteDelay)
 	runScenarioPass(t, eng)
 
 	assert.NoDirExists(t, filepath.Join(syncRoot, "bin"))
@@ -409,7 +411,7 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-shape", "root", "shape", "file\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -418,7 +420,7 @@ func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *tes
 	eng, syncRoot := h.eng, h.syncRoot
 	runScenarioPass(t, eng)
 
-	writeLocalFile(t, syncRoot, "shape", "edited locally\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "shape", "edited locally\n")
 	remote.deleteRemotely("item-shape")
 	remote.addFolder("item-shape-dir", "root", "shape")
 	remote.addFile(t, "item-inner", "item-shape-dir", "inner.txt", "inner\n")
@@ -444,7 +446,7 @@ func TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth(t *tes
 func TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "shape")
 	remote.addFile(t, "item-child", "item-dir", "child.txt", "child\n")
@@ -453,7 +455,7 @@ func TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth(t *testi
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
-	writeLocalFile(t, syncRoot, filepath.Join("shape", "child.txt"), "edited child\n")
+	syncfixture.WriteLocalFile(t, syncRoot, filepath.Join("shape", "child.txt"), "edited child\n")
 	remote.deleteRemotely("item-dir")
 	remote.addFile(t, "item-shape-file", "root", "shape", "now a file\n")
 
@@ -477,7 +479,7 @@ func TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth(t *testi
 func TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "shape")
 	remote.addFile(t, "item-child", "item-dir", "child.txt", "child\n")
@@ -488,7 +490,7 @@ func TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth(t *testin
 	runScenarioPass(t, eng)
 
 	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "shape")))
-	writeLocalFile(t, syncRoot, "shape", "now a local file\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "shape", "now a local file\n")
 	remote.setContent(t, "item-child", "edited online\n")
 
 	runScenarioPass(t, eng)
@@ -509,11 +511,11 @@ func TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth(t *testin
 func TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 
-	writeLocalFile(t, syncRoot, filepath.Join("thing", "local.txt"), "local child\n")
+	syncfixture.WriteLocalFile(t, syncRoot, filepath.Join("thing", "local.txt"), "local child\n")
 	remote.addFile(t, "item-thing", "root", "thing", "remote file\n")
 
 	runScenarioPass(t, eng)
@@ -531,11 +533,11 @@ func TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth(t *testing.T) {
 func TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 
-	writeLocalFile(t, syncRoot, "thing", "local file\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "thing", "local file\n")
 	remote.addFolder("item-thing", "root", "thing")
 	remote.addFile(t, "item-child", "item-thing", "child.txt", "remote child\n")
 
@@ -568,7 +570,7 @@ func modelContents(tree map[string]string) []string {
 func TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "photos")
 	remote.addFile(t, "item-a", "item-dir", "a.txt", "a\n")
@@ -578,7 +580,7 @@ func TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges(t *testing.T) {
 	runScenarioPass(t, eng)
 
 	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "photos")))
-	writeLocalFile(t, syncRoot, "photos", "now a file\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "photos", "now a file\n")
 
 	runScenarioPass(t, eng)
 
@@ -597,7 +599,7 @@ func TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges(t *testing.T) {
 func TestRunOnce_RemoteMoveChainIntoVacatedPathConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-c", "root", "c")
 	remote.addFile(t, "item-b", "root", "b.txt", "b\n")
@@ -644,11 +646,11 @@ func requireScenarioLocalFile(t *testing.T, syncRoot, rel, want string) {
 func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 	t.Parallel()
 
-	for _, swapSide := range []string{modelLocalSide, modelRemoteSide} {
+	for _, swapSide := range []string{syncfixture.ModelLocalSide, syncfixture.ModelRemoteSide} {
 		t.Run(swapSide, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "item-a", "root", "a.txt", "A\n")
 			remote.addFile(t, "item-b", "root", "b.txt", "B\n")
 			remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -656,7 +658,7 @@ func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 			runScenarioPass(t, h.eng)
 
 			h.beginRound(t)
-			if swapSide == modelLocalSide {
+			if swapSide == syncfixture.ModelLocalSide {
 				for _, step := range [][2]string{{"a.txt", "swap.txt"}, {"b.txt", "a.txt"}, {"swap.txt", "b.txt"}} {
 					require.NoError(t, os.Rename(filepath.Join(h.syncRoot, step[0]), filepath.Join(h.syncRoot, step[1])))
 				}
@@ -669,7 +671,7 @@ func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 
 			requireScenarioLocalFile(t, h.syncRoot, "a.txt", "B\n")
 			requireScenarioLocalFile(t, h.syncRoot, "b.txt", "A\n")
-			if swapSide == modelRemoteSide {
+			if swapSide == syncfixture.ModelRemoteSide {
 				assert.Zero(t, remote.uploads, "a swap online moves names locally, it transfers nothing")
 			}
 			assertSyncInvariants(t, h)
@@ -689,7 +691,7 @@ func TestRunOnce_SwapOfTwoNamesConverges(t *testing.T) {
 func TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-f", "root", "f")
 	remote.addFile(t, "item-x", "item-f", "x.txt", "X\n")
 	remote.addFile(t, "item-y", "item-f", "y.txt", "Y\n")
@@ -718,7 +720,7 @@ func TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone(t *testing.T) {
 func TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-c", "item-docs", "c.md", "C\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -729,7 +731,7 @@ func TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges(t *testing.T)
 	docs := filepath.Join(h.syncRoot, "docs")
 	require.NoError(t, os.RemoveAll(docs))
 	require.NoError(t, os.Mkdir(docs, 0o750))
-	writeLocalFile(t, h.syncRoot, filepath.Join("docs", "c.md"), "C\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("docs", "c.md"), "C\n")
 	remote.moveAt(t, "docs/c.md", "docs/d.md")
 	runScenarioPass(t, h.eng)
 
@@ -749,7 +751,7 @@ func TestRunOnce_RemoteRenameInsideLocallyRecreatedFolderConverges(t *testing.T)
 func TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-in", "item-docs", "in.txt", "in\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -758,7 +760,7 @@ func TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth(t *testing.T) {
 
 	h.beginRound(t)
 	require.NoError(t, os.RemoveAll(filepath.Join(h.syncRoot, "docs")))
-	writeLocalFile(t, h.syncRoot, "docs", "local file\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, "docs", "local file\n")
 	remote.deleteAt(t, "docs")
 	remote.putFileAt(t, "docs", "remote file\n")
 	runScenarioPass(t, h.eng)
@@ -776,7 +778,7 @@ func TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth(t *testing.T) {
 func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-docs", "root", "docs", "was a file\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	h := newSyncHarness(t, remote)
@@ -784,7 +786,7 @@ func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
 
 	h.beginRound(t)
 	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "docs")))
-	writeLocalFile(t, h.syncRoot, filepath.Join("docs", "local.txt"), "local\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("docs", "local.txt"), "local\n")
 	remote.deleteAt(t, "docs")
 	remote.mkdirAt(t, "docs")
 	remote.putFileAt(t, "docs/remote.txt", "remote\n")
@@ -807,7 +809,7 @@ func TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem(t *testing.T) {
 func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	h := newSyncHarness(t, remote)
@@ -837,7 +839,7 @@ func TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderConverges(t *testing.T) {
 func TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-f", "root", "f")
 	remote.addFile(t, "item-x", "item-f", "x.txt", "synced\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -847,7 +849,7 @@ func TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth(t *testing.T) 
 	h.beginRound(t)
 	// Written beside it and renamed over it, so the new file cannot reuse the
 	// old inode.
-	writeLocalFile(t, h.syncRoot, filepath.Join("f", "x.new"), "a new local file\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("f", "x.new"), "a new local file\n")
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "f", "x.new"), filepath.Join(h.syncRoot, "f", "x.txt")))
 	remote.moveAt(t, "f/x.txt", "x.txt")
 	runScenarioPass(t, h.eng)
@@ -870,7 +872,7 @@ func TestRunOnce_RemoteMoveOfAFileTheUserReplacedLocallyKeepsBoth(t *testing.T) 
 func TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-p", "root", "p.txt", "P\n")
 	remote.addFile(t, "item-q", "root", "q.txt", "Q\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -901,7 +903,7 @@ func TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges(t *testing.T) {
 func TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-d", "root", "d")
 	remote.addFile(t, "item-x", "item-d", "x.txt", "X\n")
 	remote.addFile(t, "item-y", "item-d", "y.txt", "Y\n")
@@ -931,7 +933,7 @@ func TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone(t *testing.T)
 func TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-d", "root", "d")
 	remote.addFile(t, "item-x", "item-d", "x.txt", "X\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -961,7 +963,7 @@ func TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges(t *testing.T) 
 func TestRunOnce_RemoteDeleteOfALocallyRecreatedEmptyFolderIsApplied(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-q", "root", "q")
 	remote.addFolder("item-x", "item-q", "x")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -993,7 +995,7 @@ func TestRunOnce_RemoteDeleteOfALocallyRecreatedEmptyFolderIsApplied(t *testing.
 func TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-x", "root", "X")
 	remote.addFile(t, "item-a", "item-x", "a.txt", "A\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -1003,7 +1005,7 @@ func TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore(t *testi
 	h.beginRound(t)
 	require.NoError(t, os.RemoveAll(filepath.Join(h.syncRoot, "X")))
 	require.NoError(t, os.Mkdir(filepath.Join(h.syncRoot, "X"), 0o750))
-	writeLocalFile(t, h.syncRoot, filepath.Join("X", "a.txt"), "A\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("X", "a.txt"), "A\n")
 	remote.deleteAt(t, "X")
 	runScenarioPass(t, h.eng)
 
@@ -1022,7 +1024,7 @@ func TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore(t *testi
 func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-d", "root", "d")
 	remote.addFile(t, "item-in", "item-d", "in.txt", "in\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -1053,7 +1055,7 @@ func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T)
 func TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-q", "root", "q")
 	remote.addFile(t, "item-a", "item-q", "a.txt", "before\n")
 	h := newSyncHarness(t, remote)
@@ -1076,13 +1078,13 @@ func TestRunOnce_SameRenameOnBothSidesStillAppliesTheRemoteEdit(t *testing.T) {
 func TestRunOnce_LostMoveAnswerAfterARemoteEditStillAppliesTheEdit(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-q", "root", "q")
 	remote.addFile(t, "item-a", "item-q", "a.txt", "before\n")
 	client := remote.client(t)
-	move := client.moveItemOptsFn
+	move := client.MoveItemOptsFn
 	lost := false
-	client.moveItemOptsFn = func(
+	client.MoveItemOptsFn = func(
 		ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 	) (*graph.Item, error) {
 		item, err := move(ctx, driveID, itemID, newParentID, newName, opts)
@@ -1098,7 +1100,7 @@ func TestRunOnce_LostMoveAnswerAfterARemoteEditStillAppliesTheEdit(t *testing.T)
 	h.beginRound(t)
 	remote.putFileAt(t, "q/a.txt", "edited online\n")
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "q", "a.txt"), filepath.Join(h.syncRoot, "a.txt")))
-	report, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.True(t, lost, "the move ran and lost its answer")
 	require.Equal(t, 1, report.Failed)

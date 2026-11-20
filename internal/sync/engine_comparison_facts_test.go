@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // renumberedDeviceOffset fabricates a device number no test host uses.
@@ -23,7 +24,7 @@ const renumberedDeviceOffset = 1 << 40
 func TestRunOnce_RenumberedDeviceTransfersNothing(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-a", "item-docs", "a.txt", "alpha\n")
@@ -61,7 +62,7 @@ func TestRunOnce_RenumberedDeviceTransfersNothing(t *testing.T) {
 func TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-a", "item-docs", "a.txt", "alpha\n")
@@ -71,7 +72,7 @@ func TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing(t *testing.T) {
 	runScenarioPass(t, eng)
 
 	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "docs")))
-	writeLocalFile(t, syncRoot, filepath.Join("docs", "a.txt"), "alpha\n")
+	syncfixture.WriteLocalFile(t, syncRoot, filepath.Join("docs", "a.txt"), "alpha\n")
 
 	report := runScenarioPass(t, eng)
 	assert.Zero(t, report.Uploads+report.Downloads+report.FolderCreates+report.LocalDeletes+report.RemoteDeletes,

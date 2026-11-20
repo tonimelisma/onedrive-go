@@ -5,9 +5,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
-func listRetryWorkForTest(t *testing.T, store *SyncStore, ctx context.Context) []RetryWorkRow {
+func listRetryWorkForTest(t *testing.T, store *syncstore.SyncStore, ctx context.Context) []syncdomain.RetryWorkRow {
 	t.Helper()
 
 	rows, err := store.ListRetryWork(ctx)
@@ -15,7 +18,7 @@ func listRetryWorkForTest(t *testing.T, store *SyncStore, ctx context.Context) [
 	return rows
 }
 
-func actionableObservationIssuesForTest(t *testing.T, store *SyncStore, ctx context.Context) []ObservationIssueRow {
+func actionableObservationIssuesForTest(t *testing.T, store *syncstore.SyncStore, ctx context.Context) []syncdomain.ObservationIssueRow {
 	t.Helper()
 
 	rows, err := store.ListObservationIssues(ctx)

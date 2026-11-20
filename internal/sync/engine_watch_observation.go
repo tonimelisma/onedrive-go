@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // commitLocalScan commits one full local scan, a watch snapshot or the
@@ -14,19 +17,19 @@ import (
 // newly skipped file is reported first. It reports what the commit changed.
 func (flow *engineFlow) commitLocalScan(
 	ctx context.Context,
-	rows []LocalStateRow,
-	skipped []SkippedItem,
+	rows []syncdomain.LocalStateRow,
+	skipped []syncdomain.SkippedItem,
 	crossedMounts []string,
-) (LocalSnapshotCommitResult, error) {
+) (syncstore.LocalSnapshotCommitResult, error) {
 	eng := flow.engine
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
 	findings := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	eng.emitDebugEvent(EngineDebugEvent{
-		Type: EngineDebugEventObservationFindingsReconcileStarted,
+	eng.emitDebugEvent(syncdomain.EngineDebugEvent{
+		Type: syncdomain.EngineDebugEventObservationFindingsReconcileStarted,
 		Note: engineDebugNoteLocalSkipped,
 	})
 
-	return eng.commitLocalSnapshot(ctx, LocalSnapshotCommit{
+	return eng.commitLocalSnapshot(ctx, syncstore.LocalSnapshotCommit{
 		Rows:          rows,
 		Findings:      &findings,
 		CrossedMounts: crossedMounts,
@@ -36,7 +39,7 @@ func (flow *engineFlow) commitLocalScan(
 // observationIssueKey identifies one persisted skipped-file finding.
 type observationIssueKey struct {
 	path      string
-	issueType IssueType
+	issueType syncdomain.IssueType
 }
 
 // knownObservationIssues returns the skipped-file findings already persisted
@@ -68,11 +71,11 @@ func (flow *engineFlow) knownObservationIssues(ctx context.Context) map[observat
 // `status`) stay at Debug so a persistent bad name does not warn on every
 // safety scan.
 func (flow *engineFlow) logSkippedObservationFindings(
-	skipped []SkippedItem,
+	skipped []syncdomain.SkippedItem,
 	known map[observationIssueKey]struct{},
 ) {
 	eng := flow.engine
-	byReason := make(map[IssueType][]SkippedItem)
+	byReason := make(map[syncdomain.IssueType][]syncdomain.SkippedItem)
 	for i := range skipped {
 		_, alreadyReported := known[observationIssueKey{path: skipped[i].Path, issueType: skipped[i].Reason}]
 		if alreadyReported {
@@ -126,13 +129,13 @@ func (flow *engineFlow) logSkippedObservationFindings(
 // when every file shares one detail, otherwise the condition's label ("11
 // files with names OneDrive does not allow"). One file's detail once spoke for
 // eleven different invalid names as "the name starts with a space".
-func aggregateSkippedText(reason IssueType, items []SkippedItem) string {
+func aggregateSkippedText(reason syncdomain.IssueType, items []syncdomain.SkippedItem) string {
 	shared := skippedItemReasonText(&items[0])
 	for i := 1; i < len(items); i++ {
 		if skippedItemReasonText(&items[i]) == shared {
 			continue
 		}
-		if key, ok := ConditionKeyForIssueType(reason); ok {
+		if key, ok := syncdomain.ConditionKeyForIssueType(reason); ok {
 			return fmt.Sprintf("%d %s", len(items), conditionLabel(key, len(items)))
 		}
 		return fmt.Sprintf("%d files: %s", len(items), strings.ReplaceAll(string(reason), "_", " "))
@@ -143,7 +146,7 @@ func aggregateSkippedText(reason IssueType, items []SkippedItem) string {
 
 // skippedItemReasonText is the user-facing reason for a skipped file: the
 // scanner's detail when it has one, otherwise the issue type in words.
-func skippedItemReasonText(item *SkippedItem) string {
+func skippedItemReasonText(item *syncdomain.SkippedItem) string {
 	if item.Detail != "" {
 		return item.Detail
 	}
@@ -154,7 +157,7 @@ func skippedItemReasonText(item *SkippedItem) string {
 // applyObservationFindingsBatch persists one findings batch.
 func (flow *engineFlow) applyObservationFindingsBatch(
 	ctx context.Context,
-	batch *ObservationFindingsBatch,
+	batch *syncdomain.ObservationFindingsBatch,
 	failureMessage string,
 	reconcileNote string,
 ) error {
@@ -163,8 +166,8 @@ func (flow *engineFlow) applyObservationFindingsBatch(
 		return nil
 	}
 
-	eng.emitDebugEvent(EngineDebugEvent{
-		Type: EngineDebugEventObservationFindingsReconcileStarted,
+	eng.emitDebugEvent(syncdomain.EngineDebugEvent{
+		Type: syncdomain.EngineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
 	if err := eng.baseline.ReconcileObservationFindings(ctx, batch); err != nil {

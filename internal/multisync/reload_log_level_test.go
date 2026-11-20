@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.8.1
@@ -31,7 +32,7 @@ func TestOrchestrator_Reload_AppliesTheConfigLogLevel(t *testing.T) {
 	var started atomic.Int32
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				started.Add(1)
 				<-ctx.Done()
 				return ctx.Err()

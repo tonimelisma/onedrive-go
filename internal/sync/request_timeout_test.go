@@ -11,6 +11,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // stalledGraphRequestError is the error graph returns for one item request
@@ -18,10 +22,10 @@ import (
 func stalledGraphRequestError(t *testing.T, kind stalledRequestKind) error {
 	t.Helper()
 
-	server, reached := newStalledServer(t)
-	client, dispatched := stalledGraphClient(t, server, kind.client(t))
+	server, reached := syncfixture.NewStalledServer(t)
+	client, dispatched := syncfixture.StalledGraphClient(t, server, kind.client(t))
 
-	_, err := client.GetItem(t.Context(), driveid.New(engineTestDriveID), "stalled-item")
+	_, err := client.GetItem(t.Context(), driveid.New(syncfixture.EngineTestDriveID), "stalled-item")
 	require.Error(t, err)
 	assert.Equal(t, int64(1), dispatched.Load(), "one dispatch is one request")
 	if !kind.reachesServer {
@@ -47,12 +51,12 @@ func TestClassifyResult_TransportTimeoutIsARequestTimeoutUntilTheRunEnds(t *test
 			err := stalledGraphRequestError(t, kind)
 			require.ErrorIs(t, err, context.DeadlineExceeded, "the transport's timeout has the shape of a deadline")
 
-			live := classifyResult(&ActionCompletion{Err: err, HTTPStatus: ExtractHTTPStatus(err)})
+			live := classifyResult(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err)})
 			assert.Equal(t, resultRequeue, live.Class, "%v", err)
-			assert.Equal(t, PersistRetryWork, live.Persistence)
-			assert.Equal(t, IssueRequestTimeout, live.ConditionType)
+			assert.Equal(t, syncdomain.PersistRetryWork, live.Persistence)
+			assert.Equal(t, syncdomain.IssueRequestTimeout, live.ConditionType)
 
-			ended := classifyResult(&ActionCompletion{Err: err, HTTPStatus: ExtractHTTPStatus(err), RunEnded: true})
+			ended := classifyResult(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err), RunEnded: true})
 			assert.Equal(t, resultShutdown, ended.Class)
 		})
 	}
@@ -70,10 +74,10 @@ func TestRunEnded_AsksTheRunNotTheError(t *testing.T) {
 	cancel()
 	failure := errors.New("request failed")
 
-	assert.False(t, RunEnded(t.Context(), context.DeadlineExceeded), "a deadline while the run goes on")
-	assert.False(t, RunEnded(t.Context(), context.Canceled), "a cancel narrower than the run")
-	assert.True(t, RunEnded(ended, failure), "any failure once the run has ended")
-	assert.False(t, RunEnded(ended, nil), "no error is never a stop")
+	assert.False(t, syncdomain.RunEnded(t.Context(), context.DeadlineExceeded), "a deadline while the run goes on")
+	assert.False(t, syncdomain.RunEnded(t.Context(), context.Canceled), "a cancel narrower than the run")
+	assert.True(t, syncdomain.RunEnded(ended, failure), "any failure once the run has ended")
+	assert.False(t, syncdomain.RunEnded(ended, nil), "no error is never a stop")
 }
 
 // A failure to hand a poll's batch over, from the batch handler or from the
@@ -100,27 +104,27 @@ func TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			fetcher := &scriptedDeltaFetcher{answer: func(int, string) (*graph.DeltaPage, error) {
-				return &graph.DeltaPage{Items: []graph.Item{cursorTestItem("a")}, DeltaLink: "token-after"}, nil
+			fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
+				return &graph.DeltaPage{Items: []graph.Item{syncfixture.CursorTestItem("a")}, DeltaLink: "token-after"}, nil
 			}}
-			obs := NewRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
+			obs := syncobserve.NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
 			runCtx, endRun := context.WithCancel(t.Context())
 			defer endRun()
-			handle := func(context.Context, []RemoteItem, string, ShortcutTopologyBatch) (RemoteObservationBatch, error) {
+			handle := func(context.Context, []syncdomain.RemoteItem, string, syncshortcut.ShortcutTopologyBatch) (syncobserve.RemoteObservationBatch, error) {
 				if tc.endRun {
 					endRun()
 				}
 				if !tc.failApply {
-					return RemoteObservationBatch{}, failure
+					return syncobserve.RemoteObservationBatch{}, failure
 				}
 				applied := make(chan error, 1)
 				applied <- failure
 
-				return RemoteObservationBatch{ApplyAck: applied}, nil
+				return syncobserve.RemoteObservationBatch{ApplyAck: applied}, nil
 			}
 
-			err := runWithin(t, runCtx, "the remote watch to return", func(ctx context.Context) error {
-				return obs.Watch(ctx, "saved-token", make(chan RemoteObservationBatch, 1), MinPollInterval, nil, handle)
+			err := syncfixture.RunWithin(t, runCtx, "the remote watch to return", func(ctx context.Context) error {
+				return obs.Watch(ctx, "saved-token", make(chan syncobserve.RemoteObservationBatch, 1), syncdomain.MinPollInterval, nil, handle)
 			})
 
 			if tc.endRun {
@@ -145,14 +149,14 @@ func TestCancelCauses_AnswerToCanceledAndNameTheirCancel(t *testing.T) {
 		name  string
 		cause error
 	}{
-		{name: "action returned", cause: ErrActionReturned},
-		{name: "worker pool stopped", cause: ErrWorkerPoolStopped},
-		{name: "one-shot pass failed", cause: ErrOneShotPassFailed},
-		{name: "one-shot pass ended", cause: ErrOneShotPassEnded},
+		{name: "action returned", cause: syncdomain.ErrActionReturned},
+		{name: "worker pool stopped", cause: syncdomain.ErrWorkerPoolStopped},
+		{name: "one-shot pass failed", cause: syncdomain.ErrOneShotPassFailed},
+		{name: "one-shot pass ended", cause: syncdomain.ErrOneShotPassEnded},
 	} {
 		require.ErrorIs(t, tc.cause, context.Canceled, tc.name)
 		require.NotErrorIs(t, tc.cause, context.DeadlineExceeded, tc.name)
-		assert.True(t, IsCancellationEcho(fmt.Errorf("request canceled: %w", tc.cause)), tc.name)
+		assert.True(t, syncdomain.IsCancellationEcho(fmt.Errorf("request canceled: %w", tc.cause)), tc.name)
 		assert.NotContains(t, texts, tc.cause.Error(), "%s has a text of its own", tc.name)
 		texts[tc.cause.Error()] = tc.name
 	}
@@ -172,7 +176,7 @@ func TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation(t *testing.T) {
 	canceled := fmt.Errorf("watch step: %w", context.Canceled)
 	expired := fmt.Errorf("watch step: %w", context.DeadlineExceeded)
 	diskFailure := errors.New("write sync state: disk I/O error")
-	storeSilent := fmt.Errorf("record retry work: %w: %w", context.DeadlineExceeded, ErrStoreAccessTimedOut)
+	storeSilent := fmt.Errorf("record retry work: %w: %w", context.DeadlineExceeded, syncdomain.ErrStoreAccessTimedOut)
 
 	assert.True(t, isWatchShutdownError(ended, canceled), "the cancel coming back")
 	assert.True(t, isWatchShutdownError(ended, expired), "an ended context's deadline coming back")

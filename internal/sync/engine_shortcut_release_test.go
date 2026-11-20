@@ -21,6 +21,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -40,7 +42,7 @@ const (
 func newReleaseRemote(t *testing.T) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", releaseSyncedFolder)
 	remote.addFolder("item-sub", "item-docs", "sub")
 	remote.addFile(t, "item-a", "item-docs", "a.txt", releaseContentA)
@@ -67,7 +69,7 @@ func rewriteBaselineLocalHash(t *testing.T, eng *testEngine, storedPath string) 
 	t.Helper()
 
 	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
-		`UPDATE baseline SET local_hash = ? WHERE path = ?`, testQuickXor("not what the file holds\n"), storedPath)
+		`UPDATE baseline SET local_hash = ? WHERE path = ?`, syncfixture.TestQuickXor("not what the file holds\n"), storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -108,12 +110,12 @@ func changeContentUnseen(t *testing.T, eng *testEngine, syncRoot, storedPath, co
 func settleReleaseScenario(t *testing.T, eng *testEngine) {
 	t.Helper()
 
-	installManualClockForTestEngine(eng, newManualClock(time.Now().Add(time.Hour)))
+	installManualClockForTestEngine(eng, syncfixture.NewManualClock(time.Now().Add(time.Hour)))
 	runScenarioPass(t, eng)
 }
 
 // releaseBaselineRow is the baseline row at storedPath.
-func releaseBaselineRow(t *testing.T, eng *testEngine, storedPath string) *BaselineEntry {
+func releaseBaselineRow(t *testing.T, eng *testEngine, storedPath string) *syncdomain.BaselineEntry {
 	t.Helper()
 
 	bl, err := eng.baseline.Load(t.Context())
@@ -125,10 +127,10 @@ func releaseBaselineRow(t *testing.T, eng *testEngine, storedPath string) *Basel
 }
 
 // countingDownloads counts, per item, the downloads client serves.
-func countingDownloads(client *engineMockClient) *releaseDownloadCounts {
+func countingDownloads(client *syncfixture.EngineMockClient) *releaseDownloadCounts {
 	counts := &releaseDownloadCounts{byItem: map[string]int{}}
-	download := client.downloadFn
-	client.downloadFn = func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
+	download := client.DownloadFn
+	client.DownloadFn = func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
 		counts.add(itemID)
 		return download(ctx, driveID, itemID, w)
 	}
@@ -161,7 +163,7 @@ func (c *releaseDownloadCounts) snapshot() map[string]int {
 func runReleaseDrain(t *testing.T, eng *testEngine) *Report {
 	t.Helper()
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true, ReleaseLocalTree: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true, ReleaseLocalTree: true})
 	require.NoError(t, err)
 
 	return report
@@ -173,8 +175,8 @@ func releaseBaselinePaths(t *testing.T, eng *testEngine) []string {
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 	var paths []string
-	bl.ForEachPath(func(p string, entry *BaselineEntry) {
-		if p != "" && entry.ItemType != ItemTypeRoot {
+	bl.ForEachPath(func(p string, entry *syncdomain.BaselineEntry) {
+		if p != "" && entry.ItemType != syncdomain.ItemTypeRoot {
 			paths = append(paths, p)
 		}
 	})
@@ -190,7 +192,7 @@ func releaseKeptIssuePaths(t *testing.T, eng *testEngine) []string {
 	require.NoError(t, err)
 	var paths []string
 	for i := range issues {
-		if issues[i].IssueType == IssueRemovedFolderKept {
+		if issues[i].IssueType == syncdomain.IssueRemovedFolderKept {
 			paths = append(paths, issues[i].Path)
 		}
 	}
@@ -262,11 +264,13 @@ type releaseKeptCase struct {
 func releaseKeptCases() []releaseKeptCase {
 	return []releaseKeptCase{
 		{
-			name:      "a file the content filter hides",
-			configure: func(inputs *engineInputs) { inputs.ContentFilter = ContentFilterConfig{IgnoreDotfiles: true} },
+			name: "a file the content filter hides",
+			configure: func(inputs *engineInputs) {
+				inputs.ContentFilter = syncdomain.ContentFilterConfig{IgnoreDotfiles: true}
+			},
 			place: func(t *testing.T, syncRoot string) {
 				t.Helper()
-				writeLocalFile(t, syncRoot, "Docs/.notes", "mine\n")
+				syncfixture.WriteLocalFile(t, syncRoot, "Docs/.notes", "mine\n")
 			},
 			path: "Docs/.notes", keptNotOnOneDrive: true,
 		},
@@ -290,7 +294,7 @@ func releaseKeptCases() []releaseKeptCase {
 			name: "a restore copy, a name sync reserves",
 			place: func(t *testing.T, syncRoot string) {
 				t.Helper()
-				writeLocalFile(t, syncRoot, ".onedrive-go-restore-1234", "half a restore\n")
+				syncfixture.WriteLocalFile(t, syncRoot, ".onedrive-go-restore-1234", "half a restore\n")
 			},
 			path: ".onedrive-go-restore-1234", keptNotOnOneDrive: true,
 		},
@@ -298,7 +302,7 @@ func releaseKeptCases() []releaseKeptCase {
 			name: "a file an interrupted removal set aside",
 			place: func(t *testing.T, syncRoot string) {
 				t.Helper()
-				writeLocalFile(t, syncRoot, "Docs/.onedrive-go.0123456789abcdef.detach", "set aside\n")
+				syncfixture.WriteLocalFile(t, syncRoot, "Docs/.onedrive-go.0123456789abcdef.detach", "set aside\n")
 			},
 			path: "Docs/.onedrive-go.0123456789abcdef.detach",
 		},
@@ -374,7 +378,7 @@ func TestReleaseLocalTree_ANewOrChangedFileIsLeftForTheNextDrain(t *testing.T) {
 			name: "a new file", path: "Docs/new.txt",
 			change: func(t *testing.T, syncRoot string) {
 				t.Helper()
-				writeLocalFile(t, syncRoot, "Docs/new.txt", "written after the scan\n")
+				syncfixture.WriteLocalFile(t, syncRoot, "Docs/new.txt", "written after the scan\n")
 			},
 			wantFiles: []string{releaseFileA, "Docs/new.txt", releaseFileB, releaseFileTop},
 		},
@@ -382,7 +386,7 @@ func TestReleaseLocalTree_ANewOrChangedFileIsLeftForTheNextDrain(t *testing.T) {
 			name: "a file edited to a new size", path: releaseFileA,
 			change: func(t *testing.T, syncRoot string) {
 				t.Helper()
-				writeLocalFile(t, syncRoot, releaseFileA, "edited after the scan\n")
+				syncfixture.WriteLocalFile(t, syncRoot, releaseFileA, "edited after the scan\n")
 			},
 			wantFiles: allFiles,
 		},
@@ -405,7 +409,7 @@ func TestReleaseLocalTree_ANewOrChangedFileIsLeftForTheNextDrain(t *testing.T) {
 			remote, eng, syncRoot := newReleaseScenario(t, nil)
 			tc.change(t, syncRoot)
 
-			report := &Report{Mode: SyncBidirectional}
+			report := &Report{Mode: syncdomain.SyncBidirectional}
 			require.NoError(t, eng.releaseLocalTree(t.Context(), report))
 
 			assert.Zero(t, report.Released, "the survey sees the change: nothing leaves")
@@ -479,7 +483,7 @@ func TestRunOnce_ALocalDeleteRefusedForAnUnseenChangePlansTheLocalEditNext(t *te
 	rewriteBaselineLocalHash(t, eng, releaseFileTop)
 	remote.deleteRemotely("item-top")
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, report.Superseded, "the delete is refused once")
@@ -504,7 +508,7 @@ func TestReleaseLocalTree_AReadableFolderStopsAtTheFirstRefusal(t *testing.T) {
 		files   = releaseBatchSize + 44
 		refused = 100
 	)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", releaseSyncedFolder)
 	for i := range files {
 		remote.addFile(t, fmt.Sprintf("item-%03d", i), "item-docs", fmt.Sprintf("f%03d.txt", i), fmt.Sprintf("file %d\n", i))
@@ -513,7 +517,7 @@ func TestReleaseLocalTree_AReadableFolderStopsAtTheFirstRefusal(t *testing.T) {
 	runScenarioPass(t, eng)
 	rewriteBaselineLocalHash(t, eng, fmt.Sprintf("Docs/f%03d.txt", refused))
 
-	report := &Report{Mode: SyncBidirectional}
+	report := &Report{Mode: syncdomain.SyncBidirectional}
 	require.NoError(t, eng.releaseLocalTree(t.Context(), report))
 
 	assert.Equal(t, refused, report.Released, "what sorts before the refusal leaves")
@@ -544,12 +548,12 @@ func TestReleaseLocalTree_JunkThatCannotBeRemovedIsKeptAndItsCauseWarned(t *test
 		t.Skip("root removes files from a read-only folder")
 	}
 
-	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &engineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
-		inputs.ContentFilter = ContentFilterConfig{IgnoreJunkFiles: true}
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{IgnoreJunkFiles: true}
 	})
 	capture, logger := synctest.NewLogCapture()
 	eng.logger = logger
-	writeLocalFile(t, syncRoot, ".DS_Store", "finder\n")
+	syncfixture.WriteLocalFile(t, syncRoot, ".DS_Store", "finder\n")
 	require.NoError(t, os.Chmod(syncRoot, 0o500)) //nolint:gosec // the test makes its own folder read-only
 	t.Cleanup(func() {
 		assert.NoError(t, os.Chmod(syncRoot, 0o700)) //nolint:gosec // and gives the folder back
@@ -602,10 +606,10 @@ func TestRunOnce_FinalDrainRemovesBundledJunkUnderTheConfiguredRule(t *testing.T
 	t.Parallel()
 
 	_, eng, syncRoot := newReleaseScenario(t, func(inputs *engineInputs) {
-		inputs.ContentFilter = ContentFilterConfig{IgnoreJunkFiles: true}
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{IgnoreJunkFiles: true}
 	})
-	writeLocalFile(t, syncRoot, "Docs/.DS_Store", "finder\n")
-	writeLocalFile(t, syncRoot, ".DS_Store", "finder\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "Docs/.DS_Store", "finder\n")
+	syncfixture.WriteLocalFile(t, syncRoot, ".DS_Store", "finder\n")
 
 	report := runReleaseDrain(t, eng)
 
@@ -623,7 +627,7 @@ func TestRunOnce_FinalDrainRemovesALeftoverDownloadPartialFirst(t *testing.T) {
 	t.Parallel()
 
 	_, eng, syncRoot := newReleaseScenario(t, nil)
-	writeLocalFile(t, syncRoot, "Docs/.onedrive-go.a.txt.partial", "half a download\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "Docs/.onedrive-go.a.txt.partial", "half a download\n")
 
 	report := runReleaseDrain(t, eng)
 
@@ -644,7 +648,7 @@ func TestReleaseLocalTree_ASyncedFileAlreadyGoneLeavesWithItsRow(t *testing.T) {
 	remote, eng, syncRoot := newReleaseScenario(t, nil)
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, releaseFileTop)))
 
-	report := &Report{Mode: SyncBidirectional}
+	report := &Report{Mode: syncdomain.SyncBidirectional}
 	require.NoError(t, eng.releaseLocalTree(t.Context(), report))
 
 	assert.False(t, report.LocalTreeHolds().Any(), "%+v", report.LocalTreeHolds())
@@ -657,12 +661,12 @@ func TestReleaseLocalTree_ASyncedFileAlreadyGoneLeavesWithItsRow(t *testing.T) {
 // releaseDeniedClient is the scenario remote's client whose listing of the
 // whole folder answers 403 while denied is set: the shared folder can no
 // longer be read.
-func releaseDeniedClient(t *testing.T, remote *moveScenarioRemote, denied *atomic.Bool) *engineMockClient {
+func releaseDeniedClient(t *testing.T, remote *moveScenarioRemote, denied *atomic.Bool) *syncfixture.EngineMockClient {
 	t.Helper()
 
 	client := remote.client(t)
-	listDelta := client.deltaFn
-	client.deltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
+	listDelta := client.DeltaFn
+	client.DeltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
 		if denied.Load() {
 			return nil, graph.ErrForbidden
 		}
@@ -689,8 +693,8 @@ func TestRunOnce_UnreadableSharedFolderReleasesWhatMatchesAndTheReAddPlansNoDele
 	capture, logger := synctest.NewLogCapture()
 	eng, syncRoot := newTestEngineWithLogger(t, releaseDeniedClient(t, remote, &denied), logger)
 	runScenarioPass(t, eng)
-	writeLocalFile(t, syncRoot, releaseFileA, "edited, never uploaded\n")
-	writeLocalFile(t, syncRoot, "Docs/new.txt", "new, never uploaded\n")
+	syncfixture.WriteLocalFile(t, syncRoot, releaseFileA, "edited, never uploaded\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "Docs/new.txt", "new, never uploaded\n")
 
 	denied.Store(true)
 	for pass := range 2 {
@@ -749,14 +753,14 @@ func unreadableRootAnswers() []struct {
 func newSharedFolderReleaseEngine(t *testing.T, answer *rootReadAnswer) (*testEngine, string) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFolder(sharedFolderReleaseRootID, StrRoot, "Shared")
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder(sharedFolderReleaseRootID, syncdomain.StrRoot, "Shared")
 	remote.addFolder("item-docs", sharedFolderReleaseRootID, releaseSyncedFolder)
 	remote.addFile(t, "item-a", "item-docs", "a.txt", releaseContentA)
 	remote.addFile(t, "item-top", sharedFolderReleaseRootID, releaseFileTop, "top\n")
 
 	client := remote.client(t)
-	client.listChildrenRecursiveFn = func(_ context.Context, _ driveid.ID, folderID string) ([]graph.Item, error) {
+	client.ListChildrenRecursiveFn = func(_ context.Context, _ driveid.ID, folderID string) ([]graph.Item, error) {
 		if answer.err != nil {
 			return nil, answer.err
 		}
@@ -850,7 +854,7 @@ func TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept(t *t
 
 			var rootAnswer rootReadAnswer
 			eng, syncRoot := newSharedFolderReleaseEngine(t, &rootAnswer)
-			writeLocalFile(t, syncRoot, releaseFileA, "edited, never uploaded\n")
+			syncfixture.WriteLocalFile(t, syncRoot, releaseFileA, "edited, never uploaded\n")
 
 			rootAnswer.err = tc.answer
 			for pass := range 2 {
@@ -861,7 +865,7 @@ func TestRunOnce_FinalDrainOfAnUnreadableSharedFolderIsHeldOnlyByWhatItKept(t *t
 				assert.Equal(t, LeftWork{NotUploaded: 1}, holds.Left,
 					"pass %d: the run left the change it kept and nothing else", pass)
 				assert.Equal(t, []string{notUploadedReason(1, []string{releaseFileA})}, holds.Reasons(), "pass %d", pass)
-				assert.Equal(t, []string{string(IssueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
+				assert.Equal(t, []string{string(syncdomain.IssueRemovedFolderKept) + " " + releaseFileA}, storedIssueNames(t, eng),
 					"pass %d: the store holds the kept change and no issue of the folder", pass)
 			}
 			assert.FileExists(t, filepath.Join(syncRoot, filepath.FromSlash(releaseFileA)), "the change stays")
@@ -886,10 +890,10 @@ func TestRunOnce_ACrashDuringTheReleaseResumesWithNoRemoteDelete(t *testing.T) {
 		point      string
 		occurrence int
 	}{
-		{point: CrashPointCommitOutcome, occurrence: 1},
-		{point: CrashPointCommitOutcome, occurrence: 3},
-		{point: CrashPointLocalDeleteTrashed, occurrence: 1},
-		{point: CrashPointLocalDeleteTrashed, occurrence: 2},
+		{point: syncdomain.CrashPointCommitOutcome, occurrence: 1},
+		{point: syncdomain.CrashPointCommitOutcome, occurrence: 3},
+		{point: syncdomain.CrashPointLocalDeleteTrashed, occurrence: 1},
+		{point: syncdomain.CrashPointLocalDeleteTrashed, occurrence: 2},
 	} {
 		for _, lostWAL := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%d", crashCaseName(tc.point, lostWAL), tc.occurrence), func(t *testing.T) {

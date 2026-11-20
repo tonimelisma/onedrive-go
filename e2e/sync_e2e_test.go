@@ -28,7 +28,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -207,7 +207,7 @@ func verifyBaselineReport(t *testing.T, cfgPath string, env map[string]string) (
 	require.NoError(t, err)
 
 	dbPath := stateDBPathForEnv(canonicalID, env)
-	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("open sync store: %w", err)
 	}

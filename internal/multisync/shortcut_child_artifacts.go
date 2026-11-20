@@ -13,15 +13,16 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 type shortcutChildArtifactCleanup struct {
 	mountID     string
 	namespaceID string
-	ackRef      syncengine.ShortcutChildAckRef
+	ackRef      syncshortcut.ShortcutChildAckRef
 	localRoot   string
-	reason      syncengine.ShortcutChildArtifactCleanupReason
+	reason      syncshortcut.ShortcutChildArtifactCleanupReason
 }
 
 type shortcutChildArtifactCleanupSource string
@@ -163,7 +164,7 @@ func (o *Orchestrator) childArtifactCleanupExecutor() shortcutChildArtifactClean
 }
 
 func shortcutChildArtifactCleanups(
-	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
 ) ([]shortcutChildArtifactCleanup, error) {
 	if len(snapshots) == 0 {
 		return nil, nil
@@ -340,7 +341,7 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 			))
 			continue
 		}
-		snapshot, err := acker.AcknowledgeChildArtifactsPurged(ctx, syncengine.ShortcutChildArtifactCleanupAck{
+		snapshot, err := acker.AcknowledgeChildArtifactsPurged(ctx, syncshortcut.ShortcutChildArtifactCleanupAck{
 			Ref: cleanup.ackRef,
 		})
 		if err != nil {

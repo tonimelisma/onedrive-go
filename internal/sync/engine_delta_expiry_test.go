@@ -11,17 +11,19 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // expiringScenarioClient answers the next delta call that carries a saved
 // token with gone, once, and otherwise serves the scenario remote.
-func expiringScenarioClient(t *testing.T, remote *moveScenarioRemote, gone error) (*engineMockClient, *bool) {
+func expiringScenarioClient(t *testing.T, remote *moveScenarioRemote, gone error) (*syncfixture.EngineMockClient, *bool) {
 	t.Helper()
 
 	client := remote.client(t)
-	serve := client.deltaFn
+	serve := client.DeltaFn
 	expire := false
-	client.deltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
+	client.DeltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
 		if expire && token != "" {
 			expire = false
 			return nil, gone
@@ -37,10 +39,10 @@ func expiringScenarioClient(t *testing.T, remote *moveScenarioRemote, gone error
 func TestRunOnce_DeltaExpiredRecoverySynthesizesMissedDeletes(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "kept")
 	remote.addFile(t, "item-gone", "root", "gone.txt", "deleted online")
-	client, expire := expiringScenarioClient(t, remote, deltaGone("resyncChangesApplyDifferences"))
+	client, expire := expiringScenarioClient(t, remote, syncfixture.DeltaGone("resyncChangesApplyDifferences"))
 	eng, syncRoot := newTestEngine(t, client)
 	require.Equal(t, 2, runScenarioPass(t, eng).Downloads)
 
@@ -68,14 +70,14 @@ func TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal(t *testing.
 		name string
 		gone error
 	}{
-		{name: "upload differences", gone: deltaGone("resyncChangesUploadDifferences")},
-		{name: "unknown flavor", gone: deltaGone("")},
+		{name: "upload differences", gone: syncfixture.DeltaGone("resyncChangesUploadDifferences")},
+		{name: "unknown flavor", gone: syncfixture.DeltaGone("")},
 		{name: "bare 410", gone: graph.ErrGone},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "item-keep", "root", "keep.txt", "kept")
 			remote.addFile(t, "item-gone", "root", "gone.txt", "missing online")
 			client, expire := expiringScenarioClient(t, remote, tt.gone)
@@ -104,28 +106,28 @@ func TestRunOnce_DeltaExpiredUploadDifferencesKeepsAndReuploadsLocal(t *testing.
 func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	eng := &Engine{
 		driveID:          driveID,
 		remoteRootItemID: "mount-root",
-		logger:           testLogger(t),
-		itemsClient: &engineMockClient{
-			getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+		logger:           syncfixture.TestLogger(t),
+		itemsClient: &syncfixture.EngineMockClient{
+			GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 				return nil, graph.ErrNotFound
 			},
 		},
 	}
-	bl := baselineWith(&BaselineEntry{
-		Path: "gone.txt", DriveID: driveID, ItemID: "gone", ParentID: "mount-root", ItemType: ItemTypeFile,
+	bl := syncfixture.BaselineWith(&syncdomain.BaselineEntry{
+		Path: "gone.txt", DriveID: driveID, ItemID: "gone", ParentID: "mount-root", ItemType: syncdomain.ItemTypeFile,
 	})
 
 	for _, tt := range []struct {
-		kind         ResyncKind
+		kind         syncdomain.ResyncKind
 		wantReupload bool
 	}{
-		{kind: ResyncKindApplyDifferences, wantReupload: false},
-		{kind: ResyncKindUploadDifferences, wantReupload: true},
-		{kind: ResyncKindUnknown, wantReupload: true},
+		{kind: syncdomain.ResyncKindApplyDifferences, wantReupload: false},
+		{kind: syncdomain.ResyncKindUploadDifferences, wantReupload: true},
+		{kind: syncdomain.ResyncKindUnknown, wantReupload: true},
 	} {
 		events, _ := eng.mountRootEvents(t.Context(), nil, bl, true, tt.kind)
 		require.Len(t, events, 1, "kind %d", tt.kind)
@@ -138,13 +140,13 @@ func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 func TestNewDeltaExpiredError_ParsesTheResyncFlavor(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, ResyncKindApplyDifferences, ResyncKindOf(NewDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))))
-	assert.Equal(t, ResyncKindUploadDifferences, ResyncKindOf(NewDeltaExpiredError(deltaGone("resyncChangesUploadDifferences"))))
-	assert.Equal(t, ResyncKindUnknown, ResyncKindOf(NewDeltaExpiredError(deltaGone(""))))
-	assert.Equal(t, ResyncKindUnknown, ResyncKindOf(NewDeltaExpiredError(graph.ErrGone)))
+	assert.Equal(t, syncdomain.ResyncKindApplyDifferences, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone("resyncChangesApplyDifferences"))))
+	assert.Equal(t, syncdomain.ResyncKindUploadDifferences, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone("resyncChangesUploadDifferences"))))
+	assert.Equal(t, syncdomain.ResyncKindUnknown, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone(""))))
+	assert.Equal(t, syncdomain.ResyncKindUnknown, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(graph.ErrGone)))
 
-	err := NewDeltaExpiredError(deltaGone("resyncChangesApplyDifferences"))
-	require.ErrorIs(t, err, ErrDeltaExpired)
+	err := syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone("resyncChangesApplyDifferences"))
+	require.ErrorIs(t, err, syncdomain.ErrDeltaExpired)
 	require.ErrorIs(t, err, graph.ErrGone)
 }
 
@@ -152,14 +154,14 @@ func TestNewDeltaExpiredError_ParsesTheResyncFlavor(t *testing.T) {
 func TestRunOnce_SavedTokenOneDriveKeepsRefusingIsReenumerated(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "kept")
 	remote.addFile(t, "item-gone", "root", "gone.txt", "deleted online")
 	refused := &graph.GraphError{StatusCode: 400, Code: "invalidRequest", Err: graph.ErrBadRequest}
 	client, refuse := expiringScenarioClient(t, remote, refused)
-	serve := client.deltaFn
+	serve := client.DeltaFn
 	refusals := 0
-	client.deltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
+	client.DeltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
 		if *refuse && token != "" {
 			refusals++
 			return nil, refused

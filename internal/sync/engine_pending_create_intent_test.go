@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-5.6.15
@@ -22,11 +25,11 @@ import (
 func TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "orphan", "root", "doc.txt", "")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &PendingCreate{
-		DriveID: driveid.New(engineTestDriveID), Path: "doc.txt", ParentID: "root",
+	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
+		DriveID: driveid.New(syncfixture.EngineTestDriveID), Path: "doc.txt", ParentID: "root",
 	}))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "doc.txt"), []byte("the user's content\n"), 0o600))
 
@@ -54,14 +57,14 @@ func TestRunOnce_EmptyItemACrashLeftUnrecordedIsFinishedNotConflicted(t *testing
 func TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
 	original := filepath.Join(h.syncRoot, "doc.txt")
 	require.NoError(t, os.WriteFile(original, []byte("my words\n"), 0o600))
 
 	refuseCreatesUnanswered(remote, true)
-	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Empty(t, remote.tree(), "the create never reached OneDrive")
 	pending, found, err := h.eng.baseline.PendingCreateAt(t.Context(), "doc.txt")
@@ -93,15 +96,15 @@ func TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped(t *testing.T) {
 func TestRunOnce_EmptyItemOfAKilledCreateWhoseFileWasDeletedIsRemoved(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	// A file both sides keep, so deleting the placeholder does not empty the
 	// remote side, which the delete-safety hold would hold for confirmation.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
 
-	require.NoError(t, h.eng.baseline.RecordPendingCreateIntent(t.Context(), &PendingCreate{
-		DriveID: driveid.New(engineTestDriveID), Path: "doc.txt", ParentID: "root",
+	require.NoError(t, h.eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
+		DriveID: driveid.New(syncfixture.EngineTestDriveID), Path: "doc.txt", ParentID: "root",
 	}))
 	remote.mu.Lock()
 	remote.addFile(t, "orphan", "root", "doc.txt", "")
@@ -126,7 +129,7 @@ func TestRunOnce_EmptyItemOfAKilledCreateWhoseFileWasDeletedIsRemoved(t *testing
 func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	// A file both sides keep, so deleting the placeholder does not empty the
 	// remote side, which the delete-safety hold would hold for confirmation.
@@ -134,7 +137,7 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 	ctx := t.Context()
-	require.NoError(t, eng.baseline.RecordPendingCreateIntent(ctx, &PendingCreate{
+	require.NoError(t, eng.baseline.RecordPendingCreateIntent(ctx, &syncdomain.PendingCreate{
 		DriveID: driveID, Path: "doc.txt", ParentID: "root",
 	}))
 
@@ -142,8 +145,8 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	rt := testWatchRuntime(t, eng)
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	pipe := &watchPipeline{bl: bl, mode: SyncBidirectional}
-	applied, err := rt.runSteadyStateReplan(ctx, pipe, DirtyBatch{})
+	pipe := &watchPipeline{bl: bl, mode: syncdomain.SyncBidirectional}
+	applied, err := rt.runSteadyStateReplan(ctx, pipe, syncobserve.DirtyBatch{})
 	require.NoError(t, err)
 	require.True(t, applied)
 	pending, found, err := eng.baseline.PendingCreateAt(ctx, "doc.txt")
@@ -156,10 +159,10 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	remote.addFile(t, "orphan", "root", "doc.txt", "")
 	landed := *remote.items["orphan"]
 	remote.mu.Unlock()
-	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &RemoteObservationBatch{
-		Source: RemoteObservationBatchPrimaryWatch,
-		Observed: []ObservedItem{{
-			DriveID: driveID, ItemID: landed.ID, ParentID: "root", Path: "doc.txt", ItemType: ItemTypeFile,
+	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &syncobserve.RemoteObservationBatch{
+		Source: syncobserve.RemoteObservationBatchPrimaryWatch,
+		Observed: []syncdomain.ObservedItem{{
+			DriveID: driveID, ItemID: landed.ID, ParentID: "root", Path: "doc.txt", ItemType: syncdomain.ItemTypeFile,
 			Hash: landed.QuickXorHash, Size: 0, Mtime: landed.ModifiedAt.UnixNano(), ETag: landed.ETag,
 		}},
 	}))
@@ -168,12 +171,12 @@ func TestWatchRuntime_ReplanKeepsAFreshCreateIntentForTheBatchThatShowsItsFile(t
 	require.True(t, found)
 	require.Equal(t, landed.ID, pending.ItemID, "the batch claims the empty file for the intent")
 
-	applied, err = rt.runSteadyStateReplan(ctx, pipe, DirtyBatch{})
+	applied, err = rt.runSteadyStateReplan(ctx, pipe, syncobserve.DirtyBatch{})
 	require.NoError(t, err)
 	require.True(t, applied)
 	outbox := rt.currentOutbox()
 	require.Len(t, outbox, 1, "one action: the placeholder's delete")
-	assert.Equal(t, ActionRemoteDelete, outbox[0].Action.Type, "not a download of the empty file")
+	assert.Equal(t, syncdomain.ActionRemoteDelete, outbox[0].Action.Type, "not a download of the empty file")
 	assert.Equal(t, "doc.txt", outbox[0].Action.Path)
 	assert.Equal(t, landed.ID, outbox[0].Action.ItemID)
 

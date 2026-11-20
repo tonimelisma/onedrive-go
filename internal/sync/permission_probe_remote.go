@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // The handle403 probes below log at Debug only: each runs once per failing
@@ -58,9 +59,9 @@ func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) 
 // failures are evidence (none), not errors.
 func (ph *permissionHandler) handle403(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	failedPath string,
-	actionType ActionType,
+	actionType syncdomain.ActionType,
 ) (permissionEvidence, error) {
 	if ph.permChecker == nil {
 		return permissionEvidence{}, nil
@@ -80,7 +81,7 @@ func (ph *permissionHandler) handle403(
 			Kind:         permissionEvidenceKnownActiveBoundary,
 			BoundaryPath: boundary,
 			TriggerPath:  failedPath,
-			IssueType:    IssueRemoteWriteDenied,
+			IssueType:    syncdomain.IssueRemoteWriteDenied,
 		}, nil
 	}
 
@@ -144,7 +145,7 @@ func (ph *permissionHandler) handlePermissionCheckError(
 	err error,
 	failedPath string,
 	parentFolder string,
-	actionType ActionType,
+	actionType syncdomain.ActionType,
 ) permissionEvidence {
 	if errors.Is(err, graph.ErrNotFound) {
 		ph.logger.Debug("handle403: folder not found, recording as permission denied",
@@ -187,7 +188,7 @@ func (ph *permissionHandler) remoteBoundaryEvidence(
 	errMsg string,
 	httpStatus int,
 	failedPath string,
-	actionType ActionType,
+	actionType syncdomain.ActionType,
 ) permissionEvidence {
 	_ = actionType
 
@@ -195,7 +196,7 @@ func (ph *permissionHandler) remoteBoundaryEvidence(
 		Kind:         permissionEvidenceBoundaryDenied,
 		BoundaryPath: boundary,
 		TriggerPath:  failedPath,
-		IssueType:    IssueRemoteWriteDenied,
+		IssueType:    syncdomain.IssueRemoteWriteDenied,
 		LastError:    errMsg,
 		HTTPStatus:   httpStatus,
 	}
@@ -203,7 +204,7 @@ func (ph *permissionHandler) remoteBoundaryEvidence(
 
 func (ph *permissionHandler) walkPermissionBoundary(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	startFolder string,
 	remoteRootItemID string,
 	remoteDriveID driveid.ID,
@@ -238,7 +239,7 @@ func (ph *permissionHandler) walkPermissionBoundary(
 }
 
 func resolveBoundaryRemoteItemID(
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	boundaryPath string,
 	driveID driveid.ID,
 	remoteRootItemID string,

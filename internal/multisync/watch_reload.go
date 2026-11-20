@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // reload applies the config file to the running sync. It returns an error in
@@ -18,7 +19,7 @@ import (
 // reported, WatchStopping follows. Drives that fail to start under the new
 // config are not a reload failure: they are reported as startup results.
 func (o *Orchestrator) reload(
-	ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions,
+	ctx context.Context, mode syncdomain.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,

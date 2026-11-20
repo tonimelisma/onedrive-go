@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // An applied move, in either direction and of either kind, publishes the
@@ -62,7 +64,7 @@ func TestRunOnce_AppliedMoveLeavesTheBaselineCurrent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFolder("item-a", "root", "A")
 			remote.addFolder("item-b", "root", "B")
 			remote.addFile(t, "item-f", "item-a", "f.txt", "content\n")
@@ -75,7 +77,7 @@ func TestRunOnce_AppliedMoveLeavesTheBaselineCurrent(t *testing.T) {
 			assert.Equal(t, 1, report.Moves)
 			assert.Zero(t, report.BaselineUpdates, "the move publishes the destination row itself: %+v", report)
 
-			next, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+			next, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 			require.NoError(t, err)
 			assert.Zero(t, next.BaselineUpdates+next.Uploads+next.Downloads+next.Moves+next.FolderCreates+
 				next.LocalDeletes+next.RemoteDeletes, "nothing is left to publish: %+v", next)

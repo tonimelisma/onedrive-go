@@ -21,7 +21,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
@@ -75,7 +77,7 @@ func seedConfiguredStatusDrives(t *testing.T, cfg *config.Config) {
 func queryLiveSyncState(ctx context.Context, statePath string, logger *slog.Logger) *syncStateInfo {
 	querier := &liveSyncStateQuerier{logger: logger, examplesLimit: defaultVisiblePaths}
 
-	return querier.QuerySyncState(ctx, statePath, statusStoreRootDrive, syncengine.ContentFilterConfig{})
+	return querier.QuerySyncState(ctx, statePath, statusStoreRootDrive, syncdomain.ContentFilterConfig{})
 }
 
 // printMountStatus prints one drive the way status prints it inside an
@@ -102,7 +104,7 @@ type mockSyncStateQuerier struct {
 }
 
 func (m *mockSyncStateQuerier) QuerySyncState(
-	_ context.Context, _ string, _ statusStoreRoot, _ syncengine.ContentFilterConfig,
+	_ context.Context, _ string, _ statusStoreRoot, _ syncdomain.ContentFilterConfig,
 ) *syncStateInfo {
 	return m.state
 }
@@ -112,23 +114,23 @@ func (m *mockSyncStateQuerier) QuerySyncState(
 // that holds none of that type yet, as every caller does.
 func seedObservationIssueForStatusTest(
 	t *testing.T,
-	store *syncengine.SyncStore,
-	issue *syncengine.ObservationIssue,
+	store *syncstore.SyncStore,
+	issue *syncdomain.ObservationIssue,
 ) {
 	t.Helper()
 
 	require.NoError(t, store.ReconcileObservationFindings(
 		t.Context(),
-		&syncengine.ObservationFindingsBatch{
-			Issues:            []syncengine.ObservationIssue{*issue},
-			ManagedIssueTypes: []syncengine.IssueType{issue.IssueType},
+		&syncdomain.ObservationFindingsBatch{
+			Issues:            []syncdomain.ObservationIssue{*issue},
+			ManagedIssueTypes: []syncdomain.IssueType{issue.IssueType},
 		},
 	))
 }
 
 func testShortcutStatusChild(
 	parentCID driveid.CanonicalID,
-	state syncengine.ShortcutRootState,
+	state syncshortcut.ShortcutRootState,
 ) childMountStatusInput {
 	record := testShortcutStatusRecord(parentCID, state)
 	return testShortcutStatusChildFromRecord(parentCID, &record)
@@ -136,14 +138,14 @@ func testShortcutStatusChild(
 
 func testShortcutStatusRecord(
 	parentCID driveid.CanonicalID,
-	state syncengine.ShortcutRootState,
-) syncengine.ShortcutRootRecord {
+	state syncshortcut.ShortcutRootState,
+) syncshortcut.ShortcutRootRecord {
 	const (
 		bindingID    = "binding-docs"
 		relativePath = "Shortcuts/Docs"
 	)
 	alias := filepath.Base(relativePath)
-	return syncengine.ShortcutRootRecord{
+	return syncshortcut.ShortcutRootRecord{
 		NamespaceID:       parentCID.String(),
 		BindingItemID:     bindingID,
 		RelativeLocalPath: relativePath,
@@ -158,11 +160,11 @@ func testShortcutStatusRecord(
 
 func testShortcutStatusChildFromRecord(
 	parentCID driveid.CanonicalID,
-	record *syncengine.ShortcutRootRecord,
+	record *syncshortcut.ShortcutRootRecord,
 ) childMountStatusInput {
-	metadata := syncengine.ShortcutRootStatus(record.State)
+	metadata := syncshortcut.ShortcutRootStatus(record.State)
 	parentSyncRoot := filepath.Clean("/tmp/sync-root")
-	statusView := syncengine.ShortcutRootStatusView{
+	statusView := syncshortcut.ShortcutRootStatusView{
 		MountID:          config.ChildMountID(parentCID.String(), record.BindingItemID),
 		SortPath:         record.RelativeLocalPath,
 		DisplayName:      record.LocalAlias,
@@ -213,7 +215,7 @@ func TestDriveState_PausedOverridesNoToken(t *testing.T) {
 // Validates: R-2.10.1
 func TestBuildChildStatusDrive_InheritsParentPause(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateActive)
+	child := testShortcutStatusChild(parentCID, syncshortcut.ShortcutRootStateActive)
 	paused := true
 	mount := buildChildStatusDrive(
 		t.Context(),
@@ -227,7 +229,7 @@ func TestBuildChildStatusDrive_InheritsParentPause(t *testing.T) {
 
 type shortcutStatusLifecycleCase struct {
 	name               string
-	state              syncengine.ShortcutRootState
+	state              syncshortcut.ShortcutRootState
 	displayState       string
 	reason             string
 	detail             string
@@ -241,14 +243,14 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 	cases := []shortcutStatusLifecycleCase{
 		{
 			name:         "active",
-			state:        syncengine.ShortcutRootStateActive,
+			state:        syncshortcut.ShortcutRootStateActive,
 			displayState: driveStateReady,
 		},
 		{
 			name:         "target_unavailable",
-			state:        syncengine.ShortcutRootStateTargetUnavailable,
-			displayState: string(syncengine.ShortcutRootStateTargetUnavailable),
-			reason:       string(syncengine.ShortcutRootStateTargetUnavailable),
+			state:        syncshortcut.ShortcutRootStateTargetUnavailable,
+			displayState: string(syncshortcut.ShortcutRootStateTargetUnavailable),
+			reason:       string(syncshortcut.ShortcutRootStateTargetUnavailable),
 			detail:       "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
 			action:       "Ask the owner to share it with you again, or remove the shortcut from your OneDrive.",
 			autoRetry:    boolPtr(true),
@@ -256,9 +258,9 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "local_root_unavailable",
-			state:        syncengine.ShortcutRootStateLocalRootUnavailable,
-			displayState: string(syncengine.ShortcutRootStateLocalRootUnavailable),
-			reason:       string(syncengine.ShortcutRootStateLocalRootUnavailable),
+			state:        syncshortcut.ShortcutRootStateLocalRootUnavailable,
+			displayState: string(syncshortcut.ShortcutRootStateLocalRootUnavailable),
+			reason:       string(syncshortcut.ShortcutRootStateLocalRootUnavailable),
 			detail:       "This shared folder's local folder is missing or can't be read.",
 			action:       "Restore the local folder, or delete it to discard changes that have not synced.",
 			autoRetry:    boolPtr(true),
@@ -266,9 +268,9 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "blocked_path",
-			state:        syncengine.ShortcutRootStateBlockedPath,
-			displayState: string(syncengine.ShortcutRootStateBlockedPath),
-			reason:       string(syncengine.ShortcutRootStateBlockedPath),
+			state:        syncshortcut.ShortcutRootStateBlockedPath,
+			displayState: string(syncshortcut.ShortcutRootStateBlockedPath),
+			reason:       string(syncshortcut.ShortcutRootStateBlockedPath),
 			detail:       "Something else is in the way at this shared folder's local path.",
 			action:       "Move or rename the file or folder at that path.",
 			autoRetry:    boolPtr(true),
@@ -276,9 +278,9 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "rename_ambiguous",
-			state:        syncengine.ShortcutRootStateRenameAmbiguous,
-			displayState: string(syncengine.ShortcutRootStateRenameAmbiguous),
-			reason:       string(syncengine.ShortcutRootStateRenameAmbiguous),
+			state:        syncshortcut.ShortcutRootStateRenameAmbiguous,
+			displayState: string(syncshortcut.ShortcutRootStateRenameAmbiguous),
+			reason:       string(syncshortcut.ShortcutRootStateRenameAmbiguous),
 			detail:       "More than one renamed folder could be this shared folder.",
 			action:       "Keep exactly one renamed folder, or restore the original name.",
 			autoRetry:    boolPtr(true),
@@ -286,9 +288,9 @@ func shortcutStatusLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "alias_mutation_blocked",
-			state:        syncengine.ShortcutRootStateAliasMutationBlocked,
-			displayState: string(syncengine.ShortcutRootStateAliasMutationBlocked),
-			reason:       string(syncengine.ShortcutRootStateAliasMutationBlocked),
+			state:        syncshortcut.ShortcutRootStateAliasMutationBlocked,
+			displayState: string(syncshortcut.ShortcutRootStateAliasMutationBlocked),
+			reason:       string(syncshortcut.ShortcutRootStateAliasMutationBlocked),
 			detail:       "Renaming or deleting this shared folder locally couldn't be applied in OneDrive.",
 			action:       "Check your connection and your access to the folder, or undo the local rename or delete.",
 			autoRetry:    boolPtr(true),
@@ -302,9 +304,9 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 	return []shortcutStatusLifecycleCase{
 		{
 			name:         "removed_final_drain",
-			state:        syncengine.ShortcutRootStateRemovedFinalDrain,
-			displayState: string(syncengine.ShortcutRootStateRemovedFinalDrain),
-			reason:       string(syncengine.ShortcutRootStateRemovedFinalDrain),
+			state:        syncshortcut.ShortcutRootStateRemovedFinalDrain,
+			displayState: string(syncshortcut.ShortcutRootStateRemovedFinalDrain),
+			reason:       string(syncshortcut.ShortcutRootStateRemovedFinalDrain),
 			detail:       "This shared folder was removed from your OneDrive; its last local changes are syncing before the local copy is removed.",
 			action:       "Restore access to the shared folder, or delete its local folder to discard changes that have not synced.",
 			autoRetry:    boolPtr(true),
@@ -312,9 +314,9 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "removed_cleanup_blocked",
-			state:        syncengine.ShortcutRootStateRemovedCleanupBlocked,
-			displayState: string(syncengine.ShortcutRootStateRemovedCleanupBlocked),
-			reason:       string(syncengine.ShortcutRootStateRemovedCleanupBlocked),
+			state:        syncshortcut.ShortcutRootStateRemovedCleanupBlocked,
+			displayState: string(syncshortcut.ShortcutRootStateRemovedCleanupBlocked),
+			reason:       string(syncshortcut.ShortcutRootStateRemovedCleanupBlocked),
 			detail:       "This shared folder was removed, but its local copy can't be removed.",
 			action:       "Move or delete what is in the way at that path; the next sync finishes the cleanup.",
 			autoRetry:    boolPtr(true),
@@ -322,26 +324,26 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "removed_release_pending",
-			state:        syncengine.ShortcutRootStateRemovedReleasePending,
-			displayState: string(syncengine.ShortcutRootStateRemovedReleasePending),
-			reason:       string(syncengine.ShortcutRootStateRemovedReleasePending),
+			state:        syncshortcut.ShortcutRootStateRemovedReleasePending,
+			displayState: string(syncshortcut.ShortcutRootStateRemovedReleasePending),
+			reason:       string(syncshortcut.ShortcutRootStateRemovedReleasePending),
 			detail:       "This shared folder was removed and its last changes have synced; its local copy is being removed.",
 			autoRetry:    boolPtr(true),
 			protectsPath: true,
 		},
 		{
 			name:         "removed_child_cleanup_pending",
-			state:        syncengine.ShortcutRootStateRemovedChildCleanupPending,
-			displayState: string(syncengine.ShortcutRootStateRemovedChildCleanupPending),
-			reason:       string(syncengine.ShortcutRootStateRemovedChildCleanupPending),
+			state:        syncshortcut.ShortcutRootStateRemovedChildCleanupPending,
+			displayState: string(syncshortcut.ShortcutRootStateRemovedChildCleanupPending),
+			reason:       string(syncshortcut.ShortcutRootStateRemovedChildCleanupPending),
 			detail:       "This shared folder was removed; its local sync data is being cleaned up.",
 			autoRetry:    boolPtr(true),
 		},
 		{
 			name:               "same_path_replacement_waiting",
-			state:              syncengine.ShortcutRootStateSamePathReplacementWaiting,
-			displayState:       string(syncengine.ShortcutRootStateSamePathReplacementWaiting),
-			reason:             string(syncengine.ShortcutRootStateSamePathReplacementWaiting),
+			state:              syncshortcut.ShortcutRootStateSamePathReplacementWaiting,
+			displayState:       string(syncshortcut.ShortcutRootStateSamePathReplacementWaiting),
+			reason:             string(syncshortcut.ShortcutRootStateSamePathReplacementWaiting),
 			detail:             "A new shared folder with the same name is waiting for the old one to finish syncing.",
 			autoRetry:          boolPtr(true),
 			protectsPath:       true,
@@ -349,9 +351,9 @@ func shortcutStatusRemovalLifecycleCases() []shortcutStatusLifecycleCase {
 		},
 		{
 			name:         "duplicate_target",
-			state:        syncengine.ShortcutRootStateDuplicateTarget,
-			displayState: string(syncengine.ShortcutRootStateDuplicateTarget),
-			reason:       string(syncengine.ShortcutRootStateDuplicateTarget),
+			state:        syncshortcut.ShortcutRootStateDuplicateTarget,
+			displayState: string(syncshortcut.ShortcutRootStateDuplicateTarget),
+			reason:       string(syncshortcut.ShortcutRootStateDuplicateTarget),
 			detail:       "Another shortcut in this drive already syncs the same shared folder.",
 			action:       "Remove one of the two shortcuts from your OneDrive.",
 			autoRetry:    boolPtr(true),
@@ -384,7 +386,7 @@ func buildStatusLifecycleMount(
 
 	record := testShortcutStatusRecord(parentCID, tc.state)
 	if tc.waitingReplacement != "" {
-		record.Waiting = &syncengine.ShortcutRootReplacement{
+		record.Waiting = &syncshortcut.ShortcutRootReplacement{
 			BindingItemID:     "binding-new",
 			RelativeLocalPath: tc.waitingReplacement,
 			LocalAlias:        "Docs",
@@ -474,7 +476,7 @@ func boolPtr(value bool) *bool {
 // Validates: R-2.3.3, R-2.4.8, R-2.10.4
 func TestBuildChildStatusDrive_SurfacesProtectedPaths(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-	record := testShortcutStatusRecord(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
+	record := testShortcutStatusRecord(parentCID, syncshortcut.ShortcutRootStateRemovedFinalDrain)
 	record.ProtectedPaths = []string{"Shortcuts/Docs", "Shortcuts/Old Docs"}
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusDrive(
@@ -500,8 +502,8 @@ func TestBuildStatusAccountsFromViews_NestsChildMountsUnderParent(t *testing.T) 
 			parentCID: {SyncDir: "/tmp/sync-root"},
 		},
 	}
-	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateActive)
-	shortcutRoots := map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView{
+	child := testShortcutStatusChild(parentCID, syncshortcut.ShortcutRootStateActive)
+	shortcutRoots := map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView{
 		parentCID: {child.Root},
 	}
 
@@ -529,9 +531,9 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 		ProjectionKind: statusProjectionChild,
 		DisplayName:    "Docs",
 		SyncDir:        "/tmp/sync-root/Shortcuts/Docs",
-		State:          string(syncengine.ShortcutRootStateTargetUnavailable),
+		State:          string(syncshortcut.ShortcutRootStateTargetUnavailable),
 		StateLabel:     "Shared folder unavailable",
-		StateReason:    string(syncengine.ShortcutRootStateTargetUnavailable),
+		StateReason:    string(syncshortcut.ShortcutRootStateTargetUnavailable),
 		StateDetail:    "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
 	})
 	require.NoError(t, err)
@@ -539,7 +541,7 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	output := buf.String()
 	assert.Contains(t, output, "Status: Shared folder unavailable")
 	assert.Contains(t, output, "Reason: OneDrive can't open this shared folder")
-	assert.NotContains(t, output, string(syncengine.ShortcutRootStateTargetUnavailable))
+	assert.NotContains(t, output, string(syncshortcut.ShortcutRootStateTargetUnavailable))
 	assert.Contains(t, output, "Shared folder: Managed through the parent drive")
 }
 
@@ -555,8 +557,8 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 		ProjectionKind:         statusProjectionChild,
 		DisplayName:            "Docs",
 		SyncDir:                "/tmp/sync-root/Shortcuts/Docs",
-		State:                  string(syncengine.ShortcutRootStateRemovedFinalDrain),
-		StateReason:            string(syncengine.ShortcutRootStateRemovedFinalDrain),
+		State:                  string(syncshortcut.ShortcutRootStateRemovedFinalDrain),
+		StateReason:            string(syncshortcut.ShortcutRootStateRemovedFinalDrain),
 		StateDetail:            "This shared folder was removed from your OneDrive; its last local changes are syncing before the local copy is removed.",
 		ProtectedCurrentPath:   "/tmp/sync-root/Shortcuts/Docs",
 		ProtectedReservedPaths: []string{"/tmp/sync-root/Shortcuts/Old Docs"},
@@ -574,7 +576,7 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 // Validates: R-2.10.1
 func TestBuildChildStatusDrive_UsesMountIDWithoutSyntheticSharedCanonical(t *testing.T) {
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-	record := testShortcutStatusRecord(parentCID, syncengine.ShortcutRootStateBlockedPath)
+	record := testShortcutStatusRecord(parentCID, syncshortcut.ShortcutRootStateBlockedPath)
 	record.BlockedDetail = "shortcut alias path is blocked by a local file"
 	child := testShortcutStatusChildFromRecord(parentCID, &record)
 	mount := buildChildStatusDrive(
@@ -588,7 +590,7 @@ func TestBuildChildStatusDrive_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 	assert.Equal(t, statusProjectionChild, mount.ProjectionKind)
 	assert.Empty(t, mount.CanonicalID)
 	assert.Equal(t, "Docs", statusMountLabel(&mount))
-	assert.Equal(t, string(syncengine.ShortcutRootStateBlockedPath), mount.StateReason)
+	assert.Equal(t, string(syncshortcut.ShortcutRootStateBlockedPath), mount.StateReason)
 	assert.Equal(t, "Something else is in the way at this shared folder's local path.", mount.StateDetail)
 	assert.Equal(t, "shortcut alias path is blocked by a local file", mount.StateDebugDetail)
 	assert.Contains(t, mount.RecoveryAction, "Move or rename the file or folder at that path")
@@ -613,7 +615,7 @@ func TestBuildChildStatusDrive_FinalDrainGuidesAccessRestore(t *testing.T) {
 	t.Parallel()
 
 	parentCID := driveid.MustCanonicalID("personal:alice@example.com")
-	child := testShortcutStatusChild(parentCID, syncengine.ShortcutRootStateRemovedFinalDrain)
+	child := testShortcutStatusChild(parentCID, syncshortcut.ShortcutRootStateRemovedFinalDrain)
 
 	mount := buildChildStatusDrive(
 		t.Context(),
@@ -622,8 +624,8 @@ func TestBuildChildStatusDrive_FinalDrainGuidesAccessRestore(t *testing.T) {
 		nil,
 	)
 
-	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.State)
-	assert.Equal(t, string(syncengine.ShortcutRootStateRemovedFinalDrain), mount.StateReason)
+	assert.Equal(t, string(syncshortcut.ShortcutRootStateRemovedFinalDrain), mount.State)
+	assert.Equal(t, string(syncshortcut.ShortcutRootStateRemovedFinalDrain), mount.StateReason)
 	assert.Contains(t, mount.StateDetail, "last local changes are syncing")
 	assert.Contains(t, mount.RecoveryAction, "Restore access to the shared folder")
 	assert.Contains(t, mount.RecoveryAction, "delete its local folder")
@@ -1116,65 +1118,65 @@ func TestQuerySyncState_RemoteDriftAndConditions(t *testing.T) {
 
 	require.NoError(t, db.Close())
 
-	store, err := syncengine.NewSyncStore(ctx, dbPath, logger)
+	store, err := syncstore.NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.Close(ctx))
 	}()
 
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/x.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/x.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/x.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/y.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/y.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/y.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	_, err = store.RecordRetryWorkFailure(ctx, &syncengine.RetryWorkFailure{
-		Work: syncengine.RetryWorkKey{
+	_, err = store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
+		Work: syncdomain.RetryWorkKey{
 			Path:       "/y.txt",
-			ActionType: syncengine.ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		},
 	}, func(int) time.Duration { return 0 })
 	require.NoError(t, err)
-	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
+	seedObservationIssueForStatusTest(t, store, &syncdomain.ObservationIssue{
 		Path:      "/z.txt",
 		DriveID:   testDriveID,
-		IssueType: syncengine.IssueInvalidFilename,
+		IssueType: syncdomain.IssueInvalidFilename,
 	})
 
 	info := queryLiveSyncState(t.Context(), dbPath, logger)
@@ -1199,32 +1201,32 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 	defer db.Close()
 
 	ctx := t.Context()
-	store, err := syncengine.NewSyncStore(ctx, dbPath, logger)
+	store, err := syncstore.NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.Close(ctx))
 	}()
 
-	scopeKey := syncengine.SKPermRemoteWrite("Shared/Docs")
-	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
+	scopeKey := syncdomain.SKPermRemoteWrite("Shared/Docs")
+	require.NoError(t, store.UpsertBlockScope(ctx, &syncdomain.BlockScope{
 		Key:           scopeKey,
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
-	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/a.txt",
-		ActionType: syncengine.ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 	}, scopeKey)
 	require.NoError(t, err)
-	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/b.txt",
-		ActionType: syncengine.ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 	}, scopeKey)
 	require.NoError(t, err)
-	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
+	seedObservationIssueForStatusTest(t, store, &syncdomain.ObservationIssue{
 		Path:      "/actionable.txt",
 		DriveID:   driveid.New("test-drive-id"),
-		IssueType: syncengine.IssueInvalidFilename,
+		IssueType: syncdomain.IssueInvalidFilename,
 	})
 
 	info := queryLiveSyncState(t.Context(), dbPath, logger)
@@ -1239,17 +1241,17 @@ func TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
-	store, err := syncengine.NewSyncStore(t.Context(), dbPath, logger)
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, logger)
 	require.NoError(t, err)
 
-	require.NoError(t, store.CommitMutation(t.Context(), &syncengine.BaselineMutation{
-		Action:   syncengine.ActionDownload,
+	require.NoError(t, store.CommitMutation(t.Context(), &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "/tracked.txt",
 		DriveID:  driveid.New("test-drive-id"),
 		ItemID:   "item-1",
 		ParentID: "root",
-		ItemType: syncengine.ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	walPath := dbPath + "-wal"
@@ -1290,42 +1292,42 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	defer db.Close()
 
 	ctx := t.Context()
-	store, err := syncengine.NewSyncStore(ctx, dbPath, logger)
+	store, err := syncstore.NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.Close(ctx))
 	}()
 
-	scopeKey := syncengine.SKPermRemoteWrite("Shared/Team Docs")
-	seedObservationIssueForStatusTest(t, store, &syncengine.ObservationIssue{
+	scopeKey := syncdomain.SKPermRemoteWrite("Shared/Team Docs")
+	seedObservationIssueForStatusTest(t, store, &syncdomain.ObservationIssue{
 		Path:      "/invalid:name.txt",
 		DriveID:   driveid.New("test-drive-id"),
-		IssueType: syncengine.IssueInvalidFilename,
+		IssueType: syncdomain.IssueInvalidFilename,
 	})
-	require.NoError(t, store.UpsertBlockScope(ctx, &syncengine.BlockScope{
+	require.NoError(t, store.UpsertBlockScope(ctx, &syncdomain.BlockScope{
 		Key:           scopeKey,
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 	}))
-	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/a.txt",
-		ActionType: syncengine.ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 	}, scopeKey)
 	require.NoError(t, err)
-	_, err = store.RecordBlockedRetryWork(ctx, syncengine.RetryWorkKey{
+	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/b.txt",
-		ActionType: syncengine.ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 	}, scopeKey)
 	require.NoError(t, err)
 
 	info := queryLiveSyncState(t.Context(), dbPath, logger)
 	require.NotNil(t, info)
-	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
-	sharedDescriptor := describeStatusCondition(syncengine.ConditionRemoteWriteDenied)
+	invalidDescriptor := describeStatusCondition(syncdomain.ConditionInvalidFilename)
+	sharedDescriptor := describeStatusCondition(syncdomain.ConditionRemoteWriteDenied)
 	assert.ElementsMatch(t, []statusConditionJSON{
 		{
-			ConditionKey:  string(syncengine.ConditionInvalidFilename),
-			ConditionType: string(syncengine.IssueInvalidFilename),
+			ConditionKey:  string(syncdomain.ConditionInvalidFilename),
+			ConditionType: string(syncdomain.IssueInvalidFilename),
 			Title:         invalidDescriptor.Title,
 			Reason:        invalidDescriptor.Reason,
 			Action:        invalidDescriptor.Action,
@@ -1333,8 +1335,8 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 			Paths:         []string{"/invalid:name.txt"},
 		},
 		{
-			ConditionKey:  string(syncengine.ConditionRemoteWriteDenied),
-			ConditionType: string(syncengine.IssueRemoteWriteDenied),
+			ConditionKey:  string(syncdomain.ConditionRemoteWriteDenied),
+			ConditionType: string(syncdomain.IssueRemoteWriteDenied),
 			Title:         sharedDescriptor.Title,
 			Reason:        sharedDescriptor.Reason,
 			Action:        sharedDescriptor.Action,
@@ -1365,14 +1367,14 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 						ConditionCount: 2,
 						Conditions: []statusConditionJSON{
 							{
-								ConditionKey: string(syncengine.ConditionQuotaExceeded),
+								ConditionKey: string(syncdomain.ConditionQuotaExceeded),
 								Title:        "Storage full",
 								Count:        1,
 								ScopeKind:    "drive",
 								Scope:        "Shared/Docs",
 							},
 							{
-								ConditionKey: string(syncengine.ConditionQuotaExceeded),
+								ConditionKey: string(syncdomain.ConditionQuotaExceeded),
 								Title:        "Storage full",
 								Count:        1,
 								ScopeKind:    "drive",
@@ -1401,13 +1403,13 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := describeStatusCondition(syncengine.ConditionQuotaExceeded)
+	quotaDescriptor := describeStatusCondition(syncdomain.ConditionQuotaExceeded)
 	ss := &syncStateInfo{
 		ConditionCount: 2,
 		Conditions: []statusConditionJSON{
 			{
-				ConditionKey:  string(syncengine.ConditionQuotaExceeded),
-				ConditionType: string(syncengine.IssueQuotaExceeded),
+				ConditionKey:  string(syncdomain.ConditionQuotaExceeded),
+				ConditionType: string(syncdomain.IssueQuotaExceeded),
 				Title:         quotaDescriptor.Title,
 				Reason:        quotaDescriptor.Reason,
 				Action:        quotaDescriptor.Action,
@@ -1416,8 +1418,8 @@ func TestPrintSyncStateText_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T)
 				Scope:         "Shared/Docs",
 			},
 			{
-				ConditionKey:  string(syncengine.ConditionQuotaExceeded),
-				ConditionType: string(syncengine.IssueQuotaExceeded),
+				ConditionKey:  string(syncdomain.ConditionQuotaExceeded),
+				ConditionType: string(syncdomain.IssueQuotaExceeded),
 				Title:         quotaDescriptor.Title,
 				Reason:        quotaDescriptor.Reason,
 				Action:        quotaDescriptor.Action,
@@ -1561,14 +1563,14 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 						ConditionCount: 3,
 						Conditions: []statusConditionJSON{
 							{
-								ConditionKey: string(syncengine.ConditionQuotaExceeded),
+								ConditionKey: string(syncdomain.ConditionQuotaExceeded),
 								Title:        "Storage full",
 								Count:        1,
 								ScopeKind:    "drive",
 								Scope:        "Shared/Team Docs",
 							},
 							{
-								ConditionKey: string(syncengine.ConditionInvalidFilename),
+								ConditionKey: string(syncdomain.ConditionInvalidFilename),
 								Title:        "Invalid filename",
 								Count:        2,
 								ScopeKind:    "file",
@@ -1842,16 +1844,16 @@ func TestPrintSyncStateText_WithPendingAndConditions(t *testing.T) {
 func TestPrintSyncStateText_WithConditions(t *testing.T) {
 	t.Parallel()
 
-	quotaDescriptor := describeStatusCondition(syncengine.ConditionQuotaExceeded)
-	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
-	authDescriptor := describeStatusCondition(syncengine.ConditionAuthenticationRequired)
+	quotaDescriptor := describeStatusCondition(syncdomain.ConditionQuotaExceeded)
+	invalidDescriptor := describeStatusCondition(syncdomain.ConditionInvalidFilename)
+	authDescriptor := describeStatusCondition(syncdomain.ConditionAuthenticationRequired)
 	ss := &syncStateInfo{
 		ConditionCount: 3,
 		Retrying:       2,
 		Conditions: []statusConditionJSON{
 			{
-				ConditionKey:  string(syncengine.ConditionQuotaExceeded),
-				ConditionType: string(syncengine.IssueQuotaExceeded),
+				ConditionKey:  string(syncdomain.ConditionQuotaExceeded),
+				ConditionType: string(syncdomain.IssueQuotaExceeded),
 				Title:         quotaDescriptor.Title,
 				Reason:        quotaDescriptor.Reason,
 				Action:        quotaDescriptor.Action,
@@ -1861,8 +1863,8 @@ func TestPrintSyncStateText_WithConditions(t *testing.T) {
 				Paths:         []string{"/quota/a.txt"},
 			},
 			{
-				ConditionKey:  string(syncengine.ConditionInvalidFilename),
-				ConditionType: string(syncengine.IssueInvalidFilename),
+				ConditionKey:  string(syncdomain.ConditionInvalidFilename),
+				ConditionType: string(syncdomain.IssueInvalidFilename),
 				Title:         invalidDescriptor.Title,
 				Reason:        invalidDescriptor.Reason,
 				Action:        invalidDescriptor.Action,
@@ -1870,8 +1872,8 @@ func TestPrintSyncStateText_WithConditions(t *testing.T) {
 				Paths:         []string{"/bad:name.txt", "/worse:name.txt"},
 			},
 			{
-				ConditionKey:  string(syncengine.ConditionAuthenticationRequired),
-				ConditionType: string(syncengine.IssueUnauthorized),
+				ConditionKey:  string(syncdomain.ConditionAuthenticationRequired),
+				ConditionType: string(syncdomain.IssueUnauthorized),
 				Title:         authDescriptor.Title,
 				Reason:        authDescriptor.Reason,
 				Action:        authDescriptor.Action,
@@ -2132,7 +2134,7 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 func createTestStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	store, err := syncengine.NewSyncStore(t.Context(), dbPath, slog.New(slog.DiscardHandler))
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 }

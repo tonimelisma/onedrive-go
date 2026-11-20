@@ -1,0 +1,154 @@
+package syncstore
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// A stored time is written by one of two encodings and read back by name.
+// Times compared by order and remote modification times go through
+// StoredTimeNano, which saturates; local modification, change and birth
+// times keep UnixNano, are compared only with themselves and are never turned
+// back into a time. These tests read the product source: a new conversion
+// fails them until it is declared below with what it is, so a new stored time
+// has to choose its encoder and its decoder.
+
+const (
+	// What a time.Unix(0, n) call decodes.
+	decodesOrderedTime   = "an ordered stored time"
+	decodesRemoteModTime = "a stored remote modification time"
+	decodesRangeBound    = "a bound of the stored range"
+
+	// What a plain t.UnixNano() call encodes.
+	encodesThroughTheSaturatingEncoder = "StoredTimeNano itself"
+	encodesLocalTimeForEquality        = "a local time compared for equality"
+
+	// A value that lives in memory only, either way: a clock reading, an
+	// activity stamp, a time shown in an error.
+	inMemoryValue = "an in-memory value"
+)
+
+// Validates: R-6.7.34, R-2.10.7
+func TestStoredTimes_EveryDecodeIsDeclared(t *testing.T) {
+	t.Parallel()
+
+	declared := map[string]map[string]int{
+		"internal/sync/syncdomain/domain_stored_time.go":         {decodesRangeBound: 2, decodesRemoteModTime: 1},
+		"internal/sync/syncstore/block_scope_rows.go":            {decodesOrderedTime: 1},
+		"internal/sync/engine_runtime_lifecycle.go":              {decodesOrderedTime: 1},
+		"internal/sync/engine_runtime_owners.go":                 {decodesOrderedTime: 1},
+		"internal/sync/engine_watch_maintenance.go":              {decodesOrderedTime: 3},
+		"internal/sync/syncdomain/domain_pending_create.go":      {decodesOrderedTime: 1},
+		"internal/sync/internal/syncobserve/local_hash_reuse.go": {inMemoryValue: 1},
+		"internal/sync/engine_housekeeping.go":                   {inMemoryValue: 1},
+	}
+
+	found := countProductCalls(t, isTimeUnixFromNanoseconds, "internal/sync", "internal/driveops")
+	assert.Equal(t, declaredTotals(declared), found,
+		"every time.Unix(0, n) in internal/sync and internal/driveops is declared with what it decodes")
+}
+
+// Validates: R-6.7.34, R-2.10.7
+func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
+	t.Parallel()
+
+	declared := map[string]map[string]int{
+		"internal/sync/syncdomain/domain_stored_time.go":                {encodesThroughTheSaturatingEncoder: 1},
+		"internal/sync/internal/syncobserve/scanner.go":                 {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
+		"internal/sync/internal/syncobserve/observer_local_handlers.go": {encodesLocalTimeForEquality: 4, inMemoryValue: 1},
+		"internal/sync/internal/syncexec/executor_preconditions.go":     {encodesLocalTimeForEquality: 3},
+		"internal/sync/internal/syncexec/executor_delete.go":            {encodesLocalTimeForEquality: 1, inMemoryValue: 2},
+		"internal/sync/internal/syncexec/executor_transfer.go":          {encodesLocalTimeForEquality: 2},
+		"internal/sync/internal/syncobserve/local_hash_reuse.go":        {encodesLocalTimeForEquality: 1},
+		"internal/sync/internal/syncobserve/scanner_hash_cache.go":      {encodesLocalTimeForEquality: 1},
+		"internal/sync/engine_shortcut_release.go":                      {encodesLocalTimeForEquality: 1},
+		"internal/sync/engine_housekeeping.go":                          {inMemoryValue: 1},
+	}
+
+	found := countProductCalls(t, isPlainUnixNano, "internal/sync")
+	assert.Equal(t, declaredTotals(declared), found,
+		"every plain UnixNano() in internal/sync is declared with what it encodes; a stored ordered or remote time uses StoredTimeNano")
+}
+
+func declaredTotals(declared map[string]map[string]int) map[string]int {
+	totals := make(map[string]int, len(declared))
+	for file, kinds := range declared {
+		for _, count := range kinds {
+			totals[file] += count
+		}
+	}
+
+	return totals
+}
+
+// countProductCalls counts, per non-test Go file under the repository-relative
+// directories, the calls match accepts. The sync tree's test-helper packages
+// are test code and are left out.
+func countProductCalls(t *testing.T, match func(*ast.CallExpr) bool, dirs ...string) map[string]int {
+	t.Helper()
+
+	root := filepath.Join("..", "..", "..")
+	counts := map[string]int{}
+	for _, dir := range dirs {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			name := entry.Name()
+			if entry.IsDir() {
+				if name == "testdata" || name == "syncfixture" || name == "syncstoretest" {
+					return filepath.SkipDir
+				}
+
+				return nil
+			}
+			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return fmt.Errorf("relative path of %s: %w", path, relErr)
+			}
+			fset := token.NewFileSet()
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if parseErr != nil {
+				return fmt.Errorf("parse %s: %w", path, parseErr)
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				if call, ok := node.(*ast.CallExpr); ok && match(call) {
+					counts[filepath.ToSlash(rel)]++
+				}
+				return true
+			})
+
+			return nil
+		})
+		require.NoError(t, err)
+	}
+
+	return counts
+}
+
+func isTimeUnixFromNanoseconds(call *ast.CallExpr) bool {
+	if !isSelector(call.Fun, "time", "Unix") || len(call.Args) != 2 {
+		return false
+	}
+	seconds, ok := call.Args[0].(*ast.BasicLit)
+
+	return ok && seconds.Kind == token.INT && seconds.Value == "0"
+}
+
+func isPlainUnixNano(call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+
+	return ok && selector.Sel.Name == "UnixNano" && len(call.Args) == 0
+}

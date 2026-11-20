@@ -16,6 +16,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -35,9 +40,9 @@ func TestPostSyncHousekeeping_SkipsConfiguredChildRoots(t *testing.T) {
 
 	flow := &engineFlow{
 		engine: &Engine{
-			syncTree:      mustOpenSyncTree(t, syncRoot),
-			logger:        testLogger(t),
-			contentFilter: ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Docs"}},
+			syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
+			logger:        syncfixture.TestLogger(t),
+			contentFilter: syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Docs"}},
 		},
 	}
 	flow.deps = newRuntimeDeps(flow.engine)
@@ -59,10 +64,10 @@ func TestPostSyncHousekeeping_SkipsProtectedShortcutRoots(t *testing.T) {
 
 	flow := &engineFlow{
 		engine: &Engine{
-			syncTree:      mustOpenSyncTree(t, syncRoot),
-			logger:        testLogger(t),
-			contentFilter: ContentFilterConfig{},
-			protectedRoots: []ProtectedRoot{{
+			syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
+			logger:        syncfixture.TestLogger(t),
+			contentFilter: syncdomain.ContentFilterConfig{},
+			protectedRoots: []syncshortcut.ProtectedRoot{{
 				Path:      "Shared Project",
 				BindingID: "shortcut-binding",
 			}},
@@ -99,8 +104,8 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 		message: protectedRootRefreshRecoveredMessage,
 		signal:  refreshed,
 	})
-	eng, syncRoot := newTestEngineWithLogger(t, &engineMockClient{}, logger)
-	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	eng, syncRoot := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
+	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 	ack := eng.ShortcutChildAckHandle()
 
 	const rounds = 10
@@ -115,8 +120,8 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 			case <-stop:
 				return
 			case <-refreshed:
-				_, err := ack.AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-					Ref: NewShortcutChildAckRefForTest("binding-1"),
+				_, err := ack.AcknowledgeChildFinalDrain(t.Context(), syncshortcut.ShortcutChildDrainAck{
+					Ref: syncshortcut.NewShortcutChildAckRefForTest("binding-1"),
 				})
 				acked <- err
 			}
@@ -129,7 +134,7 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 		seedRemovedSharedFolders(t, eng.Engine, syncRoot)
 		eng.protectedRootRefreshFailing = true
 		eng.flow.postSyncHousekeeping(t.Context())
-		require.NoError(t, receiveWithin[error](t, acked,
+		require.NoError(t, syncfixture.ReceiveWithin[error](t, acked,
 			"the final-drain acknowledgement, which starts when housekeeping logs its refresh recovery line"))
 		assert.Empty(t, eng.currentProtectedRoots(),
 			"the acknowledgement rewrote the list housekeeping had just refreshed")
@@ -169,27 +174,27 @@ func seedRemovedSharedFolders(t *testing.T, eng *Engine, syncRoot string) {
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Docs"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Notes"), 0o700))
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{
 		{
-			NamespaceID:       shortcutNamespaceTestID,
+			NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 			BindingItemID:     "binding-1",
 			RelativeLocalPath: "Shared/Docs",
 			LocalAlias:        "Docs",
 			RemoteDriveID:     driveid.New("drive-1"),
 			RemoteItemID:      "target-1",
 			RemoteIsFolder:    true,
-			State:             ShortcutRootStateRemovedFinalDrain,
+			State:             syncshortcut.ShortcutRootStateRemovedFinalDrain,
 			ProtectedPaths:    []string{"Shared/Docs"},
 		},
 		{
-			NamespaceID:       shortcutNamespaceTestID,
+			NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 			BindingItemID:     "binding-2",
 			RelativeLocalPath: "Shared/Notes",
 			LocalAlias:        "Notes",
 			RemoteDriveID:     driveid.New("drive-1"),
 			RemoteItemID:      "target-2",
 			RemoteIsFolder:    true,
-			State:             ShortcutRootStateRemovedReleasePending,
+			State:             syncshortcut.ShortcutRootStateRemovedReleasePending,
 			ProtectedPaths:    []string{"Shared/Notes"},
 		},
 	}))
@@ -210,9 +215,9 @@ func TestPostSyncHousekeeping_RespectsIncludedDirs(t *testing.T) {
 
 	flow := &engineFlow{
 		engine: &Engine{
-			syncTree:      mustOpenSyncTree(t, syncRoot),
-			logger:        testLogger(t),
-			contentFilter: ContentFilterConfig{IncludedDirs: []string{"Projects"}},
+			syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
+			logger:        syncfixture.TestLogger(t),
+			contentFilter: syncdomain.ContentFilterConfig{IncludedDirs: []string{"Projects"}},
 		},
 	}
 	flow.deps = newRuntimeDeps(flow.engine)
@@ -225,12 +230,12 @@ func TestPostSyncHousekeeping_RespectsIncludedDirs(t *testing.T) {
 
 // closedTestStore returns a store whose database is already closed, so every
 // query fails the way an unreadable state database does.
-func closedTestStore(t *testing.T) *SyncStore {
+func closedTestStore(t *testing.T) *syncstore.SyncStore {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "closed.db")
-	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600))
-	store, err := OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
+	require.NoError(t, os.WriteFile(dbPath, syncstoretest.LoadTestStoreTemplate(t), 0o600))
+	store, err := syncstore.OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 
@@ -252,8 +257,8 @@ func TestEngineClose_ReportsStaleSessionCleanupWithTheCount(t *testing.T) {
 			t.Skip("the superuser ignores folder modes")
 		}
 
-		logs, logger := newDebugLogBuffer()
-		eng, syncRoot := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+		logs, logger := syncfixture.NewDebugLogBuffer()
+		eng, syncRoot := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 		makeReadOnlyForTest(t, saveStaleEngineSession(t, filepath.Join(filepath.Dir(syncRoot), "data")))
 
 		require.NoError(t, eng.Close(t.Context()))
@@ -268,8 +273,8 @@ func TestEngineClose_ReportsStaleSessionCleanupWithTheCount(t *testing.T) {
 	t.Run("removed", func(t *testing.T) {
 		t.Parallel()
 
-		logs, logger := newDebugLogBuffer()
-		eng, syncRoot := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+		logs, logger := syncfixture.NewDebugLogBuffer()
+		eng, syncRoot := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 		saveStaleEngineSession(t, filepath.Join(filepath.Dir(syncRoot), "data"))
 
 		require.NoError(t, eng.Close(t.Context()))
@@ -286,8 +291,8 @@ func TestEngineClose_ReportsStaleSessionCleanupWithTheCount(t *testing.T) {
 func saveStaleEngineSession(t *testing.T, dataDir string) string {
 	t.Helper()
 
-	store := driveops.NewSessionStore(dataDir, testLogger(t))
-	require.NoError(t, store.Save(engineTestDriveID, "/old.txt", &driveops.SessionRecord{SessionURL: "https://example.com/old"}))
+	store := driveops.NewSessionStore(dataDir, syncfixture.TestLogger(t))
+	require.NoError(t, store.Save(syncfixture.EngineTestDriveID, "/old.txt", &driveops.SessionRecord{SessionURL: "https://example.com/old"}))
 	saved, err := filepath.Glob(filepath.Join(dataDir, "*", "*.json"))
 	require.NoError(t, err)
 	require.Len(t, saved, 1, "one saved session file")
@@ -338,15 +343,15 @@ func TestPostSyncHousekeeping_SkipsTransferCleanupWhenProtectedRootsCannotBeRead
 	require.NoError(t, os.WriteFile(rootPartial, []byte("root"), 0o600))
 	require.NoError(t, os.WriteFile(childPartial, []byte("child"), 0o600))
 
-	logBuf, logger := newDebugLogBuffer()
+	logBuf, logger := syncfixture.NewDebugLogBuffer()
 	broken := closedTestStore(t)
 	flow := &engineFlow{
 		engine: &Engine{
-			syncTree:            mustOpenSyncTree(t, syncRoot),
+			syncTree:            syncfixture.MustOpenSyncTree(t, syncRoot),
 			logger:              logger,
 			baseline:            broken,
-			shortcutNamespaceID: shortcutNamespaceTestID,
-			contentFilter:       ContentFilterConfig{},
+			shortcutNamespaceID: syncfixture.ShortcutNamespaceTestID,
+			contentFilter:       syncdomain.ContentFilterConfig{},
 		},
 	}
 	flow.deps = newRuntimeDeps(flow.engine)
@@ -365,7 +370,7 @@ func TestPostSyncHousekeeping_SkipsTransferCleanupWhenProtectedRootsCannotBeRead
 	assert.Equal(t, 1, countLogLines(logBuf.String(), "failed again"))
 
 	// Recovery: the store reads again, cleanup resumes and the streak ends.
-	flow.engine.baseline = newTestStore(t)
+	flow.engine.baseline = syncstoretest.NewTestStore(t)
 	flow.deps = newRuntimeDeps(flow.engine)
 	flow.postSyncHousekeeping(t.Context())
 	assert.NoFileExists(t, rootPartial, "cleanup runs once the protected roots are current")
@@ -393,14 +398,14 @@ func TestPostSyncHousekeeping_CanceledContextIsQuiet(t *testing.T) {
 	rootPartial := filepath.Join(syncRoot, testOwnedPartialName("root.txt"))
 	require.NoError(t, os.WriteFile(rootPartial, []byte("root"), 0o600))
 
-	logBuf, logger := newDebugLogBuffer()
+	logBuf, logger := syncfixture.NewDebugLogBuffer()
 	flow := &engineFlow{
 		engine: &Engine{
-			syncTree:            mustOpenSyncTree(t, syncRoot),
+			syncTree:            syncfixture.MustOpenSyncTree(t, syncRoot),
 			logger:              logger,
-			baseline:            newTestStore(t),
-			shortcutNamespaceID: shortcutNamespaceTestID,
-			contentFilter:       ContentFilterConfig{},
+			baseline:            syncstoretest.NewTestStore(t),
+			shortcutNamespaceID: syncfixture.ShortcutNamespaceTestID,
+			contentFilter:       syncdomain.ContentFilterConfig{},
 		},
 	}
 	flow.deps = newRuntimeDeps(flow.engine)
@@ -450,9 +455,9 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 				locked := filepath.Join(syncRoot, "locked")
 				require.NoError(t, os.Mkdir(locked, 0o700))
 				eng := &Engine{
-					syncTree:      mustOpenSyncTree(t, syncRoot),
+					syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
 					logger:        logger,
-					contentFilter: ContentFilterConfig{},
+					contentFilter: syncdomain.ContentFilterConfig{},
 				}
 
 				return eng, func() string {
@@ -473,10 +478,10 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 
 				dataDir := t.TempDir()
 				eng := &Engine{
-					syncTree:      mustOpenSyncTree(t, t.TempDir()),
+					syncTree:      syncfixture.MustOpenSyncTree(t, t.TempDir()),
 					sessionStore:  driveops.NewSessionStore(dataDir, logger),
 					logger:        logger,
-					contentFilter: ContentFilterConfig{},
+					contentFilter: syncdomain.ContentFilterConfig{},
 				}
 
 				return eng, func() string { return saveStaleEngineSession(t, dataDir) }
@@ -488,7 +493,7 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			logs, logger := newDebugLogBuffer()
+			logs, logger := syncfixture.NewDebugLogBuffer()
 			eng, leaveLeftover := tc.arrange(t, logger)
 			flow := &engineFlow{engine: eng}
 			flow.deps = newRuntimeDeps(eng)
@@ -513,7 +518,7 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 
 			// Recovery: the folder is writable again, the leftover goes and
 			// the streak ends. A clean pass after that says nothing more.
-			setTestDirPermissions(t, dir, 0o700)
+			syncfixture.SetTestDirPermissions(t, dir, 0o700)
 			flow.postSyncHousekeeping(t.Context())
 			flow.postSyncHousekeeping(t.Context())
 			assert.Zero(t, leftovers())
@@ -523,7 +528,7 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 
 			// A new streak is reported once more.
 			leaveLeftover()
-			setTestDirPermissions(t, dir, 0o500)
+			syncfixture.SetTestDirPermissions(t, dir, 0o500)
 			flow.postSyncHousekeeping(t.Context())
 			assert.Equal(t, 2, countLogLines(logs.String(), tc.warn), "a new streak is reported once more")
 		})
@@ -550,11 +555,11 @@ func TestPurgeExpiredTrash_WarnsOncePerFailureStreak(t *testing.T) {
 	}
 	breakTrash()
 
-	logBuf, logger := newDebugLogBuffer()
+	logBuf, logger := syncfixture.NewDebugLogBuffer()
 	eng := &Engine{
 		trash:  localtrash.Open(trashPath, nil),
 		logger: logger,
-		clock:  newManualClock(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		clock:  syncfixture.NewManualClock(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
 	}
 
 	const warnLine = "Could not remove expired files from the sync trash"

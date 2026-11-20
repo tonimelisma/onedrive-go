@@ -13,6 +13,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // gatedUploadClient parks every upload until the test releases it and
@@ -35,34 +37,34 @@ func newGatedUploadClient() *gatedUploadClient {
 
 // wrap gates every upload path of inner (creates, replacements and simple
 // uploads); observation and folder creates stay free.
-func (c *gatedUploadClient) wrap(inner *engineMockClient) *engineMockClient {
+func (c *gatedUploadClient) wrap(inner *syncfixture.EngineMockClient) *syncfixture.EngineMockClient {
 	out := *inner
-	out.uploadFn = func(
+	out.UploadFn = func(
 		ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
 		if err := c.admit(ctx); err != nil {
 			return nil, err
 		}
 		defer c.leave()
-		return inner.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
+		return inner.UploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
 	}
-	out.uploadCreatingFn = func(
+	out.UploadCreatingFn = func(
 		ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 	) (*graph.Item, error) {
 		if err := c.admit(ctx); err != nil {
 			return nil, err
 		}
 		defer c.leave()
-		return inner.uploadCreatingFn(ctx, parentID, name, content, size, onCreated)
+		return inner.UploadCreatingFn(ctx, parentID, name, content, size, onCreated)
 	}
-	out.uploadToItemFn = func(
+	out.UploadToItemFn = func(
 		ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
 		if err := c.admit(ctx); err != nil {
 			return nil, err
 		}
 		defer c.leave()
-		return inner.uploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
+		return inner.UploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 	}
 
 	return &out
@@ -127,7 +129,7 @@ func (c *gatedUploadClient) waitArrivals(t *testing.T, n int) {
 	for c.arrivalCount() < n {
 		select {
 		case <-c.arrived:
-		case <-time.After(eventWait):
+		case <-time.After(syncfixture.EventWait):
 			require.Failf(t, "uploads did not arrive", "waited for %d arrivals, have %d", n, c.arrivalCount())
 		}
 	}
@@ -161,16 +163,16 @@ func newColdStartTrace() *coldStartTrace {
 }
 
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
-func (tr *coldStartTrace) record(event DebugEvent) {
+func (tr *coldStartTrace) record(event syncdomain.DebugEvent) {
 	var line string
-	if event.Type == EngineDebugEventColdStartAllowanceRaised {
+	if event.Type == syncdomain.EngineDebugEventColdStartAllowanceRaised {
 		line = fmt.Sprintf("raised(%d)", event.Count)
 		select {
 		case tr.raised <- event.Count:
 		default:
 		}
 	}
-	if event.Type == EngineDebugEventColdStartHandedOver {
+	if event.Type == syncdomain.EngineDebugEventColdStartHandedOver {
 		line = "handed-over"
 		select {
 		case tr.handedOver <- struct{}{}:
@@ -207,7 +209,7 @@ func (tr *coldStartTrace) waitHandedOver(t *testing.T) {
 
 	select {
 	case <-tr.handedOver:
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "the slow start was not handed over to a scope")
 	}
 }
@@ -218,7 +220,7 @@ func (tr *coldStartTrace) waitRaised(t *testing.T, want int) {
 	select {
 	case got := <-tr.raised:
 		require.Equal(t, want, got, "slow-start allowance")
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Failf(t, "allowance not raised", "waited for the allowance to reach %d", want)
 	}
 }
@@ -244,7 +246,7 @@ func TestColdStart_AllowanceDoublesPerRoundToThePoolSize(t *testing.T) {
 
 			s := newActionScheduler()
 			s.resetColdStart(tc.ceiling)
-			ta := &TrackedAction{Action: Action{Type: ActionUpload, Path: "a.txt", DriveID: driveid.New(engineTestDriveID)}}
+			ta := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "a.txt", DriveID: driveid.New(syncfixture.EngineTestDriveID)}}
 			assert.Equal(t, min(2, tc.ceiling), s.coldStartRampFor(coldStartTarget(ta)).allowance)
 
 			var raised []int
@@ -262,29 +264,29 @@ func TestColdStart_AllowanceDoublesPerRoundToThePoolSize(t *testing.T) {
 func TestColdStart_HandOverOpensTheTargetToTheScope(t *testing.T) {
 	t.Parallel()
 
-	driveA := driveid.New(engineTestDriveID)
+	driveA := driveid.New(syncfixture.EngineTestDriveID)
 	driveB := driveid.New("other-drive")
 	s := newActionScheduler()
 	s.resetColdStart(8)
-	a := &TrackedAction{Action: Action{Type: ActionUpload, Path: "a.txt", DriveID: driveA}}
-	b := &TrackedAction{Action: Action{Type: ActionUpload, Path: "b.txt", DriveID: driveB}}
-	local := &TrackedAction{Action: Action{Type: ActionLocalDelete, Path: "c.txt"}}
+	a := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "a.txt", DriveID: driveA}}
+	b := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "b.txt", DriveID: driveB}}
+	local := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionLocalDelete, Path: "c.txt"}}
 
-	a2 := &TrackedAction{ID: 2, Action: Action{Type: ActionUpload, Path: "a2.txt", DriveID: driveA}}
+	a2 := &syncdomain.TrackedAction{ID: 2, Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "a2.txt", DriveID: driveA}}
 	s.markRunning(a)
 	s.markRunning(a2)
-	assert.False(t, s.coldStartAdmits(&TrackedAction{ID: 3, Action: a.Action}), "two in flight is the opening allowance")
+	assert.False(t, s.coldStartAdmits(&syncdomain.TrackedAction{ID: 3, Action: a.Action}), "two in flight is the opening allowance")
 	assert.True(t, s.coldStartAdmits(b), "each target ramps on its own")
 	assert.True(t, s.coldStartAdmits(local), "an action that sends nothing to a drive is never gated")
 
-	assert.Equal(t, []string{a.Action.ThrottleTargetKey()}, s.handOverColdStart(SKThrottleDrive(driveA)))
-	assert.True(t, s.coldStartAdmits(&TrackedAction{ID: 3, Action: a.Action}), "the scope owns the drive's admission now")
-	assert.Empty(t, s.handOverColdStart(SKThrottleDrive(driveA)), "said once")
-	assert.Empty(t, s.handOverColdStart(SKQuotaOwn()), "a quota scope says nothing about request rate")
+	assert.Equal(t, []string{a.Action.ThrottleTargetKey()}, s.handOverColdStart(syncdomain.SKThrottleDrive(driveA)))
+	assert.True(t, s.coldStartAdmits(&syncdomain.TrackedAction{ID: 3, Action: a.Action}), "the scope owns the drive's admission now")
+	assert.Empty(t, s.handOverColdStart(syncdomain.SKThrottleDrive(driveA)), "said once")
+	assert.Empty(t, s.handOverColdStart(syncdomain.SKQuotaOwn()), "a quota scope says nothing about request rate")
 	assert.Zero(t, s.noteColdStartSuccess(a), "a handed-over target no longer ramps")
 
-	assert.ElementsMatch(t, []string{b.Action.ThrottleTargetKey()}, s.handOverColdStart(SKService()))
-	c := &TrackedAction{Action: Action{Type: ActionUpload, Path: "d.txt", DriveID: driveid.New("third-drive")}}
+	assert.ElementsMatch(t, []string{b.Action.ThrottleTargetKey()}, s.handOverColdStart(syncdomain.SKService()))
+	c := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "d.txt", DriveID: driveid.New("third-drive")}}
 	assert.True(t, s.coldStartRampFor(coldStartTarget(c)).handedOver, "a service scope takes every later target too")
 
 	s.resetColdStart(8)
@@ -307,7 +309,7 @@ func TestColdStart_OneShotRampsInFlightFromTwo(t *testing.T) {
 		workers = 8
 	)
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	gate := newGatedUploadClient()
 	eng, syncRoot := newTestEngine(t, gate.wrap(remote.client(t)))
@@ -315,13 +317,13 @@ func TestColdStart_OneShotRampsInFlightFromTwo(t *testing.T) {
 	trace := newColdStartTrace()
 	eng.SetDebugEventHook(trace.record)
 	for i := range files {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
+		syncfixture.WriteLocalFile(t, syncRoot, fmt.Sprintf("file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
 	}
 
 	trace.beginPass()
 	runErr := make(chan error, 1)
 	go func() {
-		_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		runErr <- err
 	}()
 
@@ -343,7 +345,7 @@ func TestColdStart_OneShotRampsInFlightFromTwo(t *testing.T) {
 	select {
 	case err := <-runErr:
 		require.NoError(t, err)
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "the pass did not finish")
 	}
 
@@ -370,9 +372,9 @@ type coldStartHandOverRun struct {
 	h        *syncHarness
 	limiter  *throttleWindowClient
 	gate     *gatedUploadClient
-	clock    *manualClock
+	clock    *syncfixture.ManualClock
 	trace    *coldStartTrace
-	scopeKey ScopeKey
+	scopeKey syncdomain.ScopeKey
 }
 
 const (
@@ -386,9 +388,9 @@ const (
 func newColdStartHandOverRun(t *testing.T) *coldStartHandOverRun {
 	t.Helper()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
-	clock := newManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
 	limiter := newThrottleWindowClient(clock.Now, coldStartHandOverBudget, coldStartHandOverWindow)
 	gate := newGatedUploadClient()
 	eng, syncRoot := newTestEngine(t, gate.wrap(limiter.wrap(remote.client(t))))
@@ -398,12 +400,12 @@ func newColdStartHandOverRun(t *testing.T) *coldStartHandOverRun {
 	eng.SetDebugEventHook(trace.record)
 	h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 	for i := range coldStartHandOverFiles {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
+		syncfixture.WriteLocalFile(t, syncRoot, fmt.Sprintf("file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
 	}
 	h.beginRound(t)
 
 	return &coldStartHandOverRun{
-		h: h, limiter: limiter, gate: gate, clock: clock, trace: trace, scopeKey: SKThrottleDrive(driveID),
+		h: h, limiter: limiter, gate: gate, clock: clock, trace: trace, scopeKey: syncdomain.SKThrottleDrive(driveID),
 	}
 }
 
@@ -414,14 +416,14 @@ func newColdStartHandOverRun(t *testing.T) *coldStartHandOverRun {
 // workers (four in flight, the 429 among them): they are the bounded cost
 // of the episode, and nothing follows them. It returns the scope as
 // persisted after the pass.
-func (run *coldStartHandOverRun) runThrottledFirstPass(t *testing.T) BlockScope {
+func (run *coldStartHandOverRun) runThrottledFirstPass(t *testing.T) syncdomain.BlockScope {
 	t.Helper()
 
 	gate, trace := run.gate, run.trace
 	trace.beginPass()
 	runErr := make(chan error, 1)
 	go func() {
-		_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		_, err := run.h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		runErr <- err
 	}()
 	gate.waitArrivals(t, 2)
@@ -441,7 +443,7 @@ func (run *coldStartHandOverRun) runThrottledFirstPass(t *testing.T) BlockScope 
 	select {
 	case err := <-runErr:
 		require.NoError(t, err)
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "the first pass did not finish")
 	}
 	assert.Equal(t, sentWhenThrottled, gate.arrivalCount(), "nothing more is sent after the 429 is applied")
@@ -465,13 +467,13 @@ func (run *coldStartHandOverRun) runThrottledFirstPass(t *testing.T) BlockScope 
 // runProbationPass is pass 2, started at the trial deadline under the
 // persisted scope: the scope's ramp paces it, the slow start does not, and
 // the backlog completes.
-func (run *coldStartHandOverRun) runProbationPass(t *testing.T, block BlockScope) {
+func (run *coldStartHandOverRun) runProbationPass(t *testing.T, block syncdomain.BlockScope) {
 	t.Helper()
 
 	run.limiter.setBudget(1000)
 	run.clock.Advance(block.NextTrialAt.Sub(run.clock.Now()))
 	run.trace.beginPass()
-	_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := run.h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, coldStartHandOverFiles, run.h.remote.uploads)
 	_, ok := getTestBlockScope(run.h.eng, run.scopeKey)
@@ -484,12 +486,12 @@ func (run *coldStartHandOverRun) runFreshPass(t *testing.T) {
 	t.Helper()
 
 	for i := range coldStartHandOverMoreFiles {
-		writeLocalFile(t, run.h.syncRoot, fmt.Sprintf("more-%02d.txt", i), fmt.Sprintf("more %d\n", i))
+		syncfixture.WriteLocalFile(t, run.h.syncRoot, fmt.Sprintf("more-%02d.txt", i), fmt.Sprintf("more %d\n", i))
 	}
 	run.h.beginRound(t)
 	run.clock.Advance(coldStartHandOverWindow)
 	run.trace.beginPass()
-	_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := run.h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, coldStartHandOverFiles+coldStartHandOverMoreFiles, run.h.remote.uploads)
 }
@@ -536,20 +538,20 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 	rt.sched.resetColdStart(eng.workerPoolSize())
 	ctx := t.Context()
 
-	uploads := make([]*TrackedAction, 0, 7)
+	uploads := make([]*syncdomain.TrackedAction, 0, 7)
 	for i := range 7 {
-		ta := rt.sched.graph.Add(&Action{
-			Type:    ActionUpload,
+		ta := rt.sched.graph.Add(&syncdomain.Action{
+			Type:    syncdomain.ActionUpload,
 			Path:    fmt.Sprintf("file-%d.txt", i),
 			DriveID: eng.driveID,
-			View:    &PathView{Path: fmt.Sprintf("file-%d.txt", i)},
+			View:    &syncdomain.PathView{Path: fmt.Sprintf("file-%d.txt", i)},
 		}, int64(i+1), nil)
 		require.NotNil(t, ta)
 		uploads = append(uploads, ta)
 	}
 	rt.replaceOutbox(uploads)
 
-	dispatch := func() *TrackedAction {
+	dispatch := func() *syncdomain.TrackedAction {
 		ch, next := rt.dispatchChannelForOutbox()
 		if ch == nil {
 			return nil
@@ -558,9 +560,9 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 		rt.handleWatchDispatch(next)
 		return ta
 	}
-	complete := func(ta *TrackedAction) {
+	complete := func(ta *syncdomain.TrackedAction) {
 		t.Helper()
-		ready, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(ta), &Baseline{})
+		ready, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(ta), &syncdomain.Baseline{})
 		require.NoError(t, err)
 		assert.Empty(t, ready)
 	}

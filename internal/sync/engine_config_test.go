@@ -16,6 +16,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -35,7 +40,7 @@ func testEngineMountConfig(syncDir string) *EngineMountConfig {
 		RemoteRootItemID:       "mount-root-id",
 		RemoteRootDeltaCapable: false,
 		EnableWebsocket:        true,
-		LocalRules: LocalObservationRules{
+		LocalRules: syncdomain.LocalObservationRules{
 			RejectSharePointRootForms: true,
 		},
 		TransferWorkers: 3,
@@ -69,7 +74,7 @@ func (s *configTestPathConvergenceStub) PermanentDeleteResolvedPath(_ context.Co
 func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
@@ -77,7 +82,7 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 	mountCfg.DriveType = driveid.MustCanonicalID("personal:test@example.com").DriveType()
 	mountCfg.RemoteRootItemID = ""
 	mountCfg.EnableWebsocket = false
-	mountCfg.LocalRules = LocalObservationRules{}
+	mountCfg.LocalRules = syncdomain.LocalObservationRules{}
 
 	eng, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, logger, nil, false)
 	require.NoError(t, err)
@@ -102,24 +107,24 @@ func TestNewMountEngine_PropagatesOrdinaryMountConfig(t *testing.T) {
 func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	mountCfg := testEngineMountConfig(syncDir)
-	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
+	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutNamespaceTestID,
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateRemovedFinalDrain,
+		State:             syncshortcut.ShortcutRootStateRemovedFinalDrain,
 		ProtectedPaths:    []string{"Shared/Docs", "Shared/Old Docs"},
 		LocalRootIdentity: &synctree.FileIdentity{Device: 7, Inode: 9},
 	}}))
@@ -142,24 +147,24 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	mountCfg := testEngineMountConfig(syncDir)
-	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
+	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutNamespaceTestID,
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateRemovedChildCleanupPending,
+		State:             syncshortcut.ShortcutRootStateRemovedChildCleanupPending,
 	}}))
 	require.NoError(t, store.Close(t.Context()))
 
@@ -175,7 +180,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
@@ -207,7 +212,7 @@ func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
 func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
@@ -218,7 +223,7 @@ func TestNewMountEngine_UsesMountConfigNotSessionResolvedFields(t *testing.T) {
 	mountCfg.AccountEmail = "mount-owner@example.com"
 	mountCfg.RemoteRootItemID = "mount-owned-root-id"
 	mountCfg.EnableWebsocket = false
-	mountCfg.LocalRules = LocalObservationRules{}
+	mountCfg.LocalRules = syncdomain.LocalObservationRules{}
 
 	eng, err := NewMountEngine(t.Context(), session, mountCfg, logger, nil, false)
 	require.NoError(t, err)
@@ -246,7 +251,7 @@ func TestNewMountEngine_RequiresSyncRoot(t *testing.T) {
 	mountCfg := testEngineMountConfig(t.TempDir())
 	mountCfg.SyncRoot = ""
 
-	_, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, testLogger(t), nil, false)
+	_, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, syncfixture.TestLogger(t), nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync root is required")
 }
@@ -257,7 +262,7 @@ func TestNewMountEngine_RequiresDBPath(t *testing.T) {
 	mountCfg := testEngineMountConfig(t.TempDir())
 	mountCfg.DBPath = ""
 
-	_, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, testLogger(t), nil, false)
+	_, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, syncfixture.TestLogger(t), nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state DB path is required")
 }
@@ -268,7 +273,7 @@ func TestNewMountEngine_RequiresDriveID(t *testing.T) {
 	mountCfg := testEngineMountConfig(t.TempDir())
 	mountCfg.DriveID = driveid.ID{}
 
-	_, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, testLogger(t), nil, false)
+	_, err := NewMountEngine(t.Context(), testEngineSession(), mountCfg, syncfixture.TestLogger(t), nil, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "drive ID is required")
 }
@@ -276,13 +281,13 @@ func TestNewMountEngine_RequiresDriveID(t *testing.T) {
 func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	pathConvergence := &configTestPathConvergenceStub{}
-	mock := &engineMockClient{
-		createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+	mock := &syncfixture.EngineMockClient{
+		CreateFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
 			return &graph.Item{ID: "created-folder-id"}, nil
 		},
 	}
@@ -304,12 +309,12 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	executor := NewExecution(eng.execCfg, emptyBaseline())
-	outcome := executor.ExecuteFolderCreate(t.Context(), &Action{
-		Type:       ActionFolderCreate,
+	executor := syncexec.NewExecution(eng.execCfg, syncfixture.EmptyBaseline())
+	outcome := executor.ExecuteFolderCreate(t.Context(), &syncdomain.Action{
+		Type:       syncdomain.ActionFolderCreate,
 		Path:       "photos",
-		CreateSide: CreateRemote,
-		View:       &PathView{Path: "photos"},
+		CreateSide: syncdomain.CreateRemote,
+		View:       &syncdomain.PathView{Path: "photos"},
 	})
 	require.True(t, outcome.Success, "expected remote folder create to succeed: %v", outcome.Error)
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
@@ -325,8 +330,8 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 func TestEngine_StoreAndExecutorTellTheEngineClocksTime(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	clock := newManualClock(time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC))
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	clock := syncfixture.NewManualClock(time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 
 	assert.Equal(t, clock.Now(), eng.baseline.NowForTest(), "store")
@@ -342,24 +347,24 @@ func TestEngine_StoreAndExecutorTellTheEngineClocksTime(t *testing.T) {
 func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
 
 	mountCfg := testEngineMountConfig(syncDir)
-	mountCfg.ShortcutNamespaceID = shortcutNamespaceTestID
+	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
 	require.NoError(t, err)
-	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutNamespaceTestID,
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateRemovedFinalDrain,
+		State:             syncshortcut.ShortcutRootStateRemovedFinalDrain,
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 	require.NoError(t, store.Close(t.Context()))

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // applyTrialReleaseDecision is a successful trial: it releases the next ramp
@@ -15,10 +16,10 @@ import (
 // leaving it queued.
 func (flow *engineFlow) applyTrialReleaseDecision(
 	ctx context.Context,
-	current *TrackedAction,
-	r *ActionCompletion,
-	trialScopeKey ScopeKey,
-) ([]*TrackedAction, error) {
+	current *syncdomain.TrackedAction,
+	r *syncdomain.ActionCompletion,
+	trialScopeKey syncdomain.ScopeKey,
+) ([]*syncdomain.TrackedAction, error) {
 	batch, err := flow.releaseScopeBatch(ctx, trialScopeKey, r.TrialScopeGeneration)
 	if err != nil {
 		return batch, err
@@ -34,9 +35,9 @@ func (flow *engineFlow) applyTrialReleaseDecision(
 
 func (flow *engineFlow) applyTrialExtendDecision(
 	ctx context.Context,
-	current *TrackedAction,
-	r *ActionCompletion,
-	trialScopeKey ScopeKey,
+	current *syncdomain.TrackedAction,
+	r *syncdomain.ActionCompletion,
+	trialScopeKey syncdomain.ScopeKey,
 ) error {
 	flow.sched.markFinished(current)
 	if err := flow.rehomeBlockedRetryWork(ctx, r, trialScopeKey); err != nil {
@@ -51,11 +52,11 @@ func (flow *engineFlow) applyTrialExtendDecision(
 
 func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	ctx context.Context,
-	current *TrackedAction,
-	decision *ResultDecision,
-	r *ActionCompletion,
-	bl *Baseline,
-	trialScopeKey ScopeKey,
+	current *syncdomain.TrackedAction,
+	decision *syncdomain.ResultDecision,
+	r *syncdomain.ActionCompletion,
+	bl *syncdomain.Baseline,
+	trialScopeKey syncdomain.ScopeKey,
 ) error {
 	flow.sched.markFinished(current)
 	reclassified, err := flow.applyTrialReclassification(ctx, decision, r, bl)
@@ -65,7 +66,7 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	if !reclassified {
 		return flow.applyTrialRetryFallback(ctx, current, decision, r, trialScopeKey)
 	}
-	if err := flow.holdActionFromPersistedRetryState(current, RetryWorkKeyForCompletion(r)); err != nil {
+	if err := flow.holdActionFromPersistedRetryState(current, syncdomain.RetryWorkKeyForCompletion(r)); err != nil {
 		return err
 	}
 
@@ -82,19 +83,19 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 // rearmed or discarded.
 func (flow *engineFlow) applyTrialRetryFallback(
 	ctx context.Context,
-	current *TrackedAction,
-	decision *ResultDecision,
-	r *ActionCompletion,
-	trialScopeKey ScopeKey,
+	current *syncdomain.TrackedAction,
+	decision *syncdomain.ResultDecision,
+	r *syncdomain.ActionCompletion,
+	trialScopeKey syncdomain.ScopeKey,
 ) error {
-	if decision.Persistence != PersistRetryWork {
+	if decision.Persistence != syncdomain.PersistRetryWork {
 		return fmt.Errorf("trial retry fallback for %s: missing retry_work persistence", r.Path)
 	}
 
 	persistAs := decision
-	target := ScopeUpdateResult{}
+	target := syncdomain.ScopeUpdateResult{}
 	if shouldTransitionTrialFallbackScope(decision) {
-		target = ScopeUpdateResult{
+		target = syncdomain.ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ConditionType,
@@ -123,7 +124,7 @@ func (flow *engineFlow) applyTrialRetryFallback(
 	return nil
 }
 
-func shouldTransitionTrialFallbackScope(decision *ResultDecision) bool {
+func shouldTransitionTrialFallbackScope(decision *syncdomain.ResultDecision) bool {
 	return decision != nil &&
 		decision.Class == errclass.ClassScopeBlockingTransient &&
 		!decision.ScopeKey.IsZero()
@@ -131,9 +132,9 @@ func shouldTransitionTrialFallbackScope(decision *ResultDecision) bool {
 
 func (flow *engineFlow) applyTrialReclassification(
 	ctx context.Context,
-	decision *ResultDecision,
-	r *ActionCompletion,
-	bl *Baseline,
+	decision *syncdomain.ResultDecision,
+	r *syncdomain.ActionCompletion,
+	bl *syncdomain.Baseline,
 ) (bool, error) {
 	handled, err := flow.applyTrialPermissionReclassification(ctx, r, bl)
 	if err != nil {
@@ -143,11 +144,11 @@ func (flow *engineFlow) applyTrialReclassification(
 		return true, nil
 	}
 
-	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == SKDiskLocal() {
+	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == syncdomain.SKDiskLocal() {
 		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
 			return false, err
 		}
-		return true, flow.applyBlockScope(ctx, ScopeUpdateResult{
+		return true, flow.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),

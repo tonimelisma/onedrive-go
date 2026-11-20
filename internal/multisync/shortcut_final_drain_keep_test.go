@@ -13,6 +13,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // Validates: R-2.4.8, R-6.6.28
@@ -132,7 +134,7 @@ func TestRunOnce_FinalDrainChildThatLeftWorkKeepsItsLocalCopy(t *testing.T) {
 
 			parent := testStandaloneMount(t, "personal:final-drain-left@example.com", "Parent")
 			child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-drain", "Shortcuts/Docs")
-			child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+			child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 			childID := child.ChildMountID
 			childRoot := filepath.Join(parent.SyncRoot, "Shortcuts", "Docs")
 			child.Engine.LocalRoot = childRoot
@@ -146,11 +148,11 @@ func TestRunOnce_FinalDrainChildThatLeftWorkKeepsItsLocalCopy(t *testing.T) {
 			var acks atomic.Int32
 			orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 				return &mockEngine{
-					ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+					ackDrainFn: func(context.Context, syncshortcut.ShortcutChildDrainAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 						acks.Add(1)
-						return syncengine.ShortcutChildWorkSnapshot{}, nil
+						return syncshortcut.ShortcutChildWorkSnapshot{}, nil
 					},
-					runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+					runOnceFn: func(ctx context.Context, mode syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 						if req.Mount.projectionKind() == MountProjectionStandalone {
 							if err := req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 								return nil, err
@@ -164,7 +166,7 @@ func TestRunOnce_FinalDrainChildThatLeftWorkKeepsItsLocalCopy(t *testing.T) {
 				}, nil
 			}
 
-			result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+			result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 			require.Len(t, result.Reports, 2)
 			assert.Zero(t, acks.Load(), "the parent is not told the drain finished")
@@ -184,16 +186,16 @@ func TestFinalDrain_RunsBidirectionalFullReconcileInOneShotAndWatch(t *testing.T
 	t.Parallel()
 
 	type runCall struct {
-		mode syncengine.SyncMode
+		mode syncdomain.SyncMode
 		opts syncengine.RunOptions
 	}
 	var calls []runCall
 	engine := &mockEngine{
-		runOnceFn: func(_ context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
+		runOnceFn: func(_ context.Context, mode syncdomain.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
 			calls = append(calls, runCall{mode: mode, opts: opts})
 			return &syncengine.Report{Mode: mode}, nil
 		},
-		runWatchFn: func(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error {
+		runWatchFn: func(context.Context, syncdomain.SyncMode, syncengine.WatchOptions) error {
 			return errors.New("a final drain does not watch")
 		},
 	}
@@ -203,16 +205,16 @@ func TestFinalDrain_RunsBidirectionalFullReconcileInOneShotAndWatch(t *testing.T
 	}
 	mount := testFinalDrainMount(t, "child-modes", "binding-modes")
 
-	work, err := orch.buildEngineWork(t.Context(), mount, nil, syncengine.SyncUploadOnly, syncengine.RunOptions{})
+	work, err := orch.buildEngineWork(t.Context(), mount, nil, syncdomain.SyncUploadOnly, syncengine.RunOptions{})
 	require.NoError(t, err)
 	_, err = work.fn(t.Context())
 	require.NoError(t, err)
-	_, err = orch.runWatchRunnerEngine(t.Context(), mount, engine, syncengine.SyncDownloadOnly, syncengine.WatchOptions{})
+	_, err = orch.runWatchRunnerEngine(t.Context(), mount, engine, syncdomain.SyncDownloadOnly, syncengine.WatchOptions{})
 	require.NoError(t, err)
 
 	require.Len(t, calls, 2, "one-shot and watch each run the drain once")
 	for _, call := range calls {
-		assert.Equal(t, syncengine.SyncBidirectional, call.mode)
+		assert.Equal(t, syncdomain.SyncBidirectional, call.mode)
 		assert.True(t, call.opts.FullReconcile)
 		assert.True(t, call.opts.ReleaseLocalTree, "the drain ends by releasing the local tree")
 	}

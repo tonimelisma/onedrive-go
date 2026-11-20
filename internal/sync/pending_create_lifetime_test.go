@@ -17,6 +17,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // The tests here follow a pending-create record to its end: every way a row
@@ -40,16 +46,16 @@ const (
 // zeroByteCreatedItem is what graph.UploadCreating returns for a zero-byte
 // file: the created item is the whole file, and the create hook never runs.
 func zeroByteCreatedItem() *graph.Item {
-	return &graph.Item{ID: "empty-item", ETag: `"e,1"`, Size: 0, QuickXorHash: emptyQuickXor}
+	return &graph.Item{ID: "empty-item", ETag: `"e,1"`, Size: 0, QuickXorHash: syncfixture.EmptyQuickXor}
 }
 
 // newFileUploadAction is the planned upload of a new file at path in the
 // drive's root.
-func newFileUploadAction(path string) *Action {
-	return &Action{Type: ActionUpload, Path: path, DriveID: driveid.New(testDriveID), View: &PathView{Path: path}}
+func newFileUploadAction(path string) *syncdomain.Action {
+	return &syncdomain.Action{Type: syncdomain.ActionUpload, Path: path, DriveID: driveid.New(syncfixture.TestDriveID), View: &syncdomain.PathView{Path: path}}
 }
 
-func requireNoPendingCreateAt(t *testing.T, store *SyncStore, path, why string) {
+func requireNoPendingCreateAt(t *testing.T, store *syncstore.SyncStore, path, why string) {
 	t.Helper()
 
 	_, found, err := store.PendingCreateAt(t.Context(), path)
@@ -81,21 +87,21 @@ func TestUploadNewFile_ZeroByteCreateLeavesNoPendingRow(t *testing.T) {
 
 			actionCtx, cancelAction := context.WithCancel(t.Context())
 			defer cancelAction()
-			ul := &creatingTestUploader{create: func(context.Context, graph.CreatedFunc) (*graph.Item, error) {
+			ul := &syncfixture.CreatingTestUploader{Create: func(context.Context, graph.CreatedFunc) (*graph.Item, error) {
 				if tc.canceled {
 					cancelAction()
 				}
 				return zeroByteCreatedItem(), nil
 			}}
-			_, logger := newDebugLogBuffer()
+			_, logger := syncfixture.NewDebugLogBuffer()
 			e, store, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
-			writeExecTestFile(t, syncRoot, "empty.txt", "")
+			syncfixture.WriteExecTestFile(t, syncRoot, "empty.txt", "")
 
 			outcome := e.ExecuteUpload(actionCtx, newFileUploadAction("empty.txt"))
-			requireOutcomeSuccess(t, &outcome)
+			syncfixture.RequireOutcomeSuccess(t, &outcome)
 			requireNoPendingCreateAt(t, store, "empty.txt", "the attempt that succeeded clears its intent")
 
-			require.NoError(t, store.CommitMutation(t.Context(), MutationFromActionOutcome(&outcome)))
+			require.NoError(t, store.CommitMutation(t.Context(), syncdomain.MutationFromActionOutcome(&outcome)))
 			requireNoPendingCreateAt(t, store, "empty.txt", "the committed outcome leaves no record")
 		})
 	}
@@ -112,33 +118,33 @@ func TestUploadNewFile_ZeroByteCreateLeavesNoPendingRow(t *testing.T) {
 func TestUploadNewFile_ZeroByteCreateClaimedByTheObserverLeavesNoPendingRow(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	var store *SyncStore
-	ul := &creatingTestUploader{create: func(ctx context.Context, _ graph.CreatedFunc) (*graph.Item, error) {
+	driveID := driveid.New(syncfixture.TestDriveID)
+	var store *syncstore.SyncStore
+	ul := &syncfixture.CreatingTestUploader{Create: func(ctx context.Context, _ graph.CreatedFunc) (*graph.Item, error) {
 		created := zeroByteCreatedItem()
 		// The change batch that shows the new file is committed before the
 		// create's answer is handled.
-		if err := store.CommitObservation(ctx, []ObservedItem{{
-			DriveID: driveID, ItemID: created.ID, ParentID: GraphRootID, Path: "empty.txt", ItemType: ItemTypeFile,
+		if err := store.CommitObservation(ctx, []syncdomain.ObservedItem{{
+			DriveID: driveID, ItemID: created.ID, ParentID: syncexec.GraphRootID, Path: "empty.txt", ItemType: syncdomain.ItemTypeFile,
 			Hash: created.QuickXorHash, Size: 0, ETag: created.ETag,
 		}}, "", driveID); err != nil {
 			return nil, err
 		}
 		return created, nil
 	}}
-	_, logger := newDebugLogBuffer()
+	_, logger := syncfixture.NewDebugLogBuffer()
 	e, executorStore, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
 	store = executorStore
-	writeExecTestFile(t, syncRoot, "empty.txt", "")
+	syncfixture.WriteExecTestFile(t, syncRoot, "empty.txt", "")
 
 	outcome := e.ExecuteUpload(t.Context(), newFileUploadAction("empty.txt"))
-	requireOutcomeSuccess(t, &outcome)
+	syncfixture.RequireOutcomeSuccess(t, &outcome)
 	pending, found, err := store.PendingCreateAt(t.Context(), "empty.txt")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "empty-item", pending.ItemID, "observation claimed the new file for the intent")
 
-	require.NoError(t, store.CommitMutation(t.Context(), MutationFromActionOutcome(&outcome)))
+	require.NoError(t, store.CommitMutation(t.Context(), syncdomain.MutationFromActionOutcome(&outcome)))
 	requireNoPendingCreateAt(t, store, "empty.txt", "the committed zero-byte outcome drops the row naming its item")
 }
 
@@ -153,7 +159,7 @@ func TestUploadNewFile_ZeroByteCreateClaimedByTheObserverLeavesNoPendingRow(t *t
 func TestRunOnce_ClaimedZeroByteFileThenRemoteMtimeChangeIsARemoteChange(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.hashlessEmptyFiles = true
 	// A file both sides keep, so no pass sees one side emptied.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -162,7 +168,7 @@ func TestRunOnce_ClaimedZeroByteFileThenRemoteMtimeChangeIsARemoteChange(t *test
 	require.NoError(t, os.WriteFile(filepath.Join(h.syncRoot, "empty.txt"), nil, 0o600))
 
 	loseCreateAnswers(remote, true)
-	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	loseCreateAnswers(remote, false)
 	created, ok := remote.itemAt("empty.txt")
@@ -200,7 +206,7 @@ func TestRunOnce_ClaimedZeroByteFileThenRemoteMtimeChangeIsARemoteChange(t *test
 func TestRunOnce_AdoptedPlaceholderWithAnEmptyLocalFileLosesItsRecord(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	// A file both sides keep, so no pass sees one side emptied.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	h := newSyncHarness(t, remote)
@@ -209,7 +215,7 @@ func TestRunOnce_AdoptedPlaceholderWithAnEmptyLocalFileLosesItsRecord(t *testing
 	// A zero-byte file's create landed and its answer was lost: OneDrive
 	// holds the empty file and only the intent names its path.
 	require.NoError(t, os.WriteFile(filepath.Join(h.syncRoot, "empty.txt"), nil, 0o600))
-	require.NoError(t, h.eng.baseline.RecordPendingCreateIntent(t.Context(), &PendingCreate{
+	require.NoError(t, h.eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
 		DriveID: remote.driveID, Path: "empty.txt", ParentID: "root",
 	}))
 	remote.mu.Lock()
@@ -220,7 +226,7 @@ func TestRunOnce_AdoptedPlaceholderWithAnEmptyLocalFileLosesItsRecord(t *testing
 	report := runScenarioPass(t, h.eng)
 
 	assert.Zero(t, report.Uploads+report.Downloads, "both sides hold the same empty file: %+v", report)
-	_, _, adopted := readBaselineRow(t, h.eng.baseline, "orphan")
+	_, _, adopted := syncstoretest.ReadBaselineRow(t, h.eng.baseline, "orphan")
 	require.True(t, adopted, "observation claimed and adopted the empty file")
 	requireNoPendingCreateAt(t, h.eng.baseline, "empty.txt", "nothing is left to upload into the placeholder")
 	assertSyncInvariants(t, h)
@@ -239,42 +245,42 @@ func TestPrunePendingCreates_DropsTheRecordOfASettledEmptyPlaceholder(t *testing
 
 	for _, tc := range []struct {
 		name      string
-		local     *LocalStateRow
+		local     *syncdomain.LocalStateRow
 		committed bool // an upload with content committed into the item
 		wantKept  bool
 	}{
-		{name: "local file empty", local: &LocalStateRow{Path: "doc.txt", ItemType: ItemTypeFile, Hash: emptyQuickXor}},
+		{name: "local file empty", local: &syncdomain.LocalStateRow{Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: syncfixture.EmptyQuickXor}},
 		{
 			name:  "local file holds content",
-			local: &LocalStateRow{Path: "doc.txt", ItemType: ItemTypeFile, Hash: "my-hash", Size: 9}, wantKept: true,
+			local: &syncdomain.LocalStateRow{Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: "my-hash", Size: 9}, wantKept: true,
 		},
 		{name: "local file gone", wantKept: true},
 		{
 			name:  "upload with content committed",
-			local: &LocalStateRow{Path: "doc.txt", ItemType: ItemTypeFile, Hash: emptyQuickXor}, committed: true, wantKept: true,
+			local: &syncdomain.LocalStateRow{Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: syncfixture.EmptyQuickXor}, committed: true, wantKept: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newTestStore(t)
+			store := syncstoretest.NewTestStore(t)
 			ctx := t.Context()
 			adoptTestPlaceholder(t, store)
 			if tc.committed {
-				require.NoError(t, store.CommitMutation(ctx, &BaselineMutation{
-					Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveid.New(testDriveID),
-					ItemID: testPlaceholderID, ParentID: GraphRootID, ItemType: ItemTypeFile,
+				require.NoError(t, store.CommitMutation(ctx, &syncdomain.BaselineMutation{
+					Action: syncdomain.ActionUpload, Success: true, Path: "doc.txt", DriveID: driveid.New(syncfixture.TestDriveID),
+					ItemID: testPlaceholderID, ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFile,
 					LocalHash: "my-hash", RemoteHash: "my-hash", LocalSize: 9, LocalSizeKnown: true,
 					RemoteSize: 9, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 				}))
 			}
-			var scanned []LocalStateRow
+			var scanned []syncdomain.LocalStateRow
 			if tc.local != nil {
 				scanned = append(scanned, *tc.local)
 			}
 			require.NoError(t, store.ReplaceLocalState(ctx, scanned))
 
-			require.NoError(t, store.PrunePendingCreates(ctx, PassRefreshedLocalOnly, func(string) bool { return true }))
+			require.NoError(t, store.PrunePendingCreates(ctx, syncstore.PassRefreshedLocalOnly, func(string) bool { return true }))
 
 			_, found, err := store.PendingCreateAt(ctx, "doc.txt")
 			require.NoError(t, err)
@@ -292,30 +298,30 @@ func TestPrunePendingCreates_DropsTheRecordOfASettledEmptyPlaceholder(t *testing
 func TestCommitMutation_DeleteOutcomeDropsTheRecordOfItsItem(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	for _, tc := range []struct {
 		name     string
-		mutation BaselineMutation
+		mutation syncdomain.BaselineMutation
 	}{
 		{
 			name: "deleted on OneDrive",
-			mutation: BaselineMutation{
-				Action: ActionRemoteDelete, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-				ItemType: ItemTypeFile,
+			mutation: syncdomain.BaselineMutation{
+				Action: syncdomain.ActionRemoteDelete, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
+				ItemType: syncdomain.ItemTypeFile,
 			},
 		},
 		{
 			name: "deleted locally",
-			mutation: BaselineMutation{
-				Action: ActionLocalDelete, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-				ItemType: ItemTypeFile,
+			mutation: syncdomain.BaselineMutation{
+				Action: syncdomain.ActionLocalDelete, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
+				ItemType: syncdomain.ItemTypeFile,
 			},
 		},
 		{
 			name: "another item takes its path",
-			mutation: BaselineMutation{
-				Action: ActionDownload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: "theirs",
-				ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+			mutation: syncdomain.BaselineMutation{
+				Action: syncdomain.ActionDownload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: "theirs",
+				ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 				LocalSize: 3, LocalSizeKnown: true, RemoteSize: 3, RemoteSizeKnown: true, ETag: `"t,1"`,
 			},
 		},
@@ -323,7 +329,7 @@ func TestCommitMutation_DeleteOutcomeDropsTheRecordOfItsItem(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newTestStore(t)
+			store := syncstoretest.NewTestStore(t)
 			adoptTestPlaceholder(t, store)
 
 			mutation := tc.mutation
@@ -343,12 +349,12 @@ func TestCommitMutation_DeleteOutcomeDropsTheRecordOfItsItem(t *testing.T) {
 func TestCommitMutation_UploadWithContentKeepsTheRecordForItsEcho(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
+	store := syncstoretest.NewTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	placeholder := adoptTestPlaceholder(t, store)
-	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
-		Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-		ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+	require.NoError(t, store.CommitMutation(t.Context(), &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
+		ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		LocalSize: 7, LocalSizeKnown: true, RemoteSize: 7, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 	}))
 	pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
@@ -356,8 +362,8 @@ func TestCommitMutation_UploadWithContentKeepsTheRecordForItsEcho(t *testing.T) 
 	require.True(t, found, "kept for the echo")
 	require.Equal(t, testPlaceholderID, pending.ItemID)
 
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{placeholder}, "t-echo", driveID))
-	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{placeholder}, "t-echo", driveID))
+	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the echo of the empty state is not a remote change")
 }
@@ -431,24 +437,24 @@ func TestUploadNewFile_RemovedPlaceholderLeavesNoRecord(t *testing.T) {
 
 			actionCtx, cancelAction := context.WithCancel(t.Context())
 			defer cancelAction()
-			ul := &creatingTestUploader{
-				create: func(ctx context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
+			ul := &syncfixture.CreatingTestUploader{
+				Create: func(ctx context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
 					if tc.canceled {
 						cancelAction()
 					}
 					return tc.answer(ctx, onCreated)
 				},
-				getItem: func(itemID string) (*graph.Item, error) {
+				GetItemFunc: func(itemID string) (*graph.Item, error) {
 					// Still empty: the content did not land.
-					return &graph.Item{ID: itemID, ETag: `"c,2"`, QuickXorHash: emptyQuickXor}, nil
+					return &graph.Item{ID: itemID, ETag: `"c,2"`, QuickXorHash: syncfixture.EmptyQuickXor}, nil
 				},
 			}
-			_, logger := newDebugLogBuffer()
+			_, logger := syncfixture.NewDebugLogBuffer()
 			e, store, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
-			local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+			local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 
-			_, uploadErr := e.UploadNewFileForTest(actionCtx, &Action{Type: ActionUpload, Path: "doc.txt"},
-				driveid.New(testDriveID), GraphRootID, "doc.txt", local)
+			_, uploadErr := e.UploadNewFileForTest(actionCtx, &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},
+				driveid.New(syncfixture.TestDriveID), syncexec.GraphRootID, "doc.txt", local)
 			require.Error(t, uploadErr)
 
 			pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
@@ -470,20 +476,20 @@ func TestUploadNewFile_RemovedPlaceholderLeavesNoRecord(t *testing.T) {
 func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAStaleEcho(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
+	store := syncstoretest.NewTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	placeholder := adoptTestPlaceholder(t, store)
-	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
-		Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-		ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+	require.NoError(t, store.CommitMutation(t.Context(), &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
+		ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		LocalSize: 7, LocalSizeKnown: true, RemoteSize: 7, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 	}))
 
 	sizeless := placeholder
 	sizeless.Hash, sizeless.ETag, sizeless.SizeUnknown = "", placeholderLaterETag, true
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{sizeless}, "t-sizeless", driveID))
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{sizeless}, "t-sizeless", driveID))
 
-	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, placeholderLaterETag, row.ETag, "the observation is applied like any item's")
 	assert.False(t, row.SizeKnown)
@@ -515,33 +521,33 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newTestStore(t)
-			driveID := driveid.New(testDriveID)
-			pending := &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: GraphRootID}
+			store := syncstoretest.NewTestStore(t)
+			driveID := driveid.New(syncfixture.TestDriveID)
+			pending := &syncdomain.PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: syncexec.GraphRootID}
 			if tc.intentOnly {
 				require.NoError(t, store.RecordPendingCreateIntent(t.Context(), pending))
 			} else {
 				pending.ItemID, pending.CreatedETag = testPlaceholderID, placeholderCreatedETag
 				require.NoError(t, store.RecordPendingCreate(t.Context(), pending))
 			}
-			observed := ObservedItem{
-				DriveID: driveID, ItemID: testPlaceholderID, ParentID: GraphRootID, Path: "doc.txt", ItemType: ItemTypeFile,
+			observed := syncdomain.ObservedItem{
+				DriveID: driveID, ItemID: testPlaceholderID, ParentID: syncexec.GraphRootID, Path: "doc.txt", ItemType: syncdomain.ItemTypeFile,
 				ETag: placeholderMovedETag, SizeUnknown: true,
 			}
 
-			require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{observed}, "t1", driveID))
+			require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{observed}, "t1", driveID))
 
-			_, _, adopted := readBaselineRow(t, store, testPlaceholderID)
+			_, _, adopted := syncstoretest.ReadBaselineRow(t, store, testPlaceholderID)
 			assert.False(t, adopted, "nothing is adopted on a size nobody knows")
-			require.NotNil(t, readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID), "the item is observed like any other")
+			require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID), "the item is observed like any other")
 			kept, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
 			require.NoError(t, err)
 			require.True(t, found, "the record stays")
 			assert.Equal(t, tc.wantRecorded, kept.ItemID)
 
-			observed.SizeUnknown, observed.Hash, observed.ETag = false, emptyQuickXor, placeholderLaterETag
-			require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{observed}, "t2", driveID))
-			_, _, adopted = readBaselineRow(t, store, testPlaceholderID)
+			observed.SizeUnknown, observed.Hash, observed.ETag = false, syncfixture.EmptyQuickXor, placeholderLaterETag
+			require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{observed}, "t2", driveID))
+			_, _, adopted = syncstoretest.ReadBaselineRow(t, store, testPlaceholderID)
 			assert.True(t, adopted, "known to be empty, the placeholder is adopted")
 		})
 	}
@@ -559,13 +565,13 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted(t *testing.T) {
 func TestCommitObservation_AdoptedPlaceholderRenamedWhileEmptyTakesItsRecordAlong(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
+	store := syncstoretest.NewTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	placeholder := adoptTestPlaceholder(t, store)
 
 	renamed := placeholder
 	renamed.Path, renamed.ETag = renamedPath, placeholderMovedETag
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{renamed}, "t-renamed", driveID))
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{renamed}, "t-renamed", driveID))
 
 	requireNoPendingCreateAt(t, store, "doc.txt", "a create at the old path finds no placeholder of its own")
 	pending, found, err := store.PendingCreateAt(t.Context(), renamedPath)
@@ -575,15 +581,15 @@ func TestCommitObservation_AdoptedPlaceholderRenamedWhileEmptyTakesItsRecordAlon
 
 	// The upload by ID that was on its way commits its content at the path it
 	// was planned for, and the echo of the renamed empty item arrives after it.
-	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
-		Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-		ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+	require.NoError(t, store.CommitMutation(t.Context(), &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
+		ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		LocalSize: 7, LocalSizeKnown: true, RemoteSize: 7, RemoteSizeKnown: true, ETag: placeholderLaterETag,
 	}))
 	echo := renamed
 	echo.ETag = `"p,2b"`
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{echo}, "t-echo", driveID))
-	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{echo}, "t-echo", driveID))
+	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the echo of the empty item is not a remote change")
 }
@@ -596,22 +602,22 @@ func TestCommitObservation_AdoptedPlaceholderRenamedWhileEmptyTakesItsRecordAlon
 func TestCommitObservation_PlaceholderMovedBeforeItWasAdoptedLosesItsRecord(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
-	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-		ItemID: testPlaceholderID, DriveID: driveID, Path: "doc.txt", ParentID: GraphRootID, CreatedETag: placeholderCreatedETag,
+	store := syncstoretest.NewTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
+	require.NoError(t, store.RecordPendingCreate(t.Context(), &syncdomain.PendingCreate{
+		ItemID: testPlaceholderID, DriveID: driveID, Path: "doc.txt", ParentID: syncexec.GraphRootID, CreatedETag: placeholderCreatedETag,
 	}))
 
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
-		DriveID: driveID, ItemID: testPlaceholderID, ParentID: GraphRootID, Path: renamedPath, ItemType: ItemTypeFile,
-		Hash: emptyQuickXor, Size: 0, ETag: placeholderMovedETag,
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{{
+		DriveID: driveID, ItemID: testPlaceholderID, ParentID: syncexec.GraphRootID, Path: renamedPath, ItemType: syncdomain.ItemTypeFile,
+		Hash: syncfixture.EmptyQuickXor, Size: 0, ETag: placeholderMovedETag,
 	}}, "t1", driveID))
 
 	requireNoPendingCreateAt(t, store, "doc.txt", "the record of a create at doc.txt ends")
 	requireNoPendingCreateAt(t, store, renamedPath, "and does not follow an item it never adopted")
-	_, _, adopted := readBaselineRow(t, store, testPlaceholderID)
+	_, _, adopted := syncstoretest.ReadBaselineRow(t, store, testPlaceholderID)
 	assert.False(t, adopted)
-	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, renamedPath, row.Path)
 }
@@ -626,8 +632,8 @@ func TestCommitObservation_PlaceholderMovedBeforeItWasAdoptedLosesItsRecord(t *t
 func TestExecuteUpload_LookupFailureAfterACreateIsNotAGoneParent(t *testing.T) {
 	t.Parallel()
 
-	ul := &creatingTestUploader{
-		create: func(_ context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
+	ul := &syncfixture.CreatingTestUploader{
+		Create: func(_ context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
 			item := &graph.Item{ID: "new-item", ETag: `"c,1"`}
 			if err := onCreated(item); err != nil {
 				return nil, &graph.CreatedItemError{Item: item, Err: err}
@@ -636,16 +642,16 @@ func TestExecuteUpload_LookupFailureAfterACreateIsNotAGoneParent(t *testing.T) {
 				Item: item, Err: fmt.Errorf("graph: uploading chunk at offset 0: %w", graph.ErrUploadCompletedWithoutItem),
 			}
 		},
-		getItem: func(string) (*graph.Item, error) { return nil, graph.ErrNotFound },
+		GetItemFunc: func(string) (*graph.Item, error) { return nil, graph.ErrNotFound },
 	}
-	_, logger := newDebugLogBuffer()
+	_, logger := syncfixture.NewDebugLogBuffer()
 	e, store, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
-	writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+	syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 
 	outcome := e.ExecuteUpload(t.Context(), newFileUploadAction("doc.txt"))
 
-	requireOutcomeFailure(t, &outcome)
-	var gone *RemoteItemGoneError
+	syncfixture.RequireOutcomeFailure(t, &outcome)
+	var gone *syncexec.RemoteItemGoneError
 	require.NotErrorAs(t, outcome.Error, &gone, "a failed lookup of the created item says nothing about its parent")
 	var created *graph.CreatedItemError
 	require.ErrorAs(t, outcome.Error, &created)
@@ -666,11 +672,11 @@ func TestExecuteUpload_LookupFailureAfterACreateIsNotAGoneParent(t *testing.T) {
 func TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("folder-docs", "root", "docs")
 	remote.addFile(t, "item-keep", "folder-docs", "keep.txt", "keep\n")
 	client := remote.client(t)
-	client.uploadCreatingFn = func(
+	client.UploadCreatingFn = func(
 		_ context.Context, _, _ string, _ io.ReaderAt, _ int64, onCreated graph.CreatedFunc,
 	) (*graph.Item, error) {
 		// The content went up and the completion carried no item, and the
@@ -687,14 +693,14 @@ func TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth(t *testing
 	runScenarioPass(t, eng)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "docs", "new.txt"), []byte("my words\n"), 0o600))
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	assert.Zero(t, report.Superseded, "a failed lookup proves nothing about the plan")
 	assert.Zero(t, report.LocalDeletes+report.HeldLocalDeletes)
-	require.NotNil(t, readRemoteStateRow(t, eng.baseline.RawDBForTest(), "folder-docs"), "the parent folder stays in remote truth")
-	require.NotNil(t, readRemoteStateRow(t, eng.baseline.RawDBForTest(), "item-keep"), "and so does its subtree")
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, eng.baseline.RawDBForTest(), "folder-docs"), "the parent folder stays in remote truth")
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, eng.baseline.RawDBForTest(), "item-keep"), "and so does its subtree")
 	assert.FileExists(t, filepath.Join(syncRoot, "docs", "keep.txt"))
 }
 
@@ -743,9 +749,9 @@ func TestFinishIntoPlaceholder_RefusesAnItemThatIsNotAnEmptyLiveFile(t *testing.
 			name: "moved to another folder", path: "docs/doc.txt", parentID: "folder-docs",
 			item: graph.Item{ID: testPlaceholderID, Name: "doc.txt", ParentID: "folder-other", ETag: `"m,1"`},
 		},
-		{name: "moved out of the drive root", path: "doc.txt", parentID: GraphRootID, item: atRoot("doc.txt", "folder-other", "other")},
+		{name: "moved out of the drive root", path: "doc.txt", parentID: syncexec.GraphRootID, item: atRoot("doc.txt", "folder-other", "other")},
 		{name: "still in its folder", path: "docs/doc.txt", parentID: "folder-docs", item: inDocs(graph.Item{ETag: `"s,1"`}), wantFinish: true},
-		{name: "still at the drive root", path: "doc.txt", parentID: GraphRootID, item: atRoot("doc.txt", "root-id", ""), wantFinish: true},
+		{name: "still at the drive root", path: "doc.txt", parentID: syncexec.GraphRootID, item: atRoot("doc.txt", "root-id", ""), wantFinish: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -766,23 +772,23 @@ func TestFinishIntoPlaceholder_RefusesAnItemThatIsNotAnEmptyLiveFile(t *testing.
 func runFinishIntoPlaceholderCase(t *testing.T, tc *finishIntoPlaceholderCase) (finished bool, uploads int) {
 	t.Helper()
 
-	ul := &creatingTestUploader{}
-	ul.uploadToItemFn = func(
+	ul := &syncfixture.CreatingTestUploader{}
+	ul.UploadToItemFn = func(
 		context.Context, driveid.ID, string, string, io.ReaderAt, int64, time.Time, graph.ProgressFunc,
 	) (*graph.Item, error) {
 		uploads++
 		return &graph.Item{ID: testPlaceholderID}, nil
 	}
-	_, logger := newDebugLogBuffer()
+	_, logger := syncfixture.NewDebugLogBuffer()
 	e, _, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
-	e.SetItemsForTest(&executorMockItemClient{getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+	e.SetItemsForTest(&syncfixture.ExecutorMockItemClient{GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 		item := tc.item
 		return &item, nil
 	}})
-	local := writeExecTestFile(t, syncRoot, tc.path, "my words\n")
+	local := syncfixture.WriteExecTestFile(t, syncRoot, tc.path, "my words\n")
 
-	_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &Action{Type: ActionUpload, Path: tc.path},
-		driveid.New(testDriveID), tc.parentID, testPlaceholderID, tc.path, local)
+	_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: tc.path},
+		driveid.New(syncfixture.TestDriveID), tc.parentID, testPlaceholderID, tc.path, local)
 	require.NoError(t, err)
 
 	return finished, uploads
@@ -799,17 +805,17 @@ func runFinishIntoPlaceholderCase(t *testing.T, tc *finishIntoPlaceholderCase) (
 func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	newExecutor := func(t *testing.T, readErr error) (*Executor, string) {
+	driveID := driveid.New(syncfixture.TestDriveID)
+	newExecutor := func(t *testing.T, readErr error) (*syncexec.Executor, string) {
 		t.Helper()
 
-		_, logger := newDebugLogBuffer()
-		e, _, syncRoot := newPendingCreateTestExecutor(t, &creatingTestUploader{}, logger)
-		e.SetItemsForTest(&executorMockItemClient{getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+		_, logger := syncfixture.NewDebugLogBuffer()
+		e, _, syncRoot := newPendingCreateTestExecutor(t, &syncfixture.CreatingTestUploader{}, logger)
+		e.SetItemsForTest(&syncfixture.ExecutorMockItemClient{GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 			return nil, readErr
 		}})
 
-		return e, writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+		return e, syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 	}
 
 	for _, read := range followUpReadFailures() {
@@ -817,11 +823,11 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 			t.Parallel()
 
 			e, local := newExecutor(t, read.err)
-			_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-				driveID, GraphRootID, testPlaceholderID, "doc.txt", local)
+			_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},
+				driveID, syncexec.GraphRootID, testPlaceholderID, "doc.txt", local)
 
 			assert.True(t, finished, "the failed read settles the attempt")
-			requireClassifiedAsTheRead(t, read, ActionUpload, driveID, UploadTransferError(err))
+			requireClassifiedAsTheRead(t, read, syncdomain.ActionUpload, driveID, syncexec.UploadTransferError(err))
 		})
 	}
 
@@ -829,8 +835,8 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 		t.Parallel()
 
 		e, local := newExecutor(t, graph.ErrNotFound)
-		_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-			driveID, GraphRootID, testPlaceholderID, "doc.txt", local)
+		_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},
+			driveID, syncexec.GraphRootID, testPlaceholderID, "doc.txt", local)
 
 		require.NoError(t, err)
 		assert.False(t, finished, "a placeholder that is gone is no placeholder")
@@ -839,24 +845,24 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 
 // dispatchTestCreate queues the create of the new file doc.txt as action id
 // and lets rt's loop dispatch it to a worker.
-func dispatchTestCreate(t *testing.T, rt *watchRuntime, id int64) *TrackedAction {
+func dispatchTestCreate(t *testing.T, rt *watchRuntime, id int64) *syncdomain.TrackedAction {
 	t.Helper()
 
 	const path = "doc.txt"
-	return dispatchTestAction(t, rt, id, &Action{
-		Type: ActionUpload, Path: path, DriveID: rt.engine.driveID, View: &PathView{Path: path},
+	return dispatchTestAction(t, rt, id, &syncdomain.Action{
+		Type: syncdomain.ActionUpload, Path: path, DriveID: rt.engine.driveID, View: &syncdomain.PathView{Path: path},
 	})
 }
 
 // dispatchTestAction queues action as action id and lets rt's loop dispatch
 // it to a worker, which leaves it running.
-func dispatchTestAction(t *testing.T, rt *watchRuntime, id int64, action *Action) *TrackedAction {
+func dispatchTestAction(t *testing.T, rt *watchRuntime, id int64, action *syncdomain.Action) *syncdomain.TrackedAction {
 	t.Helper()
 
 	queued := rt.sched.graph.Add(action, id, nil)
 	require.NotNil(t, queued)
 	rt.sched.markQueued(queued)
-	rt.replaceOutbox([]*TrackedAction{queued})
+	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 	_, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	select {
@@ -871,13 +877,13 @@ func dispatchTestAction(t *testing.T, rt *watchRuntime, id int64, action *Action
 
 // failTestCreate completes the dispatched create as one whose answer was
 // lost, a second after clock's now, and returns when it ended.
-func failTestCreate(t *testing.T, rt *watchRuntime, bl *Baseline, clock *manualClock, create *TrackedAction) time.Time {
+func failTestCreate(t *testing.T, rt *watchRuntime, bl *syncdomain.Baseline, clock *syncfixture.ManualClock, create *syncdomain.TrackedAction) time.Time {
 	t.Helper()
 
 	clock.Advance(time.Second)
 	endedAt := clock.Now()
-	require.NoError(t, rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
-		Path: create.Action.Path, DriveID: rt.engine.driveID, ActionType: ActionUpload, ActionID: create.ID,
+	require.NoError(t, rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
+		Path: create.Action.Path, DriveID: rt.engine.driveID, ActionType: syncdomain.ActionUpload, ActionID: create.ID,
 		Err: scenarioCreateAnswerLost(filepath.Base(create.Action.Path)), ErrMsg: "create answer lost",
 	}))
 
@@ -890,25 +896,25 @@ type pollWatchTest struct {
 	remote *moveScenarioRemote
 	eng    *testEngine
 	rt     *watchRuntime
-	bl     *Baseline
-	clock  *manualClock
+	bl     *syncdomain.Baseline
+	clock  *syncfixture.ManualClock
 }
 
 func newPollWatchTest(t *testing.T) *pollWatchTest {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	eng, _ := newTestEngine(t, remote.client(t))
-	clock := newManualClock(time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &PendingCreate{
+	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
 		DriveID: remote.driveID, Path: "doc.txt", ParentID: "root",
 	}))
 
@@ -921,15 +927,15 @@ func newPollWatchTest(t *testing.T) *pollWatchTest {
 func (w *pollWatchTest) poll(t *testing.T, startedAt time.Time, withEvents bool) int {
 	t.Helper()
 
-	batch := RemoteObservationBatch{Source: RemoteObservationBatchPrimaryWatch, PollStartedAt: startedAt, PollOnly: true}
+	batch := syncobserve.RemoteObservationBatch{Source: syncobserve.RemoteObservationBatchPrimaryWatch, PollStartedAt: startedAt, PollOnly: true}
 	if withEvents {
 		keep, ok := w.remote.itemAt("keep.txt")
 		require.True(t, ok)
-		batch = RemoteObservationBatch{
-			Source: RemoteObservationBatchPrimaryWatch, PollStartedAt: startedAt,
-			Observed: []ObservedItem{{
+		batch = syncobserve.RemoteObservationBatch{
+			Source: syncobserve.RemoteObservationBatchPrimaryWatch, PollStartedAt: startedAt,
+			Observed: []syncdomain.ObservedItem{{
 				DriveID: w.remote.driveID, ItemID: keep.ID, ParentID: "root", Path: "keep.txt",
-				ItemType: ItemTypeFile, Hash: keep.QuickXorHash, Size: keep.Size,
+				ItemType: syncdomain.ItemTypeFile, Hash: keep.QuickXorHash, Size: keep.Size,
 				Mtime: keep.ModifiedAt.UnixNano(), ETag: `"keep-touched"`,
 			}},
 		}
@@ -977,7 +983,7 @@ func TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll(t *testing.
 			t.Parallel()
 
 			w := newPollWatchTest(t)
-			require.NoError(t, w.eng.baseline.RecordPendingCreateIntent(t.Context(), &PendingCreate{
+			require.NoError(t, w.eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
 				DriveID: w.remote.driveID, Path: "elsewhere.txt", ParentID: "root",
 			}))
 			endedAt := failTestCreate(t, w.rt, w.bl, w.clock, dispatchTestCreate(t, w.rt, 1))
@@ -1009,8 +1015,8 @@ func TestWatch_PollKeepsTheIntentOfAFileThatIsStillThere(t *testing.T) {
 	t.Parallel()
 
 	w := newPollWatchTest(t)
-	require.NoError(t, w.eng.baseline.UpsertLocalStateRows(t.Context(), []LocalStateRow{{
-		Path: "doc.txt", ItemType: ItemTypeFile, Hash: "my-hash", Size: 9,
+	require.NoError(t, w.eng.baseline.UpsertLocalStateRows(t.Context(), []syncdomain.LocalStateRow{{
+		Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: "my-hash", Size: 9,
 	}}))
 	endedAt := failTestCreate(t, w.rt, w.bl, w.clock, dispatchTestCreate(t, w.rt, 1))
 
@@ -1038,15 +1044,15 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 	w := newPollWatchTest(t)
 	require.NoError(t, w.eng.baseline.ClearPendingCreateIntent(t.Context(), "doc.txt"))
 	adoptTestPlaceholder(t, w.eng.baseline)
-	require.NoError(t, w.eng.baseline.UpsertLocalStateRows(t.Context(), []LocalStateRow{{
-		Path: "doc.txt", ItemType: ItemTypeFile, Hash: emptyQuickXor, Size: 0,
+	require.NoError(t, w.eng.baseline.UpsertLocalStateRows(t.Context(), []syncdomain.LocalStateRow{{
+		Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: syncfixture.EmptyQuickXor, Size: 0,
 	}}))
-	upload := dispatchTestAction(t, w.rt, 1, &Action{
-		Type: ActionUpload, Path: "doc.txt", DriveID: w.rt.engine.driveID, ItemID: testPlaceholderID,
-		View: &PathView{Path: "doc.txt"},
+	upload := dispatchTestAction(t, w.rt, 1, &syncdomain.Action{
+		Type: syncdomain.ActionUpload, Path: "doc.txt", DriveID: w.rt.engine.driveID, ItemID: testPlaceholderID,
+		View: &syncdomain.PathView{Path: "doc.txt"},
 	})
 
-	w.rt.queuePendingReplan(DirtyBatch{})
+	w.rt.queuePendingReplan(syncobserve.DirtyBatch{})
 	replanned, err := w.rt.runPendingWatchReplan(t.Context(), &watchPipeline{runtime: w.rt, bl: w.bl})
 	require.NoError(t, err)
 	assert.False(t, replanned, "no replan, so no prune, while the upload runs")
@@ -1060,7 +1066,7 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 	// running drops it.
 	w.rt.sched.markFinished(upload)
 	require.True(t, w.rt.canPrepareNow())
-	require.NoError(t, w.eng.baseline.PrunePendingCreates(t.Context(), PassRefreshedLocalOnly, w.eng.localScanCoverage()))
+	require.NoError(t, w.eng.baseline.PrunePendingCreates(t.Context(), syncstore.PassRefreshedLocalOnly, w.eng.localScanCoverage()))
 	requireNoPendingCreateAt(t, w.eng.baseline, "doc.txt", "the settled empty placeholder's record goes with the next replan")
 }
 
@@ -1090,18 +1096,18 @@ func TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile(t *testing.T) {
 			w.clock.Advance(time.Second)
 			polledAt := w.clock.Now()
 
-			batches := make(chan RemoteObservationBatch)
-			cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-				return w.rt.watchMountRootRemote(ctx, w.bl, batches, MinPollInterval)
+			batches := make(chan syncobserve.RemoteObservationBatch)
+			cancel, done := syncfixture.RunInBackground(t, t.Context(), func(ctx context.Context) error {
+				return w.rt.watchMountRootRemote(ctx, w.bl, batches, syncdomain.MinPollInterval)
 			})
-			batch := receiveWithin(t, batches, "the mount-root poll's batch")
+			batch := syncfixture.ReceiveWithin(t, batches, "the mount-root poll's batch")
 
-			assert.Equal(t, RemoteObservationBatchMountRoot, batch.Source)
+			assert.Equal(t, syncobserve.RemoteObservationBatchMountRoot, batch.Source)
 			assert.Equal(t, polledAt, batch.PollStartedAt, "stamped when the poll began")
 			assert.True(t, batch.PollStartedAt.After(endedAt))
 			assert.NotNil(t, batch.ApplyAck, "a whole batch, whose apply the poll waits for")
 			require.NoError(t, w.rt.handleRemoteObservationBatch(t.Context(), &batch))
-			stopWatch(t, cancel, done)
+			syncfixture.StopWatch(t, cancel, done)
 
 			_, found, err := w.eng.baseline.PendingCreateAt(t.Context(), "doc.txt")
 			require.NoError(t, err)
@@ -1116,8 +1122,8 @@ func TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile(t *testing.T) {
 type mountRootWatchTest struct {
 	eng   *testEngine
 	rt    *watchRuntime
-	bl    *Baseline
-	clock *manualClock
+	bl    *syncdomain.Baseline
+	clock *syncfixture.ManualClock
 }
 
 // newMountRootWatchTest builds a mountRootWatchTest whose folder's polls
@@ -1126,10 +1132,10 @@ func newMountRootWatchTest(t *testing.T, withEvents bool) *mountRootWatchTest {
 	t.Helper()
 
 	const mountRoot = "mount-root-root"
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	var polls atomic.Int32
-	mock := &engineMockClient{
-		folderDeltaFn: func(_ context.Context, _ driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+	mock := &syncfixture.EngineMockClient{
+		FolderDeltaFn: func(_ context.Context, _ driveid.ID, folderID, token string) ([]graph.Item, string, error) {
 			polls.Add(1)
 			assert.Equal(t, mountRoot, folderID)
 			if token == "" || !withEvents {
@@ -1144,16 +1150,16 @@ func newMountRootWatchTest(t *testing.T, withEvents bool) *mountRootWatchTest {
 		inputs.RemoteRootItemID = mountRoot
 		inputs.RemoteRootDeltaCapable = true
 	})
-	clock := newManualClock(time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 	require.Positive(t, polls.Load(), "the pass read the folder")
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &PendingCreate{
+	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
 		DriveID: driveID, Path: "doc.txt", ParentID: mountRoot,
 	}))
 
@@ -1161,7 +1167,7 @@ func newMountRootWatchTest(t *testing.T, withEvents bool) *mountRootWatchTest {
 }
 
 // pendingCreateCount is the number of pending-create rows in store.
-func pendingCreateCount(t *testing.T, store *SyncStore) int {
+func pendingCreateCount(t *testing.T, store *syncstore.SyncStore) int {
 	t.Helper()
 
 	var rows int

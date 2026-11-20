@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // watchCreateAttempts is the watch loop's memory of the file creates it ran
@@ -41,8 +44,8 @@ type watchCreateAttempts struct {
 
 // dispatched notes ta when it is the create of a new file: an upload with no
 // remote item to overwrite.
-func (a *watchCreateAttempts) dispatched(ta *TrackedAction) {
-	if ta == nil || ta.Action.Type != ActionUpload || ShouldOverwriteKnownRemoteItem(&ta.Action) {
+func (a *watchCreateAttempts) dispatched(ta *syncdomain.TrackedAction) {
+	if ta == nil || ta.Action.Type != syncdomain.ActionUpload || syncexec.ShouldOverwriteKnownRemoteItem(&ta.Action) {
 		return
 	}
 	if a.inFlight == nil {
@@ -55,7 +58,7 @@ func (a *watchCreateAttempts) dispatched(ta *TrackedAction) {
 // succeeded left no intent (the hook named its item, or a zero-byte file
 // cleared it), so its path is forgotten; one that did not keeps its intent
 // for a poll that begins after now.
-func (a *watchCreateAttempts) completed(c *ActionCompletion, now time.Time) {
+func (a *watchCreateAttempts) completed(c *syncdomain.ActionCompletion, now time.Time) {
 	if c == nil {
 		return
 	}

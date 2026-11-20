@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -51,7 +53,7 @@ func handleEventWithin(
 
 	require.NoError(t, runWithin(t, t.Context(), "the replaced runner's event to be handled without its replacement",
 		func(ctx context.Context) error {
-			return orch.handleWatchRunnerEvent(ctx, event, syncengine.SyncBidirectional, syncengine.WatchOptions{},
+			return orch.handleWatchRunnerEvent(ctx, event, syncdomain.SyncBidirectional, syncengine.WatchOptions{},
 				runners, make(chan watchRunnerEvent, 1), newParentChildWorkSnapshots())
 		}))
 }
@@ -159,7 +161,7 @@ func TestApplyWatchMountSetForParent_NormalToFinalDrainRestartsChild(t *testing.
 
 	normal := testChildRecord(t, parentID, "binding-drain-later", "Shortcuts/DrainLater")
 	draining := normal
-	draining.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	draining.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 
 	parentMounts, err := buildStandaloneMountSpecs(cfg.StandaloneMounts)
 	require.NoError(t, err)
@@ -198,7 +200,7 @@ func TestApplyWatchMountSetForParent_NormalToFinalDrainRestartsChild(t *testing.
 	drained := make(chan struct{})
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(context.Context, syncdomain.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
 				close(drained)
 				return &syncengine.Report{}, nil
 			},
@@ -210,7 +212,7 @@ func TestApplyWatchMountSetForParent_NormalToFinalDrainRestartsChild(t *testing.
 		runners,
 		parentID,
 		nextDecisions,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		make(chan watchRunnerEvent, 4),
 		newParentChildWorkSnapshots(),
@@ -235,7 +237,7 @@ func TestRetireWatchRunner_TimeoutFailsClosed(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	engine := &mockEngine{
-		runWatchFn: func(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error {
+		runWatchFn: func(context.Context, syncdomain.SyncMode, syncengine.WatchOptions) error {
 			<-release
 			return nil
 		},
@@ -373,7 +375,7 @@ func newStuckStopFixture(t *testing.T, paused bool) *stuckStopFixture {
 // applySet applies decisions to runners as a reload or reconcile pass does,
 // and adds the runners the pass reports stopped to f.stopped.
 func (f *stuckStopFixture) applySet(ctx context.Context, runners map[mountID]*watchRunner, decisions *runtimeWorkSet) error {
-	stopped, _, _, err := f.orch.applyWatchMountSet(ctx, runners, decisions, syncengine.SyncBidirectional,
+	stopped, _, _, err := f.orch.applyWatchMountSet(ctx, runners, decisions, syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{}, make(chan watchRunnerEvent, 4), f.childWork)
 	f.stopped += stopped
 	return err
@@ -392,13 +394,13 @@ func (f *stuckStopFixture) applyConfiguredSet(ctx context.Context, runners map[m
 // lists no shortcut, as its runner publishes once the shortcut is gone.
 func (f *stuckStopFixture) applyEmptyParentSnapshot(ctx context.Context, runners map[mountID]*watchRunner) error {
 	stopped, _, _, err := f.orch.applyWatchMountSetForParent(ctx, runners, f.parent.id(), &runtimeWorkSet{},
-		syncengine.SyncBidirectional, syncengine.WatchOptions{}, make(chan watchRunnerEvent, 4), f.childWork)
+		syncdomain.SyncBidirectional, syncengine.WatchOptions{}, make(chan watchRunnerEvent, 4), f.childWork)
 	f.stopped += stopped
 	return err
 }
 
 func (f *stuckStopFixture) handle(ctx context.Context, runners map[mountID]*watchRunner, event watchRunnerEvent) error {
-	return f.orch.handleWatchRunnerEvent(ctx, event, syncengine.SyncBidirectional, syncengine.WatchOptions{},
+	return f.orch.handleWatchRunnerEvent(ctx, event, syncdomain.SyncBidirectional, syncengine.WatchOptions{},
 		runners, make(chan watchRunnerEvent, 4), f.childWork)
 }
 
@@ -561,7 +563,7 @@ func startStuckWatch(t *testing.T, cidStr, name string) *stuckWatch {
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		w.starts.Add(1)
 		return &mockEngine{
-			runWatchFn: func(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error {
+			runWatchFn: func(context.Context, syncdomain.SyncMode, syncengine.WatchOptions) error {
 				started <- struct{}{}
 				<-release
 				return nil
@@ -636,7 +638,7 @@ func TestStartWatchRunner_CancelledRunnerDoesNotBlockOnAFullEventChannel(t *test
 	draining := make(chan struct{})
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				close(draining)
 				<-ctx.Done()
 				return &syncengine.Report{}, nil
@@ -645,7 +647,7 @@ func TestStartWatchRunner_CancelledRunnerDoesNotBlockOnAFullEventChannel(t *test
 	}
 
 	unread := make(chan watchRunnerEvent)
-	wr, err := orch.startWatchRunner(t.Context(), drainMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, unread)
+	wr, err := orch.startWatchRunner(t.Context(), drainMount, 1, syncdomain.SyncBidirectional, syncengine.WatchOptions{}, unread)
 	require.NoError(t, err)
 	receiveWithin(t, draining, "the final drain to start")
 	wr.cancel()
@@ -698,7 +700,7 @@ func newDrainingDrives(lockPath, socketPath string, ids ...mountID) (map[mountID
 	factory := func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		drive := drives[req.Mount.id()]
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				close(drive.started)
 				<-ctx.Done()
 				<-drive.release

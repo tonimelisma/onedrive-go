@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Every drive filter setting reaches the engine. cross_filesystems was once
@@ -28,7 +28,7 @@ func TestContentFilterConfigFor_CarriesEveryFilterSetting(t *testing.T) {
 		CrossFilesystems: true,
 	})
 
-	assert.Equal(t, syncengine.ContentFilterConfig{
+	assert.Equal(t, syncdomain.ContentFilterConfig{
 		IgnoredDirs:      []string{"Ignored"},
 		IncludedDirs:     []string{"Included"},
 		IgnoredPaths:     []string{"*.tmp"},

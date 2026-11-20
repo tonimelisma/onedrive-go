@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 type shortcutChildDrainStatus string
@@ -18,7 +20,7 @@ const (
 
 type shortcutChildDrainResult struct {
 	MountID string
-	AckRef  syncengine.ShortcutChildAckRef
+	AckRef  syncshortcut.ShortcutChildAckRef
 	Status  shortcutChildDrainStatus
 	Detail  string
 }
@@ -100,5 +102,5 @@ func cleanShortcutChildDrainResults(results []shortcutChildDrainResult) []shortc
 }
 
 func isMountRootUnavailableReport(err error) bool {
-	return errors.Is(err, syncengine.ErrMountRootUnavailable)
+	return errors.Is(err, syncdomain.ErrMountRootUnavailable)
 }

@@ -12,10 +12,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type syncCommandOptions struct {
-	Mode           syncengine.SyncMode
+	Mode           syncdomain.SyncMode
 	Watch          bool
 	DryRun         *bool
 	FullReconcile  bool
@@ -26,7 +27,7 @@ type syncWatchRunner func(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
@@ -37,7 +38,7 @@ type syncRunOnceRunner func(
 	ctx context.Context,
 	holder *config.Holder,
 	drives []*config.ResolvedDrive,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,
@@ -118,7 +119,7 @@ func runSyncWatch(
 	cc *CLIContext,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
@@ -169,7 +170,7 @@ func runSyncOnce(
 	cc *CLIContext,
 	holder *config.Holder,
 	drives []*config.ResolvedDrive,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.RunOptions,
 	logger *slog.Logger,
 	controlSocketPath string,

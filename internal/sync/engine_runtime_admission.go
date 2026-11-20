@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 type admissionDecisionKind int
@@ -17,12 +20,12 @@ const (
 )
 
 type admissionDecision struct {
-	Action        *TrackedAction
+	Action        *syncdomain.TrackedAction
 	Kind          admissionDecisionKind
-	ScopeKey      ScopeKey
+	ScopeKey      syncdomain.ScopeKey
 	NextRetryAt   time.Time
-	ClearScopeKey ScopeKey
-	RetryWorkKey  RetryWorkKey
+	ClearScopeKey syncdomain.ScopeKey
+	RetryWorkKey  syncdomain.RetryWorkKey
 }
 
 // admitReady applies exact retry/block-scope admission to a ready action set.
@@ -33,8 +36,8 @@ type admissionDecision struct {
 // held row written for work that will not run.
 func (flow *engineFlow) admitReady(
 	ctx context.Context,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
+	ready []*syncdomain.TrackedAction,
+) ([]*syncdomain.TrackedAction, error) {
 	if isStoppingRun(ctx) {
 		return ready, nil
 	}
@@ -51,7 +54,7 @@ func (flow *engineFlow) admitReady(
 func (flow *engineFlow) filterFreshAdmissionDecisions(
 	ctx context.Context,
 	decisions []admissionDecision,
-) ([]admissionDecision, []*TrackedAction, error) {
+) ([]admissionDecision, []*syncdomain.TrackedAction, error) {
 	filtered := make([]admissionDecision, 0, len(decisions))
 	for i := range decisions {
 		decision := decisions[i]
@@ -64,7 +67,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 			continue
 		}
 
-		freshness, err := EvaluateActionFreshnessFromStore(ctx, executorStoreOf(flow.deps.store), &ta.Action)
+		freshness, err := syncexec.EvaluateActionFreshnessFromStore(ctx, executorStoreOf(flow.deps.store), &ta.Action)
 		if err != nil {
 			return filtered, append(admissionDispatchActions(filtered), ta), err
 		}
@@ -73,8 +76,8 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 			continue
 		}
 
-		completionErr := fmt.Errorf("%w: %s", ErrActionPreconditionChanged, freshness.Reason)
-		completion := ActionCompletionFromTrackedAction(ta, nil, completionErr)
+		completionErr := fmt.Errorf("%w: %s", syncdomain.ErrActionPreconditionChanged, freshness.Reason)
+		completion := syncdomain.ActionCompletionFromTrackedAction(ta, nil, completionErr)
 		flow.engine.collector().RecordSuperseded(perf.SupersededSourceEngineAdmission, 1)
 		if err := flow.applySupersededCompletion(ctx, ta, &completion, "admission stale action"); err != nil {
 			return filtered, admissionDispatchActions(filtered), err
@@ -84,8 +87,8 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 	return filtered, nil, nil
 }
 
-func admissionDispatchActions(decisions []admissionDecision) []*TrackedAction {
-	actions := make([]*TrackedAction, 0, len(decisions))
+func admissionDispatchActions(decisions []admissionDecision) []*syncdomain.TrackedAction {
+	actions := make([]*syncdomain.TrackedAction, 0, len(decisions))
 	for i := range decisions {
 		if decisions[i].Kind == admissionDispatchNow && decisions[i].Action != nil {
 			actions = append(actions, decisions[i].Action)
@@ -97,7 +100,7 @@ func admissionDispatchActions(decisions []admissionDecision) []*TrackedAction {
 
 func (flow *engineFlow) decideAdmission(
 	now time.Time,
-	ready []*TrackedAction,
+	ready []*syncdomain.TrackedAction,
 ) []admissionDecision {
 	decisions := make([]admissionDecision, 0, len(ready))
 
@@ -115,11 +118,11 @@ func (flow *engineFlow) decideAdmission(
 	return decisions
 }
 
-func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) admissionDecision {
+func (flow *engineFlow) newAdmissionDecision(ta *syncdomain.TrackedAction) admissionDecision {
 	decision := admissionDecision{
 		Action:       ta,
 		Kind:         admissionDispatchNow,
-		RetryWorkKey: RetryWorkKeyForAction(&ta.Action),
+		RetryWorkKey: syncdomain.RetryWorkKeyForAction(&ta.Action),
 	}
 
 	if ta.IsTrial && !ta.TrialScopeKey.IsZero() &&
@@ -131,7 +134,7 @@ func (flow *engineFlow) newAdmissionDecision(ta *TrackedAction) admissionDecisio
 }
 
 func (flow *engineFlow) applyActiveScopeAdmission(
-	ta *TrackedAction,
+	ta *syncdomain.TrackedAction,
 	decision *admissionDecision,
 ) {
 	if ta == nil || decision == nil || decision.Kind != admissionDispatchNow {
@@ -153,8 +156,8 @@ func (flow *engineFlow) applyActiveScopeAdmission(
 func (flow *engineFlow) applyAdmissionDecisions(
 	ctx context.Context,
 	decisions []admissionDecision,
-) ([]*TrackedAction, error) {
-	var dispatch []*TrackedAction
+) ([]*syncdomain.TrackedAction, error) {
+	var dispatch []*syncdomain.TrackedAction
 
 	for i := range decisions {
 		decision := &decisions[i]
@@ -172,7 +175,7 @@ func (flow *engineFlow) applyAdmissionDecisions(
 			flow.sched.markQueued(ta)
 			dispatch = append(dispatch, ta)
 		case admissionHoldRetry:
-			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, decision.NextRetryAt)
+			flow.holdAction(ta, heldReasonRetry, syncdomain.ScopeKey{}, decision.NextRetryAt)
 		case admissionHoldScope:
 			if err := flow.persistHeldScopeDecision(ctx, ta, decision); err != nil {
 				return dispatch, err
@@ -199,7 +202,7 @@ func (flow *engineFlow) applyAdmissionScopeClear(
 
 func (flow *engineFlow) persistHeldScopeDecision(
 	ctx context.Context,
-	ta *TrackedAction,
+	ta *syncdomain.TrackedAction,
 	decision *admissionDecision,
 ) error {
 	if ta == nil || decision == nil || decision.ScopeKey.IsZero() {
@@ -212,8 +215,8 @@ func (flow *engineFlow) persistHeldScopeDecision(
 	}
 
 	work := decision.RetryWorkKey
-	if work == (RetryWorkKey{}) {
-		work = RetryWorkKeyForAction(&ta.Action)
+	if work == (syncdomain.RetryWorkKey{}) {
+		work = syncdomain.RetryWorkKeyForAction(&ta.Action)
 	}
 	if err := flow.persistBlockedRetryWork(ctx, work, decision.ScopeKey); err != nil {
 		return err
@@ -231,7 +234,7 @@ func (flow *engineFlow) persistHeldScopeDecision(
 
 // discardScopeWithoutBlockedWork discards an active scope that no blocked
 // retry work names any more.
-func (flow *engineFlow) discardScopeWithoutBlockedWork(ctx context.Context, scopeKey ScopeKey) error {
+func (flow *engineFlow) discardScopeWithoutBlockedWork(ctx context.Context, scopeKey syncdomain.ScopeKey) error {
 	if !flow.scopes.hasActiveScope(scopeKey) {
 		return nil
 	}
@@ -246,7 +249,7 @@ func (flow *engineFlow) discardScopeWithoutBlockedWork(ctx context.Context, scop
 // executorStoreOf is the executor's view of store. A missing store stays
 // missing: a nil *SyncStore would otherwise become a non-nil ExecutorStore,
 // and the freshness check skips only when it has no store at all.
-func executorStoreOf(store *SyncStore) ExecutorStore {
+func executorStoreOf(store *syncstore.SyncStore) syncexec.ExecutorStore {
 	if store == nil {
 		return nil
 	}

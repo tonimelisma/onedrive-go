@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 const (
@@ -26,7 +27,7 @@ const (
 // keep running), when a drive's sync did not stop within its bound
 // (ErrSyncStuck), whether a reload, a runner exit or the shutdown itself
 // asked it to, and when the loop itself panicked (panicguard.ErrPanic).
-func (o *Orchestrator) RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) (err error) {
+func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, opts syncengine.WatchOptions) (err error) {
 	// Registered first so it runs last, after the drain and the socket close
 	// below: a panic on the loop leaves its maps and its report memory of
 	// unknown consistency, so the watch does not carry on. The drives stop
@@ -149,7 +150,7 @@ func (o *Orchestrator) drainWatch(ctx context.Context, runners map[mountID]*watc
 // settings; with no client waiting there is nobody else to tell. A drive
 // that did not stop is returned, and ends the watch.
 func (o *Orchestrator) reloadForReason(
-	ctx context.Context, reason string, mode syncengine.SyncMode, opts syncengine.WatchOptions,
+	ctx context.Context, reason string, mode syncdomain.SyncMode, opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner, runnerEvents chan<- watchRunnerEvent, childWork *parentChildWorkSnapshots,
 ) error {
 	o.logger.Info("Reloading the config (" + reason + ")")
@@ -171,7 +172,7 @@ func (o *Orchestrator) reloadForReason(
 // exactly what started, also when the start fails or panics part way.
 func (o *Orchestrator) startWatchRuntime(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	commands chan controlCommand,
 	fatal chan<- error,
@@ -234,7 +235,7 @@ func (o *Orchestrator) startWatchRuntime(
 // and adds it to runners, and returns every mount's start result.
 func (o *Orchestrator) startInitialWatchRunners(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.WatchOptions,

@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // shortcutWriteStep names a test's write into a shortcut's local folder in
@@ -243,12 +243,12 @@ func TestE2E_Shortcut_LocalRootCollisionSkipsChildButParentCompletes(t *testing.
 	out, stderr, err := runCLICore(t, cfgPath, env, fixture.ParentDrive, "sync", "--upload-only")
 	require.Error(t, err)
 	assertOutputContains(t, out, "(upload only)")
-	assertOutputContains(t, stderr, string(syncengine.ShortcutRootStateBlockedPath))
+	assertOutputContains(t, stderr, string(syncshortcut.ShortcutRootStateBlockedPath))
 	assert.Equal(t, 1, strings.Count(out, "Uploaded "), "exactly one upload should succeed")
 
 	record := requireShortcutChildAtPath(t, env, fixture, fixture.ShortcutName)
-	assert.Equal(t, syncengine.ShortcutRootStateBlockedPath, record.State)
-	assert.Equal(t, string(syncengine.ShortcutRootStateBlockedPath), record.StateReason)
+	assert.Equal(t, syncshortcut.ShortcutRootStateBlockedPath, record.State)
+	assert.Equal(t, string(syncshortcut.ShortcutRootStateBlockedPath), record.StateReason)
 	waitForRemoteReadContains(t, cfgPath, env, fixture.ParentDrive, parentName, pollTimeout, "stat", parentRemotePath)
 }
 

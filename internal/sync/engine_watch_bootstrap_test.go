@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.10.33
@@ -17,36 +19,36 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 	ctx := t.Context()
 	now := eng.nowFunc()
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  eng.driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	row := RetryWorkRow{
+	row := syncdomain.RetryWorkRow{
 		Path:         "cleanup.txt",
-		ActionType:   ActionCleanup,
+		ActionType:   syncdomain.ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(-time.Second).UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
-	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
-	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	rt.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 	rt.kickRetryHeldReleaseNow()
 	rt.enterBootstrap()
 
@@ -69,29 +71,29 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  eng.driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	root := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	root := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "sync.txt",
 		DriveID: eng.driveID,
 		ItemID:  "sync-item",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	dependent := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
@@ -101,11 +103,11 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 
 	err = rt.handleWatchActionCompletion(ctx, &watchPipeline{
 		bl: bl,
-	}, &ActionCompletion{
+	}, &syncdomain.ActionCompletion{
 		Path:       "sync.txt",
 		ItemID:     "sync-item",
 		DriveID:    eng.driveID,
-		ActionType: ActionDownload,
+		ActionType: syncdomain.ActionDownload,
 		Success:    true,
 		ActionID:   1,
 	})

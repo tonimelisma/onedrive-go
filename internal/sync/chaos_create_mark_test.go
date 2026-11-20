@@ -17,6 +17,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Validates: R-5.6.15
@@ -93,11 +95,11 @@ func createThroughGraph(t *testing.T, answer chaosAnswer) (int64, error) {
 	if answer.notSent {
 		tokenErr = errChaosNotSent
 	}
-	client, err := graph.NewClient(server.URL, &http.Client{Timeout: eventWait}, chaosPinTokenSource{err: tokenErr},
+	client, err := graph.NewClient(server.URL, &http.Client{Timeout: syncfixture.EventWait}, chaosPinTokenSource{err: tokenErr},
 		slog.New(slog.DiscardHandler), "chaos-pin")
 	require.NoError(t, err)
 
-	_, createErr := client.CreateFile(t.Context(), driveid.New(engineTestDriveID), GraphRootID, "doc.txt")
+	_, createErr := client.CreateFile(t.Context(), driveid.New(syncfixture.EngineTestDriveID), syncexec.GraphRootID, "doc.txt")
 
 	return requests.Load(), createErr
 }

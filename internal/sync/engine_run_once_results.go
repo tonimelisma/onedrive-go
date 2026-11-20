@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // runResultsLoopWithInitialOutbox drives one pass's workers from the
@@ -16,11 +18,11 @@ import (
 func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *Baseline,
-	completions <-chan ActionCompletion,
-	initialOutbox []*TrackedAction,
+	bl *syncdomain.Baseline,
+	completions <-chan syncdomain.ActionCompletion,
+	initialOutbox []*syncdomain.TrackedAction,
 ) error {
-	r.outbox = append([]*TrackedAction(nil), initialOutbox...)
+	r.outbox = append([]*syncdomain.TrackedAction(nil), initialOutbox...)
 	stopNoting := r.noteRunCancel(ctx)
 	defer stopNoting()
 	err := r.runResultsLoop(ctx, cancel, bl, completions)
@@ -35,8 +37,8 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *Baseline,
-	completions <-chan ActionCompletion,
+	bl *syncdomain.Baseline,
+	completions <-chan syncdomain.ActionCompletion,
 ) error {
 	var fatalErr error
 
@@ -81,8 +83,8 @@ func (r *oneShotRunner) runResultsLoop(
 func (r *oneShotRunner) pollImmediateCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *Baseline,
-	completions <-chan ActionCompletion,
+	bl *syncdomain.Baseline,
+	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
 	if len(r.outbox) != 0 || r.sched.runningCount != 0 {
@@ -118,8 +120,8 @@ func (r *oneShotRunner) finishResultsLoopIfSettled(fatalErr error) (bool, error)
 func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *Baseline,
-	completions <-chan ActionCompletion,
+	bl *syncdomain.Baseline,
+	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
 	if nextFatal, handled := r.releaseIdleDueHeldWork(ctx, bl); handled {
@@ -143,7 +145,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 // completed as shutdown and the error is returned.
 func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 ) (error, bool) {
 	if r.stop != nil || r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
 		return nil, false
@@ -162,8 +164,8 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *Baseline,
-	completions <-chan ActionCompletion,
+	bl *syncdomain.Baseline,
+	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
 	// A finished outcome may change what the next dispatch is allowed to be
@@ -183,8 +185,8 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	now := r.deps.now()
 	next, admitAt := r.nextDispatchable(r.outbox, now)
 	var (
-		dispatchCh chan<- *TrackedAction
-		nextAction *TrackedAction
+		dispatchCh chan<- *syncdomain.TrackedAction
+		nextAction *syncdomain.TrackedAction
 		admitDue   <-chan struct{}
 	)
 	switch {
@@ -231,9 +233,9 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 func (r *oneShotRunner) handleOneShotCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	fatalErr error,
-	completion *ActionCompletion,
+	completion *syncdomain.ActionCompletion,
 ) error {
 	if fatalErr != nil || ctx.Err() != nil {
 		if err := r.processShutdownCompletion(ctx, completion, bl); err != nil {

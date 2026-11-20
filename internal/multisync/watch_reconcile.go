@@ -7,6 +7,8 @@ import (
 	"sort"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // reconcileWatchRunners brings the runner set in line with the configured
@@ -15,7 +17,7 @@ import (
 // could not compute is warned about and leaves the runners as they are.
 func (o *Orchestrator) reconcileWatchRunners(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
@@ -76,7 +78,7 @@ func (o *Orchestrator) applyWatchMountSet(
 	ctx context.Context,
 	runners map[mountID]*watchRunner,
 	decisions *runtimeWorkSet,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
@@ -125,8 +127,8 @@ func (o *Orchestrator) reportShortcutCleanup(err error) {
 func (o *Orchestrator) reconcileWatchRunnersForParent(
 	ctx context.Context,
 	parentID mountID,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
-	mode syncengine.SyncMode,
+	snapshot syncshortcut.ShortcutChildWorkSnapshot,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
@@ -160,8 +162,8 @@ func (o *Orchestrator) reconcileWatchRunnersForParent(
 		)
 		return nil
 	}
-	publications := map[mountID]syncengine.ShortcutChildWorkSnapshot{
-		parentID: syncengine.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot),
+	publications := map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
+		parentID: syncshortcut.NormalizeShortcutChildWorkSnapshot(parentID.String(), snapshot),
 	}
 	decisions, err := o.buildRuntimeWorkFromParentSnapshots([]*mountSpec{parent}, publications)
 	if err != nil {
@@ -213,7 +215,7 @@ func (o *Orchestrator) applyWatchMountSetForParent(
 	runners map[mountID]*watchRunner,
 	parentID mountID,
 	decisions *runtimeWorkSet,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
@@ -257,7 +259,7 @@ func (o *Orchestrator) startReloadWatchRunners(
 	runners map[mountID]*watchRunner,
 	runnable map[mountID]*mountSpec,
 	initialStartup []MountStartupResult,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,

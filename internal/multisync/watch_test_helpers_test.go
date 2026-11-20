@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // These are the watch helpers of internal/sync's tests, declared again here
@@ -77,7 +78,7 @@ func runWithin(t *testing.T, ctx context.Context, what string, run func(context.
 // test here runs it, as a run for runInBackground or runWithin.
 func runWatchOf(orch *Orchestrator) func(context.Context) error {
 	return func(ctx context.Context) error {
-		return orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+		return orch.RunWatch(ctx, syncdomain.SyncBidirectional, syncengine.WatchOptions{})
 	}
 }
 
@@ -97,7 +98,7 @@ func runOnceInBackground(t *testing.T, orch *Orchestrator) (*RunOnceResult, <-ch
 
 	result := &RunOnceResult{}
 	_, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-		*result = orch.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{})
+		*result = orch.RunOnce(ctx, syncdomain.SyncBidirectional, syncengine.RunOptions{})
 		return nil
 	})
 

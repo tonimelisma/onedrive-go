@@ -3,25 +3,28 @@ package sync
 import (
 	"sort"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	flow.retryWork.install(runtime.RetryRows)
 
-	flow.retries.heldByKey = make(map[RetryWorkKey]*heldAction)
-	flow.retries.heldByScope = make(map[ScopeKey][]RetryWorkKey)
+	flow.retries.heldByKey = make(map[syncdomain.RetryWorkKey]*heldAction)
+	flow.retries.heldByScope = make(map[syncdomain.ScopeKey][]syncdomain.RetryWorkKey)
 	flow.sched.queuedByID = make(map[int64]struct{})
 	flow.sched.runningByID = make(map[int64]struct{})
 	flow.sched.runningCount = 0
 	flow.sched.resetColdStart(flow.engine.workerPoolSize())
 	flow.retries.nextHeldOrder = 0
 
-	activeScopes := make([]ActiveScope, 0, len(runtime.BlockScopes))
+	activeScopes := make([]syncdomain.ActiveScope, 0, len(runtime.BlockScopes))
 	for i := range runtime.BlockScopes {
 		if runtime.BlockScopes[i] == nil {
 			continue
 		}
-		activeScopes = append(activeScopes, ActiveScopeFromBlockScopeRow(runtime.BlockScopes[i]))
+		activeScopes = append(activeScopes, syncdomain.ActiveScopeFromBlockScopeRow(runtime.BlockScopes[i]))
 	}
 	flow.scopes.replaceActiveScopes(activeScopes)
 	// A target already under a throttle (or service) scope when the plan
@@ -31,18 +34,18 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 		flow.handOverColdStart(activeScopes[i].Key)
 	}
 	if flow.scopes.state == nil {
-		flow.scopes.state = NewScopeState(flow.engine.nowFunc, flow.deps.logger)
+		flow.scopes.state = syncexec.NewScopeState(flow.engine.nowFunc, flow.deps.logger)
 	}
 }
 
-func (flow *engineFlow) holdAction(ta *TrackedAction, reason heldReason, scopeKey ScopeKey, nextRetry time.Time) {
+func (flow *engineFlow) holdAction(ta *syncdomain.TrackedAction, reason heldReason, scopeKey syncdomain.ScopeKey, nextRetry time.Time) {
 	if ta == nil {
 		return
 	}
 
 	flow.sched.markFinished(ta)
 	ta.AdmitAt = time.Time{}
-	key := RetryWorkKeyForAction(&ta.Action)
+	key := syncdomain.RetryWorkKeyForAction(&ta.Action)
 	flow.retries.nextHeldOrder++
 	held := &heldAction{
 		Tracked:   ta,
@@ -79,8 +82,8 @@ func (flow *engineFlow) hasDueHeldWork(now time.Time) bool {
 	return false
 }
 
-func (flow *engineFlow) dueRetryKeys(now time.Time) []RetryWorkKey {
-	keys := make([]RetryWorkKey, 0)
+func (flow *engineFlow) dueRetryKeys(now time.Time) []syncdomain.RetryWorkKey {
+	keys := make([]syncdomain.RetryWorkKey, 0)
 	for key, held := range flow.retries.heldByKey {
 		if held == nil || held.Reason != heldReasonRetry || held.NextRetry.After(now) {
 			continue
@@ -101,7 +104,7 @@ func (flow *engineFlow) dueRetryKeys(now time.Time) []RetryWorkKey {
 	return keys
 }
 
-func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
+func (flow *engineFlow) dueTrialKeys(now time.Time) []syncdomain.RetryWorkKey {
 	activeScopes := flow.scopes.snapshotActiveScopes()
 	sort.Slice(activeScopes, func(i, j int) bool {
 		if !activeScopes[i].NextTrialAt.Equal(activeScopes[j].NextTrialAt) {
@@ -110,7 +113,7 @@ func (flow *engineFlow) dueTrialKeys(now time.Time) []RetryWorkKey {
 		return activeScopes[i].Key.String() < activeScopes[j].Key.String()
 	})
 
-	var keys []RetryWorkKey
+	var keys []syncdomain.RetryWorkKey
 	for _, scope := range activeScopes {
 		if scope.NextTrialAt.After(now) {
 			continue

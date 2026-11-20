@@ -18,7 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // presentedError carries a user-facing message while keeping the underlying
@@ -248,7 +248,7 @@ func remoteFailureText(err error) string {
 // A partial that is missing has no plain sentence, since its folder is
 // there, and the error itself is printed.
 func localFailureText(err error) string {
-	if syncengine.IsLocalDiskFull(err) {
+	if syncstore.IsLocalDiskFull(err) {
 		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
 	}
 

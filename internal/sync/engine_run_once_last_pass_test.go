@@ -18,6 +18,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-6.6.28
@@ -29,13 +32,13 @@ import (
 func TestExecutePreparedPlan_APassThatEndsAtItsFirstDispatchLeavesItsWork(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	report := &Report{}
 	runtime := &runtimePlan{
-		Plan: &ActionPlan{
-			Actions: []Action{
-				{Type: ActionUpload, Path: "a.txt", View: &PathView{Path: "a.txt"}},
-				{Type: ActionUpload, Path: "b.txt", View: &PathView{Path: "b.txt"}},
+		Plan: &syncdomain.ActionPlan{
+			Actions: []syncdomain.Action{
+				{Type: syncdomain.ActionUpload, Path: "a.txt", View: &syncdomain.PathView{Path: "a.txt"}},
+				{Type: syncdomain.ActionUpload, Path: "b.txt", View: &syncdomain.PathView{Path: "b.txt"}},
 			},
 			Deps: [][]int{nil, nil},
 		},
@@ -44,7 +47,7 @@ func TestExecutePreparedPlan_APassThatEndsAtItsFirstDispatchLeavesItsWork(t *tes
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := newOneShotRunner(eng.Engine).executePreparedPlan(ctx, runtime, &Baseline{})
+	err := newOneShotRunner(eng.Engine).executePreparedPlan(ctx, runtime, &syncdomain.Baseline{})
 	require.Error(t, err, "admission refuses a canceled run")
 	assert.Zero(t, report.Succeeded+report.Failed, "%+v", report)
 	assert.Equal(t, len(runtime.Plan.Actions), report.LeftForNextSync, "neither completed nor failed: left")
@@ -70,14 +73,14 @@ func throttledUploadTestEngine(
 ) (*testEngine, *moveScenarioRemote) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
 	// Creates go through Upload, so the refusals below see every one.
-	client.uploadCreatingFn = nil
-	upload := client.uploadFn
+	client.UploadCreatingFn = nil
+	upload := client.UploadFn
 	var calls atomic.Int32
 	bothIn := make(chan struct{})
-	client.uploadFn = func(
+	client.UploadFn = func(
 		ctx context.Context, d driveid.ID, parentID, name string, content io.ReaderAt, size int64,
 		mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
@@ -101,14 +104,14 @@ func throttledUploadTestEngine(
 
 	eng, syncRoot := newTestEngine(t, client)
 	eng.transferWorkers = 2
-	clock := newManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	eng.waitFn = func(_ context.Context, d time.Duration) error {
 		clock.Advance(d)
 		return nil
 	}
-	writeLocalFile(t, syncRoot, "a.txt", "alpha\n")
-	writeLocalFile(t, syncRoot, "b.txt", "beta\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "a.txt", "alpha\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "b.txt", "beta\n")
 
 	return eng, remote
 }
@@ -129,7 +132,7 @@ func TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce(t *testing.T) 
 		return nil
 	})
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, report.Failed, "both refusals of the first pass and the refused trial: %+v", report)
 	assert.Equal(t, LeftWork{WillRetry: 2}, report.LeftWork(), "%+v", report)
@@ -150,7 +153,7 @@ func TestRunOnce_APauseWaitedOutLeavesNothing(t *testing.T) {
 
 	eng, remote := throttledUploadTestEngine(t, func(int32) error { return nil })
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, report.Failed, "the first pass's refusals: %+v", report)
 	assert.False(t, report.LeftWork().Any(), "%+v", report)
@@ -167,16 +170,16 @@ func TestRunOnce_APauseWaitedOutLeavesNothing(t *testing.T) {
 func supersededMoveTestEngine(
 	t *testing.T,
 	failNew func(syncRoot string) error,
-) (*testEngine, *moveScenarioRemote, *engineMockClient, *manualClock) {
+) (*testEngine, *moveScenarioRemote, *syncfixture.EngineMockClient, *syncfixture.ManualClock) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-dir", "root", "dir")
 	remote.addFile(t, "item-a", "item-dir", "a.txt", "alpha\n")
 	client := remote.client(t)
-	move := client.moveItemOptsFn
+	move := client.MoveItemOptsFn
 	var refused atomic.Int32
-	client.moveItemOptsFn = func(
+	client.MoveItemOptsFn = func(
 		ctx context.Context, d driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 	) (*graph.Item, error) {
 		if refused.CompareAndSwap(0, 1) {
@@ -186,10 +189,10 @@ func supersededMoveTestEngine(
 		return move(ctx, d, itemID, newParentID, newName, opts)
 	}
 	var syncRoot string
-	client.uploadCreatingFn = nil
-	upload := client.uploadFn
+	client.UploadCreatingFn = nil
+	upload := client.UploadFn
 	var uploads atomic.Int32
-	client.uploadFn = func(
+	client.UploadFn = func(
 		ctx context.Context, d driveid.ID, parentID, name string, content io.ReaderAt, size int64,
 		mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
@@ -204,11 +207,11 @@ func supersededMoveTestEngine(
 
 	eng, root := newTestEngine(t, client)
 	syncRoot = root
-	clock := newManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "dir"), filepath.Join(syncRoot, "dir-moved")))
-	writeLocalFile(t, syncRoot, "new.txt", "new\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "new.txt", "new\n")
 
 	return eng, remote, client, clock
 }
@@ -233,7 +236,7 @@ func TestRunOnce_AFailureTheNextPassNoLongerNeedsIsNotLeft(t *testing.T) {
 		return lastPassTestServerError()
 	})
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Superseded, "%+v", report)
 	assert.Equal(t, 1, report.Failed, "the first pass failed new.txt: %+v", report)
@@ -258,7 +261,7 @@ func TestRunOnce_AFailureALaterPassFinishesIsNotLeft(t *testing.T) {
 	})
 	advanceBeforeTheNextPass(client, clock, &failed)
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Failed, "the first pass failed new.txt: %+v", report)
 	assert.False(t, report.LeftWork().Any(), "%+v", report)
@@ -268,10 +271,10 @@ func TestRunOnce_AFailureALaterPassFinishesIsNotLeft(t *testing.T) {
 // advanceBeforeTheNextPass moves the clock an hour on at the first remote
 // observation after ready is set, so the retry of a failure made before it is
 // due in the pass that observation starts.
-func advanceBeforeTheNextPass(client *engineMockClient, clock *manualClock, ready *atomic.Bool) {
-	delta := client.deltaFn
+func advanceBeforeTheNextPass(client *syncfixture.EngineMockClient, clock *syncfixture.ManualClock, ready *atomic.Bool) {
+	delta := client.DeltaFn
 	var advanced atomic.Bool
-	client.deltaFn = func(ctx context.Context, d driveid.ID, token string) (*graph.DeltaPage, error) {
+	client.DeltaFn = func(ctx context.Context, d driveid.ID, token string) (*graph.DeltaPage, error) {
 		if ready.Load() && advanced.CompareAndSwap(false, true) {
 			clock.Advance(time.Hour)
 		}
@@ -303,7 +306,7 @@ func TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFolder("item-dir", "root", "dir")
 			remote.addFile(t, "item-a", "item-dir", "a.txt", "alpha\n")
 			remote.addFile(t, "item-gone", "root", "gone.txt", "gone\n")
@@ -311,8 +314,8 @@ func TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt(t *testing.T) {
 			var refused atomic.Bool
 			if tc.redo {
 				// A move OneDrive refuses once makes the run pass again.
-				move := client.moveItemOptsFn
-				client.moveItemOptsFn = func(
+				move := client.MoveItemOptsFn
+				client.MoveItemOptsFn = func(
 					ctx context.Context, d driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 				) (*graph.Item, error) {
 					if refused.CompareAndSwap(false, true) {
@@ -324,17 +327,17 @@ func TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt(t *testing.T) {
 				}
 			}
 			eng, syncRoot := newTestEngine(t, client)
-			clock := newManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
+			clock := syncfixture.NewManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
 			installManualClockForTestEngine(eng, clock)
 			runScenarioPass(t, eng)
 
-			db := requireStoreTestRawDB(t, eng.baseline)
+			db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
 			_, err := db.ExecContext(t.Context(), refuseGoneCleanupSQL)
 			require.NoError(t, err)
 			if tc.redo {
-				delta := client.deltaFn
+				delta := client.DeltaFn
 				var dropped atomic.Bool
-				client.deltaFn = func(ctx context.Context, d driveid.ID, token string) (*graph.DeltaPage, error) {
+				client.DeltaFn = func(ctx context.Context, d driveid.ID, token string) (*graph.DeltaPage, error) {
 					if refused.Load() && dropped.CompareAndSwap(false, true) {
 						if _, dropErr := db.ExecContext(ctx, `DROP TRIGGER refuse_gone_cleanup`); dropErr != nil {
 							return nil, fmt.Errorf("dropping the cleanup trigger: %w", dropErr)
@@ -348,7 +351,7 @@ func TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt(t *testing.T) {
 			require.NoError(t, os.Remove(filepath.Join(syncRoot, "gone.txt")))
 			remote.deleteAt(t, "gone.txt")
 
-			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			assert.Equal(t, 1, report.Failed, "the cleanup failed once: %+v", report)
 			assert.Equal(t, tc.wantLeft, report.LeftWork(), "%+v", report)
@@ -365,7 +368,7 @@ func TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt(t *testing.T) {
 func TestRunOnce_AConflictCopyAtThePassBoundIsLeftWork(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-doc", "root", "doc.txt", "first\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
@@ -373,7 +376,7 @@ func TestRunOnce_AConflictCopyAtThePassBoundIsLeftWork(t *testing.T) {
 	remote.putFileAt(t, "doc.txt", "edited online\n")
 	eng.oneShotPassLimit = 1
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.ConflictCopies, "%+v", report)
 	assert.Positive(t, report.LeftWork().WillRetry, "the copy is the next sync's: %+v", report)
@@ -388,12 +391,12 @@ func TestRunOnce_AConflictCopyAtThePassBoundIsLeftWork(t *testing.T) {
 func TestRunOnce_ReportsTheFilesAnInterruptedRemovalSetAside(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, ".onedrive-go.0123456789abcdef.detach"), []byte("half-removed\n"), 0o600))
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.InterruptedRemovals)
 	assert.False(t, report.LeftWork().Any(), "%+v", report)
@@ -422,9 +425,9 @@ func TestFailureKeptForRetry_TheFeedAndThePassCountAgree(t *testing.T) {
 	} {
 		flow.resetResultStats()
 		activities = nil
-		completion := &ActionCompletion{ActionType: ActionUpload, Path: "a.txt", Err: errors.New("refused")}
+		completion := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionUpload, Path: "a.txt", Err: errors.New("refused")}
 
-		decision := &ResultDecision{Class: class}
+		decision := &syncdomain.ResultDecision{Class: class}
 		eng.emitActivity(completion, decision, true)
 		flow.recordError(decision, completion)
 

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -21,7 +22,7 @@ const waitNotBoundedByEventWait = "the wait did not give up exactly eventWait af
 func assertGaveUpAfterEventWait(t *testing.T, start time.Time) {
 	t.Helper()
 
-	assert.Equal(t, eventWait, time.Since(start), waitNotBoundedByEventWait)
+	assert.Equal(t, syncfixture.EventWait, time.Since(start), waitNotBoundedByEventWait)
 }
 
 // runIgnoringCancellation returns a run that ignores its context and returns
@@ -67,7 +68,7 @@ func TestWatchHelpers_FailNamingWhatTheyWaitedFor(t *testing.T) {
 			wait: func(t *testing.T) {
 				t.Helper()
 				defer assertGaveUpAfterEventWait(t, time.Now())
-				receiveWithin(t, make(chan struct{}), "the event under test")
+				syncfixture.ReceiveWithin(t, make(chan struct{}), "the event under test")
 			},
 			want: "timed out waiting for the event under test",
 		},
@@ -76,7 +77,7 @@ func TestWatchHelpers_FailNamingWhatTheyWaitedFor(t *testing.T) {
 			wait: func(t *testing.T) {
 				t.Helper()
 				defer assertGaveUpAfterEventWait(t, time.Now())
-				require.NoError(t, runWithin(t, t.Context(), "the run under test to return", runIgnoringCancellation(t)))
+				require.NoError(t, syncfixture.RunWithin(t, t.Context(), "the run under test to return", runIgnoringCancellation(t)))
 			},
 			want: "timed out waiting for the run under test to return",
 		},
@@ -85,8 +86,8 @@ func TestWatchHelpers_FailNamingWhatTheyWaitedFor(t *testing.T) {
 			wait: func(t *testing.T) {
 				t.Helper()
 				defer assertGaveUpAfterEventWait(t, time.Now())
-				cancel, done := runInBackground(t, t.Context(), runIgnoringCancellation(t))
-				stopWatch(t, cancel, done)
+				cancel, done := syncfixture.RunInBackground(t, t.Context(), runIgnoringCancellation(t))
+				syncfixture.StopWatch(t, cancel, done)
 			},
 			want: "timed out waiting for the watch to return after cancellation",
 		},
@@ -97,7 +98,7 @@ func TestWatchHelpers_FailNamingWhatTheyWaitedFor(t *testing.T) {
 				t.Helper()
 				start := time.Now()
 				t.Cleanup(func() { assertGaveUpAfterEventWait(t, start) })
-				runInBackground(t, t.Context(), runIgnoringCancellation(t))
+				syncfixture.RunInBackground(t, t.Context(), runIgnoringCancellation(t))
 			},
 			want: "a background watch did not return after its cleanup canceled it",
 		},

@@ -1,8 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/store_remote_twins.go, internal/sync/store_pending_creates.go, internal/sync/store_held_deletes.go, internal/sync/store_delete_ledger.go, internal/sync/store_local_hash_cache.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/store_sync_root.go, internal/sync/store_test_seams.go
-
-LAYER: 1
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
 
 Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -825,8 +823,8 @@ baseline path resolution before baseline publication.
 policy for `status` or watch summaries, and it no longer persists a separate
 last-sync history table.
 Shared condition-family grouping and ordering belong to
-`internal/sync/condition_keys.go`, while raw grouped projection over durable
-authorities belongs to `internal/sync/condition_projection.go`; neither
+`internal/sync/syncdomain/condition_keys.go`, while raw grouped projection over durable
+authorities belongs to `internal/sync/syncstore/condition_projection.go`; neither
 responsibility belongs to store query helpers.
 Store maintenance must also keep `block_scopes` honest:
 

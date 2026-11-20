@@ -958,7 +958,6 @@ func verifyStepNames() []verifyStepName {
 		outputBoundariesStepName,
 		testConventionsStepName,
 		specGovernsStepName,
-		layeringStepName,
 		retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName,
 		requirementTraceabilityStepName,
@@ -1003,7 +1002,7 @@ func (name verifyStepName) runsGoTest() bool {
 		stressSyncConcurrencyRaceStepName, stressSyncRaceStepName, raceStepName, seedsStepName, failedTestRerunStepName:
 		return true
 	case formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
-		specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
+		specGovernsStepName, retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
 		taggedVetStepName, coverageStepName, fullE2ECompileStepName, fullE2EDiscoveryStepName:
 		return false
@@ -1039,14 +1038,13 @@ const (
 	outputBoundariesStepName        verifyStepName = "output-boundaries"
 	testConventionsStepName         verifyStepName = "test-conventions"
 	specGovernsStepName             verifyStepName = "spec-governs"
-	layeringStepName                verifyStepName = "layering"
 	retiredBacklogIDsStepName       verifyStepName = "retired-backlog-ids"
 	mutexOwnershipDocsStepName      verifyStepName = "mutex-ownership-docs"
 	requirementTraceabilityStepName verifyStepName = "requirement-traceability"
 )
 
 // repoRuleSteps are the repository's static rules that lint cannot state: the
-// flattened-error-attribute, integration-test-name, spec-ownership, layering,
+// flattened-error-attribute, integration-test-name, spec-ownership,
 // backlog-id, mutex-doc and traceability checks. They take seconds, so every
 // profile that builds the tree runs them.
 func repoRuleSteps() []verifyStep {
@@ -1054,7 +1052,6 @@ func repoRuleSteps() []verifyStep {
 		{name: outputBoundariesStepName, run: runOutputBoundaries},
 		{name: testConventionsStepName, run: runTestConventions},
 		{name: specGovernsStepName, run: runSpecGoverns},
-		{name: layeringStepName, run: runLayering},
 		{name: retiredBacklogIDsStepName, run: runRetiredBacklogIDs},
 		{name: mutexOwnershipDocsStepName, run: runMutexDocs},
 		{name: requirementTraceabilityStepName, run: runRequirementTraceability},

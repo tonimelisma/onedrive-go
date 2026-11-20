@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // logWatchSummary logs a periodic one-liner summary of active sync conditions
@@ -101,7 +103,7 @@ func watchConditionSummaryAddsActionable(summary watchConditionSummary, previous
 
 	for i := range summary.Counts {
 		key := summary.Counts[i].Key
-		if ConditionClearsAutomatically(key) {
+		if syncdomain.ConditionClearsAutomatically(key) {
 			continue
 		}
 		if _, seen := previous[string(key)]; !seen {
@@ -120,75 +122,75 @@ func watchConditionSummaryAddsActionable(summary watchConditionSummary, previous
 // conditionLabel words by its own name.
 //
 //nolint:gocyclo,funlen // one case per member: the label table of the enum
-func conditionLabelText(key ConditionKey) (label string, ok bool) {
+func conditionLabelText(key syncdomain.ConditionKey) (label string, ok bool) {
 	switch key {
-	case ConditionInvalidFilename:
+	case syncdomain.ConditionInvalidFilename:
 		return "with names OneDrive does not allow", true
-	case ConditionPathTooLong:
+	case syncdomain.ConditionPathTooLong:
 		return "with paths too long for OneDrive", true
-	case ConditionFileTooLarge:
+	case syncdomain.ConditionFileTooLarge:
 		return "too large for OneDrive", true
-	case ConditionCaseCollision:
+	case syncdomain.ConditionCaseCollision:
 		return "whose names OneDrive treats as the same name", true
-	case ConditionRemoteNameTwin:
+	case syncdomain.ConditionRemoteNameTwin:
 		return "that OneDrive keeps as two items under one name here", true
-	case ConditionLocalReadDenied:
+	case syncdomain.ConditionLocalReadDenied:
 		return "that cannot be read locally", true
-	case ConditionLocalWriteDenied:
+	case syncdomain.ConditionLocalWriteDenied:
 		return "that cannot be written locally", true
-	case ConditionRemoteWriteDenied:
+	case syncdomain.ConditionRemoteWriteDenied:
 		return "in read-only shared folders", true
-	case ConditionRemoteReadDenied:
+	case syncdomain.ConditionRemoteReadDenied:
 		return "in OneDrive folders you cannot read", true
-	case ConditionRemoteRootNotFound:
+	case syncdomain.ConditionRemoteRootNotFound:
 		return "in OneDrive folders that were not found", true
-	case ConditionQuotaExceeded:
+	case syncdomain.ConditionQuotaExceeded:
 		return "waiting for OneDrive storage space", true
-	case ConditionDiskFull, ConditionFileTooLargeForSpace:
+	case syncdomain.ConditionDiskFull, syncdomain.ConditionFileTooLargeForSpace:
 		return "waiting for local disk space", true
-	case ConditionLocalNameTooLong:
+	case syncdomain.ConditionLocalNameTooLong:
 		return "with names too long for this computer", true
-	case ConditionLocalReadOnly:
+	case syncdomain.ConditionLocalReadOnly:
 		return "on a read-only local filesystem", true
-	case ConditionDeletesHeld:
+	case syncdomain.ConditionDeletesHeld:
 		return "whose deletion is held until you confirm it", true
-	case ConditionLocalUnsyncable:
+	case syncdomain.ConditionLocalUnsyncable:
 		return "renamed or replaced into something sync cannot use", true
-	case ConditionLocalMountBoundary:
+	case syncdomain.ConditionLocalMountBoundary:
 		return "on another filesystem inside the sync folder", true
-	case ConditionLocalMountMissing:
+	case syncdomain.ConditionLocalMountMissing:
 		return "whose disk is not mounted", true
-	case ConditionLocalInterrupted:
+	case syncdomain.ConditionLocalInterrupted:
 		return "left set aside by an interrupted removal", true
-	case ConditionRemovedFolderKept:
+	case syncdomain.ConditionRemovedFolderKept:
 		return "kept in the local folder of a removed shared folder", true
-	case ConditionRemoteFolderUnverified:
+	case syncdomain.ConditionRemoteFolderUnverified:
 		return "too large to verify before deleting on OneDrive", true
-	case ConditionLocalFileTooLarge:
+	case syncdomain.ConditionLocalFileTooLarge:
 		return "too large for the local filesystem", true
-	case ConditionLocalBusy:
+	case syncdomain.ConditionLocalBusy:
 		return "busy on this computer", true
-	case ConditionLocalCrossDevice:
+	case syncdomain.ConditionLocalCrossDevice:
 		return "that would move across a mount point", true
-	case ConditionUnsupportedOperation:
+	case syncdomain.ConditionUnsupportedOperation:
 		return "that OneDrive refuses to handle", true
-	case ConditionMalwareDetected:
+	case syncdomain.ConditionMalwareDetected:
 		return "that OneDrive flagged as malware", true
-	case ConditionLocalDatabaseOpen:
+	case syncdomain.ConditionLocalDatabaseOpen:
 		return "that are databases open in an application", true
-	case ConditionUploadVerification:
+	case syncdomain.ConditionUploadVerification:
 		return "that OneDrive stored differently than uploaded", true
-	case ConditionDownloadIntegrity:
+	case syncdomain.ConditionDownloadIntegrity:
 		return "that OneDrive served differently than it describes", true
-	case ConditionRateLimited:
+	case syncdomain.ConditionRateLimited:
 		return "waiting while OneDrive limits requests", true
-	case ConditionServiceOutage:
+	case syncdomain.ConditionServiceOutage:
 		return "waiting for OneDrive to become available", true
-	case ConditionAuthenticationRequired:
+	case syncdomain.ConditionAuthenticationRequired:
 		return "waiting for sign-in", true
-	case ConditionHashError:
+	case syncdomain.ConditionHashError:
 		return "that could not be checked", true
-	case ConditionUnexpectedCondition:
+	case syncdomain.ConditionUnexpectedCondition:
 		return "with unexpected errors", true
 	default:
 		return "", false
@@ -203,9 +205,9 @@ const (
 )
 
 // conditionLabel names a condition kind in user words for console text.
-func conditionLabel(key ConditionKey, count int) string {
+func conditionLabel(key syncdomain.ConditionKey, count int) string {
 	noun := conditionNounFile
-	if key == ConditionLocalMountBoundary || key == ConditionLocalMountMissing {
+	if key == syncdomain.ConditionLocalMountBoundary || key == syncdomain.ConditionLocalMountMissing {
 		noun = conditionNounFolder
 	}
 	if count != 1 {
@@ -229,7 +231,7 @@ func formatWatchConditionBreakdown(summary watchConditionSummary) string {
 }
 
 func (rt *watchRuntime) logRemoteBlockedChanges(groups []watchRemoteBlockedGroup) {
-	current := make(map[ScopeKey]string, len(groups))
+	current := make(map[syncdomain.ScopeKey]string, len(groups))
 
 	for i := range groups {
 		group := groups[i]

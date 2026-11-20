@@ -14,6 +14,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -28,11 +32,11 @@ import (
 // fake OneDrive and returns the harness once the upload has converged.
 func syncedNFDFileHarness(t *testing.T) *syncHarness {
 	t.Helper()
-	skipUnlessByteExactNames(t)
+	syncfixture.SkipUnlessByteExactNames(t)
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	h := newSyncHarness(t, remote)
-	writeLocalFile(t, h.syncRoot, filepath.Join("corpus", nfdCafe+" nfd.txt"), "nfd content\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("corpus", syncfixture.NfdCafe+" nfd.txt"), "nfd content\n")
 	h.beginRound(t)
 
 	report := runScenarioPass(t, h.eng)
@@ -52,10 +56,10 @@ func TestRunOnce_LocalNFDNamedFileUploadsInOnePass(t *testing.T) {
 	h := syncedNFDFileHarness(t)
 
 	assert.Equal(t, map[string]string{
-		"corpus":                         modelFolderSentinel,
-		"corpus/" + nfcCafe + " nfd.txt": "nfd content\n",
+		"corpus": syncfixture.ModelFolderSentinel,
+		"corpus/" + syncfixture.NfcCafe + " nfd.txt": "nfd content\n",
 	}, h.remote.tree())
-	assert.Equal(t, []string{nfdCafe + " nfd.txt"}, localNames(t, filepath.Join(h.syncRoot, "corpus")),
+	assert.Equal(t, []string{syncfixture.NfdCafe + " nfd.txt"}, syncfixture.LocalNames(t, filepath.Join(h.syncRoot, "corpus")),
 		"the local file keeps its own spelling")
 	assert.True(t, assertQuietNextPass(t, h.eng))
 }
@@ -93,15 +97,15 @@ func TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile(t *testing.T) {
 	t.Parallel()
 
 	h := syncedNFDFileHarness(t)
-	h.remote.putFileAt(t, "corpus/"+nfcCafe+" nfd.txt", "edited online\n")
+	h.remote.putFileAt(t, "corpus/"+syncfixture.NfcCafe+" nfd.txt", "edited online\n")
 	h.beginRound(t)
 
 	report := runScenarioPass(t, h.eng)
 
 	assert.Equal(t, 1, report.Downloads)
-	assert.Equal(t, []string{nfdCafe + " nfd.txt"}, localNames(t, filepath.Join(h.syncRoot, "corpus")),
+	assert.Equal(t, []string{syncfixture.NfdCafe + " nfd.txt"}, syncfixture.LocalNames(t, filepath.Join(h.syncRoot, "corpus")),
 		"the download replaced the NFD-named file instead of writing an NFC sibling")
-	content, err := os.ReadFile(filepath.Join(h.syncRoot, "corpus", nfdCafe+" nfd.txt"))
+	content, err := os.ReadFile(filepath.Join(h.syncRoot, "corpus", syncfixture.NfdCafe+" nfd.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "edited online\n", string(content))
 	assertNFDConverged(t, h)
@@ -114,13 +118,13 @@ func TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile(t *testing.T) {
 	t.Parallel()
 
 	h := syncedNFDFileHarness(t)
-	h.remote.deleteAt(t, "corpus/"+nfcCafe+" nfd.txt")
+	h.remote.deleteAt(t, "corpus/"+syncfixture.NfcCafe+" nfd.txt")
 	h.beginRound(t)
 
 	report := runScenarioPass(t, h.eng)
 
 	assert.Equal(t, 1, report.LocalDeletes)
-	assert.Empty(t, localNames(t, filepath.Join(h.syncRoot, "corpus")))
+	assert.Empty(t, syncfixture.LocalNames(t, filepath.Join(h.syncRoot, "corpus")))
 	assertNFDConverged(t, h)
 }
 
@@ -139,7 +143,7 @@ func TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile(t *testing.T) {
 		left []string
 	}{
 		{name: "rename", to: "corpus/renamed.txt", left: []string{"renamed.txt"}},
-		{name: "other folder", to: "other/" + nfcCafe + " nfd.txt", left: []string{}},
+		{name: "other folder", to: "other/" + syncfixture.NfcCafe + " nfd.txt", left: []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -148,12 +152,12 @@ func TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile(t *testing.T) {
 			require.NoError(t, os.Mkdir(filepath.Join(h.syncRoot, "other"), 0o750))
 			runScenarioPass(t, h.eng)
 
-			h.remote.moveAt(t, "corpus/"+nfcCafe+" nfd.txt", tc.to)
+			h.remote.moveAt(t, "corpus/"+syncfixture.NfcCafe+" nfd.txt", tc.to)
 			h.beginRound(t)
 			report := runScenarioPass(t, h.eng)
 
 			assert.Equal(t, 1, report.Moves)
-			assert.Equal(t, tc.left, localNames(t, filepath.Join(h.syncRoot, "corpus")), "the source left")
+			assert.Equal(t, tc.left, syncfixture.LocalNames(t, filepath.Join(h.syncRoot, "corpus")), "the source left")
 			content, err := os.ReadFile(filepath.Join(h.syncRoot, filepath.FromSlash(tc.to)))
 			require.NoError(t, err)
 			assert.Equal(t, "nfd content\n", string(content))
@@ -169,38 +173,38 @@ func TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile(t *testing.T) {
 // when it is deleted online.
 func TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted(t *testing.T) {
 	t.Parallel()
-	skipUnlessByteExactNames(t)
+	syncfixture.SkipUnlessByteExactNames(t)
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	h := newSyncHarness(t, remote)
-	writeLocalFile(t, h.syncRoot, filepath.Join(nfdCafe+" dir", "inside.txt"), "inside\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join(syncfixture.NfdCafe+" dir", "inside.txt"), "inside\n")
 	// A file outside the folder keeps the folder delete below from emptying
 	// the drive, which the delete-safety hold would hold for confirmation.
-	writeLocalFile(t, h.syncRoot, "keep.txt", "keep\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, "keep.txt", "keep\n")
 	h.beginRound(t)
 	runScenarioPass(t, h.eng)
 	require.Equal(t, map[string]string{
-		nfcCafe + " dir":            modelFolderSentinel,
-		nfcCafe + " dir/inside.txt": "inside\n",
-		"keep.txt":                  "keep\n",
+		syncfixture.NfcCafe + " dir":            syncfixture.ModelFolderSentinel,
+		syncfixture.NfcCafe + " dir/inside.txt": "inside\n",
+		"keep.txt":                              "keep\n",
 	}, remote.tree())
 
-	remote.putFileAt(t, nfcCafe+" dir/new.txt", "new online\n")
-	remote.mkdirAt(t, nfcCafe+" dir/sub")
+	remote.putFileAt(t, syncfixture.NfcCafe+" dir/new.txt", "new online\n")
+	remote.mkdirAt(t, syncfixture.NfcCafe+" dir/sub")
 	h.beginRound(t)
 	report := runScenarioPass(t, h.eng)
 
 	assert.Equal(t, 1, report.Downloads)
 	assert.Equal(t, 1, report.FolderCreates)
-	assert.Equal(t, []string{nfdCafe + " dir", "keep.txt"}, localNames(t, h.syncRoot), "no NFC-named twin folder")
-	assert.ElementsMatch(t, []string{"inside.txt", "new.txt", "sub"}, localNames(t, filepath.Join(h.syncRoot, nfdCafe+" dir")))
+	assert.Equal(t, []string{syncfixture.NfdCafe + " dir", "keep.txt"}, syncfixture.LocalNames(t, h.syncRoot), "no NFC-named twin folder")
+	assert.ElementsMatch(t, []string{"inside.txt", "new.txt", "sub"}, syncfixture.LocalNames(t, filepath.Join(h.syncRoot, syncfixture.NfdCafe+" dir")))
 	assertNFDConverged(t, h)
 
-	remote.deleteAt(t, nfcCafe+" dir")
+	remote.deleteAt(t, syncfixture.NfcCafe+" dir")
 	h.beginRound(t)
 	runScenarioPass(t, h.eng)
 
-	assert.Equal(t, []string{"keep.txt"}, localNames(t, h.syncRoot), "the folder delete removed the NFD-named folder")
+	assert.Equal(t, []string{"keep.txt"}, syncfixture.LocalNames(t, h.syncRoot), "the folder delete removed the NFD-named folder")
 	assertNFDConverged(t, h)
 }
 
@@ -214,12 +218,12 @@ func TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth(t *testing.T) {
 
 	h := syncedNFDFileHarness(t)
 	h.eng.clock = &modelClock{}
-	writeLocalFile(t, h.syncRoot, filepath.Join("corpus", nfdCafe+" nfd.txt"), "edited here\n")
-	h.remote.putFileAt(t, "corpus/"+nfcCafe+" nfd.txt", "edited online\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("corpus", syncfixture.NfdCafe+" nfd.txt"), "edited here\n")
+	h.remote.putFileAt(t, "corpus/"+syncfixture.NfcCafe+" nfd.txt", "edited online\n")
 	h.beginRound(t)
 
 	for range 3 {
-		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 
@@ -236,42 +240,42 @@ func TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth(t *testing.T) {
 // spelling found a "denied" folder that was only absent under that spelling.
 func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T) {
 	t.Parallel()
-	skipUnlessByteExactNames(t)
+	syncfixture.SkipUnlessByteExactNames(t)
 
 	t.Run("accessible folder keeps the denial per file", func(t *testing.T) {
 		t.Parallel()
 
 		ph, syncRoot := newTestPermHandler(t, nil)
-		require.NoError(t, os.Mkdir(filepath.Join(syncRoot, nfdCafe), 0o750))
+		require.NoError(t, os.Mkdir(filepath.Join(syncRoot, syncfixture.NfdCafe), 0o750))
 
-		evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
-			Path:       nfcCafe + "/file.txt",
-			ActionType: ActionDownload,
+		evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+			Path:       syncfixture.NfcCafe + "/file.txt",
+			ActionType: syncdomain.ActionDownload,
 			ErrMsg:     "permission denied",
 		})
 
 		assert.Equal(t, permissionEvidenceFileDenied, evidence.Kind)
-		assert.Equal(t, nfcCafe+"/file.txt", evidence.TriggerPath)
+		assert.Equal(t, syncfixture.NfcCafe+"/file.txt", evidence.TriggerPath)
 	})
 
 	t.Run("read-only mount is one stored boundary", func(t *testing.T) {
 		t.Parallel()
 
 		ph, syncRoot := newTestPermHandler(t, nil)
-		mount := filepath.Join(syncRoot, nfdCafe)
+		mount := filepath.Join(syncRoot, syncfixture.NfdCafe)
 		require.NoError(t, os.MkdirAll(filepath.Join(mount, "photos"), 0o750))
 		ph.readOnlyDir = func(absDir string) bool {
 			return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
 		}
 
-		evidence := ph.handleLocalPermission(t.Context(), &ActionCompletion{
-			Path:       nfcCafe + "/photos/a.jpg",
-			ActionType: ActionDownload,
+		evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+			Path:       syncfixture.NfcCafe + "/photos/a.jpg",
+			ActionType: syncdomain.ActionDownload,
 			Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
 		})
 
 		assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
-		assert.Equal(t, nfcCafe, evidence.BoundaryPath)
+		assert.Equal(t, syncfixture.NfcCafe, evidence.BoundaryPath)
 	})
 }
 
@@ -282,34 +286,34 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 // stored NFC spelling alone.
 func TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded(t *testing.T) {
 	t.Parallel()
-	skipUnlessByteExactNames(t)
+	syncfixture.SkipUnlessByteExactNames(t)
 
 	driveID := driveid.New(synctest.TestDriveID)
-	stored := nfcCafe + ".txt"
+	stored := syncfixture.NfcCafe + ".txt"
 	var deleted []string
-	items := &executorMockItemClient{
-		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+	items := &syncfixture.ExecutorMockItemClient{
+		GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 			return &graph.Item{ID: itemID, Name: stored, ParentID: "root", DriveID: driveID, ETag: "etag-a", QuickXorHash: "hash-a"}, nil
 		},
-		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, _ string) error {
+		DeleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, _ string) error {
 			deleted = append(deleted, itemID)
 			return nil
 		},
 	}
-	cfg, syncRoot := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-	writeExecTestFile(t, syncRoot, nfdCafe+".txt", "back again\n")
+	cfg, syncRoot := newTestExecutorConfig(t, items, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+	syncfixture.WriteExecTestFile(t, syncRoot, syncfixture.NfdCafe+".txt", "back again\n")
 
-	action := &Action{
-		Type: ActionRemoteDelete, Path: stored, ItemID: "item-a", DriveID: driveID,
-		View: &PathView{
+	action := &syncdomain.Action{
+		Type: syncdomain.ActionRemoteDelete, Path: stored, ItemID: "item-a", DriveID: driveID,
+		View: &syncdomain.PathView{
 			Path:   stored,
-			Remote: &RemoteState{DriveID: driveID, ItemID: "item-a", ItemType: ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
+			Remote: &syncdomain.RemoteState{DriveID: driveID, ItemID: "item-a", ItemType: syncdomain.ItemTypeFile, ETag: "etag-a", Hash: "hash-a"},
 		},
 	}
-	outcome := NewExecution(cfg, emptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
+	outcome := syncexec.NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteRemoteDelete(t.Context(), action)
 
-	requireOutcomeFailure(t, &outcome)
-	require.ErrorIs(t, outcome.Error, ErrActionPreconditionChanged)
+	syncfixture.RequireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, syncdomain.ErrActionPreconditionChanged)
 	assert.Empty(t, deleted, "a file that is back locally must not be deleted on OneDrive")
 }
 
@@ -321,32 +325,32 @@ func TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded(t *testing.T) {
 // path, and once the twin is removed the synced file syncs as before.
 func TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing(t *testing.T) {
 	t.Parallel()
-	skipUnlessBothUnicodeFormsCoexist(t)
+	syncfixture.SkipUnlessBothUnicodeFormsCoexist(t)
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	h := newSyncHarness(t, remote)
-	writeLocalFile(t, h.syncRoot, twinSyncedName, twinSyncedContent)
+	syncfixture.WriteLocalFile(t, h.syncRoot, syncfixture.TwinSyncedName, syncfixture.TwinSyncedContent)
 	h.beginRound(t)
 	require.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
 
-	writeLocalFile(t, h.syncRoot, twinSecondName, "twin content, longer\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, syncfixture.TwinSecondName, "twin content, longer\n")
 	for pass := range 2 {
 		report := runScenarioPass(t, h.eng)
 		assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes,
 			"pass %d acts on neither file: %+v", pass+1, report)
 	}
-	assert.Equal(t, map[string]string{twinSyncedName: twinSyncedContent}, remote.tree())
+	assert.Equal(t, map[string]string{syncfixture.TwinSyncedName: syncfixture.TwinSyncedContent}, remote.tree())
 
 	issues, err := h.eng.baseline.ListObservationIssues(t.Context())
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, twinSyncedName, issues[0].Path)
-	assert.Equal(t, IssueCaseCollision, issues[0].IssueType)
+	assert.Equal(t, syncfixture.TwinSyncedName, issues[0].Path)
+	assert.Equal(t, syncdomain.IssueCaseCollision, issues[0].IssueType)
 
-	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, twinSecondName)))
-	writeLocalFile(t, h.syncRoot, twinSyncedName, "edited after the twin went\n")
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, syncfixture.TwinSecondName)))
+	syncfixture.WriteLocalFile(t, h.syncRoot, syncfixture.TwinSyncedName, "edited after the twin went\n")
 	assert.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
-	assert.Equal(t, map[string]string{twinSyncedName: "edited after the twin went\n"}, remote.tree())
+	assert.Equal(t, map[string]string{syncfixture.TwinSyncedName: "edited after the twin went\n"}, remote.tree())
 	issues, err = h.eng.baseline.ListObservationIssues(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, issues)
@@ -357,35 +361,35 @@ func TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing(t *testing.T) {
 // harness. The twin's delete event is still to be handled.
 func syncedFileWithRemovedTwin(t *testing.T) *syncHarness {
 	t.Helper()
-	skipUnlessBothUnicodeFormsCoexist(t)
+	syncfixture.SkipUnlessBothUnicodeFormsCoexist(t)
 
-	h := newSyncHarness(t, newMoveScenarioRemote(driveid.New(engineTestDriveID)))
-	writeLocalFile(t, h.syncRoot, twinSyncedName, twinSyncedContent)
+	h := newSyncHarness(t, newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID)))
+	syncfixture.WriteLocalFile(t, h.syncRoot, syncfixture.TwinSyncedName, syncfixture.TwinSyncedContent)
 	require.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
-	writeLocalFile(t, h.syncRoot, twinSecondName, "twin content, longer\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, syncfixture.TwinSecondName, "twin content, longer\n")
 	runScenarioPass(t, h.eng)
-	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, twinSecondName)))
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, syncfixture.TwinSecondName)))
 
 	return h
 }
 
 // handleTwinDelete runs the watch observer's delete of the removed twin and
 // returns the observations it sent.
-func handleTwinDelete(t *testing.T, h *syncHarness) []LocalObservation {
+func handleTwinDelete(t *testing.T, h *syncHarness) []syncobserve.LocalObservation {
 	t.Helper()
 
 	bl, err := h.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	obs := NewLocalObserver(bl, h.eng.logger, 0)
-	obs.PendingTimers = make(map[string]SyncTimer)
-	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
-	batches := make(chan LocalObservation, 1)
+	obs := syncobserve.NewLocalObserver(bl, h.eng.logger, 0)
+	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
+	obs.HashRequests = make(chan syncobserve.HashRequest, syncobserve.HashRequestBufSize)
+	batches := make(chan syncobserve.LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
-	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), h.eng.syncTree,
-		filepath.Join(h.syncRoot, twinSecondName), twinSyncedName, twinSyncedName)
+	obs.HandleDelete(t.Context(), syncfixture.NewRecordingFsWatcher(), h.eng.syncTree,
+		filepath.Join(h.syncRoot, syncfixture.TwinSecondName), syncfixture.TwinSyncedName, syncfixture.TwinSyncedName)
 
-	var sent []LocalObservation
+	var sent []syncobserve.LocalObservation
 	for len(batches) > 0 {
 		sent = append(sent, <-batches)
 	}
@@ -404,7 +408,7 @@ func TestHandleDelete_UnicodeFormTwinKeepsTheSyncedFilesRow(t *testing.T) {
 	h := syncedFileWithRemovedTwin(t)
 
 	assert.Empty(t, handleTwinDelete(t, h), "the stored path still names the synced file")
-	_, found, err := h.eng.baseline.GetLocalStateByPath(t.Context(), twinSyncedName)
+	_, found, err := h.eng.baseline.GetLocalStateByPath(t.Context(), syncfixture.TwinSyncedName)
 	require.NoError(t, err)
 	assert.True(t, found)
 }
@@ -412,23 +416,23 @@ func TestHandleDelete_UnicodeFormTwinKeepsTheSyncedFilesRow(t *testing.T) {
 // Validates: R-2.13.2
 func TestRunOnce_UnicodeFormFolderTwinOfSyncedFileFailsNothing(t *testing.T) {
 	t.Parallel()
-	skipUnlessBothUnicodeFormsCoexist(t)
+	syncfixture.SkipUnlessBothUnicodeFormsCoexist(t)
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	h := newSyncHarness(t, remote)
-	writeLocalFile(t, h.syncRoot, twinSyncedName, twinSyncedContent)
+	syncfixture.WriteLocalFile(t, h.syncRoot, syncfixture.TwinSyncedName, syncfixture.TwinSyncedContent)
 	require.Equal(t, 1, runScenarioPass(t, h.eng).Uploads)
 
-	writeLocalFile(t, h.syncRoot, filepath.Join(twinSecondName, "child.txt"), "child\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join(syncfixture.TwinSecondName, "child.txt"), "child\n")
 	for pass := range 2 {
 		report := runScenarioPass(t, h.eng)
 		assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes,
 			"pass %d acts on neither entry: %+v", pass+1, report)
 	}
-	assert.Equal(t, map[string]string{twinSyncedName: twinSyncedContent}, remote.tree())
+	assert.Equal(t, map[string]string{syncfixture.TwinSyncedName: syncfixture.TwinSyncedContent}, remote.tree())
 
 	issues, err := h.eng.baseline.ListObservationIssues(t.Context())
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
-	assert.Equal(t, IssueCaseCollision, issues[0].IssueType)
+	assert.Equal(t, syncdomain.IssueCaseCollision, issues[0].IssueType)
 }

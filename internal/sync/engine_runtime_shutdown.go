@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // stopDrain is the one bound a stopping run records the results of its
@@ -118,12 +121,12 @@ func unrecordedResultsMessage(count int) string {
 // short is counted for endStopDrain to say, not returned.
 func (flow *engineFlow) processShutdownCompletion(
 	ctx context.Context,
-	completion *ActionCompletion,
-	bl *Baseline,
+	completion *syncdomain.ActionCompletion,
+	bl *syncdomain.Baseline,
 ) error {
 	flow.beginStopDrain()
 	drain := flow.stop
-	detached, cancel := DetachedStoreContext(ctx, drain.deadline)
+	detached, cancel := syncexec.DetachedStoreContext(ctx, drain.deadline)
 	defer cancel()
 	drainCtx := context.WithValue(detached, stoppingRunKey{}, true)
 
@@ -131,24 +134,24 @@ func (flow *engineFlow) processShutdownCompletion(
 	flow.completeOutboxAsShutdown(ready)
 
 	var fatalErr *fatalCompletionError
-	if err == nil || errors.As(err, &fatalErr) || !errors.Is(context.Cause(drainCtx), ErrStoreAccessTimedOut) {
+	if err == nil || errors.As(err, &fatalErr) || !errors.Is(context.Cause(drainCtx), syncdomain.ErrStoreAccessTimedOut) {
 		return err
 	}
 	drain.unrecorded++
 	if drain.firstErr == nil {
-		drain.firstErr = StoreAccessError(drainCtx, err)
+		drain.firstErr = syncexec.StoreAccessError(drainCtx, err)
 	}
 
 	return nil
 }
 
-func (flow *engineFlow) completeOutboxAsShutdown(outbox []*TrackedAction) {
+func (flow *engineFlow) completeOutboxAsShutdown(outbox []*syncdomain.TrackedAction) {
 	for _, ta := range outbox {
 		flow.completeTrackedActionAsShutdown(ta)
 	}
 }
 
-func (flow *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
+func (flow *engineFlow) completeTrackedActionAsShutdown(ta *syncdomain.TrackedAction) {
 	if ta == nil {
 		return
 	}
@@ -159,7 +162,7 @@ func (flow *engineFlow) completeTrackedActionAsShutdown(ta *TrackedAction) {
 }
 
 func (flow *engineFlow) logSuppressedShutdownCompletionError(
-	completion *ActionCompletion,
+	completion *syncdomain.ActionCompletion,
 	err error,
 ) {
 	if completion == nil || err == nil {
@@ -180,7 +183,7 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 	// not be recorded; the next sync rediscovers it from durable truth
 	// (R-2.5.3).
 	var fatalErr *fatalCompletionError
-	if IsCancellationEcho(err) || errors.As(err, &fatalErr) {
+	if syncdomain.IsCancellationEcho(err) || errors.As(err, &fatalErr) {
 		flow.deps.logger.Debug("suppressed action completion error during shutdown", fields...)
 		return
 	}

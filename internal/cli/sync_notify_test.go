@@ -24,6 +24,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -88,7 +89,7 @@ type lifecycleOrchestrator struct {
 	err     error
 }
 
-func (o *lifecycleOrchestrator) RunWatch(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error {
+func (o *lifecycleOrchestrator) RunWatch(context.Context, syncdomain.SyncMode, syncengine.WatchOptions) error {
 	for _, event := range o.events {
 		o.cfg.WatchLifecycle(event)
 	}
@@ -131,7 +132,7 @@ func TestRunSyncDaemon_NotifiesSystemdOfLifecycle(t *testing.T) {
 	}}
 
 	done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-		return runSyncDaemonWithFactory(ctx, holder, nil, syncengine.SyncBidirectional,
+		return runSyncDaemonWithFactory(ctx, holder, nil, syncdomain.SyncBidirectional,
 			syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard, "/tmp/control.sock",
 			nil, notifier, func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 				orch.cfg = cfg
@@ -180,7 +181,7 @@ func TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode(t *testing.T) {
 		}}},
 	}}
 
-	err := runSyncDaemonWithFactory(t.Context(), holder, nil, syncengine.SyncBidirectional,
+	err := runSyncDaemonWithFactory(t.Context(), holder, nil, syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard, "/tmp/control.sock",
 		nil, notifier, func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			orch.cfg = cfg
@@ -202,7 +203,7 @@ func TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne(t *testing.T) {
 	notifier := socket.notifier(map[string]string{})
 
 	orch := &lifecycleOrchestrator{err: panicguard.Recovered(slog.New(slog.DiscardHandler), "in the watch loop", "boom")}
-	err := runSyncDaemonWithFactory(t.Context(), holder, nil, syncengine.SyncBidirectional,
+	err := runSyncDaemonWithFactory(t.Context(), holder, nil, syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard, "/tmp/control.sock",
 		nil, notifier, func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
 			orch.cfg = cfg
@@ -219,7 +220,7 @@ func TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne(t *testing.T) {
 // contextBoundOrchestrator is a watch that runs until its context ends.
 type contextBoundOrchestrator struct{}
 
-func (contextBoundOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+func (contextBoundOrchestrator) RunWatch(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 	<-ctx.Done()
 	return nil
 }
@@ -243,7 +244,7 @@ func runWatchWithPanickingKeepalive(t *testing.T, orch syncDaemonOrchestrator) e
 	logger := slog.New(synctest.PanicOnMessage{Message: "systemd watchdog keepalive failed", Next: slog.DiscardHandler})
 
 	return runWithin(t, t.Context(), "the keepalive's panic to end the watch", func(ctx context.Context) error {
-		return runSyncDaemonWithFactory(ctx, holder, nil, syncengine.SyncBidirectional,
+		return runSyncDaemonWithFactory(ctx, holder, nil, syncdomain.SyncBidirectional,
 			syncengine.WatchOptions{}, logger, io.Discard, "/tmp/control.sock",
 			nil, notifier, func(*multisync.OrchestratorConfig) syncDaemonOrchestrator {
 				return orch
@@ -273,7 +274,7 @@ func TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError(t *testing.T) {
 // then hands back what work that end interrupted would: its context's cause.
 type causeReadingOrchestrator struct{}
 
-func (causeReadingOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+func (causeReadingOrchestrator) RunWatch(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 	<-ctx.Done()
 	return fmt.Errorf("request canceled: %w", context.Cause(ctx))
 }
@@ -304,7 +305,7 @@ var errWatchDrainFailed = errors.New("the drain did not finish")
 // then fails on its way out with a failure of its own.
 type failingStopOrchestrator struct{}
 
-func (failingStopOrchestrator) RunWatch(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+func (failingStopOrchestrator) RunWatch(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 	<-ctx.Done()
 	return errWatchDrainFailed
 }
@@ -335,7 +336,7 @@ func TestRunSyncDaemon_NoDrivesIsAConfigFailure(t *testing.T) {
 	notifier := socket.notifier(map[string]string{})
 
 	err := runSyncDaemonWithFactory(t.Context(), config.NewHolder(&config.Config{}, ""), nil,
-		syncengine.SyncBidirectional, syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard,
+		syncdomain.SyncBidirectional, syncengine.WatchOptions{}, slog.New(slog.DiscardHandler), io.Discard,
 		"/tmp/control.sock", nil, notifier, nil)
 
 	require.Error(t, err)

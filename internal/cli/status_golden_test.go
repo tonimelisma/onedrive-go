@@ -5,16 +5,16 @@ import (
 	"testing"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 
 	"github.com/stretchr/testify/require"
-
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 )
 
 func goldenStatusAccounts() []statusAccount {
-	invalidDescriptor := describeStatusCondition(syncengine.ConditionInvalidFilename)
-	authDescriptor := describeStatusCondition(syncengine.ConditionAuthenticationRequired)
-	sharedDescriptor := describeStatusCondition(syncengine.ConditionRemoteWriteDenied)
+	invalidDescriptor := describeStatusCondition(syncdomain.ConditionInvalidFilename)
+	authDescriptor := describeStatusCondition(syncdomain.ConditionAuthenticationRequired)
+	sharedDescriptor := describeStatusCondition(syncdomain.ConditionRemoteWriteDenied)
 
 	return []statusAccount{
 		{
@@ -41,8 +41,8 @@ func goldenStatusAccounts() []statusAccount {
 						ExamplesLimit:  defaultVisiblePaths,
 						Conditions: []statusConditionJSON{
 							{
-								ConditionKey:  string(syncengine.ConditionInvalidFilename),
-								ConditionType: string(syncengine.IssueInvalidFilename),
+								ConditionKey:  string(syncdomain.ConditionInvalidFilename),
+								ConditionType: string(syncdomain.IssueInvalidFilename),
 								Title:         invalidDescriptor.Title,
 								Reason:        invalidDescriptor.Reason,
 								Action:        invalidDescriptor.Action,
@@ -50,8 +50,8 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:         []string{"/invalid:name.txt"},
 							},
 							{
-								ConditionKey:  string(syncengine.ConditionAuthenticationRequired),
-								ConditionType: string(syncengine.IssueUnauthorized),
+								ConditionKey:  string(syncdomain.ConditionAuthenticationRequired),
+								ConditionType: string(syncdomain.IssueUnauthorized),
 								Title:         authDescriptor.Title,
 								Reason:        authDescriptor.Reason,
 								Action:        authDescriptor.Action,
@@ -61,8 +61,8 @@ func goldenStatusAccounts() []statusAccount {
 								Paths:         nil,
 							},
 							{
-								ConditionKey:  string(syncengine.ConditionRemoteWriteDenied),
-								ConditionType: string(syncengine.IssueRemoteWriteDenied),
+								ConditionKey:  string(syncdomain.ConditionRemoteWriteDenied),
+								ConditionType: string(syncdomain.IssueRemoteWriteDenied),
 								Title:         sharedDescriptor.Title,
 								Reason:        sharedDescriptor.Reason,
 								Action:        sharedDescriptor.Action,
@@ -102,7 +102,7 @@ func goldenStatusAccounts() []statusAccount {
 // goldenBlockedSharedFolder is a removed shared folder whose local cleanup
 // is blocked, carrying the raw diagnostic that only --verbose shows.
 func goldenBlockedSharedFolder() statusDrive {
-	metadata := syncengine.ShortcutRootStatus(syncengine.ShortcutRootStateRemovedCleanupBlocked)
+	metadata := syncshortcut.ShortcutRootStatus(syncshortcut.ShortcutRootStateRemovedCleanupBlocked)
 	autoRetry := metadata.AutoRetry
 	return statusDrive{
 		MountID:              "personal:alice@example.com|binding-docs",

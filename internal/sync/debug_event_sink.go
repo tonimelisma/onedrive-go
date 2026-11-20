@@ -8,6 +8,7 @@ import (
 	stdsync "sync"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 const debugEventFilePerm = 0o600
@@ -40,7 +41,7 @@ func newDebugEventFileSink(path string, logger *slog.Logger) (*debugEventFileSin
 }
 
 //nolint:gocritic // Value semantics are intentional here so hooks observe immutable snapshots.
-func (s *debugEventFileSink) Hook(event DebugEvent) {
+func (s *debugEventFileSink) Hook(event syncdomain.DebugEvent) {
 	if s == nil {
 		return
 	}
@@ -69,7 +70,7 @@ func (s *debugEventFileSink) Close() error {
 
 // NewDebugEventFileHook opens an NDJSON debug-event sink and returns a hook
 // suitable for Engine.SetDebugEventHook plus its closer.
-func NewDebugEventFileHook(path string, logger *slog.Logger) (func(DebugEvent), func() error, error) {
+func NewDebugEventFileHook(path string, logger *slog.Logger) (func(syncdomain.DebugEvent), func() error, error) {
 	sink, err := newDebugEventFileSink(path, logger)
 	if err != nil {
 		return nil, nil, err

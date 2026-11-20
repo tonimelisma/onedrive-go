@@ -17,6 +17,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Dispatch-order control for tests (D-090). The engine's ready frontier
@@ -27,15 +30,15 @@ import (
 
 // dispatchOrderForward sorts a frontier by action ID, which is plan order:
 // the canonical order the other two permute.
-func dispatchOrderForward(frontier []*TrackedAction) []*TrackedAction {
-	slices.SortStableFunc(frontier, func(a, b *TrackedAction) int {
+func dispatchOrderForward(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
+	slices.SortStableFunc(frontier, func(a, b *syncdomain.TrackedAction) int {
 		return compareInt64(a.ID, b.ID)
 	})
 
 	return frontier
 }
 
-func dispatchOrderReverse(frontier []*TrackedAction) []*TrackedAction {
+func dispatchOrderReverse(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 	dispatchOrderForward(frontier)
 	slices.Reverse(frontier)
 
@@ -44,11 +47,11 @@ func dispatchOrderReverse(frontier []*TrackedAction) []*TrackedAction {
 
 // dispatchOrderShuffle permutes each frontier with one seeded generator, so
 // the same seed reproduces the same order run after run.
-func dispatchOrderShuffle(seed uint64) func([]*TrackedAction) []*TrackedAction {
+func dispatchOrderShuffle(seed uint64) func([]*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 	var mu stdsync.Mutex
 	rng := rand.New(rand.NewPCG(seed, seed^0x5851f42d4c957f2d)) //nolint:gosec // deterministic test RNG
 
-	return func(frontier []*TrackedAction) []*TrackedAction {
+	return func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 		dispatchOrderForward(frontier)
 		mu.Lock()
 		defer mu.Unlock()
@@ -70,7 +73,7 @@ func compareInt64(a, b int64) int {
 }
 
 // parseDispatchOrder turns an order name into the engine hook.
-func parseDispatchOrder(t *testing.T, name string) func([]*TrackedAction) []*TrackedAction {
+func parseDispatchOrder(t *testing.T, name string) func([]*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 	t.Helper()
 
 	switch {
@@ -80,10 +83,10 @@ func parseDispatchOrder(t *testing.T, name string) func([]*TrackedAction) []*Tra
 		return dispatchOrderReverse
 	case strings.HasPrefix(name, "shuffle:"):
 		seed, err := strconv.ParseUint(strings.TrimPrefix(name, "shuffle:"), 10, 64)
-		require.NoError(t, err, dispatchOrderEnv)
+		require.NoError(t, err, syncfixture.DispatchOrderEnv)
 		return dispatchOrderShuffle(seed)
 	default:
-		require.Failf(t, "unknown dispatch order", "%s=%q: want forward, reverse or shuffle:<seed>", dispatchOrderEnv, name)
+		require.Failf(t, "unknown dispatch order", "%s=%q: want forward, reverse or shuffle:<seed>", syncfixture.DispatchOrderEnv, name)
 		return nil
 	}
 }
@@ -109,7 +112,7 @@ func runUnderDispatchOrder(t *testing.T, order string, fn func(*testing.T)) {
 func applyRegisteredDispatchOrder(t *testing.T, eng *Engine) {
 	t.Helper()
 
-	order := os.Getenv(dispatchOrderEnv)
+	order := os.Getenv(syncfixture.DispatchOrderEnv)
 	for name := t.Name(); name != ""; name = parentTestName(name) {
 		if registered, ok := registeredDispatchOrders.Load(name); ok {
 			if name, isString := registered.(string); isString {
@@ -394,7 +397,7 @@ func runOnceScenarios() []func(*testing.T) {
 
 // Validates: R-2.17.1, R-6.8.9
 func TestReverseDispatch_RunOnceScenariosPass(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
 	for _, scenario := range runOnceScenarios() {

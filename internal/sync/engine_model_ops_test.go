@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Model-test operations beyond create, edit, delete, move, mkdir and type
@@ -38,14 +40,14 @@ const (
 // operations per side, sometimes a mirrored move and a cross-side
 // operation; now and then a batch wipes one side instead, and the next sync
 // must hold those deletes (D-002) until the model confirms them.
-func (r *modelRun) applyBatchEdits(label string) []modelEdit {
+func (r *modelRun) applyBatchEdits(label string) []syncfixture.ModelEdit {
 	if r.rng.IntN(modelWipeOdds) == 0 {
 		if edits := r.wipeSide(); len(edits) > 0 {
 			return edits
 		}
 	}
 
-	var edits []modelEdit
+	var edits []syncfixture.ModelEdit
 	for range r.rng.IntN(modelMaxOpsPerSide + 1) {
 		edits = append(edits, r.localEdit()...)
 	}
@@ -62,10 +64,10 @@ func (r *modelRun) applyBatchEdits(label string) []modelEdit {
 	return edits
 }
 
-func (r *modelRun) localEdit() []modelEdit {
+func (r *modelRun) localEdit() []syncfixture.ModelEdit {
 	tree := r.localTree()
 	kinds := []string{
-		modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace,
+		syncfixture.ModelOpCreateFile, syncfixture.ModelOpEditFile, syncfixture.ModelOpDelete, syncfixture.ModelOpMove, syncfixture.ModelOpMakeFolder, syncfixture.ModelOpReplace,
 		modelOpHardLink, modelOpMoveThenRecreate, modelOpRecreateFolder,
 	}
 	if r.caseSensitive {
@@ -73,7 +75,7 @@ func (r *modelRun) localEdit() []modelEdit {
 	}
 
 	switch kind := r.pick(kinds); kind {
-	case modelOpEditFile:
+	case syncfixture.ModelOpEditFile:
 		return r.localEditFile(tree, r.pick(modelEntriesOf(tree, false)))
 	case modelOpHardLink:
 		return r.localHardLink(tree)
@@ -82,16 +84,16 @@ func (r *modelRun) localEdit() []modelEdit {
 	case modelOpRecreateFolder:
 		return r.localRecreateFolder(tree)
 	case modelOpCaseRename:
-		return r.caseRename(modelLocalSide, tree)
+		return r.caseRename(syncfixture.ModelLocalSide, tree)
 	default:
 		return modelEditList(r.localBasicEdit(kind, tree))
 	}
 }
 
-func (r *modelRun) remoteEdit() []modelEdit {
+func (r *modelRun) remoteEdit() []syncfixture.ModelEdit {
 	tree := r.remote.tree()
 	switch kind := r.pick([]string{
-		modelOpCreateFile, modelOpEditFile, modelOpDelete, modelOpMove, modelOpMakeFolder, modelOpReplace,
+		syncfixture.ModelOpCreateFile, syncfixture.ModelOpEditFile, syncfixture.ModelOpDelete, syncfixture.ModelOpMove, syncfixture.ModelOpMakeFolder, syncfixture.ModelOpReplace,
 		modelOpSwap, modelOpDeleteAndRecreate, modelOpCaseRename,
 	}); kind {
 	case modelOpSwap:
@@ -99,23 +101,23 @@ func (r *modelRun) remoteEdit() []modelEdit {
 	case modelOpDeleteAndRecreate:
 		return r.remoteDeleteAndRecreate(tree)
 	case modelOpCaseRename:
-		return r.caseRename(modelRemoteSide, tree)
+		return r.caseRename(syncfixture.ModelRemoteSide, tree)
 	default:
 		return modelEditList(r.remoteBasicEdit(kind, tree))
 	}
 }
 
-func modelEditList(edit modelEdit, ok bool) []modelEdit {
+func modelEditList(edit syncfixture.ModelEdit, ok bool) []syncfixture.ModelEdit {
 	if !ok {
 		return nil
 	}
 
-	return []modelEdit{edit}
+	return []syncfixture.ModelEdit{edit}
 }
 
 // localEditFile rewrites p in place. A hard link shares the write, so every
 // other path whose content changed with it is recorded as edited too.
-func (r *modelRun) localEditFile(tree map[string]string, p string) []modelEdit {
+func (r *modelRun) localEditFile(tree map[string]string, p string) []syncfixture.ModelEdit {
 	if p == "" {
 		return nil
 	}
@@ -127,33 +129,33 @@ func (r *modelRun) localEditFile(tree map[string]string, p string) []modelEdit {
 // writeLocalInPlace rewrites p in place with new content. A hard link shares
 // the write, so every other path whose content changed with it is recorded as
 // edited too.
-func (r *modelRun) writeLocalInPlace(tree map[string]string, p string) []modelEdit {
-	content := r.nextContent(modelLocalSide)
-	writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
-	edits := []modelEdit{{side: modelLocalSide, kind: modelOpEditFile, path: p, content: content}}
+func (r *modelRun) writeLocalInPlace(tree map[string]string, p string) []syncfixture.ModelEdit {
+	content := r.nextContent(syncfixture.ModelLocalSide)
+	syncfixture.WriteLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
+	edits := []syncfixture.ModelEdit{{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpEditFile, Path: p, Content: content}}
 	for other, now := range r.localTree() {
 		if other != p && now == content && tree[other] != content {
-			edits = append(edits, modelEdit{side: modelLocalSide, kind: modelOpEditFile, path: other, content: content})
+			edits = append(edits, syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpEditFile, Path: other, Content: content})
 		}
 	}
 
 	return edits
 }
 
-func (r *modelRun) remoteEditFile(tree map[string]string) (modelEdit, bool) {
+func (r *modelRun) remoteEditFile(tree map[string]string) (syncfixture.ModelEdit, bool) {
 	p := r.pick(modelEntriesOf(tree, false))
 	if p == "" {
-		return modelEdit{}, false
+		return syncfixture.ModelEdit{}, false
 	}
-	content := r.nextContent(modelRemoteSide)
+	content := r.nextContent(syncfixture.ModelRemoteSide)
 	r.remote.putFileAt(r.t, p, content)
 	r.logf("remote edit %s", p)
 
-	return modelEdit{side: modelRemoteSide, kind: modelOpEditFile, path: p, content: content}, true
+	return syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpEditFile, Path: p, Content: content}, true
 }
 
 // localHardLink gives a file a second name on the same inode.
-func (r *modelRun) localHardLink(tree map[string]string) []modelEdit {
+func (r *modelRun) localHardLink(tree map[string]string) []syncfixture.ModelEdit {
 	src := r.pick(modelEntriesOf(tree, false))
 	dst := r.newPathIn(r.localFolders(), modelFileNamePool, tree)
 	if src == "" || dst == "" {
@@ -162,25 +164,25 @@ func (r *modelRun) localHardLink(tree map[string]string) []modelEdit {
 	require.NoError(r.t, os.Link(r.localAbs(src), r.localAbs(dst)))
 	r.logf("local hard link %s -> %s", dst, src)
 
-	return []modelEdit{{side: modelLocalSide, kind: modelOpCreateFile, path: dst, content: tree[src]}}
+	return []syncfixture.ModelEdit{{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpCreateFile, Path: dst, Content: tree[src]}}
 }
 
 // localMoveThenRecreate moves an entry away and creates a new one of the
 // same type at the path it left.
-func (r *modelRun) localMoveThenRecreate(tree map[string]string) []modelEdit {
+func (r *modelRun) localMoveThenRecreate(tree map[string]string) []syncfixture.ModelEdit {
 	from, to, ok := r.pickMove(tree)
 	if !ok {
 		return nil
 	}
 	require.NoError(r.t, os.Rename(r.localAbs(from), r.localAbs(to)))
-	edits := []modelEdit{{side: modelLocalSide, kind: modelOpMove, path: from, to: to}}
-	if tree[from] == modelFolderSentinel {
+	edits := []syncfixture.ModelEdit{{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: from, To: to}}
+	if tree[from] == syncfixture.ModelFolderSentinel {
 		require.NoError(r.t, os.MkdirAll(r.localAbs(from), 0o750))
-		edits = append(edits, modelEdit{side: modelLocalSide, kind: modelOpMakeFolder, path: from})
+		edits = append(edits, syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMakeFolder, Path: from})
 	} else {
-		content := r.nextContent(modelLocalSide)
-		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(from), content)
-		edits = append(edits, modelEdit{side: modelLocalSide, kind: modelOpCreateFile, path: from, content: content})
+		content := r.nextContent(syncfixture.ModelLocalSide)
+		syncfixture.WriteLocalFile(r.t, r.syncRoot, filepath.FromSlash(from), content)
+		edits = append(edits, syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpCreateFile, Path: from, Content: content})
 	}
 	r.logf("local move %s -> %s then recreate %s", from, to, from)
 
@@ -196,7 +198,7 @@ func (r *modelRun) localMoveThenRecreate(tree map[string]string) []modelEdit {
 // includes the birth time, which tells such a rebuild apart wherever the
 // filesystem records one (R-2.17.1); building aside keeps the replay
 // deterministic on filesystems that record none.
-func (r *modelRun) localRecreateFolder(tree map[string]string) []modelEdit {
+func (r *modelRun) localRecreateFolder(tree map[string]string) []syncfixture.ModelEdit {
 	folder := r.pick(modelEntriesOf(tree, true))
 	if folder == "" {
 		return nil
@@ -212,18 +214,18 @@ func (r *modelRun) localRecreateFolder(tree map[string]string) []modelEdit {
 			require.NoError(r.t, os.MkdirAll(filepath.Join(rebuilt, filepath.FromSlash(rel)), 0o750))
 			continue
 		}
-		writeLocalFile(r.t, rebuilt, filepath.FromSlash(rel), tree[folder+"/"+rel])
+		syncfixture.WriteLocalFile(r.t, rebuilt, filepath.FromSlash(rel), tree[folder+"/"+rel])
 	}
 	require.NoError(r.t, os.RemoveAll(r.localAbs(folder)))
 	require.NoError(r.t, os.Rename(rebuilt, r.localAbs(folder)))
 	r.logf("local recreate folder %s", folder)
 
-	return []modelEdit{{side: modelLocalSide, kind: modelOpRecreateFolder, path: folder}}
+	return []syncfixture.ModelEdit{{Side: syncfixture.ModelLocalSide, Kind: modelOpRecreateFolder, Path: folder}}
 }
 
 // caseRename renames an entry to the same name in another case, a rename
 // OneDrive treats as one item keeping its name.
-func (r *modelRun) caseRename(side string, tree map[string]string) []modelEdit {
+func (r *modelRun) caseRename(side string, tree map[string]string) []syncfixture.ModelEdit {
 	from := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 	if from == "" {
 		return nil
@@ -233,19 +235,19 @@ func (r *modelRun) caseRename(side string, tree map[string]string) []modelEdit {
 		return nil
 	}
 	to := path.Join(path.Dir(from), renamed)
-	if side == modelLocalSide {
+	if side == syncfixture.ModelLocalSide {
 		require.NoError(r.t, os.Rename(r.localAbs(from), r.localAbs(to)))
 	} else {
 		r.remote.moveAt(r.t, from, to)
 	}
 	r.logf("%s case rename %s -> %s", side, from, to)
 
-	return []modelEdit{{side: side, kind: modelOpMove, path: from, to: to}}
+	return []syncfixture.ModelEdit{{Side: side, Kind: syncfixture.ModelOpMove, Path: from, To: to}}
 }
 
 // remoteSwap exchanges two files' paths through a temporary name, as a
 // user would.
-func (r *modelRun) remoteSwap(tree map[string]string) []modelEdit {
+func (r *modelRun) remoteSwap(tree map[string]string) []syncfixture.ModelEdit {
 	files := modelEntriesOf(tree, false)
 	if len(files) < 2 {
 		return nil
@@ -261,28 +263,28 @@ func (r *modelRun) remoteSwap(tree map[string]string) []modelEdit {
 	r.remote.moveAt(r.t, tmp, second)
 	r.logf("remote swap %s <-> %s", first, second)
 
-	return []modelEdit{
-		{side: modelRemoteSide, kind: modelOpMove, path: first, to: second},
-		{side: modelRemoteSide, kind: modelOpMove, path: second, to: first},
+	return []syncfixture.ModelEdit{
+		{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMove, Path: first, To: second},
+		{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMove, Path: second, To: first},
 	}
 }
 
 // remoteDeleteAndRecreate replaces an entry with a new item of the same
 // type at the same path: same path, new item ID.
-func (r *modelRun) remoteDeleteAndRecreate(tree map[string]string) []modelEdit {
+func (r *modelRun) remoteDeleteAndRecreate(tree map[string]string) []syncfixture.ModelEdit {
 	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 	if p == "" {
 		return nil
 	}
 	r.remote.deleteAt(r.t, p)
-	edits := []modelEdit{{side: modelRemoteSide, kind: modelOpDelete, path: p}}
-	if tree[p] == modelFolderSentinel {
+	edits := []syncfixture.ModelEdit{{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpDelete, Path: p}}
+	if tree[p] == syncfixture.ModelFolderSentinel {
 		r.remote.mkdirAt(r.t, p)
-		edits = append(edits, modelEdit{side: modelRemoteSide, kind: modelOpMakeFolder, path: p})
+		edits = append(edits, syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMakeFolder, Path: p})
 	} else {
-		content := r.nextContent(modelRemoteSide)
+		content := r.nextContent(syncfixture.ModelRemoteSide)
 		r.remote.putFileAt(r.t, p, content)
-		edits = append(edits, modelEdit{side: modelRemoteSide, kind: modelOpCreateFile, path: p, content: content})
+		edits = append(edits, syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpCreateFile, Path: p, Content: content})
 	}
 	r.logf("remote delete and recreate %s", p)
 
@@ -290,7 +292,7 @@ func (r *modelRun) remoteDeleteAndRecreate(tree map[string]string) []modelEdit {
 }
 
 // crossEdit applies one operation that touches the same item on both sides.
-func (r *modelRun) crossEdit(label string) []modelEdit {
+func (r *modelRun) crossEdit(label string) []syncfixture.ModelEdit {
 	kinds := []string{modelCrossDivergent, modelCrossLocalMoveEdit, modelCrossRemoteMoveEdit}
 	if r.caseSensitive {
 		kinds = append(kinds, modelCrossCaseVariant)
@@ -301,9 +303,9 @@ func (r *modelRun) crossEdit(label string) []modelEdit {
 	case modelCrossDivergent:
 		return r.divergentRenames(shared)
 	case modelCrossLocalMoveEdit:
-		return r.moveOneSideEditOther(shared, modelLocalSide)
+		return r.moveOneSideEditOther(shared, syncfixture.ModelLocalSide)
 	case modelCrossRemoteMoveEdit:
-		return r.moveOneSideEditOther(shared, modelRemoteSide)
+		return r.moveOneSideEditOther(shared, syncfixture.ModelRemoteSide)
 	default:
 		return r.caseVariantCreate(label)
 	}
@@ -325,7 +327,7 @@ func (r *modelRun) sharedEntries() map[string]string {
 }
 
 // divergentRenames renames one item to different names on the two sides.
-func (r *modelRun) divergentRenames(shared map[string]string) []modelEdit {
+func (r *modelRun) divergentRenames(shared map[string]string) []syncfixture.ModelEdit {
 	from, localTo, ok := r.pickMove(shared)
 	if !ok {
 		return nil
@@ -339,18 +341,18 @@ func (r *modelRun) divergentRenames(shared map[string]string) []modelEdit {
 	r.remote.moveAt(r.t, from, remoteTo)
 	r.logf("divergent rename %s -> local %s, remote %s", from, localTo, remoteTo)
 
-	return []modelEdit{
-		{side: modelLocalSide, kind: modelOpMove, path: from, to: localTo},
-		{side: modelRemoteSide, kind: modelOpMove, path: from, to: remoteTo},
+	return []syncfixture.ModelEdit{
+		{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: from, To: localTo},
+		{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMove, Path: from, To: remoteTo},
 	}
 }
 
 // moveOneSideEditOther moves a shared file on moveSide while the other side
 // edits it in place.
-func (r *modelRun) moveOneSideEditOther(shared map[string]string, moveSide string) []modelEdit {
+func (r *modelRun) moveOneSideEditOther(shared map[string]string, moveSide string) []syncfixture.ModelEdit {
 	files := map[string]string{}
 	for p, content := range shared {
-		if content != modelFolderSentinel {
+		if content != syncfixture.ModelFolderSentinel {
 			files[p] = content
 		}
 	}
@@ -358,20 +360,20 @@ func (r *modelRun) moveOneSideEditOther(shared map[string]string, moveSide strin
 	if !ok || modelTreeHasFold(r.localTree(), to) || modelTreeHasFold(r.remote.tree(), to) {
 		return nil
 	}
-	if moveSide == modelLocalSide {
+	if moveSide == syncfixture.ModelLocalSide {
 		require.NoError(r.t, os.Rename(r.localAbs(from), r.localAbs(to)))
-		content := r.nextContent(modelRemoteSide)
+		content := r.nextContent(syncfixture.ModelRemoteSide)
 		r.remote.putFileAt(r.t, from, content)
 		r.logf("local move %s -> %s while remote edits it", from, to)
-		return []modelEdit{
-			{side: modelLocalSide, kind: modelOpMove, path: from, to: to},
-			{side: modelRemoteSide, kind: modelOpEditFile, path: from, content: content},
+		return []syncfixture.ModelEdit{
+			{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: from, To: to},
+			{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpEditFile, Path: from, Content: content},
 		}
 	}
 	r.remote.moveAt(r.t, from, to)
 	r.logf("remote move %s -> %s while local edits it", from, to)
 
-	return append([]modelEdit{{side: modelRemoteSide, kind: modelOpMove, path: from, to: to}},
+	return append([]syncfixture.ModelEdit{{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMove, Path: from, To: to}},
 		r.writeLocalInPlace(r.localTree(), from)...)
 }
 
@@ -380,7 +382,7 @@ func (r *modelRun) moveOneSideEditOther(shared map[string]string, moveSide strin
 // the local one is a durable collision for the user to rename, never
 // overwritten. The model is that user: after the first pass it
 // checks the local file is intact and renames it.
-func (r *modelRun) caseVariantCreate(label string) []modelEdit {
+func (r *modelRun) caseVariantCreate(label string) []syncfixture.ModelEdit {
 	local := r.localTree()
 	remote := r.remote.tree()
 	name := path.Join(r.pick(modelFoldersOf(r.sharedFolders())), r.pick(strings.Fields(modelFileNamePool)))
@@ -388,25 +390,25 @@ func (r *modelRun) caseVariantCreate(label string) []modelEdit {
 	if variant == name || modelTreeHasFold(local, name) || modelTreeHasFold(remote, name) {
 		return nil
 	}
-	localContent := r.nextContent(modelLocalSide)
-	writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(name), localContent)
-	remoteContent := r.nextContent(modelRemoteSide)
+	localContent := r.nextContent(syncfixture.ModelLocalSide)
+	syncfixture.WriteLocalFile(r.t, r.syncRoot, filepath.FromSlash(name), localContent)
+	remoteContent := r.nextContent(syncfixture.ModelRemoteSide)
 	r.remote.putFileAt(r.t, variant, remoteContent)
 	r.logf("case variants: local create %s, remote create %s", name, variant)
 
-	r.afterFirstPass = func() []modelEdit {
+	r.afterFirstPass = func() []syncfixture.ModelEdit {
 		data, err := os.ReadFile(r.localAbs(name))
 		require.NoError(r.t, err, "%s: the local case variant %s must survive the collision; %s", label, name, r.failureContext())
 		assert.Equal(r.t, localContent, string(data), "%s: the local case variant %s was overwritten; %s", label, name, r.failureContext())
 		resolved := r.freeResolvedName(name)
 		require.NoError(r.t, os.Rename(r.localAbs(name), r.localAbs(resolved)))
 		r.logf("user renames the local case variant %s -> %s", name, resolved)
-		return []modelEdit{{side: modelLocalSide, kind: modelOpMove, path: name, to: resolved}}
+		return []syncfixture.ModelEdit{{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: name, To: resolved}}
 	}
 
-	return []modelEdit{
-		{side: modelLocalSide, kind: modelOpCreateFile, path: name, content: localContent},
-		{side: modelRemoteSide, kind: modelOpCreateFile, path: variant, content: remoteContent},
+	return []syncfixture.ModelEdit{
+		{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpCreateFile, Path: name, Content: localContent},
+		{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpCreateFile, Path: variant, Content: remoteContent},
 	}
 }
 
@@ -427,9 +429,9 @@ func (r *modelRun) freeResolvedName(name string) string {
 // entry beside it (online, or locally) is a durable collision the engine
 // keeps out of sync by design, never overwrites. The model renames each such
 // local entry once sync is otherwise quiet, so the batch can converge.
-func (r *modelRun) resolveNameCollisions() []modelEdit {
+func (r *modelRun) resolveNameCollisions() []syncfixture.ModelEdit {
 	local, remote := r.localTree(), r.remote.tree()
-	var edits []modelEdit
+	var edits []syncfixture.ModelEdit
 	for _, p := range append(modelEntriesOf(local, false), modelEntriesOf(local, true)...) {
 		if _, exists := local[p]; !exists {
 			// Inside a folder renamed earlier in this loop.
@@ -441,7 +443,7 @@ func (r *modelRun) resolveNameCollisions() []modelEdit {
 		resolved := r.freeResolvedName(p)
 		require.NoError(r.t, os.Rename(r.localAbs(p), r.localAbs(resolved)))
 		r.logf("user renames colliding local %s -> %s", p, resolved)
-		edits = append(edits, modelEdit{side: modelLocalSide, kind: modelOpMove, path: p, to: resolved})
+		edits = append(edits, syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: p, To: resolved})
 		local = r.localTree()
 	}
 
@@ -467,7 +469,7 @@ func (r *modelRun) collidesUnderFolding(p string, local, remote map[string]strin
 func (r *modelRun) sharedFolders() map[string]string {
 	shared := r.sharedEntries()
 	for p, content := range shared {
-		if content != modelFolderSentinel {
+		if content != syncfixture.ModelFolderSentinel {
 			delete(shared, p)
 		}
 	}
@@ -477,23 +479,23 @@ func (r *modelRun) sharedFolders() map[string]string {
 
 // wipeSide deletes everything on one side. The next pass must hold the
 // deletes it would propagate (D-002: the other side vanished).
-func (r *modelRun) wipeSide() []modelEdit {
-	side := r.pick([]string{modelLocalSide, modelRemoteSide})
+func (r *modelRun) wipeSide() []syncfixture.ModelEdit {
+	side := r.pick([]string{syncfixture.ModelLocalSide, syncfixture.ModelRemoteSide})
 	tree := r.localTree()
-	if side == modelRemoteSide {
+	if side == syncfixture.ModelRemoteSide {
 		tree = r.remote.tree()
 	}
-	var edits []modelEdit
+	var edits []syncfixture.ModelEdit
 	for _, p := range append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...) {
 		if strings.Contains(p, "/") {
 			continue
 		}
-		if side == modelLocalSide {
+		if side == syncfixture.ModelLocalSide {
 			require.NoError(r.t, os.RemoveAll(r.localAbs(p)))
 		} else {
 			r.remote.deleteAt(r.t, p)
 		}
-		edits = append(edits, modelEdit{side: side, kind: modelOpDelete, path: p})
+		edits = append(edits, syncfixture.ModelEdit{Side: side, Kind: syncfixture.ModelOpDelete, Path: p})
 	}
 	if len(edits) > 0 {
 		r.expectHoldOf = side

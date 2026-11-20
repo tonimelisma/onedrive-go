@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -22,10 +24,10 @@ func TestFullScan_LongNonASCIIPathWithinTheCharacterLimitIsObserved(t *testing.T
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, rel), []byte("x"), 0o600))
 
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
+	obs := syncobserve.NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
-	assert.NotNil(t, findEvent(result.Events, filepath.ToSlash(rel)))
+	assert.NotNil(t, syncfixture.FindEvent(result.Events, filepath.ToSlash(rel)))
 	assert.Empty(t, result.Skipped)
 }

@@ -3,13 +3,15 @@ package sync
 import (
 	"context"
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // runStartupStage runs the shared startup proof/normalization sequence used by
 // one-shot and watch before they diverge into their own runtime shells.
 func (flow *engineFlow) runStartupStage(
 	ctx context.Context,
-) (*Baseline, error) {
+) (*syncdomain.Baseline, error) {
 	eng := flow.engine
 
 	hasAccountAuthRequirement, err := eng.hasPersistedAccountAuthRequirement()

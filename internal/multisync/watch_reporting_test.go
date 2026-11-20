@@ -18,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -34,7 +36,7 @@ func warningsContaining(capture *synctest.LogCapture, text string) []string {
 
 func blockingWatchEngine() *mockEngine {
 	return &mockEngine{
-		runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+		runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},
@@ -86,7 +88,7 @@ func TestReconcileWatchRunners_AnnouncesEachStartFailureOnceUntilItChanges(t *te
 	runners := make(map[mountID]*watchRunner)
 	childWork := newParentChildWorkSnapshots()
 	reconcile := func() {
-		require.NoError(t, orch.reconcileWatchRunners(t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{},
+		require.NoError(t, orch.reconcileWatchRunners(t.Context(), syncdomain.SyncBidirectional, syncengine.WatchOptions{},
 			runners, make(chan watchRunnerEvent, 4), childWork))
 	}
 	t.Cleanup(func() { stopTestRunners(t, runners) })
@@ -167,7 +169,7 @@ func newBackoffHarness(t *testing.T) *backoffHarness {
 
 func (h *backoffHarness) reconcile() {
 	h.t.Helper()
-	require.NoError(h.t, h.orch.reconcileWatchRunners(h.t.Context(), syncengine.SyncBidirectional, syncengine.WatchOptions{},
+	require.NoError(h.t, h.orch.reconcileWatchRunners(h.t.Context(), syncdomain.SyncBidirectional, syncengine.WatchOptions{},
 		h.runners, h.events, h.childWork))
 }
 
@@ -181,7 +183,7 @@ func (h *backoffHarness) exit(err error) {
 	receiveWithin(h.t, wr.done, "the canceled watch runner to return")
 	require.NoError(h.t, h.orch.handleWatchRunnerEvent(h.t.Context(),
 		watchRunnerEvent{mountID: h.id, generation: wr.generation, err: err},
-		syncengine.SyncBidirectional, syncengine.WatchOptions{}, h.runners, h.events, h.childWork))
+		syncdomain.SyncBidirectional, syncengine.WatchOptions{}, h.runners, h.events, h.childWork))
 }
 
 func (h *backoffHarness) stopWarnings() []string {
@@ -286,7 +288,7 @@ func TestRunWatch_RestartsFailedRunnerWhenBackoffTimerFires(t *testing.T) {
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		call := calls.Add(1)
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				if call == 1 {
 					return errors.New("sync: initial sync failed: database is locked")
 				}
@@ -343,7 +345,7 @@ func TestHandleWatchRunnerEvent_IgnoresEventFromAlreadyStoppedRunner(t *testing.
 	require.NoError(t, orch.handleWatchRunnerEvent(
 		t.Context(),
 		watchRunnerEvent{mountID: mountID(rd.CanonicalID.String()), err: fmt.Errorf("drain: %w", context.Canceled)},
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		make(map[mountID]*watchRunner),
 		make(chan watchRunnerEvent, 1),
@@ -363,7 +365,7 @@ func TestStartWatchRunner_CanceledFinalDrainSendsNoEvent(t *testing.T) {
 
 	parent := testStandaloneMount(t, "personal:drain-cancel@example.com", "Parent")
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-drain-cancel", "Shortcuts/Docs")
-	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 	decisions, err := buildRuntimeWork([]StandaloneMountConfig{parent}, testParentSnapshots(&parent, child), t.TempDir())
 	require.NoError(t, err)
 	var childMount *mountSpec
@@ -380,7 +382,7 @@ func TestStartWatchRunner_CanceledFinalDrainSendsNoEvent(t *testing.T) {
 	draining := make(chan struct{})
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				close(draining)
 				<-ctx.Done()
 				return nil, fmt.Errorf("drain: %w", ctx.Err())
@@ -389,7 +391,7 @@ func TestStartWatchRunner_CanceledFinalDrainSendsNoEvent(t *testing.T) {
 	}
 
 	events := make(chan watchRunnerEvent, 1)
-	wr, err := orch.startWatchRunner(t.Context(), childMount, 1, syncengine.SyncBidirectional, syncengine.WatchOptions{}, events)
+	wr, err := orch.startWatchRunner(t.Context(), childMount, 1, syncdomain.SyncBidirectional, syncengine.WatchOptions{}, events)
 	require.NoError(t, err)
 	receiveWithin(t, draining, "the final drain to start")
 	wr.cancel()
@@ -421,7 +423,7 @@ func TestRunOnce_ControlSocketInUseIsReportedOnceForAllDrives(t *testing.T) {
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	orch := NewOrchestrator(cfg)
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	require.Equal(t, 1, result.Startup.StartupResultCount())
 	assert.Zero(t, result.Startup.SelectedDriveCount(), "a failure that stops the whole run names no drive")
@@ -583,7 +585,7 @@ func newPanicIsolationEngines(siblingCanonicalID driveid.CanonicalID, firstRun f
 func (e *panicIsolationEngines) factory(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 	if req.Mount.parentCanonicalID() == e.siblingCanonicalID {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				close(e.siblingStarted)
 				<-ctx.Done()
 				close(e.siblingStopped)
@@ -593,7 +595,7 @@ func (e *panicIsolationEngines) factory(_ context.Context, req engineFactoryRequ
 	}
 	start := e.panickyStarts.Add(1)
 	return &mockEngine{
-		runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+		runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 			if start == 1 {
 				return e.firstRun()
 			}
@@ -670,7 +672,7 @@ func TestRunWatch_UnsavedSignInIsLoggedOncePerDistinctFailure(t *testing.T) {
 	orch.reconcileTicks = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				<-ctx.Done()
 				return ctx.Err()
 			},

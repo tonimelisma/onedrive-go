@@ -8,6 +8,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // EngineMountConfig carries the non-client runtime facts needed to construct an
@@ -22,12 +24,12 @@ type EngineMountConfig struct {
 	AccountEmail             string
 	RemoteRootItemID         string
 	RemoteRootDeltaCapable   bool
-	ExpectedSyncRootIdentity *ShortcutRootIdentity
+	ExpectedSyncRootIdentity *syncshortcut.ShortcutRootIdentity
 	EnableWebsocket          bool
-	ContentFilter            ContentFilterConfig
-	LocalRules               LocalObservationRules
+	ContentFilter            syncdomain.ContentFilterConfig
+	LocalRules               syncdomain.LocalObservationRules
 	ShortcutNamespaceID      string
-	ShortcutChildWorkSink    ShortcutChildWorkSink
+	ShortcutChildWorkSink    syncshortcut.ShortcutChildWorkSink
 	TransferWorkers          int
 	CheckWorkers             int
 	MinFreeSpace             int64
@@ -79,7 +81,7 @@ func NewMountEngine(
 		AccountCanonicalID:       mountCfg.AccountCanonicalID,
 		RemoteRootItemID:         mountCfg.RemoteRootItemID,
 		RemoteRootDeltaCapable:   mountCfg.RemoteRootDeltaCapable,
-		ExpectedSyncRootIdentity: ShortcutRootIdentityToFileIdentity(mountCfg.ExpectedSyncRootIdentity),
+		ExpectedSyncRootIdentity: syncshortcut.ShortcutRootIdentityToFileIdentity(mountCfg.ExpectedSyncRootIdentity),
 		Fetcher:                  session.Meta,
 		SocketIOFetcher:          session.Meta,
 		Items:                    session.Meta,

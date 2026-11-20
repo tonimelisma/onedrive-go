@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"log/slog"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func (rt *watchRuntime) beginWatchDrain(
@@ -15,7 +17,7 @@ func (rt *watchRuntime) beginWatchDrain(
 		// is set when the watch first sees its stop, measured from the
 		// cancel (beginStopDrain).
 		rt.beginStopDrain()
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventShutdownStarted})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventShutdownStarted})
 		rt.deps.logger.Info("graceful shutdown: sealing new work admission",
 			slog.Int("in_flight", rt.sched.graph.InFlightCount()),
 		)
@@ -116,7 +118,7 @@ func (rt *watchRuntime) drainLoopDone(p *watchPipeline) bool {
 func (rt *watchRuntime) handleDrainingCompletion(
 	ctx context.Context,
 	p *watchPipeline,
-	completion *ActionCompletion,
+	completion *syncdomain.ActionCompletion,
 	ok bool,
 ) (bool, error) {
 	if !ok {

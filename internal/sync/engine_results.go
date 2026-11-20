@@ -4,6 +4,9 @@ import (
 	"log/slog"
 	"sort"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // failureSummaryEntry is one failure of a pass that was kept as retry work,
@@ -49,15 +52,15 @@ func (rt *watchRuntime) armRetryTimer() {
 		return
 	}
 
-	rt.deps.emit(EngineDebugEvent{
-		Type:  EngineDebugEventRetryTimerArmed,
+	rt.deps.emit(syncdomain.EngineDebugEvent{
+		Type:  syncdomain.EngineDebugEventRetryTimerArmed,
 		Delay: delay,
 	})
 	retryCh, emit := rt.timers.retryTimerCh, rt.deps.emit
 	rt.resetRetryTimer(rt.deps.clock.AfterFunc(delay, func() {
-		emit(EngineDebugEvent{Type: EngineDebugEventRetryTimerFired})
+		emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryTimerFired})
 		if signalTimerChannel(retryCh) {
-			emit(EngineDebugEvent{Type: EngineDebugEventRetryKicked})
+			emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryKicked})
 		}
 	}))
 }
@@ -77,7 +80,7 @@ func (rt *watchRuntime) stopRetryTimer() {
 // across the engine.
 func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 	if signalTimerChannel(rt.timers.retryTimerCh) {
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRetryKicked})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryKicked})
 	}
 }
 
@@ -94,7 +97,7 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 // (failureAwaitsUser), preserves the raw error for the final SyncReport, and
 // records a failure kept as retry work for the end-of-pass summary
 // (logFailureSummary).
-func (f *engineFlow) recordError(decision *ResultDecision, r *ActionCompletion) {
+func (f *engineFlow) recordError(decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion) {
 	f.results.failed++
 	if decision != nil && failureKeptForRetry(decision.Class) {
 		f.results.keptForRetry++
@@ -110,7 +113,7 @@ func (f *engineFlow) recordError(decision *ResultDecision, r *ActionCompletion) 
 		f.results.errors = append(f.results.errors, r.Err)
 	}
 
-	if decision == nil || decision.Persistence != PersistRetryWork {
+	if decision == nil || decision.Persistence != syncdomain.PersistRetryWork {
 		return
 	}
 
@@ -214,7 +217,7 @@ func (e *Engine) since(start time.Time) time.Duration {
 // transfer workers with the pool's floor, or one when serialized (D-090). It
 // is the ceiling a fresh plan's slow start doubles toward (R-6.8.25).
 func (e *Engine) workerPoolSize() int {
-	return PoolWorkerCount(e.transferWorkers, e.serializeWorkers)
+	return syncexec.PoolWorkerCount(e.transferWorkers, e.serializeWorkers)
 }
 
 // resultStats returns the engine-owned counters and error list.
@@ -284,13 +287,13 @@ func (rt *watchRuntime) armTrialTimer() {
 	// the watch loop calls DueTrials, so even if a second AfterFunc
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
-	rt.deps.emit(EngineDebugEvent{
-		Type:  EngineDebugEventTrialTimerArmed,
+	rt.deps.emit(syncdomain.EngineDebugEvent{
+		Type:  syncdomain.EngineDebugEventTrialTimerArmed,
 		Delay: delay,
 	})
 	trialCh, emit := rt.timers.trialCh, rt.deps.emit
 	rt.resetTrialTimer(rt.deps.clock.AfterFunc(delay, func() {
-		emit(EngineDebugEvent{Type: EngineDebugEventTrialTimerFired})
+		emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventTrialTimerFired})
 		signalTimerChannel(trialCh)
 	}))
 }

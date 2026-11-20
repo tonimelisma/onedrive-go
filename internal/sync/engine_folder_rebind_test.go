@@ -7,6 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // A folder deleted and re-created online at the same path is a new item. The
@@ -17,7 +20,7 @@ import (
 func TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("photos-1", "root", "Photos")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	require.Equal(t, 1, runScenarioPass(t, eng).FolderCreates)
@@ -32,7 +35,7 @@ func TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem(t *testing
 	require.True(t, found, "the folder is still synced")
 	assert.Equal(t, "photos-2", entry.ItemID, "the baseline follows the folder's new item")
 
-	writeTestFile(t, syncRoot, "Photos/new.txt", "new local file")
+	syncfixture.WriteTestFile(t, syncRoot, "Photos/new.txt", "new local file")
 	report := runScenarioPass(t, eng)
 	require.Equal(t, 1, report.Uploads, "%+v", report)
 
@@ -45,7 +48,7 @@ func TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem(t *testing
 func TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("docs-1", "root", "Docs")
 	remote.addFolder("deep-1", "docs-1", "Deep")
 	remote.addFile(t, "file-1", "deep-1", "a.txt", "content")
@@ -59,7 +62,7 @@ func TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers(t *testing.T) 
 	remote.addFolder("deep-2", "docs-2", "Deep")
 	remote.addFile(t, "file-2", "deep-2", "a.txt", "content")
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates,
 		"same content at the same paths moves nothing: %+v", report)
@@ -77,18 +80,18 @@ func TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers(t *testing.T) 
 func TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	_, err := mgr.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES
 			('photos-1', 'Photos', 'root', 'folder'),
 			('pic-1', 'Photos/a.jpg', 'photos-1', 'file')`)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
-		Action: ActionBaselineUpdate, Success: true, Path: "Photos", DriveID: driveID,
-		ItemID: "photos-2", ParentID: "root", ItemType: ItemTypeFolder,
+	require.NoError(t, mgr.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionBaselineUpdate, Success: true, Path: "Photos", DriveID: driveID,
+		ItemID: "photos-2", ParentID: "root", ItemType: syncdomain.ItemTypeFolder,
 	}))
 
 	var parentID string
@@ -101,30 +104,30 @@ func TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren(t *testing.T) 
 func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	_, err := mgr.RawDBForTest().ExecContext(ctx,
 		`INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES ('id1', 'X', 'root', 'folder')`)
 	require.NoError(t, err)
-	require.NoError(t, mgr.ReplaceLocalState(ctx, []LocalStateRow{{Path: "X", ItemType: ItemTypeFolder}}))
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "id2", Path: "X", ItemType: ItemTypeFolder},
+	require.NoError(t, mgr.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{{Path: "X", ItemType: syncdomain.ItemTypeFolder}}))
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "id2", Path: "X", ItemType: syncdomain.ItemTypeFolder},
 	}, "", driveID))
 
 	rows, err := mgr.QueryReconciliationState(ctx)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, ReconcileBaselineUpdate, rows[0].ReconciliationKind)
+	assert.Equal(t, syncdomain.ReconcileBaselineUpdate, rows[0].ReconciliationKind)
 }
 
 // Validates: R-2.10.49
 func TestCommitMutation_FolderRebindUpdatesCachedChildren(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	_, err := mgr.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES
 			('photos-1', 'Photos', 'root', 'folder'),
@@ -133,9 +136,9 @@ func TestCommitMutation_FolderRebindUpdatesCachedChildren(t *testing.T) {
 	bl, err := mgr.Load(ctx)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.CommitMutation(ctx, &BaselineMutation{
-		Action: ActionBaselineUpdate, Success: true, Path: "Photos", DriveID: driveID,
-		ItemID: "photos-2", ParentID: "root", ItemType: ItemTypeFolder,
+	require.NoError(t, mgr.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionBaselineUpdate, Success: true, Path: "Photos", DriveID: driveID,
+		ItemID: "photos-2", ParentID: "root", ItemType: syncdomain.ItemTypeFolder,
 	}))
 
 	child, found := bl.GetByPath("Photos/a.jpg")

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
@@ -36,7 +38,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				<-ctx.Done()
 				return ctx.Err()
 			},
@@ -97,7 +99,7 @@ func TestRunWatch_StartupFailureIsNotReady(t *testing.T) {
 
 	orch := NewOrchestrator(cfg)
 	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
-		return nil, &syncengine.StateStoreIncompatibleError{Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema}
+		return nil, &syncstore.StateStoreIncompatibleError{Reason: syncstore.StateStoreIncompatibleReasonIncompatibleSchema}
 	}
 
 	err := runWithin(t, t.Context(), "a watch whose only drive failed to start to return, not idle", runWatchOf(orch))

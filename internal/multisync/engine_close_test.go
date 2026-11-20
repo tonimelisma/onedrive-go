@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -49,7 +51,7 @@ func TestRunOnce_AnEngineThatDoesNotCloseFailsTheRun(t *testing.T) {
 		return firedTimer()
 	}
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	require.ErrorIs(t, result.Stuck, ErrSyncStuck)
 	require.ErrorContains(t, result.Stuck, "CloseStuck")
@@ -77,7 +79,7 @@ func TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged(t *testing.T) 
 
 	parent := testStandaloneMount(t, "personal:child-close-stuck@example.com", "Parent")
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-close-stuck", "Shortcuts/Stuck")
-	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfig(t, parent)
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
@@ -98,15 +100,15 @@ func TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged(t *testing.T) 
 			}, nil
 		}
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				if err := req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 					return nil, err
 				}
 				return &syncengine.Report{}, nil
 			},
-			ackDrainFn: func(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+			ackDrainFn: func(context.Context, syncshortcut.ShortcutChildDrainAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 				acks.Add(1)
-				return syncengine.ShortcutChildWorkSnapshot{}, nil
+				return syncshortcut.ShortcutChildWorkSnapshot{}, nil
 			},
 		}, nil
 	}
@@ -122,7 +124,7 @@ func TestRunOnce_AShortcutEngineThatDoesNotCloseIsNotAcknowledged(t *testing.T) 
 		return never, func() {}
 	}
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	require.ErrorIs(t, result.Stuck, ErrSyncStuck)
 	require.ErrorContains(t, result.Stuck, "Stuck")

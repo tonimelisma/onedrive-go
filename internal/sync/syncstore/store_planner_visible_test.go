@@ -1,0 +1,384 @@
+package syncstore
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+)
+
+// Validates: R-2.1.3, R-2.4.1
+func TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	_, err := store.RawDBForTest().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
+		VALUES
+			('folder-docs', 'docs', 'folder', '', ''),
+			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
+	require.NoError(t, err)
+
+	visible := plannerVisibleRowsForTest(t, store, nil, []syncdomain.RemoteStateRow{
+		{
+			DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+			ItemID:   "file-docs",
+			Path:     "docs/file.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash",
+		},
+		{
+			DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+			ItemID:   "file-docs2",
+			Path:     "docs2/file.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash",
+		},
+	})
+
+	assert.Equal(t, []string{"docs2/file.txt"}, remoteStatePaths(visible.Remote))
+}
+
+// Validates: R-2.1.3, R-2.4.1
+func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	_, err := store.RawDBForTest().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
+		VALUES
+			('folder-docs', 'docs', 'folder', '', ''),
+			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
+	require.NoError(t, err)
+
+	visible := plannerVisibleRowsForTest(t, store, []syncdomain.LocalStateRow{
+		{
+			Path:     "docs/file.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash",
+		},
+		{
+			Path:     "docs2/file.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash",
+		},
+	}, nil)
+
+	assert.Equal(t, []string{"docs2/file.txt"}, localStatePaths(visible.Local))
+}
+
+func plannerVisibleRowsForTest(
+	t *testing.T,
+	store *SyncStore,
+	localRows []syncdomain.LocalStateRow,
+	remoteRows []syncdomain.RemoteStateRow,
+) plannerVisibleRows {
+	t.Helper()
+
+	ctx := t.Context()
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	visible, err := ReplacePlannerVisibleStateTx(
+		ctx,
+		tx,
+		localRows,
+		remoteRows,
+		driveid.New(syncfixture.EngineTestDriveID),
+	)
+	require.NoError(t, err)
+
+	return visible
+}
+
+func localStatePaths(rows []syncdomain.LocalStateRow) []string {
+	paths := make([]string, 0, len(rows))
+	for i := range rows {
+		paths = append(paths, rows[i].Path)
+	}
+	return paths
+}
+
+func remoteStatePaths(rows []syncdomain.RemoteStateRow) []string {
+	paths := make([]string, 0, len(rows))
+	for i := range rows {
+		paths = append(paths, rows[i].Path)
+	}
+	return paths
+}
+
+// The prune statements used to be a correlated EXISTS over baseline with a
+// substr() prefix test per visible row (rows x baseline rows). They are kept
+// here as the oracle for the range-delete form that replaced them.
+const (
+	oraclePrunePlannerVisibleLocalDescendants = `DELETE FROM planner_visible_local_state
+		WHERE EXISTS (
+			SELECT 1
+			FROM baseline parent
+			LEFT JOIN planner_visible_local_state parent_local ON parent_local.path = parent.path
+			WHERE parent.item_type = 'folder'
+				AND parent.path <> ''
+				AND parent_local.path IS NULL
+				AND substr(planner_visible_local_state.path, 1, length(parent.path) + 1) = parent.path || '/'
+		)`
+	oraclePrunePlannerVisibleRemoteDescendants = `DELETE FROM planner_visible_remote_state
+		WHERE EXISTS (
+			SELECT 1
+			FROM baseline parent
+			LEFT JOIN planner_visible_remote_state parent_remote ON parent_remote.path = parent.path
+			WHERE parent.item_type = 'folder'
+				AND parent.path <> ''
+				AND parent_remote.path IS NULL
+				AND substr(planner_visible_remote_state.path, 1, length(parent.path) + 1) = parent.path || '/'
+		)`
+)
+
+type plannerVisiblePruneCase struct {
+	name string
+	// baseline holds path -> item type of the synced tree.
+	baseline map[string]syncdomain.ItemType
+	// visible holds the paths a side still has (path -> item type); paths
+	// absent from baseline are new on that side.
+	visible map[string]syncdomain.ItemType
+	// want lists the visible paths that survive the prune.
+	want []string
+}
+
+func plannerVisiblePruneCases() []plannerVisiblePruneCase {
+	return []plannerVisiblePruneCase{
+		{
+			// Validates: R-2.4.1
+			name: "nothing missing prunes nothing",
+			baseline: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a/b": syncdomain.ItemTypeFolder, "a/b/c.txt": syncdomain.ItemTypeFile, "d.txt": syncdomain.ItemTypeFile,
+			},
+			visible: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a/b": syncdomain.ItemTypeFolder, "a/b/c.txt": syncdomain.ItemTypeFile, "d.txt": syncdomain.ItemTypeFile, "new.txt": syncdomain.ItemTypeFile,
+			},
+			want: []string{"a", "a/b", "a/b/c.txt", "d.txt", "new.txt"},
+		},
+		{
+			// Validates: R-2.4.1
+			name: "missing top folder prunes its subtree but not a sibling prefix",
+			baseline: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a/b": syncdomain.ItemTypeFolder, "a/b/c.txt": syncdomain.ItemTypeFile, "a/x.txt": syncdomain.ItemTypeFile,
+				"ab": syncdomain.ItemTypeFolder, "ab/z.txt": syncdomain.ItemTypeFile, "d.txt": syncdomain.ItemTypeFile,
+			},
+			visible: map[string]syncdomain.ItemType{
+				"a/b": syncdomain.ItemTypeFolder, "a/b/c.txt": syncdomain.ItemTypeFile, "a/x.txt": syncdomain.ItemTypeFile, "a/new.txt": syncdomain.ItemTypeFile,
+				"ab": syncdomain.ItemTypeFolder, "ab/z.txt": syncdomain.ItemTypeFile, "d.txt": syncdomain.ItemTypeFile,
+			},
+			want: []string{"ab", "ab/z.txt", "d.txt"},
+		},
+		{
+			// Validates: R-2.4.1
+			name: "missing folder three levels down prunes only below it",
+			baseline: map[string]syncdomain.ItemType{
+				"p": syncdomain.ItemTypeFolder, "p/q": syncdomain.ItemTypeFolder, "p/q/r": syncdomain.ItemTypeFolder,
+				"p/q/r/f.txt": syncdomain.ItemTypeFile, "p/q/r/s": syncdomain.ItemTypeFolder, "p/q/r/s/g.txt": syncdomain.ItemTypeFile, "p/q/g.txt": syncdomain.ItemTypeFile,
+			},
+			visible: map[string]syncdomain.ItemType{
+				"p": syncdomain.ItemTypeFolder, "p/q": syncdomain.ItemTypeFolder,
+				"p/q/r/f.txt": syncdomain.ItemTypeFile, "p/q/r/s": syncdomain.ItemTypeFolder, "p/q/r/s/g.txt": syncdomain.ItemTypeFile, "p/q/g.txt": syncdomain.ItemTypeFile,
+			},
+			want: []string{"p", "p/q", "p/q/g.txt"},
+		},
+		{
+			// Validates: R-2.4.1
+			name: "nested missing folders prune once",
+			baseline: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a/b": syncdomain.ItemTypeFolder, "a/b/c": syncdomain.ItemTypeFolder, "a/b/c/d.txt": syncdomain.ItemTypeFile, "a/e.txt": syncdomain.ItemTypeFile,
+				"a-b": syncdomain.ItemTypeFolder, "a-b/f.txt": syncdomain.ItemTypeFile,
+			},
+			visible: map[string]syncdomain.ItemType{
+				"a/b/c": syncdomain.ItemTypeFolder, "a/b/c/d.txt": syncdomain.ItemTypeFile, "a/e.txt": syncdomain.ItemTypeFile,
+				"a-b": syncdomain.ItemTypeFolder, "a-b/f.txt": syncdomain.ItemTypeFile,
+			},
+			want: []string{"a-b", "a-b/f.txt"},
+		},
+		{
+			// Validates: R-2.4.1
+			name: "missing file or root row never prunes",
+			baseline: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a/f.txt": syncdomain.ItemTypeFile, "a/f.txt/odd.txt": syncdomain.ItemTypeFile,
+			},
+			visible: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a/f.txt/odd.txt": syncdomain.ItemTypeFile, "b.txt": syncdomain.ItemTypeFile,
+			},
+			want: []string{"a", "a/f.txt/odd.txt", "b.txt"},
+		},
+		{
+			// Validates: R-2.4.1
+			name: "folder with slash-adjacent names",
+			baseline: map[string]syncdomain.ItemType{
+				"a": syncdomain.ItemTypeFolder, "a0": syncdomain.ItemTypeFolder, "a0/x.txt": syncdomain.ItemTypeFile, "a.": syncdomain.ItemTypeFolder, "a./y.txt": syncdomain.ItemTypeFile,
+			},
+			visible: map[string]syncdomain.ItemType{
+				"a/under.txt": syncdomain.ItemTypeFile, "a0": syncdomain.ItemTypeFolder, "a0/x.txt": syncdomain.ItemTypeFile, "a.": syncdomain.ItemTypeFolder, "a./y.txt": syncdomain.ItemTypeFile,
+			},
+			want: []string{"a.", "a./y.txt", "a0", "a0/x.txt"},
+		},
+	}
+}
+
+// Validates: R-2.1.3, R-2.4.1
+//
+// The range-delete prune removes exactly the rows the correlated scan removed
+// on trees with missing folders at several depths, nested, and next to
+// sibling prefixes, and its query plan is a primary-key range per missing
+// folder, not a scan of the visible rows per baseline row.
+func TestReplacePlannerVisibleStateTx_PruneMatchesCorrelatedScan(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range plannerVisiblePruneCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestStore(t)
+			seedPlannerVisibleBaseline(t, store, tc.baseline)
+			localRows, remoteRows := plannerVisibleRowsFromPaths(tc.visible)
+
+			visible := plannerVisibleRowsForTest(t, store, localRows, remoteRows)
+			plan := explainPlannerVisiblePrunes(t, store)
+
+			assert.Equal(t, tc.want, localStatePaths(visible.Local), "local rows; query plan:\n%s", plan)
+			assert.Equal(t, tc.want, remoteStatePaths(visible.Remote), "remote rows; query plan:\n%s", plan)
+
+			oracleLocal, oracleRemote := plannerVisiblePathsAfterPrune(t, store, localRows, remoteRows,
+				oraclePrunePlannerVisibleLocalDescendants, oraclePrunePlannerVisibleRemoteDescendants)
+			assert.Equal(t, oracleLocal, localStatePaths(visible.Local), "local rows differ from the correlated scan; query plan:\n%s", plan)
+			assert.Equal(t, oracleRemote, remoteStatePaths(visible.Remote), "remote rows differ from the correlated scan; query plan:\n%s", plan)
+		})
+	}
+}
+
+// Validates: R-2.4.1
+func TestReplacePlannerVisibleStateTx_PruneUsesAPathRangePerMissingFolder(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	plan := explainPlannerVisiblePrunes(t, store)
+
+	for _, table := range []string{PlannerVisibleLocalStateTable, PlannerVisibleRemoteStateTable} {
+		assert.Regexp(t, `SEARCH below USING COVERING INDEX sqlite_autoindex_`+table+`_\d+ \(path>\? AND path<\?\)`, plan,
+			"the prune of %s must range-scan the visible rows below each missing folder; query plan:\n%s", table, plan)
+		assert.NotContains(t, plan, "SCAN "+table,
+			"the prune must not scan the visible rows per baseline row; query plan:\n%s", table, plan)
+	}
+}
+
+func seedPlannerVisibleBaseline(t *testing.T, store *SyncStore, baseline map[string]syncdomain.ItemType) {
+	t.Helper()
+
+	ctx := t.Context()
+	_, err := store.RawDBForTest().ExecContext(ctx,
+		`INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash) VALUES ('root', '', 'root', '', '')`)
+	require.NoError(t, err)
+	for path, itemType := range baseline {
+		_, err := store.RawDBForTest().ExecContext(ctx,
+			`INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash) VALUES (?, ?, ?, '', '')`,
+			"id-"+path, path, itemType.String())
+		require.NoError(t, err)
+	}
+}
+
+func plannerVisibleRowsFromPaths(visible map[string]syncdomain.ItemType) ([]syncdomain.LocalStateRow, []syncdomain.RemoteStateRow) {
+	localRows := make([]syncdomain.LocalStateRow, 0, len(visible))
+	remoteRows := make([]syncdomain.RemoteStateRow, 0, len(visible))
+	for path, itemType := range visible {
+		localRows = append(localRows, syncdomain.LocalStateRow{Path: path, ItemType: itemType, Hash: "hash"})
+		remoteRows = append(remoteRows, syncdomain.RemoteStateRow{
+			DriveID: driveid.New(syncfixture.EngineTestDriveID), ItemID: "id-" + path, Path: path, ItemType: itemType, Hash: "hash",
+		})
+	}
+
+	return localRows, remoteRows
+}
+
+// plannerVisiblePathsAfterPrune materializes the TEMP tables the way
+// ReplacePlannerVisibleStateTx does and prunes them with the given
+// statements, returning the surviving paths in order.
+func plannerVisiblePathsAfterPrune(
+	tb testing.TB,
+	store *SyncStore,
+	localRows []syncdomain.LocalStateRow,
+	remoteRows []syncdomain.RemoteStateRow,
+	pruneLocal, pruneRemote string,
+) ([]string, []string) {
+	tb.Helper()
+
+	ctx := tb.Context()
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
+	require.NoError(tb, err)
+	defer func() { _ = tx.Rollback() }()
+
+	for _, query := range []string{
+		SQLCreatePlannerVisibleLocalStateForTest(), SQLCreatePlannerVisibleRemoteStateForTest(),
+		sqlDeletePlannerVisibleLocalState, sqlDeletePlannerVisibleRemoteState,
+	} {
+		_, err = tx.ExecContext(ctx, query)
+		require.NoError(tb, err)
+	}
+	require.NoError(tb, insertPlannerVisibleLocalRowsTx(ctx, tx, localRows))
+	require.NoError(tb, insertPlannerVisibleRemoteRowsTx(ctx, tx, remoteRows))
+	_, err = tx.ExecContext(ctx, pruneLocal)
+	require.NoError(tb, err)
+	_, err = tx.ExecContext(ctx, pruneRemote)
+	require.NoError(tb, err)
+
+	local, err := listLocalStateRowsWithQuery(ctx, tx, sqlListPlannerVisibleLocalState)
+	require.NoError(tb, err)
+	remote, err := QueryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, driveid.New(syncfixture.EngineTestDriveID))
+	require.NoError(tb, err)
+
+	return localStatePaths(local), remoteStatePaths(remote)
+}
+
+// explainPlannerVisiblePrunes returns SQLite's query plans for both prune
+// statements, so a regression to a per-row scan is visible in test output.
+func explainPlannerVisiblePrunes(t *testing.T, store *SyncStore) string {
+	t.Helper()
+
+	ctx := t.Context()
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	for _, query := range []string{
+		SQLCreatePlannerVisibleLocalStateForTest(), SQLCreatePlannerVisibleRemoteStateForTest(),
+	} {
+		_, err = tx.ExecContext(ctx, query)
+		require.NoError(t, err)
+	}
+
+	return queryPlanText(t, tx, sqlPrunePlannerVisibleLocalDescendants) + "\n" +
+		queryPlanText(t, tx, sqlPrunePlannerVisibleRemoteDescendants)
+}
+
+func queryPlanText(t *testing.T, tx SqlTxRunner, query string, args ...any) string {
+	t.Helper()
+
+	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail))
+		fmt.Fprintf(&plan, "%d/%d %s\n", id, parent, detail)
+	}
+	require.NoError(t, rows.Err())
+
+	return plan.String()
+}

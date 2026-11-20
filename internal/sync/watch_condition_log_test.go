@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-6.6.30
@@ -12,8 +15,8 @@ func TestFormatWatchConditionBreakdown_UsesUserWords(t *testing.T) {
 
 	summary := watchConditionSummary{
 		Counts: []watchConditionCount{
-			{Key: ConditionAuthenticationRequired, Count: 1},
-			{Key: ConditionRemoteWriteDenied, Count: 2},
+			{Key: syncdomain.ConditionAuthenticationRequired, Count: 1},
+			{Key: syncdomain.ConditionRemoteWriteDenied, Count: 2},
 		},
 		ConditionTotal: 3,
 		Retrying:       99,
@@ -33,18 +36,18 @@ func TestFormatWatchConditionBreakdown_UsesUserWords(t *testing.T) {
 func TestConditionLabel_EveryDeclaredKeyHasALabel(t *testing.T) {
 	t.Parallel()
 
-	for name, value := range stringConstantsOfType(t, "condition_keys.go", "ConditionKey") {
-		label, ok := conditionLabelText(ConditionKey(value))
+	for name, value := range syncfixture.StringConstantsOfType(t, "condition_keys.go", "ConditionKey") {
+		label, ok := conditionLabelText(syncdomain.ConditionKey(value))
 		assert.True(t, ok, "%s has no label", name)
 		assert.NotEmpty(t, label, "%s has an empty label", name)
 		assert.NotContains(t, label, "_", "%s is labeled in words, not by its key", name)
 	}
 
-	label, ok := conditionLabelText(conditionKeyOutsideTheSet)
+	label, ok := conditionLabelText(syncfixture.ConditionKeyOutsideTheSet)
 	assert.False(t, ok)
 	assert.Empty(t, label)
-	assert.Equal(t, "files with not a condition key", conditionLabel(conditionKeyOutsideTheSet, 2))
-	assert.Equal(t, "file waiting for sign-in", conditionLabel(ConditionAuthenticationRequired, 1))
+	assert.Equal(t, "files with not a condition key", conditionLabel(syncfixture.ConditionKeyOutsideTheSet, 2))
+	assert.Equal(t, "file waiting for sign-in", conditionLabel(syncdomain.ConditionAuthenticationRequired, 1))
 }
 
 // A condition of a mount point is a condition of one folder, the mount point,
@@ -54,8 +57,8 @@ func TestConditionLabel_EveryDeclaredKeyHasALabel(t *testing.T) {
 func TestConditionLabel_AMountPointIsCountedAsAFolder(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "folder whose disk is not mounted", conditionLabel(ConditionLocalMountMissing, 1))
-	assert.Equal(t, "folders on another filesystem inside the sync folder", conditionLabel(ConditionLocalMountBoundary, 2))
+	assert.Equal(t, "folder whose disk is not mounted", conditionLabel(syncdomain.ConditionLocalMountMissing, 1))
+	assert.Equal(t, "folders on another filesystem inside the sync folder", conditionLabel(syncdomain.ConditionLocalMountBoundary, 2))
 }
 
 // Validates: R-6.6.30
@@ -64,7 +67,7 @@ func TestWatchConditionSummaryFingerprint_IsTheSetOfConditionKinds(t *testing.T)
 
 	summary := watchConditionSummary{
 		Counts: []watchConditionCount{
-			{Key: ConditionInvalidFilename, Count: 4},
+			{Key: syncdomain.ConditionInvalidFilename, Count: 4},
 		},
 		ConditionTotal: 4,
 	}

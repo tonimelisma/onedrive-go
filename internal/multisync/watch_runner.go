@@ -9,6 +9,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // watchRunner holds per-mount state for a running watch-mode engine. All
@@ -43,7 +45,7 @@ type watchRunnerEvent struct {
 	generation            uint64
 	report                *syncengine.Report
 	err                   error
-	parentSnapshot        syncengine.ShortcutChildWorkSnapshot
+	parentSnapshot        syncshortcut.ShortcutChildWorkSnapshot
 	parentSnapshotChanged bool
 }
 
@@ -53,7 +55,7 @@ type watchRunnerEvent struct {
 func (o *Orchestrator) startNextWatchRunner(
 	ctx context.Context,
 	mount *mountSpec,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 	childWork *parentChildWorkSnapshots,
@@ -72,7 +74,7 @@ func (o *Orchestrator) startWatchRunner(
 	ctx context.Context,
 	mount *mountSpec,
 	generation uint64,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 ) (*watchRunner, error) {
@@ -193,7 +195,7 @@ func (o *Orchestrator) runWatchRunnerEngine(
 	ctx context.Context,
 	mount *mountSpec,
 	engine engineRunner,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 ) (report *syncengine.Report, err error) {
 	defer func() {
@@ -209,7 +211,7 @@ func (o *Orchestrator) runWatchRunnerEngine(
 	// engineRunnerAdapter comment for why this layer adds no prefix.
 	if mount.isFinalDrainChild() {
 		//nolint:wrapcheck // The engine error carries its own context; this layer only reports it.
-		return engine.RunOnce(ctx, syncengine.SyncBidirectional, syncengine.RunOptions{
+		return engine.RunOnce(ctx, syncdomain.SyncBidirectional, syncengine.RunOptions{
 			FullReconcile:    true,
 			ReleaseLocalTree: true,
 		})
@@ -241,7 +243,7 @@ func (o *Orchestrator) removeMountPerfCollector(mountID string) {
 func (o *Orchestrator) handleWatchRunnerEvent(
 	ctx context.Context,
 	event watchRunnerEvent,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,
@@ -301,7 +303,7 @@ func (o *Orchestrator) reportWatchRunnerExit(wr *watchRunner, err error) {
 	name := wr.mount.label()
 
 	switch {
-	case errors.Is(err, syncengine.ErrMountRootUnavailable):
+	case errors.Is(err, syncdomain.ErrMountRootUnavailable):
 		// The restart attempt fails at startup with the same cause, and that
 		// startup failure is what gets announced.
 		o.logger.Info(fmt.Sprintf("Stopped syncing %s: its sync folder is unavailable", name),
@@ -342,8 +344,8 @@ func parentSnapshotEventIsCurrent(
 	if wr.generation != event.generation {
 		return false
 	}
-	eventSnapshot := syncengine.NormalizeShortcutChildWorkSnapshot(event.mountID.String(), event.parentSnapshot)
-	return syncengine.ShortcutChildWorkSnapshotsEqual(childWork.latestFor(event.mountID), eventSnapshot)
+	eventSnapshot := syncshortcut.NormalizeShortcutChildWorkSnapshot(event.mountID.String(), event.parentSnapshot)
+	return syncshortcut.ShortcutChildWorkSnapshotsEqual(childWork.latestFor(event.mountID), eventSnapshot)
 }
 
 func (o *Orchestrator) handleFinalDrainWatchRunnerEvent(
