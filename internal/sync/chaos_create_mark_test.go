@@ -97,7 +97,7 @@ func createThroughGraph(t *testing.T, answer chaosAnswer) (int64, error) {
 		slog.New(slog.DiscardHandler), "chaos-pin")
 	require.NoError(t, err)
 
-	_, createErr := client.CreateFile(t.Context(), driveid.New(engineTestDriveID), graphRootID, "doc.txt")
+	_, createErr := client.CreateFile(t.Context(), driveid.New(engineTestDriveID), GraphRootID, "doc.txt")
 
 	return requests.Load(), createErr
 }

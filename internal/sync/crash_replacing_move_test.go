@@ -52,7 +52,7 @@ func TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove(t *testing
 		point:  CrashPointLocalMoveDestinationTrashed,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.crashAt = capture.hook
+	h.eng.execCfg.SetCrashHookForTest(capture.hook)
 	_, err = h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	recovered := capture.reopen(t)

@@ -47,7 +47,7 @@ func TestPlannerPlanCurrentState_LocalAbsenceDeletesRemoteOnlyWithBaseline(t *te
 		ctx := t.Context()
 		driveID := driveid.New(engineTestDriveID)
 
-		_, err := store.rawDB().ExecContext(ctx, `
+		_, err := store.RawDBForTest().ExecContext(ctx, `
 			INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 			VALUES ('item-synced', 'synced.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-synced')`)
 		require.NoError(t, err)

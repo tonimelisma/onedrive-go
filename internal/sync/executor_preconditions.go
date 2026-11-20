@@ -31,13 +31,13 @@ var errRemoteMoveAlreadyApplied = errors.New("remote move already applied")
 // the engine also drops the item from remote_state so the next plan stops
 // targeting it instead of superseding the same action on every pass.
 type RemoteItemGoneError struct {
-	op     string
+	Op     string
 	ItemID string
-	role   string
+	Role   string
 }
 
 func (e *RemoteItemGoneError) Error() string {
-	return fmt.Sprintf("%s: %s remote %s %s is missing", ErrActionPreconditionChanged, e.op, e.role, e.ItemID)
+	return fmt.Sprintf("%s: %s remote %s %s is missing", ErrActionPreconditionChanged, e.Op, e.Role, e.ItemID)
 }
 
 func (e *RemoteItemGoneError) Unwrap() error { return ErrActionPreconditionChanged }
@@ -88,7 +88,7 @@ func (e *Executor) remoteSourcePrecondition(
 	item, err := e.items.GetItem(ctx, driveID, action.ItemID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return liveRemoteSource{}, &RemoteItemGoneError{op: op, ItemID: action.ItemID, role: "item"}
+			return liveRemoteSource{}, &RemoteItemGoneError{Op: op, ItemID: action.ItemID, Role: "item"}
 		}
 		return liveRemoteSource{}, fmt.Errorf("checking remote %s precondition for %s: %w", op, action.Path, err)
 	}
@@ -242,7 +242,7 @@ func (e *Executor) validateRemoteParentPrecondition(
 	if parentID == "" {
 		return nil
 	}
-	if parentID == graphRootID {
+	if parentID == GraphRootID {
 		return nil
 	}
 	if e.parentChecks.folderRead(driveID, parentID) {
@@ -253,7 +253,7 @@ func (e *Executor) validateRemoteParentPrecondition(
 	item, err := e.items.GetItem(ctx, driveID, parentID)
 	if err != nil {
 		if errors.Is(err, graph.ErrNotFound) {
-			return &RemoteItemGoneError{op: op, ItemID: parentID, role: "parent"}
+			return &RemoteItemGoneError{Op: op, ItemID: parentID, Role: "parent"}
 		}
 		return fmt.Errorf("checking remote %s parent precondition for %s: %w", op, action.Path, err)
 	}
@@ -278,7 +278,7 @@ func remoteCreateParentGone(err error, op, parentID string) error {
 		return nil
 	}
 
-	return &RemoteItemGoneError{op: op, ItemID: parentID, role: "parent"}
+	return &RemoteItemGoneError{Op: op, ItemID: parentID, Role: "parent"}
 }
 
 func remoteStateRowFromGraphItem(item *graph.Item) *RemoteStateRow {

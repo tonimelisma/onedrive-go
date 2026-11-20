@@ -47,15 +47,15 @@ var ErrDeltaExpired = errors.New("OneDrive change history expired")
 type ResyncKind int
 
 const (
-	// resyncKindUnknown is a 410 without a recognized flavor. It is
-	// treated like resyncKindUploadDifferences: when unsure, never delete.
-	resyncKindUnknown ResyncKind = iota
+	// ResyncKindUnknown is a 410 without a recognized flavor. It is
+	// treated like ResyncKindUploadDifferences: when unsure, never delete.
+	ResyncKindUnknown ResyncKind = iota
 	// ResyncKindApplyDifferences: the server's view is current; an item it
 	// no longer returns was deleted, and the local copy may follow.
 	ResyncKindApplyDifferences
-	// resyncKindUploadDifferences: the server lost changes; local items it
+	// ResyncKindUploadDifferences: the server lost changes; local items it
 	// did not return are to be uploaded again, never deleted.
-	resyncKindUploadDifferences
+	ResyncKindUploadDifferences
 )
 
 // Graph's inner codes for the two resync flavors.
@@ -89,14 +89,14 @@ func NewCursorUnusableError(reason string, cause error) *DeltaExpiredError {
 }
 
 func NewDeltaExpiredError(cause error) *DeltaExpiredError {
-	kind := resyncKindUnknown
+	kind := ResyncKindUnknown
 	var graphErr *graph.GraphError
 	if errors.As(cause, &graphErr) {
 		switch {
 		case graphErr.HasCode(graphCodeResyncApplyDifferences):
 			kind = ResyncKindApplyDifferences
 		case graphErr.HasCode(graphCodeResyncUploadDifferences):
-			kind = resyncKindUploadDifferences
+			kind = ResyncKindUploadDifferences
 		}
 	}
 
@@ -120,14 +120,14 @@ func (e *DeltaExpiredError) Is(target error) bool { return target == ErrDeltaExp
 func (e *DeltaExpiredError) Unwrap() error { return e.cause }
 
 // ResyncKindOf returns the flavor of an expired-delta error, or
-// resyncKindUnknown when err does not carry one.
+// ResyncKindUnknown when err does not carry one.
 func ResyncKindOf(err error) ResyncKind {
 	var expired *DeltaExpiredError
 	if errors.As(err, &expired) {
 		return expired.kind
 	}
 
-	return resyncKindUnknown
+	return ResyncKindUnknown
 }
 
 // ErrRemoteObservationIncomplete is returned when remote observation cannot

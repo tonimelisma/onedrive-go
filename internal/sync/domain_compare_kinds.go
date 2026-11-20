@@ -16,8 +16,8 @@ const kindUnclassified = "unclassified"
 //
 // The zero value is ComparisonUnclassified, the CASE's ELSE: a state no rule
 // covers, which planning refuses (validatePlannerKinds). Members are never
-// persisted, so their numbers may change; comparisonDiverged stays last,
-// because allComparisonKinds and ParseComparisonKind range up to it.
+// persisted, so their numbers may change; ComparisonDiverged stays last,
+// because AllComparisonKinds and ParseComparisonKind range up to it.
 type ComparisonKind uint8
 
 const (
@@ -27,18 +27,18 @@ const (
 	comparisonBothMissing
 	ComparisonLocalMoveDest
 	ComparisonRemoteMoveSource
-	comparisonRemoteMoveDest
+	ComparisonRemoteMoveDest
 	comparisonKeptLocalFolder
-	comparisonLocalOnlyCreate
+	ComparisonLocalOnlyCreate
 	ComparisonRemoteMoveShadowed
-	comparisonRemoteOnlyCreate
+	ComparisonRemoteOnlyCreate
 	comparisonCreateEqual
 	comparisonCreateConflict
 	comparisonUnchanged
-	comparisonEqualAgain
+	ComparisonEqualAgain
 	comparisonLocalMissing
 	comparisonRemoteMissing
-	comparisonDiverged
+	ComparisonDiverged
 )
 
 //nolint:gocyclo // one case per member: the name table of the enum
@@ -56,15 +56,15 @@ func (k ComparisonKind) String() string {
 		return "local_move_dest"
 	case ComparisonRemoteMoveSource:
 		return "remote_move_source"
-	case comparisonRemoteMoveDest:
+	case ComparisonRemoteMoveDest:
 		return "remote_move_dest"
 	case comparisonKeptLocalFolder:
 		return "kept_local_folder"
-	case comparisonLocalOnlyCreate:
+	case ComparisonLocalOnlyCreate:
 		return "local_only_create"
 	case ComparisonRemoteMoveShadowed:
 		return "remote_move_shadowed"
-	case comparisonRemoteOnlyCreate:
+	case ComparisonRemoteOnlyCreate:
 		return "remote_only_create"
 	case comparisonCreateEqual:
 		return "create_equal"
@@ -72,24 +72,24 @@ func (k ComparisonKind) String() string {
 		return "create_conflict"
 	case comparisonUnchanged:
 		return "unchanged" //nolint:goconst // an enum name; the other use in the package is a test file's content
-	case comparisonEqualAgain:
+	case ComparisonEqualAgain:
 		return "equal_again"
 	case comparisonLocalMissing:
 		return "local_missing"
 	case comparisonRemoteMissing:
 		return "remote_missing"
-	case comparisonDiverged:
+	case ComparisonDiverged:
 		return "diverged"
 	default:
 		return fmt.Sprintf("comparisonKind(%d)", uint8(k))
 	}
 }
 
-// allComparisonKinds lists every member in declaration order, the
+// AllComparisonKinds lists every member in declaration order, the
 // unclassified one first.
-func allComparisonKinds() []ComparisonKind {
-	kinds := make([]ComparisonKind, 0, int(comparisonDiverged)+1)
-	for k := ComparisonUnclassified; k <= comparisonDiverged; k++ {
+func AllComparisonKinds() []ComparisonKind {
+	kinds := make([]ComparisonKind, 0, int(ComparisonDiverged)+1)
+	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
 		kinds = append(kinds, k)
 	}
 
@@ -101,7 +101,7 @@ func allComparisonKinds() []ComparisonKind {
 // planning refuses with the row's inputs. Any other unknown name is the SQL
 // and the enum drifting apart.
 func ParseComparisonKind(s string) (ComparisonKind, error) {
-	for k := ComparisonUnclassified; k <= comparisonDiverged; k++ {
+	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
 		if k.String() == s {
 			return k, nil
 		}
@@ -118,7 +118,7 @@ func ParseComparisonKind(s string) (ComparisonKind, error) {
 //
 // The zero value is ReconcileUnclassified, the CASE's ELSE; ReconcileNoop is
 // the explicit "nothing to do" that the decision table states for a path.
-// ReconcileReplaceLocal stays last (allReconciliationKinds,
+// ReconcileReplaceLocal stays last (AllReconciliationKinds,
 // ParseReconciliationKind).
 type ReconciliationKind uint8
 
@@ -187,9 +187,9 @@ func (k ReconciliationKind) String() string {
 	}
 }
 
-// allReconciliationKinds lists every member in declaration order, the
+// AllReconciliationKinds lists every member in declaration order, the
 // unclassified one first.
-func allReconciliationKinds() []ReconciliationKind {
+func AllReconciliationKinds() []ReconciliationKind {
 	kinds := make([]ReconciliationKind, 0, int(ReconcileReplaceLocal)+1)
 	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
 		kinds = append(kinds, k)

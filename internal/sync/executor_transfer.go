@@ -225,7 +225,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		opts := e.uploadOpts(action, source)
 		opts.IfMatch = liveETag
 		result, err = e.transferMgr.UploadFileToItem(ctx, driveID, action.ItemID, localPath, opts)
-		err = uploadTransferError(err)
+		err = UploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -260,7 +260,7 @@ func (e *Executor) ExecuteUpload(ctx context.Context, action *Action) ActionOutc
 		if gone := remoteCreateParentGone(err, "upload create", parentID); gone != nil {
 			return e.failedOutcomeWithFailure(action, ActionUpload, gone, action.Path, PermissionCapabilityRemoteRead)
 		}
-		err = uploadTransferError(err)
+		err = UploadTransferError(err)
 		if err != nil {
 			return e.failedOutcomeWithFailure(
 				action,
@@ -355,13 +355,13 @@ func downloadTransferFailureCapability(err error) PermissionCapability {
 	return inferFailureCapabilityFromError(err, PermissionCapabilityLocalWrite, PermissionCapabilityRemoteRead)
 }
 
-// uploadTransferError turns the upload answers that mean "remote truth moved
+// UploadTransferError turns the upload answers that mean "remote truth moved
 // on" (isRemoteTruthMovedOn) into a stale precondition, so the engine replans
 // from fresh truth instead of retrying the same request. A durable name
 // collision stays what it is. The Graph error stays in the chain for the
 // log; the engine classifies the stale precondition before any status it
 // carries (classifyResult).
-func uploadTransferError(err error) error {
+func UploadTransferError(err error) error {
 	var nameTaken *RemoteNameTakenError
 	if errors.As(err, &nameTaken) {
 		return err
@@ -490,9 +490,9 @@ func ShouldOverwriteKnownRemoteItem(action *Action) bool {
 	return true
 }
 
-// pendingCreateStore is the executor's narrow view of the sync store's
+// PendingCreateStore is the executor's narrow view of the sync store's
 // pending-create records (store_pending_creates.go).
-type pendingCreateStore interface {
+type PendingCreateStore interface {
 	RecordPendingCreateIntent(ctx context.Context, pending *PendingCreate) error
 	RecordPendingCreate(ctx context.Context, pending *PendingCreate) error
 	ClearPendingCreateIntent(ctx context.Context, path string) error
@@ -561,7 +561,7 @@ func (e *Executor) uploadNewFile(
 
 // priorCreateIntent reports whether an earlier attempt left an intent to
 // create action's file that never learned an item ID and is still within
-// pendingCreateIntentTTL: the one state in which an empty file at the path
+// PendingCreateIntentTTL: the one state in which an empty file at the path
 // can be that attempt's own (resolveCreateConflict). The store stamps intents
 // with the engine's clock, which is the executor's too.
 func (e *Executor) priorCreateIntent(ctx context.Context, action *Action) (bool, error) {
@@ -886,14 +886,14 @@ func (e *Executor) claimLostCreate(
 
 // placeholderIsAtCreate reports whether item sits where the create of relPath
 // under parentID puts the file: relPath's name in NFC, under parentID. The
-// drive root's alias graphRootID names no item, so an item read back for a
+// drive root's alias GraphRootID names no item, so an item read back for a
 // create in the drive root is placed by remoteItemIsAt, and only a location
 // it knows to be elsewhere refuses it.
 func (e *Executor) placeholderIsAtCreate(item *graph.Item, relPath, parentID string) bool {
 	if namekey.Stored(item.Name) != namekey.Stored(slashpath.Base(relPath)) {
 		return false
 	}
-	if parentID != "" && parentID != graphRootID {
+	if parentID != "" && parentID != GraphRootID {
 		return item.ParentID == parentID
 	}
 	at, known := e.remoteItemIsAt(item, relPath)

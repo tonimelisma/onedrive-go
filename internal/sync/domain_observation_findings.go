@@ -1,6 +1,6 @@
 package sync
 
-// localObservationManagedIssueTypes lists the issue types a full local scan
+// LocalObservationManagedIssueTypes lists the issue types a full local scan
 // owns: its findings batch replaces the stored conditions of exactly these
 // types, so a condition the scan does not report again is cleared. Every
 // type a local scan reports is listed, because every full scan re-reports a
@@ -8,7 +8,7 @@ package sync
 // after its cause is gone. Leaving one out on purpose needs its reason
 // recorded where TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports
 // checks this list against the types the scanner's source names.
-func localObservationManagedIssueTypes() []IssueType {
+func LocalObservationManagedIssueTypes() []IssueType {
 	return []IssueType{
 		IssueInvalidFilename,
 		IssuePathTooLong,
@@ -42,7 +42,7 @@ func localObservationManagedIssueTypes() []IssueType {
 
 func NewLocalObservationFindingsBatch() ObservationFindingsBatch {
 	return ObservationFindingsBatch{
-		ManagedIssueTypes: localObservationManagedIssueTypes(),
+		ManagedIssueTypes: LocalObservationManagedIssueTypes(),
 	}
 }
 

@@ -9,64 +9,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// seedObservationIssueRowForTest adds one issue to the stored set and keeps
-// every other. A batch replaces all stored issues of the types it manages, so
-// the batch reports the stored issues of the seeded type again next to the
-// new one.
-func seedObservationIssueRowForTest(t *testing.T, store *SyncStore, issue *ObservationIssue) {
-	t.Helper()
-
-	rows, err := store.ListObservationIssues(t.Context())
-	require.NoError(t, err)
-	batch := ObservationFindingsBatch{
-		Issues:            []ObservationIssue{*issue},
-		ManagedIssueTypes: []IssueType{issue.IssueType},
-	}
-	for i := range rows {
-		if rows[i].IssueType != issue.IssueType || rows[i].Path == issue.Path {
-			continue
-		}
-		batch.Issues = append(batch.Issues, ObservationIssue{
-			Path:      rows[i].Path,
-			DriveID:   rows[i].DriveID,
-			IssueType: rows[i].IssueType,
-			ScopeKey:  rows[i].ScopeKey,
-		})
-	}
-	require.NoError(t, store.ReconcileObservationFindings(t.Context(), &batch))
-}
-
-func seedObservationIssueForTest(
-	t *testing.T,
-	store *SyncStore,
-	path string,
-	issueType IssueType,
-	scopeKey ScopeKey,
-) {
-	t.Helper()
-
-	seedObservationIssueRowForTest(t, store, &ObservationIssue{
-		Path:      path,
-		DriveID:   driveid.New(testDriveID),
-		IssueType: issueType,
-		ScopeKey:  scopeKey,
-	})
-}
-
-func observationIssuePathsForTest(t *testing.T, store *SyncStore) []string {
-	t.Helper()
-
-	rows, err := store.ListObservationIssues(t.Context())
-	require.NoError(t, err)
-
-	paths := make([]string, 0, len(rows))
-	for i := range rows {
-		paths = append(paths, rows[i].Path)
-	}
-
-	return paths
-}
-
 // Validates: R-2.5.2
 func TestSyncStore_ReconcileObservationFindings_RejectsInvalidIssueInput(t *testing.T) {
 	t.Parallel()
@@ -95,7 +37,7 @@ func TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType(t *testin
 	ctx := t.Context()
 
 	seedObservationIssueForTest(t, store, "kept.txt", IssueInvalidFilename, ScopeKey{})
-	_, err := store.rawDB().ExecContext(ctx,
+	_, err := store.RawDBForTest().ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key) VALUES (?, ?, ?)`,
 		"renamed.txt", "invalid_name", "")
 	require.NoError(t, err)
@@ -132,7 +74,7 @@ func TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType
 	require.ErrorContains(t, err, `unknown issue type "invalid_name"`)
 
 	var count int
-	require.NoError(t, store.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count))
+	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count))
 	assert.Zero(t, count)
 }
 
@@ -213,60 +155,6 @@ func TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies(t *tes
 	}))
 
 	assert.ElementsMatch(t, []string{"/", "Private"}, observationIssuePathsForTest(t, store))
-}
-
-// interruptedRemovalStatusPaths returns the paths status lists under the
-// interrupted-removal condition, read the way `status` reads them: the drive
-// snapshot projected into condition groups.
-func interruptedRemovalStatusPaths(t *testing.T, store *SyncStore) []string {
-	t.Helper()
-
-	snapshot, err := store.ReadDriveStatusSnapshot(t.Context())
-	require.NoError(t, err)
-	groups := ProjectStoredConditionGroups(&snapshot)
-	for i := range groups {
-		if groups[i].ConditionKey == ConditionLocalInterrupted {
-			return groups[i].Paths
-		}
-	}
-
-	return nil
-}
-
-// Every full scan that finds the leftover of an interrupted removal reports
-// it, so the scan that no longer finds it has proven it gone: the local
-// findings batch clears the condition and status stops listing it. A scan
-// that still finds it keeps it, and that re-report is not a change that
-// replans (R-2.8.21). The condition used to be left out of the batch's
-// managed types and outlived the leftover for good.
-//
-// Validates: R-6.4.9, R-2.8.21
-func TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover(t *testing.T) {
-	t.Parallel()
-
-	store := newTestStore(t)
-	ctx := t.Context()
-	const leftoverPath = "Docs/.onedrive-go.0123456789abcdef.detach"
-	leftover := SkippedItem{
-		Path:   leftoverPath,
-		Reason: IssueLocalInterruptedRemoval,
-		Detail: "sync set this file aside while removing it and was interrupted",
-	}
-	reconcileScan := func(skipped ...SkippedItem) bool {
-		batch := localObservationFindingsBatchFromSkippedItems(driveid.New(testDriveID), skipped)
-		changed, err := store.ReconcileObservationFindingsReportingChange(ctx, &batch)
-		require.NoError(t, err)
-
-		return changed
-	}
-
-	assert.True(t, reconcileScan(leftover), "the first scan that finds the leftover records it")
-	assert.False(t, reconcileScan(leftover), "a scan that still finds it keeps it, and that is no change")
-	assert.Equal(t, []string{leftoverPath}, interruptedRemovalStatusPaths(t, store))
-
-	assert.True(t, reconcileScan(), "the scan that no longer finds the leftover clears its condition")
-	assert.Empty(t, observationIssuePathsForTest(t, store))
-	assert.Empty(t, interruptedRemovalStatusPaths(t, store), "status no longer lists it")
 }
 
 // A batch replaces only the rows of the types it manages, so a row it stored

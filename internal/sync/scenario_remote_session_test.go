@@ -390,7 +390,7 @@ func TestScenarioSession_ResumeSendsOnlyTheMissingRanges(t *testing.T) {
 	client := remote.sessionClient(t)
 	content := strings.Repeat("r", (fragmentsInTheFile-1)*scenarioSessionFragmentSize+lastFragmentSize)
 	size := int64(len(content))
-	session, err := client.CreateUploadSession(t.Context(), remote.driveID, graphRootID, "big.bin", size, time.Time{})
+	session, err := client.CreateUploadSession(t.Context(), remote.driveID, GraphRootID, "big.bin", size, time.Time{})
 	require.NoError(t, err)
 
 	remote.mu.Lock()

@@ -71,7 +71,7 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
 	ctx := t.Context()
 
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES ('item-hidden', 'hidden/file.txt', 'file')`)
 	require.NoError(t, err)
@@ -554,7 +554,7 @@ func TestRunOnce_UnclassifiedRowFailsThePassNamingThePath(t *testing.T) {
 	writeLocalFile(t, syncRoot, "new.txt", "local content")
 
 	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
-	require.ErrorIs(t, err, errUnclassifiedPlan)
+	require.ErrorIs(t, err, ErrUnclassifiedPlan)
 	require.ErrorContains(t, err, unclassifiedNewFileError)
 	require.ErrorContains(t, err, " metadata_drift=0)")
 	assert.Zero(t, uploads.Load())
@@ -577,7 +577,7 @@ func TestRunSteadyStateReplan_UnclassifiedRowEndsTheReplanNamingThePath(t *testi
 
 	rt := testWatchRuntime(t, eng)
 	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{bl: bl, mode: SyncBidirectional}, DirtyBatch{})
-	require.ErrorIs(t, err, errUnclassifiedPlan)
+	require.ErrorIs(t, err, ErrUnclassifiedPlan)
 	require.ErrorContains(t, err, "sync: watch replan build_current_plan: "+unclassifiedNewFileError)
 	assert.False(t, applied)
 	assert.Empty(t, rt.currentOutbox())
@@ -605,11 +605,11 @@ func TestObserveLocal_MeasuresTheRacilyCleanWindowOnTheRunsClock(t *testing.T) {
 	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
 	require.True(t, ok)
 	recorded := testQuickXor("the content the baseline records\n")
-	_, err = eng.baseline.rawDB().ExecContext(t.Context(),
+	_, err = eng.baseline.RawDBForTest().ExecContext(t.Context(),
 		`UPDATE baseline SET local_hash = ?, local_mtime = ?, local_ctime = ? WHERE path = ?`,
 		recorded, info.ModTime().UnixNano(), ctime, releaseFileTop)
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 	installManualClockForTestEngine(eng, newManualClock(ahead.Add(time.Hour)))
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)

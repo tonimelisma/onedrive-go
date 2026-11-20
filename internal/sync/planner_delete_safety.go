@@ -21,7 +21,7 @@ import (
 //     has not been emptied by a person deleting things one by one; the side
 //     vanished, and every delete toward the other side is held;
 //   - proportional: more deletes (files and folders) toward one side than
-//     max(deleteSafetyMinItems, deleteSafetyBaselinePercent of baseline items)
+//     max(DeleteSafetyMinItems, deleteSafetyBaselinePercent of baseline items)
 //     are held. The unconfirmed deletes sync already ran toward that side
 //     within DeleteSafetyWindow count too, against the baseline as it stood
 //     before them, so a deletion spread over many small passes is judged as
@@ -41,7 +41,7 @@ import (
 // observed truth is unchanged and runs on the first pass started with
 // `sync --confirm-deletes`, which releases exactly the recorded held set.
 const (
-	deleteSafetyMinItems        = 50
+	DeleteSafetyMinItems        = 50
 	deleteSafetyBaselinePercent = 30
 	percentDenominator          = 100
 )
@@ -277,7 +277,7 @@ func deleteSafetyVerdict(
 // judged against.
 func deleteSafetyThreshold(baselineItems int) int {
 	proportional := (baselineItems*deleteSafetyBaselinePercent + percentDenominator - 1) / percentDenominator
-	return max(deleteSafetyMinItems, proportional)
+	return max(DeleteSafetyMinItems, proportional)
 }
 
 // heldDeleteClosure returns the indexes of every held delete plus every action

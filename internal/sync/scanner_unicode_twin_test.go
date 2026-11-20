@@ -16,25 +16,6 @@ import (
 // in Unicode form. Both map to one stored path (R-2.13.1), so the second entry
 // is a local name collision (R-2.13.2): neither file is chosen.
 
-const (
-	twinSyncedName    = nfcCafe + ".txt"
-	twinSecondName    = nfdCafe + ".txt"
-	twinSyncedContent = "synced content\n"
-)
-
-// skipUnlessBothUnicodeFormsCoexist creates both spellings of one name in a
-// fresh directory and skips when the filesystem folds them into one entry.
-func skipUnlessBothUnicodeFormsCoexist(t *testing.T) {
-	t.Helper()
-
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, twinSyncedName), []byte("a"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, twinSecondName), []byte("b"), 0o600))
-	if len(localNames(t, dir)) != 2 {
-		t.Skip("the filesystem folds Unicode forms into one name; the two spellings cannot both exist")
-	}
-}
-
 // syncedTwinScanRoot writes the synced file, scans it once and returns the
 // sync root, the baseline that records the scanned row as synced, and the row.
 func syncedTwinScanRoot(t *testing.T) (string, *Baseline, LocalStateRow) {

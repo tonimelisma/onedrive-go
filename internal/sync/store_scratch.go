@@ -241,7 +241,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner SqlTxRunner) ([]Remo
 			return nil, fmt.Errorf("sync: scanning scratch remote_state seed row: %w", err)
 		}
 
-		row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
+		row.DriveID = RemoteStateDriveID(rawDriveID, driveid.ID{})
 		row.Hash = hash.String
 		row.ETag = etag.String
 		if size.Valid {

@@ -32,12 +32,8 @@ import (
 // (default 1).
 
 const (
-	plannerModelDefaultSeeds = 8
 	plannerModelMaxRounds    = 10
 	plannerModelEditsPerSide = 3
-	plannerModelSeedEnv      = "ONEDRIVE_GO_PLANNER_SEED"
-	plannerModelSeedsEnv     = "ONEDRIVE_GO_PLANNER_SEEDS"
-	plannerModelSeedStartEnv = "ONEDRIVE_GO_PLANNER_SEED_START"
 	plannerModelFileNames    = "a.txt b.txt c.txt"
 	plannerModelFolderNames  = "d e"
 	plannerModelLocalDevice  = 1
@@ -137,13 +133,13 @@ func sortedKeys[V any](m map[string]V) []string {
 func (s *pmState) remoteParentID(p string) string {
 	dir := path.Dir(p)
 	if dir == "." {
-		return strRoot
+		return StrRoot
 	}
 	if parent, ok := s.remote[dir]; ok {
 		return parent.id
 	}
 
-	return strRoot
+	return StrRoot
 }
 
 // plan writes the model into a fresh store and plans it.
@@ -164,12 +160,10 @@ func (s *pmState) writeStore() {
 	}
 	store := s.store
 	for _, table := range []string{"baseline", "remote_state", "local_state"} {
-		_, err := store.rawDB().ExecContext(ctx, "DELETE FROM "+table)
+		_, err := store.RawDBForTest().ExecContext(ctx, "DELETE FROM "+table)
 		require.NoError(t, err)
 	}
-	store.baselineMu.Lock()
-	store.baseline = nil
-	store.baselineMu.Unlock()
+	store.DropBaselineCacheForTest()
 
 	var observed []ObservedItem
 	for _, p := range sortedKeys(s.remote) {
@@ -190,7 +184,7 @@ func (s *pmState) writeStore() {
 				parentID = synced.id
 			}
 		}
-		require.NoError(t, upsertBaselineRowTx(ctx, store.rawDB(), &BaselineEntry{
+		require.NoError(t, UpsertBaselineRowTxForTest(ctx, store.RawDBForTest(), &BaselineEntry{
 			Path: p, ItemID: row.id, ParentID: parentID, ItemType: pmType(row.folder),
 			LocalHash: s.hash(row.folder, row.localContent), RemoteHash: s.hash(row.folder, row.remoteContent),
 			LocalSize: int64(len(row.localContent)), LocalSizeKnown: true,
@@ -647,26 +641,6 @@ func (e pmSideEdit) replace(p string) {
 	e.record(modelOpReplace, p, "", content)
 }
 
-// plannerSeedVars are the planner model's variables.
-func plannerSeedVars() seedVars {
-	return seedVars{single: plannerModelSeedEnv, count: plannerModelSeedsEnv, start: plannerModelSeedStartEnv}
-}
-
-// plannerModelSeeds is the planner model's seeds: the ones the environment
-// names, else the first plannerModelDefaultSeeds (one under -race).
-func plannerModelSeeds(t *testing.T) []uint64 {
-	t.Helper()
-
-	count := plannerModelDefaultSeeds
-	if raceDetectorEnabled {
-		// The planner model is single-goroutine apart from the store; one
-		// seed covers what the race detector can find (see modelRaceSeeds).
-		count = 1
-	}
-
-	return seedsFromEnv(t, plannerSeedVars(), count)
-}
-
 // Validates: R-2.3.1, R-2.17.1, R-2.17.2
 func TestPlannerModel_RandomTriplesConverge(t *testing.T) {
 	skipInShort(t)
@@ -759,4 +733,19 @@ func TestPMWrittenStillHeld_FollowsContentThroughMoves(t *testing.T) {
 	}
 	assert.Equal(t, []string{"edited then renamed", "final"}, contents)
 	assert.True(t, modelOverwrittenLater(written, 0), "the path rule this replaces excused the renamed edit")
+}
+
+// Validates: R-6.10.25
+//
+// A failing planner model seed shows one command that reruns it, its
+// `seed-replay:` line: the run's failure context names the seed and carries
+// no second rerun hint, like the engine model's
+// (TestModelRun_FailureContextCarriesNoSecondRerunHint).
+func TestPlannerModelRun_FailureContextCarriesNoSecondRerunHint(t *testing.T) {
+	t.Parallel()
+
+	context := (&pmRun{pmState: &pmState{}, seed: 7}).failureContext()
+	assert.Contains(t, context, "seed 7")
+	assert.NotContains(t, context, "rerun")
+	assert.NotContains(t, context, "_SEED=")
 }

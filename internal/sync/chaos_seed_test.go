@@ -327,15 +327,15 @@ func chaosEntryAt(entries []string, i int) string {
 // Validates: R-6.10.25
 //
 // A failing seed shows one command that reruns it, its `seed-replay:` line:
-// the failure context of a model run, with the chaos layer or without it, and
-// of a planner model run names the seed and carries no second rerun hint.
+// the failure context of a model run, with the chaos layer or without it,
+// names the seed and carries no second rerun hint. The planner model's run
+// is held to the same (TestPlannerModelRun_FailureContextCarriesNoSecondRerunHint).
 func TestModelRun_FailureContextCarriesNoSecondRerunHint(t *testing.T) {
 	t.Parallel()
 
 	contexts := map[string]string{
-		"plain":   (&modelRun{seed: 7}).failureContext(),
-		"chaos":   (&modelRun{seed: 7, chaos: newChaosGraph(7)}).failureContext(),
-		"planner": (&pmRun{pmState: &pmState{}, seed: 7}).failureContext(),
+		"plain": (&modelRun{seed: 7}).failureContext(),
+		"chaos": (&modelRun{seed: 7, chaos: newChaosGraph(7)}).failureContext(),
 	}
 	for name, context := range contexts {
 		assert.Contains(t, context, "seed 7", name)

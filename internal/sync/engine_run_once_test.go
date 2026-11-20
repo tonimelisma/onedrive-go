@@ -323,13 +323,13 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	tx, err := BeginPerfTx(ctx, eng.baseline.db)
+	tx, err := eng.baseline.BeginPerfTx(ctx)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, tx.Rollback())
 	}()
 
-	_, err = replaceLocalStateTx(ctx, tx, []LocalStateRow{{
+	_, err = ReplaceLocalStateTxForTest(ctx, tx, []LocalStateRow{{
 		Path:     "tx-only.txt",
 		ItemType: ItemTypeFile,
 		Hash:     "hash",
@@ -499,7 +499,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 		Size:     5,
 		Mtime:    11,
 	}}))
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('stale-remote', 'stale-remote.txt', 'file', 'stale-remote-hash', 6, ?, 'etag-stale')`,
 		time.Now().UnixNano(),
@@ -1024,7 +1024,7 @@ func TestNewEngine_RequiresResetForNonSQLiteStateDB(t *testing.T) {
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, stateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
+	assert.Equal(t, StateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -1032,7 +1032,7 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE baseline (
@@ -1082,7 +1082,7 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 
 	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
 	require.NoError(t, err)
-	db := store.rawDB()
+	db := store.RawDBForTest()
 	for i := range 200 {
 		_, err = db.ExecContext(t.Context(),
 			`INSERT INTO remote_state (drive_id, item_id, path, item_type) VALUES ('d', ?, ?, 'file')`,
@@ -1107,10 +1107,10 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", sqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(t.Context(), canonicalSchemaSQL)
+	_, err = db.ExecContext(t.Context(), CanonicalSchemaSQLForTest())
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `DROP TABLE store_metadata`)
 	require.NoError(t, err)
@@ -1337,7 +1337,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	ctx := t.Context()
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-dl', 'retry-download.txt', 'file', NULL, 18, ?)`,
 		now,
@@ -1347,7 +1347,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 	// run is a full enumeration, which is authoritative and would rightly
 	// treat a row it does not list as deleted on OneDrive.
 	require.NoError(t, eng.baseline.CommitObservation(ctx, nil, "token-0", driveID))
-	_, err = eng.baseline.rawDB().ExecContext(ctx,
+	_, err = eng.baseline.RawDBForTest().ExecContext(ctx,
 		`UPDATE observation_state SET next_full_remote_refresh_at = ?`, time.Now().Add(time.Hour).UnixNano())
 	require.NoError(t, err)
 
@@ -1426,7 +1426,7 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	}, "")
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-edit', 'remote-edit.txt', 'file', 'remote-hash-new', 19, ?, 'etag-edit-new')`,
 		now,
@@ -1494,7 +1494,7 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	require.NoError(t, os.Remove(filepath.Join(syncRoot, "retry-download.txt")))
 
 	now := time.Now().UnixNano()
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-dl', 'retry-download.txt', 'file', ?, 18, ?, 'etag-dl')`,
 		downloadHash, now,
@@ -1591,7 +1591,7 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.baseline.rawDB().ExecContext(ctx, `
+	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('ghost', 'gone/never-synced.txt', 'file', 'h', 1, 1)`)
 	require.NoError(t, err)
@@ -1601,7 +1601,7 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	assert.Zero(t, report.Downloads+report.LocalDeletes+report.RemoteDeletes)
 
 	var count int
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'ghost'`).Scan(&count))
 	assert.Zero(t, count, "a full rescan that no longer lists an item drops its remote_state row")
 }

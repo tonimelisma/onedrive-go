@@ -216,8 +216,7 @@ func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 	rt.resources.localObs = NewLocalObserver(bl, eng.logger, eng.checkWorkers)
-	rt.resources.localObs.droppedEvents.Add(1)
-	rt.resources.localObs.droppedRetries.Add(1)
+	rt.resources.localObs.RestoreDropped(1, 1)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{
 		{Path: "known.txt", ItemType: ItemTypeFile},
@@ -250,7 +249,7 @@ func TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce(t *testing.T) {
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 	rt.resources.localObs = NewLocalObserver(bl, eng.logger, eng.checkWorkers)
-	rt.resources.localObs.droppedEvents.Add(1)
+	rt.resources.localObs.RestoreDropped(1, 0)
 
 	// A canceled context makes marking local truth suspect fail the same way
 	// on every tick.
@@ -277,7 +276,7 @@ func TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce(t *testing.T) {
 	rt.recoverDroppedLocalObservation(t.Context())
 	assert.Zero(t, rt.resources.localObs.DroppedEvents(), "the retry schedules the rescan")
 
-	rt.resources.localObs.droppedEvents.Add(1)
+	rt.resources.localObs.RestoreDropped(1, 0)
 	rt.recoverDroppedLocalObservation(canceled)
 	assert.Equal(t, 2, warnLines(), "a failure after a successful rescan is news again")
 }

@@ -601,10 +601,10 @@ func (e *Executor) exactLocalNameExists(relPath string) bool {
 	return match.Found() || match.Ambiguous
 }
 
-// remoteFolderDeleteListLimit bounds the live listing a folder delete makes
+// RemoteFolderDeleteListLimit bounds the live listing a folder delete makes
 // before it may run. Descendants the plan deleted are already gone by then
 // (child deletes run first), so the listing is normally one empty page.
-const remoteFolderDeleteListLimit = 10000
+const RemoteFolderDeleteListLimit = 10000
 
 // validateRemoteFolderDeleteChildren refuses a recursive folder delete that
 // would take content the planner never saw (D-006). A DELETE of a folder
@@ -635,11 +635,11 @@ func (e *Executor) validateRemoteFolderDeleteChildren(ctx context.Context, drive
 		}
 		for i := range children {
 			seen++
-			if seen > remoteFolderDeleteListLimit {
+			if seen > RemoteFolderDeleteListLimit {
 				// Not stale: replanning would list the same folder again on
 				// every pass. A durable issue asks the user instead.
 				return fmt.Errorf("%w: %s holds more than %d items", ErrRemoteFolderTooLargeToVerify,
-					action.Path, remoteFolderDeleteListLimit)
+					action.Path, RemoteFolderDeleteListLimit)
 			}
 			child := &children[i]
 			if err := e.validateLiveFolderDeleteChild(action, child); err != nil {

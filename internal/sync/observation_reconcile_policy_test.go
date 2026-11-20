@@ -137,7 +137,7 @@ func TestSyncStore_ApplyObservationReconcilePlan_DeletesByPreviousIssueType(t *t
 		IssueType: IssueInvalidFilename,
 	})
 
-	tx, err := BeginPerfTx(ctx, store.rawDB())
+	tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 
 	plan := observationReconcilePlan{

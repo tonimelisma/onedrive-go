@@ -1680,7 +1680,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 	}, eventWait, 10*time.Millisecond)
 	stopWatch(t, cancel, done)
 
-	assert.Empty(t, readObservationCursor(t, store.rawDB(), driveID.String()), "zero-event wake polls must not commit observations")
+	assert.Empty(t, readObservationCursor(t, store.RawDBForTest(), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
@@ -2295,8 +2295,8 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	receiveWithin(t, committed, "the watch's first batch to be committed")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, "token-1", readObservationCursor(t, store.rawDB(), driveID.String()))
-	row := readRemoteStateRow(t, store.rawDB(), "f1")
+	assert.Equal(t, "token-1", readObservationCursor(t, store.RawDBForTest(), driveID.String()))
+	row := readRemoteStateRow(t, store.RawDBForTest(), "f1")
 	require.NotNil(t, row, "remote observation should persist mirrored state")
 	assert.Equal(t, driveID, row.DriveID)
 	assert.Equal(t, "a.txt", row.Path)
@@ -2506,7 +2506,7 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 
 	assert.Equal(t, "token-after-deletes", obs.CurrentDeltaToken(),
 		"a window that returned items must advance the token even when none converted to events")
-	assert.Equal(t, "token-after-deletes", readObservationCursor(t, store.rawDB(), driveID.String()),
+	assert.Equal(t, "token-after-deletes", readObservationCursor(t, store.RawDBForTest(), driveID.String()),
 		"the advanced token must be committed so a restart does not replay the window")
 }
 
@@ -2723,7 +2723,7 @@ func runSingleWatchPoll(t *testing.T, obs *RemoteObserver, driveID driveid.ID) (
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, obs.CurrentDeltaToken(), readObservationCursor(t, store.rawDB(), driveID.String()),
+	assert.Equal(t, obs.CurrentDeltaToken(), readObservationCursor(t, store.RawDBForTest(), driveID.String()),
 		"the in-memory cursor must match the committed one")
 
 	return obs.CurrentDeltaToken(), emitted

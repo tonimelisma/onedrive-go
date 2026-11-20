@@ -163,7 +163,7 @@ func TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree(t *testing.T) {
 
 	runFullRemoteRefreshAsyncForTest(t, eng, t.Context(), bl)
 	_, ackErr := eng.ShortcutChildAckHandle().AcknowledgeChildFinalDrain(t.Context(), ShortcutChildDrainAck{
-		Ref: newShortcutChildAckRef("binding-1"),
+		Ref: NewShortcutChildAckRefForTest("binding-1"),
 	})
 	require.NoError(t, ackErr)
 

@@ -65,15 +65,15 @@ func pathTruthStatusForPath(
 	switch {
 	case hasLocalBoundary:
 		status.Local = pathTruthSideStatus{
-			Availability: truthAvailabilityBlockedObservationIssue,
-			Source:       pathTruthSourceObservationIssue,
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
 			IssueType:    localBoundary.IssueType,
 			ScopeKey:     localBoundary.ScopeKey,
 		}
-	case hasObservationIssue && observationIssueBlocksLocalTruth(observationIssue.IssueType):
+	case hasObservationIssue && ObservationIssueBlocksLocalTruth(observationIssue.IssueType):
 		status.Local = pathTruthSideStatus{
-			Availability: truthAvailabilityBlockedObservationIssue,
-			Source:       pathTruthSourceObservationIssue,
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
 			IssueType:    observationIssue.IssueType,
 			ScopeKey:     observationIssue.ScopeKey,
 		}
@@ -82,15 +82,15 @@ func pathTruthStatusForPath(
 	switch {
 	case hasRemoteBoundary:
 		status.Remote = pathTruthSideStatus{
-			Availability: truthAvailabilityBlockedObservationIssue,
-			Source:       pathTruthSourceObservationIssue,
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
 			IssueType:    remoteBoundary.IssueType,
 			ScopeKey:     remoteBoundary.ScopeKey,
 		}
 	case hasObservationIssue && observationIssueBlocksRemoteTruth(observationIssue.IssueType):
 		status.Remote = pathTruthSideStatus{
-			Availability: truthAvailabilityBlockedObservationIssue,
-			Source:       pathTruthSourceObservationIssue,
+			Availability: TruthAvailabilityBlockedObservationIssue,
+			Source:       PathTruthSourceObservationIssue,
 			IssueType:    observationIssue.IssueType,
 			ScopeKey:     observationIssue.ScopeKey,
 		}
@@ -101,7 +101,7 @@ func pathTruthStatusForPath(
 
 func availablePathTruthSideStatus() pathTruthSideStatus {
 	return pathTruthSideStatus{
-		Availability: truthAvailabilityAvailable,
+		Availability: TruthAvailabilityAvailable,
 	}
 }
 
@@ -192,10 +192,10 @@ func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict 
 	}
 }
 
-// observationIssueBlocksLocalTruth reports whether an observation issue at a
+// ObservationIssueBlocksLocalTruth reports whether an observation issue at a
 // path makes that path's local truth unavailable, so the planner reads the
 // path as unknown rather than absent (truthVerdictForIssueType).
-func observationIssueBlocksLocalTruth(issueType IssueType) bool {
+func ObservationIssueBlocksLocalTruth(issueType IssueType) bool {
 	return truthVerdictForIssueType(issueType).blocksLocal
 }
 

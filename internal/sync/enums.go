@@ -31,8 +31,8 @@ const (
 	strModify         = "modify"
 	StrFile           = "file"
 	StrFolder         = "folder"
-	strRoot           = "root"
-	strDownload       = "download"
+	StrRoot           = "root"
+	StrDownload       = "download"
 	strUpload         = "upload"
 	strDelete         = "delete"
 	strLocalDelete    = "local_delete"
@@ -88,7 +88,7 @@ func (t ItemType) String() string {
 	case ItemTypeFolder:
 		return StrFolder
 	case ItemTypeRoot:
-		return strRoot
+		return StrRoot
 	default:
 		return fmt.Sprintf("ItemType(%d)", int(t))
 	}
@@ -126,7 +126,7 @@ func ParseItemType(s string) (ItemType, error) {
 		return ItemTypeFile, nil
 	case StrFolder:
 		return ItemTypeFolder, nil
-	case strRoot:
+	case StrRoot:
 		return ItemTypeRoot, nil
 	default:
 		return ItemTypeFile, fmt.Errorf("sync: unknown item type %q", s)
@@ -174,7 +174,7 @@ const (
 func (a ActionType) String() string {
 	switch a {
 	case ActionDownload:
-		return strDownload
+		return StrDownload
 	case ActionUpload:
 		return strUpload
 	case ActionLocalDelete:
@@ -215,7 +215,7 @@ func (a ActionType) IsMember() bool {
 // parseActionType converts the SQLite wire value back into an ActionType.
 func parseActionType(s string) (ActionType, error) {
 	switch s {
-	case strDownload:
+	case StrDownload:
 		return ActionDownload, nil
 	case strUpload:
 		return ActionUpload, nil

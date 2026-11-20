@@ -156,7 +156,7 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 	runScenarioPass(t, h.eng)
 	// The synced folder reaches the main database file; the round's commits
 	// stay in the WAL, which the lost-WAL variant then loses.
-	_, err := h.eng.baseline.rawDB().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	remote.deleteAt(t, replacedFolderPath)
@@ -165,8 +165,8 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 		point: CrashPointDownloadRenamed, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.crashAt = capture.hook
-	h.eng.baseline.crashAt = capture.hook
+	h.eng.execCfg.SetCrashHookForTest(capture.hook)
+	h.eng.baseline.SetCrashHookForTest(capture.hook)
 	h.beginRound(t)
 	report := runScenarioPass(t, h.eng)
 	require.Equal(t, 1, report.Downloads, "the replacing file is downloaded")
@@ -205,7 +205,7 @@ func assertPublishesTheReplacingFileInOnePass(t *testing.T, eng *testEngine, rem
 		itemType   ItemType
 		remoteHash string
 	}
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(t.Context(),
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(t.Context(),
 		`SELECT item_type, COALESCE(remote_hash, '') FROM baseline WHERE path = ?`, replacedFolderPath).Scan(
 		&stored.itemType, &stored.remoteHash))
 	assert.Equal(t, ItemTypeFile, stored.itemType, "the stored row records the file")

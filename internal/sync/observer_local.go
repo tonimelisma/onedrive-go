@@ -48,9 +48,9 @@ const (
 	// up long before the five-minute safety scan.
 	recoveryScanDelay = 10 * time.Second
 
-	// hashRequestBufSize is the buffer for the timer → watchLoop channel.
+	// HashRequestBufSize is the buffer for the timer → watchLoop channel.
 	// Timer callbacks must not block; 256 handles bursts like `git checkout`.
-	hashRequestBufSize = 256
+	HashRequestBufSize = 256
 )
 
 // Write coalescing limits (see scheduleWriteHash).
@@ -74,9 +74,9 @@ const (
 // is being written to continuously.
 const maxCoalesceRetries = 3
 
-// hashRequest is sent from timer callbacks to the watchLoop goroutine when a
+// HashRequest is sent from timer callbacks to the watchLoop goroutine when a
 // write coalesce timer fires and the file should be hashed (B-107).
-type hashRequest struct {
+type HashRequest struct {
 	FsPath    string
 	DbRelPath string
 	Retries   int // number of re-schedules already attempted
@@ -90,7 +90,7 @@ type hashRequest struct {
 type localWatchState struct {
 	// Write coalescing fields (B-107). Single watch-loop owner.
 	PendingTimers map[string]SyncTimer // per-path timers; watchLoop-only (no mutex needed)
-	HashRequests  chan hashRequest     // timer callback → watchLoop
+	HashRequests  chan HashRequest     // timer callback → watchLoop
 
 	// writeChurn holds per-path write history for coalescing deadlines and
 	// unstable-file backoff (D-081b). Watch-loop only; pruned at safety scans.
@@ -111,7 +111,7 @@ type localWatchState struct {
 	// collisionPeers tracks N-way collision relationships detected in watch
 	// mode. When a collider is deleted, all surviving peers are re-emitted
 	// via handleCreate (which re-checks and re-records any remaining collisions).
-	// Cleared on safety scan (authoritative detectCaseCollisions replaces this).
+	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
 	// Single-goroutine access (watchLoop) — no mutex.
 	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
 
@@ -158,7 +158,7 @@ type localWatchState struct {
 func newLocalWatchState() localWatchState {
 	return localWatchState{
 		PendingTimers:        make(map[string]SyncTimer),
-		HashRequests:         make(chan hashRequest, hashRequestBufSize),
+		HashRequests:         make(chan HashRequest, HashRequestBufSize),
 		DirNameCache:         make(map[string]map[namekey.Key][]string),
 		RecentLocalDeletes:   make(map[string]struct{}),
 		CollisionPeers:       make(map[string]map[string]struct{}),

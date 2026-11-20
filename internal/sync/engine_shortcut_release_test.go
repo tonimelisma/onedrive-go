@@ -66,13 +66,13 @@ func newReleaseScenario(t *testing.T, configure func(*engineInputs)) (*moveScena
 func rewriteBaselineLocalHash(t *testing.T, eng *testEngine, storedPath string) {
 	t.Helper()
 
-	result, err := eng.baseline.rawDB().ExecContext(t.Context(),
+	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
 		`UPDATE baseline SET local_hash = ? WHERE path = ?`, testQuickXor("not what the file holds\n"), storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), rows)
-	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 }
 
 // changeContentUnseen rewrites a synced file to content of the same size and
@@ -92,13 +92,13 @@ func changeContentUnseen(t *testing.T, eng *testEngine, syncRoot, storedPath, co
 	require.NoError(t, err)
 	ctime, ok := synctree.ChangeTimeFromFileInfo(after)
 	require.True(t, ok)
-	result, err := eng.baseline.rawDB().ExecContext(t.Context(),
+	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
 		`UPDATE baseline SET local_ctime = ? WHERE path = ?`, ctime, storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), rows)
-	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 }
 
 // settleReleaseScenario moves the engine's clock well past the synced files'
@@ -750,7 +750,7 @@ func newSharedFolderReleaseEngine(t *testing.T, answer *rootReadAnswer) (*testEn
 	t.Helper()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFolder(sharedFolderReleaseRootID, strRoot, "Shared")
+	remote.addFolder(sharedFolderReleaseRootID, StrRoot, "Shared")
 	remote.addFolder("item-docs", sharedFolderReleaseRootID, releaseSyncedFolder)
 	remote.addFile(t, "item-a", "item-docs", "a.txt", releaseContentA)
 	remote.addFile(t, "item-top", sharedFolderReleaseRootID, releaseFileTop, "top\n")
@@ -921,7 +921,7 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool
 	remote := newReleaseRemote(t)
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
-	_, err := h.eng.baseline.rawDB().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	capture := &crashCapture{
@@ -935,8 +935,8 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool
 		}
 		return nil
 	}
-	h.eng.execCfg.crashAt = hook
-	h.eng.baseline.crashAt = hook
+	h.eng.execCfg.SetCrashHookForTest(hook)
+	h.eng.baseline.SetCrashHookForTest(hook)
 	runReleaseDrain(t, h.eng)
 	recovered := capture.reopen(t)
 

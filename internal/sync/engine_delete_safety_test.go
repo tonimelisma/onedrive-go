@@ -46,7 +46,7 @@ func deleteSafetyFilePath(syncRoot string, i int) string {
 func readHeldDeletes(t *testing.T, eng *testEngine) []HeldDeleteRow {
 	t.Helper()
 
-	rows, err := queryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.rawDB())
+	rows, err := QueryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.RawDBForTest())
 	require.NoError(t, err)
 	return rows
 }
@@ -113,7 +113,7 @@ func TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld(t *testing.T) {
 	// can tell this from a person deleting everything.
 	remote.mu.Lock()
 	for id := range remote.items {
-		if id != strRoot {
+		if id != StrRoot {
 			delete(remote.items, id)
 		}
 	}

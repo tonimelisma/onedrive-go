@@ -26,10 +26,8 @@ import (
 // testPlaceholderID is the placeholder these tests record, and the eTags it
 // has as it is created, then moved, then moved again.
 const (
-	testPlaceholderID      = "placeholder"
-	placeholderCreatedETag = `"p,1"`
-	placeholderMovedETag   = `"p,2"`
-	placeholderLaterETag   = `"p,3"`
+	placeholderMovedETag = `"p,2"`
+	placeholderLaterETag = `"p,3"`
 )
 
 // renamedPath is where these tests rename or move a placeholder, and
@@ -57,27 +55,6 @@ func requireNoPendingCreateAt(t *testing.T, store *SyncStore, path, why string) 
 	_, found, err := store.PendingCreateAt(t.Context(), path)
 	require.NoError(t, err)
 	require.False(t, found, why)
-}
-
-// adoptTestPlaceholder records the placeholder of a create at doc.txt and
-// has observation adopt it, still empty, as synced empty content.
-func adoptTestPlaceholder(t *testing.T, store *SyncStore) ObservedItem {
-	t.Helper()
-
-	const path = "doc.txt"
-	driveID := driveid.New(testDriveID)
-	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-		ItemID: testPlaceholderID, DriveID: driveID, Path: path, ParentID: graphRootID, CreatedETag: placeholderCreatedETag,
-	}))
-	placeholder := ObservedItem{
-		DriveID: driveID, ItemID: testPlaceholderID, ParentID: graphRootID, Path: path, ItemType: ItemTypeFile,
-		Hash: emptyQuickXor, Size: 0, ETag: placeholderCreatedETag,
-	}
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{placeholder}, "t-adopt", driveID))
-	_, _, adopted := readBaselineRow(t, store, testPlaceholderID)
-	require.True(t, adopted, "the placeholder is adopted")
-
-	return placeholder
 }
 
 // Validates: R-5.6.15
@@ -142,7 +119,7 @@ func TestUploadNewFile_ZeroByteCreateClaimedByTheObserverLeavesNoPendingRow(t *t
 		// The change batch that shows the new file is committed before the
 		// create's answer is handled.
 		if err := store.CommitObservation(ctx, []ObservedItem{{
-			DriveID: driveID, ItemID: created.ID, ParentID: graphRootID, Path: "empty.txt", ItemType: ItemTypeFile,
+			DriveID: driveID, ItemID: created.ID, ParentID: GraphRootID, Path: "empty.txt", ItemType: ItemTypeFile,
 			Hash: created.QuickXorHash, Size: 0, ETag: created.ETag,
 		}}, "", driveID); err != nil {
 			return nil, err
@@ -286,7 +263,7 @@ func TestPrunePendingCreates_DropsTheRecordOfASettledEmptyPlaceholder(t *testing
 			if tc.committed {
 				require.NoError(t, store.CommitMutation(ctx, &BaselineMutation{
 					Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveid.New(testDriveID),
-					ItemID: testPlaceholderID, ParentID: graphRootID, ItemType: ItemTypeFile,
+					ItemID: testPlaceholderID, ParentID: GraphRootID, ItemType: ItemTypeFile,
 					LocalHash: "my-hash", RemoteHash: "my-hash", LocalSize: 9, LocalSizeKnown: true,
 					RemoteSize: 9, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 				}))
@@ -338,7 +315,7 @@ func TestCommitMutation_DeleteOutcomeDropsTheRecordOfItsItem(t *testing.T) {
 			name: "another item takes its path",
 			mutation: BaselineMutation{
 				Action: ActionDownload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: "theirs",
-				ParentID: graphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+				ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 				LocalSize: 3, LocalSizeKnown: true, RemoteSize: 3, RemoteSizeKnown: true, ETag: `"t,1"`,
 			},
 		},
@@ -371,7 +348,7 @@ func TestCommitMutation_UploadWithContentKeepsTheRecordForItsEcho(t *testing.T) 
 	placeholder := adoptTestPlaceholder(t, store)
 	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
 		Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-		ParentID: graphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		LocalSize: 7, LocalSizeKnown: true, RemoteSize: 7, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 	}))
 	pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
@@ -380,7 +357,7 @@ func TestCommitMutation_UploadWithContentKeepsTheRecordForItsEcho(t *testing.T) 
 	require.Equal(t, testPlaceholderID, pending.ItemID)
 
 	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{placeholder}, "t-echo", driveID))
-	row := readRemoteStateRow(t, store.rawDB(), testPlaceholderID)
+	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the echo of the empty state is not a remote change")
 }
@@ -470,8 +447,8 @@ func TestUploadNewFile_RemovedPlaceholderLeavesNoRecord(t *testing.T) {
 			e, store, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
 			local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 
-			_, uploadErr := e.uploadNewFile(actionCtx, &Action{Type: ActionUpload, Path: "doc.txt"},
-				driveid.New(testDriveID), graphRootID, "doc.txt", local)
+			_, uploadErr := e.UploadNewFileForTest(actionCtx, &Action{Type: ActionUpload, Path: "doc.txt"},
+				driveid.New(testDriveID), GraphRootID, "doc.txt", local)
 			require.Error(t, uploadErr)
 
 			pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
@@ -498,7 +475,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAStaleEcho(t *testing.T
 	placeholder := adoptTestPlaceholder(t, store)
 	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
 		Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-		ParentID: graphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		LocalSize: 7, LocalSizeKnown: true, RemoteSize: 7, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 	}))
 
@@ -506,7 +483,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAStaleEcho(t *testing.T
 	sizeless.Hash, sizeless.ETag, sizeless.SizeUnknown = "", placeholderLaterETag, true
 	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{sizeless}, "t-sizeless", driveID))
 
-	row := readRemoteStateRow(t, store.rawDB(), testPlaceholderID)
+	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, placeholderLaterETag, row.ETag, "the observation is applied like any item's")
 	assert.False(t, row.SizeKnown)
@@ -540,7 +517,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted(t *testing.T) {
 
 			store := newTestStore(t)
 			driveID := driveid.New(testDriveID)
-			pending := &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: graphRootID}
+			pending := &PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: GraphRootID}
 			if tc.intentOnly {
 				require.NoError(t, store.RecordPendingCreateIntent(t.Context(), pending))
 			} else {
@@ -548,7 +525,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted(t *testing.T) {
 				require.NoError(t, store.RecordPendingCreate(t.Context(), pending))
 			}
 			observed := ObservedItem{
-				DriveID: driveID, ItemID: testPlaceholderID, ParentID: graphRootID, Path: "doc.txt", ItemType: ItemTypeFile,
+				DriveID: driveID, ItemID: testPlaceholderID, ParentID: GraphRootID, Path: "doc.txt", ItemType: ItemTypeFile,
 				ETag: placeholderMovedETag, SizeUnknown: true,
 			}
 
@@ -556,7 +533,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted(t *testing.T) {
 
 			_, _, adopted := readBaselineRow(t, store, testPlaceholderID)
 			assert.False(t, adopted, "nothing is adopted on a size nobody knows")
-			require.NotNil(t, readRemoteStateRow(t, store.rawDB(), testPlaceholderID), "the item is observed like any other")
+			require.NotNil(t, readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID), "the item is observed like any other")
 			kept, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
 			require.NoError(t, err)
 			require.True(t, found, "the record stays")
@@ -600,13 +577,13 @@ func TestCommitObservation_AdoptedPlaceholderRenamedWhileEmptyTakesItsRecordAlon
 	// was planned for, and the echo of the renamed empty item arrives after it.
 	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
 		Action: ActionUpload, Success: true, Path: "doc.txt", DriveID: driveID, ItemID: testPlaceholderID,
-		ParentID: graphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
+		ParentID: GraphRootID, ItemType: ItemTypeFile, LocalHash: "h", RemoteHash: "h",
 		LocalSize: 7, LocalSizeKnown: true, RemoteSize: 7, RemoteSizeKnown: true, ETag: placeholderLaterETag,
 	}))
 	echo := renamed
 	echo.ETag = `"p,2b"`
 	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{echo}, "t-echo", driveID))
-	row := readRemoteStateRow(t, store.rawDB(), testPlaceholderID)
+	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the echo of the empty item is not a remote change")
 }
@@ -622,11 +599,11 @@ func TestCommitObservation_PlaceholderMovedBeforeItWasAdoptedLosesItsRecord(t *t
 	store := newTestStore(t)
 	driveID := driveid.New(testDriveID)
 	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-		ItemID: testPlaceholderID, DriveID: driveID, Path: "doc.txt", ParentID: graphRootID, CreatedETag: placeholderCreatedETag,
+		ItemID: testPlaceholderID, DriveID: driveID, Path: "doc.txt", ParentID: GraphRootID, CreatedETag: placeholderCreatedETag,
 	}))
 
 	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
-		DriveID: driveID, ItemID: testPlaceholderID, ParentID: graphRootID, Path: renamedPath, ItemType: ItemTypeFile,
+		DriveID: driveID, ItemID: testPlaceholderID, ParentID: GraphRootID, Path: renamedPath, ItemType: ItemTypeFile,
 		Hash: emptyQuickXor, Size: 0, ETag: placeholderMovedETag,
 	}}, "t1", driveID))
 
@@ -634,7 +611,7 @@ func TestCommitObservation_PlaceholderMovedBeforeItWasAdoptedLosesItsRecord(t *t
 	requireNoPendingCreateAt(t, store, renamedPath, "and does not follow an item it never adopted")
 	_, _, adopted := readBaselineRow(t, store, testPlaceholderID)
 	assert.False(t, adopted)
-	row := readRemoteStateRow(t, store.rawDB(), testPlaceholderID)
+	row := readRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, renamedPath, row.Path)
 }
@@ -716,8 +693,8 @@ func TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth(t *testing
 	assert.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	assert.Zero(t, report.Superseded, "a failed lookup proves nothing about the plan")
 	assert.Zero(t, report.LocalDeletes+report.HeldLocalDeletes)
-	require.NotNil(t, readRemoteStateRow(t, eng.baseline.rawDB(), "folder-docs"), "the parent folder stays in remote truth")
-	require.NotNil(t, readRemoteStateRow(t, eng.baseline.rawDB(), "item-keep"), "and so does its subtree")
+	require.NotNil(t, readRemoteStateRow(t, eng.baseline.RawDBForTest(), "folder-docs"), "the parent folder stays in remote truth")
+	require.NotNil(t, readRemoteStateRow(t, eng.baseline.RawDBForTest(), "item-keep"), "and so does its subtree")
 	assert.FileExists(t, filepath.Join(syncRoot, "docs", "keep.txt"))
 }
 
@@ -766,9 +743,9 @@ func TestFinishIntoPlaceholder_RefusesAnItemThatIsNotAnEmptyLiveFile(t *testing.
 			name: "moved to another folder", path: "docs/doc.txt", parentID: "folder-docs",
 			item: graph.Item{ID: testPlaceholderID, Name: "doc.txt", ParentID: "folder-other", ETag: `"m,1"`},
 		},
-		{name: "moved out of the drive root", path: "doc.txt", parentID: graphRootID, item: atRoot("doc.txt", "folder-other", "other")},
+		{name: "moved out of the drive root", path: "doc.txt", parentID: GraphRootID, item: atRoot("doc.txt", "folder-other", "other")},
 		{name: "still in its folder", path: "docs/doc.txt", parentID: "folder-docs", item: inDocs(graph.Item{ETag: `"s,1"`}), wantFinish: true},
-		{name: "still at the drive root", path: "doc.txt", parentID: graphRootID, item: atRoot("doc.txt", "root-id", ""), wantFinish: true},
+		{name: "still at the drive root", path: "doc.txt", parentID: GraphRootID, item: atRoot("doc.txt", "root-id", ""), wantFinish: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -798,13 +775,13 @@ func runFinishIntoPlaceholderCase(t *testing.T, tc *finishIntoPlaceholderCase) (
 	}
 	_, logger := newDebugLogBuffer()
 	e, _, syncRoot := newPendingCreateTestExecutor(t, ul, logger)
-	e.items = &executorMockItemClient{getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+	e.SetItemsForTest(&executorMockItemClient{getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 		item := tc.item
 		return &item, nil
-	}}
+	}})
 	local := writeExecTestFile(t, syncRoot, tc.path, "my words\n")
 
-	_, finished, err := e.finishIntoPlaceholder(t.Context(), &Action{Type: ActionUpload, Path: tc.path},
+	_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &Action{Type: ActionUpload, Path: tc.path},
 		driveid.New(testDriveID), tc.parentID, testPlaceholderID, tc.path, local)
 	require.NoError(t, err)
 
@@ -828,9 +805,9 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 
 		_, logger := newDebugLogBuffer()
 		e, _, syncRoot := newPendingCreateTestExecutor(t, &creatingTestUploader{}, logger)
-		e.items = &executorMockItemClient{getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+		e.SetItemsForTest(&executorMockItemClient{getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 			return nil, readErr
-		}}
+		}})
 
 		return e, writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 	}
@@ -840,11 +817,11 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 			t.Parallel()
 
 			e, local := newExecutor(t, read.err)
-			_, finished, err := e.finishIntoPlaceholder(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-				driveID, graphRootID, testPlaceholderID, "doc.txt", local)
+			_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
+				driveID, GraphRootID, testPlaceholderID, "doc.txt", local)
 
 			assert.True(t, finished, "the failed read settles the attempt")
-			requireClassifiedAsTheRead(t, read, ActionUpload, driveID, uploadTransferError(err))
+			requireClassifiedAsTheRead(t, read, ActionUpload, driveID, UploadTransferError(err))
 		})
 	}
 
@@ -852,8 +829,8 @@ func TestFinishIntoPlaceholder_AReadThatFailsIsThatReadsFailure(t *testing.T) {
 		t.Parallel()
 
 		e, local := newExecutor(t, graph.ErrNotFound)
-		_, finished, err := e.finishIntoPlaceholder(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-			driveID, graphRootID, testPlaceholderID, "doc.txt", local)
+		_, finished, err := e.FinishIntoPlaceholderForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
+			driveID, GraphRootID, testPlaceholderID, "doc.txt", local)
 
 		require.NoError(t, err)
 		assert.False(t, finished, "a placeholder that is gone is no placeholder")
@@ -1188,7 +1165,7 @@ func pendingCreateCount(t *testing.T, store *SyncStore) int {
 	t.Helper()
 
 	var rows int
-	require.NoError(t, store.rawDB().QueryRowContext(t.Context(), `SELECT count(*) FROM pending_creates`).Scan(&rows))
+	require.NoError(t, store.RawDBForTest().QueryRowContext(t.Context(), `SELECT count(*) FROM pending_creates`).Scan(&rows))
 
 	return rows
 }

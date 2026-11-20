@@ -36,11 +36,11 @@ func TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters(t *testing.T) {
 	store, err := NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
 	var journalMode string
-	require.NoError(t, store.rawDB().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode))
+	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode))
 	assert.Equal(t, "wal", journalMode, "every pragma the URI carries is applied")
 	var busyTimeout, journalSizeLimit int64
-	require.NoError(t, store.rawDB().QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout))
-	require.NoError(t, store.rawDB().QueryRowContext(ctx, "PRAGMA journal_size_limit").Scan(&journalSizeLimit))
+	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout))
+	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, "PRAGMA journal_size_limit").Scan(&journalSizeLimit))
 	assert.Equal(t, storeBusyTimeout.Milliseconds(), busyTimeout)
 	assert.Equal(t, int64(storeJournalSizeLimitBytes), journalSizeLimit)
 	require.NoError(t, store.UpsertBlockScope(ctx, block))
@@ -77,13 +77,13 @@ func TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters(t *testing.T) {
 func TestSQLiteFileURI_EscapesTheDatabasePath(t *testing.T) {
 	t.Parallel()
 
-	query := url.Values{sqlitePragmaParam: {"busy_timeout(5000)"}}
+	query := url.Values{SqlitePragmaParam: {"busy_timeout(5000)"}}
 
 	assert.Equal(t,
 		"file:///srv/data%3Fv=1%23part%25/state.db?_pragma=busy_timeout%285000%29",
-		sqliteFileURI("/srv/data?v=1#part%/state.db", query),
+		SqliteFileURI("/srv/data?v=1#part%/state.db", query),
 		"an absolute path keeps an empty authority and escapes what a URI would read")
-	assert.Equal(t, "file:state.db", sqliteFileURI("state.db", nil),
+	assert.Equal(t, "file:state.db", SqliteFileURI("state.db", nil),
 		"a relative path has no authority SQLite could read as a host")
 }
 
@@ -94,7 +94,7 @@ func TestSQLiteFileURI_EscapesTheDatabasePath(t *testing.T) {
 func TestSQLiteFileURI_TheTestBuilderMatchesTheStoreBuilder(t *testing.T) {
 	t.Parallel()
 
-	queries := []url.Values{nil, {sqlitePragmaParam: {"busy_timeout(5000)", "foreign_keys(ON)"}, "mode": {"ro"}}}
+	queries := []url.Values{nil, {SqlitePragmaParam: {"busy_timeout(5000)", "foreign_keys(ON)"}, "mode": {"ro"}}}
 	for _, path := range []string{
 		"/srv/state/state.db",
 		"state.db",
@@ -106,7 +106,7 @@ func TestSQLiteFileURI_TheTestBuilderMatchesTheStoreBuilder(t *testing.T) {
 		"my data?#%/state.db",
 	} {
 		for _, query := range queries {
-			assert.Equal(t, sqliteFileURI(path, query), synctest.SQLiteFileURI(path, query), "%s %v", path, query)
+			assert.Equal(t, SqliteFileURI(path, query), synctest.SQLiteFileURI(path, query), "%s %v", path, query)
 		}
 	}
 }
@@ -122,7 +122,7 @@ func TestSQLiteDSNs_AreBuiltOnlyByTheTwoBuilders(t *testing.T) {
 	})
 	require.Greater(t, files, 100, "the walk reads the module's Go files")
 	assert.Empty(t, violations,
-		"a SQLite DSN is built by sqliteFileURI or synctest.SQLiteFileURI, never by joining \"file:\" and a path, "+
+		"a SQLite DSN is built by SqliteFileURI or synctest.SQLiteFileURI, never by joining \"file:\" and a path, "+
 			"and sql.Open takes one of them (or \":memory:\"), never a bare path")
 }
 
@@ -140,7 +140,7 @@ import "database/sql"
 func open(path string) {
 	_, _ = sql.Open("sqlite", "file:"+path)
 	_, _ = sql.Open("sqlite", path)
-	_, _ = sql.Open("sqlite", sqliteFileURI(path, nil))
+	_, _ = sql.Open("sqlite", SqliteFileURI(path, nil))
 	_, _ = sql.Open("sqlite", ":memory:")
 }
 `
@@ -210,7 +210,7 @@ func isSQLiteDSNBuilderCall(expr ast.Expr) bool {
 		return false
 	}
 	if ident, isIdent := call.Fun.(*ast.Ident); isIdent {
-		return ident.Name == "sqliteFileURI"
+		return ident.Name == "SqliteFileURI"
 	}
 
 	return isSelector(call.Fun, "synctest", "SQLiteFileURI")

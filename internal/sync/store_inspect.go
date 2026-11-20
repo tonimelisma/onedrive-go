@@ -288,9 +288,9 @@ func openStoreInspector(dbPath string, logger *slog.Logger) (*storeInspector, er
 const inspectorBusyTimeout = time.Second
 
 func openReadOnlySyncStoreDB(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open(SqliteDriverName, sqliteFileURI(dbPath, url.Values{
+	db, err := sql.Open(SqliteDriverName, SqliteFileURI(dbPath, url.Values{
 		"mode": {"ro"},
-		sqlitePragmaParam: {
+		SqlitePragmaParam: {
 			"query_only(1)",
 			fmt.Sprintf("busy_timeout(%d)", inspectorBusyTimeout.Milliseconds()),
 		},
@@ -392,7 +392,7 @@ func readDriveStatusConditions(ctx context.Context, runner SqlTxRunner, snapshot
 	if err != nil {
 		return fmt.Errorf("read drive status blocked retry_work: %w", err)
 	}
-	snapshot.HeldDeletes, err = queryHeldDeleteRowsWithRunner(ctx, runner)
+	snapshot.HeldDeletes, err = QueryHeldDeleteRowsWithRunner(ctx, runner)
 	if err != nil {
 		return fmt.Errorf("read drive status held deletes: %w", err)
 	}

@@ -247,7 +247,7 @@ func TestExecutor_ConflictCopy_OriginalNameThatCannotBeRemovedIsASavedCopy(t *te
 
 	e, syncRoot := newConflictCopyExecutor(t)
 	capture, logger := synctest.NewLogCapture()
-	e.logger = logger
+	e.SetLoggerForTest(logger)
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName("a.txt")
 	writeExecTestFile(t, syncRoot, "a.txt", "local edit")
 

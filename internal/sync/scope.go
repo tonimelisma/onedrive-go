@@ -31,10 +31,10 @@ const (
 	quotaWindowThreshold = 3
 	quotaWindowDuration  = 10 * time.Second
 
-	// serviceWindowThreshold is the number of unique paths that must fail
+	// ServiceWindowThreshold is the number of unique paths that must fail
 	// with a 5xx, or without an answer, within serviceWindowDuration to
 	// trigger a service block scope.
-	serviceWindowThreshold = 5
+	ServiceWindowThreshold = 5
 	serviceWindowDuration  = 30 * time.Second
 )
 
@@ -105,7 +105,7 @@ func (ss *ScopeState) UpdateScope(r *ActionCompletion) ScopeUpdateResult {
 		// A 501/505 refusal is not an outage and never gets here (R-2.10.65).
 		sk := ScopeKeyForResult(answer, r.DriveID)
 		return ss.checkWindow(sk, r.Path,
-			serviceWindowThreshold, serviceWindowDuration,
+			ServiceWindowThreshold, serviceWindowDuration,
 			IssueServiceOutage)
 
 	default:

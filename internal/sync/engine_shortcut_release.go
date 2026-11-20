@@ -361,7 +361,7 @@ func (w *releaseSurveyWalk) writable(onDisk string) bool {
 }
 
 // releaseFileLooksUnchanged is the survey's stat test of a synced file. It
-// compares the facts canReuseBaselineHash compares, size, modification time,
+// compares the facts CanReuseBaselineHash compares, size, modification time,
 // change time and file identity, so an edit that put the modification time
 // back, or another file renamed over this one, is found before anything is
 // removed. A modification or change time the row lacks reads as changed: the

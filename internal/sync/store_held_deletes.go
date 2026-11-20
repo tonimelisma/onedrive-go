@@ -49,7 +49,7 @@ func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []HeldDelete) (
 	return nil
 }
 
-func queryHeldDeleteRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]HeldDeleteRow, error) {
+func QueryHeldDeleteRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]HeldDeleteRow, error) {
 	rows, err := runner.QueryContext(ctx,
 		`SELECT path, side, reason, item_type, item_id FROM held_deletes ORDER BY side, path`)
 	if err != nil {
@@ -83,7 +83,7 @@ func queryHeldDeleteRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]H
 // ListHeldDeletes returns the recorded held set, the deletes a
 // `sync --confirm-deletes` pass may release.
 func (s *SyncStore) ListHeldDeletes(ctx context.Context) ([]HeldDelete, error) {
-	rows, err := queryHeldDeleteRowsWithRunner(ctx, s.db)
+	rows, err := QueryHeldDeleteRowsWithRunner(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}

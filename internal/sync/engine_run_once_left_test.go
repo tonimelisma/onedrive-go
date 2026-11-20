@@ -321,10 +321,9 @@ func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testi
 		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
 		{Type: ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
 	}
-	require.Error(t, detectDependencyCycle(buildDependencies(cycle)), "the fixture must contain a cycle")
+	require.Error(t, DependencyCycleForTest(cycle), "the fixture must contain a cycle")
 
-	plan, err := NewPlanner(logger).planBuiltActions(
-		cycle, nil, nil, &moveComposition{}, &moveInputs{}, PlannerMountContext{}, SyncBidirectional)
+	plan, err := NewPlanner(logger).PlanActionsForTest(cycle, SyncBidirectional)
 	require.NoError(t, err)
 	require.Empty(t, plan.Actions, "both moves are dropped")
 
@@ -352,10 +351,6 @@ func TestPlanFollowUp_LeftWhenTheRunEnds(t *testing.T) {
 	assert.Equal(t, 4, followUp.LeftWhenTheRunEnds(true))
 	assert.Zero(t, PlanFollowUp{}.LeftWhenTheRunEnds(true))
 }
-
-// unresolvedTestRetryingAttempts is the attempt count from which `status`
-// lists retry work as "Retrying".
-const unresolvedTestRetryingAttempts = 3
 
 // Validates: R-6.6.28
 //

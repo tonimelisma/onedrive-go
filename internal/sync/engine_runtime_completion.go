@@ -722,7 +722,7 @@ func retryDelayForDecision(decision *ResultDecision) func(int) time.Duration {
 //     does not hold;
 //   - a folder too large to verify before its recursive delete on OneDrive
 //     clears when the user deletes it online or it shrinks. Every retry
-//     relists up to remoteFolderDeleteListLimit items before it fails again,
+//     relists up to RemoteFolderDeleteListLimit items before it fails again,
 //     so on the one-second curve a watch session relisted 10,000 items on
 //     every pass.
 //

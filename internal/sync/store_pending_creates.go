@@ -70,7 +70,7 @@ import (
 //     nothing or succeeded without the hook (a zero-byte file), and drops the
 //     row of an item the cleanup removed (ForgetRemovedPlaceholder);
 //   - the step after planning (PrunePendingCreates): an intent past
-//     pendingCreateIntentTTL, an intent whose file is gone after a pass that
+//     PendingCreateIntentTTL, an intent whose file is gone after a pass that
 //     observed OneDrive first, the row of an adopted placeholder whose local
 //     file is empty too, and the row naming an item at a path the local scan
 //     does not visit (the content filter hides it, a shortcut root reserves
@@ -96,7 +96,7 @@ import (
 // reaches OneDrive and its answer is lost on the way back (live, 2026-11-11,
 // during a network outage). The intent row closes that window: it names the
 // path before the request, and an empty file observed at that path within
-// pendingCreateIntentTTL of the intent, and not already synced, is the
+// PendingCreateIntentTTL of the intent, and not already synced, is the
 // placeholder, whose ID is then recorded.
 //
 // The intent is cleared when the attempt ends with nothing left to recognize:
@@ -115,7 +115,7 @@ import (
 // fresh it could claim an empty file a stranger made at that path, which the
 // next pass then deleted since the local file was gone (model test, chaos
 // seeds 9 and 11). The step after planning therefore prunes intents. One
-// past pendingCreateIntentTTL claims nothing and goes after any plan. One
+// past PendingCreateIntentTTL claims nothing and goes after any plan. One
 // whose path a complete local scan finds empty goes after a pass that
 // observed OneDrive before the local tree (a one-shot sync, a watch
 // bootstrap): that observation ran first, so an intent whose create landed
@@ -250,7 +250,7 @@ func (o PassObservation) claimedLandedCreates() bool {
 // built, the records no create, no upload and no observation needs any more.
 // It runs after the observations that plan was built from were committed.
 //
-//   - Past pendingCreateIntentTTL an intent claims nothing, so it is deleted
+//   - Past PendingCreateIntentTTL an intent claims nothing, so it is deleted
 //     whatever the pass observed.
 //   - After a pass that observed OneDrive before the local tree, an intent
 //     whose file is gone is deleted (createIntentFileGoneTx): that pass's
@@ -911,7 +911,7 @@ func adoptPlaceholderTx(
 
 // claimIntendedPlaceholderTx matches an observed item against an intent at
 // its path that has no item ID yet. An empty, live file observed there
-// within pendingCreateIntentTTL of the intent, and not already synced, is the
+// within PendingCreateIntentTTL of the intent, and not already synced, is the
 // placeholder the dying process created: the row takes its ID and eTag.
 // Anything else at the path (content, a folder, a deletion) or an expired
 // intent means no placeholder of ours is there, and the intent is dropped.

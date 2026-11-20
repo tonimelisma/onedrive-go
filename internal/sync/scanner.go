@@ -189,7 +189,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	// Colliding entries are dropped from events and recorded as findings;
 	// their rows stay, so a collider never reads as a local delete (R-2.12.1).
 	var caseSkipped []SkippedItem
-	events, caseSkipped = detectCaseCollisions(events, o.baseline, observed)
+	events, caseSkipped = DetectCaseCollisions(events, o.baseline, observed)
 	skipped = append(skipped, caseSkipped...)
 
 	o.logger.Info("local observer completed full scan",
@@ -707,13 +707,13 @@ func (o *LocalObserver) processObservedInfo(
 	if kind == ObservedKindDir {
 		identity, hasIdentity := synctree.IdentityFromFileInfo(info)
 		if o.isForeignMountPoint(o.scanAvailability, dbRelPath, identity, hasIdentity) {
-			*skipped = append(*skipped, mountBoundarySkippedItem(dbRelPath))
+			*skipped = append(*skipped, MountBoundarySkippedItem(dbRelPath))
 			observed[dbRelPath] = true
 			o.logger.Debug("not crossing into another filesystem", slog.String("path", dbRelPath))
 			return filepath.SkipDir
 		}
 		if o.flaggedMountIsGone(o.scanAvailability, dbRelPath) {
-			*skipped = append(*skipped, vanishedMountSkippedItem(dbRelPath))
+			*skipped = append(*skipped, VanishedMountSkippedItem(dbRelPath))
 			observed[dbRelPath] = true
 			o.logger.Debug("a crossed mount point is no longer mounted", slog.String("path", dbRelPath))
 			return filepath.SkipDir
@@ -827,7 +827,7 @@ func (o *LocalObserver) detectFileContentChange(
 	currentSize := info.Size()
 	observedRow := currentRows[dbRelPath]
 
-	if canReuseBaselineHash(info, base, scanStartNano) {
+	if CanReuseBaselineHash(info, base, scanStartNano) {
 		o.logger.Debug("fast path: mtime+size match, skipping hash",
 			slog.String("path", dbRelPath))
 		currentRows[dbRelPath] = LocalStateRow{
@@ -883,7 +883,7 @@ func sortedLocalStateRows(current map[string]LocalStateRow) []LocalStateRow {
 	return rows
 }
 
-// detectCaseCollisions finds events where two paths in the same directory
+// DetectCaseCollisions finds events where two paths in the same directory
 // differ only in case. Both colliders are removed from events and returned
 // as SkippedItems. OneDrive uses a case-insensitive namespace — uploading
 // both would cause one to silently overwrite the other (R-2.12.1).
@@ -895,7 +895,7 @@ func sortedLocalStateRows(current map[string]LocalStateRow) []LocalStateRow {
 // set treats every baseline variant as present.
 //
 // O(n) time, O(n) memory. Pure function — no side effects.
-func detectCaseCollisions(
+func DetectCaseCollisions(
 	events []ChangeEvent, baseline *Baseline, observed map[string]bool,
 ) (clean []ChangeEvent, collisions []SkippedItem) {
 	if len(events) == 0 {

@@ -25,11 +25,6 @@ import (
 // A test can pin the order -- forward, reversed or a seeded shuffle -- and
 // serialize the workers so the order is also the execution order.
 
-// dispatchOrderEnv runs every engine the package's tests build under one
-// order: "forward", "reverse" or "shuffle:<seed>". Unset, engines keep the
-// graph order and the worker pool, as in production.
-const dispatchOrderEnv = "ONEDRIVE_GO_DISPATCH_ORDER"
-
 // dispatchOrderForward sorts a frontier by action ID, which is plan order:
 // the canonical order the other two permute.
 func dispatchOrderForward(frontier []*TrackedAction) []*TrackedAction {

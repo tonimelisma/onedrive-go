@@ -52,7 +52,7 @@ func BenchmarkReplacePlannerVisibleState(b *testing.B) {
 
 			b.ResetTimer()
 			for b.Loop() {
-				tx, err := BeginPerfTx(ctx, store.rawDB())
+				tx, err := BeginPerfTx(ctx, store.RawDBForTest())
 				require.NoError(b, err)
 				visible, err := ReplacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
 				require.NoError(b, err)
@@ -90,7 +90,7 @@ func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibl
 	b.Helper()
 
 	ctx := context.Background()
-	tx, err := store.rawDB().BeginTx(ctx, nil)
+	tx, err := store.RawDBForTest().BeginTx(ctx, nil)
 	require.NoError(b, err)
 	insertBaseline, err := tx.PrepareContext(ctx, sqlUpsertBaseline)
 	require.NoError(b, err)
@@ -124,7 +124,7 @@ func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibl
 	for top := range benchPlannerVisibleTopFolders {
 		topPath := fmt.Sprintf("top-%02d", top)
 		topID := "top-" + fmt.Sprint(top)
-		add(topPath, strRoot, topID, ItemTypeFolder, "", 0)
+		add(topPath, StrRoot, topID, ItemTypeFolder, "", 0)
 		for f := range benchPlannerVisibleFoldersPerTop {
 			folderPath := fmt.Sprintf("%s/folder-%03d", topPath, f)
 			folderID := fmt.Sprintf("%s-%d", topID, f)

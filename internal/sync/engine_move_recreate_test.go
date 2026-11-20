@@ -1371,7 +1371,7 @@ func (tc *ownLandingCase) remote(t *testing.T) *moveScenarioRemote {
 	t.Helper()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	parentID := strRoot
+	parentID := StrRoot
 	if tc.parents != "" {
 		for _, name := range strings.Split(tc.parents, "/") {
 			remote.addFolder("item-"+name, parentID, name)
@@ -1449,7 +1449,7 @@ func refuseMoveAsideOnce(remote *moveScenarioRemote, itemID string) {
 	remote.mu.Lock()
 	defer remote.mu.Unlock()
 	remote.refuseMove = func(id, newName string) error {
-		if id != itemID || !strings.Contains(newName, moveSwapInfix) || parks.Add(1) > 1 {
+		if id != itemID || !strings.Contains(newName, MoveSwapInfix) || parks.Add(1) > 1 {
 			return nil
 		}
 		return &graph.GraphError{StatusCode: http.StatusBadRequest, Code: "invalidRequest", Err: graph.ErrBadRequest}
@@ -1631,8 +1631,8 @@ func TestRunOnce_NamesTradedHereInAnotherCaseAreMovedOnOneDrive(t *testing.T) {
 	t.Parallel()
 
 	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFile(t, "item-a", strRoot, "a.txt", "a\n")
-	remote.addFile(t, "item-b", strRoot, "b.txt", "b\n")
+	remote.addFile(t, "item-a", StrRoot, "a.txt", "a\n")
+	remote.addFile(t, "item-b", StrRoot, "b.txt", "b\n")
 	logs := &syncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 	eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)

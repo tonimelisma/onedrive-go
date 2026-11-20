@@ -60,7 +60,7 @@ func installOwnerCheck(t *testing.T, rt *watchRuntime) {
 	})
 	rt.scopes.ownerCheck = check
 	rt.timers.ownerCheck = check
-	rt.sched.graph.ownerCheck = check
+	rt.sched.graph.SetOwnerCheck(check)
 }
 
 // assertOwnerCheckFires proves an owner check installed through install
@@ -90,7 +90,7 @@ func TestOwnerCheck_DependencyGraphCatchesASecondGoroutine(t *testing.T) {
 
 	graph := NewDepGraph(synctest.TestLogger(t))
 	assertOwnerCheckFires(t,
-		func(check func()) { graph.ownerCheck = check },
+		func(check func()) { graph.SetOwnerCheck(check) },
 		func() { graph.InFlightCount() },
 	)
 }

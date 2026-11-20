@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	errUnknownActionType         = errors.New("sync: unknown action type in worker dispatch")
+	ErrUnknownActionType         = errors.New("sync: unknown action type in worker dispatch")
 	errPublicationOnlyActionType = errors.New("sync: publication-only action routed to worker")
 )
 
@@ -373,7 +373,7 @@ func (wp *WorkerPool) dispatchAction(
 			Action:  action.Type,
 			Path:    action.Path,
 			Success: false,
-			Error:   fmt.Errorf("%w: %s", errUnknownActionType, OutsideTheEnum(action.Type)),
+			Error:   fmt.Errorf("%w: %s", ErrUnknownActionType, OutsideTheEnum(action.Type)),
 		}
 	}
 }

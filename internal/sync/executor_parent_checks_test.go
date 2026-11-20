@@ -111,7 +111,7 @@ func TestExecutor_Upload_CreateIntoAParentGoneMidPlanIsAParentGoneFact(t *testin
 	var gone *RemoteItemGoneError
 	require.ErrorAs(t, second.Error, &gone)
 	assert.Equal(t, "parent-id", gone.ItemID)
-	assert.Equal(t, "parent", gone.role)
+	assert.Equal(t, "parent", gone.Role)
 	assert.Equal(t, PermissionCapabilityRemoteRead, second.FailureCapability)
 	assert.Equal(t, 1, getItemCalls, "the gone parent was not read again before the create")
 }

@@ -379,7 +379,7 @@ func (o *LocalObserver) handleCreate(
 	// Early rejection for case collisions in watch mode (R-2.12.2).
 	// Applies to both files and directories — OneDrive's case-insensitive
 	// namespace cannot host both Xyz/ and xyz in the same parent.
-	// The authoritative check is FullScan's post-walk detectCaseCollisions;
+	// The authoritative check is FullScan's post-walk DetectCaseCollisions;
 	// this rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(tree, filepath.Dir(fsPath), name, filepath.Dir(dbRelPath)); hasCollision {
 		// Track peer for re-emission when the collider is deleted. The
@@ -506,7 +506,7 @@ func (o *LocalObserver) watchCreateHash(
 		// unrelated content and is hashed like any create.
 		if entry != nil && entry.Path != dbRelPath && entry.ItemType == ItemTypeFile &&
 			syncedPathGone(tree, entry.Path) {
-			if canReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
+			if CanReuseBaselineHash(info, entry, o.clock.Now().UnixNano()) {
 				return entry.LocalHash
 			}
 
@@ -814,7 +814,7 @@ func (o *LocalObserver) writeCooldown() time.Duration {
 // loop. Timer callbacks must not block or touch watch-loop state, so a full
 // channel drops the request and asks for a recovery rescan instead.
 func (o *LocalObserver) scheduleDeferredHash(fsPath, dbRelPath string, retries int, delay time.Duration) {
-	req := hashRequest{
+	req := HashRequest{
 		FsPath:    fsPath,
 		DbRelPath: dbRelPath,
 		Retries:   retries,
@@ -938,7 +938,7 @@ func (o *LocalObserver) escalateWriteBackoff(path string, churn *pathWriteChurn)
 
 // deferStillChangingHash re-arms the hash of a file that kept changing
 // through every coalescing retry, after an escalated backoff.
-func (o *LocalObserver) deferStillChangingHash(req hashRequest) {
+func (o *LocalObserver) deferStillChangingHash(req HashRequest) {
 	now := o.clock.Now()
 	churn := o.writeChurnFor(req.DbRelPath, now)
 	o.escalateWriteBackoff(req.DbRelPath, churn)
@@ -959,7 +959,7 @@ func (o *LocalObserver) pruneWriteChurn(now time.Time) {
 // HashAndEmit is called from the watchLoop when a write coalesce timer fires.
 // It hashes the file and sends its row if the content differs from the
 // baseline. Runs in the watchLoop goroutine (same thread as handleWrite).
-func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req hashRequest) {
+func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, req HashRequest) {
 	req = o.prepareDeferredHashRequest(req)
 
 	info, isSymlink, err := statObservedPath(req.FsPath)
@@ -991,7 +991,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	}
 
 	// Early rejection for case collisions in write coalesce (R-2.12.2).
-	// The authoritative check is FullScan's detectCaseCollisions; this
+	// The authoritative check is FullScan's DetectCaseCollisions; this
 	// rejects obvious collisions between safety scans.
 	if collidingName, hasCollision := o.HasCaseCollisionCached(
 		tree, filepath.Dir(req.FsPath), filepath.Base(req.FsPath), filepath.Dir(req.DbRelPath),
@@ -1052,7 +1052,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 	o.TrySend(ctx, &ev)
 }
 
-func (o *LocalObserver) prepareDeferredHashRequest(req hashRequest) hashRequest {
+func (o *LocalObserver) prepareDeferredHashRequest(req HashRequest) HashRequest {
 	delete(o.PendingTimers, req.DbRelPath)
 	if churn, ok := o.writeChurn[req.DbRelPath]; ok {
 		churn.firstPendingAt = time.Time{}
@@ -1061,7 +1061,7 @@ func (o *LocalObserver) prepareDeferredHashRequest(req hashRequest) hashRequest 
 	return req
 }
 
-func (o *LocalObserver) retryDeferredHashOnChange(req hashRequest, err error) bool {
+func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
 	if !errors.Is(err, ErrFileChangedDuringHash) || req.Retries >= maxCoalesceRetries {
 		return false
 	}

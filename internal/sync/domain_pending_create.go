@@ -6,9 +6,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-// pendingCreateIntentTTL is how long an intent without an item ID can claim
+// PendingCreateIntentTTL is how long an intent without an item ID can claim
 // an empty file observed at its path. Past it the intent is pruned.
-const pendingCreateIntentTTL = 72 * time.Hour
+const PendingCreateIntentTTL = 72 * time.Hour
 
 // PendingCreate is one recorded, not yet confirmed create. ItemID is empty
 // while only the intent is recorded.
@@ -24,9 +24,9 @@ type PendingCreate struct {
 }
 
 // IntentIsFresh reports whether the intent was recorded within
-// pendingCreateIntentTTL of now, so that an empty file at its path can still
+// PendingCreateIntentTTL of now, so that an empty file at its path can still
 // be the file its create made. Observation's claim, the executor's claim on a
 // 409 and the prune all ask this one question.
 func (p *PendingCreate) IntentIsFresh(now time.Time) bool {
-	return StoredTimeIsSet(p.IntendedAt) && now.Sub(time.Unix(0, p.IntendedAt)) <= pendingCreateIntentTTL
+	return StoredTimeIsSet(p.IntendedAt) && now.Sub(time.Unix(0, p.IntendedAt)) <= PendingCreateIntentTTL
 }

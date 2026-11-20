@@ -158,13 +158,13 @@ func TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty(t *testing.T) {
 	leftover := filepath.Join(syncRoot, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
 
-	require.True(t, obs.runSafetyScan(t.Context(), tree))
+	require.True(t, obs.RunSafetyScanForTest(t.Context(), tree))
 	applySnapshot(t, rt, forwardedSnapshot(t, batches))
 	require.Equal(t, []string{leftoverName}, interruptedRemovalStatusPaths(t, eng.baseline))
 	rt.resources.dirtyBuf.FlushImmediate()
 
 	require.NoError(t, os.Remove(leftover))
-	require.True(t, obs.runSafetyScan(t.Context(), tree))
+	require.True(t, obs.RunSafetyScanForTest(t.Context(), tree))
 	applySnapshot(t, rt, forwardedSnapshot(t, batches))
 
 	assert.Empty(t, interruptedRemovalStatusPaths(t, eng.baseline))
@@ -268,7 +268,7 @@ func TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags(t *testing.T) {
 		CrossedMounts: []string{"disk"},
 	})
 
-	flags := obs.mountBoundaryFlags.Load()
+	flags := obs.MountBoundaryFlagsForTest()
 	require.NotNil(t, flags)
-	assert.Contains(t, *flags, "disk", "a disk mounted during the watch is flagged for the next scan")
+	assert.Contains(t, flags, "disk", "a disk mounted during the watch is flagged for the next scan")
 }

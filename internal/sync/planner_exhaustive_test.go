@@ -913,7 +913,7 @@ func (r *exRun) freeRemoteName(dir string) string {
 func (w *exWorld) planPass() *ActionPlan {
 	w.writeStore()
 	ctx := w.t.Context()
-	db := w.store.rawDB()
+	db := w.store.RawDBForTest()
 	_, err := db.ExecContext(ctx, "DELETE FROM observation_issues")
 	require.NoError(w.t, err)
 	for _, p := range w.localCaseCollisions() {
@@ -926,7 +926,7 @@ func (w *exWorld) planPass() *ActionPlan {
 }
 
 // localCaseCollisions lists the paths a full scan here skips as case
-// collisions (detectCaseCollisions): an entry that is new or changed since
+// collisions (DetectCaseCollisions): an entry that is new or changed since
 // it was synced and whose name OneDrive takes for a synced sibling's still
 // here, or for another such entry's, and what lies below it.
 func (w *exWorld) localCaseCollisions() []string {
@@ -946,7 +946,7 @@ func (w *exWorld) localCaseCollisions() []string {
 		}
 		events = append(events, ChangeEvent{Path: p, ItemType: pmType(item.folder)})
 	}
-	_, skipped := detectCaseCollisions(events, newBaselineForTest(entries), observed)
+	_, skipped := DetectCaseCollisions(events, newBaselineForTest(entries), observed)
 	paths := make([]string, 0, len(skipped))
 	for i := range skipped {
 		paths = append(paths, skipped[i].Path)
@@ -1339,7 +1339,7 @@ func exQuietStore(t *testing.T) *SyncStore {
 
 	dbPath := filepath.Join(t.TempDir(), "exhaustive.db")
 	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600))
-	store, err := openSyncStoreWithDriver(t.Context(), dbPath, slog.New(slog.DiscardHandler), false, exDriverName)
+	store, err := OpenSyncStoreWithDriverForTest(t.Context(), dbPath, slog.New(slog.DiscardHandler), false, exDriverName)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, store.Close(context.Background()))
@@ -1347,8 +1347,8 @@ func exQuietStore(t *testing.T) *SyncStore {
 	// A plan fills the planner-visible tables within its transaction and
 	// rolls it back. Made once on the store's one connection, they stay, and
 	// so do the statements that read them.
-	for _, ddl := range []string{sqlCreatePlannerVisibleLocalState, sqlCreatePlannerVisibleRemoteState} {
-		_, err := store.rawDB().ExecContext(t.Context(), ddl)
+	for _, ddl := range []string{SQLCreatePlannerVisibleLocalStateForTest(), SQLCreatePlannerVisibleRemoteStateForTest()} {
+		_, err := store.RawDBForTest().ExecContext(t.Context(), ddl)
 		require.NoError(t, err)
 	}
 

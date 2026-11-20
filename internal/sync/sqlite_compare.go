@@ -840,10 +840,10 @@ func queryReconciliationStateWithRunner(
 	ctx context.Context,
 	runner SqlTxRunner,
 ) ([]SQLiteReconciliationRow, error) {
-	return queryReconciliationStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
+	return QueryReconciliationStateWithRunnerForTables(ctx, runner, "local_state", "remote_state")
 }
 
-func queryReconciliationStateWithRunnerForTables(
+func QueryReconciliationStateWithRunnerForTables(
 	ctx context.Context,
 	runner SqlTxRunner,
 	localStateTable string,

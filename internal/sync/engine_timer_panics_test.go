@@ -217,13 +217,13 @@ func TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged(t *testing.T) {
 	t.Parallel()
 
 	capture, logger := synctest.NewLogCapture()
-	eng := &Engine{wallClock: RealClock{logger: logger, panics: &TimerPanics{}}}
+	eng := &Engine{wallClock: NewRealClock(logger, &TimerPanics{})}
 	bound := eng.wallClock
 	_, end := eng.beginRun(t.Context())
 	require.NoError(t, end(nil))
 
 	require.NotPanics(t, func() { panicThroughTheBoundary(bound, "late timer exploded") }, "after its run returned")
-	require.NotPanics(t, func() { panicThroughTheBoundary(RealClock{logger: logger}, "unbound timer exploded") },
+	require.NotPanics(t, func() { panicThroughTheBoundary(NewRealClock(logger, nil), "unbound timer exploded") },
 		"on a clock no engine bound")
 
 	logged := capture.AtLeast(slog.LevelError)

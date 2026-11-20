@@ -17,7 +17,7 @@ func retryWorkRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path str
 	t.Helper()
 
 	var count int
-	err := store.rawDB().QueryRowContext(t.Context(),
+	err := store.RawDBForTest().QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM retry_work WHERE path = ?`, path,
 	).Scan(&count)
 	require.NoError(t, err)
@@ -28,7 +28,7 @@ func retryWorkRowCountForStoreScopeTest(t *testing.T, store *SyncStore, path str
 func syncStorePathForStoreScopeTest(t *testing.T, store *SyncStore) string {
 	t.Helper()
 
-	rows, err := store.rawDB().QueryContext(t.Context(), "PRAGMA database_list")
+	rows, err := store.RawDBForTest().QueryContext(t.Context(), "PRAGMA database_list")
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -152,7 +152,7 @@ func TestReadDriveStatusSnapshot_RemoteDriftUsesPlannerContentTest(t *testing.T)
 
 	// The commits above wrote matching remote_state rows; replace them with
 	// what a later remote observation reports.
-	_, err := store.rawDB().ExecContext(t.Context(), `
+	_, err := store.RawDBForTest().ExecContext(t.Context(), `
 		INSERT OR REPLACE INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-docs', 'Docs', 'folder', NULL, NULL, 1777605693000000000),
@@ -190,9 +190,9 @@ func TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities(t *te
 	require.NoError(t, err)
 	require.Len(t, statuses, 2)
 
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, statuses["bad:name.txt"].Local.Availability)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["bad:name.txt"].Local.Availability)
 	assert.Equal(t, IssueInvalidFilename, statuses["bad:name.txt"].Local.IssueType)
-	assert.Equal(t, truthAvailabilityAvailable, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.Equal(t, TruthAvailabilityAvailable, statuses["Private/sub/file.txt"].Local.Availability)
 	assert.True(t, statuses["Private/sub/file.txt"].Local.ScopeKey.IsZero())
 }
 
@@ -219,8 +219,8 @@ func TestReadPathTruthStatus_DerivesReadBoundaryDescendantsFromObservationIssues
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 
-	assert.Equal(t, truthAvailabilityBlockedObservationIssue, statuses["Private/sub/file.txt"].Local.Availability)
-	assert.Equal(t, pathTruthSourceObservationIssue, statuses["Private/sub/file.txt"].Local.Source)
+	assert.Equal(t, TruthAvailabilityBlockedObservationIssue, statuses["Private/sub/file.txt"].Local.Availability)
+	assert.Equal(t, PathTruthSourceObservationIssue, statuses["Private/sub/file.txt"].Local.Source)
 	assert.Equal(t, IssueLocalReadDenied, statuses["Private/sub/file.txt"].Local.IssueType)
 	assert.Equal(t, scopeKey, statuses["Private/sub/file.txt"].Local.ScopeKey)
 }

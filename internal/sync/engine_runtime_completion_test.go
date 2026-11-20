@@ -207,7 +207,7 @@ func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	for i := range serviceWindowThreshold {
+	for i := range ServiceWindowThreshold {
 		completion := &ActionCompletion{
 			Path:       fmt.Sprintf("outage-%d.txt", i),
 			ActionType: ActionUpload,
@@ -223,7 +223,7 @@ func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *
 	blocked, err := eng.baseline.ListBlockedRetryWork(t.Context())
 	require.NoError(t, err)
 	require.NotEmpty(t, blocked)
-	assert.Equal(t, fmt.Sprintf("outage-%d.txt", serviceWindowThreshold-1), blocked[len(blocked)-1].Path)
+	assert.Equal(t, fmt.Sprintf("outage-%d.txt", ServiceWindowThreshold-1), blocked[len(blocked)-1].Path)
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
 

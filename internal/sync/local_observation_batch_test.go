@@ -69,7 +69,7 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
-	require.True(t, obs.runSafetyScan(t.Context(), mustOpenSyncTree(t, root)))
+	require.True(t, obs.RunSafetyScanForTest(t.Context(), mustOpenSyncTree(t, root)))
 
 	// The scan sends before it returns: a missing batch fails here instead of
 	// hanging the test.
@@ -124,14 +124,14 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := mustOpenSyncTree(t, root)
 
-	require.True(t, obs.runSafetyScan(t.Context(), tree))
+	require.True(t, obs.RunSafetyScanForTest(t.Context(), tree))
 	skipped := forwardedSnapshot(t, batches).Findings
 	require.Len(t, skipped, 1)
 	assert.Equal(t, leftoverName, skipped[0].Path)
 	assert.Equal(t, IssueLocalInterruptedRemoval, skipped[0].Reason)
 
 	require.NoError(t, os.Remove(leftover))
-	require.True(t, obs.runSafetyScan(t.Context(), tree))
+	require.True(t, obs.RunSafetyScanForTest(t.Context(), tree))
 	assert.Empty(t, forwardedSnapshot(t, batches).Findings, "the scan found nothing to skip, and says so")
 }
 

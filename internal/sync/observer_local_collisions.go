@@ -11,7 +11,7 @@
 //
 // Related files:
 //   - observer_local_handlers.go: event handlers that call these methods
-//   - scanner.go:                 FullScan's detectCaseCollisions (authoritative)
+//   - scanner.go:                 FullScan's DetectCaseCollisions (authoritative)
 
 package sync
 
@@ -34,7 +34,7 @@ import (
 //
 // A listing that fails both ways makes the caller report no collision (fail
 // open), as it always has: the event's own handling meets the same failure,
-// and the full scan's detectCaseCollisions, which is authoritative, judges
+// and the full scan's DetectCaseCollisions, which is authoritative, judges
 // the directory again.
 func readDirForCollisionCheck(tree *synctree.Root, dirPath string) ([]os.DirEntry, error) {
 	if tree != nil {

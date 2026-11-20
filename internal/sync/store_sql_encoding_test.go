@@ -1,18 +1,11 @@
 package sync
 
 import (
-	"context"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // Validates: R-2.10.7, R-2.10.14
@@ -63,45 +56,4 @@ func TestRemoteModTime_DecodesAStoredRemoteModificationTime(t *testing.T) {
 	assert.True(t, RemoteModTime(math.MinInt64).Equal(time.Unix(0, math.MinInt64)))
 	at := time.Date(2025, 6, 15, 12, 0, 0, 123456789, time.UTC)
 	assert.True(t, RemoteModTime(StoredTimeNano(at)).Equal(at))
-}
-
-// Every writer of a remote modification time stores the same value for the
-// same time: the item converter, the upload outcome and the live row an
-// executor precondition compares with the planned one. They are compared with
-// each other, so one encoding at both ends of the range, and at the epoch.
-//
-// Validates: R-6.7.34
-func TestStoredTimeNano_RemoteModificationTimeWritersAgree(t *testing.T) {
-	t.Parallel()
-
-	driveID := driveid.New(engineTestDriveID)
-	for _, modified := range []time.Time{
-		time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Unix(0, 0),
-		time.Date(2025, 6, 15, 12, 0, 0, 123456789, time.UTC),
-	} {
-		item := graph.Item{ID: "item-f", Name: "f.txt", ParentID: "root", DriveID: driveID, ModifiedAt: modified}
-		converter := NewPrimaryConverter(emptyBaseline(), driveID, synctest.TestLogger(t), nil, nil)
-		events := converter.ConvertItems(context.Background(), []graph.Item{
-			{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
-			item,
-		})
-		var observed *RemoteItem
-		for i := range events {
-			if events[i].ItemID == item.ID {
-				observed = &events[i]
-			}
-		}
-		require.NotNil(t, observed, "%s", modified)
-
-		uploaded := (&Executor{}).uploadOutcome(&Action{Type: ActionUpload, Path: "f.txt"}, driveID, "root",
-			&driveops.UploadResult{Item: &item, Mtime: modified})
-		live := remoteStateRowFromGraphItem(&item)
-
-		want := StoredTimeNano(modified)
-		assert.Equal(t, want, observed.Mtime, "converter, %s", modified)
-		assert.Equal(t, want, uploaded.RemoteMtime, "upload outcome, %s", modified)
-		assert.Equal(t, want, live.Mtime, "live precondition row, %s", modified)
-	}
 }

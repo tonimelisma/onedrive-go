@@ -1,6 +1,6 @@
 # Sync Shortcut
 
-GOVERNS: internal/sync/protected_roots.go, internal/sync/shortcut_alias_mutation_types.go, internal/sync/shortcut_protected_root_types.go, internal/sync/shortcut_root_planner.go, internal/sync/shortcut_root_planner_ack.go, internal/sync/shortcut_root_planner_cleanup.go, internal/sync/shortcut_root_planner_local.go, internal/sync/shortcut_root_planner_topology.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_status.go, internal/sync/store_shortcut_root_status_read.go, internal/sync/store_shortcut_roots.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_topology.go
+GOVERNS: internal/sync/protected_roots.go, internal/sync/shortcut_alias_mutation_types.go, internal/sync/shortcut_protected_root_types.go, internal/sync/shortcut_root_planner.go, internal/sync/shortcut_root_planner_ack.go, internal/sync/shortcut_root_planner_cleanup.go, internal/sync/shortcut_root_planner_local.go, internal/sync/shortcut_root_planner_topology.go, internal/sync/shortcut_root_state.go, internal/sync/shortcut_root_status.go, internal/sync/store_shortcut_root_status_read.go, internal/sync/store_shortcut_roots.go, internal/sync/shortcut_root_transition.go, internal/sync/shortcut_topology.go, internal/sync/shortcut_test_seams.go
 
 Implements: R-2.10 [designed], R-2.14 [designed]
 

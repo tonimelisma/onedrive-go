@@ -152,7 +152,7 @@ func (r *moveScenarioRemote) touch(id string) {
 // bumpAncestorETags models OneDrive changing every ancestor folder's eTag when
 // something beneath it changes.
 func (r *moveScenarioRemote) bumpAncestorETags(parentID string) {
-	for id := parentID; id != "" && id != strRoot; {
+	for id := parentID; id != "" && id != StrRoot; {
 		item, ok := r.items[id]
 		if !ok {
 			return
@@ -306,7 +306,7 @@ func (r *moveScenarioRemote) childIDs(parentID string) []string {
 // pathOf is id's root-relative path, "" for the root.
 func (r *moveScenarioRemote) pathOf(id string) string {
 	var parts []string
-	for current := id; current != "" && current != strRoot; {
+	for current := id; current != "" && current != StrRoot; {
 		item, ok := r.items[current]
 		if !ok {
 			return ""
@@ -320,7 +320,7 @@ func (r *moveScenarioRemote) pathOf(id string) string {
 
 // itemAt resolves a root-relative path case-insensitively, as OneDrive does.
 func (r *moveScenarioRemote) itemAt(remotePath string) (*graph.Item, bool) {
-	current := r.items[strRoot]
+	current := r.items[StrRoot]
 	if remotePath == "" {
 		return current, true
 	}
@@ -346,7 +346,7 @@ func (r *moveScenarioRemote) tree() map[string]string {
 func (r *moveScenarioRemote) treeLocked() map[string]string {
 	out := make(map[string]string, len(r.items))
 	for id, item := range r.items {
-		if id == strRoot {
+		if id == StrRoot {
 			continue
 		}
 		if item.IsFolder {

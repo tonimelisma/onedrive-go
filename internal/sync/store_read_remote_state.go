@@ -74,7 +74,7 @@ func QueryRemoteStateRowsWithRunner(
 			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
 		}
 
-		row.DriveID = remoteStateDriveID(rawDriveID, contentDriveID)
+		row.DriveID = RemoteStateDriveID(rawDriveID, contentDriveID)
 		row.Hash = hash.String
 		row.ETag = etag.String
 
@@ -165,7 +165,7 @@ func scanRemoteStateRowWithQuerier(
 		return nil, err
 	}
 
-	row.DriveID = remoteStateDriveID(rawDriveID, fallbackDriveID)
+	row.DriveID = RemoteStateDriveID(rawDriveID, fallbackDriveID)
 	row.Hash = hash.String
 	row.ETag = etag.String
 
@@ -180,7 +180,7 @@ func scanRemoteStateRowWithQuerier(
 	return &row, nil
 }
 
-func remoteStateDriveID(rawDriveID string, fallback driveid.ID) driveid.ID {
+func RemoteStateDriveID(rawDriveID string, fallback driveid.ID) driveid.ID {
 	if rawDriveID != "" {
 		return driveid.New(rawDriveID)
 	}

@@ -33,7 +33,7 @@ func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreate
 	assert.Equal(t, SKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
 	// Which types are managed is checked against the scanner's source by
 	// TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports.
-	assert.Equal(t, localObservationManagedIssueTypes(), batch.ManagedIssueTypes)
+	assert.Equal(t, LocalObservationManagedIssueTypes(), batch.ManagedIssueTypes)
 }
 
 // Validates: R-2.1.2, R-2.10.4
@@ -147,7 +147,7 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 	require.Contains(t, reported, IssueInvalidFilename, "the source reading must see the scanner's findings")
 
 	managed := make(map[IssueType]struct{})
-	for _, issueType := range localObservationManagedIssueTypes() {
+	for _, issueType := range LocalObservationManagedIssueTypes() {
 		_, duplicate := managed[issueType]
 		assert.False(t, duplicate, "%s is listed twice", issueType)
 		managed[issueType] = struct{}{}
@@ -158,7 +158,7 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 			continue
 		}
 		assert.NotEmpty(t, keptUnmanaged[issueType],
-			"%v build skipped items naming %s, which localObservationManagedIssueTypes leaves out: "+
+			"%v build skipped items naming %s, which LocalObservationManagedIssueTypes leaves out: "+
 				"add it, so the next full scan that no longer reports it clears it, "+
 				"or record in keptUnmanaged why it must stay", files, issueType)
 	}

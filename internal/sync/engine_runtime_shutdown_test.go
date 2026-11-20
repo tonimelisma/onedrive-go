@@ -64,7 +64,7 @@ func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *DepGraph) []
 	return append(completions,
 		ActionCompletion{
 			ActionID: 2, Path: "gone.txt", ActionType: ActionDownload, RunEnded: true,
-			Err: &RemoteItemGoneError{op: "download", ItemID: goneItemID, role: "item"},
+			Err: &RemoteItemGoneError{Op: "download", ItemID: goneItemID, Role: "item"},
 		},
 		ActionCompletion{
 			ActionID: 3, Path: "Projects", ActionType: ActionFolderCreate, RunEnded: true,
@@ -143,7 +143,7 @@ func runWatchDrain(ctx context.Context, rt *watchRuntime, p *watchPipeline) erro
 func holdStoreConnection(t *testing.T, store *SyncStore) func() {
 	t.Helper()
 
-	conn, err := store.db.Conn(t.Context())
+	conn, err := store.RawDBForTest().Conn(t.Context())
 	require.NoError(t, err)
 	released := false
 	release := func() {

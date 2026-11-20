@@ -1,14 +1,10 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"os"
 	"strings"
-	stdsync "sync"
 	"testing"
 	"time"
 
@@ -24,41 +20,6 @@ import (
 // reaches WARN/ERROR (shown to every user at default verbosity) and what
 // stays below it because it repeats, heals itself, is shutdown noise, or is
 // already reported elsewhere.
-
-// syncLockedBuffer is a bytes.Buffer safe for slog handlers written from
-// several goroutines.
-type syncLockedBuffer struct {
-	mu  stdsync.Mutex // guards buf
-	buf bytes.Buffer
-}
-
-func (b *syncLockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	n, err := b.buf.Write(p)
-	if err != nil {
-		return n, fmt.Errorf("write log buffer: %w", err)
-	}
-
-	return n, nil
-}
-
-func (b *syncLockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.String()
-}
-
-func newCapturedLogger() (*slog.Logger, *syncLockedBuffer) {
-	buf := &syncLockedBuffer{}
-	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})), buf
-}
-
-func countLevel(output, level string) int {
-	return strings.Count(output, "level="+level+" ")
-}
 
 // Validates: R-6.6.22
 func TestEngineFlow_FatalAuth_ReturnedOnceNotLogged(t *testing.T) {
@@ -291,32 +252,6 @@ func TestWatchConditionSummary_AFailedReadIsLoggedOnce(t *testing.T) {
 	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the recovery is not a new failure")
 }
 
-// A file that stats but cannot be opened used to warn "hash computation
-// failed" on every safety scan forever. It is now a skipped local_read_denied
-// item (reported once, listed by status) and the scan logs nothing at WARN.
-//
-// Validates: R-6.6.30
-func TestFullScan_UnreadableFileIsSkippedItemNotWarning(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	writeTestFile(t, dir, "locked.txt", "secret")
-
-	logger, logs := newCapturedLogger()
-	obs := NewLocalObserver(emptyBaseline(), logger, 0)
-	obs.hashFunc = func(context.Context, string) (string, error) {
-		return "", fmt.Errorf("open locked.txt: %w", os.ErrPermission)
-	}
-
-	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
-	require.NoError(t, err)
-
-	require.Len(t, result.Skipped, 1)
-	assert.Equal(t, "locked.txt", result.Skipped[0].Path)
-	assert.Equal(t, IssueLocalReadDenied, result.Skipped[0].Reason)
-	assert.Zero(t, countLevel(logs.String(), "WARN"))
-}
-
 // Socket.io is a best-effort wake source; watch keeps polling. A long outage
 // used to print one WARN per backoff step (about once a minute forever).
 //
@@ -453,22 +388,6 @@ func TestWatchConditionSummary_WarnsOnlyForNewActionableKinds(t *testing.T) {
 	assert.False(t, watchConditionSummaryAddsActionable(withBadName, watchConditionSummaryFingerprint(withBadName)))
 	assert.Equal(t, "1 file with names OneDrive does not allow, 9 files waiting while OneDrive limits requests",
 		formatWatchConditionBreakdown(withBadName))
-}
-
-// The console prints this reason after the folder path; it used to dump the
-// whole blocker list as a Go slice with internal "non-disposable" wording.
-//
-// Validates: R-6.6.11
-func TestFolderNotEmptyError_NamesAFewBlockersAndTheAction(t *testing.T) {
-	t.Parallel()
-
-	err := folderNotEmptyError([]string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"})
-	assert.Equal(t,
-		"folder still contains files that are not on OneDrive (a.txt, b.txt, c.txt and 2 more); move or delete them to finish",
-		err.Error())
-	assert.Equal(t,
-		"folder still contains files that are not on OneDrive (a.txt); move or delete them to finish",
-		folderNotEmptyError([]string{"a.txt"}).Error())
 }
 
 // requireReconcileSkipped commits a scan of no rows with the skipped

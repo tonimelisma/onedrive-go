@@ -267,7 +267,7 @@ func parentRelPath(dbRelPath string) string {
 	return parent
 }
 
-func vanishedMountSkippedItem(dbRelPath string) SkippedItem {
+func VanishedMountSkippedItem(dbRelPath string) SkippedItem {
 	return SkippedItem{
 		Path:   dbRelPath,
 		Reason: IssueLocalMountMissing,
@@ -278,7 +278,7 @@ func vanishedMountSkippedItem(dbRelPath string) SkippedItem {
 	}
 }
 
-func mountBoundarySkippedItem(dbRelPath string) SkippedItem {
+func MountBoundarySkippedItem(dbRelPath string) SkippedItem {
 	return SkippedItem{
 		Path:   dbRelPath,
 		Reason: IssueLocalMountBoundary,

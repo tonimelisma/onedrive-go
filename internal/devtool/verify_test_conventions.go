@@ -15,9 +15,9 @@ import (
 	"unicode/utf8"
 )
 
-// testConventionViolation is a test the integration tier would never run.
-// The other test conventions (testify for failures, no wall-clock sleep) are
-// lint rules: forbidigo in .golangci.yml.
+// testConventionViolation is a test the integration tier would never run, or
+// a production use of a test seam. The other test conventions (testify for
+// failures, no wall-clock sleep) are lint rules: forbidigo in .golangci.yml.
 type testConventionViolation struct {
 	Path    string
 	Line    int
@@ -63,7 +63,7 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 			return nil
 		}
 
-		if !strings.HasSuffix(path, "_test.go") {
+		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 
@@ -73,11 +73,19 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 		}
 		rel = filepath.ToSlash(rel)
 
+		isTest := strings.HasSuffix(path, "_test.go")
+		if !isTest && isTestSeamHelperPath(rel) {
+			return nil
+		}
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if parseErr != nil {
 			return fmt.Errorf("parse %s: %w", rel, parseErr)
 		}
-		violations = append(violations, integrationTestNameViolations(fset, rel, file)...)
+		if isTest {
+			violations = append(violations, integrationTestNameViolations(fset, rel, file)...)
+		} else {
+			violations = append(violations, testSeamUseViolations(fset, rel, file)...)
+		}
 
 		return nil
 	})
@@ -119,6 +127,54 @@ func integrationTestNameViolations(fset *token.FileSet, rel string, file *ast.Fi
 				name, integrationBuildTag, integrationTestPrefix, integrationTestPrefix),
 		})
 	}
+
+	return violations
+}
+
+// testSeamSuffix ends the name of a test seam: a production function that
+// exists so the tests of another package can reach state they could not
+// reach otherwise (NewBaselineForTest). An export_test.go file cannot serve
+// them, because only its own package's tests see it.
+const testSeamSuffix = "ForTest"
+
+// isTestSeamHelperPath reports whether rel is a file of a package that holds
+// shared test support code, which may use a test seam like a test file.
+func isTestSeamHelperPath(rel string) bool {
+	for _, dir := range []string{"internal/sync/internal/syncfixture/", "internal/sync/internal/syncstoretest/"} {
+		if strings.HasPrefix(rel, dir) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// testSeamUseViolations holds every use of a test seam in a production file:
+// declaring one there is how a seam exists, calling one is production code
+// depending on a test hook.
+func testSeamUseViolations(fset *token.FileSet, rel string, file *ast.File) []testConventionViolation {
+	declared := make(map[*ast.Ident]bool)
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			declared[fn.Name] = true
+		}
+	}
+
+	var violations []testConventionViolation
+	ast.Inspect(file, func(node ast.Node) bool {
+		ident, ok := node.(*ast.Ident)
+		if !ok || declared[ident] || ident.Name == testSeamSuffix || !strings.HasSuffix(ident.Name, testSeamSuffix) {
+			return true
+		}
+		violations = append(violations, testConventionViolation{
+			Path: rel,
+			Line: fset.Position(ident.Pos()).Line,
+			Message: fmt.Sprintf("%s is a test seam (...%s): only test files and the sync test-helper "+
+				"packages may use it", ident.Name, testSeamSuffix),
+		})
+
+		return true
+	})
 
 	return violations
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
-	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Scenarios on the real filesystem with names whose bytes are in Unicode NFD
@@ -25,40 +23,6 @@ import (
 // fails with ENOENT, so every operation on an existing entry has to find the
 // spelling on disk. The emulated case-insensitive volume (internal/synctest)
 // folds the two forms like macOS does and could not catch this.
-
-// darwinGOOS is runtime.GOOS on macOS.
-const darwinGOOS = "darwin"
-
-const (
-	// nfdCafe is "café" spelled as e + U+0301 COMBINING ACUTE ACCENT.
-	nfdCafe = "café"
-	// nfcCafe is the same name, precomposed (U+00E9).
-	nfcCafe = "café"
-)
-
-// skipUnlessByteExactNames skips on macOS, whose volumes resolve either
-// spelling to the same entry, so the scenario's premise does not hold.
-func skipUnlessByteExactNames(t *testing.T) {
-	t.Helper()
-
-	if runtime.GOOS == darwinGOOS {
-		t.Skip("macOS volumes are normalization-insensitive; both spellings name one entry")
-	}
-}
-
-// localNames lists the raw names in dir, so a test sees the spelling on disk.
-func localNames(t *testing.T, dir string) []string {
-	t.Helper()
-
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		names = append(names, entry.Name())
-	}
-
-	return names
-}
 
 // syncedNFDFileHarness syncs a local corpus/<NFD café> nfd.txt to an empty
 // fake OneDrive and returns the harness once the upload has converged.
@@ -265,52 +229,6 @@ func TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth(t *testing.T) {
 	assertNFDConverged(t, h)
 }
 
-// Validates: R-2.13.2
-//
-// Watch-mode re-checks look an NFD-named file up by its spelling on disk: a
-// delete event for it while it still exists (an atomic save) is not a
-// delete, and its synced path is not gone.
-func TestWatchRechecks_FindTheNFDNamedLocalFile(t *testing.T) {
-	t.Parallel()
-	skipUnlessByteExactNames(t)
-
-	syncRoot := t.TempDir()
-	writeLocalFile(t, syncRoot, filepath.Join(nfdCafe+" dir", nfdCafe+".txt"), "x")
-	tree, err := synctree.Open(syncRoot)
-	require.NoError(t, err)
-	stored := nfcCafe + " dir/" + nfcCafe + ".txt"
-	fsPath := filepath.Join(syncRoot, nfdCafe+" dir", nfdCafe+".txt")
-
-	assert.True(t, localPathStillPresent(tree, stored, fsPath), "the event's file still exists")
-	assert.False(t, syncedPathGone(tree, stored), "the synced file is still there")
-
-	require.NoError(t, os.Remove(fsPath))
-	assert.False(t, localPathStillPresent(tree, stored, fsPath))
-	assert.True(t, syncedPathGone(tree, stored))
-}
-
-// Validates: R-2.13.2, R-2.8.13
-//
-// A full scan's rows carry the stored NFC path; the watch on an NFD-named
-// folder is added on its spelling on disk. Adding the NFC spelling failed
-// with ENOENT on every scan and left the folder unwatched.
-func TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder(t *testing.T) {
-	t.Parallel()
-	skipUnlessByteExactNames(t)
-
-	dir := t.TempDir()
-	onDisk := filepath.Join(dir, nfdCafe+" dir")
-	require.NoError(t, os.Mkdir(onDisk, 0o700))
-	watcher := newAddErrWatcher(nil, nil)
-	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	obs.activeWatcher = watcher
-
-	obs.rewatchUnwatchedDirectories(mustOpenSyncTree(t, dir), []LocalStateRow{{Path: nfcCafe + " dir", ItemType: ItemTypeFolder}})
-
-	assert.Contains(t, watcher.addedPaths(), onDisk)
-	assert.NotContains(t, watcher.addedPaths(), filepath.Join(dir, nfcCafe+" dir"))
-}
-
 // Validates: R-2.13.2, R-2.10.61
 //
 // The local permission probe inspects an NFD-named folder by its spelling on
@@ -460,7 +378,7 @@ func handleTwinDelete(t *testing.T, h *syncHarness) []LocalObservation {
 	require.NoError(t, err)
 	obs := NewLocalObserver(bl, h.eng.logger, 0)
 	obs.PendingTimers = make(map[string]SyncTimer)
-	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
+	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 

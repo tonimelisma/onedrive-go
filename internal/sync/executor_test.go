@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +22,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
-	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
 const (
@@ -34,74 +32,6 @@ const (
 // ---------------------------------------------------------------------------
 // Mock types (prefixed to avoid collision with other test files)
 // ---------------------------------------------------------------------------
-
-type executorMockItemClient = testMockItemClient
-
-type executorMockDownloader struct {
-	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
-}
-
-func (m *executorMockDownloader) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
-	if m.downloadFn != nil {
-		return m.downloadFn(ctx, driveID, itemID, w)
-	}
-
-	return 0, fmt.Errorf("Download not mocked")
-}
-
-type executorMockUploader struct {
-	// rawResponse returns uploadFn's item as is instead of a faithful one,
-	// to model a server that stored something other than what was sent.
-	rawResponse    bool
-	uploadFn       func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
-	uploadToItemFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
-}
-
-func (m *executorMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
-	if m.uploadFn != nil && m.rawResponse {
-		return m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
-	}
-	if m.uploadFn != nil {
-		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
-	}
-
-	return nil, fmt.Errorf("Upload not mocked")
-}
-
-func (m *executorMockUploader) UploadToItem(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
-	if m.uploadToItemFn != nil {
-		return faithfulUploadResult(content, size)(m.uploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress))
-	}
-	if m.uploadFn != nil {
-		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, "", "", content, size, mtime, progress))
-	}
-
-	return nil, fmt.Errorf("UploadToItem not mocked")
-}
-
-// faithfulUploadResult makes a mocked upload answer like a server that
-// stored exactly the bytes it was sent: the returned item carries their size
-// and QuickXorHash, as driveops verifies the stored item against them.
-func faithfulUploadResult(content io.ReaderAt, size int64) func(*graph.Item, error) (*graph.Item, error) {
-	return func(item *graph.Item, err error) (*graph.Item, error) {
-		if err != nil || item == nil {
-			return item, err
-		}
-
-		data := make([]byte, size)
-		if _, readErr := content.ReadAt(data, 0); readErr != nil && !errors.Is(readErr, io.EOF) {
-			return nil, fmt.Errorf("reading mocked upload content: %w", readErr)
-		}
-
-		h := quickxorhash.New()
-		h.Write(data)
-		stored := *item
-		stored.Size = size
-		stored.QuickXorHash = base64.StdEncoding.EncodeToString(h.Sum(nil))
-
-		return &stored, nil
-	}
-}
 
 type executorPathConvergenceStub struct {
 	waitItem                 *graph.Item
@@ -169,34 +99,12 @@ func newTestExecutorConfigWithPathConvergence(
 	return cfg, syncRoot
 }
 
-func writeExecTestFile(t *testing.T, dir, relPath, content string) string {
-	t.Helper()
-
-	absPath := filepath.Join(dir, relPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o700))
-	require.NoError(t, os.WriteFile(absPath, []byte(content), 0o600))
-
-	return absPath
-}
-
-func requireOutcomeSuccess(t *testing.T, o *ActionOutcome) {
-	t.Helper()
-
-	require.True(t, o.Success, "expected success but got error: %v", o.Error)
-}
-
-func requireOutcomeFailure(t *testing.T, o *ActionOutcome) {
-	t.Helper()
-
-	require.False(t, o.Success, "expected failure but got success")
-}
-
 func TestNewExecutorConfig_AllowsNilPathConvergence(t *testing.T) {
 	t.Parallel()
 
 	cfg, _ := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, &executorMockUploader{})
 
-	require.Nil(t, cfg.pathConvergence)
+	require.Nil(t, cfg.PathConvergenceForTest())
 }
 
 // ---------------------------------------------------------------------------
@@ -787,7 +695,7 @@ func TestExecutor_RemoteMove_UsesConditionalETagFromPreflight(t *testing.T) {
 		},
 		moveItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName, ifMatch string) (*graph.Item, error) {
 			assert.Equal(t, "item1", itemID)
-			assert.Equal(t, graphRootID, newParentID)
+			assert.Equal(t, GraphRootID, newParentID)
 			assert.Equal(t, "renamed.txt", newName)
 			assert.Equal(t, `"etag-current"`, ifMatch)
 			return &graph.Item{ID: "item1", ETag: `"etag-next"`}, nil
@@ -1241,43 +1149,6 @@ func TestExecutor_Download_HashMismatch_Retries(t *testing.T) {
 	assert.Equal(t, execHelloWorldContent, string(data))
 }
 
-// Validates: R-5.5.1, R-5.8.2
-func TestExecutor_Download_HashMismatch_FailsWithoutWritingTarget(t *testing.T) {
-	t.Parallel()
-
-	callCount := 0
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
-			callCount++
-			// An error page served with status 200, every time.
-			n, err := w.Write([]byte(`<html>Service unavailable</html>`))
-			return int64(n), err
-		},
-	}
-
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
-
-	action := &Action{
-		Type:    ActionDownload,
-		Path:    "hash-reject.txt",
-		ItemID:  "item1",
-		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{Hash: "remote-hash", Size: 4096, Mtime: 1}},
-	}
-
-	o := e.ExecuteDownload(t.Context(), action)
-
-	// It used to be accepted after three attempts and renamed into place,
-	// with the local hash recorded as the remote one.
-	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, driveops.ErrDownloadIntegrity)
-	assert.Equal(t, 3, callCount, "1 initial + 2 retries")
-	assert.Equal(t, IssueDownloadIntegrity, issueTypeForResult(&ActionCompletion{Err: o.Error}))
-
-	assert.NoFileExists(t, filepath.Join(syncRoot, "hash-reject.txt"), "the error page is never renamed into place")
-}
-
 // Validates: R-5.8.2
 func TestExecutor_Download_DeterministicTransformRecordsRemoteHash(t *testing.T) {
 	t.Parallel()
@@ -1375,37 +1246,6 @@ func TestExecutor_Upload_SimpleSuccess(t *testing.T) {
 
 	assert.Equal(t, "uploaded1", o.ItemID)
 	assert.Equal(t, "root", o.ParentID)
-}
-
-// Validates: R-5.5.2, R-2.5.7
-func TestExecuteUpload_ResponseSizeMismatch_DoesNotCommitBaseline(t *testing.T) {
-	t.Parallel()
-
-	ul := &executorMockUploader{
-		rawResponse: true,
-		uploadFn: func(_ context.Context, _ driveid.ID, _, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			// A Personal-drive answer that stored 2 bytes of a 5-byte file
-			// and carries no hash: size is the only evidence, and it differs.
-			return &graph.Item{ID: "short", Name: name, Size: 2, ParentDriveType: "personal"}, nil
-		},
-	}
-
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, &executorMockDownloader{}, ul)
-	e := NewExecution(cfg, emptyBaseline())
-	writeExecTestFile(t, syncRoot, "short.txt", "hello")
-
-	o := e.ExecuteUpload(t.Context(), &Action{
-		Type:    ActionUpload,
-		Path:    "short.txt",
-		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Path: "short.txt"},
-	})
-
-	// Before: a success outcome recording local=5 bytes and remote=2 bytes
-	// as one converged baseline row, never differing from either half again.
-	requireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, driveops.ErrUploadVerificationFailed)
-	assert.Equal(t, IssueUploadVerification, issueTypeForResult(&ActionCompletion{Err: o.Error}))
 }
 
 func TestExecutor_Upload_APIError(t *testing.T) {
@@ -1979,7 +1819,7 @@ func TestExecutor_LocalDelete_HashMismatch_ReturnsStalePrecondition(t *testing.T
 	uploader := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadCalled = true
-			assert.Equal(t, graphRootID, parentID)
+			assert.Equal(t, GraphRootID, parentID)
 			assert.Equal(t, "exec-modified.txt", name)
 			return &graph.Item{ID: "uploaded-item", ETag: "etag1", QuickXorHash: "remote-hash"}, nil
 		},
@@ -2027,7 +1867,7 @@ func TestExecutor_LocalDelete_HashMismatch_DoesNotCreateConflictCopy(t *testing.
 	uploader := &executorMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadCalled = true
-			assert.Equal(t, graphRootID, parentID)
+			assert.Equal(t, GraphRootID, parentID)
 			assert.Equal(t, "exec-modified.txt", name)
 			return &graph.Item{ID: "uploaded-item", ETag: "etag1", QuickXorHash: "remote-hash"}, nil
 		},

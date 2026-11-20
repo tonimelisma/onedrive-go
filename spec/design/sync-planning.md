@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/planner.go, internal/sync/planner_dependencies.go, internal/sync/planner_actions.go, internal/sync/planner_kinds.go, internal/sync/planner_move_composition.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go
+GOVERNS: internal/sync/planner.go, internal/sync/planner_dependencies.go, internal/sync/planner_actions.go, internal/sync/planner_kinds.go, internal/sync/planner_move_composition.go, internal/sync/planner_delete_safety.go, internal/sync/planner_truth_overlay.go, internal/sync/planner_test_seams.go
 
 LAYER: 2
 

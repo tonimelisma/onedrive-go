@@ -541,7 +541,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 // baseline. A local delete's content check proved the file no longer holds
 // what the row records while its stat facts may all still match, and a row
 // without a change time is one the next scan reads instead of trusting
-// (canReuseBaselineHash). A path with no row is left alone.
+// (CanReuseBaselineHash). A path with no row is left alone.
 func (s *SyncStore) ForgetBaselineLocalCtime(ctx context.Context, path string) error {
 	if _, err := s.db.ExecContext(ctx, `UPDATE baseline SET local_ctime = 0 WHERE path = ?`, path); err != nil {
 		return fmt.Errorf("sync: forgetting the change time of %s: %w", path, err)

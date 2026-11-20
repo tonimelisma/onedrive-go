@@ -105,7 +105,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 		size, mtime, ctime, birth int64
 		device, inode             uint64
 	}
-	require.NoError(t, eng.baseline.rawDB().QueryRowContext(ctx,
+	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
 		`SELECT hash, size, mtime, ctime, local_birth_time, local_device, local_inode
 		FROM local_state WHERE path = ?`, fileName).Scan(
 		&observed.hash, &observed.size, &observed.mtime, &observed.ctime, &observed.birth, &observed.device, &observed.inode))
@@ -137,7 +137,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
 	t.Parallel()
 
-	err := uploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
+	err := UploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
 
 	// Another writer changed the item mid-upload: re-observe and replan,
 	// never upload over the change.

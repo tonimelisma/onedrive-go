@@ -24,7 +24,7 @@ import (
 type SyncClock interface {
 	Now() time.Time
 	AfterFunc(delay time.Duration, fn func()) SyncTimer
-	NewTicker(interval time.Duration) syncTicker
+	NewTicker(interval time.Duration) SyncTicker
 	Sleep(ctx context.Context, delay time.Duration) error
 	Jitter(maxDelay time.Duration) time.Duration
 }
@@ -130,7 +130,7 @@ func (p *TimerPanics) record(err error) {
 	p.cancel()
 }
 
-func (RealClock) NewTicker(interval time.Duration) syncTicker {
+func (RealClock) NewTicker(interval time.Duration) SyncTicker {
 	return realNewTicker(interval)
 }
 
@@ -149,9 +149,9 @@ type SyncTimer interface {
 	Stop() bool
 }
 
-// syncTicker is the engine-owned ticker boundary used by bootstrap and watch
+// SyncTicker is the engine-owned ticker boundary used by bootstrap and watch
 // loops. It keeps ticker ownership explicit and injectable.
-type syncTicker interface {
+type SyncTicker interface {
 	Chan() <-chan time.Time
 	Stop()
 }
@@ -188,7 +188,7 @@ func (t *realSyncTicker) Stop() {
 	t.ticker.Stop()
 }
 
-func realNewTicker(interval time.Duration) syncTicker {
+func realNewTicker(interval time.Duration) SyncTicker {
 	if interval <= 0 {
 		return nil
 	}
@@ -220,7 +220,7 @@ func realJitter(maxDelay time.Duration) time.Duration {
 	return rand.N(maxDelay) //nolint:gosec // non-cryptographic jitter for I/O scheduling
 }
 
-func TickerChan(ticker syncTicker) <-chan time.Time {
+func TickerChan(ticker SyncTicker) <-chan time.Time {
 	if ticker == nil {
 		return nil
 	}
@@ -228,7 +228,7 @@ func TickerChan(ticker syncTicker) <-chan time.Time {
 	return ticker.Chan()
 }
 
-func StopTicker(ticker syncTicker) {
+func StopTicker(ticker SyncTicker) {
 	if ticker == nil {
 		return
 	}

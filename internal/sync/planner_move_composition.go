@@ -729,8 +729,8 @@ func (e *moveEmitter) resolvePending(order []string) {
 	}
 }
 
-// moveSwapInfix names the temporary path a parked item waits at.
-const moveSwapInfix = ".swap-"
+// MoveSwapInfix names the temporary path a parked item waits at.
+const MoveSwapInfix = ".swap-"
 
 // moveNameMaxBytes is the longest name a local filesystem stores (NAME_MAX).
 // A parking name cuts its stem to fit the infix: a swap of two names at the
@@ -925,7 +925,7 @@ func (e *moveEmitter) freeParkingPath(p string) string {
 	stem := strings.TrimSuffix(name, ext)
 	taken := e.takenPathsFolded()
 	for i := 1; i <= len(e.keys)+1; i++ {
-		suffix := moveSwapInfix + strconv.Itoa(i) + ext
+		suffix := MoveSwapInfix + strconv.Itoa(i) + ext
 		candidate := joinMovePath(dir, truncateNameBytes(stem, moveNameMaxBytes-len(suffix))+suffix)
 		if !taken[namekey.OfPath(candidate)] {
 			return candidate

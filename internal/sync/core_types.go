@@ -95,7 +95,7 @@ type BaselineEntry struct {
 
 // DirNameKey groups baseline entries by (directory, OneDrive namespace key of
 // the name) for O(1) sibling lookups under OneDrive's name equivalence. Used
-// by detectCaseCollisions to find collisions between new files and
+// by DetectCaseCollisions to find collisions between new files and
 // already-synced baseline entries.
 type DirNameKey struct {
 	Dir     string
@@ -159,7 +159,7 @@ func (b *Baseline) GetByID(itemID string) (*BaselineEntry, bool) {
 
 // GetCaseVariants returns all baseline entries in the same directory whose
 // name OneDrive treats as the same name (namekey: case, Unicode form,
-// ignored emoji). Used by detectCaseCollisions to find
+// ignored emoji). Used by DetectCaseCollisions to find
 // collisions between new files and already-synced baseline entries.
 // The caller must filter out exact path matches (same casing = not a collision).
 // Thread-safe: holds a read lock during access and returns a copy of the
@@ -344,8 +344,8 @@ type LocalState struct {
 type truthAvailability string
 
 const (
-	truthAvailabilityAvailable               truthAvailability = "available"
-	truthAvailabilityBlockedObservationIssue truthAvailability = "blocked_observation_issue"
+	TruthAvailabilityAvailable               truthAvailability = "available"
+	TruthAvailabilityBlockedObservationIssue truthAvailability = "blocked_observation_issue"
 )
 
 // pathTruthSource captures which durable authority proved that one side of
@@ -354,7 +354,7 @@ type pathTruthSource string
 
 const (
 	pathTruthSourceNone             pathTruthSource = ""
-	pathTruthSourceObservationIssue pathTruthSource = "observation_issue"
+	PathTruthSourceObservationIssue pathTruthSource = "observation_issue"
 )
 
 // pathTruthSideStatus is the raw current-truth availability status for one
@@ -368,7 +368,7 @@ type pathTruthSideStatus struct {
 }
 
 func (s pathTruthSideStatus) IsAvailable() bool {
-	return s.Availability == "" || s.Availability == truthAvailabilityAvailable
+	return s.Availability == "" || s.Availability == TruthAvailabilityAvailable
 }
 
 // PathTruthStatus carries the raw current-truth availability status for both

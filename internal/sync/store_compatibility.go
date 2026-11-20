@@ -25,7 +25,7 @@ const quickCheckMaxFindings = 5
 type stateStoreIncompatibleReason string
 
 const (
-	stateStoreIncompatibleReasonOpenFailed         stateStoreIncompatibleReason = "open_failed"
+	StateStoreIncompatibleReasonOpenFailed         stateStoreIncompatibleReason = "open_failed"
 	StateStoreIncompatibleReasonIncompatibleSchema stateStoreIncompatibleReason = "incompatible_schema"
 	StateStoreIncompatibleReasonCorrupt            stateStoreIncompatibleReason = "corrupt"
 )
@@ -66,7 +66,7 @@ func IsStateStoreIncompatible(err error) bool {
 
 func (r stateStoreIncompatibleReason) Description() string {
 	switch r {
-	case stateStoreIncompatibleReasonOpenFailed:
+	case StateStoreIncompatibleReasonOpenFailed:
 		return "its database could not be opened"
 	case StateStoreIncompatibleReasonIncompatibleSchema:
 		return "it was written by an incompatible version of onedrive-go"
@@ -77,15 +77,15 @@ func (r stateStoreIncompatibleReason) Description() string {
 	}
 }
 
-// openEngineSyncStore is the engine-owned compatibility boundary for existing
+// OpenEngineSyncStore is the engine-owned compatibility boundary for existing
 // state DBs. It never mutates or recreates durable state during startup:
 // missing DBs bootstrap normally via NewSyncStore, while unreadable or
 // incompatible existing DBs surface a typed store-incompatible error.
-func openEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
+func OpenEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*SyncStore, error) {
 	return OpenEngineSyncStoreWithDriver(ctx, dbPath, logger, SqliteDriverName)
 }
 
-// OpenEngineSyncStoreWithDriver is openEngineSyncStore through the named
+// OpenEngineSyncStoreWithDriver is OpenEngineSyncStore through the named
 // database/sql driver; tests open an engine's store through a fault-injecting
 // driver with it.
 func OpenEngineSyncStoreWithDriver(
@@ -119,7 +119,7 @@ func OpenEngineSyncStoreWithDriver(
 		return nil, err
 	}
 
-	reason := stateStoreIncompatibleReasonOpenFailed
+	reason := StateStoreIncompatibleReasonOpenFailed
 	switch {
 	case errors.Is(err, errIncompatibleSchema):
 		reason = StateStoreIncompatibleReasonIncompatibleSchema

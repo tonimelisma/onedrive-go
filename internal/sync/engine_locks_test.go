@@ -310,7 +310,7 @@ func TestEngineLocks_ReleasedInReverseOnlyAfterTheStoreCloses(t *testing.T) {
 	inputs.lockFlock = func(fd int, how int) error {
 		if how == syscall.LOCK_UN {
 			unlocked = append(unlocked, lockFileName(t, fd, names))
-			storeOpenAtUnlock = append(storeOpenAtUnlock, engine.baseline.rawDB().PingContext(context.Background()))
+			storeOpenAtUnlock = append(storeOpenAtUnlock, engine.baseline.RawDBForTest().PingContext(context.Background()))
 		}
 		return syscall.Flock(fd, how)
 	}

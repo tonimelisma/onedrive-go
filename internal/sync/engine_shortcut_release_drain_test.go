@@ -210,12 +210,12 @@ func TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook(t *testing
 			drain := newThreeFileRelease(t)
 			var trashed atomic.Int32
 			trashDir := drain.eng.trash.Dir()
-			drain.eng.execCfg.crashAt = func(point string) error {
+			drain.eng.execCfg.SetCrashHookForTest(func(point string) error {
 				if point == CrashPointLocalDeleteTrashed && trashed.Add(1) == tc.trashFailsAfter {
 					return os.Chmod(trashDir, 0o500) //nolint:gosec // the test makes the trash refuse new entries
 				}
 				return nil
-			}
+			})
 			t.Cleanup(func() {
 				assert.NoError(t, os.Chmod(trashDir, 0o700)) //nolint:gosec // and gives the trash back
 			})
@@ -378,13 +378,13 @@ func TestReleaseLocalTree_ARowWithoutAModificationTimeWaitsForTheNextDrain(t *te
 	t.Parallel()
 
 	remote, eng, syncRoot := newReleaseScenario(t, nil)
-	result, err := eng.baseline.rawDB().ExecContext(t.Context(),
+	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
 		`UPDATE baseline SET local_mtime = 0 WHERE path = ?`, releaseFileTop)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
 	require.Equal(t, int64(1), rows)
-	require.NoError(t, eng.baseline.reloadBaselineCache(t.Context()))
+	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 
 	report := &Report{Mode: SyncBidirectional}
 	require.NoError(t, eng.releaseLocalTree(t.Context(), report))
@@ -414,14 +414,14 @@ func TestReleaseLocalTree_ARestoreThatFailsStillPutsBackTheRestOfTheBatch(t *tes
 	rewriteBaselineLocalHash(t, eng, releaseFileA)
 	errRestore := errors.New("restore refused")
 	var commits atomic.Int32
-	eng.baseline.crashAt = func(point string) error {
+	eng.baseline.SetCrashHookForTest(func(point string) error {
 		// The five rows are forgotten first; the next commit restores the
 		// refused Docs/a.txt (Docs/sub/b.txt left before it).
 		if point == CrashPointCommitOutcome && commits.Add(1) == releaseSyncedRows+1 {
 			return errRestore
 		}
 		return nil
-	}
+	})
 
 	report := &Report{Mode: SyncBidirectional}
 	err := eng.releaseLocalTree(t.Context(), report)

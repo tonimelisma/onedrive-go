@@ -289,7 +289,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 		writeCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]SyncTimer),
-			HashRequests:  make(chan hashRequest, 10),
+			HashRequests:  make(chan HashRequest, 10),
 		},
 		clock: &observerTestClock{SyncClock: RealClock{}, afterFunc: RealClock{}.AfterFunc},
 	}
@@ -300,7 +300,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	// Call hashAndEmit with retries at the cap. Even though the file is
 	// stable (no ErrFileChangedDuringHash), this verifies the code path
 	// works correctly at the retry boundary.
-	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), hashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,
 		DbRelPath: "exhausted.txt",
 		Retries:   maxCoalesceRetries,
@@ -334,7 +334,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 		writeCoalesceCooldown: 100 * time.Millisecond,
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]SyncTimer),
-			HashRequests:  make(chan hashRequest, 10),
+			HashRequests:  make(chan HashRequest, 10),
 		},
 		clock: &observerTestClock{SyncClock: RealClock{}, afterFunc: RealClock{}.AfterFunc},
 	}
@@ -342,7 +342,7 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	batches := localBatches(obs, 5)
 	ctx := t.Context()
 
-	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), hashRequest{
+	obs.HashAndEmit(ctx, mustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,
 		DbRelPath: "noop.txt",
 	})
@@ -434,7 +434,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 				},
 			},
 			PendingTimers: make(map[string]SyncTimer),
-			HashRequests:  make(chan hashRequest, hashRequestBufSize),
+			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
 		writeCoalesceCooldown: 50 * time.Millisecond,
 		clock: &observerTestClock{

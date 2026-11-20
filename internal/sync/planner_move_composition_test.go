@@ -128,7 +128,7 @@ func TestComposeMoves_ParkingNameFitsTheNameLimit(t *testing.T) {
 		assert.LessOrEqual(t, len(move.newPath), 255, move.newPath)
 		assert.True(t, utf8.ValidString(move.newPath), move.newPath)
 	}
-	assert.Contains(t, c.moves[0].newPath, moveSwapInfix)
+	assert.Contains(t, c.moves[0].newPath, MoveSwapInfix)
 }
 
 // Validates: R-2.17.6

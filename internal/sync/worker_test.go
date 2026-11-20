@@ -26,32 +26,6 @@ import (
 // Worker pool mock types (prefixed to avoid collision with executor_test.go)
 // ---------------------------------------------------------------------------
 
-type workerMockItemClient = testMockItemClient
-
-type workerMockDownloader struct {
-	downloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
-}
-
-func (m *workerMockDownloader) Download(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
-	if m.downloadFn != nil {
-		return m.downloadFn(ctx, driveID, itemID, w)
-	}
-
-	return 0, fmt.Errorf("Download not mocked")
-}
-
-type workerMockUploader struct {
-	uploadFn func(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error)
-}
-
-func (m *workerMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
-	if m.uploadFn != nil {
-		return faithfulUploadResult(content, size)(m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
-	}
-
-	return nil, fmt.Errorf("Upload not mocked")
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -858,19 +832,6 @@ func TestExtractHTTPStatus_Nil(t *testing.T) {
 	assert.Equal(t, 0, ExtractHTTPStatus(nil))
 }
 
-func TestExtractRetryAfter_GraphError(t *testing.T) {
-	t.Parallel()
-
-	ge := &graph.GraphError{StatusCode: 429, RetryAfter: 30 * time.Second}
-	assert.Equal(t, 30*time.Second, extractRetryAfter(ge))
-}
-
-func TestExtractRetryAfter_Nil(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, time.Duration(0), extractRetryAfter(nil))
-}
-
 // ---------------------------------------------------------------------------
 // Engine-owned counters (R-6.8.9)
 // ---------------------------------------------------------------------------
@@ -949,15 +910,6 @@ func TestEngineOwnsCounters(t *testing.T) {
 	assert.Equal(t, int32(1), failed.Load(), "engine should count 1 failure")
 }
 
-// TestExtractRetryAfter_Wrapped verifies that ExtractRetryAfter works with wrapped errors.
-func TestExtractRetryAfter_Wrapped(t *testing.T) {
-	t.Parallel()
-
-	ge := &graph.GraphError{StatusCode: 503, RetryAfter: 120 * time.Second}
-	wrapped := fmt.Errorf("request failed: %w", ge)
-	assert.Equal(t, 120*time.Second, extractRetryAfter(wrapped))
-}
-
 // syncedBaselineFor describes a file on disk as it was at its last sync, so
 // local-delete fixtures carry the baseline evidence S4 requires before
 // deleting. Fixtures that omit it are asking the executor to delete content
@@ -990,17 +942,17 @@ func TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation(t *testing.T) {
 	poolCtx, cancelPool := context.WithCancel(t.Context())
 	defer cancelPool()
 
-	cfg.items = &workerMockItemClient{
+	cfg.SetItemsForTest(&workerMockItemClient{
 		createFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
 			// The transfer succeeds, then shutdown arrives before the worker
 			// commits the outcome.
 			cancelPool()
 			return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
 		},
-	}
+	})
 
 	pool := NewWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), 1)
-	pool.executeAction(poolCtx, &TrackedAction{
+	pool.ExecuteActionForTest(poolCtx, &TrackedAction{
 		ID: 1,
 		Action: Action{
 			Type:       ActionFolderCreate,

@@ -395,20 +395,20 @@ func TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries(t *
 	}{
 		{
 			name: "409 on a create resolved as stale",
-			err: uploadTransferError(&graph.GraphError{
+			err: UploadTransferError(&graph.GraphError{
 				StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict,
 			}),
 		},
 		{
 			name: "409 resourceModified on a create",
-			err: uploadTransferError(&graph.GraphError{
-				StatusCode: http.StatusConflict, Code: graphCodeResourceModified, Err: graph.ErrConflict,
+			err: UploadTransferError(&graph.GraphError{
+				StatusCode: http.StatusConflict, Code: GraphCodeResourceModified, Err: graph.ErrConflict,
 			}),
 		},
 		{
 			name: "412 on a conditional overwrite",
-			err: uploadTransferError(&graph.GraphError{
-				StatusCode: http.StatusPreconditionFailed, Code: graphCodeResourceModified, Err: graph.ErrPreconditionFailed,
+			err: UploadTransferError(&graph.GraphError{
+				StatusCode: http.StatusPreconditionFailed, Code: GraphCodeResourceModified, Err: graph.ErrPreconditionFailed,
 			}),
 		},
 		{name: "401", err: staleAround(&graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrUnauthorized})},
@@ -712,5 +712,27 @@ func TestClassifyResult_MalwareIsPerFileNotReadDenied(t *testing.T) {
 			assert.True(t, got.ScopeEvidence.IsZero())
 			assert.False(t, shouldHandleRemote403Permission(completion), "no permission probe for blocked content")
 		})
+	}
+}
+
+// Validates: R-6.2.16
+//
+// The engine's decisions on the action type panic with OutsideTheEnum on a
+// value outside the enum, like the vocabulary's
+// (TestActionTypeDecisions_PanicOnATypeOutsideTheEnum): no activity, no
+// capability.
+func TestEngineActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
+	t.Parallel()
+
+	const unlisted = ActionCleanup + 1
+	completion := &ActionCompletion{ActionType: unlisted, Path: "docs/a.txt"}
+
+	decisions := map[string]func(){
+		"activityKindFor":                     func() { activityKindFor(unlisted) },
+		"effectiveRemotePermissionCapability": func() { effectiveRemotePermissionCapability(completion) },
+		"effectiveLocalPermissionCapability":  func() { effectiveLocalPermissionCapability(completion) },
+	}
+	for name, decide := range decisions {
+		assert.PanicsWithValue(t, OutsideTheEnum(unlisted), decide, name)
 	}
 }

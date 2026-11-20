@@ -208,7 +208,7 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 		HTTPStatus: 503,
 		ErrMsg:     "service unavailable",
 	})
-	require.Contains(t, rt.scopes.state.windows, SKService())
+	require.True(t, rt.scopes.state.HasWindowForTest(SKService()))
 
 	publication := rt.sched.graph.Add(&Action{
 		Type:    ActionCleanup,
@@ -221,7 +221,7 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
-	assert.Contains(t, rt.scopes.state.windows, SKService(),
+	assert.True(t, rt.scopes.state.HasWindowForTest(SKService()),
 		"publication-only successes must not clear unrelated scope failure windows")
 }
 

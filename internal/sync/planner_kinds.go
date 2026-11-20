@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// errUnclassifiedPlan is the class of every unclassifiedPlanError.
-var errUnclassifiedPlan = errors.New("sync: planner state is outside the decision table")
+// ErrUnclassifiedPlan is the class of every unclassifiedPlanError.
+var ErrUnclassifiedPlan = errors.New("sync: planner state is outside the decision table")
 
 // unclassifiedPlanError is a plan that met a row the decision table does not
 // classify (R-6.2.16). A path planned as nothing to do silently stops
@@ -28,7 +28,7 @@ type unclassifiedPlanError struct {
 
 func (e *unclassifiedPlanError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s: %q (comparison %s, reconciliation %s", errUnclassifiedPlan.Error(), e.Path, e.Comparison, e.Reconciliation)
+	fmt.Fprintf(&b, "%s: %q (comparison %s, reconciliation %s", ErrUnclassifiedPlan.Error(), e.Path, e.Comparison, e.Reconciliation)
 	for i, input := range e.Inputs {
 		separator := " "
 		if i == 0 {
@@ -48,7 +48,7 @@ func (e *unclassifiedPlanError) Error() string {
 }
 
 func (e *unclassifiedPlanError) Unwrap() error {
-	return errUnclassifiedPlan
+	return ErrUnclassifiedPlan
 }
 
 func unclassifiedRowError(rec *SQLiteReconciliationRow) *unclassifiedPlanError {

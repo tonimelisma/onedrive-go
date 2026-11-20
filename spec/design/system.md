@@ -325,6 +325,11 @@ Static verification is a first-class architectural constraint, not a best-effort
   instead of never running. The tag counts on either side of `&&` and `||`
   and not under a negation: a `!integration` file is built exactly when the
   tier is off (`TestFileBuildConstraintNames_FollowsNegationAndBothOperands`).
+  The same check refuses a production use of a test seam: a function whose
+  name ends in `ForTest` exists so the tests of another package can reach
+  state they could not reach otherwise (`export_test.go` serves only its own
+  package's tests), so only test files and the sync test-helper packages may
+  use one (`TestRunTestConventionsRefusesAProductionUseOfATestSeam`).
 - A test's wait for an event that must come (a debug event, an observer
   batch, a pass result, a goroutine's return) is bounded by one named wait,
   long enough for a loaded two-core host under the race detector: `eventWait`

@@ -7,30 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func comparisonKindsByPath(rows []SQLiteComparisonRow) map[string]string {
-	out := make(map[string]string, len(rows))
-	for i := range rows {
-		out[rows[i].Path] = rows[i].ComparisonKind.String()
-	}
-
-	return out
-}
-
-func reconciliationKindsByPath(rows []SQLiteReconciliationRow) map[string]string {
-	out := make(map[string]string, len(rows))
-	for i := range rows {
-		out[rows[i].Path] = rows[i].ReconciliationKind.String()
-	}
-
-	return out
-}
-
 // Validates: R-2.1.3, R-2.1.4
 func TestQueryReconciliationState_BaselineAbsentFromBothRemovesBaseline(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	_, err := store.rawDB().ExecContext(t.Context(), `
+	_, err := store.RawDBForTest().ExecContext(t.Context(), `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-1', 'gone.txt', 'file', 'hash-a', 'hash-a', 10, 10, 100, 100)`)
 	require.NoError(t, err)
@@ -51,7 +33,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 'old', 1, 1, 1, 1, 'etag-old'),
@@ -61,7 +43,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 			('item-redownload', 'redownload.txt', 'file', 'same', 'same', 1, 1, 1, 1, 'etag-same')`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES
 			('upload.txt', 'file', 'new-local', 2, 2),
@@ -70,7 +52,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 			('new-local.txt', 'file', 'local-create', 3, 3)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 1, 1, 'etag-old'),
@@ -100,21 +82,21 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES
 			('item-deleted-locally', 'deleted-locally', 'folder'),
 			('item-delete-local', 'delete-local', 'folder')`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type)
 		VALUES
 			('delete-local', 'folder'),
 			('new-local-folder', 'folder')`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type)
 		VALUES
 			('item-deleted-locally', 'deleted-locally', 'folder'),
@@ -141,7 +123,7 @@ func TestQueryReconciliationState_FolderMetadataChurnIsNoop(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_size, remote_size, local_mtime, remote_mtime, etag
 		)
@@ -149,12 +131,12 @@ func TestQueryReconciliationState_FolderMetadataChurnIsNoop(t *testing.T) {
 			('item-folder', 'stable-folder', 'folder', 0, 0, 100, 100, 'etag-old')`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, size, mtime)
 		VALUES ('stable-folder', 'folder', 4096, 200)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, size, mtime, etag)
 		VALUES ('item-folder', 'stable-folder', 'folder', 1234, 300, 'etag-new')`)
 	require.NoError(t, err)
@@ -175,21 +157,21 @@ func TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity(t *testi
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_device, local_inode, local_has_identity
 		)
 		VALUES ('item-folder', 'Projects', 'folder', 11, 22, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (
 			path, item_type, local_device, local_inode, local_has_identity
 		)
 		VALUES ('Renamed Projects', 'folder', 11, 22, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type)
 		VALUES ('item-folder', 'Projects', 'folder')`)
 	require.NoError(t, err)
@@ -213,7 +195,7 @@ func TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove(
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -226,7 +208,7 @@ func TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove(
 	// copy appeared under a different inode. Neither proves a move: the
 	// identity match lacks content corroboration, and a baseline row that has
 	// identity never falls back to hash pairing.
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (
 			path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
 		)
@@ -235,7 +217,7 @@ func TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove(
 			('same-hash-copy.txt', 'file', 'same-hash', 12, 1, 70, 80, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-file', 'old.txt', 'file', 'same-hash', 12, 1)`)
 	require.NoError(t, err)
@@ -281,7 +263,7 @@ func TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration(t *t
 			store := newTestStore(t)
 			ctx := t.Context()
 
-			_, err := store.rawDB().ExecContext(ctx, `
+			_, err := store.RawDBForTest().ExecContext(ctx, `
 				INSERT INTO baseline (
 					item_id, path, item_type, local_hash, remote_hash,
 					local_size, remote_size, local_mtime, remote_mtime,
@@ -291,7 +273,7 @@ func TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration(t *t
 				baseSize, baseSize, baseMtime, baseMtime)
 			require.NoError(t, err)
 
-			_, err = store.rawDB().ExecContext(ctx, `
+			_, err = store.RawDBForTest().ExecContext(ctx, `
 				INSERT INTO local_state (
 					path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
 				)
@@ -299,7 +281,7 @@ func TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration(t *t
 				tt.hash, tt.size, tt.mtime)
 			require.NoError(t, err)
 
-			_, err = store.rawDB().ExecContext(ctx, `
+			_, err = store.RawDBForTest().ExecContext(ctx, `
 				INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 				VALUES ('item-swap', 'vim.swp', 'file', 'base-hash', ?, ?)`,
 				baseSize, baseMtime)
@@ -334,7 +316,7 @@ func TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit(t *testing
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -347,7 +329,7 @@ func TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit(t *testing
 			('item-dir', 'restored-dir', 'folder', NULL, NULL, NULL, NULL, NULL, NULL, 5, 9, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (
 			path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity
 		)
@@ -358,7 +340,7 @@ func TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit(t *testing
 			('restored-dir', 'folder', NULL, NULL, NULL, 50, 63, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-same', 'same-content.txt', 'file', 'h', 12, 1),
@@ -399,14 +381,14 @@ func TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged(t *testin
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-lost', 'lost-hash.txt', 'file', 'h', 'h', 7, 7, 1, 1, 'e1'),
 			('item-resized', 'resized.txt', 'file', 'h', 'h', 7, 7, 1, 1, 'e1')`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES
 			('lost-hash.txt', 'file', 'h', 7, 1),
@@ -414,7 +396,7 @@ func TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged(t *testin
 			('empty.txt', 'file', 'AAAAAAAAAAAAAAAAAAAAAAAAAAA=', 0, 5)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES
 			('item-lost', 'lost-hash.txt', 'file', NULL, 7, 9, 'e1'),
@@ -451,12 +433,12 @@ func TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedL
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES ('item-old', 'shared', 'folder')`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type)
 		VALUES ('item-new', 'shared', 'folder')`)
 	require.NoError(t, err)
@@ -478,7 +460,7 @@ func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *tes
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -491,7 +473,7 @@ func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *tes
 			('item-dir', 'dir', 'folder', NULL, NULL, NULL, NULL, NULL, NULL, 9, 4, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, hash, size, mtime, local_device, local_inode, local_has_identity)
 		VALUES
 			('linked.txt', 'file', 'h1', 3, 1, 9, 1, 1),
@@ -504,7 +486,7 @@ func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *tes
 			('renamed-dir', 'folder', NULL, NULL, NULL, 9, 4, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-linked', 'linked.txt', 'file', 'h1', 3, 1),
@@ -567,7 +549,7 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 				if itemType == StrFile {
 					hash = "same-hash"
 				}
-				_, err := store.rawDB().ExecContext(ctx, `
+				_, err := store.RawDBForTest().ExecContext(ctx, `
 					INSERT INTO baseline (
 						item_id, path, item_type, local_hash, remote_hash,
 						local_size, remote_size, local_mtime, remote_mtime,
@@ -576,14 +558,14 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 					VALUES ('item-old', 'old', ?, ?, ?, 4, 4, 1, 1, 5, 6, ?, 1)`,
 					itemType, hash, hash, tc.baselineBirth)
 				require.NoError(t, err)
-				_, err = store.rawDB().ExecContext(ctx, `
+				_, err = store.RawDBForTest().ExecContext(ctx, `
 					INSERT INTO local_state (
 						path, item_type, hash, size, mtime, local_device, local_inode, local_birth_time, local_has_identity
 					)
 					VALUES ('new', ?, ?, 4, 1, 5, 6, ?, 1)`,
 					itemType, hash, tc.localBirth)
 				require.NoError(t, err)
-				_, err = store.rawDB().ExecContext(ctx, `
+				_, err = store.RawDBForTest().ExecContext(ctx, `
 					INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 					VALUES ('item-old', 'old', ?, ?, 4, 1)`,
 					itemType, hash)
@@ -638,7 +620,7 @@ func TestQueryReconciliationState_BirthTimeAtTheSamePath(t *testing.T) {
 
 			store := newTestStore(t)
 			ctx := t.Context()
-			_, err := store.rawDB().ExecContext(ctx, `
+			_, err := store.RawDBForTest().ExecContext(ctx, `
 				INSERT INTO baseline (
 					item_id, path, item_type, local_hash, remote_hash,
 					local_size, remote_size, local_mtime, remote_mtime,
@@ -646,13 +628,13 @@ func TestQueryReconciliationState_BirthTimeAtTheSamePath(t *testing.T) {
 				)
 				VALUES ('item-a', 'a.txt', 'file', 'h', 'h', 4, 4, 1, 1, 5, 6, ?, 1)`, tc.baselineBirth)
 			require.NoError(t, err)
-			_, err = store.rawDB().ExecContext(ctx, `
+			_, err = store.RawDBForTest().ExecContext(ctx, `
 				INSERT INTO local_state (
 					path, item_type, hash, size, mtime, local_device, local_inode, local_birth_time, local_has_identity
 				)
 				VALUES ('a.txt', 'file', 'h', 4, 1, 5, 6, ?, 1)`, tc.localBirth)
 			require.NoError(t, err)
-			_, err = store.rawDB().ExecContext(ctx, `
+			_, err = store.RawDBForTest().ExecContext(ctx, `
 				INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 				VALUES ('item-a', 'a.txt', 'file', 'h', 4, 1)`)
 			require.NoError(t, err)
@@ -695,15 +677,15 @@ func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpda
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	_, err := store.rawDB().ExecContext(ctx, `
+	_, err := store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-a', 'a.txt', 'file', 'served', 'reported', 4, 8, 1, 1, 'etag-a')`)
 	require.NoError(t, err)
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES ('a.txt', 'file', 'reported', 8, 2)`)
 	require.NoError(t, err)
-	_, err = store.rawDB().ExecContext(ctx, `
+	_, err = store.RawDBForTest().ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-a', 'a.txt', 'file', 'reported', 8, 1, 'etag-a')`)
 	require.NoError(t, err)
@@ -711,7 +693,7 @@ func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpda
 	comparisonRows, err := store.QueryComparisonState(ctx)
 	require.NoError(t, err)
 	require.Len(t, comparisonRows, 1)
-	assert.Equal(t, comparisonEqualAgain, comparisonRows[0].ComparisonKind)
+	assert.Equal(t, ComparisonEqualAgain, comparisonRows[0].ComparisonKind)
 	assert.True(t, comparisonRows[0].LocalChanged)
 	assert.False(t, comparisonRows[0].RemoteChanged)
 	assert.True(t, comparisonRows[0].CurrentEqual)

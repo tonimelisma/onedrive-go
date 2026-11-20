@@ -192,7 +192,7 @@ func TestChaosGraph_SessionRouteDrawsFaults(t *testing.T) {
 	var seen chaosSessionOutcomes
 	for i := range chaosSessionAttempts {
 		name := fmt.Sprintf("big-%d.bin", i)
-		session, err := client.CreateUploadSession(t.Context(), remote.driveID, graphRootID, name, int64(len(chaosSessionContent)), time.Time{})
+		session, err := client.CreateUploadSession(t.Context(), remote.driveID, GraphRootID, name, int64(len(chaosSessionContent)), time.Time{})
 		if err != nil {
 			seen.createFailed(t, remote, name, err)
 			continue
@@ -316,7 +316,7 @@ func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T
 	for i := range attempts {
 		name := fmt.Sprintf("part-%d.bin", i)
 		c.startStep(true)
-		session, err := client.CreateUploadSession(t.Context(), remote.driveID, graphRootID, name, size, time.Time{})
+		session, err := client.CreateUploadSession(t.Context(), remote.driveID, GraphRootID, name, size, time.Time{})
 		if err != nil {
 			continue
 		}

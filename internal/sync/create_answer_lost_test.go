@@ -70,7 +70,7 @@ func TestUploadNewFile_CreateWhoseAnswerWasLostIsFinishedByTheRetry(t *testing.T
 			action := &Action{Type: ActionUpload, Path: "doc.txt"}
 
 			loseCreateAnswers(remote, true)
-			_, lostErr := e.uploadNewFile(t.Context(), action, remote.driveID, graphRootID, "doc.txt", local)
+			_, lostErr := e.UploadNewFileForTest(t.Context(), action, remote.driveID, GraphRootID, "doc.txt", local)
 			require.ErrorIs(t, lostErr, graph.ErrCreateOutcomeUnknown)
 			require.Equal(t, map[string]string{"doc.txt": ""}, remote.tree(), "the create landed: an empty file")
 			lost, ok := remote.itemAt("doc.txt")
@@ -81,7 +81,7 @@ func TestUploadNewFile_CreateWhoseAnswerWasLostIsFinishedByTheRetry(t *testing.T
 			assert.Empty(t, pending.ItemID, "the client never learned the item's ID")
 
 			loseCreateAnswers(remote, false)
-			result, err := e.uploadNewFile(t.Context(), action, remote.driveID, graphRootID, "doc.txt", local)
+			result, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, GraphRootID, "doc.txt", local)
 			require.NoError(t, err, "the retry's 409 is about its own empty file")
 			assert.Equal(t, lost.ID, result.Item.ID, "the content went into the file the lost create made")
 			assert.Equal(t, map[string]string{"doc.txt": tc.content}, remote.tree(), "one remote file, holding the content")
@@ -106,7 +106,7 @@ func TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent(t *testing
 	local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 	action := &Action{Type: ActionUpload, Path: "doc.txt"}
 	loseCreateAnswers(remote, true)
-	_, lostErr := e.uploadNewFile(t.Context(), action, remote.driveID, graphRootID, "doc.txt", local)
+	_, lostErr := e.UploadNewFileForTest(t.Context(), action, remote.driveID, GraphRootID, "doc.txt", local)
 	require.Error(t, lostErr)
 	loseCreateAnswers(remote, false)
 
@@ -114,8 +114,8 @@ func TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent(t *testing
 	client.listChildrenFn = func(context.Context, driveid.ID, string) ([]graph.Item, error) {
 		return nil, nil // the folder's listing has not caught up with the create
 	}
-	e.items = client
-	_, err := e.uploadNewFile(t.Context(), action, remote.driveID, graphRootID, "doc.txt", local)
+	e.SetItemsForTest(client)
+	_, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, GraphRootID, "doc.txt", local)
 	require.ErrorIs(t, err, graph.ErrConflict)
 
 	assert.Equal(t, map[string]string{"doc.txt": ""}, remote.tree())
@@ -148,7 +148,7 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 		{name: "an empty file and no earlier intent", remoteName: "doc.txt"},
 		{
 			name: "an empty file and an expired intent", remoteName: "doc.txt",
-			priorIntent: true, retriedAfter: pendingCreateIntentTTL + time.Minute,
+			priorIntent: true, retriedAfter: PendingCreateIntentTTL + time.Minute,
 		},
 		{
 			name: "a file with content and a fresh intent", remoteName: "doc.txt", remoteContent: "their words\n",
@@ -168,9 +168,9 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 
 			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
 			if tc.remoteFolder {
-				remote.addFolder("stranger", graphRootID, tc.remoteName)
+				remote.addFolder("stranger", GraphRootID, tc.remoteName)
 			} else {
-				remote.addFile(t, "stranger", graphRootID, tc.remoteName, tc.remoteContent)
+				remote.addFile(t, "stranger", GraphRootID, tc.remoteName, tc.remoteContent)
 			}
 			before := remote.tree()
 			e, store, syncRoot := newScenarioCreateExecutor(t, remote)
@@ -178,7 +178,7 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 			if tc.priorIntent {
 				store.SetNowFunc(func() time.Time { return intendedAt })
 				require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &PendingCreate{
-					DriveID: remote.driveID, Path: "doc.txt", ParentID: graphRootID,
+					DriveID: remote.driveID, Path: "doc.txt", ParentID: GraphRootID,
 				}))
 			}
 			now := func() time.Time { return intendedAt.Add(tc.retriedAfter) }
@@ -187,8 +187,8 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 			stranger, ok := remote.itemAt("doc.txt")
 			require.True(t, ok)
 
-			_, err := e.uploadNewFile(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-				remote.driveID, graphRootID, "doc.txt", local)
+			_, err := e.UploadNewFileForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
+				remote.driveID, GraphRootID, "doc.txt", local)
 			require.ErrorIs(t, err, graph.ErrConflict)
 			var nameTaken *RemoteNameTakenError
 			assert.Equal(t, tc.nameTaken, errors.As(err, &nameTaken), "only another spelling is a name collision")
@@ -232,7 +232,7 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 			local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 			action := &Action{Type: ActionUpload, Path: "doc.txt"}
 			loseCreateAnswers(remote, true)
-			_, lostErr := e.uploadNewFile(t.Context(), action, remote.driveID, graphRootID, "doc.txt", local)
+			_, lostErr := e.UploadNewFileForTest(t.Context(), action, remote.driveID, GraphRootID, "doc.txt", local)
 			require.Error(t, lostErr)
 			loseCreateAnswers(remote, false)
 
@@ -250,7 +250,7 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 					return item, err
 				}
 			}
-			e.items = client
+			e.SetItemsForTest(client)
 			var attempts []string
 			uploadToItem := client.uploadToItemFn
 			client.uploadToItemFn = func(
@@ -260,9 +260,9 @@ func TestUploadNewFile_ClaimNeverOverwritesContentWrittenMeanwhile(t *testing.T)
 				attempts = append(attempts, ifMatch)
 				return uploadToItem(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 			}
-			e.transferMgr = driveops.NewTransferManager(client, client, nil, e.logger)
+			e.SetTransferMgr(driveops.NewTransferManager(client, client, nil, e.LoggerForTest()))
 
-			_, err := e.uploadNewFile(t.Context(), action, remote.driveID, graphRootID, "doc.txt", local)
+			_, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, GraphRootID, "doc.txt", local)
 			require.ErrorIs(t, err, tc.wantSentinel)
 
 			assert.Equal(t, map[string]string{"doc.txt": "their words\n"}, remote.tree(), "their content stays")

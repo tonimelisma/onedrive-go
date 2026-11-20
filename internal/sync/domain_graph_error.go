@@ -98,7 +98,7 @@ const (
 // Graph codes and message fragments the server-answer table recognizes
 // beyond graph.IsQuotaExhausted and graph.IsNotSupported.
 const (
-	graphCodeResourceModified = "resourceModified"
+	GraphCodeResourceModified = "resourceModified"
 	graphMessageNameTooLong   = "name is too long"
 	graphMessagePathLimit     = "400 characters or less"
 )
@@ -146,7 +146,7 @@ func classifyServerAnswer(status int, err error) ServerAnswer {
 		// known), so the scanner's 400 cannot catch every case, and a bare
 		// 400 would retry forever.
 		return ServerAnswerPathTooLong
-	case status == http.StatusConflict && hasGraphErr && graphErr.HasCode(graphCodeResourceModified):
+	case status == http.StatusConflict && hasGraphErr && graphErr.HasCode(GraphCodeResourceModified):
 		return ServerAnswerTransientConflict
 	}
 

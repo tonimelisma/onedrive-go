@@ -143,7 +143,7 @@ func assertStoreIntegrity(t *testing.T, eng *testEngine) bool {
 	t.Helper()
 
 	ctx := t.Context()
-	db := eng.baseline.rawDB()
+	db := eng.baseline.RawDBForTest()
 
 	var integrity string
 	require.NoError(t, db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity))
@@ -273,7 +273,7 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 func syncStateRows(t *testing.T, eng *testEngine, query string) string {
 	t.Helper()
 
-	rows, err := eng.baseline.rawDB().QueryContext(t.Context(), query)
+	rows, err := eng.baseline.RawDBForTest().QueryContext(t.Context(), query)
 	require.NoError(t, err)
 	defer rows.Close()
 	var out strings.Builder

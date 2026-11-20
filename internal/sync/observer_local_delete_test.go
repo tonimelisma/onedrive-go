@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	stdsync "sync"
 	"testing"
 	"time"
 
@@ -237,40 +236,6 @@ func (a *addTrackingWatcher) Errors() <-chan error          { return a.errs }
 // handleDelete NFC fix tests
 // ---------------------------------------------------------------------------
 
-// recordingFsWatcher extends mockFsWatcher to record Remove() calls.
-// This allows tests to verify which paths were passed to watcher.Remove().
-type recordingFsWatcher struct {
-	mockFsWatcher
-	mu        stdsync.Mutex
-	removed   []string
-	removeErr error // injectable error for Remove()
-}
-
-func newRecordingFsWatcher() *recordingFsWatcher {
-	return &recordingFsWatcher{
-		mockFsWatcher: mockFsWatcher{
-			events: make(chan fsnotify.Event, 10),
-			errs:   make(chan error, 10),
-		},
-	}
-}
-
-func (r *recordingFsWatcher) Remove(name string) error {
-	r.mu.Lock()
-	r.removed = append(r.removed, name)
-	err := r.removeErr
-	r.mu.Unlock()
-	return err
-}
-
-func (r *recordingFsWatcher) getRemovedPaths() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	result := make([]string, len(r.removed))
-	copy(result, r.removed)
-	return result
-}
-
 // Validates: R-6.7.20
 func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 	t.Parallel()
@@ -335,7 +300,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 
 			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 			obs.PendingTimers = make(map[string]SyncTimer)
-			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
+			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 			if tt.baseType == ItemTypeFolder {
 				registerWatchedForTest(obs, tt.fsPath)
@@ -382,7 +347,7 @@ func TestHandleDelete_SendsTheRemovalOfThePath(t *testing.T) {
 
 			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 			obs.PendingTimers = make(map[string]SyncTimer)
-			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
+			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 			batches := localBatches(obs, 10)
 			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/target", "target", "target")
@@ -405,7 +370,7 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	watcher := newRecordingFsWatcher()
 	obs := NewLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.PendingTimers = make(map[string]SyncTimer)
-	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
+	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 	// Set up a pending timer for "file.txt".
 	obs.PendingTimers["file.txt"] = RealClock{}.AfterFunc(time.Hour, func() {})
@@ -436,7 +401,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
 	obs.PendingTimers = make(map[string]SyncTimer)
-	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
+	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
 	registerWatchedForTest(obs, dirPath)
 
@@ -482,79 +447,3 @@ func TestHandleFsEvent_SyncRootLifecycleEventDoesNotEmitContentDelete(t *testing
 
 // Needed for context usage in test helpers — keep the import.
 var _ = context.Background
-
-// watchDeleteRemainingRows stores rows as local truth, runs the delete the
-// watch observer reports for rel, applies the batch it sends the way the
-// watch loop does, and returns the rows left.
-func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []LocalStateRow, rel string) []LocalStateRow {
-	t.Helper()
-
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), rows))
-
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]SyncTimer)
-	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
-	batches := make(chan LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
-
-	syncRoot := t.TempDir()
-	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, syncRoot),
-		filepath.Join(syncRoot, rel), rel, filepath.Base(rel))
-
-	var batch LocalObservation
-	select {
-	case batch = <-batches:
-	default:
-		require.Fail(t, "the delete sent no batch")
-	}
-	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &batch))
-
-	remaining, err := eng.baseline.ListLocalState(t.Context())
-	require.NoError(t, err)
-
-	return remaining
-}
-
-// Validates: R-2.8.8
-//
-// A new folder whose watch could not be added still had its children's rows
-// stored by the scan of the new folder. Its delete removes them with it, even
-// though neither the baseline nor the watch set says the path was a folder.
-func TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows(t *testing.T) {
-	t.Parallel()
-
-	remaining := watchDeleteRemainingRows(t, emptyBaseline(), []LocalStateRow{
-		{Path: "new", ItemType: ItemTypeFolder},
-		{Path: "new/a.txt", ItemType: ItemTypeFile},
-		{Path: "new/nested", ItemType: ItemTypeFolder},
-		{Path: "new/nested/b.txt", ItemType: ItemTypeFile},
-		{Path: "new-sibling.txt", ItemType: ItemTypeFile},
-	}, "new")
-
-	assert.Equal(t, []LocalStateRow{{Path: "new-sibling.txt", ItemType: ItemTypeFile}}, remaining)
-}
-
-// Validates: R-2.8.8
-func TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix(t *testing.T) {
-	t.Parallel()
-
-	baseline := baselineWith(&BaselineEntry{
-		Path: "report", DriveID: driveid.New("d"), ItemID: "item1", ItemType: ItemTypeFile,
-	})
-	remaining := watchDeleteRemainingRows(t, baseline, []LocalStateRow{
-		{Path: "report", ItemType: ItemTypeFile},
-		{Path: "report.txt", ItemType: ItemTypeFile},
-		{Path: "report-old", ItemType: ItemTypeFolder},
-		{Path: "report-old/a.txt", ItemType: ItemTypeFile},
-	}, "report")
-
-	assert.Equal(t, []LocalStateRow{
-		{Path: "report-old", ItemType: ItemTypeFolder},
-		{Path: "report-old/a.txt", ItemType: ItemTypeFile},
-		{Path: "report.txt", ItemType: ItemTypeFile},
-	}, remaining)
-}

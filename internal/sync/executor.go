@@ -20,9 +20,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// graphRootID is the Graph API parent reference for top-level items.
-// Distinct from strRoot in types.go which serializes the ItemTypeRoot enum.
-const graphRootID = "root"
+// GraphRootID is the Graph API parent reference for top-level items.
+// Distinct from StrRoot in types.go which serializes the ItemTypeRoot enum.
+const GraphRootID = "root"
 
 // ExecutorConfig holds the configuration every per-action executor shares.
 // The engine sets it up while it is built and no run changes it, except
@@ -68,7 +68,7 @@ type ExecutorConfig struct {
 
 	// pendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15). Nil in executor-only tests.
-	pendingCreates pendingCreateStore
+	pendingCreates PendingCreateStore
 
 	// storeAccessTimeout bounds every store access the executor runs detached
 	// from its action's context. Zero means OutcomeCommitTimeout; tests
@@ -86,7 +86,7 @@ func (cfg *ExecutorConfig) SetTrash(trash *localtrash.Trash) {
 }
 
 // SetPendingCreates wires the store that records pending creates.
-func (cfg *ExecutorConfig) SetPendingCreates(store pendingCreateStore) {
+func (cfg *ExecutorConfig) SetPendingCreates(store PendingCreateStore) {
 	cfg.pendingCreates = store
 }
 
@@ -851,7 +851,7 @@ func (e *Executor) ResolveParentID(relPath string) (string, error) {
 			return e.remoteRootItemID, nil
 		}
 
-		return graphRootID, nil
+		return GraphRootID, nil
 	}
 
 	// Normalize to forward slashes for map lookups.
