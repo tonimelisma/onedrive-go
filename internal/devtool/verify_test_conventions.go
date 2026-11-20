@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -137,11 +138,16 @@ func integrationTestNameViolations(fset *token.FileSet, rel string, file *ast.Fi
 // them, because only its own package's tests see it.
 const testSeamSuffix = "ForTest"
 
-// isTestSeamHelperPath reports whether rel is a file of a package that holds
-// shared test support code, which may use a test seam like a test file.
+// testSeamHelperDirs returns the packages that hold shared test support
+// code, which may use a test seam like a test file.
+func testSeamHelperDirs() []string {
+	return []string{"internal/sync/internal/syncfixture", "internal/sync/internal/syncstoretest"}
+}
+
+// isTestSeamHelperPath reports whether rel is a file of a test-helper package.
 func isTestSeamHelperPath(rel string) bool {
-	for _, dir := range []string{"internal/sync/internal/syncfixture/", "internal/sync/internal/syncstoretest/"} {
-		if strings.HasPrefix(rel, dir) {
+	for _, dir := range testSeamHelperDirs() {
+		if strings.HasPrefix(rel, dir+"/") {
 			return true
 		}
 	}
@@ -151,7 +157,8 @@ func isTestSeamHelperPath(rel string) bool {
 
 // testSeamUseViolations holds every use of a test seam in a production file:
 // declaring one there is how a seam exists, calling one is production code
-// depending on a test hook.
+// depending on a test hook. Importing a test-helper package is such a use
+// too: the helpers call seams on the importer's behalf.
 func testSeamUseViolations(fset *token.FileSet, rel string, file *ast.File) []testConventionViolation {
 	declared := make(map[*ast.Ident]bool)
 	for _, decl := range file.Decls {
@@ -160,7 +167,7 @@ func testSeamUseViolations(fset *token.FileSet, rel string, file *ast.File) []te
 		}
 	}
 
-	var violations []testConventionViolation
+	violations := testHelperImportViolations(fset, rel, file)
 	ast.Inspect(file, func(node ast.Node) bool {
 		ident, ok := node.(*ast.Ident)
 		if !ok || declared[ident] || ident.Name == testSeamSuffix || !strings.HasSuffix(ident.Name, testSeamSuffix) {
@@ -175,6 +182,32 @@ func testSeamUseViolations(fset *token.FileSet, rel string, file *ast.File) []te
 
 		return true
 	})
+
+	return violations
+}
+
+// testHelperImportViolations holds every import of a test-helper package in a
+// production file. The helper packages themselves are not checked, so they
+// may import each other.
+func testHelperImportViolations(fset *token.FileSet, rel string, file *ast.File) []testConventionViolation {
+	var violations []testConventionViolation
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		for _, dir := range testSeamHelperDirs() {
+			if path != repoModulePath+"/"+dir {
+				continue
+			}
+			violations = append(violations, testConventionViolation{
+				Path: rel,
+				Line: fset.Position(spec.Pos()).Line,
+				Message: fmt.Sprintf("%s is a sync test-helper package: only test files and the other "+
+					"test-helper packages may import it", path),
+			})
+		}
+	}
 
 	return violations
 }

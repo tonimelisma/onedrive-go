@@ -329,7 +329,10 @@ Static verification is a first-class architectural constraint, not a best-effort
   name ends in `ForTest` exists so the tests of another package can reach
   state they could not reach otherwise (`export_test.go` serves only its own
   package's tests), so only test files and the sync test-helper packages may
-  use one (`TestRunTestConventionsRefusesAProductionUseOfATestSeam`).
+  use one (`TestRunTestConventionsRefusesAProductionUseOfATestSeam`). A
+  helper package calls seams on its importer's behalf, so a production
+  file outside the helpers may not import one
+  (`TestRunTestConventionsRefusesAProductionImportOfATestHelperPackage`).
 - A test's wait for an event that must come (a debug event, an observer
   batch, a pass result, a goroutine's return) is bounded by one named wait,
   long enough for a loaded two-core host under the race detector: `eventWait`
