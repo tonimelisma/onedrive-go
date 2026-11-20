@@ -11,7 +11,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-func baselineWithItems(t *testing.T, files int, folders int) *syncdomain.Baseline {
+func baselineWithItems(t *testing.T, files int, folders int) syncdomain.BaselineView {
 	t.Helper()
 
 	entries := make([]*syncdomain.BaselineEntry, 0, files+folders)

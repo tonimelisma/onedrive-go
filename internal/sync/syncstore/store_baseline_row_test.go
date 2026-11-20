@@ -46,7 +46,7 @@ func TestUpsertBaselineRowTx_RoundTripsEveryColumn(t *testing.T) {
 	require.NoError(t, err)
 	read, ok := baseline.GetByPath(written.Path)
 	require.True(t, ok, "the upserted row must load")
-	assert.Equal(t, written, read)
+	assert.Equal(t, *written, read)
 
 	// The upsert replaces every column of the item's existing row.
 	rewritten := *written
@@ -63,7 +63,7 @@ func TestUpsertBaselineRowTx_RoundTripsEveryColumn(t *testing.T) {
 	assert.False(t, stale, "the upsert keys on the item, so the old path is gone")
 	read, ok = baseline.GetByPath(rewritten.Path)
 	require.True(t, ok)
-	assert.Equal(t, &rewritten, read)
+	assert.Equal(t, rewritten, read)
 }
 
 // Validates: R-2.5.2

@@ -74,7 +74,7 @@ type ExecutorConfig struct {
 // shared ExecutorConfig, parentChecks, guards itself.
 type Executor struct {
 	*ExecutorConfig
-	baseline *syncdomain.Baseline
+	baseline syncdomain.BaselineView
 }
 
 // ExecutorInputs is everything NewExecutorConfig builds an executor
@@ -255,7 +255,7 @@ func (e *Executor) waitRemoteParentVisible(ctx context.Context, action *syncdoma
 
 // NewExecution creates an ephemeral Executor for a single action execution.
 // Baseline is used for parent ID resolution (thread-safe via locked accessors).
-func NewExecution(cfg *ExecutorConfig, bl *syncdomain.Baseline) *Executor {
+func NewExecution(cfg *ExecutorConfig, bl syncdomain.BaselineView) *Executor {
 	return &Executor{
 		ExecutorConfig: cfg,
 		baseline:       bl,

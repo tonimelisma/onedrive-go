@@ -273,7 +273,7 @@ func newEngineExecutorConfig(
 
 // buildLocalObserver builds a local observer on the engine's real clock,
 // with the engine's observer test seams.
-func (e *Engine) buildLocalObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.LocalObserver {
+func (e *Engine) buildLocalObserver(bl syncdomain.BaselineView, logger *slog.Logger) *syncobserve.LocalObserver {
 	obs := syncobserve.NewLocalObserver(bl, logger, e.checkWorkers)
 	obs.SetClock(e.wallClock)
 	obs.SetHooks(e.hooks.observe)
@@ -283,7 +283,7 @@ func (e *Engine) buildLocalObserver(bl *syncdomain.Baseline, logger *slog.Logger
 
 // buildRemoteObserver builds an observer of the engine's drive on the
 // engine's real clock.
-func (e *Engine) buildRemoteObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.RemoteObserver {
+func (e *Engine) buildRemoteObserver(bl syncdomain.BaselineView, logger *slog.Logger) *syncobserve.RemoteObserver {
 	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, logger)
 	obs.SetClock(e.wallClock)
 

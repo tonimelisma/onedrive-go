@@ -128,14 +128,13 @@ const (
 	baselineMutationMove
 )
 
-// Load reads the entire baseline table into memory, populating ByPath and
-// ByID maps. The result is cached on the manager — subsequent calls return
-// the cached baseline without querying the database. The cache is kept
-// consistent by CommitMutation(), which incrementally patches the in-memory
-// maps via updateBaselineCache() after each transaction. This is safe
-// because SyncStore exclusively owns the database (sole-writer
-// pattern with SetMaxOpenConns(1)).
-func (s *SyncStore) Load(ctx context.Context) (*syncdomain.Baseline, error) {
+// Load returns the store's baseline cache, reading the baseline table on the
+// first call. Every later call returns the same cache: the store keeps it
+// current itself (CommitMutation patches it after each transaction), which
+// is safe because SyncStore exclusively owns the database (sole-writer
+// pattern with SetMaxOpenConns(1)). Callers get the read-only view; only the
+// store writes the cache.
+func (s *SyncStore) Load(ctx context.Context) (syncdomain.BaselineView, error) {
 	s.baselineMu.Lock()
 	defer s.baselineMu.Unlock()
 
@@ -148,51 +147,52 @@ func (s *SyncStore) Load(ctx context.Context) (*syncdomain.Baseline, error) {
 		return nil, fmt.Errorf("sync: loading content drive for baseline: %w", err)
 	}
 
-	b, err := LoadBaselineWithRunner(ctx, s.db, contentDriveID)
+	entries, err := loadBaselineEntries(ctx, s.db, contentDriveID)
 	if err != nil {
 		return nil, err
 	}
 
-	s.baseline = b
-	s.logger.Debug("baseline loaded", slog.Int("entries", len(b.ByPath)))
+	s.baseline = newBaselineCache(indexBaselineEntries(entries))
+	s.logger.Debug("baseline loaded", slog.Int("entries", len(entries)))
 
-	return b, nil
+	return s.baseline, nil
 }
 
-// LoadBaselineWithRunner builds a Baseline from the rows runner sees. Inside a
-// read transaction it is the baseline of that transaction's snapshot, which is
-// what planning must use alongside SQL comparison rows from the same snapshot.
-func LoadBaselineWithRunner(ctx context.Context, runner SqlTxRunner, contentDriveID driveid.ID) (*syncdomain.Baseline, error) {
+// LoadBaselineWithRunner returns the baseline rows runner sees as an
+// immutable snapshot. Inside a read transaction it is the baseline of that
+// transaction's snapshot, which is what planning must use alongside SQL
+// comparison rows from the same snapshot.
+func LoadBaselineWithRunner(ctx context.Context, runner SqlTxRunner, contentDriveID driveid.ID) (*syncdomain.BaselineSnapshot, error) {
+	entries, err := loadBaselineEntries(ctx, runner, contentDriveID)
+	if err != nil {
+		return nil, err
+	}
+
+	return syncdomain.NewBaselineSnapshot(entries), nil
+}
+
+// loadBaselineEntries reads every baseline row runner sees.
+func loadBaselineEntries(ctx context.Context, runner SqlTxRunner, contentDriveID driveid.ID) ([]*syncdomain.BaselineEntry, error) {
 	rows, err := runner.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	b := &syncdomain.Baseline{
-		ByPath:       make(map[string]*syncdomain.BaselineEntry),
-		ByID:         make(map[string]*syncdomain.BaselineEntry),
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
-
+	var entries []*syncdomain.BaselineEntry
 	for rows.Next() {
 		entry, err := scanBaselineRow(rows, contentDriveID)
 		if err != nil {
 			return nil, err
 		}
-
-		b.ByPath[entry.Path] = entry
-		b.ByID[entry.ItemID] = entry
-
-		dnk := syncdomain.DirNameKeyFromPath(entry.Path)
-		b.ByDirNameKey[dnk] = append(b.ByDirNameKey[dnk], entry)
+		entries = append(entries, entry)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sync: iterating baseline rows: %w", err)
 	}
 
-	return b, nil
+	return entries, nil
 }
 
 // scanBaselineRow scans a single row from the baseline table, handling
@@ -475,10 +475,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		}
 	}
 
-	var existing *syncdomain.BaselineEntry
-	if entry, ok := s.baseline.GetByPath(refresh.Path); ok {
-		existing = entry
-	}
+	existing, hasExisting := s.baseline.GetByPath(refresh.Path)
 
 	entry := &syncdomain.BaselineEntry{
 		Path:             refresh.Path,
@@ -496,7 +493,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		LocalHasIdentity: refresh.LocalHasIdentity,
 	}
 
-	if existing != nil {
+	if hasExisting {
 		entry.ParentID = existing.ParentID
 		entry.RemoteHash = existing.RemoteHash
 		entry.RemoteSize = existing.RemoteSize
@@ -532,7 +529,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 		return fmt.Errorf("sync: committing refresh local baseline transaction: %w", err)
 	}
 
-	s.baseline.Put(entry)
+	s.baseline.put(*entry)
 
 	return nil
 }
@@ -551,9 +548,8 @@ func (s *SyncStore) ForgetBaselineLocalCtime(ctx context.Context, path string) e
 		return nil
 	}
 	if entry, ok := s.baseline.GetByPath(path); ok {
-		forgotten := *entry
-		forgotten.LocalCtime = 0
-		s.baseline.Put(&forgotten)
+		entry.LocalCtime = 0
+		s.baseline.put(entry)
 	}
 
 	return nil
@@ -660,9 +656,9 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *syncdomain.Basel
 			}
 			return nil
 		}
-		s.baseline.Put(mutationToEntry(o))
+		s.baseline.put(mutationToEntry(o))
 	case baselineMutationDelete:
-		s.baseline.Delete(o.Path)
+		s.baseline.delete(o.Path)
 	case baselineMutationMove:
 		if isFolderPathMove(o) {
 			// The subtree moved too; rebuilding beats re-deriving every
@@ -676,23 +672,23 @@ func (s *SyncStore) updateBaselineCache(ctx context.Context, o *syncdomain.Basel
 		// moving side's coordinates, which can name another item's baseline
 		// row (a divergent rename moves the local copy from a path the
 		// baseline never recorded for this item).
-		s.baseline.Put(mutationToEntry(o))
+		s.baseline.put(mutationToEntry(o))
 	}
 
 	return nil
 }
 
 // reloadBaselineCache rebuilds the cache from SQLite in place. Callers hold
-// the *Baseline that Load returned for a whole run (watch keeps its startup
-// pointer), so swapping in a new object would orphan theirs: every later
-// commit would update only the new one, and planning would see SQL rows for
-// paths its baseline never received.
+// the view that Load returned for a whole run (watch keeps its startup one),
+// so replacing the cache object would orphan theirs: every later commit would
+// update only the new one, and planning would see SQL rows for paths its
+// baseline never received.
 func (s *SyncStore) reloadBaselineCache(ctx context.Context) error {
 	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
 		return fmt.Errorf("sync: loading content drive for baseline reload: %w", err)
 	}
-	fresh, err := LoadBaselineWithRunner(ctx, s.db, contentDriveID)
+	entries, err := loadBaselineEntries(ctx, s.db, contentDriveID)
 	if err != nil {
 		return fmt.Errorf("sync: loading baseline after cache invalidation: %w", err)
 	}
@@ -700,17 +696,17 @@ func (s *SyncStore) reloadBaselineCache(ctx context.Context) error {
 	s.baselineMu.Lock()
 	defer s.baselineMu.Unlock()
 	if s.baseline == nil {
-		s.baseline = fresh
+		s.baseline = newBaselineCache(indexBaselineEntries(entries))
 		return nil
 	}
-	s.baseline.ReplaceContents(fresh)
+	s.baseline.swap(indexBaselineEntries(entries))
 
 	return nil
 }
 
 // mutationToEntry converts a BaselineMutation into a BaselineEntry for cache update.
-func mutationToEntry(o *syncdomain.BaselineMutation) *syncdomain.BaselineEntry {
-	return &syncdomain.BaselineEntry{
+func mutationToEntry(o *syncdomain.BaselineMutation) syncdomain.BaselineEntry {
+	return syncdomain.BaselineEntry{
 		Path:             o.Path,
 		DriveID:          o.DriveID,
 		ItemID:           o.ItemID,
@@ -761,7 +757,8 @@ func commitUpsert(ctx context.Context, tx SqlTxRunner, o *syncdomain.BaselineMut
 		return fmt.Errorf("sync: clearing stale baseline for %s: %w", o.Path, err)
 	}
 
-	if err := upsertBaselineRowTx(ctx, tx, mutationToEntry(o)); err != nil {
+	entry := mutationToEntry(o)
+	if err := upsertBaselineRowTx(ctx, tx, &entry); err != nil {
 		return fmt.Errorf("sync: upserting baseline for %s: %w", o.Path, err)
 	}
 	// A synced item at the path supersedes a folder kept there after its
@@ -998,7 +995,7 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 	// The callback must not call back into the baseline: ForEachPath holds the
 	// read lock for its duration, and a nested acquire can deadlock against a
 	// writer that queued in between. It only consults the local dbEntries map.
-	s.baseline.ForEachPath(func(p string, cached *syncdomain.BaselineEntry) {
+	s.baseline.ForEachPath(func(p string, cached syncdomain.BaselineEntry) {
 		dbEntry, ok := dbEntries[p]
 		if !ok {
 			s.logger.Debug("cache consistency: entry in cache not in DB",
@@ -1010,7 +1007,7 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) (int, error) {
 			return
 		}
 
-		if !baselineEntriesEqual(cached, dbEntry) {
+		if !baselineEntriesEqual(&cached, dbEntry) {
 			s.logger.Debug("cache consistency: field mismatch",
 				slog.String("path", p),
 			)

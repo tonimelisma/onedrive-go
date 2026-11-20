@@ -17,7 +17,7 @@ import (
 // watchDeleteRemainingRows stores rows as local truth, runs the delete the
 // watch observer reports for rel, applies the batch it sends the way the
 // watch loop does, and returns the rows left.
-func watchDeleteRemainingRows(t *testing.T, baseline *syncdomain.Baseline, rows []syncdomain.LocalStateRow, rel string) []syncdomain.LocalStateRow {
+func watchDeleteRemainingRows(t *testing.T, baseline syncdomain.BaselineView, rows []syncdomain.LocalStateRow, rel string) []syncdomain.LocalStateRow {
 	t.Helper()
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})

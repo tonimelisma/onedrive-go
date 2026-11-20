@@ -23,7 +23,7 @@ import (
 // newSettleTestObserver returns an observer driven entirely by a manual clock
 // and a counting hash function, for handler-level tests that call the watch
 // handlers directly instead of running the watch loop.
-func newSettleTestObserver(t *testing.T, baseline *syncdomain.Baseline, clock *syncfixture.ManualClock, hashCalls *atomic.Int64) *LocalObserver {
+func newSettleTestObserver(t *testing.T, baseline syncdomain.BaselineView, clock *syncfixture.ManualClock, hashCalls *atomic.Int64) *LocalObserver {
 	t.Helper()
 
 	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)

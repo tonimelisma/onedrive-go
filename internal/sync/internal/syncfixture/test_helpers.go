@@ -873,20 +873,19 @@ const TestDriveID = synctest.TestDriveID
 // it waits for the signal that the input was handled, then checks.
 const EventWait = time.Minute
 
-// EmptyBaseline returns a Baseline with initialized but empty maps.
-func EmptyBaseline() *syncdomain.Baseline {
-	return syncdomain.NewBaselineForTest(nil)
+// EmptyBaseline returns a baseline with no entries.
+func EmptyBaseline() *syncdomain.BaselineSnapshot {
+	return syncdomain.NewBaselineSnapshot(nil)
 }
 
-// BaselineWith creates a Baseline pre-populated with the given entries.
-func BaselineWith(entries ...*syncdomain.BaselineEntry) *syncdomain.Baseline {
-	return syncdomain.NewBaselineForTest(entries)
+// BaselineWith returns a baseline holding the given entries.
+func BaselineWith(entries ...*syncdomain.BaselineEntry) *syncdomain.BaselineSnapshot {
+	return syncdomain.NewBaselineSnapshot(entries)
 }
 
-// NewBaselineForTest seeds a baseline using the store-owned test helper so
-// sync tests stay aligned with the current baseline owner.
-func NewBaselineForTest(entries []*syncdomain.BaselineEntry) *syncdomain.Baseline {
-	return syncdomain.NewBaselineForTest(entries)
+// NewBaselineForTest returns a baseline holding the given entries.
+func NewBaselineForTest(entries []*syncdomain.BaselineEntry) *syncdomain.BaselineSnapshot {
+	return syncdomain.NewBaselineSnapshot(entries)
 }
 
 // TestLogger returns a *slog.Logger wired to t.Log for clean test output.

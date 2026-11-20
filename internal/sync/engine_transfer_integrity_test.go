@@ -94,7 +94,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 	require.NoError(t, err)
 	acceptedEntry, ok := accepted.GetByPath(fileName)
 	require.True(t, ok)
-	before := *acceptedEntry
+	before := acceptedEntry
 	require.Equal(t, syncfixture.HashContentQuickXor(t, served), before.LocalHash, "the setup: the transform is accepted")
 	require.Equal(t, syncfixture.HashContentQuickXor(t, reported), before.RemoteHash)
 

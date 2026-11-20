@@ -20,7 +20,7 @@ import (
 
 // syncedTwinScanRoot writes the synced file, scans it once and returns the
 // sync root, the baseline that records the scanned row as synced, and the row.
-func syncedTwinScanRoot(t *testing.T) (string, *syncdomain.Baseline, syncdomain.LocalStateRow) {
+func syncedTwinScanRoot(t *testing.T) (string, syncdomain.BaselineView, syncdomain.LocalStateRow) {
 	t.Helper()
 	syncfixture.SkipUnlessBothUnicodeFormsCoexist(t)
 

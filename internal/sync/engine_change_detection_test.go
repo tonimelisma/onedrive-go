@@ -109,7 +109,7 @@ func TestRunOnce_TransfersRecordLocalCtimeAndIdentity(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, ctime, entry.LocalCtime, "%s baseline ctime", name)
 		assert.True(t, entry.LocalHasIdentity, "%s baseline identity", name)
-		assert.True(t, syncobserve.CanReuseBaselineHash(info, entry, ctime+2*int64(syncobserve.RacilyCleanWindow)), "%s fast path applies", name)
+		assert.True(t, syncobserve.CanReuseBaselineHash(info, &entry, ctime+2*int64(syncobserve.RacilyCleanWindow)), "%s fast path applies", name)
 	}
 }
 

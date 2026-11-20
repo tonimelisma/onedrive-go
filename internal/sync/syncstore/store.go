@@ -39,7 +39,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
-	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 
 	// Pure-Go SQLite driver (no CGO).
 	"modernc.org/sqlite"
@@ -71,7 +70,7 @@ const syncStoreDirPerm = 0o700
 // defines is written through its methods.
 type SyncStore struct {
 	db         *sql.DB
-	baseline   *syncdomain.Baseline
+	baseline   *baselineCache
 	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
 	logger     *slog.Logger
 	// nowFunc is the store's clock, the engine's run clock once the engine
@@ -251,7 +250,7 @@ func (s *SyncStore) SetNowFunc(fn func() time.Time) {
 // cachedBaseline returns the in-memory baseline cache populated by the most
 // recent Load or commit. Returns nil before the first one. Used by tests to
 // inspect baseline state without a round-trip through Load().
-func (s *SyncStore) cachedBaseline() *syncdomain.Baseline {
+func (s *SyncStore) cachedBaseline() *baselineCache {
 	s.baselineMu.Lock()
 	defer s.baselineMu.Unlock()
 

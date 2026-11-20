@@ -49,7 +49,7 @@ type ExecutorStore interface {
 	GetLocalStateByPath(ctx context.Context, path string) (*syncdomain.LocalStateRow, bool, error)
 	GetRemoteStateByID(ctx context.Context, driveID driveid.ID, itemID string) (*syncdomain.RemoteStateRow, bool, error)
 	GetRemoteStateByPath(ctx context.Context, path string, driveID driveid.ID) (*syncdomain.RemoteStateRow, bool, error)
-	Load(ctx context.Context) (*syncdomain.Baseline, error)
+	Load(ctx context.Context) (syncdomain.BaselineView, error)
 	ReadObservationState(ctx context.Context) (*syncdomain.ObservationState, error)
 }
 

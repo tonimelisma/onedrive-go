@@ -59,7 +59,7 @@ func (ph *permissionHandler) ActiveRemoteBlockedBoundaries(ctx context.Context) 
 // failures are evidence (none), not errors.
 func (ph *permissionHandler) handle403(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	failedPath string,
 	actionType syncdomain.ActionType,
 ) (permissionEvidence, error) {
@@ -204,7 +204,7 @@ func (ph *permissionHandler) remoteBoundaryEvidence(
 
 func (ph *permissionHandler) walkPermissionBoundary(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	startFolder string,
 	remoteRootItemID string,
 	remoteDriveID driveid.ID,
@@ -239,7 +239,7 @@ func (ph *permissionHandler) walkPermissionBoundary(
 }
 
 func resolveBoundaryRemoteItemID(
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	boundaryPath string,
 	driveID driveid.ID,
 	remoteRootItemID string,

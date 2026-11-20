@@ -11,7 +11,7 @@ import (
 // one-shot and watch before they diverge into their own runtime shells.
 func (flow *engineFlow) runStartupStage(
 	ctx context.Context,
-) (*syncdomain.Baseline, error) {
+) (syncdomain.BaselineView, error) {
 	eng := flow.engine
 
 	hasAccountAuthRequirement, err := eng.hasPersistedAccountAuthRequirement()

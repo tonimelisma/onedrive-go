@@ -143,7 +143,7 @@ func TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems(t *testing
 	cached := store.cachedBaseline()
 	require.NotNil(t, cached)
 	identity := func(path string) (uint64, bool) {
-		entry, ok := cached.ByPath[path]
+		entry, ok := cached.GetByPath(path)
 		require.True(t, ok, path)
 		return entry.LocalInode, entry.LocalHasIdentity
 	}
@@ -161,8 +161,10 @@ func TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems(t *testing
 
 	fresh, err := LoadBaselineWithRunner(ctx, store.RawDBForTest(), driveid.ID{})
 	require.NoError(t, err)
-	assert.True(t, fresh.ByPath["folder"].LocalHasIdentity)
-	assert.Equal(t, uint64(10), fresh.ByPath["folder"].LocalInode)
+	folder, ok := fresh.GetByPath("folder")
+	require.True(t, ok)
+	assert.True(t, folder.LocalHasIdentity)
+	assert.Equal(t, uint64(10), folder.LocalInode)
 }
 
 // Validates: R-2.8.8

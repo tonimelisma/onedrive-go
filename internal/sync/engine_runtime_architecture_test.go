@@ -22,13 +22,13 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 
 	type publicationPathCase struct {
 		name string
-		run  func(t *testing.T, eng *testEngine, rt *watchRuntime, bl *syncdomain.Baseline)
+		run  func(t *testing.T, eng *testEngine, rt *watchRuntime, bl syncdomain.BaselineView)
 	}
 
 	cases := []publicationPathCase{
 		{
 			name: "steady-state completion",
-			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
@@ -45,7 +45,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 		},
 		{
 			name: "bootstrap completion",
-			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
 				rt.enterBootstrap()
@@ -63,7 +63,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 		},
 		{
 			name: "retry tick",
-			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				seedDueRetryPublication(t, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, false)
@@ -74,7 +74,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 		},
 		{
 			name: "trial tick",
-			run: func(t *testing.T, eng *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, eng *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				seedDueTrialPublication(t, eng, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, true)
@@ -217,13 +217,13 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 
 	type frontierPathCase struct {
 		name string
-		run  func(t *testing.T, eng *testEngine, rt *watchRuntime, bl *syncdomain.Baseline)
+		run  func(t *testing.T, eng *testEngine, rt *watchRuntime, bl syncdomain.BaselineView)
 	}
 
 	cases := []frontierPathCase{
 		{
 			name: "steady-state completion",
-			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
@@ -239,7 +239,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 		},
 		{
 			name: "bootstrap completion",
-			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
 				rt.enterBootstrap()
@@ -256,7 +256,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 		},
 		{
 			name: "retry tick",
-			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				seedDueRetryPublication(t, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, false)
@@ -265,7 +265,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 		},
 		{
 			name: "trial tick",
-			run: func(t *testing.T, eng *testEngine, rt *watchRuntime, bl *syncdomain.Baseline) {
+			run: func(t *testing.T, eng *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				seedDueTrialPublication(t, eng, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, true)
@@ -292,7 +292,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 	}
 }
 
-func seedPublicationBaseline(t *testing.T, eng *testEngine) *syncdomain.Baseline {
+func seedPublicationBaseline(t *testing.T, eng *testEngine) syncdomain.BaselineView {
 	t.Helper()
 
 	require.NoError(t, eng.baseline.CommitMutation(t.Context(), &syncdomain.BaselineMutation{

@@ -12,7 +12,7 @@ import (
 func (flow *engineFlow) startRuntimeStage(
 	ctx context.Context,
 	runtime *runtimePlan,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, bool, error) {
 	if runtime == nil || runtime.Plan == nil {
 		return nil, false, nil
@@ -52,7 +52,7 @@ func (flow *engineFlow) startRuntimeStage(
 // through the engine's dispatch order.
 func (flow *engineFlow) reduceReadyFrontierStage(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	ready []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	frontier, err := flow.reduceReadyFrontier(ctx, bl, ready)
@@ -69,7 +69,7 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 // held work stays held for the next sync.
 func (flow *engineFlow) reduceReadyFrontier(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	ready []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	if isStoppingRun(ctx) {

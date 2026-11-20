@@ -561,7 +561,7 @@ func (o *LocalObserver) admitSyncedEntry(
 
 	availability := o.scanAvailability
 	entries := availability.syncedEntries
-	current := syncedEntry{fsPath: fsPath, isDir: info.IsDir(), isSynced: isSyncedEntry(info, base)}
+	current := syncedEntry{fsPath: fsPath, isDir: info.IsDir(), isSynced: isSyncedEntry(info, &base)}
 	first, seen := entries[dbRelPath]
 	if !seen {
 		entries[dbRelPath] = current
@@ -594,7 +594,7 @@ func (o *LocalObserver) admitSyncedEntry(
 	default:
 		availability.dropEntry(first, dbRelPath, currentRows)
 		entries[dbRelPath] = first
-		currentRows[dbRelPath] = baselineLocalStateRow(base)
+		currentRows[dbRelPath] = baselineLocalStateRow(&base)
 		return false, current.skipError()
 	}
 }
@@ -762,7 +762,7 @@ func (o *LocalObserver) classifyObservedInfo(
 ) error {
 	var existing *syncdomain.BaselineEntry
 	if baselineEntry, found := o.baseline.GetByPath(dbRelPath); found {
-		existing = baselineEntry
+		existing = &baselineEntry
 	}
 
 	// No baseline entry — this is a new item.
@@ -900,7 +900,7 @@ func sortedLocalStateRows(current map[string]syncdomain.LocalStateRow) []syncdom
 //
 // O(n) time, O(n) memory. Pure function — no side effects.
 func DetectCaseCollisions(
-	events []syncdomain.ChangeEvent, baseline *syncdomain.Baseline, observed map[string]bool,
+	events []syncdomain.ChangeEvent, baseline syncdomain.BaselineView, observed map[string]bool,
 ) (clean []syncdomain.ChangeEvent, collisions []syncdomain.SkippedItem) {
 	if len(events) == 0 {
 		return nil, nil
@@ -962,7 +962,7 @@ type caseGroupKey struct {
 func crossCheckBaseline(
 	events []syncdomain.ChangeEvent,
 	groups map[caseGroupKey][]int,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 	observed map[string]bool,
 	colliderSet map[int]struct{},
 ) {
@@ -982,8 +982,8 @@ func crossCheckBaseline(
 		ev := &events[indices[0]]
 		variants := baseline.GetCaseVariants(key.dir, filepath.Base(ev.Path))
 
-		for _, v := range variants {
-			if v.Path != ev.Path && baselineVariantPresent(v, observed) {
+		for i := range variants {
+			if v := &variants[i]; v.Path != ev.Path && baselineVariantPresent(v.Path, observed) {
 				colliderSet[indices[0]] = struct{}{}
 
 				break
@@ -994,8 +994,8 @@ func crossCheckBaseline(
 
 // baselineVariantPresent reports whether a baseline case variant still exists
 // on disk in this scan. Without an observed set every variant counts.
-func baselineVariantPresent(v *syncdomain.BaselineEntry, observed map[string]bool) bool {
-	return observed == nil || observed[v.Path]
+func baselineVariantPresent(path string, observed map[string]bool) bool {
+	return observed == nil || observed[path]
 }
 
 // suppressDirectoryChildren marks children of colliding directories as colliders.
@@ -1036,7 +1036,7 @@ func buildCollisionSkippedItems(
 	groups map[caseGroupKey][]int,
 	colliderSet, childColliderSet map[int]struct{},
 	collidingDirPrefixes []string,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 	observed map[string]bool,
 ) []syncdomain.SkippedItem {
 	collisions := make([]syncdomain.SkippedItem, 0, len(colliderSet))
@@ -1085,7 +1085,7 @@ func appendSingleGroupCollision(
 	events []syncdomain.ChangeEvent,
 	indices []int,
 	colliderSet, childColliderSet map[int]struct{},
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 	observed map[string]bool,
 ) []syncdomain.SkippedItem {
 	idx := indices[0]
@@ -1105,8 +1105,8 @@ func appendSingleGroupCollision(
 	}
 
 	variants := baseline.GetCaseVariants(filepath.Dir(ev.Path), filepath.Base(ev.Path))
-	for _, v := range variants {
-		if v.Path != ev.Path && baselineVariantPresent(v, observed) {
+	for i := range variants {
+		if v := &variants[i]; v.Path != ev.Path && baselineVariantPresent(v.Path, observed) {
 			return append(collisions, syncdomain.SkippedItem{
 				Path:   ev.Path,
 				Reason: syncdomain.IssueCaseCollision,

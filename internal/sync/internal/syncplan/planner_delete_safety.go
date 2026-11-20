@@ -50,7 +50,7 @@ const (
 // DeleteSafetyInput is the evidence the hold is decided from: the planner's
 // baseline and the planner-visible current snapshots of both sides.
 type DeleteSafetyInput struct {
-	Baseline   *syncdomain.Baseline
+	Baseline   syncdomain.BaselineView
 	LocalRows  []syncdomain.LocalStateRow
 	RemoteRows []syncdomain.RemoteStateRow
 	// Approved is the held set the user confirmed with `sync
@@ -322,13 +322,13 @@ func heldDeleteClosure(plan *syncdomain.ActionPlan, seeds map[int]syncdomain.Del
 }
 
 // countBaselineItems counts synced files and folders.
-func countBaselineItems(baseline *syncdomain.Baseline) int {
+func countBaselineItems(baseline syncdomain.BaselineView) int {
 	if baseline == nil {
 		return 0
 	}
 	items := 0
-	baseline.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
-		if entry != nil && entry.ItemType != syncdomain.ItemTypeRoot {
+	baseline.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) {
+		if entry.ItemType != syncdomain.ItemTypeRoot {
 			items++
 		}
 	})

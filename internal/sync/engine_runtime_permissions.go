@@ -41,7 +41,7 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	switch {
 	case decision.Class == errclass.ClassSuperseded, isStoppingRun(ctx):
@@ -60,7 +60,7 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	if bl == nil || flow.engine.permHandler.permChecker == nil {
 		return false, nil
@@ -163,7 +163,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	if isStoppingRun(ctx) {
 		return false, nil
@@ -196,7 +196,7 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 func (flow *engineFlow) permissionEvidenceForCompletion(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (permissionEvidence, bool, error) {
 	switch {
 	case shouldHandleRemote403Permission(r):

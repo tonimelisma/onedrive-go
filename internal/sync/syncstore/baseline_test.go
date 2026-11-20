@@ -394,7 +394,7 @@ func TestSyncStore_ForgetBaselineLocalCtime_ClearsOnlyTheChangeTime(t *testing.T
 	commitAll(t, mgr, ctx, []syncdomain.BaselineMutation{synced})
 	before, ok := mgr.cachedBaseline().GetByPath(synced.Path)
 	require.True(t, ok)
-	want := *before
+	want := before
 	want.LocalCtime = 0
 
 	require.NoError(t, mgr.ForgetBaselineLocalCtime(ctx, synced.Path))
@@ -402,11 +402,11 @@ func TestSyncStore_ForgetBaselineLocalCtime_ClearsOnlyTheChangeTime(t *testing.T
 
 	cached, ok := mgr.cachedBaseline().GetByPath(synced.Path)
 	require.True(t, ok)
-	assert.Equal(t, want, *cached)
+	assert.Equal(t, want, cached)
 	require.NoError(t, mgr.ReloadBaselineCacheForTest(ctx))
 	stored, ok := mgr.cachedBaseline().GetByPath(synced.Path)
 	require.True(t, ok)
-	assert.Equal(t, want, *stored, "the store holds the same row")
+	assert.Equal(t, want, stored, "the store holds the same row")
 }
 
 // Validates: R-6.5.2
@@ -1223,7 +1223,7 @@ func TestCommitMutation_FolderMoveRepathsSubtree(t *testing.T) {
 	require.NoError(t, mgr.CommitMutation(ctx, &move))
 
 	for _, cached := range []bool{true, false} {
-		bl := mgr.cachedBaseline()
+		var bl syncdomain.BaselineView = mgr.cachedBaseline()
 		if !cached {
 			var err error
 			bl, err = mgr.Load(ctx)
@@ -1310,7 +1310,7 @@ func TestUpdateBaselineCache_UnknownActionReloadsFromDB(t *testing.T) {
 	}
 	require.NoError(t, mgr.CommitMutation(ctx, &seed))
 
-	mgr.cachedBaseline().Delete("cached.txt")
+	mgr.cachedBaseline().delete("cached.txt")
 	_, ok := mgr.cachedBaseline().GetByPath("cached.txt")
 	require.False(t, ok, "test setup should corrupt the cache before reload")
 
@@ -1464,20 +1464,14 @@ func TestClearObservationCursor(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Locked accessor tests (Baseline.GetByPath, GetByID, Put, Delete, Len, ForEachPath)
+// Baseline cache tests (GetByPath, GetByID, put, delete, Len, ForEachPath)
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.2
 func TestBaseline_GetByPath(t *testing.T) {
 	t.Parallel()
 
-	b := &syncdomain.Baseline{
-		ByPath: map[string]*syncdomain.BaselineEntry{
-			"docs/readme.md": {Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")},
-		},
-		ByID:         make(map[string]*syncdomain.BaselineEntry),
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf(&syncdomain.BaselineEntry{Path: "docs/readme.md", ItemID: "item1", DriveID: driveid.New("d1")})
 
 	entry, ok := b.GetByPath("docs/readme.md")
 	require.True(t, ok)
@@ -1494,11 +1488,7 @@ func TestBaseline_GetByID(t *testing.T) {
 	driveID := driveid.New("d1")
 	entry := &syncdomain.BaselineEntry{Path: "test.txt", ItemID: "item1", DriveID: driveID}
 
-	b := &syncdomain.Baseline{
-		ByPath:       make(map[string]*syncdomain.BaselineEntry),
-		ByID:         map[string]*syncdomain.BaselineEntry{"item1": entry},
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf(entry)
 
 	got, ok := b.GetByID("item1")
 	require.True(t, ok)
@@ -1512,11 +1502,7 @@ func TestBaseline_GetByID(t *testing.T) {
 func TestBaseline_Put(t *testing.T) {
 	t.Parallel()
 
-	b := &syncdomain.Baseline{
-		ByPath:       make(map[string]*syncdomain.BaselineEntry),
-		ByID:         make(map[string]*syncdomain.BaselineEntry),
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf()
 
 	entry := &syncdomain.BaselineEntry{
 		Path:    "new/file.txt",
@@ -1524,7 +1510,7 @@ func TestBaseline_Put(t *testing.T) {
 		ItemID:  "item-new",
 	}
 
-	b.Put(entry)
+	b.put(*entry)
 
 	got, ok := b.GetByPath("new/file.txt")
 	require.True(t, ok, "entry not found after Put")
@@ -1544,15 +1530,11 @@ func TestBaseline_Put_ReplacesStaleID(t *testing.T) {
 	driveID := driveid.New("d1")
 	oldEntry := &syncdomain.BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "old-id"}
 
-	b := &syncdomain.Baseline{
-		ByPath:       map[string]*syncdomain.BaselineEntry{"file.txt": oldEntry},
-		ByID:         map[string]*syncdomain.BaselineEntry{"old-id": oldEntry},
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf(oldEntry)
 
 	// Put a new entry at the same path but different item_id.
 	newEntry := &syncdomain.BaselineEntry{Path: "file.txt", DriveID: driveID, ItemID: "new-id"}
-	b.Put(newEntry)
+	b.put(*newEntry)
 
 	// New entry should be accessible by path and new ID.
 	got, ok := b.GetByPath("file.txt")
@@ -1577,13 +1559,9 @@ func TestBaseline_Delete(t *testing.T) {
 	driveID := driveid.New("d1")
 	entry := &syncdomain.BaselineEntry{Path: "delete-me.txt", DriveID: driveID, ItemID: "item-del"}
 
-	b := &syncdomain.Baseline{
-		ByPath:       map[string]*syncdomain.BaselineEntry{"delete-me.txt": entry},
-		ByID:         map[string]*syncdomain.BaselineEntry{"item-del": entry},
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf(entry)
 
-	b.Delete("delete-me.txt")
+	b.delete("delete-me.txt")
 
 	_, ok := b.GetByPath("delete-me.txt")
 	assert.False(t, ok, "entry still exists after Delete")
@@ -1592,21 +1570,14 @@ func TestBaseline_Delete(t *testing.T) {
 	assert.False(t, ok, "entry still exists in ByID after Delete")
 
 	// Deleting nonexistent path should not panic.
-	b.Delete("nonexistent")
+	b.delete("nonexistent")
 }
 
 // Validates: R-2.2
 func TestBaseline_Len(t *testing.T) {
 	t.Parallel()
 
-	b := &syncdomain.Baseline{
-		ByPath: map[string]*syncdomain.BaselineEntry{
-			"a.txt": {Path: "a.txt"},
-			"b.txt": {Path: "b.txt"},
-		},
-		ByID:         make(map[string]*syncdomain.BaselineEntry),
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf(&syncdomain.BaselineEntry{Path: "a.txt", ItemID: "i1"}, &syncdomain.BaselineEntry{Path: "b.txt", ItemID: "i2"})
 
 	assert.Equal(t, 2, b.Len())
 }
@@ -1615,17 +1586,10 @@ func TestBaseline_Len(t *testing.T) {
 func TestBaseline_ForEachPath(t *testing.T) {
 	t.Parallel()
 
-	b := &syncdomain.Baseline{
-		ByPath: map[string]*syncdomain.BaselineEntry{
-			"a.txt": {Path: "a.txt", ItemID: "i1"},
-			"b.txt": {Path: "b.txt", ItemID: "i2"},
-		},
-		ByID:         make(map[string]*syncdomain.BaselineEntry),
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf(&syncdomain.BaselineEntry{Path: "a.txt", ItemID: "i1"}, &syncdomain.BaselineEntry{Path: "b.txt", ItemID: "i2"})
 
 	paths := make(map[string]bool)
-	b.ForEachPath(func(path string, entry *syncdomain.BaselineEntry) {
+	b.ForEachPath(func(path string, entry syncdomain.BaselineEntry) {
 		paths[path] = true
 	})
 
@@ -1638,11 +1602,7 @@ func TestBaseline_ForEachPath(t *testing.T) {
 func TestBaseline_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
-	b := &syncdomain.Baseline{
-		ByPath:       make(map[string]*syncdomain.BaselineEntry),
-		ByID:         make(map[string]*syncdomain.BaselineEntry),
-		ByDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry),
-	}
+	b := cacheOf()
 
 	// Seed some entries.
 	for i := range 100 {
@@ -1651,7 +1611,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 			DriveID: driveid.New("d1"),
 			ItemID:  fmt.Sprintf("item-%03d", i),
 		}
-		b.Put(entry)
+		b.put(*entry)
 	}
 
 	var wg stdsync.WaitGroup
@@ -1678,7 +1638,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 				DriveID: driveid.New("d1"),
 				ItemID:  fmt.Sprintf("concurrent-item-%d", i),
 			}
-			b.Put(entry)
+			b.put(*entry)
 		}()
 	}
 
@@ -1687,7 +1647,7 @@ func TestBaseline_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			b.ForEachPath(func(_ string, _ *syncdomain.BaselineEntry) {})
+			b.ForEachPath(func(_ string, _ syncdomain.BaselineEntry) {})
 		}()
 	}
 
@@ -1915,11 +1875,10 @@ func TestSyncStore_CheckpointReportsFailure(t *testing.T) {
 }
 
 // Validates: R-6.3.4
-func TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
+func TestBaselineCache_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
 	t.Parallel()
 
-	baseline := syncfixture.EmptyBaseline()
-	baseline.Put(&syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: "id-upper", ItemType: syncdomain.ItemTypeFile})
+	baseline := cacheOf(&syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: "id-upper", ItemType: syncdomain.ItemTypeFile})
 
 	// A watch observer reads the variants on its own goroutine while a worker
 	// commits an outcome that replaces the same index element in place. The
@@ -1928,7 +1887,7 @@ func TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := range 200 {
-			baseline.Put(&syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: fmt.Sprintf("id-%d", i), ItemType: syncdomain.ItemTypeFile})
+			baseline.put(syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: fmt.Sprintf("id-%d", i), ItemType: syncdomain.ItemTypeFile})
 		}
 	}()
 
@@ -1943,4 +1902,15 @@ func TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
 	require.Len(t, variants, 1)
 	assert.Equal(t, "id-199", variants[0].ItemID)
 	assert.Nil(t, baseline.GetCaseVariants("Docs", "missing.txt"))
+}
+
+// cacheOf returns a baseline cache holding copies of entries.
+func cacheOf(entries ...*syncdomain.BaselineEntry) *baselineCache {
+	owned := make([]*syncdomain.BaselineEntry, len(entries))
+	for i, entry := range entries {
+		copied := *entry
+		owned[i] = &copied
+	}
+
+	return newBaselineCache(indexBaselineEntries(owned))
 }

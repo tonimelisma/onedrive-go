@@ -32,7 +32,7 @@ func (p *Planner) PlanCurrentState(
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 	mount PlannerMountContext,
 	mode syncdomain.SyncMode,
 ) (*syncdomain.ActionPlan, error) {
@@ -402,7 +402,7 @@ func buildSQLitePathViews(
 	comparisons []syncdomain.SQLiteComparisonRow,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 	truthStatusByPath map[string]syncdomain.PathTruthStatus,
 ) (map[string]*syncdomain.PathView, map[string]*syncdomain.SQLiteComparisonRow, error) {
 	localByPath := make(map[string]syncdomain.LocalStateRow, len(localRows))
@@ -436,7 +436,7 @@ func buildSQLitePathViews(
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing baseline entry for comparison path %q", row.Path)
 			}
-			view.Baseline = entry
+			view.Baseline = &entry
 		}
 		if row.LocalPresent {
 			localRow, ok := localByPath[row.Path]

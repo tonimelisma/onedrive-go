@@ -562,7 +562,7 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 	}
 	complete := func(ta *syncdomain.TrackedAction) {
 		t.Helper()
-		ready, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(ta), &syncdomain.Baseline{})
+		ready, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(ta), syncdomain.NewBaselineSnapshot(nil))
 		require.NoError(t, err)
 		assert.Empty(t, ready)
 	}

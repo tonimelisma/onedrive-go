@@ -141,7 +141,8 @@ func (o *LocalObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, nam
 	// A file synced to OneDrive but unchanged on disk produces no event
 	// and may not appear in the filesystem cache (e.g., remote-only items).
 	variants := o.baseline.GetCaseVariants(dbDir, name)
-	for _, v := range variants {
+	for i := range variants {
+		v := &variants[i]
 		baseName := filepath.Base(v.Path)
 		if baseName == name {
 			continue // same casing — not a collision

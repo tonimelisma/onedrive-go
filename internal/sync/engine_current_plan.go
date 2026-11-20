@@ -17,7 +17,7 @@ import (
 
 func (r *oneShotRunner) runLiveCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
@@ -42,7 +42,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 
 func (r *oneShotRunner) runDryRunCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
@@ -63,7 +63,7 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 
 func (rt *watchRuntime) runBootstrapCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 ) (*runtimePlan, error) {
 	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
@@ -95,7 +95,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 // observed the local tree only.
 func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 ) (*runtimePlan, error) {
 	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
@@ -184,12 +184,12 @@ type currentInputs struct {
 	// baseline is read in the same transaction as the comparison rows, so a
 	// baseline_present row always has its entry. The run's cached baseline
 	// can lag or lead that snapshot when a commit lands between them.
-	baseline *syncdomain.Baseline
+	baseline syncdomain.BaselineView
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (*syncobserve.RemoteObservationBatch, error) {
 	pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, fullReconcile)
@@ -206,7 +206,7 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 
 func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (*syncobserve.RemoteObservationBatch, error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
@@ -280,7 +280,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 
 func (flow *engineFlow) observeLocalCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	recordHashes bool,
 ) (syncobserve.ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl, recordHashes)
@@ -293,7 +293,7 @@ func (flow *engineFlow) observeLocalCurrentState(
 
 func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (syncobserve.ScanResult, error) {
 	localResult, err := flow.observeLocalCurrentState(ctx, bl, true)
 	if err != nil {
@@ -310,7 +310,7 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 
 func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]syncdomain.RemoteItem, string, syncshortcut.ShortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := flow.deps.store.ReadObservationState(ctx)
@@ -350,7 +350,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 // false, since it must leave the store as it found it.
 func (flow *engineFlow) observeLocal(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	recordHashes bool,
 ) (syncobserve.ScanResult, error) {
 	eng := flow.engine
@@ -396,7 +396,7 @@ const errReadingPlanningState = "sync: reading sync state: %w"
 
 func (flow *engineFlow) loadDryRunCurrentObservation(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (result *currentObservation, err error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
@@ -618,7 +618,7 @@ func (flow *engineFlow) queryPlannerRowsTx(
 // does not touch durable retry/scope state.
 func (flow *engineFlow) buildCurrentPlanStage(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 	observation *currentObservation,
@@ -786,7 +786,7 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]syncdomain.Retr
 
 // planningBaseline is the baseline the planner read: the snapshot loaded in
 // the same transaction as the comparison rows when there is one.
-func planningBaseline(inputs *currentInputs, fallback *syncdomain.Baseline) *syncdomain.Baseline {
+func planningBaseline(inputs *currentInputs, fallback syncdomain.BaselineView) syncdomain.BaselineView {
 	if inputs != nil && inputs.baseline != nil {
 		return inputs.baseline
 	}
@@ -799,7 +799,7 @@ func planningBaseline(inputs *currentInputs, fallback *syncdomain.Baseline) *syn
 // tree, so it creates nothing new locally (leaveOutNewLocalItems).
 func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentInputs,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*syncdomain.ActionPlan, error) {

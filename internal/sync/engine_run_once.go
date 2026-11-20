@@ -336,7 +336,7 @@ func (e *Engine) oneShotPasses() int {
 func (e *Engine) runOneShotLivePass(
 	ctx context.Context,
 	runner *oneShotRunner,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (oneShotPass, error) {
@@ -395,7 +395,7 @@ func (e *Engine) passWithoutActions(passStart time.Time, mode syncdomain.SyncMod
 func (e *Engine) runOnceDryRun(
 	ctx context.Context,
 	runner *oneShotRunner,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 	start time.Time,
@@ -413,7 +413,7 @@ func (e *Engine) runOnceDryRun(
 func (r *oneShotRunner) executePreparedPlan(
 	ctx context.Context,
 	runtime *runtimePlan,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) error {
 	if runtime == nil {
 		return nil
@@ -497,7 +497,7 @@ func (r *oneShotRunner) executePreparedPlan(
 
 func (r *oneShotRunner) dispatchInitialReadyActions(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	runtime *runtimePlan,
 	report *Report,
 ) ([]*syncdomain.TrackedAction, bool, error) {
@@ -636,7 +636,7 @@ type fullRemoteObservation struct {
 // be uploaded again, or did not say, turns orphans into re-uploads instead.
 func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	kind syncdomain.ResyncKind,
 ) (fullRemoteObservation, error) {
 	eng := flow.engine
