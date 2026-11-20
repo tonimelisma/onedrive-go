@@ -5,38 +5,6 @@ import (
 	"errors"
 )
 
-func (batch *RemoteObservationBatch) HasObservationFindings() bool {
-	if batch == nil {
-		return false
-	}
-
-	return len(batch.Findings.Issues) > 0 ||
-		len(batch.Findings.ManagedIssueTypes) > 0
-}
-
-func (batch *RemoteObservationBatch) DeferredProgress() *RemoteObservationBatch {
-	if batch == nil ||
-		(batch.CursorToken == "" &&
-			!batch.MarkFullRemoteRefresh &&
-			!batch.FullRefreshDueSoon &&
-			!batch.OrphansUndecided &&
-			batch.ObservationMode != RemoteObservationModeEnumerate) {
-		return nil
-	}
-
-	clone := *batch
-	clone.Source = ""
-	clone.Observed = nil
-	clone.Changes = nil
-	clone.Findings = ObservationFindingsBatch{}
-	clone.ShortcutTopology = ShortcutTopologyBatch{}
-	clone.ArmFullRefreshTimer = false
-	clone.MarkFullRefreshIfIdle = false
-	clone.ApplyAck = nil
-
-	return &clone
-}
-
 func buildRemoteObservationBatch(
 	engine *Engine,
 	mode RemoteObservationMode,

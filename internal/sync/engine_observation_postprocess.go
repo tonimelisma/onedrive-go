@@ -32,30 +32,6 @@ func isFatalObserverError(err error) bool {
 	return errors.As(err, &fatal)
 }
 
-func (batch *RemoteObservationBatch) WaitApplied(ctx context.Context) error {
-	if batch == nil || batch.ApplyAck == nil {
-		return nil
-	}
-
-	select {
-	case err := <-batch.ApplyAck:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf("waiting for remote observation batch apply: %w", ctx.Err())
-	}
-}
-
-func (batch *RemoteObservationBatch) FinishApplied(err error) {
-	if batch == nil || batch.ApplyAck == nil {
-		return
-	}
-
-	select {
-	case batch.ApplyAck <- err:
-	default:
-	}
-}
-
 func (rt *watchRuntime) applyRemoteObservationBatch(
 	ctx context.Context,
 	batch *RemoteObservationBatch,

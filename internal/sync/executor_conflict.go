@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -142,25 +141,6 @@ func truncateUTF8(s string, n int) string {
 
 // maxLocalNameBytes is NAME_MAX on Linux and macOS filesystems.
 const maxLocalNameBytes = 255
-
-// ConflictStemExt splits a filename into stem and extension, handling the
-// dotfile edge case where filepath.Ext returns the entire name for files
-// like ".bashrc" (LEARNINGS §2).
-//
-// For files with multiple extensions (e.g., "archive.tar.gz"), only the last
-// extension is separated: stem="archive.tar", ext=".gz". This matches
-// filepath.Ext behavior and produces "archive.tar.conflict-YYYYMMDD-HHMMSS.gz".
-func ConflictStemExt(name string) (string, string) {
-	// Dotfile with no other dots: treat entire name as stem, no extension.
-	if name != "" && name[0] == '.' && strings.Count(name, ".") == 1 {
-		return name, ""
-	}
-
-	ext := filepath.Ext(name)
-	stem := name[:len(name)-len(ext)]
-
-	return stem, ext
-}
 
 // conflictCopyAttempts bounds the same-second names a conflict copy tries.
 const conflictCopyAttempts = 100

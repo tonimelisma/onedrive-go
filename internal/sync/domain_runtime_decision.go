@@ -41,3 +41,15 @@ type ResultDecision struct {
 	TrialHint         trialHint
 	ConditionType     IssueType
 }
+
+// RetryWorkScope is the scope a failure's retry row records. Blocked work is
+// recorded under the scope its decision blocks (ScopeKey), the scope that is
+// activated, so the two can never name different scopes; other work records
+// its evidence, which a later activation of that scope may block.
+func (decision *ResultDecision) RetryWorkScope() ScopeKey {
+	if decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero() {
+		return decision.ScopeKey
+	}
+
+	return decision.ScopeEvidence
+}

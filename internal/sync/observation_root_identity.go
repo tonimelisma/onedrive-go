@@ -1,18 +1,12 @@
 package sync
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
-	stdsync "sync"
-	"sync/atomic"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // The local root identity check is an observation precondition: it decides
@@ -24,170 +18,6 @@ import (
 // snapshot. Without that, an unmounted disk, a wiped tmpfs, or a symlinked
 // root re-pointed at an empty folder scans successfully with zero entries,
 // and every synced file is planned as a remote delete (D-001).
-
-// ErrSyncRootRebindHint is appended to a primary-root mismatch so the user
-// learns the one explicit way out. It is not offered for shortcut child roots,
-// whose identity is owned by the parent engine.
-const ErrSyncRootRebindHint = "if you moved or restored the sync folder on purpose, run " +
-	"'onedrive-go drive rebind-root' to sync with the folder that is there now"
-
-// ValidateExpectedSyncRootIdentity refuses a sync folder that is not the one
-// expected. hint, when not empty, is appended to the refusal (the rebind hint
-// for primary roots).
-func ValidateExpectedSyncRootIdentity(root *synctree.Root, expected *synctree.RootIdentity, hint string) error {
-	if root == nil || expected == nil {
-		return nil
-	}
-	actual, err := root.RootIdentity()
-	if err != nil {
-		return withRefusalHint(fmt.Errorf("%w: %w", ErrMountRootUnavailable, err), hint)
-	}
-	if synctree.SameRoot(*expected, actual) {
-		return nil
-	}
-
-	// The folder at the sync path is not the one this state belongs to:
-	// scanning it would read as mass deletion. Say which evidence decided.
-	var reason string
-	switch {
-	case expected.Token != "" && actual.Token == "":
-		reason = "the folder has no sync folder marker (the extended attribute " + synctree.RootMarkAttribute +
-			"); it was replaced, or copied or restored without extended attributes, or the disk it lives on is not mounted"
-	case expected.Token != "":
-		reason = "the folder carries a different sync folder marker (" + synctree.RootMarkAttribute +
-			"); it is another sync folder, not the one this state was built from"
-	default:
-		reason = "it was replaced by a different folder, or the disk it lives on is not mounted"
-	}
-	return withRefusalHint(fmt.Errorf("%w: %s", ErrMountRootUnavailable, reason), hint)
-}
-
-func withRefusalHint(err error, hint string) error {
-	if hint == "" {
-		return err
-	}
-	return fmt.Errorf("%w; %s", err, hint)
-}
-
-// SyncRootIdentity is the one owner of the identity an engine's sync folder
-// must match. The executor, every local observer and the binding read it
-// through Expected, so the token a bind adds is seen everywhere at once
-// rather than by whoever copied the identity after it (a stale copy refused
-// every remote delete after a reset-sync-state rebind).
-type SyncRootIdentity struct {
-	current atomic.Pointer[synctree.RootIdentity]
-	// refusalHint is appended to every refusal: the rebind hint for primary
-	// roots, nothing for parent-owned shortcut child roots.
-	refusalHint string
-	// bindPending is set while a primary engine still has to record the
-	// identity in its store.
-	bindPending atomic.Bool
-	// bindMu serializes mark-and-bind so two commits cannot write two
-	// different tokens.
-	bindMu stdsync.Mutex
-}
-
-func NewSyncRootIdentity(binding ResolvedSyncRoot, refusalHint string) *SyncRootIdentity {
-	identity := &SyncRootIdentity{refusalHint: refusalHint}
-	if binding.Expected != nil {
-		expected := *binding.Expected
-		identity.current.Store(&expected)
-	}
-	identity.bindPending.Store(binding.BindPending)
-	return identity
-}
-
-// FixedSyncRootIdentity wraps a single known identity (tests, and callers
-// that validate once).
-func FixedSyncRootIdentity(expected *synctree.RootIdentity) *SyncRootIdentity {
-	return NewSyncRootIdentity(ResolvedSyncRoot{Expected: expected}, "")
-}
-
-// Expected returns a copy of the identity to validate against, or nil.
-func (s *SyncRootIdentity) Expected() *synctree.RootIdentity {
-	if s == nil {
-		return nil
-	}
-	expected := s.current.Load()
-	if expected == nil {
-		return nil
-	}
-	copied := *expected
-	return &copied
-}
-
-// Validate refuses tree when it is not the expected sync folder.
-func (s *SyncRootIdentity) Validate(tree *synctree.Root) error {
-	if s == nil {
-		return nil
-	}
-	return ValidateExpectedSyncRootIdentity(tree, s.Expected(), s.refusalHint)
-}
-
-// ResolvedSyncRoot is the expected identity an engine validates every scan
-// against, plus whether the store still has to record it.
-type ResolvedSyncRoot struct {
-	Expected *synctree.RootIdentity
-	// bindPending is true for a primary engine whose store has no recorded
-	// fingerprint yet. The fingerprint taken at startup is enforced in memory
-	// immediately, and persisted with the first committed local snapshot so a
-	// dry run never writes it.
-	BindPending bool
-}
-
-func resolveExpectedSyncRoot(
-	ctx context.Context,
-	store *SyncStore,
-	tree *synctree.Root,
-	parentIssued *synctree.FileIdentity,
-) (ResolvedSyncRoot, error) {
-	if parentIssued != nil {
-		expected := synctree.RootIdentityFromFileIdentity(*parentIssued)
-		if err := ValidateExpectedSyncRootIdentity(tree, &expected, ""); err != nil {
-			return ResolvedSyncRoot{}, err
-		}
-		return ResolvedSyncRoot{Expected: &expected}, nil
-	}
-
-	state, err := store.ReadObservationState(ctx)
-	if err != nil {
-		return ResolvedSyncRoot{}, fmt.Errorf("sync: reading recorded sync folder identity: %w", err)
-	}
-	if state.SyncRootIdentity != nil {
-		recorded := *state.SyncRootIdentity
-		if mismatchErr := ValidateExpectedSyncRootIdentity(tree, &recorded, ErrSyncRootRebindHint); mismatchErr != nil {
-			return ResolvedSyncRoot{}, mismatchErr
-		}
-		return ResolvedSyncRoot{Expected: &recorded}, nil
-	}
-
-	if !state.SyncRootRebind {
-		synced, countErr := store.BaselineEntryCount(ctx)
-		if countErr != nil {
-			return ResolvedSyncRoot{}, fmt.Errorf("sync: counting synced items before binding the sync folder: %w", countErr)
-		}
-		if synced > 0 {
-			// A state that already holds synced items but never recorded
-			// its folder cannot prove the folder now at the sync path is
-			// the one those items came from. Binding it silently would
-			// accept exactly the unmounted or replaced folder this check
-			// exists to refuse.
-			return ResolvedSyncRoot{}, fmt.Errorf("%w: this sync state has no record of its sync folder; %s",
-				ErrMountRootUnavailable, ErrSyncRootRebindHint)
-		}
-	}
-
-	current, err := tree.RootIdentity()
-	if err != nil {
-		return ResolvedSyncRoot{}, fmt.Errorf("%w: %w", ErrMountRootUnavailable, err)
-	}
-	// A marker already on the folder belongs to a binding this state no
-	// longer has (a reset-sync-state or rebind-root): the bind writes a new
-	// one, so the stale token must not become the in-memory expectation.
-	current.Token = ""
-
-	return ResolvedSyncRoot{Expected: &current, BindPending: true}, nil
-}
 
 // ResolveSyncRootPath returns the folder the sync tree is opened on. When the
 // configured sync folder is itself a symbolic link, the tree is opened on its
@@ -213,48 +43,4 @@ func ResolveSyncRootPath(syncRoot string) (string, error) {
 	}
 
 	return resolved, nil
-}
-
-// CountSyncFolderFiles counts the regular files under syncDir without
-// following links, so `drive rebind-root` can show the user what they are
-// about to bind against what the state remembers. A missing folder holds zero
-// files.
-func CountSyncFolderFiles(syncDir string) (int, error) {
-	tree, err := synctree.Open(syncDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("opening sync folder: %w", err)
-	}
-	files := 0
-	walkErr := tree.WalkDir(func(_ string, d fs.DirEntry, entryErr error) error {
-		if entryErr != nil {
-			return nil //nolint:nilerr // an unreadable entry is simply not counted
-		}
-		if d.Type().IsRegular() {
-			files++
-		}
-		return nil
-	})
-	if walkErr != nil {
-		if errors.Is(walkErr, os.ErrNotExist) {
-			return 0, nil
-		}
-		return files, fmt.Errorf("counting files in sync folder: %w", walkErr)
-	}
-	return files, nil
-}
-
-// SyncedFileCount reports how many files the drive's sync state at dbPath
-// records as synced.
-func SyncedFileCount(ctx context.Context, dbPath string, logger *slog.Logger) (int, error) {
-	if _, statErr := localpath.Stat(dbPath); errors.Is(statErr, os.ErrNotExist) {
-		return 0, nil
-	}
-	snapshot, err := ReadDriveStatusSnapshot(ctx, dbPath, logger)
-	if err != nil {
-		return 0, err
-	}
-	return snapshot.BaselineFileCount, nil
 }

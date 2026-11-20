@@ -32,14 +32,6 @@ const (
 	maintenanceInterval = 10 * time.Second
 )
 
-const (
-	LocalWatchHealthySafetyScanInterval = 5 * time.Minute
-	// While watching is unavailable, establishing it is retried after
-	// LocalWatchRetryInitialDelay, doubling to LocalWatchRetryMaxDelay.
-	LocalWatchRetryInitialDelay = 10 * time.Minute
-	LocalWatchRetryMaxDelay     = time.Hour
-)
-
 // quiescenceLogInterval is how often bootstrapSync logs while waiting
 // for in-flight actions to complete.
 const quiescenceLogInterval = 30 * time.Second

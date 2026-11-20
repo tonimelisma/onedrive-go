@@ -24,7 +24,7 @@ import (
 // can contain (':' is forbidden in OneDrive names, and local names with ':'
 // are rejected before upload), and so is its subtree. NUL would be the
 // obvious marker, but SQLite's length() and substr() stop at a NUL in TEXT. A remote_name_twin issue at P blocks
-// remote truth for P and everything below it (truth_status.go), so neither
+// remote truth for P and everything below it (domain_truth_status.go), so neither
 // twin syncs, nothing under them is planned, and a baselined holder keeps its
 // baseline. When the holder is deleted or moves away, the lowest-ID twin is
 // promoted to P and syncs normally on the next pass; when a twin is renamed to

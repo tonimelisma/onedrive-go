@@ -15,15 +15,6 @@ import (
 // settles from looping; whatever is left is the next sync's work.
 const oneShotMaxPasses = 4
 
-// The causes of a one-shot pass context's cancel: a completion that failed
-// the pass (which RunOnce then returns), or the pass's end.
-//
-//nolint:gosec // G101 reads "Pass" in the names as a password; these are cancel causes, not credentials
-const (
-	ErrOneShotPassFailed cancelCauseError = "sync: one-shot pass failed"
-	ErrOneShotPassEnded  cancelCauseError = "sync: one-shot pass ended"
-)
-
 // RunOnce executes a one-shot sync: a pass, and further passes while the
 // previous one left work for the next (R-2.1.7). Each pass:
 //  1. Load baseline

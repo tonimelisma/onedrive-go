@@ -684,7 +684,7 @@ keep the stored path. The resolution is `synctree.Root.Spelling` (see
   listed for it, so a large initial download does not read its folder once
   per file.
 
-The parent engine's shortcut-alias lifecycle (`shortcut_root_lifecycle.go`)
+The parent engine's shortcut-alias lifecycle (`engine_shortcut_root_lifecycle.go`)
 resolves the same way (`shortcutRootOnDisk`): observing the alias folder,
 materializing it inside existing parents, listing its parent for rename
 candidates (which are named by their stored NFC path, so the alias listed

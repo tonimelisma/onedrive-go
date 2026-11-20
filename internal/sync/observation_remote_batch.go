@@ -1,6 +1,10 @@
 package sync
 
-import "time"
+import (
+	"context"
+	"fmt"
+	"time"
+)
 
 // RemoteObservationBatch is the value remote observation hands the watch loop
 // to apply. It lives with observation rather than the engine because
@@ -49,4 +53,60 @@ type RemoteObservationBatch struct {
 	// it carries pollStartedAt and nothing to apply, neither items nor a
 	// token, so it commits nothing and replans nothing.
 	PollOnly bool
+}
+
+func (batch *RemoteObservationBatch) WaitApplied(ctx context.Context) error {
+	if batch == nil || batch.ApplyAck == nil {
+		return nil
+	}
+
+	select {
+	case err := <-batch.ApplyAck:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for remote observation batch apply: %w", ctx.Err())
+	}
+}
+
+func (batch *RemoteObservationBatch) FinishApplied(err error) {
+	if batch == nil || batch.ApplyAck == nil {
+		return
+	}
+
+	select {
+	case batch.ApplyAck <- err:
+	default:
+	}
+}
+
+func (batch *RemoteObservationBatch) HasObservationFindings() bool {
+	if batch == nil {
+		return false
+	}
+
+	return len(batch.Findings.Issues) > 0 ||
+		len(batch.Findings.ManagedIssueTypes) > 0
+}
+
+func (batch *RemoteObservationBatch) DeferredProgress() *RemoteObservationBatch {
+	if batch == nil ||
+		(batch.CursorToken == "" &&
+			!batch.MarkFullRemoteRefresh &&
+			!batch.FullRefreshDueSoon &&
+			!batch.OrphansUndecided &&
+			batch.ObservationMode != RemoteObservationModeEnumerate) {
+		return nil
+	}
+
+	clone := *batch
+	clone.Source = ""
+	clone.Observed = nil
+	clone.Changes = nil
+	clone.Findings = ObservationFindingsBatch{}
+	clone.ShortcutTopology = ShortcutTopologyBatch{}
+	clone.ArmFullRefreshTimer = false
+	clone.MarkFullRefreshIfIdle = false
+	clone.ApplyAck = nil
+
+	return &clone
 }

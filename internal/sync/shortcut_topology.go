@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -112,24 +111,6 @@ func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, 
 		return "", fmt.Errorf("sync: shortcut final-drain child %s is missing an acknowledgement reference", childMountID)
 	}
 	return childMountID, nil
-}
-
-func ApplyShortcutChildRunCommandToEngineMountConfig(
-	command *ShortcutChildRunCommand,
-	cfg *EngineMountConfig,
-) error {
-	if _, err := ValidateShortcutChildRunCommand(command); err != nil {
-		return err
-	}
-	if cfg == nil {
-		return fmt.Errorf("sync: child engine mount config is required")
-	}
-	cfg.SyncRoot = command.Engine.LocalRoot
-	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)
-	cfg.RemoteRootItemID = command.Engine.RemoteItemID
-	cfg.ExpectedSyncRootIdentity = CloneShortcutRootIdentity(command.Engine.LocalRootIdentity)
-	cfg.ContentFilter = CloneContentFilterConfig(command.Engine.ContentFilter)
-	return nil
 }
 
 func ShortcutChildEngineSpecsEqual(a *ShortcutChildEngineSpec, b *ShortcutChildEngineSpec) bool {

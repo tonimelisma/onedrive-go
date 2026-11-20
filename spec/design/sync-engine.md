@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
+GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/engine_shortcut_alias_mutation.go, internal/sync/shortcut_root_lifecycle.go, internal/sync/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
 
 LAYER: 4
 
@@ -799,8 +799,8 @@ only; they do not own or redirect control flow. The watch runtime hands its
 sink (`runtimeDeps.emit`) to the watch observers it starts, which report the
 inputs they drop by decision into the same stream (sync-observation.md); the
 stream's vocabulary is therefore in the domain family
-(`domain_debug_events.go`), and `engine_debug_events.go` keeps the sink and
-the engine's own event kinds.
+(`domain_debug_events.go`), the engine's own event kinds included, and
+`engine_debug_events.go` keeps the sink.
 Watch replan debug events include timestamped pending-replan, old-outbox
 retirement, running-drain, local-observation, planning, new-plan, and
 first-post-replan-dispatch stages. Each event carries outbox, running, and idle

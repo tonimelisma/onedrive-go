@@ -14,26 +14,6 @@ import (
 // next scan trusts a recorded hash under exactly those conditions (R-2.2.8).
 // Rows leave the cache once the file has a baseline row or is gone.
 
-// LocalHashCacheEntry is one recorded hash and the observation it was made
-// under.
-type LocalHashCacheEntry struct {
-	Path      string
-	Hash      string
-	Size      int64
-	Mtime     int64
-	Ctime     int64
-	Device    uint64
-	Inode     uint64
-	BirthTime int64
-}
-
-// LocalHashCache is what a scan consults and feeds. The store implements it;
-// tests substitute a map.
-type LocalHashCache interface {
-	Lookup(path string) (LocalHashCacheEntry, bool)
-	Record(ctx context.Context, entries []LocalHashCacheEntry) error
-}
-
 // storeLocalHashCache is the store's cache: the rows loaded once at scan
 // start, and writes going straight to the table.
 type storeLocalHashCache struct {

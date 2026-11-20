@@ -17,15 +17,6 @@ var (
 	errPublicationOnlyActionType = errors.New("sync: publication-only action routed to worker")
 )
 
-// The causes of the worker contexts' cancels. Neither reaches an action while
-// its run goes on: ErrActionReturned lands after the action returned, and
-// ErrWorkerPoolStopped ends the context the workers were started under, so an
-// action it interrupts completes with RunEnded set, as a shutdown.
-const (
-	ErrActionReturned    cancelCauseError = "sync: action returned"
-	ErrWorkerPoolStopped cancelCauseError = "sync: worker pool stopped"
-)
-
 // minWorkers is the floor for total worker count.
 const minWorkers = 4
 

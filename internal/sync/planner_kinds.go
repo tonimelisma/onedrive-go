@@ -51,12 +51,6 @@ func (e *unclassifiedPlanError) Unwrap() error {
 	return errUnclassifiedPlan
 }
 
-// IsUnclassified reports a reconciliation row outside the decision table: the
-// comparison has no rule, or no reconciliation rule matched it.
-func (r *SQLiteReconciliationRow) IsUnclassified() bool {
-	return r.ComparisonKind == ComparisonUnclassified || r.ReconciliationKind == ReconcileUnclassified
-}
-
 func unclassifiedRowError(rec *SQLiteReconciliationRow) *unclassifiedPlanError {
 	return &unclassifiedPlanError{
 		Path:           rec.Path,

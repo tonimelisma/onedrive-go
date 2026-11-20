@@ -4,14 +4,6 @@ import (
 	"log/slog"
 )
 
-// RemoteItem is one item a remote observer reports: the row it stores and,
-// when the item moved, the path that row had before. The converter and the
-// orphan finders build it; the old path is never stored.
-type RemoteItem struct {
-	ObservedItem
-	OldPath string
-}
-
 // RemoteChange is what one reported item changes, as the planner-wake
 // decision reads it: the path, the path the item moved from, and its kind.
 type RemoteChange struct {

@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/store_remote_twins.go, internal/sync/store_pending_creates.go, internal/sync/store_held_deletes.go, internal/sync/store_delete_ledger.go, internal/sync/store_local_hash_cache.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/sqlite_compare_kinds.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_types.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/truth_status.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/store_remote_twins.go, internal/sync/store_pending_creates.go, internal/sync/store_held_deletes.go, internal/sync/store_delete_ledger.go, internal/sync/store_local_hash_cache.go, internal/sync/block_scope_rows.go, internal/sync/blocked_retry_projection.go, internal/sync/condition_projection.go, internal/sync/observation_reconcile_policy.go, internal/sync/schema.go, internal/sync/scope_lifecycle_policy.go, internal/sync/sqlite_compare.go, internal/sync/store.go, internal/sync/store_compatibility.go, internal/sync/store_inspect.go, internal/sync/store_local_state.go, internal/sync/store_observation_issues.go, internal/sync/store_observation_state.go, internal/sync/store_planner_visible.go, internal/sync/store_read_remote_state.go, internal/sync/store_reset.go, internal/sync/store_retry_work.go, internal/sync/store_scope_admin.go, internal/sync/store_scratch.go, internal/sync/store_sql_encoding.go, internal/sync/store_write_baseline.go, internal/sync/store_write_block_scopes.go, internal/sync/store_write_observation.go, internal/sync/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/store_sync_root.go
 
 LAYER: 1
 
@@ -72,7 +72,7 @@ each one's subtree by the primary-key range `path >= p || '/' AND path < p ||
 `TestReplacePlannerVisibleStateTx_PruneUsesAPathRangePerMissingFolder`,
 `BenchmarkReplacePlannerVisibleState`).
 
-`shortcut_alias_mutation.go` is no longer claimed here. It declares `*Engine`
+`engine_shortcut_alias_mutation.go` is no longer claimed here. It declares `*Engine`
 methods that perform Graph mutations and persist the resulting shortcut-root
 state, which is engine orchestration, not store truth. It was the only reason
 this family appeared to depend on `Engine` at all. Shortcut status display metadata is sync-owned but derived from
@@ -193,7 +193,7 @@ nine hours with no issue and no log line.
 
 A stored time that is compared by order (a deadline or a not-before time),
 and a remote modification time, is written through one encoder,
-`StoredTimeNano` (`store_sql_encoding.go`): Unix nanoseconds, saturated at
+`StoredTimeNano` (`domain_stored_time.go`): Unix nanoseconds, saturated at
 the ends of the int64 range. A time past 2262 stores `math.MaxInt64`, a time
 before 1678 stores `math.MinInt64`, the zero time stores 0, every such
 column's "no time", and the epoch itself stores 1 ns after it
@@ -514,7 +514,7 @@ truth availability has no verdict for it and guessing one could read a path
 as absent; an empty `condition_type` is a transient failure and reads as no
 condition. A write refuses the same values, so a row the read would refuse is
 never written. What an issue says about truth is one exhaustive switch,
-`truthVerdictForIssueType` (`truth_status.go`), read through
+`truthVerdictForIssueType` (`domain_truth_status.go`), read through
 `observationIssueBlocksLocalTruth` and `observationIssueBlocksRemoteTruth`:
 every member has a stated verdict on the local and the OneDrive side of its
 path, and on OneDrive's side of everything beneath it (only `remote_name_twin`

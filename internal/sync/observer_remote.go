@@ -34,7 +34,6 @@ const (
 	// re-enumerate the drive back to back.
 	expiredDeltaRecoveryMinInterval = 15 * time.Minute
 	maxPathDepth                    = 256
-	MinPollInterval                 = 30 * time.Second
 	specialFolderVault              = "vault" // Graph API personal vault folder name
 )
 

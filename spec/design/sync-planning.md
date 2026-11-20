@@ -274,7 +274,7 @@ The SQL decision table has two stages, one `CASE` expression each in
 (which of baseline, local and remote hold it, and how the sides relate to the
 baseline), and `sqlReconciliationKindCase` turns that kind and the path's flags
 into a reconciliation kind, the decision `buildActionsForReconciliation` maps
-to actions. Both vocabularies are Go enums in `sqlite_compare_kinds.go`
+to actions. Both vocabularies are Go enums in `domain_compare_kinds.go`
 (`ComparisonKind`, `ReconciliationKind`), the source of truth. They sit in the
 store layer, next to the SQL that carries their names, because the row scans
 parse them; `planner_kinds.go` holds the planner's check of them and its error.

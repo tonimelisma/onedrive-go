@@ -173,3 +173,21 @@ func (e *Engine) confirmShortcutOmission(ctx context.Context, topology *Shortcut
 		Complete:          true,
 	})
 }
+
+func ApplyShortcutChildRunCommandToEngineMountConfig(
+	command *ShortcutChildRunCommand,
+	cfg *EngineMountConfig,
+) error {
+	if _, err := ValidateShortcutChildRunCommand(command); err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("sync: child engine mount config is required")
+	}
+	cfg.SyncRoot = command.Engine.LocalRoot
+	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)
+	cfg.RemoteRootItemID = command.Engine.RemoteItemID
+	cfg.ExpectedSyncRootIdentity = CloneShortcutRootIdentity(command.Engine.LocalRootIdentity)
+	cfg.ContentFilter = CloneContentFilterConfig(command.Engine.ContentFilter)
+	return nil
+}

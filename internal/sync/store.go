@@ -20,7 +20,7 @@
 //   - store_scope_admin.go:        scope release/discard mutation helpers
 //   - store_compatibility.go:      startup diagnosis for unsupported existing DBs
 //   - store_reset.go:              explicit delete-and-recreate helper
-//   - store_sql_encoding.go:       column encodings, stored times among them
+//   - store_sql_encoding.go:       column encodings (stored times: domain_stored_time.go)
 
 package sync
 

@@ -205,3 +205,21 @@ func (e cancelCauseError) Error() string { return string(e) }
 
 // Is answers true for context.Canceled and for nothing else.
 func (cancelCauseError) Is(target error) bool { return target == context.Canceled }
+
+// The causes of a one-shot pass context's cancel: a completion that failed
+// the pass (which RunOnce then returns), or the pass's end.
+//
+//nolint:gosec // G101 reads "Pass" in the names as a password; these are cancel causes, not credentials
+const (
+	ErrOneShotPassFailed cancelCauseError = "sync: one-shot pass failed"
+	ErrOneShotPassEnded  cancelCauseError = "sync: one-shot pass ended"
+)
+
+// The causes of the worker contexts' cancels. Neither reaches an action while
+// its run goes on: ErrActionReturned lands after the action returned, and
+// ErrWorkerPoolStopped ends the context the workers were started under, so an
+// action it interrupts completes with RunEnded set, as a shutdown.
+const (
+	ErrActionReturned    cancelCauseError = "sync: action returned"
+	ErrWorkerPoolStopped cancelCauseError = "sync: worker pool stopped"
+)
