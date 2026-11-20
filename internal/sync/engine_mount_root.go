@@ -22,7 +22,7 @@ func (e *Engine) mountRootDeltaSupported() bool {
 
 // mountRootObservation is what one mount-root observation saw.
 type mountRootObservation struct {
-	events []changeEvent
+	events []remoteItem
 	token  string
 	mode   remoteObservationMode
 	// complete marks a whole-folder enumeration (a delta without a token,
@@ -125,7 +125,7 @@ func (flow *engineFlow) observeMountRootRemote(
 // are re-uploads, not deletes (R-2.15.3).
 func (e *Engine) mountRootEvents(
 	ctx context.Context, items []graph.Item, bl *Baseline, complete bool, kind resyncKind,
-) ([]changeEvent, bool) {
+) ([]remoteItem, bool) {
 	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
 	if !complete {
 		return events, false
@@ -146,7 +146,7 @@ func convertMountRootItems(
 	bl *Baseline,
 	logger *slog.Logger,
 	itemClient itemClient,
-) []changeEvent {
+) []remoteItem {
 	converter := newPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
 	converter.RemoteRootItemID = remoteRootItemID
 	return converter.ConvertItems(ctx, items)
@@ -156,7 +156,7 @@ func shouldFallbackMountRootDelta(err error) bool {
 	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
-func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []changeEvent {
+func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []remoteItem {
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		seen[items[i].ID] = struct{}{}
@@ -200,8 +200,8 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 // mount; an item still inside, one whose parent cannot be resolved, or a
 // lookup that failed is left for the next listing.
 func (e *Engine) confirmMountRootOrphans(
-	ctx context.Context, listed []graph.Item, orphans []changeEvent,
-) (confirmed []changeEvent, undecided bool) {
+	ctx context.Context, listed []graph.Item, orphans []remoteItem,
+) (confirmed []remoteItem, undecided bool) {
 	inside := make(map[string]struct{}, len(listed)+1)
 	inside[e.remoteRootItemID] = struct{}{}
 	for i := range listed {
@@ -221,14 +221,14 @@ func (e *Engine) confirmMountRootOrphans(
 // soon (observeRemoteFullWithShortcutTopology).
 func (e *Engine) confirmEnumerationOrphans(
 	ctx context.Context,
-	orphans []changeEvent,
+	orphans []remoteItem,
 	inside map[string]struct{},
-) (confirmed []changeEvent, undecided bool) {
+) (confirmed []remoteItem, undecided bool) {
 	if len(orphans) == 0 || e.itemsClient == nil {
 		return orphans, false
 	}
 
-	confirmed = make([]changeEvent, 0, len(orphans))
+	confirmed = make([]remoteItem, 0, len(orphans))
 	for i := range orphans {
 		orphan := orphans[i]
 		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
@@ -383,7 +383,7 @@ func shouldSkipMountRootWatchBatch(batch *remoteObservationBatch) bool {
 		return true
 	}
 
-	return len(batch.emitted) == 0 &&
+	return len(batch.changes) == 0 &&
 		!batch.hasObservationFindings() &&
 		batch.deferredProgress() == nil &&
 		batch.observationMode != remoteObservationModeEnumerate

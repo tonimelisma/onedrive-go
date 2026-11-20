@@ -23,8 +23,8 @@ func TestDetectCaseCollisions_TwoWay(t *testing.T) {
 	t.Parallel()
 
 	events := []changeEvent{
-		{Path: "dir/File.txt", Name: "File.txt", Type: changeCreate},
-		{Path: "dir/file.txt", Name: "file.txt", Type: changeCreate},
+		{Path: "dir/File.txt"},
+		{Path: "dir/file.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -42,9 +42,9 @@ func TestDetectCaseCollisions_ThreeWay(t *testing.T) {
 	t.Parallel()
 
 	events := []changeEvent{
-		{Path: "File.txt", Name: "File.txt", Type: changeCreate},
-		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
-		{Path: "FILE.txt", Name: "FILE.txt", Type: changeCreate},
+		{Path: "File.txt"},
+		{Path: "file.txt"},
+		{Path: "FILE.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -57,8 +57,8 @@ func TestDetectCaseCollisions_DifferentDirs(t *testing.T) {
 	t.Parallel()
 
 	events := []changeEvent{
-		{Path: "dir1/File.txt", Name: "File.txt", Type: changeCreate},
-		{Path: "dir2/file.txt", Name: "file.txt", Type: changeCreate},
+		{Path: "dir1/File.txt"},
+		{Path: "dir2/file.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -80,11 +80,11 @@ func TestDetectCaseCollisions_NoCollisions(t *testing.T) {
 	t.Parallel()
 
 	events := []changeEvent{
-		{Path: "a.txt", Name: "a.txt", Type: changeCreate},
-		{Path: "b.txt", Name: "b.txt", Type: changeCreate},
-		{Path: "c.txt", Name: "c.txt", Type: changeCreate},
-		{Path: "dir/d.txt", Name: "d.txt", Type: changeCreate},
-		{Path: "dir/e.txt", Name: "e.txt", Type: changeCreate},
+		{Path: "a.txt"},
+		{Path: "b.txt"},
+		{Path: "c.txt"},
+		{Path: "dir/d.txt"},
+		{Path: "dir/e.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -97,8 +97,8 @@ func TestDetectCaseCollisions_DetailContainsCollidingName(t *testing.T) {
 	t.Parallel()
 
 	events := []changeEvent{
-		{Path: "docs/Report.md", Name: "Report.md", Type: changeCreate},
-		{Path: "docs/report.md", Name: "report.md", Type: changeCreate},
+		{Path: "docs/Report.md"},
+		{Path: "docs/report.md"},
 	}
 
 	_, collisions := detectCaseCollisions(events, nil, nil)
@@ -196,14 +196,10 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
-	// Colliders should NOT generate ChangeDelete events — they stay in the
-	// observed map to prevent false deletions.
-	for _, ev := range result.Events {
-		if ev.Type == ChangeDelete {
-			assert.NotEqual(t, "Doc.pdf", ev.Path, "collider should not generate false delete")
-			assert.NotEqual(t, "doc.pdf", ev.Path, "collider should not generate false delete")
-		}
-	}
+	// Colliders are not deletes: both keep their rows, and the collision
+	// finding blocks them instead.
+	assert.NotNil(t, findRow(result.Rows, "Doc.pdf"), "collider should not become a false delete")
+	assert.NotNil(t, findRow(result.Rows, "doc.pdf"), "collider should not become a false delete")
 }
 
 // Validates: R-2.1.3
@@ -330,7 +326,7 @@ func TestDetectCaseCollisions_BaselineCrossCheck(t *testing.T) {
 	})
 
 	events := []changeEvent{
-		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
+		{Path: "file.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, baseline, nil)
@@ -348,8 +344,8 @@ func TestDetectCaseCollisions_FullCaseFoldingCollides(t *testing.T) {
 	// Manual test: STRASSE.txt uploaded over straße.txt because ToLower
 	// does not fold ß to ss, while OneDrive treats them as one name.
 	events := []changeEvent{
-		{Path: "stra\u00dfe.txt", Name: "stra\u00dfe.txt", Type: changeCreate},
-		{Path: "STRASSE.txt", Name: "STRASSE.txt", Type: changeCreate},
+		{Path: "stra\u00dfe.txt"},
+		{Path: "STRASSE.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -366,7 +362,7 @@ func TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles(t *te
 	baseline := newBaselineForTest([]*BaselineEntry{
 		{Path: "a\U0001F600.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
-	events := []changeEvent{{Path: "a.txt", Name: "a.txt", Type: changeCreate}}
+	events := []changeEvent{{Path: "a.txt"}}
 
 	clean, collisions := detectCaseCollisions(events, baseline, nil)
 	assert.Empty(t, clean)
@@ -382,10 +378,10 @@ func TestDetectCaseCollisions_KelvinSignAndMicroSignAreDistinctNames(t *testing.
 	t.Parallel()
 
 	events := []changeEvent{
-		{Path: "\u212a.txt", Name: "\u212a.txt", Type: changeCreate},
-		{Path: "K.txt", Name: "K.txt", Type: changeCreate},
-		{Path: "\u00b5.txt", Name: "\u00b5.txt", Type: changeCreate},
-		{Path: "\u039c.txt", Name: "\u039c.txt", Type: changeCreate},
+		{Path: "\u212a.txt"},
+		{Path: "K.txt"},
+		{Path: "\u00b5.txt"},
+		{Path: "\u039c.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -403,7 +399,7 @@ func TestDetectCaseCollisions_CaseOnlyRenameIsNotACollision(t *testing.T) {
 		{Path: "File.txt", DriveID: driveid.New("d"), ItemID: "id1"},
 	})
 	events := []changeEvent{
-		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
+		{Path: "file.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, baseline, map[string]bool{"file.txt": true})
@@ -425,7 +421,7 @@ func TestDetectCaseCollisions_BaselineExactMatch_NoCollision(t *testing.T) {
 	})
 
 	events := []changeEvent{
-		{Path: "File.txt", Name: "File.txt", Type: ChangeModify},
+		{Path: "File.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, baseline, nil)
@@ -445,8 +441,8 @@ func TestDetectCaseCollisions_BaselineAndEventCollision(t *testing.T) {
 	})
 
 	events := []changeEvent{
-		{Path: "File.txt", Name: "File.txt", Type: changeCreate},
-		{Path: "file.txt", Name: "file.txt", Type: changeCreate},
+		{Path: "File.txt"},
+		{Path: "file.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, baseline, nil)
@@ -464,7 +460,7 @@ func TestDetectCaseCollisions_BaselineInSubdir(t *testing.T) {
 	})
 
 	events := []changeEvent{
-		{Path: "docs/report.md", Name: "report.md", Type: changeCreate},
+		{Path: "docs/report.md"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, baseline, nil)
@@ -479,7 +475,7 @@ func TestDetectCaseCollisions_NilBaseline_NoChange(t *testing.T) {
 
 	// nil baseline (backwards compat) — should behave exactly like before.
 	events := []changeEvent{
-		{Path: "unique.txt", Name: "unique.txt", Type: changeCreate},
+		{Path: "unique.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -498,9 +494,9 @@ func TestDetectCaseCollisions_DirectoryChildrenSuppressed(t *testing.T) {
 	// "Docs/" (folder) collides with "docs" (file). Children of "Docs/" must
 	// also be suppressed — they can't be uploaded to a folder that won't exist.
 	events := []changeEvent{
-		{Path: "Docs", Name: "Docs", Type: changeCreate, ItemType: ItemTypeFolder},
-		{Path: "docs", Name: "docs", Type: changeCreate, ItemType: ItemTypeFile},
-		{Path: "Docs/readme.txt", Name: "readme.txt", Type: changeCreate, ItemType: ItemTypeFile},
+		{Path: "Docs", ItemType: ItemTypeFolder},
+		{Path: "docs", ItemType: ItemTypeFile},
+		{Path: "Docs/readme.txt", ItemType: ItemTypeFile},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -521,10 +517,10 @@ func TestDetectCaseCollisions_DirectoryNestedChildrenSuppressed(t *testing.T) {
 
 	// Nested children under a colliding directory should also be suppressed.
 	events := []changeEvent{
-		{Path: "Docs", Name: "Docs", Type: changeCreate, ItemType: ItemTypeFolder},
-		{Path: "docs", Name: "docs", Type: changeCreate, ItemType: ItemTypeFile},
-		{Path: "Docs/sub", Name: "sub", Type: changeCreate, ItemType: ItemTypeFolder},
-		{Path: "Docs/sub/file.txt", Name: "file.txt", Type: changeCreate, ItemType: ItemTypeFile},
+		{Path: "Docs", ItemType: ItemTypeFolder},
+		{Path: "docs", ItemType: ItemTypeFile},
+		{Path: "Docs/sub", ItemType: ItemTypeFolder},
+		{Path: "Docs/sub/file.txt", ItemType: ItemTypeFile},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -538,8 +534,8 @@ func TestDetectCaseCollisions_DirectoryNoCollision_ChildrenPass(t *testing.T) {
 
 	// No collision on the directory — children pass through normally.
 	events := []changeEvent{
-		{Path: "Docs", Name: "Docs", Type: changeCreate, ItemType: ItemTypeFolder},
-		{Path: "Docs/readme.txt", Name: "readme.txt", Type: changeCreate, ItemType: ItemTypeFile},
+		{Path: "Docs", ItemType: ItemTypeFolder},
+		{Path: "Docs/readme.txt", ItemType: ItemTypeFile},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)
@@ -649,8 +645,8 @@ func TestDetectCaseCollisions_UnicodeFormTwinsReportOnceWithClearReason(t *testi
 
 	// "café" composed and decomposed both normalize to the same NFC path.
 	events := []changeEvent{
-		{Path: "dir/café.txt", Name: "café.txt", Type: changeCreate},
-		{Path: "dir/café.txt", Name: "café.txt", Type: changeCreate},
+		{Path: "dir/café.txt"},
+		{Path: "dir/café.txt"},
 	}
 
 	clean, collisions := detectCaseCollisions(events, nil, nil)

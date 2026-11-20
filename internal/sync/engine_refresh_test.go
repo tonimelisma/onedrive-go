@@ -17,15 +17,15 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// projectObservedItems projection tests
+// projectRemoteObservations projection tests
 // ---------------------------------------------------------------------------
 
 func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []changeEvent{
-		{
+	events := []remoteItem{
+		{observedItem: observedItem{
 			ItemID:    "item1",
 			ParentID:  "parent1",
 			DriveID:   driveID,
@@ -36,17 +36,17 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 			Mtime:     123456789,
 			ETag:      "etag1",
 			IsDeleted: false,
-		},
-		{
+		}},
+		{observedItem: observedItem{
 			ItemID:    "item2",
 			DriveID:   driveID,
 			Path:      "docs/folder",
 			ItemType:  ItemTypeFolder,
 			IsDeleted: true,
-		},
+		}},
 	}
 
-	items := projectObservedItems(slog.Default(), events)
+	items := projectRemoteObservations(slog.Default(), events).observed
 	require.Len(t, items, 2)
 
 	assert.Equal(t, driveID, items[0].DriveID)
@@ -107,15 +107,14 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	// observeAndCommitRemoteCurrentState with 0 events (only root, which is skipped).
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
+	// observeAndCommitRemoteCurrentState with no change (only root, which is skipped).
+	pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
 	)
 	require.NoError(t, err)
-	assert.Empty(t, events, "should return 0 events (root is skipped)")
-	require.Nil(t, pendingCursor, "no pending cursor when 0 events")
+	require.Nil(t, pendingCursor, "no pending cursor when the window holds no change")
 
 	// Token should NOT have been advanced.
 	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
@@ -165,14 +164,16 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	// observeAndCommitRemoteCurrentState with actual events.
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
+	// observeAndCommitRemoteCurrentState with one change (root is skipped).
+	pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
 	)
 	require.NoError(t, err)
-	assert.Len(t, events, 1, "should return 1 event (root is skipped)")
+	remoteRows, err := e.baseline.ListRemoteState(ctx)
+	require.NoError(t, err)
+	assert.Len(t, remoteRows, 1, "the one changed item is committed (root is skipped)")
 
 	require.NotNil(t, pendingCursor)
 	assert.Equal(t, "new-token", pendingCursor.cursorToken, "pending cursor should be returned")
@@ -208,8 +209,8 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	require.Len(t, orphans, 1, "should detect 1 orphan")
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
-	assert.Equal(t, ChangeDelete, orphans[0].Type)
 	assert.True(t, orphans[0].IsDeleted)
+	assert.Empty(t, orphans[0].OldPath)
 }
 
 // Validates: R-2.1.6
@@ -312,32 +313,30 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
-	events, token, err := testEngineFlow(t, e).observeRemoteFull(ctx, bl)
+	full, err := testEngineFlow(t, e).observeRemoteFullWithShortcutTopology(ctx, bl, resyncKindApplyDifferences)
 	require.NoError(t, err)
-	assert.Equal(t, "full-token", token)
+	assert.Equal(t, "full-token", full.token)
 
-	// Should have 1 modify (file1 exists in baseline) + 1 orphan delete (file2).
-	var modifies, deletes int
-	for _, ev := range events {
-		switch ev.Type {
-		case ChangeModify:
-			modifies++
-		case ChangeDelete:
-			deletes++
-			assert.Equal(t, "file2.txt", ev.Path, "orphan should be file2.txt")
-			assert.Equal(t, "f2", ev.ItemID)
-			assert.True(t, ev.IsDeleted)
-		case changeCreate, ChangeMove:
-			// Not expected in this test.
+	// Should hold file1's row (it exists in the baseline) and the orphan
+	// delete of file2.
+	var live, deletes int
+	for _, ev := range full.events {
+		if !ev.IsDeleted {
+			live++
+			assert.Equal(t, "file1.txt", ev.Path)
+			continue
 		}
+		deletes++
+		assert.Equal(t, "file2.txt", ev.Path, "orphan should be file2.txt")
+		assert.Equal(t, "f2", ev.ItemID)
 	}
 
-	assert.Equal(t, 1, modifies, "should have 1 modify event (file1 exists in baseline)")
-	assert.Equal(t, 1, deletes, "should have 1 orphan delete event")
+	assert.Equal(t, 1, live, "should hold file1's row (file1 exists in baseline)")
+	assert.Equal(t, 1, deletes, "should have 1 orphan delete")
 }
 
 // ---------------------------------------------------------------------------
-// projectObservedItems — empty ItemID guard (Item 4)
+// projectRemoteObservations — empty ItemID guard
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.7.28
@@ -345,13 +344,13 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(testDriveID)
-	events := []changeEvent{
-		{ItemID: "valid-1", Path: "a.txt", DriveID: driveID},
-		{ItemID: "", Path: "bad.txt", DriveID: driveID},
-		{ItemID: "valid-2", Path: "b.txt", DriveID: driveID},
+	events := []remoteItem{
+		{observedItem: observedItem{ItemID: "valid-1", Path: "a.txt", DriveID: driveID}},
+		{observedItem: observedItem{ItemID: "", Path: "bad.txt", DriveID: driveID}},
+		{observedItem: observedItem{ItemID: "valid-2", Path: "b.txt", DriveID: driveID}},
 	}
 
-	items := projectObservedItems(slog.Default(), events)
+	items := projectRemoteObservations(slog.Default(), events).observed
 	require.Len(t, items, 2, "empty ItemID event should be skipped")
 	assert.Equal(t, "valid-1", items[0].ItemID)
 	assert.Equal(t, "valid-2", items[1].ItemID)
@@ -465,30 +464,26 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
 	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
 
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
+	require.NoError(t, e.baseline.CommitObservation(ctx, []observedItem{
+		{DriveID: driveID, ItemID: "f1", Path: "file1.txt", ItemType: ItemTypeFile},
+		{DriveID: driveID, ItemID: "f2", Path: "file2.txt", ItemType: ItemTypeFile},
+	}, "", driveID))
+
+	pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		true,
 	)
 	require.NoError(t, err)
 
-	// Should have modify (file1) + orphan delete (file2).
-	var modifies, deletes int
-	for _, ev := range events {
-		switch ev.Type {
-		case ChangeModify:
-			modifies++
-		case ChangeDelete:
-			deletes++
-			assert.Equal(t, "file2.txt", ev.Path)
-			assert.True(t, ev.IsDeleted)
-		case changeCreate, ChangeMove:
-			// not expected
-		}
+	// file1 is still there; the orphan delete removed file2.
+	remoteRows, err := e.baseline.ListRemoteState(ctx)
+	require.NoError(t, err)
+	remotePaths := make([]string, 0, len(remoteRows))
+	for i := range remoteRows {
+		remotePaths = append(remotePaths, remoteRows[i].Path)
 	}
-
-	assert.Equal(t, 1, modifies)
-	assert.Equal(t, 1, deletes)
+	assert.Equal(t, []string{"file1.txt"}, remotePaths)
 	require.NotNil(t, pendingCursor)
 
 	// Cursor should be returned as pending — NOT committed to DB.
@@ -531,13 +526,12 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	events, pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
+	pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
 		ctx,
 		bl,
 		false,
 	)
 	require.NoError(t, err)
-	assert.Empty(t, events)
 	assert.Nil(t, pendingCursor)
 
 	issues, err := e.baseline.ListObservationIssues(ctx)
@@ -824,7 +818,7 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 
 	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{dirty: true}))
 	rt.markDirtyFromRemoteBatch(&remoteObservationBatch{
-		emitted: []changeEvent{
+		changes: []remoteChange{
 			{Path: "alpha.txt"},
 			{OldPath: "beta.txt"},
 			{Path: "gamma.txt", OldPath: "delta.txt"},

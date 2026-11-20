@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"path"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -119,13 +120,14 @@ func TestFullDelta_NewFiles(t *testing.T) {
 
 	// First file.
 	e := events[0]
-	assert.Equal(t, changeCreate, e.Type)
+	assert.False(t, e.IsDeleted)
+	assert.Empty(t, e.OldPath)
 	assert.Equal(t, "hello.txt", e.Path)
 	assert.Equal(t, "qxh1", e.Hash)
 	assert.Equal(t, int64(100), e.Size)
 
 	// Second file.
-	assert.Equal(t, "world.txt", events[1].Name)
+	assert.Equal(t, "world.txt", path.Base(events[1].Path))
 }
 
 // Validates: R-6.7.3
@@ -159,7 +161,7 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 
 	// Root and folder produce events too (folder is classified).
 	// Find the file event.
-	var fileEvent *changeEvent
+	var fileEvent *remoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -169,7 +171,8 @@ func TestFullDelta_ModifiedFile(t *testing.T) {
 	}
 
 	require.NotNil(t, fileEvent, "file event not found")
-	assert.Equal(t, ChangeModify, fileEvent.Type)
+	assert.False(t, fileEvent.IsDeleted)
+	assert.Empty(t, fileEvent.OldPath)
 	assert.Equal(t, "docs/readme.md", fileEvent.Path)
 	assert.Equal(t, "new-hash", fileEvent.Hash)
 }
@@ -201,7 +204,7 @@ func TestFullDelta_DeletedFile(t *testing.T) {
 	require.Len(t, events, 1)
 
 	e := events[0]
-	assert.Equal(t, ChangeDelete, e.Type)
+	assert.True(t, e.IsDeleted)
 	assert.True(t, e.IsDeleted)
 	assert.Equal(t, "photos/cat.jpg", e.Path)
 }
@@ -234,9 +237,10 @@ func TestFullDelta_ModifiedFile_SparseFieldsRecoveredFromBaseline(t *testing.T) 
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, ChangeModify, events[0].Type)
+	assert.False(t, events[0].IsDeleted)
+	assert.Empty(t, events[0].OldPath)
 	assert.Equal(t, "docs/readme.md", events[0].Path)
-	assert.Equal(t, "readme.md", events[0].Name)
+	assert.Equal(t, "readme.md", path.Base(events[0].Path))
 	assert.Equal(t, "new-hash", events[0].Hash)
 }
 
@@ -276,7 +280,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var moveEvent *changeEvent
+	var moveEvent *remoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			moveEvent = &events[i]
@@ -286,7 +290,7 @@ func TestFullDelta_MovedFile(t *testing.T) {
 	}
 
 	require.NotNil(t, moveEvent, "move event not found")
-	assert.Equal(t, ChangeMove, moveEvent.Type)
+	assert.NotEmpty(t, moveEvent.OldPath)
 	assert.Equal(t, "new-folder/doc.txt", moveEvent.Path)
 	assert.Equal(t, "old-folder/doc.txt", moveEvent.OldPath)
 }
@@ -326,10 +330,10 @@ func TestFullDelta_MovedFile_SparseNameRecoveredFromBaseline(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, ChangeMove, events[0].Type)
+	assert.NotEmpty(t, events[0].OldPath)
 	assert.Equal(t, "new-folder/doc.txt", events[0].Path)
 	assert.Equal(t, "old-folder/doc.txt", events[0].OldPath)
-	assert.Equal(t, "doc.txt", events[0].Name)
+	assert.Equal(t, "doc.txt", path.Base(events[0].Path))
 }
 
 // Validates: R-6.7.29
@@ -370,7 +374,7 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var fileEvent *changeEvent
+	var fileEvent *remoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -379,7 +383,7 @@ func TestFullDelta_DescendantFollowsSparseRenamedParentWithOmittedParentReferenc
 	}
 
 	require.NotNil(t, fileEvent, "descendant event not found")
-	assert.Equal(t, ChangeMove, fileEvent.Type)
+	assert.NotEmpty(t, fileEvent.OldPath)
 	assert.Equal(t, "Team/Statements/q1.txt", fileEvent.Path,
 		"descendant should keep the renamed parent's baseline ancestry when parentReference is omitted")
 	assert.Equal(t, "Team/Reports/q1.txt", fileEvent.OldPath)
@@ -508,7 +512,7 @@ func TestFullDelta_PathMaterialization_InFlight(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	// Find file event.
-	var fileEvent *changeEvent
+	var fileEvent *remoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -577,7 +581,7 @@ func TestFullDelta_PathMaterialization_Mixed(t *testing.T) {
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var fileEvent *changeEvent
+	var fileEvent *remoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			fileEvent = &events[i]
@@ -616,7 +620,7 @@ func TestFullDelta_DeletedItem_MissingName(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, "budget.xlsx", events[0].Name, "recovered from baseline")
+	assert.Equal(t, "budget.xlsx", path.Base(events[0].Path), "recovered from baseline")
 	assert.Equal(t, "work/budget.xlsx", events[0].Path)
 }
 
@@ -679,7 +683,7 @@ func TestFullDelta_NFCNormalization(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, nfc, events[0].Name, "NFC-normalized")
+	assert.Equal(t, nfc, path.Base(events[0].Path), "NFC-normalized")
 	assert.Equal(t, nfc, events[0].Path, "NFC-normalized")
 }
 
@@ -941,9 +945,9 @@ func TestFullDelta_DeletedItem_NotInBaseline(t *testing.T) {
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, ChangeDelete, events[0].Type)
+	assert.True(t, events[0].IsDeleted)
 	assert.Equal(t, "ephemeral.txt", events[0].Path)
-	assert.Equal(t, "ephemeral.txt", events[0].Name)
+	assert.Equal(t, "ephemeral.txt", path.Base(events[0].Path))
 }
 
 // Validates: R-6.7.3
@@ -1008,12 +1012,13 @@ func TestFullDelta_SkipsUntrackedDeletedItemWithKnownParentButEmptyName(t *testi
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, changeCreate, events[0].Type)
+	assert.False(t, events[0].IsDeleted)
+	assert.Empty(t, events[0].OldPath)
 	assert.Equal(t, "Projects", events[0].Path)
 	assert.Equal(t, "delta-link", token)
 }
 
-func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []changeEvent {
+func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []remoteItem {
 	t.Helper()
 
 	fetcher := &mockDeltaFetcher{
@@ -1290,18 +1295,18 @@ func noopSleep(_ context.Context, _ time.Duration) error {
 }
 
 // startTestRemoteBatchDrain plays the watch runtime for a remote observer's
-// batches: it forwards each batch's events, applies the batch with apply
+// batches: it forwards each batch's changes, applies the batch with apply
 // (nil applies nothing) and acknowledges it. It runs in the background until
-// ctx ends (runInBackground), and its events channel closes then.
+// ctx ends (runInBackground), and its changes channel closes then.
 func startTestRemoteBatchDrain(
 	t *testing.T,
 	ctx context.Context,
 	batches <-chan remoteObservationBatch,
 	apply func(remoteObservationBatch) error,
-) <-chan changeEvent {
+) <-chan remoteChange {
 	t.Helper()
 
-	events := make(chan changeEvent, 32)
+	events := make(chan remoteChange, 32)
 	runInBackground(t, ctx, func(drainCtx context.Context) error {
 		defer close(events)
 
@@ -1312,9 +1317,9 @@ func startTestRemoteBatchDrain(
 					return nil
 				}
 
-				for i := range batch.emitted {
+				for i := range batch.changes {
 					select {
-					case events <- batch.emitted[i]:
+					case events <- batch.changes[i]:
 					case <-drainCtx.Done():
 						return nil
 					}
@@ -1337,7 +1342,7 @@ func startTestRemoteBatchDrain(
 func testPrimaryWatchBatchHandler(driveID driveid.ID) remoteWatchBatchHandler {
 	return func(
 		_ context.Context,
-		events []changeEvent,
+		events []remoteItem,
 		newToken string,
 		topology shortcutTopologyBatch,
 	) (remoteObservationBatch, error) {
@@ -1346,7 +1351,7 @@ func testPrimaryWatchBatchHandler(driveID driveid.ID) remoteWatchBatchHandler {
 			source:           remoteObservationBatchPrimaryWatch,
 			observationMode:  remoteObservationModeDelta,
 			observed:         projected.observed,
-			emitted:          append([]changeEvent(nil), projected.emitted...),
+			changes:          projected.changes,
 			cursorToken:      newToken,
 			shortcutTopology: topology,
 			applyAck:         make(chan error, 1),
@@ -1874,7 +1879,7 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 	events, _, err := obs.FullDelta(t.Context(), "token")
 	require.NoError(t, err, "FullDelta")
 
-	var renameEvent *changeEvent
+	var renameEvent *remoteItem
 	for i := range events {
 		if events[i].ItemID == "f1" {
 			renameEvent = &events[i]
@@ -1884,10 +1889,10 @@ func TestFullDelta_RenameInPlace(t *testing.T) {
 	}
 
 	require.NotNil(t, renameEvent, "rename event not found")
-	assert.Equal(t, ChangeMove, renameEvent.Type)
+	assert.NotEmpty(t, renameEvent.OldPath)
 	assert.Equal(t, "docs/new-name.txt", renameEvent.Path)
 	assert.Equal(t, "docs/old-name.txt", renameEvent.OldPath)
-	assert.Equal(t, "new-name.txt", renameEvent.Name)
+	assert.Equal(t, "new-name.txt", path.Base(renameEvent.Path))
 }
 
 // Validates: R-2.2.1
@@ -1931,41 +1936,6 @@ func TestSelectHash_FallbackChain(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-// TestRemoteObserver_LastActivity verifies that LastActivity() is updated
-// after a successful FullDelta poll, providing a liveness signal for the
-// engine to detect stalled observers (B-125).
-func TestRemoteObserver_LastActivity(t *testing.T) {
-	t.Parallel()
-
-	fetcher := &mockDeltaFetcher{
-		pages: []mockDeltaPage{{
-			page: &graph.DeltaPage{
-				Items: []graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveid.New(synctest.TestDriveID)},
-					{ID: "f1", Name: "test.txt", ParentID: "root", DriveID: driveid.New(synctest.TestDriveID), Size: 10},
-				},
-				DeltaLink: "delta-link",
-			},
-		}},
-	}
-
-	obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(synctest.TestDriveID), synctest.TestLogger(t))
-
-	// Before any poll, LastActivity should be zero.
-	assert.True(t, obs.LastActivity().IsZero(), "LastActivity before poll should be zero")
-
-	before := time.Now()
-
-	_, _, err := obs.FullDelta(t.Context(), "")
-	require.NoError(t, err, "FullDelta")
-
-	after := time.Now()
-	activity := obs.LastActivity()
-
-	assert.False(t, activity.Before(before), "LastActivity = %v, want >= %v", activity, before)
-	assert.False(t, activity.After(after), "LastActivity = %v, want <= %v", activity, after)
 }
 
 // TestRemoteObserver_Stats verifies that Stats() returns non-zero counters
@@ -2054,7 +2024,8 @@ func TestFullDelta_CrossDriveItems(t *testing.T) {
 	assert.Equal(t, "shared-folder/shared-doc.txt", ev.Path)
 
 	// Since the item is new (not in baseline), it should be a Create.
-	assert.Equal(t, changeCreate, ev.Type)
+	assert.False(t, ev.IsDeleted)
+	assert.Empty(t, ev.OldPath)
 }
 
 // Validates: R-2.4.7
@@ -2100,7 +2071,7 @@ func TestFullDelta_PersonalVaultExcluded(t *testing.T) {
 
 	// Only the normal file should produce an event — vault items are excluded.
 	require.Len(t, events, 1, "vault excluded")
-	assert.Equal(t, "readme.txt", events[0].Name)
+	assert.Equal(t, "readme.txt", path.Base(events[0].Path))
 }
 
 // TestFullDelta_VaultChildBeforeParent verifies that vault descendants are
@@ -2150,7 +2121,7 @@ func TestFullDelta_VaultChildBeforeParent(t *testing.T) {
 	// Only the normal file should produce an event — vault child must be
 	// skipped regardless of ordering within the delta page.
 	require.Len(t, events, 1, "vault child skipped despite ordering")
-	assert.Equal(t, "readme.txt", events[0].Name)
+	assert.Equal(t, "readme.txt", path.Base(events[0].Path))
 }
 
 // TestObserverStats_HashesComputed verifies that the HashesComputed counter
@@ -2369,7 +2340,7 @@ func TestWatch_BatchHandlerError_ReturnsError(t *testing.T) {
 	err := runWithin(t, ctx, "the batch policy failure to end the watch", func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "", batches, time.Millisecond, nil, func(
 			context.Context,
-			[]changeEvent,
+			[]remoteItem,
 			string,
 			shortcutTopologyBatch,
 		) (remoteObservationBatch, error) {
@@ -2424,7 +2395,7 @@ func TestWatch_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	assert.True(t, handed.pollOnly)
 	assert.Equal(t, polledAt, handed.pollStartedAt)
 	assert.Empty(t, handed.observed, "nothing to commit")
-	assert.Empty(t, handed.emitted, "nothing to replan")
+	assert.Empty(t, handed.changes, "nothing to replan")
 	assert.Empty(t, handed.cursorToken, "no token to save")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "token should not advance when 0 events returned")
 }
@@ -2731,7 +2702,7 @@ func TestFullDelta_OrphanParentReadTransientFailure_StaysIncomplete(t *testing.T
 
 // runSingleWatchPoll runs one Watch poll against a fresh store, commits the
 // batch it produces, and returns the committed cursor and emitted events.
-func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (string, []changeEvent) {
+func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (string, []remoteChange) {
 	t.Helper()
 
 	store := newTestStore(t)
@@ -2741,10 +2712,10 @@ func runSingleWatchPoll(t *testing.T, obs *remoteObserver, driveID driveid.ID) (
 		return ctx.Err()
 	}}
 
-	var emitted []changeEvent
+	var emitted []remoteChange
 	batches := make(chan remoteObservationBatch, 10)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
-		emitted = append(emitted, batch.emitted...)
+		emitted = append(emitted, batch.changes...)
 		return store.CommitObservation(context.WithoutCancel(ctx), batch.observed, batch.cursorToken, driveID)
 	})
 	err := runWithin(t, ctx, "the poll's sleep to end the watch", func(watchCtx context.Context) error {
@@ -2786,7 +2757,8 @@ func TestClassifyItem_RegularFileNoRemoteDriveID(t *testing.T) {
 	ev := obs.Converter.ClassifyItem(item, inflight)
 	require.NotNil(t, ev, "regular file should produce an event")
 
-	assert.Equal(t, changeCreate, ev.Type, "regular file without RemoteDriveID should be ChangeCreate")
+	assert.False(t, ev.IsDeleted, "regular file without RemoteDriveID should be ChangeCreate")
+	assert.Empty(t, ev.OldPath, "regular file without RemoteDriveID should be ChangeCreate")
 }
 
 // Validates: R-2.4.3
@@ -2961,7 +2933,7 @@ func TestFullDelta_ParentIDChainWinsOverParentReferencePath(t *testing.T) {
 	events, _, err := obs.FullDelta(t.Context(), "")
 	require.NoError(t, err)
 
-	var child *changeEvent
+	var child *remoteItem
 	for i := range events {
 		if events[i].ItemID == sharedTestFileItemID {
 			child = &events[i]
@@ -2980,7 +2952,7 @@ func TestFullDelta_ParentReferencePathFallbackChecksEverySegment(t *testing.T) {
 	// parentReference.path. A ".." segment there must not climb out, and a
 	// folder literally named "a%20b" keeps its name (L-32).
 	driveID := driveid.New(synctest.TestDriveID)
-	place := func(parentPath string) ([]changeEvent, error) {
+	place := func(parentPath string) ([]remoteItem, error) {
 		fetcher := &mockDeltaFetcher{pages: []mockDeltaPage{{page: &graph.DeltaPage{
 			Items: []graph.Item{{
 				ID: "child", Name: "x.txt", ParentID: "unknown-parent", DriveID: driveID,
@@ -3035,7 +3007,7 @@ func TestFullDelta_PlacesNamelessUntrackedDeleteByItsRemoteStatePath(t *testing.
 	require.NoError(t, err, "FullDelta")
 
 	require.Len(t, events, 1)
-	assert.Equal(t, ChangeDelete, events[0].Type)
+	assert.True(t, events[0].IsDeleted)
 	assert.Equal(t, "Projects/old.txt", events[0].Path)
-	assert.Equal(t, "old.txt", events[0].Name)
+	assert.Equal(t, "old.txt", path.Base(events[0].Path))
 }

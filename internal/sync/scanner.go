@@ -6,7 +6,6 @@
 //   - hashPhase:               parallel hash computation for discovered files
 //   - makeWalkFunc:            builds the filepath.WalkDir callback
 //   - classifyObservedInfo:    classifies one observed entry against baseline
-//   - detectDeletions:         finds baseline entries missing from walk
 //   - computeStableHashWith:   double-stat hash for actively-written files
 //   - shouldObserveWithFilter: unified observation filter (Stage 1: name + path)
 //   - IsOversizedFile:         Stage 2 observation filter (file size > 250GB)
@@ -42,9 +41,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// scanResult is the return type of FullScan. Rows are the direct current local
-// snapshot that local_state persists. Events remain observation-local signals
-// for watch dirtiness and diagnostics; they are not planner input. Skipped are
+// scanResult is the return type of FullScan. Rows are the whole current local
+// snapshot that local_state persists: a path with no row is absent. Events
+// list the entries that are new or changed against the baseline, by path and
+// kind, with case collisions removed; they are not planner input. Skipped are
 // user-actionable rejections (invalid names, path too long, file too large)
 // that the engine should record.
 type scanResult struct {
@@ -80,7 +80,6 @@ const defaultCheckWorkers = 4
 type hashJob struct {
 	fsPath           string
 	dbRelPath        string
-	name             string
 	size             int64
 	mtime            int64
 	ctime            int64
@@ -100,17 +99,17 @@ func (o *localObserver) resolveCheckWorkers() int {
 	return defaultCheckWorkers
 }
 
-// FullScan walks the sync root directory and returns a ScanResult containing
-// change events for all local changes (creates, modifies, deletes) relative
-// to the baseline, plus any skipped items that should be recorded as
-// observation issues.
+// FullScan walks the sync root directory and returns a ScanResult holding a
+// row for every entry on disk, the entries that are new or changed against
+// the baseline, and any skipped items that should be recorded as observation
+// issues. A synced item that is gone has no row.
 //
 // Three-phase design:
-//  1. Walk (sequential): collect observed map, emit folder creates, classify
-//     files that need hashing into a hashJob slice. Collects SkippedItems
-//     for invalid names, too-long paths, and too-large files.
+//  1. Walk (sequential): collect observed map and rows, list new folders,
+//     classify files that need hashing into a hashJob slice. Collects
+//     SkippedItems for invalid names, too-long paths, and too-large files.
 //  2. Hash (parallel): errgroup.SetLimit(checkWorkers) hashes files concurrently.
-//  3. Deletion detection (sequential): compare observed vs baseline.
+//  3. Case collision detection (sequential) over the new and changed entries.
 func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scanResult, error) {
 	syncRoot := tree.Path()
 	o.logger.Info("local observer starting full scan",
@@ -186,34 +185,19 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 		skipped = append(skipped, hashSkipped...)
 	}
 
-	// Phase 2.5: Case collision detection — run after hashing (events finalized)
-	// but before deletion detection. Colliding files stay in the observed map
-	// (set in Phase 1) to prevent Phase 3 from generating spurious ChangeDelete
-	// events for files that exist locally but were excluded from events (R-2.12.1).
+	// Phase 3: Case collision detection, after hashing (events finalized).
+	// Colliding entries are dropped from events and recorded as findings;
+	// their rows stay, so a collider never reads as a local delete (R-2.12.1).
 	var caseSkipped []skippedItem
 	events, caseSkipped = detectCaseCollisions(events, o.baseline, observed)
 	skipped = append(skipped, caseSkipped...)
 
-	// Phase 3: Deletion detection.
-	deletions := o.detectDeletions(observed)
-	events = append(events, deletions...)
-
-	o.logger.Debug("deletion detection complete",
-		slog.Int("deletions", len(deletions)),
-		slog.Int("baseline_entries", o.baseline.Len()),
-		slog.Int("observed", len(observed)),
-	)
-
 	o.logger.Info("local observer completed full scan",
-		slog.Int("events", len(events)),
+		slog.Int("rows", len(currentRows)),
 		slog.Int("observed", len(observed)),
 		slog.Int("hashed", len(jobs)),
 		slog.Int("skipped", len(skipped)),
 	)
-
-	if len(events) > 0 {
-		o.recordActivity()
-	}
 
 	return scanResult{
 		Events:        events,
@@ -243,8 +227,9 @@ func (o *localObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 }
 
 // hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
-// Returns the resulting change events (creates and modifies with hashes), plus
-// any skipped items from panics in hash goroutines. Panics are recovered and
+// Returns a row for every hashed file, an event for each one whose content
+// differs from the baseline, plus any skipped items from panics in hash
+// goroutines. Panics are recovered and
 // converted to SkippedItem entries — a single corrupted file cannot crash the
 // entire scan (defensive coding per eng philosophy).
 //
@@ -362,22 +347,7 @@ func (o *localObserver) hashPhase(ctx context.Context, jobs []hashJob) ([]change
 
 			recorder.addJob(gCtx, &job, hash)
 
-			changeType := changeCreate
-			if !job.isNew {
-				changeType = ChangeModify
-			}
-
-			ev := changeEvent{
-				Type:     changeType,
-				Path:     job.dbRelPath,
-				Name:     job.name,
-				ItemType: ItemTypeFile,
-				Size:     job.size,
-				Hash:     hash,
-				Mtime:    job.mtime,
-			}
-
-			keep(&ev, &row)
+			keep(&changeEvent{Path: job.dbRelPath, ItemType: ItemTypeFile}, &row)
 
 			return nil
 		})
@@ -506,7 +476,7 @@ func (o *localObserver) makeWalkFunc(
 			return skipEntry(d)
 		}
 
-		return o.processEntry(fsPath, dbRelPath, name, d, observed, currentRows, events, jobs, skipped, scanStartNano)
+		return o.processEntry(fsPath, dbRelPath, d, observed, currentRows, events, jobs, skipped, scanStartNano)
 	}
 }
 
@@ -515,7 +485,7 @@ func (o *localObserver) makeWalkFunc(
 // events directly; files that need hashing are appended to jobs for phase 2.
 // Stage 2 observation filter: file size > 250GB is checked here (after stat).
 func (o *localObserver) processEntry(
-	fsPath, dbRelPath, name string, d fs.DirEntry, observed map[string]bool,
+	fsPath, dbRelPath string, d fs.DirEntry, observed map[string]bool,
 	currentRows map[string]localStateRow,
 	events *[]changeEvent, jobs *[]hashJob, skipped *[]skippedItem, scanStartNano int64,
 ) error {
@@ -546,7 +516,6 @@ func (o *localObserver) processEntry(
 	return o.processObservedInfo(
 		fsPath,
 		dbRelPath,
-		name,
 		info,
 		dirEntryKind(d),
 		observed,
@@ -669,7 +638,7 @@ func withoutDroppedHashJobs(jobs []hashJob, availability *scanAvailability) []ha
 }
 
 func (o *localObserver) processObservedInfo(
-	fsPath, dbRelPath, name string,
+	fsPath, dbRelPath string,
 	info fs.FileInfo,
 	kind observedKind,
 	observed map[string]bool,
@@ -771,7 +740,7 @@ func (o *localObserver) processObservedInfo(
 		return fmt.Errorf("walk observed entry %s: unknown observed kind", dbRelPath)
 	}
 
-	return o.classifyObservedInfo(fsPath, dbRelPath, name, info, kind, currentRows, events, jobs, scanStartNano)
+	return o.classifyObservedInfo(fsPath, dbRelPath, info, kind, currentRows, events, jobs, scanStartNano)
 }
 
 // classifyObservedInfo determines the change type for a single observed local
@@ -779,7 +748,7 @@ func (o *localObserver) processObservedInfo(
 // events; files that need hashing are appended to jobs for the parallel hash
 // phase.
 func (o *localObserver) classifyObservedInfo(
-	fsPath, dbRelPath, name string,
+	fsPath, dbRelPath string,
 	info fs.FileInfo,
 	kind observedKind,
 	currentRows map[string]localStateRow,
@@ -796,27 +765,12 @@ func (o *localObserver) classifyObservedInfo(
 	if existing == nil {
 		observedRow := currentRows[dbRelPath]
 		if kind == observedKindDir {
-			// Folder creates go directly to events (no hashing needed).
-			*events = append(*events, changeEvent{
-				Type:     changeCreate,
-				Path:     dbRelPath,
-				Name:     name,
-				ItemType: ItemTypeFolder,
-				Size:     info.Size(),
-				Mtime:    info.ModTime().UnixNano(),
-			})
+			// A new folder goes directly to events (no hashing needed).
+			*events = append(*events, changeEvent{Path: dbRelPath, ItemType: ItemTypeFolder})
 		} else if hash, ok := o.cachedHashForNewFile(dbRelPath, info, &observedRow, scanStartNano); ok {
 			// A scan before this one hashed the file and recorded it; the
 			// file has not changed since by every fact the fast path checks.
-			*events = append(*events, changeEvent{
-				Type:     changeCreate,
-				Path:     dbRelPath,
-				Name:     name,
-				ItemType: ItemTypeFile,
-				Size:     info.Size(),
-				Hash:     hash,
-				Mtime:    info.ModTime().UnixNano(),
-			})
+			*events = append(*events, changeEvent{Path: dbRelPath, ItemType: ItemTypeFile})
 			currentRows[dbRelPath] = localStateRow{
 				Path:             dbRelPath,
 				ItemType:         ItemTypeFile,
@@ -834,7 +788,6 @@ func (o *localObserver) classifyObservedInfo(
 			*jobs = append(*jobs, hashJob{
 				fsPath:           fsPath,
 				dbRelPath:        dbRelPath,
-				name:             name,
 				size:             info.Size(),
 				mtime:            info.ModTime().UnixNano(),
 				ctime:            observedRow.Ctime,
@@ -855,7 +808,7 @@ func (o *localObserver) classifyObservedInfo(
 		return nil
 	}
 
-	return o.detectFileContentChange(fsPath, dbRelPath, name, info, existing, currentRows, jobs, scanStartNano)
+	return o.detectFileContentChange(fsPath, dbRelPath, info, existing, currentRows, jobs, scanStartNano)
 }
 
 // detectFileContentChange compares a file against its baseline entry to detect
@@ -866,7 +819,7 @@ func (o *localObserver) classifyObservedInfo(
 // are always hashed, because they may have been modified in the same clock
 // tick as the last sync (Git's "racily clean" problem).
 func (o *localObserver) detectFileContentChange(
-	fsPath, dbRelPath, name string, info fs.FileInfo, base *BaselineEntry,
+	fsPath, dbRelPath string, info fs.FileInfo, base *BaselineEntry,
 	currentRows map[string]localStateRow,
 	jobs *[]hashJob, scanStartNano int64,
 ) error {
@@ -902,7 +855,6 @@ func (o *localObserver) detectFileContentChange(
 	*jobs = append(*jobs, hashJob{
 		fsPath:           fsPath,
 		dbRelPath:        dbRelPath,
-		name:             name,
 		size:             currentSize,
 		mtime:            currentMtime,
 		ctime:            observedRow.Ctime,
@@ -1237,67 +1189,6 @@ func appendMultiGroupCollisions(
 	}
 
 	return collisions
-}
-
-// detectDeletions finds baseline entries that were not observed during the
-// walk, emitting ChangeDelete events for each.
-func (o *localObserver) detectDeletions(observed map[string]bool) []changeEvent {
-	var events []changeEvent
-
-	o.baseline.ForEachPath(func(path string, entry *BaselineEntry) {
-		if path == "" {
-			return
-		}
-
-		if entry.ItemType == ItemTypeRoot {
-			return
-		}
-
-		if observed[path] {
-			return
-		}
-
-		if o.shouldSuppressDeleteForExcludedPath(path, entry) {
-			return
-		}
-
-		events = append(events, changeEvent{
-			Type:      ChangeDelete,
-			Path:      path,
-			Name:      filepath.Base(path),
-			ItemType:  entry.ItemType,
-			Size:      entry.LocalSize,
-			Mtime:     entry.LocalMtime,
-			IsDeleted: true,
-		})
-	})
-
-	return events
-}
-
-func (o *localObserver) shouldSuppressDeleteForExcludedPath(path string, entry *BaselineEntry) bool {
-	if o.hasExcludedSymlinkAncestor(path) {
-		return true
-	}
-
-	skip := shouldObserveWithFilter(
-		filepath.Base(path),
-		path,
-		observedKindFromItemType(entry.ItemType),
-		o.filterConfig,
-		o.protectedRoots,
-		o.observationRules,
-	)
-
-	return skip != nil && skip.Reason == ""
-}
-
-func observedKindFromItemType(itemType ItemType) observedKind {
-	if itemType == ItemTypeFolder || itemType == ItemTypeRoot {
-		return observedKindDir
-	}
-
-	return observedKindFile
 }
 
 // ---------------------------------------------------------------------------

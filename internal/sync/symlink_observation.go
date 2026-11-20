@@ -386,7 +386,6 @@ func (o *localObserver) walkObservedEntry(
 	if err := o.processObservedInfo(
 		entryFsPath,
 		entryRelPath,
-		entryName,
 		info,
 		kind,
 		observed,
@@ -688,7 +687,6 @@ func (o *localObserver) processSymlinkPath(
 	if err := o.processObservedInfo(
 		fsPath,
 		dbRelPath,
-		name,
 		info,
 		kind,
 		observed,

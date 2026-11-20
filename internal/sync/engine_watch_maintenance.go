@@ -169,7 +169,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	}
 	start := rt.deps.now()
 	defer func() {
-		rt.engine.collector().RecordRefresh(len(result.emitted), rt.deps.since(start))
+		rt.engine.collector().RecordRefresh(len(result.changes), rt.deps.since(start))
 	}()
 
 	rt.deps.logger.Info("periodic full remote refresh starting")
@@ -188,9 +188,9 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 
 	observationBatch.source = remoteObservationBatchFullRefresh
 	observationBatch.armFullRefreshTimer = true
-	observationBatch.markFullRefreshIfIdle = len(observationBatch.emitted) == 0
+	observationBatch.markFullRefreshIfIdle = len(observationBatch.changes) == 0
 	result = observationBatch
-	if len(result.emitted) == 0 {
+	if len(result.changes) == 0 {
 		rt.deps.logger.Info("periodic full remote refresh complete: no changes",
 			slog.Duration("duration", rt.deps.since(start)),
 		)
@@ -198,7 +198,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	}
 
 	rt.deps.logger.Info("periodic full remote refresh complete",
-		slog.Int("events", len(result.emitted)),
+		slog.Int("changes", len(result.changes)),
 		slog.Duration("duration", rt.deps.since(start)),
 	)
 

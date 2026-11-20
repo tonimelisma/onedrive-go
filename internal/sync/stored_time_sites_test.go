@@ -48,8 +48,6 @@ func TestStoredTimes_EveryDecodeIsDeclared(t *testing.T) {
 		"internal/sync/engine_watch_maintenance.go": {decodesOrderedTime: 3},
 		"internal/sync/store_pending_creates.go":    {decodesOrderedTime: 1},
 		"internal/sync/local_hash_reuse.go":         {inMemoryValue: 1},
-		"internal/sync/observer_local.go":           {inMemoryValue: 1},
-		"internal/sync/observer_remote.go":          {inMemoryValue: 1},
 		"internal/sync/engine_housekeeping.go":      {inMemoryValue: 1},
 	}
 
@@ -64,7 +62,7 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 
 	declared := map[string]map[string]int{
 		"internal/sync/store_sql_encoding.go":      {encodesThroughTheSaturatingEncoder: 1},
-		"internal/sync/scanner.go":                 {encodesLocalTimeForEquality: 7, inMemoryValue: 1},
+		"internal/sync/scanner.go":                 {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
 		"internal/sync/observer_local_handlers.go": {encodesLocalTimeForEquality: 4, inMemoryValue: 1},
 		"internal/sync/executor_preconditions.go":  {encodesLocalTimeForEquality: 3},
 		"internal/sync/executor_delete.go":         {encodesLocalTimeForEquality: 1, inMemoryValue: 2},
@@ -72,8 +70,6 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 		"internal/sync/local_hash_reuse.go":        {encodesLocalTimeForEquality: 1},
 		"internal/sync/scanner_hash_cache.go":      {encodesLocalTimeForEquality: 1},
 		"internal/sync/engine_shortcut_release.go": {encodesLocalTimeForEquality: 1},
-		"internal/sync/observer_local.go":          {inMemoryValue: 1},
-		"internal/sync/observer_remote.go":         {inMemoryValue: 1},
 		"internal/sync/engine_housekeeping.go":     {inMemoryValue: 1},
 	}
 

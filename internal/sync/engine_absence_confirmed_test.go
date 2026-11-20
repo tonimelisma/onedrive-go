@@ -111,14 +111,14 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		},
 	}
 	listed := []graph.Item{{ID: "sub", Name: "sub", ParentID: "mount-root", IsFolder: true}}
-	orphans := []changeEvent{
-		{ItemID: "skipped", Path: "sub/a.txt", Type: ChangeDelete, IsDeleted: true},
-		{ItemID: "moved-out", Path: "b.txt", Type: ChangeDelete, IsDeleted: true},
-		{ItemID: "trashed", Path: "c.txt", Type: ChangeDelete, IsDeleted: true},
-		{ItemID: "gone", Path: "d.txt", Type: ChangeDelete, IsDeleted: true},
-		{ItemID: "unknown", Path: "e.txt", Type: ChangeDelete, IsDeleted: true},
-		{ItemID: "no-parent", Path: "f.txt", Type: ChangeDelete, IsDeleted: true},
-		{ItemID: "unresolvable", Path: "g.txt", Type: ChangeDelete, IsDeleted: true},
+	orphans := []remoteItem{
+		{observedItem: observedItem{ItemID: "skipped", Path: "sub/a.txt", IsDeleted: true}},
+		{observedItem: observedItem{ItemID: "moved-out", Path: "b.txt", IsDeleted: true}},
+		{observedItem: observedItem{ItemID: "trashed", Path: "c.txt", IsDeleted: true}},
+		{observedItem: observedItem{ItemID: "gone", Path: "d.txt", IsDeleted: true}},
+		{observedItem: observedItem{ItemID: "unknown", Path: "e.txt", IsDeleted: true}},
+		{observedItem: observedItem{ItemID: "no-parent", Path: "f.txt", IsDeleted: true}},
+		{observedItem: observedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
 	}
 
 	confirmed, _ := eng.confirmMountRootOrphans(t.Context(), listed, orphans)

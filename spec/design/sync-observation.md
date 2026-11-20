@@ -1,6 +1,6 @@
 # Sync Observation
 
-GOVERNS: internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observation_local_rules.go, internal/sync/observation_remote_batch.go, internal/sync/observation_root_identity.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/scanner_unavailable.go, internal/sync/scanner_hash_cache.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
+GOVERNS: internal/sync/baseline_orphans.go, internal/sync/buffer.go, internal/sync/inotify_linux.go, internal/sync/inotify_other.go, internal/sync/item_converter.go, internal/sync/local_hash_reuse.go, internal/sync/local_observation_batch.go, internal/sync/observation_local_rules.go, internal/sync/observation_remote_batch.go, internal/sync/observation_root_identity.go, internal/sync/observed_items.go, internal/sync/observer_local.go, internal/sync/observer_local_collisions.go, internal/sync/observer_local_handlers.go, internal/sync/observer_remote.go, internal/sync/scanner.go, internal/sync/scanner_unavailable.go, internal/sync/scanner_hash_cache.go, internal/sync/socketio.go, internal/sync/socketio_conn.go, internal/sync/socketio_protocol.go, internal/sync/symlink_observation.go
 
 LAYER: 2
 
@@ -85,7 +85,7 @@ except that the type had once been public.
 | A full local scan clears every finding it no longer reports and keeps every one it reports again, an interrupted removal's leftover included; every watch-mode full scan (safety, recovery, and the fallback scan while watching is unavailable) sends its finding set in its snapshot even when it is empty; every issue type a scan reports is a managed type of the local findings batch, checked against the scanner's source; only a regular file under a set-aside name is reported as an interrupted removal (R-6.4.9, R-2.8.21, R-2.8.22). | `TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover`, `TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone`, `TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet`, `TestWatchRuntime_FallbackScanRecordsAndClearsFindings`, `TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty`, `TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval` |
 | A watch Remove or Rename event becomes a delete only when the exact name is really gone, so a lone MOVED_FROM, an atomic save or a misattributed event never deletes a file that is still there. | `TestHandleDelete_PathThatStillExistsEmitsNoDelete`, `TestHandleFsEvent_DeletePassesFsPath` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
-| Watch-mode local observation emits scoped engine-applied batches: exact file rows, subtree deletes for every removed path, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree`, `TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows`, `TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
+| Watch-mode local observation emits scoped engine-applied batches: exact file rows, subtree deletes for every removed path, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree`, `TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows`, `TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released (R-2.8.22). | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
@@ -362,9 +362,15 @@ advance.
 Remote observation persists raw manageable `remote_state` rows. Product content
 filters are applied when the engine builds planner-visible local/remote views,
 not by deleting raw remote mirror rows. Delta/watch handling may suppress
-planner wakeups for batches whose emitted events are entirely outside the
-filtered view, but cursor advancement remains tied to successfully committed raw
-observation progress.
+planner wakeups for batches whose changes are entirely outside the filtered
+view, but cursor advancement remains tied to successfully committed raw
+observation progress. The converter and the orphan finders report each item as
+its stored row (`observedItem`) plus, for a move, the old path (`remoteItem`);
+a batch carries the rows and one `remoteChange` (path, old path, kind) per
+reported item, an item without an ID included: it stores no row but still
+counts as a change, so the cursor advances over it
+(`TestRemoteObservation_RowsAndChangesForEveryItemKind`,
+`TestRemoteBatch_AChangeWithoutAnItemIDStillCountsForTheCursor`).
 
 Known managed shortcut aliases also use persisted protected-root target metadata
 as a same-binding fallback when Graph returns a sparse moved/renamed shortcut
@@ -408,13 +414,20 @@ knows, and its own delete event, carrying the NFC path, never found the peers
 waiting on it.
 
 Watch-mode local observation also maintains `local_state` incrementally from
-re-observed scopes. File create/modify handlers stat and hash the exact file and
-emit an upsert row. Directory create handlers add watches, scan the new
-subtree, and emit rows for the observed directory tree. Every delete or
-rename-away removes the path and every row below it, whatever the observer
-knew about what the path was: a new directory whose watch could not be added
-is a folder neither the baseline nor the watch set knows, yet the scan of the
-new subtree stored its children's rows. Local observation reaches the
+re-observed scopes. The local observer has one output, the batch channel the
+watch runtime installs; a handler states what is on disk and never tells a
+create from a modify. A created or written file is stated and hashed and sent
+as its row. Directory create handlers add watches, scan the new subtree, and
+send rows for the observed directory tree. Every delete or rename-away removes
+the path and every row below it, whatever the path was: a new directory whose
+watch could not be added is a folder neither the baseline nor the watch set
+knows, yet the scan of the new subtree stored its children's rows. Which
+watches a removed path drops is decided from the watch set alone: every watch
+registered below the path, and the path's own if it has one
+(`TestHandleDelete_UnknownDirectoryDropsTheWatchesBelowIt`). A full scan's
+rows are the whole of local truth: a synced item that is gone has no row,
+which the planner reads as a local delete, and the scan walks no baseline to
+find it (`TestFullScan_DeletedSyncedFileHasNoRow`). Local observation reaches the
 runtime as one `localObservation` of one of three kinds on one channel: a
 patch (rows to write, paths and subtrees to remove), a snapshot (every row of
 one full scan with that scan's whole finding set and the mount points it
@@ -433,9 +446,10 @@ dropped on a full channel asks for a recovery scan, as every dropped
 observation does. The snapshot carries no dirty hint of its own: the runtime
 replans when the commit changes committed truth (a row, or the
 truth-complete marker, R-2.8.17) or the persisted issue set
-(`TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty`). A scan's events are counted against the
-baseline, so during a backlog every safety scan re-reports every change the
-installed plan already covers; marking the runtime dirty for them retired the
+(`TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty`). A scan's
+change list (the new and changed entries, which the case-collision check
+reads) is counted against the baseline, so during a backlog every safety scan
+would re-report every change the installed plan already covers; marking the runtime dirty for them retired the
 admitted plan at every safety scan, and with a replan slower than the safety
 interval starved dispatch entirely (R-2.8.21, the 2026-11-01 livelock on
 11,000 entries).
@@ -680,7 +694,7 @@ Ignore invariants:
 - ignored local items do not enter `local_state`
 - remote observation persists raw manageable `remote_state`; planner loading
   filters the remote current-state view before comparison
-- remote delta wake optimization is driven by whether the emitted path or old
+- remote delta wake optimization is driven by whether a change's path or old
   path is visible under the current `contentFilter`; hidden-to-hidden changes
   advance raw observation state without waking planning
 - if a baseline path is absent from both filtered current views, reconciliation

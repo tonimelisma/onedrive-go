@@ -465,7 +465,7 @@ func handleTwinDelete(t *testing.T, h *syncHarness) []localObservation {
 	obs.SetLocalObservationBatchChannel(batches)
 
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), h.eng.syncTree,
-		filepath.Join(h.syncRoot, twinSecondName), twinSyncedName, twinSyncedName, make(chan changeEvent, 1))
+		filepath.Join(h.syncRoot, twinSecondName), twinSyncedName, twinSyncedName)
 
 	var sent []localObservation
 	for len(batches) > 0 {

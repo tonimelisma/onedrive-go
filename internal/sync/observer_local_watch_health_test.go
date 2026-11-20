@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
@@ -145,10 +146,9 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	watching := make(chan struct{})
 	obs.beforeWatchLoop = func() { close(watching) }
 
-	events := make(chan changeEvent, 10)
 	tree := mustOpenSyncTree(t, dir)
 	_, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-		return obs.Watch(ctx, tree, events)
+		return obs.Watch(ctx, tree)
 	})
 
 	select {
@@ -189,13 +189,35 @@ func TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst(t *testing.T
 	// it is: the subtree walk must still reach it.
 	registerWatchedForTest(obs, "/sync", "/sync/a", "/sync/a/q/r", "/sync/a/x", "/sync/a/x/y", "/sync/a/z", "/sync/ab", "/sync/other/a")
 
-	events := make(chan changeEvent, 10)
-	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/a", "a", "a", events)
+	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/a", "a", "a")
 
 	assert.Equal(t, []string{"/sync/a/q/r", "/sync/a/x/y", "/sync/a/x", "/sync/a/z", "/sync/a"}, watcher.getRemovedPaths())
 	assert.Equal(t, []string{"/sync", "/sync/ab", "/sync/other/a"}, obs.watchedDirs.paths(),
 		"only the removed subtree is forgotten; siblings sharing a name prefix stay")
 	assert.Empty(t, obs.watchedDirs.descendants("/sync/a"), "the index holds nothing below the removed directory")
+}
+
+// Validates: R-2.8.14
+//
+// What a deleted path was is decided from the watch set alone: a directory
+// the baseline does not know, whose own watch could not be added, still
+// drops the watches registered below it, and a deleted file removes none.
+func TestHandleDelete_UnknownDirectoryDropsTheWatchesBelowIt(t *testing.T) {
+	t.Parallel()
+
+	watcher := newRecordingFsWatcher()
+	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
+	registerWatchedForTest(obs, "/sync", "/sync/new/x", "/sync/new/x/y", "/sync/news")
+	tree := mustOpenSyncTree(t, "/sync")
+
+	obs.HandleDelete(t.Context(), watcher, tree, "/sync/file.txt", "file.txt", "file.txt")
+	assert.Empty(t, watcher.getRemovedPaths(), "a deleted file removes no watch")
+
+	obs.HandleDelete(t.Context(), watcher, tree, "/sync/new", "new", "new")
+
+	assert.Equal(t, []string{"/sync/new/x/y", "/sync/new/x"}, watcher.getRemovedPaths(),
+		"the watches below the unregistered directory are dropped deepest first, and the directory itself has none to remove")
+	assert.Equal(t, []string{"/sync", "/sync/news"}, obs.watchedDirs.paths())
 }
 
 // Validates: R-2.8.14
@@ -210,23 +232,23 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 		&BaselineEntry{Path: "a/sub", DriveID: driveid.New("d"), ItemID: "s1", ItemType: ItemTypeFolder},
 	)
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 64)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 64)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	require.NoError(t, os.Rename(filepath.Join(dir, "a"), filepath.Join(dir, "b")))
 
 	// The rename is observed once the moved subtree is re-registered under
 	// its new name.
-	waitForLocalEvent(t, events, func(ev changeEvent) bool {
-		return ev.Type == changeCreate && ev.Path == "b/sub"
-	}, "re-registration of b/sub")
+	waitForLocalRow(t, batches, "b/sub")
 
 	writeTestFile(t, dir, "b/sub/new.txt", "after rename")
 
-	ev := waitForLocalEvent(t, events, func(ev changeEvent) bool {
-		return strings.HasSuffix(ev.Path, "/new.txt")
-	}, "event for the file created inside the renamed tree")
-	assert.Equal(t, "b/sub/new.txt", ev.Path,
+	patch := waitForLocalPatch(t, batches, func(batch *localObservation) bool {
+		return slices.ContainsFunc(batch.rows, func(row localStateRow) bool {
+			return strings.HasSuffix(row.Path, "/new.txt")
+		})
+	}, "a row for the file created inside the renamed tree")
+	assert.Equal(t, []string{"b/sub/new.txt"}, patchRowPaths([]localObservation{patch}),
 		"a descendant watch must not keep reporting the directory's old path")
 	stopWatch(t, cancel, done)
 }
@@ -248,7 +270,7 @@ func TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches(t *testing.T)
 	stale := filepath.Join(replaced, "old", "deep")
 	registerWatchedForTest(obs, dir, replaced, filepath.Join(replaced, "old"), stale, filepath.Join(dir, "a-sibling"))
 
-	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), replaced, "a", "a", watcher, make(chan changeEvent, 10))
+	obs.handleCreate(t.Context(), mustOpenSyncTree(t, dir), replaced, "a", "a", watcher)
 
 	assert.Equal(t, []string{stale, filepath.Join(replaced, "old")}, watcher.getRemovedPaths(),
 		"stale descendant watches of the replaced directory are dropped deepest first")
@@ -275,14 +297,12 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 	}
 	watcher := newRecordingFsWatcher()
 	tree := mustOpenSyncTree(t, dir)
-	events := make(chan changeEvent, 16)
-
-	obs.handleCreate(t.Context(), tree, photos, "photos", "photos", watcher, events)
+	obs.handleCreate(t.Context(), tree, photos, "photos", "photos", watcher)
 	require.Equal(t, int64(2), hashCalls.Load(), "the first create scans and hashes the new tree")
 	require.Contains(t, obs.watchedDirs.paths(), filepath.Join(photos, "nested"))
 
 	// fsnotify's own Create for the same directory, racing the scan.
-	obs.handleCreate(t.Context(), tree, photos, "photos", "photos", watcher, events)
+	obs.handleCreate(t.Context(), tree, photos, "photos", "photos", watcher)
 
 	assert.Equal(t, int64(2), hashCalls.Load(), "a duplicate Create of the same directory does not re-hash its tree")
 	assert.Empty(t, watcher.getRemovedPaths(), "and does not drop its watches")
@@ -292,23 +312,6 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 func registerWatchedForTest(obs *localObserver, paths ...string) {
 	for _, path := range paths {
 		obs.watchedDirs.add(path, nil)
-	}
-}
-
-func waitForLocalEvent(t *testing.T, events <-chan changeEvent, match func(changeEvent) bool, what string) changeEvent {
-	t.Helper()
-
-	timeout := time.After(eventWait)
-	for {
-		select {
-		case ev := <-events:
-			if match(ev) {
-				return ev
-			}
-		case <-timeout:
-			require.Fail(t, "timeout waiting for "+what)
-			return changeEvent{}
-		}
 	}
 }
 
@@ -334,7 +337,7 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 	batches := make(chan localObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 
-	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
+	cancel, done := startMockWatch(t, obs, watcher, dir)
 
 	watcher.errs <- fsnotify.ErrEventOverflow
 
@@ -595,7 +598,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 	batches := make(chan localObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 
-	cancel, done := startMockWatch(t, obs, &watcher.mockFsWatcher, dir, make(chan changeEvent, 10))
+	cancel, done := startMockWatch(t, obs, &watcher.mockFsWatcher, dir)
 
 	// The kernel dropped the Create for this directory.
 	missed := filepath.Join(dir, "created-during-overflow")

@@ -50,16 +50,12 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 
 	// The file is UNCHANGED, but the racily-clean guard forces a hash check.
 	// Since the hash matches, no change event should be emitted.
-	for _, ev := range result.Events {
-		if ev.Path == "racily-clean.txt" {
-			assert.NotEqual(t, ChangeModify, ev.Type,
-				"racily-clean file with matching hash should not emit ChangeModify")
-		}
-	}
+	assert.Nil(t, findEvent(result.Events, "racily-clean.txt"),
+		"a racily-clean file with matching hash is not a change")
 }
 
 // TestMtimeChangeWithoutContentChange validates that when a file's mtime
-// differs from baseline but the hash matches, no ChangeModify event
+// differs from baseline but the hash matches, no change
 // is emitted (content didn't actually change).
 func TestMtimeChangeWithoutContentChange(t *testing.T) {
 	syncRoot := t.TempDir()
@@ -89,12 +85,8 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mtime differs but hash matches → no event should be emitted.
-	for _, ev := range result.Events {
-		if ev.Path == "touched.txt" {
-			assert.NotEqual(t, ChangeModify, ev.Type,
-				"mtime change without content change should not emit ChangeModify")
-		}
-	}
+	assert.Nil(t, findEvent(result.Events, "touched.txt"),
+		"an mtime change without a content change is not a change")
 }
 
 // TestDotfileStemExt validates filepath.Ext behavior on dotfiles.

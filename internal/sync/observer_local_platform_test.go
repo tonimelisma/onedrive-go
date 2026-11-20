@@ -74,7 +74,7 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 		return filesystemInfo{kind: "cifs", remote: true}, nil
 	}
 
-	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
+	cancel, done := startMockWatch(t, obs, watcher, dir)
 
 	require.Eventually(t, func() bool { return manualTickerIntervals(clock) != nil }, eventWait, time.Millisecond)
 	assert.Equal(t, []time.Duration{networkSafetyScanInterval}, manualTickerIntervals(clock),

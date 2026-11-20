@@ -27,7 +27,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 	clone := *batch
 	clone.source = ""
 	clone.observed = nil
-	clone.emitted = nil
+	clone.changes = nil
 	clone.findings = ObservationFindingsBatch{}
 	clone.shortcutTopology = shortcutTopologyBatch{}
 	clone.armFullRefreshTimer = false
@@ -40,7 +40,7 @@ func (batch *remoteObservationBatch) deferredProgress() *remoteObservationBatch 
 func buildRemoteObservationBatch(
 	engine *Engine,
 	mode remoteObservationMode,
-	events []changeEvent,
+	events []remoteItem,
 	token string,
 	markFullRemoteRefresh bool,
 	findings ObservationFindingsBatch,
@@ -50,8 +50,8 @@ func buildRemoteObservationBatch(
 	return remoteObservationBatch{
 		observationMode:       mode,
 		observed:              projected.observed,
-		emitted:               append([]changeEvent(nil), projected.emitted...),
-		cursorToken:           primaryObservationCursorToken(token, markFullRemoteRefresh, len(projected.emitted), mode),
+		changes:               projected.changes,
+		cursorToken:           primaryObservationCursorToken(token, markFullRemoteRefresh, len(projected.changes), mode),
 		markFullRemoteRefresh: markFullRemoteRefresh,
 		findings:              findings,
 	}
@@ -60,14 +60,14 @@ func buildRemoteObservationBatch(
 func primaryObservationCursorToken(
 	token string,
 	markFullRemoteRefresh bool,
-	eventCount int,
+	changeCount int,
 	mode remoteObservationMode,
 ) string {
 	needsEnumerateClamp := mode == remoteObservationModeEnumerate
 	if token == "" && !markFullRemoteRefresh && !needsEnumerateClamp {
 		return ""
 	}
-	if !markFullRemoteRefresh && eventCount == 0 && !needsEnumerateClamp {
+	if !markFullRemoteRefresh && changeCount == 0 && !needsEnumerateClamp {
 		return ""
 	}
 
@@ -77,7 +77,7 @@ func primaryObservationCursorToken(
 func buildPrimaryWatchBatch(
 	engine *Engine,
 	bl *Baseline,
-	primaryEvents []changeEvent,
+	primaryEvents []remoteItem,
 	newToken string,
 ) remoteObservationBatch {
 	batch := buildRemoteObservationBatch(
@@ -176,7 +176,7 @@ func (flow *engineFlow) executeDriveRootObservation(
 // A folder this client deleted itself is no longer in the baseline when its
 // tombstone echoes back, so propagating a local folder delete does not cost a
 // full enumeration.
-func deltaWindowDeletesSyncedFolder(bl *Baseline, events []changeEvent) bool {
+func deltaWindowDeletesSyncedFolder(bl *Baseline, events []remoteItem) bool {
 	if bl == nil {
 		return false
 	}

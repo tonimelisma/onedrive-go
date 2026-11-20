@@ -171,7 +171,7 @@ func TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded(t *testin
 			obs := newRemoteObserver(fetcher, emptyBaseline(), driveid.New(engineTestDriveID), testLogger(t))
 			runCtx, endRun := context.WithCancel(t.Context())
 			defer endRun()
-			handle := func(context.Context, []changeEvent, string, shortcutTopologyBatch) (remoteObservationBatch, error) {
+			handle := func(context.Context, []remoteItem, string, shortcutTopologyBatch) (remoteObservationBatch, error) {
 				if tc.endRun {
 					endRun()
 				}

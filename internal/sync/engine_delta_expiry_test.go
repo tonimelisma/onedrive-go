@@ -202,11 +202,12 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	}}
 
 	recovered := make(chan resyncKind, 1)
-	orphan := changeEvent{Type: ChangeDelete, ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}
+	orphan := remoteItem{observedItem: observedItem{ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}}
 	obs.SetDeltaExpiredRecovery(func(_ context.Context, kind resyncKind) (remoteObservationBatch, error) {
 		recovered <- kind
 		return remoteObservationBatch{
-			emitted:               []changeEvent{orphan},
+			observed:              []observedItem{orphan.observedItem},
+			changes:               remoteChangesOf([]remoteItem{orphan}),
 			cursorToken:           "token-after-full-refresh",
 			markFullRemoteRefresh: true,
 		}, nil
@@ -215,15 +216,22 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	batches := make(chan remoteObservationBatch, 4)
-	events := startTestRemoteBatchDrain(t, ctx, batches, nil)
+	applied := make(chan remoteObservationBatch, 1)
+	events := startTestRemoteBatchDrain(t, ctx, batches, func(batch remoteObservationBatch) error {
+		applied <- batch
+		return nil
+	})
 	_, done := runInBackground(t, ctx, func(watchCtx context.Context) error {
 		return obs.Watch(watchCtx, "expired-token", batches, time.Hour, nil, nil)
 	})
 
 	assert.Equal(t, resyncKindUploadDifferences, receiveWithin(t, recovered, "the delta-expired recovery to run"),
 		"the resync flavor reaches the full refresh")
-	emitted := receiveWithin(t, events, "the full refresh's batch")
-	assert.True(t, emitted.ReuploadLocal, "the full refresh's batch, orphans included, is what watch emits")
+	emitted := receiveWithin(t, events, "the full refresh's change")
+	assert.Equal(t, "gone.txt", emitted.Path)
+	handed := receiveWithin(t, applied, "the full refresh's batch")
+	require.Len(t, handed.observed, 1)
+	assert.True(t, handed.observed[0].ReuploadLocal, "the full refresh's batch, orphans included, is what watch emits")
 	require.Eventually(t, func() bool { return obs.CurrentDeltaToken() == "token-after-full-refresh" },
 		eventWait, time.Millisecond)
 	stopWatch(t, cancel, done)
