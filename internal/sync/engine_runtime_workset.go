@@ -16,7 +16,7 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 	flow.sched.queuedByID = make(map[int64]struct{})
 	flow.sched.runningByID = make(map[int64]struct{})
 	flow.sched.runningCount = 0
-	flow.sched.resetColdStart(flow.engine.workerPoolSize())
+	flow.sched.resetColdStart(flow.cfg.poolSize)
 	flow.retries.nextHeldOrder = 0
 
 	activeScopes := make([]syncdomain.ActiveScope, 0, len(runtime.BlockScopes))

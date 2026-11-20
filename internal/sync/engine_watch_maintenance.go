@@ -170,7 +170,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	}
 	start := rt.deps.now()
 	defer func() {
-		rt.engine.collector().RecordRefresh(len(result.Changes), rt.deps.since(start))
+		rt.deps.perf.RecordRefresh(len(result.Changes), rt.deps.since(start))
 	}()
 
 	rt.deps.logger.Info("periodic full remote refresh starting")

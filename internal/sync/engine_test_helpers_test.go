@@ -139,7 +139,7 @@ func (s *enginePathConvergenceStub) PermanentDeleteResolvedPath(_ context.Contex
 }
 
 func newFlowBackedTestEngine(engine *Engine) *testEngine {
-	flow := newEngineFlow(engine)
+	flow := newEngineFlow(engine.flowInputs())
 
 	return &testEngine{
 		Engine: engine,
@@ -202,7 +202,7 @@ func newTestEngineInDirWith(
 	require.NoError(t, err, "NewEngine")
 	eng.hooks.assertInvariants = true
 	applyRegisteredDispatchOrder(t, eng)
-	flow := newEngineFlow(eng)
+	flow := newEngineFlow(eng.flowInputs())
 	testEng := &testEngine{
 		Engine: eng,
 		flow:   flow,
@@ -518,4 +518,18 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 		Logger:             logger,
 	}
 	return inputs
+}
+
+// refreshTestFlowInputs gives the test engine's flow and watch runtime the
+// engine's configuration, capabilities and hooks as they are now, for a test
+// that changed them on the engine after the flow was built: a run takes its
+// copy when it starts, so a live flow would not see the change.
+func refreshTestFlowInputs(eng *testEngine) {
+	in := eng.flowInputs()
+	if rt, ok := lookupTestWatchRuntime(eng); ok {
+		rt.cfg, rt.deps, rt.hooks = in.cfg, in.deps, in.hooks
+	}
+	if flow, ok := lookupTestEngineFlow(eng); ok {
+		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
+	}
 }

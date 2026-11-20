@@ -330,23 +330,28 @@ the input any further decomposition of this type needs.
 
 ## Run Capabilities Are Passed, Not Reached For
 
-Every per-run flow needs the same four things regardless of what it is
-deciding: somewhere to log, the durable store, the clock, and the debug event
-stream. Those arrive as `runtimeDeps`, constructed once when the run starts.
+Every per-run flow needs the same things regardless of what it is deciding:
+somewhere to log, the durable store, the clock, the debug event stream and the
+perf collector. Those arrive as `runtimeDeps`. The engine's configuration a
+run reads (drive, remote root, sync folder and tree, worker counts, content
+filter, local rules, shortcut namespace, websocket switch) arrives as
+`runConfig`, and its test seams as a copy of `engineHooks`. All three are
+taken in one place, `Engine.flowInputs`, which also takes the run's ID
+(`TestEngine_EachRunGetsADistinctRunID`), and `newEngineFlow` builds the flow
+from that `flowInputs` value (`TestEngine_FlowInputsCopyTheConfigurationAndHooks`).
 
-They were reached through a back-pointer to the whole `Engine`. That pointer
-carried 320 references, and four targets accounted for 191 of them. Those four
-are not collaborators the flow coordinates with; they are ambient capabilities
-that happened to be in scope. Passing them in narrows what a flow can reach
-for, and leaves the remaining engine references as what they actually are: the
-specific configuration and collaborators a particular decision consults --
-`driveID`, `contentFilter`, `permHandler`, `syncTree`.
+They were reached through a back-pointer to the whole `Engine`. Passing them
+in narrows what a flow can reach for, and leaves the remaining engine
+references as what they actually are: the collaborators a particular decision
+consults (`permHandler`, `execCfg`, the shortcut-root methods) and the state
+the engine owns (protected roots, housekeeping streaks).
 
-The snapshot is deliberate. A run's capabilities do not change underneath it,
-so `runtimeDeps` copies them at construction rather than re-reading the engine
-on each access. The consequence is visible in tests: swapping the engine's
-clock after a runtime exists has no effect on that runtime, and the test helper
-that does so refreshes the deps explicitly rather than relying on a read-through.
+The snapshot is deliberate. A run's capabilities, configuration and hooks do
+not change underneath it, so the flow copies them at construction rather than
+re-reading the engine on each access. The consequence is visible in tests:
+swapping the engine's clock or a hook after a runtime exists has no effect on
+that runtime, and the test helper that swaps the clock refreshes the deps
+explicitly rather than relying on a read-through.
 
 ## Asking For Future Work
 

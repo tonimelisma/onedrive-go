@@ -209,10 +209,10 @@ func (rt *watchRuntime) initWatchInfra(
 		Store:            executorStoreOf(rt.deps.store),
 		Logger:           rt.deps.logger,
 		CompletionBuffer: watchCompletionBuf,
-		Perf:             rt.engine.collector(),
-		Serialize:        rt.engine.hooks.serializeWorkers,
+		Perf:             rt.deps.perf,
+		Serialize:        rt.hooks.serializeWorkers,
 	})
-	pool.Start(ctx, rt.engine.transferWorkers)
+	pool.Start(ctx, rt.cfg.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
@@ -387,16 +387,16 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
 ) (*syncobserve.LocalObserver, error) {
 	localObs := rt.engine.buildLocalObserver(bl, rt.deps.logger)
-	hashCache, err := rt.engine.baseline.NewLocalHashCache(ctx)
+	hashCache, err := rt.deps.store.NewLocalHashCache(ctx)
 	if err != nil {
 		return nil, err
 	}
 	localObs.SetLocalHashCache(hashCache)
-	localObs.SetFilterConfig(rt.engine.contentFilter)
+	localObs.SetFilterConfig(rt.cfg.contentFilter)
 	localObs.SetProtectedRoots(rt.engine.currentProtectedRoots())
-	localObs.SetObservationRules(rt.engine.localRules)
+	localObs.SetObservationRules(rt.cfg.localRules)
 	localObs.SetSyncRootIdentity(rt.engine.syncRootIdentity)
-	mountFlags, err := rt.engine.baseline.ListMountBoundaries(ctx)
+	mountFlags, err := rt.deps.store.ListMountBoundaries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +453,7 @@ func (rt *watchRuntime) startLocalObserver(
 // safety-scan interval, and tries to watch again after 10 minutes, doubling
 // to an hour while the limit persists.
 func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *syncobserve.LocalObserver) error {
-	tree := rt.engine.syncTree
+	tree := rt.cfg.syncTree
 	retryDelay := syncobserve.LocalWatchRetryInitialDelay
 	var warnedCause syncobserve.WatchUnavailableCause
 
@@ -515,12 +515,12 @@ func (rt *watchRuntime) startRemoteObserver(
 }
 
 func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {
-	if !rt.engine.enableWebsocket || rt.engine.socketIOFetcher == nil {
+	if !rt.cfg.enableWebsocket || rt.engine.socketIOFetcher == nil {
 		return nil
 	}
 
 	rt.deps.logger.Info("starting socket.io wake source",
-		slog.String("drive_id", rt.engine.driveID.String()),
+		slog.String("drive_id", rt.cfg.driveID.String()),
 	)
 
 	wakeCh := make(chan struct{}, 1)
@@ -551,7 +551,7 @@ func (rt *watchRuntime) runSocketIOWakeSource(
 	defer func() {
 		if r := recover(); r != nil {
 			rt.reportSocketIOWakeSourceStop(panicguard.Recovered(rt.deps.logger, "in the socket.io wake source", r,
-				slog.String("drive_id", rt.engine.driveID.String())))
+				slog.String("drive_id", rt.cfg.driveID.String())))
 		}
 	}()
 
@@ -564,7 +564,7 @@ func (rt *watchRuntime) runSocketIOWakeSource(
 // err: watch keeps polling on its interval regardless.
 func (rt *watchRuntime) reportSocketIOWakeSourceStop(err error) {
 	rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
-		slog.String("drive_id", rt.engine.driveID.String()),
+		slog.String("drive_id", rt.cfg.driveID.String()),
 		slog.Any("error", err),
 	)
 }

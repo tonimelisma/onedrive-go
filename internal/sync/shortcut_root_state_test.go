@@ -535,7 +535,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 		published = publication
 		return nil
 	}
-	flow := newEngineFlow(eng.Engine)
+	flow := newEngineFlow(eng.flowInputs())
 
 	err = flow.applyShortcutObservationBatch(t.Context(), &syncobserve.RemoteObservationBatch{
 		ShortcutTopology: syncshortcut.ShortcutTopologyBatch{

@@ -14,7 +14,7 @@ func (flow *engineFlow) resultLogFields(decision *syncdomain.ResultDecision, r *
 
 	driveID := r.DriveID
 	if driveID.IsZero() {
-		driveID = flow.engine.driveID
+		driveID = flow.cfg.driveID
 	}
 
 	fields := []any{

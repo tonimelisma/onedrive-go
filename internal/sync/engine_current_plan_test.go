@@ -74,6 +74,7 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	refreshTestFlowInputs(eng)
 	ctx := t.Context()
 
 	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
@@ -159,6 +160,7 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, clock.Now(), syncdomain.RemoteObservationModeDelta))
 
 	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	refreshTestFlowInputs(eng)
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
@@ -184,6 +186,7 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 	assert.True(t, remoteRowsContainPath(rawRemoteRows, "hidden/remote.txt"))
 
 	eng.contentFilter = syncdomain.ContentFilterConfig{}
+	refreshTestFlowInputs(eng)
 	pending, err = eng.flow.observeAndCommitCurrentState(ctx, bl, false)
 	require.NoError(t, err)
 	observation, err = eng.flow.loadCommittedCurrentObservation(ctx, pending)

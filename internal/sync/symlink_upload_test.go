@@ -53,7 +53,7 @@ func newFollowSymlinksTestEngine(t *testing.T, mock *syncfixture.EngineMockClien
 	})
 	require.NoError(t, err)
 	eng.hooks.assertInvariants = true
-	testEng := &testEngine{Engine: eng, flow: newEngineFlow(eng)}
+	testEng := &testEngine{Engine: eng, flow: newEngineFlow(eng.flowInputs())}
 	seedTestEngineAccount(t, dataDir, accountCID)
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)))

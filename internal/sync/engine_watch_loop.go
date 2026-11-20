@@ -354,9 +354,9 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
 	return false, rt.engine.shortcutChildWorkSink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
-		rt.engine.shortcutNamespaceID,
-		rt.engine.syncRoot,
-		rt.engine.contentFilter,
+		rt.cfg.shortcutNamespaceID,
+		rt.cfg.syncRoot,
+		rt.cfg.contentFilter,
 		roots,
 	))
 }

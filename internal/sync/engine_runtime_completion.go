@@ -470,9 +470,9 @@ func (flow *engineFlow) applyFatalAuthEffects(
 
 	// The mark goes on the engine's own account, by canonical ID: another
 	// account at the same address keeps its own sign-in state.
-	if account := flow.engine.accountCanonicalID; !account.IsZero() {
+	if account := flow.cfg.accountCanonicalID; !account.IsZero() {
 		if err := config.MarkAccountAuthRequired(
-			flow.engine.dataDir,
+			flow.cfg.dataDir,
 			account,
 			authstate.ReasonSyncAuthRejected,
 		); err != nil {
@@ -494,7 +494,7 @@ func (flow *engineFlow) applyFatalAuthEffects(
 }
 
 func (flow *engineFlow) applyPublicationMutation(ctx context.Context, ta *syncdomain.TrackedAction) error {
-	mutation, err := syncstore.PublicationMutationFromAction(&ta.Action, flow.engine.driveID)
+	mutation, err := syncstore.PublicationMutationFromAction(&ta.Action, flow.cfg.driveID)
 	if err == nil {
 		err = flow.deps.store.CommitMutation(ctx, mutation)
 	}

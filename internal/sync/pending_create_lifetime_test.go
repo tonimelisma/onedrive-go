@@ -1068,7 +1068,7 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 	// running drops it.
 	w.rt.sched.markFinished(upload)
 	require.True(t, w.rt.canPrepareNow())
-	require.NoError(t, w.eng.baseline.PrunePendingCreates(t.Context(), syncstore.PassRefreshedLocalOnly, w.eng.localScanCoverage()))
+	require.NoError(t, w.eng.baseline.PrunePendingCreates(t.Context(), syncstore.PassRefreshedLocalOnly, w.rt.localScanCoverage()))
 	requireNoPendingCreateAt(t, w.eng.baseline, "doc.txt", "the settled empty placeholder's record goes with the next replan")
 }
 

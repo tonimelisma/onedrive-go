@@ -211,7 +211,7 @@ func (flow *engineFlow) releaseScopeBatch(
 	}
 
 	now := flow.deps.now()
-	allowance := nextReleaseAllowance(flow.engine.transferWorkers, scope.ReleaseAllowance, scope.SlowStartThreshold)
+	allowance := nextReleaseAllowance(flow.cfg.transferWorkers, scope.ReleaseAllowance, scope.SlowStartThreshold)
 	batchKeys := flow.heldScopeBatch(key, allowance)
 
 	_, removed, err := flow.retryWork.releaseScope(ctx, flow.deps.store, key, batchKeys, now)

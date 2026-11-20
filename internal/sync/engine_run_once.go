@@ -466,14 +466,14 @@ func (r *oneShotRunner) executePreparedPlan(
 		Store:            executorStoreOf(r.deps.store),
 		Logger:           r.deps.logger,
 		CompletionBuffer: len(plan.Actions),
-		Perf:             r.engine.collector(),
-		Serialize:        r.engine.hooks.serializeWorkers,
+		Perf:             r.deps.perf,
+		Serialize:        r.hooks.serializeWorkers,
 	})
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.
 	runCtx, cancelPass := context.WithCancelCause(ctx)
 	defer cancelPass(syncdomain.ErrOneShotPassEnded)
-	pool.Start(runCtx, r.engine.transferWorkers)
+	pool.Start(runCtx, r.cfg.transferWorkers)
 
 	// Process completions until the engine-owned runtime settles. Held retry/scope
 	// actions intentionally keep graph nodes unresolved, so the dependency graph
@@ -555,7 +555,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 	if observation.CursorToken != "" {
 		if err := flow.deps.store.CommitObservationCursor(
 			ctx,
-			flow.engine.driveID,
+			flow.cfg.driveID,
 			observation.CursorToken,
 		); err != nil {
 			return false, fmt.Errorf("sync: committing primary observation cursor: %w", err)
@@ -564,7 +564,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 	if observation.MarkFullRemoteRefresh {
 		if err := flow.deps.store.MarkFullRemoteRefresh(
 			ctx,
-			flow.engine.driveID,
+			flow.cfg.driveID,
 			flow.deps.now(),
 			observation.ObservationMode,
 		); err != nil {
@@ -575,7 +575,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 		// sooner than the normal cadence but backing off while it stays
 		// undecided.
 		deadlineChanged, err := flow.deps.store.RecordFullRefreshOrphans(
-			ctx, flow.engine.driveID, flow.deps.now(), observation.OrphansUndecided,
+			ctx, flow.cfg.driveID, flow.deps.now(), observation.OrphansUndecided,
 		)
 		if err != nil {
 			return false, fmt.Errorf("sync: recording undecided orphans: %w", err)
@@ -587,7 +587,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 	if observation.FullRefreshDueSoon {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
 			ctx,
-			flow.engine.driveID,
+			flow.cfg.driveID,
 			// Deferred, not now: one burst of folder deletions shares one
 			// enumeration, and a deadline only ever moves earlier, so
 			// refreshes stay this far apart.
@@ -602,7 +602,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 	if observation.ObservationMode == syncdomain.RemoteObservationModeEnumerate {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
 			ctx,
-			flow.engine.driveID,
+			flow.cfg.driveID,
 			flow.deps.now().Add(syncstore.RemoteRefreshEnumerateInterval),
 		)
 		if err != nil {
@@ -640,13 +640,13 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	kind syncdomain.ResyncKind,
 ) (fullRemoteObservation, error) {
 	eng := flow.engine
-	obs := eng.buildRemoteObserver(bl, eng.logger)
+	obs := eng.buildRemoteObserver(bl, flow.deps.logger)
 	obs.SetItemClient(eng.itemsClient)
 	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
 	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	obs.SetShortcutTopology(eng.shortcutNamespaceID, eng.currentProtectedRoots())
+	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.currentProtectedRoots())
 
 	// Full enumeration: empty token returns ALL items as create/modify
 	// events, plus the raw ID of every live item Graph returned. The seen set
@@ -663,17 +663,17 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
-	orphans := syncstore.FindBaselineOrphans(bl, seen, eng.driveID, "")
+	orphans := syncstore.FindBaselineOrphans(bl, seen, flow.cfg.driveID, "")
 
 	// remote_state can also hold items that were never synced (one whose name
 	// the local filesystem cannot store is never downloaded). A missed delete
 	// left such a row behind forever, keeping status at "Syncing" with a
 	// phantom remote change, and the baseline scan above never sees it.
-	remoteRows, err := eng.baseline.ListRemoteState(ctx)
+	remoteRows, err := flow.deps.store.ListRemoteState(ctx)
 	if err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: listing remote state for full refresh: %w", err)
 	}
-	orphans = append(orphans, syncstore.FindRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
+	orphans = append(orphans, syncstore.FindRemoteStateOrphans(remoteRows, seen, orphans, flow.cfg.driveID)...)
 
 	// A complete enumeration that omits an item is not proof it is gone
 	// (Graph omits items transiently); only a live 404 or deleted facet is.
@@ -689,7 +689,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	if !kind.OrphansAreDeletes() && len(orphans) > 0 {
 		summary = fmt.Sprintf("Full OneDrive rescan complete: %d items OneDrive no longer has will be uploaded again", len(orphans))
 	}
-	eng.logger.Info(summary,
+	flow.deps.logger.Info(summary,
 		slog.Int("total_events", len(events)),
 		slog.Int("orphans", len(orphans)),
 	)

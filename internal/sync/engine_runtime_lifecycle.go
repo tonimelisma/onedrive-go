@@ -138,7 +138,7 @@ func (flow *engineFlow) newBlockActivation(key syncdomain.ScopeKey, interval tim
 		block.Generation = current.Generation + 1
 		block.NextTrialAt = latestTrialDeadline(&current, block.NextTrialAt)
 		block.SlowStartThreshold = slowStartThresholdAfterThrottle(
-			flow.engine.transferWorkers, current.ReleaseAllowance, current.SlowStartThreshold)
+			flow.cfg.transferWorkers, current.ReleaseAllowance, current.SlowStartThreshold)
 	}
 
 	return block
@@ -188,7 +188,7 @@ func (flow *engineFlow) extendScopeTrial(
 	block.NextTrialAt = latestTrialDeadline(&block, nextAt)
 	block.TrialInterval = newInterval
 	block.SlowStartThreshold = slowStartThresholdAfterThrottle(
-		flow.engine.transferWorkers, block.ReleaseAllowance, block.SlowStartThreshold)
+		flow.cfg.transferWorkers, block.ReleaseAllowance, block.SlowStartThreshold)
 	block.ReleaseAllowance = 0
 	block.BatchOutstanding = 0
 	block.Generation++

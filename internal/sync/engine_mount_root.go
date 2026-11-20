@@ -15,8 +15,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
-func (e *Engine) hasRemoteMountRoot() bool {
-	return e != nil && e.remoteRootItemID != ""
+// hasRemoteMountRoot reports whether the run syncs a remote folder rather
+// than the drive root.
+func (flow *engineFlow) hasRemoteMountRoot() bool {
+	return flow.cfg.remoteRootItemID != ""
 }
 
 func (e *Engine) mountRootDeltaSupported() bool {
@@ -42,7 +44,7 @@ func (flow *engineFlow) observeMountRootRemote(
 	fullReconcile bool,
 ) (mountRootObservation, error) {
 	eng := flow.engine
-	if !eng.hasRemoteMountRoot() {
+	if !flow.hasRemoteMountRoot() {
 		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate},
 			fmt.Errorf("sync: mount-root observation requires a remote root item ID")
 	}
@@ -50,7 +52,7 @@ func (flow *engineFlow) observeMountRootRemote(
 	if eng.preferredMountRootObservationMode() == syncdomain.RemoteObservationModeDelta {
 		token := ""
 		if !fullReconcile {
-			state, err := eng.baseline.ReadObservationState(ctx)
+			state, err := flow.deps.store.ReadObservationState(ctx)
 			if err != nil {
 				return mountRootObservation{mode: syncdomain.RemoteObservationModeDelta}, fmt.Errorf("sync: reading observation state: %w", err)
 			}
@@ -58,18 +60,18 @@ func (flow *engineFlow) observeMountRootRemote(
 			token = state.Cursor
 		}
 
-		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
+		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, flow.cfg.driveID, flow.cfg.remoteRootItemID, token)
 		orphanKind := syncdomain.ResyncKindApplyDifferences
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
 			orphanKind = syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(err))
 			// Self-healing: the next call re-enumerates the shared folder from
 			// scratch, so nothing needs the user's attention.
-			eng.logger.Info("Change history for a shared folder expired; rescanning the folder",
-				slog.String("drive_id", eng.driveID.String()),
-				slog.String("remote_root_item_id", eng.remoteRootItemID),
+			flow.deps.logger.Info("Change history for a shared folder expired; rescanning the folder",
+				slog.String("drive_id", flow.cfg.driveID.String()),
+				slog.String("remote_root_item_id", flow.cfg.remoteRootItemID),
 			)
 
-			items, newToken, err = eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, "")
+			items, newToken, err = eng.folderDelta.DeltaFolderAll(ctx, flow.cfg.driveID, flow.cfg.remoteRootItemID, "")
 			fullReconcile = true
 		}
 		if err == nil {
@@ -89,29 +91,29 @@ func (flow *engineFlow) observeMountRootRemote(
 		// The fallback is retried on every poll, but the condition does not
 		// change between polls: report it once, keep the repeats at Debug.
 		fallbackAttrs := []any{
-			slog.String("drive_id", eng.driveID.String()),
-			slog.String("remote_root_item_id", eng.remoteRootItemID),
+			slog.String("drive_id", flow.cfg.driveID.String()),
+			slog.String("remote_root_item_id", flow.cfg.remoteRootItemID),
 			slog.Any("error", err),
 		}
 		if eng.mountRootDeltaFallbackReported.CompareAndSwap(false, true) {
-			eng.logger.Info("Shared folder change tracking is unavailable; listing the whole folder on each check",
+			flow.deps.logger.Info("Shared folder change tracking is unavailable; listing the whole folder on each check",
 				fallbackAttrs...)
 		} else {
-			eng.logger.Debug("mount-root delta unsupported or not ready, falling back to recursive listing",
+			flow.deps.logger.Debug("mount-root delta unsupported or not ready, falling back to recursive listing",
 				fallbackAttrs...)
 		}
 	}
 
 	if eng.recursiveLister == nil {
 		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate},
-			fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
+			fmt.Errorf("sync: recursive lister not available for mount root %s", flow.cfg.remoteRootItemID)
 	}
 
-	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.remoteRootItemID)
+	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, flow.cfg.driveID, flow.cfg.remoteRootItemID)
 	if err != nil {
 		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
-	if err := validateMountRootListingParents(items, eng.remoteRootItemID); err != nil {
+	if err := validateMountRootListingParents(items, flow.cfg.remoteRootItemID); err != nil {
 		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate}, err
 	}
 
@@ -299,9 +301,7 @@ func (flow *engineFlow) commitObservedItems(
 	observed []syncdomain.ObservedItem,
 	token string,
 ) error {
-	eng := flow.engine
-
-	if err := eng.baseline.CommitObservation(ctx, observed, token, eng.driveID); err != nil {
+	if err := flow.deps.store.CommitObservation(ctx, observed, token, flow.cfg.driveID); err != nil {
 		return fmt.Errorf("sync: committing observations: %w", err)
 	}
 
@@ -404,8 +404,8 @@ func (rt *watchRuntime) handleMountRootPollError(
 
 	delay := bo.Next()
 	outage.Failed(rt.deps.logger, "Can't check the shared folder for changes; retrying", err, delay,
-		slog.String("drive_id", rt.engine.driveID.String()),
-		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
+		slog.String("drive_id", rt.cfg.driveID.String()),
+		slog.String("remote_root_item_id", rt.cfg.remoteRootItemID),
 	)
 
 	return rt.sleepMountRootWatch(ctx, delay, "backoff")

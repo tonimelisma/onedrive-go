@@ -165,7 +165,7 @@ const (
 
 func newWatchRuntime(engine *Engine) *watchRuntime {
 	rt := &watchRuntime{
-		engineFlow: newEngineFlow(engine),
+		engineFlow: newEngineFlow(engine.flowInputs()),
 		loop: watchLoopState{
 			phase:             watchRuntimePhaseRunning,
 			lastRemoteBlocked: make(map[syncdomain.ScopeKey]string),
@@ -308,7 +308,7 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 		rt.sched.markFinished(ta)
 	}
 	rt.replaceOutbox(nil)
-	rt.engine.collector().RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(outbox))
+	rt.deps.perf.RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(outbox))
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
 	if rt.sched.runningCount > 0 {
 		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
@@ -336,16 +336,16 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*syncdomain.
 	for _, ta := range ready {
 		rt.sched.markFinished(ta)
 	}
-	rt.engine.collector().RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(ready))
+	rt.deps.perf.RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(ready))
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
 }
 
 func (rt *watchRuntime) recordReplanWorkerIdle(phase perf.ReplanIdlePhase, start time.Time, idleWorkers int) {
-	if rt == nil || rt.engine == nil || start.IsZero() {
+	if rt == nil || start.IsZero() {
 		return
 	}
 
-	rt.engine.collector().RecordReplanWorkerIdle(phase, idleWorkers, rt.deps.since(start))
+	rt.deps.perf.RecordReplanWorkerIdle(phase, idleWorkers, rt.deps.since(start))
 }
 
 func (rt *watchRuntime) startPendingReplanDrainIdleTracking(now time.Time) {
@@ -363,7 +363,7 @@ func (rt *watchRuntime) advancePendingReplanDrainIdleTracking() {
 	}
 
 	now := rt.deps.now()
-	rt.engine.collector().RecordReplanWorkerIdle(
+	rt.deps.perf.RecordReplanWorkerIdle(
 		perf.ReplanIdlePhaseWaitingDrain,
 		rt.loop.pendingReplanDrainIdleWorkers,
 		now.Sub(rt.loop.pendingReplanDrainIdleAt),
@@ -385,13 +385,13 @@ func (rt *watchRuntime) rescheduleReplanIntent(batch syncobserve.DirtyBatch) err
 }
 
 func (rt *watchRuntime) totalWorkers() int {
-	if rt == nil || rt.engine == nil || rt.engine.transferWorkers < 1 {
+	if rt == nil || rt.cfg.transferWorkers < 1 {
 		return 0
 	}
-	if rt.engine.hooks.serializeWorkers {
+	if rt.hooks.serializeWorkers {
 		return 1
 	}
-	return rt.engine.transferWorkers
+	return rt.cfg.transferWorkers
 }
 
 func (rt *watchRuntime) idleWorkers() int {

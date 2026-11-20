@@ -223,11 +223,11 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *syncobserve.RemoteObserv
 }
 
 func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *syncobserve.RemoteObservationBatch) bool {
-	if rt == nil || rt.engine == nil || batch == nil || len(batch.Changes) == 0 {
+	if rt == nil || batch == nil || len(batch.Changes) == 0 {
 		return false
 	}
 
-	return remoteChangesHavePlannerVisibleEffects(rt.engine.contentFilter, batch.Changes)
+	return remoteChangesHavePlannerVisibleEffects(rt.cfg.contentFilter, batch.Changes)
 }
 
 func remoteChangesHavePlannerVisibleEffects(filter syncdomain.ContentFilterConfig, changes []syncobserve.RemoteChange) bool {

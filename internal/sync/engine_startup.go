@@ -37,7 +37,7 @@ func (flow *engineFlow) runStartupStage(
 	}
 	eng.logVerifiedDrive(proof)
 
-	bl, err := eng.baseline.Load(ctx)
+	bl, err := flow.deps.store.Load(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sync: loading baseline after startup preparation: %w", err)
 	}

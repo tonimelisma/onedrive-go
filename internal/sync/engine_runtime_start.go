@@ -56,8 +56,8 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 	ready []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	frontier, err := flow.reduceReadyFrontier(ctx, bl, ready)
-	if flow.engine.hooks.dispatchOrder != nil && len(frontier) > 1 {
-		frontier = flow.engine.hooks.dispatchOrder(frontier)
+	if flow.hooks.dispatchOrder != nil && len(frontier) > 1 {
+		frontier = flow.hooks.dispatchOrder(frontier)
 	}
 
 	return frontier, err

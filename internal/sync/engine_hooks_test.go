@@ -37,7 +37,7 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 	assert.Equal(t, eng.wallClock, eng.runClock(), "the run clock is the engine's own real clock")
 	assert.Equal(t, configuredWorkers, eng.workerPoolSize(), "the pool runs the configured workers")
 	assert.Equal(t, oneShotMaxPasses, eng.oneShotPasses(), "one-shot runs make the full pass bound")
-	assert.False(t, newEngineFlow(eng).invariantChecksEnabled(), "invariant checks are off")
+	assert.False(t, newEngineFlow(eng.flowInputs()).invariantChecksEnabled(), "invariant checks are off")
 
 	wake := eng.newSocketIOWakeSource(syncobserve.SocketIOWakeSourceOptions{})
 	assert.Equal(t, "*syncobserve.socketIOWakeSource", fmt.Sprintf("%T", wake), "the wake source is the real one")

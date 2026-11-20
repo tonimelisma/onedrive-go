@@ -23,8 +23,8 @@ func (flow *engineFlow) commitLocalScan(
 ) (syncstore.LocalSnapshotCommitResult, error) {
 	eng := flow.engine
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
-	findings := localObservationFindingsBatchFromSkippedItems(eng.driveID, skipped)
-	eng.emitDebugEvent(syncdomain.EngineDebugEvent{
+	findings := localObservationFindingsBatchFromSkippedItems(flow.cfg.driveID, skipped)
+	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type: syncdomain.EngineDebugEventObservationFindingsReconcileStarted,
 		Note: engineDebugNoteLocalSkipped,
 	})
@@ -48,10 +48,9 @@ type observationIssueKey struct {
 // this set are new to the user. A read failure returns nil, which treats
 // every finding as new: an extra warning beats a hidden one.
 func (flow *engineFlow) knownObservationIssues(ctx context.Context) map[observationIssueKey]struct{} {
-	eng := flow.engine
-	rows, err := eng.baseline.ListObservationIssues(ctx)
+	rows, err := flow.deps.store.ListObservationIssues(ctx)
 	if err != nil {
-		eng.logger.Debug("list observation issues before skipped-file report",
+		flow.deps.logger.Debug("list observation issues before skipped-file report",
 			slog.Any("error", err),
 		)
 
@@ -74,12 +73,11 @@ func (flow *engineFlow) logSkippedObservationFindings(
 	skipped []syncdomain.SkippedItem,
 	known map[observationIssueKey]struct{},
 ) {
-	eng := flow.engine
 	byReason := make(map[syncdomain.IssueType][]syncdomain.SkippedItem)
 	for i := range skipped {
 		_, alreadyReported := known[observationIssueKey{path: skipped[i].Path, issueType: skipped[i].Reason}]
 		if alreadyReported {
-			eng.logger.Debug("observation filter: skipped file (already recorded)",
+			flow.deps.logger.Debug("observation filter: skipped file (already recorded)",
 				slog.String("path", skipped[i].Path),
 				slog.String("issue_type", string(skipped[i].Reason)),
 				slog.String("detail", skipped[i].Detail),
@@ -96,7 +94,7 @@ func (flow *engineFlow) logSkippedObservationFindings(
 			for i := range items {
 				// No per-line hint: the line is complete, and the watch
 				// condition summary that follows names `status` once.
-				eng.logger.Warn("Not syncing " + items[i].Path + ": " + skippedItemReasonText(&items[i]))
+				flow.deps.logger.Warn("Not syncing " + items[i].Path + ": " + skippedItemReasonText(&items[i]))
 			}
 
 			continue
@@ -111,12 +109,12 @@ func (flow *engineFlow) logSkippedObservationFindings(
 			samples = append(samples, items[i].Path)
 		}
 
-		eng.logger.Warn(fmt.Sprintf("Not syncing %s, such as %s",
+		flow.deps.logger.Warn(fmt.Sprintf("Not syncing %s, such as %s",
 			aggregateSkippedText(reason, items), strings.Join(samples, ", ")))
 		// Keep full per-path visibility at Debug while avoiding a warning
 		// storm once a single scanner issue fans out across many files.
 		for i := range items {
-			eng.logger.Debug("observation filter: skipped file",
+			flow.deps.logger.Debug("observation filter: skipped file",
 				slog.String("path", items[i].Path),
 				slog.String("issue_type", string(reason)),
 				slog.String("detail", items[i].Detail),
@@ -161,16 +159,15 @@ func (flow *engineFlow) applyObservationFindingsBatch(
 	failureMessage string,
 	reconcileNote string,
 ) error {
-	eng := flow.engine
 	if batch == nil {
 		return nil
 	}
 
-	eng.emitDebugEvent(syncdomain.EngineDebugEvent{
+	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type: syncdomain.EngineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
-	if err := eng.baseline.ReconcileObservationFindings(ctx, batch); err != nil {
+	if err := flow.deps.store.ReconcileObservationFindings(ctx, batch); err != nil {
 		return fmt.Errorf("%s: %w", failureMessage, err)
 	}
 

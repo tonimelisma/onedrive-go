@@ -97,20 +97,20 @@ func (rt *watchRuntime) retryTimerChan() <-chan struct{} {
 // (failureAwaitsUser), preserves the raw error for the final SyncReport, and
 // records a failure kept as retry work for the end-of-pass summary
 // (logFailureSummary).
-func (f *engineFlow) recordError(decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion) {
-	f.results.failed++
+func (flow *engineFlow) recordError(decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion) {
+	flow.results.failed++
 	if decision != nil && failureKeptForRetry(decision.Class) {
-		f.results.keptForRetry++
+		flow.results.keptForRetry++
 	}
 	if decision != nil && failureAwaitsUser(decision, r) {
-		f.results.awaitingUser++
+		flow.results.awaitingUser++
 	}
 	if r == nil {
 		return
 	}
 
 	if r.Err != nil {
-		f.results.errors = append(f.results.errors, r.Err)
+		flow.results.errors = append(flow.results.errors, r.Err)
 	}
 
 	if decision == nil || decision.Persistence != syncdomain.PersistRetryWork {
@@ -133,7 +133,7 @@ func (f *engineFlow) recordError(decision *syncdomain.ResultDecision, r *syncdom
 		group = noConditionSummaryGroup
 	}
 
-	f.results.summaries = append(f.results.summaries, failureSummaryEntry{
+	flow.results.summaries = append(flow.results.summaries, failureSummaryEntry{
 		group:  group,
 		path:   r.Path,
 		errMsg: errMsg,
@@ -147,9 +147,9 @@ func (f *engineFlow) recordError(decision *syncdomain.ResultDecision, r *syncdom
 // activity line (R-6.6.18), which shows failures that need the user at
 // default verbosity and retried ones only with --verbose; a WARN here would
 // print the same failure twice and expose retries the console hides.
-func (f *engineFlow) logFailureSummary() {
-	summaries := f.results.summaries
-	f.results.summaries = nil
+func (flow *engineFlow) logFailureSummary() {
+	summaries := flow.results.summaries
+	flow.results.summaries = nil
 
 	if len(summaries) == 0 {
 		return
@@ -183,14 +183,14 @@ func (f *engineFlow) logFailureSummary() {
 	for _, name := range names {
 		g := groups[name]
 		if len(g.items) > aggregateThreshold {
-			f.engine.logger.Info("Some files will be retried on the next sync",
+			flow.deps.logger.Info("Some files will be retried on the next sync",
 				slog.String("condition_type", name),
 				slog.Int("count", len(g.items)),
 				slog.Any("sample_paths", g.samplePaths),
 			)
 		}
 		for _, item := range g.items {
-			f.engine.logger.Debug("sync retry work",
+			flow.deps.logger.Debug("sync retry work",
 				slog.String("condition_type", name),
 				slog.String("path", item.path),
 				slog.String("error", item.errMsg),
@@ -216,42 +216,42 @@ func (e *Engine) workerPoolSize() int {
 }
 
 // resultStats returns the engine-owned counters and error list.
-func (f *engineFlow) resultStats() (succeeded, failed int, errs []error) {
-	errs = make([]error, len(f.results.errors))
-	copy(errs, f.results.errors)
-	return f.results.succeeded, f.results.failed, errs
+func (flow *engineFlow) resultStats() (succeeded, failed int, errs []error) {
+	errs = make([]error, len(flow.results.errors))
+	copy(errs, flow.results.errors)
+	return flow.results.succeeded, flow.results.failed, errs
 }
 
 // recordPassCounts fills a pass's report from the engine-owned counters.
 // Every end of a one-shot pass reports through it (or, for a plan that never
 // ran, through Report.setPassCounts directly), so each one holds the same
 // LeftForNextSync: the planned actions neither completed nor failed.
-func (f *engineFlow) recordPassCounts(report *Report, actions int) {
-	succeeded, failed, errs := f.resultStats()
+func (flow *engineFlow) recordPassCounts(report *Report, actions int) {
+	succeeded, failed, errs := flow.resultStats()
 	report.setPassCounts(actions, passCounts{
 		succeeded:    succeeded,
 		failed:       failed,
-		keptForRetry: f.results.keptForRetry,
-		awaitingUser: f.results.awaitingUser,
-		superseded:   f.supersededCount(),
+		keptForRetry: flow.results.keptForRetry,
+		awaitingUser: flow.results.awaitingUser,
+		superseded:   flow.supersededCount(),
 		errors:       errs,
 	})
 }
 
 // supersededCount is how many actions this pass gave up on as superseded.
-func (f *engineFlow) supersededCount() int {
-	return f.results.superseded
+func (flow *engineFlow) supersededCount() int {
+	return flow.results.superseded
 }
 
 // resetResultStats resets the engine-owned counters for a new pass.
-func (f *engineFlow) resetResultStats() {
-	f.results.succeeded = 0
-	f.results.failed = 0
-	f.results.keptForRetry = 0
-	f.results.awaitingUser = 0
-	f.results.superseded = 0
-	f.results.errors = nil
-	f.results.summaries = nil
+func (flow *engineFlow) resetResultStats() {
+	flow.results.succeeded = 0
+	flow.results.failed = 0
+	flow.results.keptForRetry = 0
+	flow.results.awaitingUser = 0
+	flow.results.superseded = 0
+	flow.results.errors = nil
+	flow.results.summaries = nil
 }
 
 // armTrialTimer sets (or resets) the trial timer to fire at the earliest
