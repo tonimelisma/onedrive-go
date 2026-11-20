@@ -1,11 +1,5 @@
 package sync
 
-// IsUnclassified reports a reconciliation row outside the decision table: the
-// comparison has no rule, or no reconciliation rule matched it.
-func (r *SQLiteReconciliationRow) IsUnclassified() bool {
-	return r.ComparisonKind == ComparisonUnclassified || r.ReconciliationKind == ReconcileUnclassified
-}
-
 type SQLiteComparisonRow struct {
 	Path                    string
 	BaselineItemID          string
@@ -38,4 +32,10 @@ type SQLiteReconciliationRow struct {
 	// read by the engine for the plan error (QueryPlannerDecisionInputs);
 	// nil for every classified row.
 	DecisionInputs []PlannerDecisionInput
+}
+
+// IsUnclassified reports a reconciliation row outside the decision table: the
+// comparison has no rule, or no reconciliation rule matched it.
+func (r *SQLiteReconciliationRow) IsUnclassified() bool {
+	return r.ComparisonKind == ComparisonUnclassified || r.ReconciliationKind == ReconcileUnclassified
 }

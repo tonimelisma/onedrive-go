@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	stdsync "sync"
 	"syscall"
 	"testing"
 	"time"
@@ -924,8 +923,8 @@ type enospcWatcher struct {
 	errs         chan error
 	addCount     int
 	failAfter    int
-	closeOne     stdsync.Once
-	failOne      stdsync.Once
+	closeOne     sync.Once
+	failOne      sync.Once
 	failCh       chan struct{}
 	addedPaths   []string
 	failedPaths  []string

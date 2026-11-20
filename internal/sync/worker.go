@@ -258,7 +258,6 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 // from the caller's cancellation, bounded by the pool's outcomeCommitTimeout.
 func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
 	return RunDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
-		//nolint:wrapcheck // the store's commit error names what it was committing
 		return wp.baseline.CommitMutation(commitCtx, mutation)
 	})
 }
