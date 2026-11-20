@@ -126,8 +126,8 @@ func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 			AfterFunc:             realClock{}.AfterFunc,
 			WriteCoalesceCooldown: cooldown,
 		})
-		events := make(chan changeEvent, 10)
-		cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+		batches := localBatches(obs, 10)
+		cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 		require.NoError(t, os.WriteFile(filePath, []byte("v2"), 0o600))
 		start := time.Now()
@@ -135,18 +135,14 @@ func TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash(t *testing.T) {
 		virtualWait(20 * time.Millisecond)
 		mockWatcher.events <- fsnotify.Event{Name: filePath, Op: fsnotify.Write}
 
-		ev := <-events
+		patch := <-batches
 		assert.Equal(t, 20*time.Millisecond+cooldown, time.Since(start), "hashed one cooldown after the last write")
-		assert.Equal(t, ChangeModify, ev.Type)
-		assert.Equal(t, "rapid.txt", ev.Path)
-		assert.Equal(t, hashContent(t, "v2"), ev.Hash)
+		row, ok := patchRow(&patch, "rapid.txt")
+		require.True(t, ok, "the write's patch carries the file's row: %+v", patch)
+		assert.Equal(t, hashContent(t, "v2"), row.Hash)
 
 		virtualWait(time.Hour)
-		select {
-		case extra := <-events:
-			assert.Failf(t, "coalesced writes emitted twice", "%+v", extra)
-		default:
-		}
+		requireNoLocalPatch(t, batches, "an hour after the coalesced writes")
 
 		stopWatch(t, cancel, done)
 	})
@@ -164,16 +160,16 @@ func TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval(t *testing.T)
 		mockWatcher := newMockFsWatcher()
 		obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 		obs.clock = newObserverTestClock() // real ticker and sleeps, on the bubble's clock
-		events := make(chan changeEvent, 10)
-		cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+		batches := localBatches(obs, 10)
+		cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 		start := time.Now()
 		writeTestFile(t, dir, "missed.txt", "no event for this one")
 
-		ev := <-events
+		snapshot := <-batches
 		assert.Equal(t, safetyScanInterval, time.Since(start), "found by the first safety scan")
-		assert.Equal(t, "missed.txt", filepath.ToSlash(ev.Path))
-		assert.Equal(t, changeCreate, ev.Type)
+		require.Equal(t, localSnapshot, snapshot.kind)
+		require.NotNil(t, findRow(snapshot.rows, "missed.txt"), "the snapshot holds the missed file: %+v", snapshot.rows)
 
 		stopWatch(t, cancel, done)
 	})

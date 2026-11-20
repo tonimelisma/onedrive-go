@@ -2,7 +2,6 @@ package sync
 
 import (
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -20,23 +19,19 @@ type skippedItem struct {
 	BlocksReadBoundary bool      // true when observation proved an unreadable subtree boundary
 }
 
-// changeEvent is an immutable observation fact produced by observers. The
-// runtime uses these facts to mark coarse dirty/full-refresh signals and to describe local or
-// remote observation results, but they are not the durable sync truth and are
-// never stored in the database. An event carries no source: remote events
-// reach the engine only in a remoteObservationBatch and local ones only
-// through the local observer's own paths (its event channel, scan results,
-// localObservation), so where an event came from is known by where it is.
+// changeEvent is an immutable observation fact the local observer produces.
+// It is not the durable sync truth and is never stored in the database; it
+// reaches the runtime only through the local observer's own paths (scan
+// results, localObservation). The remote side reports remoteItem values
+// instead.
 //
-// Per-observer field contract:
+// Field contract:
 //
-//	RemoteObserver populates: all fields (ItemID, ParentID, DriveID, ETag,
-//	  CTag, Hash, Size, Mtime). For ChangeDelete: Hash is empty; Size/Mtime
-//	  from API response.
-//	LocalObserver populates: Path, Name, ItemType, Size, Hash, Mtime,
-//	  filesystem identity when available, and IsDeleted. Never sets: ItemID,
-//	  ParentID, DriveID, ETag, CTag.
-//	  For ChangeDelete: Hash is empty; Size/Mtime from baseline entry.
+//	LocalObserver populates: Path and ItemType for a scan's change list;
+//	  for a watch handler's observation, the row facts (ItemType, Size,
+//	  Hash, Mtime, filesystem identity when available), or Path and
+//	  IsDeleted for a removal. Never sets: Type, Name, ItemID, ParentID,
+//	  DriveID, ETag, CTag.
 type changeEvent struct {
 	Type     changeType
 	Path     string     // NFC-normalized, relative to sync root
@@ -289,49 +284,6 @@ func (b *Baseline) ForEachPath(fn func(string, *BaselineEntry)) {
 	for path, entry := range b.ByPath {
 		fn(path, entry)
 	}
-}
-
-// FindOrphans identifies baseline entries that are not present in the seen
-// set (a full delta enumeration). These represent items deleted remotely but
-// missed by incremental delta — deletions are delivered exactly once in a
-// narrow window and permanently lost if the client's token advances past them.
-//
-// When pathPrefix is non-empty, only entries under that prefix are considered
-// (used for mount-root observation). When empty, all entries for the given
-// driveID are checked.
-//
-// Returns synthesized ChangeDelete events for each orphan, which can be fed
-// through the normal planner + executor pipeline.
-func (b *Baseline) FindOrphans(seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []changeEvent {
-	var orphans []changeEvent
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	for p, entry := range b.ByPath {
-		if entry.DriveID != driveID {
-			continue
-		}
-
-		if pathPrefix != "" && p != pathPrefix && !strings.HasPrefix(p, pathPrefix+"/") {
-			continue
-		}
-
-		if _, ok := seen[entry.ItemID]; ok {
-			continue
-		}
-
-		orphans = append(orphans, changeEvent{
-			Type:      ChangeDelete,
-			Path:      entry.Path,
-			ItemID:    entry.ItemID,
-			DriveID:   entry.DriveID,
-			ItemType:  entry.ItemType,
-			IsDeleted: true,
-		})
-	}
-
-	return orphans
 }
 
 // NewBaselineForTest creates a Baseline pre-populated with entries.

@@ -30,7 +30,7 @@ func kindTestObserver(t *testing.T, bl *Baseline, items []graph.Item, getItem fu
 	return obs
 }
 
-func kindTestEvent(t *testing.T, events []changeEvent, itemID string) *changeEvent {
+func kindTestEvent(t *testing.T, events []remoteItem, itemID string) *remoteItem {
 	t.Helper()
 
 	for i := range events {
@@ -170,7 +170,7 @@ func TestFullDelta_NegativeSizeIsUnknown(t *testing.T) {
 	assert.True(t, ev.SizeUnknown)
 
 	mgr := newTestStore(t)
-	require.NoError(t, mgr.CommitObservation(t.Context(), projectObservedItems(testLogger(t), events), "t", driveID))
+	require.NoError(t, mgr.CommitObservation(t.Context(), projectRemoteObservations(testLogger(t), events).observed, "t", driveID))
 	row := readRemoteStateRow(t, mgr.rawDB(), "odd")
 	require.NotNil(t, row)
 	assert.False(t, row.SizeKnown, "a negative size is stored as unknown, not as a size")

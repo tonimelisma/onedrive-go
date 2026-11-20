@@ -14,7 +14,6 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 	t.Parallel()
 
 	batch := localObservationBatchForEvent(&changeEvent{
-		Type:             changeCreate,
 		Path:             "new.txt",
 		ItemType:         ItemTypeFile,
 		Hash:             "hash",
@@ -41,36 +40,21 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 }
 
 // Validates: R-2.8.8
-func TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix(t *testing.T) {
+func TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree(t *testing.T) {
 	t.Parallel()
 
+	// A removal carries no kind: whatever the path was, its rows go with
+	// every row below it, so a file and a folder are removed the same way.
 	batch := localObservationBatchForEvent(&changeEvent{
-		Type:      ChangeDelete,
 		Path:      "gone",
-		ItemType:  ItemTypeFolder,
 		IsDeleted: true,
 	})
 
 	assert.True(t, batch.dirty)
 	assert.Empty(t, batch.rows)
 	assert.Empty(t, batch.deletedPaths)
-	assert.Equal(t, []string{"gone"}, batch.deletedPrefixes)
-}
-
-// Validates: R-2.8.8
-func TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree(t *testing.T) {
-	t.Parallel()
-
-	batch := localObservationBatchForEvent(&changeEvent{
-		Type:      ChangeDelete,
-		Path:      "gone",
-		ItemType:  ItemTypeFile,
-		IsDeleted: true,
-	})
-
-	assert.Empty(t, batch.deletedPaths)
 	assert.Equal(t, []string{"gone"}, batch.deletedPrefixes,
-		"a path the observer took for a file can still have rows below it")
+		"a removed path can still have rows below it")
 }
 
 // Validates: R-2.8.8
@@ -85,7 +69,7 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	batches := make(chan localObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
-	require.True(t, obs.runSafetyScan(t.Context(), mustOpenSyncTree(t, root), nil))
+	require.True(t, obs.runSafetyScan(t.Context(), mustOpenSyncTree(t, root)))
 
 	// The scan sends before it returns: a missing batch fails here instead of
 	// hanging the test.
@@ -140,14 +124,14 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := mustOpenSyncTree(t, root)
 
-	require.True(t, obs.runSafetyScan(t.Context(), tree, nil))
+	require.True(t, obs.runSafetyScan(t.Context(), tree))
 	skipped := forwardedSnapshot(t, batches).findings
 	require.Len(t, skipped, 1)
 	assert.Equal(t, leftoverName, skipped[0].Path)
 	assert.Equal(t, issueLocalInterruptedRemoval, skipped[0].Reason)
 
 	require.NoError(t, os.Remove(leftover))
-	require.True(t, obs.runSafetyScan(t.Context(), tree, nil))
+	require.True(t, obs.runSafetyScan(t.Context(), tree))
 	assert.Empty(t, forwardedSnapshot(t, batches).findings, "the scan found nothing to skip, and says so")
 }
 

@@ -144,13 +144,14 @@ func TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup(t *testing.T) {
 
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 	obs.startupSafetyScan = true
-	events := make(chan changeEvent, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
-	observed := receiveWithin(t, events, "the startup safety scan's event")
+	snapshot := waitForLocalSnapshot(t, batches, "the startup safety scan's snapshot")
 	stopWatch(t, cancel, done)
-	assert.Equal(t, changeCreate, observed.Type)
-	assert.Equal(t, "during-setup.txt", observed.Path)
+	row := findRow(snapshot.rows, "during-setup.txt")
+	require.NotNil(t, row, "the startup safety scan observes the file created during setup")
+	assert.Equal(t, hashContent(t, "created during setup"), row.Hash)
 }
 
 // Validates: R-2.1.2
@@ -167,25 +168,17 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 	})
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("modified"), 0o600))
 
-	var ev changeEvent
-	select {
-	case ev = <-events:
-	case <-time.After(eventWait):
-		cancel()
-		require.Fail(t, "timeout waiting for modify event")
-	}
-
+	row := waitForLocalRow(t, batches, "existing.txt")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, ChangeModify, ev.Type)
-	assert.Equal(t, "existing.txt", ev.Path)
-	assert.Equal(t, hashContent(t, "modified"), ev.Hash)
+	assert.Equal(t, hashContent(t, "modified"), row.Hash)
+	assert.Equal(t, int64(len("modified")), row.Size)
 }
 
 // Validates: R-2.4
@@ -196,26 +189,19 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetFilterConfig(ContentFilterConfig{IgnoreJunkFiles: true})
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startLocalWatch(t, obs, dir)
 
-	// Create an excluded file — should not produce an event.
+	// Create an excluded file — should not produce a row.
 	writeTestFile(t, dir, "temp.tmp", "temporary")
 
-	// Then create a valid file — should produce an event.
+	// Then create a valid file — should produce a row.
 	writeTestFile(t, dir, "valid.txt", "keep")
 
-	var ev changeEvent
-	select {
-	case ev = <-events:
-	case <-time.After(eventWait):
-		cancel()
-		require.Fail(t, "timeout waiting for any event")
-	}
-
+	patch := waitForLocalPatch(t, batches, func(*localObservation) bool { return true }, "any local patch")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, "valid.txt", ev.Path, "excluded file should be ignored")
+	assert.Equal(t, []string{"valid.txt"}, patchRowPaths([]localObservation{patch}), "excluded file should be ignored")
 }
 
 // Validates: R-2.8.3
@@ -225,8 +211,7 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	dir := t.TempDir()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	cancel, done := startLocalWatch(t, obs, dir)
 	stopWatch(t, cancel, done)
 }
 
@@ -266,8 +251,8 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 		},
 	}
 
-	events := make(chan changeEvent, 50)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+	batches := localBatches(obs, 50)
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 	// Step 1: Inject a watcher error → watchLoop sleeps with initial backoff (1s).
 	mockWatcher.errs <- errors.New("test watcher error 1")
@@ -281,12 +266,8 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 	// The safety scan resets errBackoff to retry.WatchLocalPolicy().Base.
 	tickCh <- time.Now()
 
-	select {
-	case ev := <-events:
-		require.Equal(t, "safety-scan.txt", ev.Path)
-	case <-time.After(eventWait):
-		require.Fail(t, "timeout waiting for safety-scan event")
-	}
+	snapshot := waitForLocalSnapshot(t, batches, "the safety scan's snapshot")
+	require.NotNil(t, findRow(snapshot.rows, "safety-scan.txt"))
 
 	// Step 3: Inject another watcher error → should use initial backoff (1s),
 	// NOT the escalated value (2s), because the safety scan reset it.
@@ -328,8 +309,7 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 		},
 	}
 
-	events := make(chan changeEvent, 50)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 	// Inject two consecutive errors.
 	mockWatcher.errs <- errors.New("error 1")
@@ -364,8 +344,8 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 	// Inject a combined Chmod|Create event — a backend-dependent edge case.
 	mockWatcher.events <- fsnotify.Event{
@@ -373,13 +353,9 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 		Op:   fsnotify.Chmod | fsnotify.Create,
 	}
 
-	select {
-	case ev := <-events:
-		require.Equal(t, changeCreate, ev.Type, "combined Chmod|Create should be handled as Create")
-		require.Equal(t, "combo.txt", ev.Path)
-	case <-time.After(eventWait):
-		require.Fail(t, "timeout waiting for combined Chmod|Create event")
-	}
+	row := waitForLocalRow(t, batches, "combo.txt")
+	require.Equal(t, hashContent(t, "combined event content"), row.Hash,
+		"combined Chmod|Create should be handled as Create")
 
 	stopWatch(t, cancel, done)
 }
@@ -389,8 +365,8 @@ func TestWatchLoop_ChmodCreateCombinedEvent(t *testing.T) {
 // (created then immediately deleted) does not cause errors when the Remove
 // event arrives for a path that was never observed by the watcher (B-117).
 // On macOS kqueue, rapid Create+Remove can coalesce into just a Remove event.
-// The handler should emit a ChangeDelete with ItemTypeFile (default) and not
-// panic or error, even though the path has no baseline entry.
+// The handler should send the removal of the path and not panic or error,
+// even though the path has no baseline entry.
 func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	t.Parallel()
 
@@ -399,8 +375,8 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{})
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 	// Inject a Remove event for a path that was never created (from the
 	// watcher's perspective). This simulates macOS kqueue coalescing a
@@ -410,17 +386,7 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 		Op:   fsnotify.Remove,
 	}
 
-	select {
-	case ev := <-events:
-		require.Equal(t, ChangeDelete, ev.Type,
-			"transient file delete should produce ChangeDelete")
-		require.Equal(t, "transient.txt", ev.Path)
-		require.Equal(t, ItemTypeFile, ev.ItemType,
-			"unknown path defaults to ItemTypeFile")
-		require.True(t, ev.IsDeleted)
-	case <-time.After(eventWait):
-		require.Fail(t, "timeout waiting for transient file delete event")
-	}
+	waitForLocalRemoval(t, batches, "transient.txt")
 
 	stopWatch(t, cancel, done)
 }
@@ -430,8 +396,8 @@ func TestWatchLoop_TransientFileCreateDelete(t *testing.T) {
 // from a local `mv file.txt dir/file.txt` are handled correctly (B-118).
 // The move produces fsnotify Rename (delete at old path) + Create (at new
 // path). If events arrive out of order (Create before Rename), both should
-// still produce independent ChangeEvents — the planner handles them as
-// separate delete + create operations on independent paths.
+// still produce independent patches — a row for the new path and the removal
+// of the old one, which the planner handles on independent paths.
 func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 	t.Parallel()
 
@@ -466,8 +432,8 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		},
 	}
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
 
 	// Inject events in REVERSED order: Create at new path before Rename
 	// (delete) at old path. This can happen when fsnotify delivers events
@@ -481,40 +447,9 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 		Op:   fsnotify.Rename,
 	}
 
-	// Collect both events.
-	var collected []changeEvent
-	timeout := time.After(eventWait)
-
-	for len(collected) < 2 {
-		select {
-		case ev := <-events:
-			collected = append(collected, ev)
-		case <-timeout:
-			require.Fail(t, "timeout", "collected only %d events, want 2", len(collected))
-		}
-	}
-
+	row := waitForLocalRow(t, batches, "dest/moved.txt")
+	waitForLocalRemoval(t, batches, "original.txt")
 	stopWatch(t, cancel, done)
 
-	// Find the Create and Delete events (order may vary).
-	var createEv, deleteEv *changeEvent
-	for i := range collected {
-		if collected[i].Type == changeCreate {
-			createEv = &collected[i]
-			continue
-		}
-
-		if collected[i].Type == ChangeDelete {
-			deleteEv = &collected[i]
-		}
-	}
-
-	require.NotNil(t, createEv, "should have a ChangeCreate for the new path")
-	require.Equal(t, "dest/moved.txt", createEv.Path)
-
-	require.NotNil(t, deleteEv, "should have a ChangeDelete for the old path")
-	require.Equal(t, "original.txt", deleteEv.Path)
-	require.True(t, deleteEv.IsDeleted)
-	require.Equal(t, ItemTypeFile, deleteEv.ItemType,
-		"baseline lookup should resolve the item type for the old path")
+	assert.Equal(t, hashContent(t, "moved content"), row.Hash)
 }

@@ -21,7 +21,7 @@ type collisionSpellingFixture struct {
 	upperNFC  string // stored spelling of the same file
 	lowerNFC  string // stored and on-disk spelling of the other file
 	obs       *localObserver
-	events    chan changeEvent
+	batches   chan localObservation
 }
 
 func newCollisionSpellingFixture(t *testing.T) *collisionSpellingFixture {
@@ -45,7 +45,7 @@ func newCollisionSpellingFixture(t *testing.T) *collisionSpellingFixture {
 	}
 
 	f.obs = newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
-	f.events = make(chan changeEvent, 10)
+	f.batches = localBatches(f.obs, 10)
 
 	return f
 }
@@ -57,20 +57,8 @@ func (f *collisionSpellingFixture) createLower(t *testing.T) {
 
 	tree := mustOpenSyncTree(t, f.dir)
 	f.obs.handleCreate(t.Context(), tree, filepath.Join(f.dir, f.lowerNFC), f.lowerNFC, f.lowerNFC,
-		newRecordingFsWatcher(), f.events)
-	require.Empty(t, f.events, "a colliding create is held back")
-}
-
-func drainChangeEvents(events chan changeEvent) []changeEvent {
-	var drained []changeEvent
-	for {
-		select {
-		case ev := <-events:
-			drained = append(drained, ev)
-		default:
-			return drained
-		}
-	}
+		newRecordingFsWatcher())
+	require.Empty(t, drainLocalPatches(f.batches), "a colliding create is held back")
 }
 
 // A collision peer is tracked and re-emitted under its stored path, never its
@@ -89,17 +77,11 @@ func TestHandleDelete_ReemitsCollisionPeerUnderItsStoredPath(t *testing.T) {
 	// NFD-named survivor sync.
 	require.NoError(t, os.Remove(filepath.Join(f.dir, f.lowerNFC)))
 	f.obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, f.dir),
-		filepath.Join(f.dir, f.lowerNFC), f.lowerNFC, f.lowerNFC, f.events)
+		filepath.Join(f.dir, f.lowerNFC), f.lowerNFC, f.lowerNFC)
 
-	var creates []changeEvent
-	for _, ev := range drainChangeEvents(f.events) {
-		if ev.Type == changeCreate {
-			creates = append(creates, ev)
-		}
-	}
+	creates := drainPatchRows(f.batches)
 	require.Len(t, creates, 1, "the surviving peer is re-emitted")
 	assert.Equal(t, f.upperNFC, creates[0].Path)
-	assert.Equal(t, f.upperNFC, creates[0].Name)
 	assert.Equal(t, int64(len("upper\n")), creates[0].Size, "the peer is stated at its spelling on disk")
 }
 
@@ -114,14 +96,9 @@ func TestHandleDelete_DeletingTheNFDNamedPeerReemitsTheOther(t *testing.T) {
 	// event does; the peer recorded for it must be found under that path.
 	require.NoError(t, os.Remove(filepath.Join(f.dir, f.upperDisk)))
 	f.obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, f.dir),
-		filepath.Join(f.dir, f.upperDisk), f.upperNFC, f.upperNFC, f.events)
+		filepath.Join(f.dir, f.upperDisk), f.upperNFC, f.upperNFC)
 
-	var creates []changeEvent
-	for _, ev := range drainChangeEvents(f.events) {
-		if ev.Type == changeCreate {
-			creates = append(creates, ev)
-		}
-	}
+	creates := drainPatchRows(f.batches)
 	require.Len(t, creates, 1, "the surviving peer is re-emitted")
 	assert.Equal(t, f.lowerNFC, creates[0].Path)
 	assert.Empty(t, f.obs.CollisionPeers, "no peer is left tracked under a spelling no event carries")

@@ -13,9 +13,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 )
 
-func testRemoteCreateEvent(path string, itemID string, driveID string) changeEvent {
-	return changeEvent{
-		Type:     changeCreate,
+func testRemoteCreateEvent(path string, itemID string, driveID string) remoteItem {
+	return remoteItem{observedItem: observedItem{
 		Path:     path,
 		ItemID:   itemID,
 		ParentID: "root",
@@ -25,13 +24,13 @@ func testRemoteCreateEvent(path string, itemID string, driveID string) changeEve
 		Size:     12,
 		Mtime:    123,
 		ETag:     fmt.Sprintf("etag-%s", itemID),
-	}
+	}}
 }
 
 func testMountRootWatchBatch(
 	engine *Engine,
 	mode remoteObservationMode,
-	events []changeEvent,
+	events []remoteItem,
 	cursorToken string,
 	findings ObservationFindingsBatch,
 ) remoteObservationBatch {
@@ -89,7 +88,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []remoteItem{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -113,7 +112,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []remoteItem{
 		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
 	}, "cursor-hidden")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -128,7 +127,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 }
 
 // Validates: R-2.4.2
-func TestRemoteEventHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
+func TestRemoteChangeHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 	t.Parallel()
 
 	filter := ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
@@ -178,13 +177,8 @@ func TestRemoteEventHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			event := changeEvent{
-				Type:     ChangeModify,
-				Path:     tt.path,
-				OldPath:  tt.old,
-				ItemType: ItemTypeFile,
-			}
-			assert.Equal(t, tt.want, remoteEventHasPlannerVisibleEffect(filter, &event))
+			change := remoteChange{Path: tt.path, OldPath: tt.old, ItemType: ItemTypeFile}
+			assert.Equal(t, tt.want, remoteChangeHasPlannerVisibleEffect(filter, &change))
 		})
 	}
 }
@@ -202,7 +196,7 @@ func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendin
 	batch := testMountRootWatchBatch(
 		eng.Engine,
 		remoteObservationModeDelta,
-		[]changeEvent{
+		[]remoteItem{
 			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
 		pendingCursor,
@@ -304,7 +298,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	findings := rootReadFailureObservationFindingsBatch(eng.driveID, issueRemoteReadDenied)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []remoteItem{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -330,7 +324,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []changeEvent{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []remoteItem{
 		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -479,10 +473,14 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 			if tc.inBase {
 				bl.Put(&BaselineEntry{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: ItemTypeFolder})
 			}
-			batch := buildPrimaryWatchBatch(eng.Engine, bl, []changeEvent{{
-				Type: ChangeDelete, Path: "bin", ItemID: "item-bin", ParentID: "root",
-				DriveID: eng.driveID, ItemType: ItemTypeFile, IsDeleted: true,
-			}}, "cursor-after-delete")
+			batch := buildPrimaryWatchBatch(eng.Engine, bl, []remoteItem{{observedItem: observedItem{
+				Path:      "bin",
+				ItemID:    "item-bin",
+				ParentID:  "root",
+				DriveID:   eng.driveID,
+				ItemType:  ItemTypeFile,
+				IsDeleted: true,
+			}}}, "cursor-after-delete")
 			require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
 			state, err := eng.baseline.ReadObservationState(ctx)

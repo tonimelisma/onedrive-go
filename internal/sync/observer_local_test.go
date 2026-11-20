@@ -120,7 +120,7 @@ func (w *readySignalWatcher) Errors() <-chan error {
 
 // startLocalWatch runs obs.Watch on dir with a real watcher in the background
 // (runInBackground) and returns once its loop is ready.
-func startLocalWatch(t *testing.T, obs *localObserver, dir string, events chan<- changeEvent) (context.CancelFunc, <-chan error) {
+func startLocalWatch(t *testing.T, obs *localObserver, dir string) (context.CancelFunc, <-chan error) {
 	t.Helper()
 
 	ready := make(chan struct{})
@@ -130,7 +130,7 @@ func startLocalWatch(t *testing.T, obs *localObserver, dir string, events chan<-
 
 	tree := mustOpenSyncTree(t, dir)
 	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-		return obs.Watch(ctx, tree, events)
+		return obs.Watch(ctx, tree)
 	})
 
 	select {
@@ -168,6 +168,17 @@ func findEvent(events []changeEvent, path string) *changeEvent {
 	return nil
 }
 
+// findRow returns the scan row with the given path, or nil.
+func findRow(rows []localStateRow, path string) *localStateRow {
+	for i := range rows {
+		if rows[i].Path == path {
+			return &rows[i]
+		}
+	}
+
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // FullScan tests
 // ---------------------------------------------------------------------------
@@ -185,12 +196,11 @@ func TestFullScan_NewFiles(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 2)
+	require.Len(t, result.Rows, 2)
 
-	ev := findEvent(result.Events, "hello.txt")
-	require.NotNil(t, ev, "hello.txt event not found")
+	ev := findRow(result.Rows, "hello.txt")
+	require.NotNil(t, ev, "hello.txt row not found")
 
-	assert.Equal(t, changeCreate, ev.Type)
-	assert.Equal(t, "hello.txt", ev.Name)
 	assert.Equal(t, hashContent(t, "hello world"), ev.Hash)
 	assert.Equal(t, int64(len("hello world")), ev.Size)
 	assert.NotZero(t, ev.Mtime, "Mtime should be non-zero")
@@ -209,9 +219,10 @@ func TestFullScan_NewFolder(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
+	assert.Equal(t, "photos", result.Events[0].Path)
 
-	ev := result.Events[0]
-	assert.Equal(t, changeCreate, ev.Type)
+	require.Len(t, result.Rows, 1)
+	ev := result.Rows[0]
 	assert.Equal(t, ItemTypeFolder, ev.ItemType)
 	assert.Empty(t, ev.Hash, "folders have no hash")
 	assert.Equal(t, "photos", ev.Path)
@@ -234,9 +245,10 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1)
+	assert.Equal(t, "doc.txt", result.Events[0].Path)
 
-	ev := result.Events[0]
-	assert.Equal(t, ChangeModify, ev.Type)
+	ev := findRow(result.Rows, "doc.txt")
+	require.NotNil(t, ev)
 	assert.Equal(t, hashContent(t, "updated content"), ev.Hash)
 }
 
@@ -261,34 +273,36 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 }
 
 // Validates: R-2.1.1
-func TestFullScan_DeletedFile(t *testing.T) {
+//
+// A scan is the whole of local truth: a synced file that is gone is the
+// absence of its row, which the planner reads as a local delete.
+func TestFullScan_DeletedSyncedFileHasNoRow(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	// File is in baseline but NOT on disk.
+	writeTestFile(t, dir, "kept.txt", "kept")
+	// gone.txt is in the baseline but NOT on disk.
 
-	baseline := baselineWith(&BaselineEntry{
-		Path: "gone.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: ItemTypeFile, LocalHash: "some-hash",
-		LocalSize: 42, LocalSizeKnown: true,
-		LocalMtime: 1234567890,
-	})
+	baseline := baselineWith(
+		&BaselineEntry{
+			Path: "gone.txt", DriveID: driveid.New("d"), ItemID: "i1",
+			ItemType: ItemTypeFile, LocalHash: "some-hash",
+			LocalSize: 42, LocalSizeKnown: true,
+			LocalMtime: 1234567890,
+		},
+		&BaselineEntry{
+			Path: "kept.txt", DriveID: driveid.New("d"), ItemID: "i2",
+			ItemType: ItemTypeFile, LocalHash: hashContent(t, "kept"),
+		},
+	)
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	require.Len(t, result.Events, 1)
-
-	ev := result.Events[0]
-	assert.Equal(t, ChangeDelete, ev.Type)
-	assert.True(t, ev.IsDeleted)
-	assert.Equal(t, "gone.txt", ev.Path)
-	assert.Equal(t, "gone.txt", ev.Name)
-
-	// Size and Mtime should be populated from baseline.
-	assert.Equal(t, int64(42), ev.Size)
-	assert.Equal(t, int64(1234567890), ev.Mtime)
+	assert.Nil(t, findRow(result.Rows, "gone.txt"), "a synced file that is gone has no row")
+	assert.Nil(t, findEvent(result.Events, "gone.txt"), "and is not an entry of the scan's change list")
+	assert.NotNil(t, findRow(result.Rows, "kept.txt"), "a synced file still on disk keeps its row")
 }
 
 // Validates: R-2.17.2
@@ -306,11 +320,8 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	require.Len(t, result.Events, 1)
-
-	ev := result.Events[0]
-	assert.Equal(t, ChangeDelete, ev.Type)
-	assert.Equal(t, ItemTypeFolder, ev.ItemType)
+	assert.Empty(t, result.Rows, "a synced folder that is gone has no row")
+	assert.Empty(t, result.Events)
 }
 
 // Validates: R-2.2.3, R-2.2.1
@@ -424,8 +435,8 @@ func TestFullScan_ContentChangedWithRestoredMtimeIsDetected(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1, "an in-place edit with a restored mtime is a change")
-	assert.Equal(t, ChangeModify, result.Events[0].Type)
-	assert.Equal(t, hashContent(t, edited), result.Events[0].Hash)
+	require.NotNil(t, findRow(result.Rows, "doc.txt"))
+	assert.Equal(t, hashContent(t, edited), findRow(result.Rows, "doc.txt").Hash)
 }
 
 // Validates: R-2.2.4
@@ -464,7 +475,8 @@ func TestFullScan_IdentityChangeForcesRehash(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1, "a new inode at the path must be re-read")
-	assert.Equal(t, hashContent(t, replaced), result.Events[0].Hash)
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, hashContent(t, replaced), result.Rows[0].Hash)
 }
 
 // Validates: R-2.2.2, R-2.2.4
@@ -545,12 +557,11 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	// Racily-clean guard should force hash, detect the mismatch -> ChangeModify.
+	// Racily-clean guard should force hash and detect the mismatch.
 	require.Len(t, result.Events, 1, "racily clean should force hash")
 
-	ev := result.Events[0]
-	assert.Equal(t, ChangeModify, ev.Type)
-	assert.Equal(t, hashContent(t, actualContent), ev.Hash)
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, hashContent(t, actualContent), result.Rows[0].Hash)
 }
 
 // Validates: R-2.2.4, R-2.8.8
@@ -580,7 +591,7 @@ func TestFullScan_RacilyCleanUnchangedFileStillProducesSnapshotRow(t *testing.T)
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	assert.Empty(t, result.Events, "unchanged racily clean file should not emit ChangeModify")
+	assert.Empty(t, result.Events, "an unchanged racily clean file is not a change")
 	require.Len(t, result.Rows, 1, "unchanged racily clean file must still remain in the local snapshot")
 	assert.Equal(t, "stable.txt", result.Rows[0].Path)
 	assert.Equal(t, hash, result.Rows[0].Hash)
@@ -614,7 +625,9 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 	require.NoError(t, err, "FullScan")
 
 	require.Len(t, result.Events, 1, "size change should force hash")
-	assert.Equal(t, ChangeModify, result.Events[0].Type)
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, hashContent(t, content), result.Rows[0].Hash)
+	assert.Equal(t, int64(len(content)), result.Rows[0].Size)
 }
 
 // Validates: R-2.4.4
@@ -678,10 +691,11 @@ func TestFullScan_FollowSymlinksOptIn(t *testing.T) {
 
 	require.Len(t, result.Events, 2)
 
-	linkEvent := findEvent(result.Events, "link.txt")
-	require.NotNil(t, linkEvent)
-	assert.Equal(t, ItemTypeFile, linkEvent.ItemType)
-	assert.Equal(t, hashContent(t, "content"), linkEvent.Hash)
+	require.NotNil(t, findEvent(result.Events, "link.txt"))
+	linkRow := findRow(result.Rows, "link.txt")
+	require.NotNil(t, linkRow)
+	assert.Equal(t, ItemTypeFile, linkRow.ItemType)
+	assert.Equal(t, hashContent(t, "content"), linkRow.Hash)
 }
 
 // Validates: R-2.4.6
@@ -942,7 +956,8 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	require.Len(t, result.Events, 1)
 	assert.Equal(t, nfcName, result.Events[0].Path, "NFC-normalized")
-	assert.Equal(t, nfcName, result.Events[0].Name, "NFC-normalized")
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, nfcName, result.Rows[0].Path, "NFC-normalized")
 }
 
 // Validates: R-2.1.1
@@ -962,7 +977,7 @@ func TestFullScan_NestedDirs(t *testing.T) {
 
 	deepEv := findEvent(result.Events, "a/b/deep.txt")
 	require.NotNil(t, deepEv, "a/b/deep.txt event not found")
-	assert.Equal(t, changeCreate, deepEv.Type)
+	assert.Equal(t, ItemTypeFile, deepEv.ItemType)
 
 	// Verify folder events exist with correct paths.
 	aEv := findEvent(result.Events, "a")
@@ -986,8 +1001,9 @@ func TestFullScan_EmptyFile(t *testing.T) {
 
 	require.Len(t, result.Events, 1)
 
-	ev := result.Events[0]
-	assert.Equal(t, changeCreate, ev.Type)
+	require.Len(t, result.Rows, 1)
+	ev := result.Rows[0]
+	assert.Equal(t, "empty.txt", ev.Path)
 	assert.NotEmpty(t, ev.Hash, "want non-empty hash for empty file")
 	assert.Equal(t, hashContent(t, ""), ev.Hash)
 	assert.Equal(t, int64(0), ev.Size)
@@ -1029,20 +1045,17 @@ func TestFullScan_MixedChanges(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
-	// 3 events: new, modified, deleted. Unchanged produces no event.
-	require.Len(t, result.Events, 3)
+	// The new and the modified file are changes; the unchanged one is not.
+	assert.NotNil(t, findEvent(result.Events, "new.txt"), "new.txt is a change")
+	assert.NotNil(t, findEvent(result.Events, "modified.txt"), "modified.txt is a change")
+	assert.Nil(t, findEvent(result.Events, "unchanged.txt"), "unchanged.txt is no change")
 
-	newEv := findEvent(result.Events, "new.txt")
-	require.NotNil(t, newEv, "new.txt event not found")
-	assert.Equal(t, changeCreate, newEv.Type)
-
-	modEv := findEvent(result.Events, "modified.txt")
-	require.NotNil(t, modEv, "modified.txt event not found")
-	assert.Equal(t, ChangeModify, modEv.Type)
-
-	delEv := findEvent(result.Events, "deleted.txt")
-	require.NotNil(t, delEv, "deleted.txt event not found")
-	assert.Equal(t, ChangeDelete, delEv.Type)
+	// Rows: every file on disk with its content; the deleted one has none.
+	require.Len(t, result.Rows, 3)
+	assert.Equal(t, hashContent(t, "new content"), findRow(result.Rows, "new.txt").Hash)
+	assert.Equal(t, hashContent(t, "updated content"), findRow(result.Rows, "modified.txt").Hash)
+	assert.Equal(t, hashContent(t, "same content"), findRow(result.Rows, "unchanged.txt").Hash)
+	assert.Nil(t, findRow(result.Rows, "deleted.txt"), "deleted.txt has no row")
 }
 
 // Validates: R-2.11.1, R-2.11.2, R-2.11.3
@@ -1421,9 +1434,9 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
-	ev := findEvent(result.Events, "unreadable.txt")
-	require.NotNil(t, ev, "unreadable file should still produce an event")
-	require.Equal(t, changeCreate, ev.Type)
+	require.NotNil(t, findEvent(result.Events, "unreadable.txt"), "unreadable file should still be a change")
+	ev := findRow(result.Rows, "unreadable.txt")
+	require.NotNil(t, ev, "unreadable file should still produce a row")
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
 }
 
@@ -1432,9 +1445,9 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.4.12, R-6.2.14
-// TestFullScan_HashFailureModifyStillEmitsEvent verifies that FullScan emits a
-// ChangeModify event with empty hash when hash computation fails for a modified
-// file (B-102). Before the fix, hash failures silently dropped modify events.
+// TestFullScan_HashFailureModifyStillEmitsEvent verifies that FullScan keeps a
+// modified file's row, with an empty hash, when hash computation fails for it
+// (B-102), instead of silently dropping the change.
 func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root user (root can read all files)")
@@ -1459,9 +1472,9 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	result, err := obs.FullScan(t.Context(), mustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
-	ev := findEvent(result.Events, "unreadable.txt")
-	require.NotNil(t, ev, "unreadable modified file should still produce an event")
-	require.Equal(t, ChangeModify, ev.Type)
+	require.NotNil(t, findEvent(result.Events, "unreadable.txt"), "unreadable modified file should still be a change")
+	ev := findRow(result.Rows, "unreadable.txt")
+	require.NotNil(t, ev, "unreadable modified file should still produce a row")
 	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
 }
 
@@ -1968,7 +1981,8 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	// good.txt should produce an event.
 	goodEv := findEvent(result.Events, "good.txt")
 	require.NotNil(t, goodEv, "good.txt should still produce an event")
-	assert.Equal(t, changeCreate, goodEv.Type)
+	require.NotNil(t, findRow(result.Rows, "good.txt"))
+	assert.Equal(t, hashContent(t, "good content"), findRow(result.Rows, "good.txt").Hash)
 
 	// bad.txt should NOT produce an event.
 	badEv := findEvent(result.Events, badFileName)

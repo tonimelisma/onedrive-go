@@ -84,7 +84,7 @@ func observeRootIssues(t *testing.T, eng *testEngine, path rootReadPath) []Obser
 	ctx := t.Context()
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	_, _, err = testEngineFlow(t, eng).observeAndCommitRemoteCurrentState(ctx, bl, path.fullReconcile)
+	_, err = testEngineFlow(t, eng).observeAndCommitRemoteCurrentState(ctx, bl, path.fullReconcile)
 	require.NoError(t, err)
 
 	issues, err := eng.baseline.ListObservationIssues(ctx)
@@ -236,7 +236,7 @@ func TestRootReadFullRefresh_ALaterPageAnsweredNotFoundIsNotTheRoot(t *testing.T
 	ctx := t.Context()
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	_, _, err = testEngineFlow(t, eng).observeAndCommitRemoteCurrentState(ctx, bl, true)
+	_, err = testEngineFlow(t, eng).observeAndCommitRemoteCurrentState(ctx, bl, true)
 	require.ErrorIs(t, err, errDeltaExpired)
 	assert.Equal(t, int32(2), laterPageReads.Load(), "the later page is asked for twice")
 

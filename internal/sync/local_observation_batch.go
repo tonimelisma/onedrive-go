@@ -55,30 +55,21 @@ func (k localObservationKind) String() string {
 // unknownLocalObservationKind names a kind outside the constants above.
 const unknownLocalObservationKind = "unknown"
 
+// localObservationBatchForEvent is the patch for one path a watch handler
+// observed: the path's row, or, for a removed path, the removal of the path
+// and every row below it. A deleted path takes its subtree whatever it was: a
+// folder neither the baseline nor the watch set knows can still have rows
+// below it.
 func localObservationBatchForEvent(event *changeEvent) localObservation {
-	if event == nil {
+	if event == nil || event.Path == "" {
 		return localObservation{}
 	}
 
-	batch := localObservation{dirty: event.Path != "" || event.OldPath != ""}
-
-	switch event.Type {
-	case ChangeDelete:
-		// A deleted path takes every row below it, whatever the observer
-		// knew about what it was: a folder neither the baseline nor the
-		// watch set knows can still have rows below it.
-		batch.deletedPrefixes = append(batch.deletedPrefixes, event.Path)
-	case ChangeMove:
-		if event.OldPath != "" {
-			batch.deletedPaths = append(batch.deletedPaths, event.OldPath)
-		}
-		if event.Path != "" && !event.IsDeleted {
-			batch.rows = append(batch.rows, localStateRowFromEvent(event))
-		}
-	case changeCreate, ChangeModify:
-		if event.Path != "" && !event.IsDeleted {
-			batch.rows = append(batch.rows, localStateRowFromEvent(event))
-		}
+	batch := localObservation{dirty: true}
+	if event.IsDeleted {
+		batch.deletedPrefixes = []string{event.Path}
+	} else {
+		batch.rows = []localStateRow{localStateRowFromEvent(event)}
 	}
 
 	return batch

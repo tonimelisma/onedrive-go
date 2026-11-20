@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -80,13 +81,13 @@ func newWatchTestObserver(t *testing.T, watcher fsWatcher, opts watchObserverTes
 }
 
 // requireDroppedWithoutEvent waits for the observer's debug report that it
-// dropped an input (match), failing at once on any change event meanwhile.
+// dropped an input (match), failing at once on any local patch meanwhile.
 // The observer reports the drop on its watch goroutine after anything the
-// input emitted, so once the report has arrived an empty events channel
-// shows that the input emitted nothing: no window decides the test. A report
-// already read by an earlier wait counts.
+// input sent, so once the report has arrived an empty batch channel shows
+// that the input sent nothing: no window decides the test. A report already
+// read by an earlier wait counts.
 func requireDroppedWithoutEvent(
-	t *testing.T, recorder *debugEventRecorder, events <-chan changeEvent,
+	t *testing.T, recorder *debugEventRecorder, batches <-chan localObservation,
 	match func(engineDebugEvent) bool, what string,
 ) {
 	t.Helper()
@@ -95,26 +96,186 @@ func requireDroppedWithoutEvent(
 	defer timer.Stop()
 	for !recorder.findEvent(match) {
 		select {
-		case ev := <-events:
-			require.FailNow(t, "unexpected event", "got %+v while waiting for %s", ev, what)
+		case batch := <-batches:
+			if batch.kind == localPatch {
+				require.FailNow(t, "unexpected local patch", "got %+v while waiting for %s", batch, what)
+			}
 		case <-recorder.events:
 		case <-timer.C:
 			require.FailNow(t, "timed out waiting for "+what)
 		}
 	}
-	requireNoChangeEvent(t, events, what)
+	requireNoLocalPatch(t, batches, what)
 }
 
-// requireNoChangeEvent fails when events holds an event. It never waits: the
-// caller has a signal that whatever could have been sent was sent before it.
-func requireNoChangeEvent(t *testing.T, events <-chan changeEvent, signal string) {
+// requireNoLocalPatch fails when batches holds a local patch. It never
+// waits: the caller has a signal that whatever could have been sent was sent
+// before it. Snapshots and suspect marks are not patches and are skipped.
+func requireNoLocalPatch(t *testing.T, batches <-chan localObservation, signal string) {
 	t.Helper()
 
-	select {
-	case ev := <-events:
-		require.FailNow(t, "unexpected event", "got %+v before %s", ev, signal)
-	default:
+	for {
+		select {
+		case batch := <-batches:
+			if batch.kind == localPatch {
+				require.FailNow(t, "unexpected local patch", "got %+v before %s", batch, signal)
+			}
+		default:
+			return
+		}
 	}
+}
+
+// localBatches installs a buffered local observation channel on obs, the one
+// output the watch runtime installs, and returns it.
+func localBatches(obs *localObserver, size int) chan localObservation {
+	batches := make(chan localObservation, size)
+	obs.SetLocalObservationBatchChannel(batches)
+
+	return batches
+}
+
+// patchRow returns the row a local patch writes for path.
+func patchRow(batch *localObservation, path string) (localStateRow, bool) {
+	if batch.kind != localPatch {
+		return localStateRow{}, false
+	}
+	for i := range batch.rows {
+		if batch.rows[i].Path == path {
+			return batch.rows[i], true
+		}
+	}
+
+	return localStateRow{}, false
+}
+
+// patchRemoves reports whether a local patch removes path and its subtree.
+func patchRemoves(batch *localObservation, path string) bool {
+	return batch.kind == localPatch && slices.Contains(batch.deletedPrefixes, path)
+}
+
+// waitForLocalPatch returns the first local patch on batches that match
+// accepts, skipping every other observation.
+func waitForLocalPatch(
+	t *testing.T, batches <-chan localObservation, match func(*localObservation) bool, what string,
+) localObservation {
+	t.Helper()
+
+	timeout := time.After(eventWait)
+	for {
+		select {
+		case batch := <-batches:
+			if batch.kind == localPatch && match(&batch) {
+				return batch
+			}
+		case <-timeout:
+			require.FailNow(t, "timeout waiting for "+what)
+			return localObservation{}
+		}
+	}
+}
+
+// waitForLocalSnapshot returns the next full scan snapshot on batches,
+// skipping every other observation.
+func waitForLocalSnapshot(t *testing.T, batches <-chan localObservation, what string) localObservation {
+	t.Helper()
+
+	timeout := time.After(eventWait)
+	for {
+		select {
+		case batch := <-batches:
+			if batch.kind == localSnapshot {
+				return batch
+			}
+		case <-timeout:
+			require.FailNow(t, "timeout waiting for "+what)
+			return localObservation{}
+		}
+	}
+}
+
+// nextLocalPatch returns the next local patch on batches, skipping every
+// other observation.
+func nextLocalPatch(t *testing.T, batches <-chan localObservation, what string) localObservation {
+	t.Helper()
+
+	return waitForLocalPatch(t, batches, func(*localObservation) bool { return true }, what)
+}
+
+// nextLocalRow returns the one row of the next local patch on batches: the
+// patch an upsert of one path sends.
+func nextLocalRow(t *testing.T, batches <-chan localObservation, what string) localStateRow {
+	t.Helper()
+
+	patch := nextLocalPatch(t, batches, what)
+	require.Len(t, patch.rows, 1, "%s: %+v", what, patch)
+	require.Empty(t, patch.deletedPrefixes, "%s: %+v", what, patch)
+
+	return patch.rows[0]
+}
+
+// waitForLocalRow waits for a local patch that writes a row for path and
+// returns that row.
+func waitForLocalRow(t *testing.T, batches <-chan localObservation, path string) localStateRow {
+	t.Helper()
+
+	var row localStateRow
+	waitForLocalPatch(t, batches, func(batch *localObservation) bool {
+		var ok bool
+		row, ok = patchRow(batch, path)
+		return ok
+	}, "a row for "+path)
+
+	return row
+}
+
+// waitForLocalRemoval waits for a local patch that removes path.
+func waitForLocalRemoval(t *testing.T, batches <-chan localObservation, path string) {
+	t.Helper()
+
+	waitForLocalPatch(t, batches, func(batch *localObservation) bool {
+		return patchRemoves(batch, path)
+	}, "the removal of "+path)
+}
+
+// drainLocalPatches returns every local patch batches holds now, without
+// waiting.
+func drainLocalPatches(batches <-chan localObservation) []localObservation {
+	var drained []localObservation
+	for {
+		select {
+		case batch := <-batches:
+			if batch.kind == localPatch {
+				drained = append(drained, batch)
+			}
+		default:
+			return drained
+		}
+	}
+}
+
+// drainPatchRows returns, in order, the rows of every local patch batches
+// holds now, without waiting.
+func drainPatchRows(batches <-chan localObservation) []localStateRow {
+	var rows []localStateRow
+	patches := drainLocalPatches(batches)
+	for i := range patches {
+		rows = append(rows, patches[i].rows...)
+	}
+
+	return rows
+}
+
+// patchRowPaths lists the row paths of patches, in order.
+func patchRowPaths(patches []localObservation) []string {
+	var paths []string
+	for i := range patches {
+		for j := range patches[i].rows {
+			paths = append(paths, patches[i].rows[j].Path)
+		}
+	}
+
+	return paths
 }
 
 // collisionSkipOf matches the local observer's report that it skipped the
@@ -132,13 +293,12 @@ func startMockWatch(
 	obs *localObserver,
 	watcher *mockFsWatcher,
 	dir string,
-	events chan changeEvent,
 ) (context.CancelFunc, <-chan error) {
 	t.Helper()
 
 	tree := mustOpenSyncTree(t, dir)
 	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-		return obs.Watch(ctx, tree, events)
+		return obs.Watch(ctx, tree)
 	})
 
 	select {
@@ -162,13 +322,12 @@ func startMockWatchInLoop(
 	obs *localObserver,
 	watcher *mockFsWatcher,
 	dir string,
-	events chan changeEvent,
 ) (context.CancelFunc, <-chan error) {
 	t.Helper()
 
 	looping := make(chan struct{})
 	obs.beforeWatchLoop = func() { close(looping) }
-	cancel, done := startMockWatch(t, obs, watcher, dir, events)
+	cancel, done := startMockWatch(t, obs, watcher, dir)
 	receiveWithin(t, looping, "the watch to finish its setup")
 
 	return cancel, done

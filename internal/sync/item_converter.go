@@ -32,7 +32,7 @@ type inflightParent struct {
 	HasUnmaterializableName bool
 }
 
-// itemConverter converts []graph.Item into []ChangeEvent with full path
+// itemConverter converts []graph.Item into []remoteItem with full path
 // materialization, NFC normalization, move detection, and deleted-item name
 // recovery. Drive-root and mount-root observation both use this single
 // conversion pipeline, shaped by path-prefix and root-item fields.
@@ -138,10 +138,10 @@ func newPrimaryConverter(
 	}
 }
 
-// ConvertItems converts a batch of graph.Items into ChangeEvents using
+// ConvertItems converts a batch of graph.Items into remote items using
 // two-pass processing: register all items in inflight, then classify all.
 // Used by mount-root observation where all items arrive in a single batch.
-func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []changeEvent {
+func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []remoteItem {
 	c.resetIncompleteObservation()
 	c.enrichSparseParentRefs(ctx, items)
 
@@ -154,7 +154,7 @@ func (c *itemConverter) ConvertItems(ctx context.Context, items []graph.Item) []
 	c.resolveMissingAncestors(ctx, items, inflight)
 
 	// Pass 2: classify and emit events.
-	var events []changeEvent
+	var events []remoteItem
 
 	for i := range items {
 		if ev := c.ClassifyItem(&items[i], inflight); ev != nil {
@@ -484,10 +484,10 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 	}
 }
 
-// ClassifyItem converts a single graph.Item into a ChangeEvent. Returns nil
+// ClassifyItem converts a single graph.Item into a remoteItem. Returns nil
 // for items that should be skipped (root, vault descendants, mount root,
 // embedded shared-folder items).
-func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]inflightParent) *changeEvent {
+func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]inflightParent) *remoteItem {
 	itemDriveID := c.resolveItemDriveID(item)
 
 	// Skip root items for both full-drive and mount-root observation.
@@ -706,11 +706,12 @@ func (c *itemConverter) shortcutTopologyFact(
 	}
 }
 
-// classifyAndConvert classifies the change type and builds a ChangeEvent.
-// Handles NFC normalization, move detection, and deleted-item name recovery.
+// classifyAndConvert builds the stored row of an item, and its old path when
+// it moved. Handles NFC normalization, move detection, and deleted-item path
+// recovery.
 func (c *itemConverter) classifyAndConvert(
 	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
-) *changeEvent {
+) *remoteItem {
 	name := effectiveItemName(item, existing)
 
 	hash := driveops.SelectHash(item)
@@ -718,26 +719,23 @@ func (c *itemConverter) classifyAndConvert(
 		c.Stats.hashesComputed.Add(1)
 	}
 
-	ev := changeEvent{
+	ev := remoteItem{observedItem: observedItem{
 		ItemID:    item.ID,
 		ParentID:  item.ParentID,
 		DriveID:   itemDriveID,
 		ItemType:  classifyItemType(item),
-		Name:      name,
 		Size:      item.Size,
 		Hash:      hash,
 		Mtime:     storedTimeNano(item.ModifiedAt),
 		ETag:      item.ETag,
-		CTag:      item.CTag,
 		IsDeleted: item.IsDeleted,
-	}
+	}}
 	if !c.normalizeRemoteFacts(&ev, item, existing) {
 		return nil
 	}
 
 	switch {
 	case item.IsDeleted:
-		ev.Type = ChangeDelete
 		c.placeDeletedItem(&ev, item, inflight, itemDriveID, existing)
 		if ev.Path == "" {
 			// A delete of an item this client never synced: there is nothing
@@ -754,14 +752,10 @@ func (c *itemConverter) classifyAndConvert(
 	case existing != nil:
 		ev.Path = c.materializePathWithBaselineFallback(item, inflight, itemDriveID, existing, name)
 		if ev.Path != existing.Path {
-			ev.Type = ChangeMove
 			ev.OldPath = existing.Path
-		} else {
-			ev.Type = ChangeModify
 		}
 
 	default:
-		ev.Type = changeCreate
 		ev.Path = c.materializePath(item, inflight, itemDriveID)
 	}
 
@@ -785,7 +779,7 @@ func (c *itemConverter) classifyAndConvert(
 // normalizeRemoteFacts repairs facts Graph reports badly (R-2.4.16): a
 // negative size is unknown, and a missing type facet takes the baseline's
 // kind. It reports false when the item cannot be classified at all.
-func (c *itemConverter) normalizeRemoteFacts(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
+func (c *itemConverter) normalizeRemoteFacts(ev *remoteItem, item *graph.Item, existing *BaselineEntry) bool {
 	if item.Size < 0 {
 		ev.Size = 0
 		ev.SizeUnknown = true
@@ -808,7 +802,7 @@ func (c *itemConverter) normalizeRemoteFacts(ev *changeEvent, item *graph.Item, 
 // instead of the item being skipped for good behind a persisted cursor (the
 // same rule as a parentless item, materializePathPreferringIDChain); a
 // re-read that answered and still names no kind, or found no item, skips it.
-func (c *itemConverter) applyBaselineKind(ev *changeEvent, item *graph.Item, existing *BaselineEntry) bool {
+func (c *itemConverter) applyBaselineKind(ev *remoteItem, item *graph.Item, existing *BaselineEntry) bool {
 	if existing == nil {
 		if enrichErr, failed := c.sparseEnrichFailed[item.ID]; failed && !errors.Is(enrichErr, graph.ErrNotFound) {
 			c.Logger.Debug("remote item kind unknown and its re-read failed; the change window will be replayed",
@@ -1177,29 +1171,21 @@ func unmaterializableRemoteNameReason(name string) string {
 	}
 }
 
-// placeDeletedItem gives a delete event its path and name: from the
+// placeDeletedItem gives a deleted item its path: from the
 // baseline, else from the remote snapshot row stored for the ID (an item the
 // observer's baseline does not hold but the store has observed, R-2.4.17),
 // else from the tombstone's own name and parent chain. Business deletes may
 // lack a name; Personal has delivered tombstones with neither name nor parent.
 func (c *itemConverter) placeDeletedItem(
-	ev *changeEvent, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
+	ev *remoteItem, item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID, existing *BaselineEntry,
 ) {
 	if existing != nil {
 		ev.Path = existing.Path
-		if ev.Name == "" {
-			ev.Name = path.Base(existing.Path)
-		}
-
 		return
 	}
 	if c.RemotePathByID != nil {
 		if stored, ok := c.RemotePathByID(item.ID); ok && stored != "" {
 			ev.Path = stored
-			if ev.Name == "" {
-				ev.Name = path.Base(stored)
-			}
-
 			return
 		}
 	}

@@ -23,22 +23,14 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	dir := t.TempDir()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startLocalWatch(t, obs, dir)
 	writeTestFile(t, dir, "new-file.txt", "hello watch")
 
-	var ev changeEvent
-	select {
-	case ev = <-events:
-	case <-time.After(eventWait):
-		cancel()
-		require.Fail(t, "timeout waiting for create event")
-	}
-
+	row := waitForLocalRow(t, batches, "new-file.txt")
 	stopWatch(t, cancel, done)
 
-	assert.Equal(t, changeCreate, ev.Type)
-	assert.Equal(t, "new-file.txt", ev.Path)
+	assert.Equal(t, ItemTypeFile, row.ItemType)
 }
 
 // Validates: R-2.1.2
@@ -48,36 +40,22 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	dir := t.TempDir()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan changeEvent, 20)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 20)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	// Create a subdirectory and a file inside it.
 	subDir := filepath.Join(dir, "subdir")
 	require.NoError(t, os.Mkdir(subDir, 0o700))
 
-	waitForLocalCreateEvent(t, events, "subdir")
+	dirRow := waitForLocalRow(t, batches, "subdir")
+	assert.Equal(t, ItemTypeFolder, dirRow.ItemType)
 
 	writeTestFile(t, dir, "subdir/inner.txt", "nested")
 
-	// Collect events until we find the file inside the subdirectory.
-	var foundInnerFile bool
-
-	timeout := time.After(eventWait)
-
-	for !foundInnerFile {
-		select {
-		case ev := <-events:
-			if ev.Path == "subdir/inner.txt" {
-				foundInnerFile = true
-			}
-		case <-timeout:
-			require.Fail(t, "timeout waiting for inner file event")
-		}
-	}
-
+	row := waitForLocalRow(t, batches, "subdir/inner.txt")
 	stopWatch(t, cancel, done)
 
-	assert.True(t, foundInnerFile, "inner file event not received")
+	assert.Equal(t, ItemTypeFile, row.ItemType)
 }
 
 // TestWatch_NewDirectoryPreExistingFiles verifies that files already present
@@ -90,8 +68,8 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	dir := t.TempDir()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan changeEvent, 30)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 30)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	// Create a directory with a file already inside it using os.MkdirAll +
 	// os.WriteFile atomically (from the watcher's perspective, the directory
@@ -103,26 +81,12 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	preExistingFile := filepath.Join(subDir, "already-here.txt")
 	require.NoError(t, os.WriteFile(preExistingFile, []byte("pre-existing"), 0o600))
 
-	// Collect events. The file should appear without a separate fsnotify event
-	// because scanNewDirectory picks it up during directory creation handling.
-	var foundPreExisting bool
-
-	timeout := time.After(eventWait)
-
-	for !foundPreExisting {
-		select {
-		case ev := <-events:
-			if ev.Path == "pre-populated/already-here.txt" && ev.Type == changeCreate {
-				foundPreExisting = true
-			}
-		case <-timeout:
-			require.Fail(t, "timeout waiting for pre-existing file event (B-100)")
-		}
-	}
-
+	// The file's row arrives without a separate fsnotify event because
+	// scanNewDirectory picks it up during directory creation handling.
+	row := waitForLocalRow(t, batches, "pre-populated/already-here.txt")
 	stopWatch(t, cancel, done)
 
-	assert.True(t, foundPreExisting, "pre-existing file in new directory was not detected")
+	assert.Equal(t, ItemTypeFile, row.ItemType)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,8 +100,8 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	dir := t.TempDir()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan changeEvent, 50)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 50)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	// Create a 3-level nested directory structure with a file at the bottom.
 	deepDir := filepath.Join(dir, "level1", "level2", "level3")
@@ -146,7 +110,7 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	deepFile := filepath.Join(deepDir, "deep-file.txt")
 	require.NoError(t, os.WriteFile(deepFile, []byte("deep content"), 0o600))
 
-	// Collect events — look for the deep file and all intermediate directories.
+	// Collect rows: the deep file and all intermediate directories.
 	foundDirs := make(map[string]bool)
 	foundFile := false
 
@@ -160,13 +124,13 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 
 	for !foundFile || len(foundDirs) < len(wantDirs) {
 		select {
-		case ev := <-events:
-			if ev.Type == changeCreate {
-				if ev.ItemType == ItemTypeFolder && wantDirs[ev.Path] {
-					foundDirs[ev.Path] = true
+		case batch := <-batches:
+			for _, row := range batch.rows {
+				if row.ItemType == ItemTypeFolder && wantDirs[row.Path] {
+					foundDirs[row.Path] = true
 				}
 
-				if ev.Path == "level1/level2/level3/deep-file.txt" && ev.ItemType == ItemTypeFile {
+				if row.Path == "level1/level2/level3/deep-file.txt" && row.ItemType == ItemTypeFile {
 					foundFile = true
 				}
 			}
@@ -185,30 +149,14 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	}
 }
 
-func waitForLocalCreateEvent(t *testing.T, events <-chan changeEvent, wantPath string) {
-	t.Helper()
-
-	timeout := time.After(eventWait)
-	for {
-		select {
-		case ev := <-events:
-			if ev.Path == wantPath && ev.Type == changeCreate {
-				return
-			}
-		case <-timeout:
-			require.Failf(t, "timeout", "waiting for create event for %q", wantPath)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Hash failure creates with empty hash (B-102) — Watch variant
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.4.12
 // TestWatch_HashFailureStillEmitsCreate verifies that a file whose hash cannot
-// be computed (e.g., unreadable) still generates a ChangeCreate event with an
-// empty hash instead of being silently dropped (B-102).
+// be computed (e.g., unreadable) still gets a row with an empty hash instead
+// of being silently dropped (B-102).
 func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root user (root can read all files)")
@@ -219,8 +167,8 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	dir := t.TempDir()
 	obs := newLocalObserver(emptyBaseline(), synctest.TestLogger(t), 0)
 
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	// Create an unreadable file after the watch loop is live.
 	// The file must be born unreadable — if we create then chmod, the observer
@@ -234,20 +182,10 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
-	var ev changeEvent
-
-	select {
-	case ev = <-events:
-	case <-time.After(eventWait):
-		cancel()
-		require.Fail(t, "timeout waiting for create event")
-	}
-
+	row := waitForLocalRow(t, batches, "unreadable.txt")
 	stopWatch(t, cancel, done)
 
-	require.Equal(t, changeCreate, ev.Type)
-	require.Equal(t, "unreadable.txt", ev.Path)
-	require.Empty(t, ev.Hash, "hash should be empty when computation fails")
+	require.Empty(t, row.Hash, "hash should be empty when computation fails")
 }
 
 // Case collision tests moved to observer_local_collisions_test.go.

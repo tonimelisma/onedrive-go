@@ -33,29 +33,18 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 	})
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startLocalWatch(t, obs, dir)
 
 	require.NoError(t, os.Remove(filepath.Join(dir, "doomed.txt")))
 
-	var ev changeEvent
-	select {
-	case ev = <-events:
-	case <-time.After(eventWait):
-		cancel()
-		require.Fail(t, "timeout waiting for delete event")
-	}
-
+	waitForLocalRemoval(t, batches, "doomed.txt")
 	stopWatch(t, cancel, done)
-
-	assert.Equal(t, ChangeDelete, ev.Type)
-	assert.Equal(t, "doomed.txt", ev.Path)
-	assert.True(t, ev.IsDeleted)
 }
 
 // TestWatch_DeleteDirectoryRemovesWatch verifies that deleting a watched
-// directory emits a ChangeDelete event and the watch continues to function
-// normally for other events (B-112).
+// directory removes its subtree from local truth and drops its watch
+// (B-112).
 // Validates: R-2.1.2
 func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	t.Parallel()
@@ -70,27 +59,17 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 	})
 
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 10)
-	cancel, done := startLocalWatch(t, obs, dir, events)
+	batches := localBatches(obs, 10)
+	cancel, done := startLocalWatch(t, obs, dir)
+	require.True(t, obs.watchedDirs.has(subDir), "the directory is watched before its delete")
 
 	// Delete the subdirectory.
 	require.NoError(t, os.Remove(subDir))
 
-	var ev changeEvent
-
-	select {
-	case ev = <-events:
-	case <-time.After(eventWait):
-		cancel()
-		require.Fail(t, "timeout waiting for delete event")
-	}
-
+	waitForLocalRemoval(t, batches, "subdir")
 	stopWatch(t, cancel, done)
 
-	require.Equal(t, ChangeDelete, ev.Type)
-	require.Equal(t, "subdir", ev.Path)
-	require.Equal(t, ItemTypeFolder, ev.ItemType)
-	require.True(t, ev.IsDeleted)
+	assert.False(t, obs.watchedDirs.has(subDir), "a deleted directory's watch is dropped")
 }
 
 // Validates: R-2.4.6
@@ -104,7 +83,7 @@ func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *test
 	obs.SetFilterConfig(ContentFilterConfig{FollowSymlinks: false})
 
 	watcher := newRecordingFsWatcher()
-	events := make(chan changeEvent, 4)
+	batches := localBatches(obs, 4)
 	tree := mustOpenSyncTree(t, syncRoot)
 	linkPath := filepath.Join(syncRoot, "link.txt")
 
@@ -115,7 +94,6 @@ func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *test
 		fsnotify.Event{Name: linkPath, Op: fsnotify.Create},
 		watcher,
 		tree,
-		events,
 	)
 
 	require.NoError(t, os.Remove(linkPath))
@@ -125,14 +103,9 @@ func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *test
 		fsnotify.Event{Name: linkPath, Op: fsnotify.Remove},
 		watcher,
 		tree,
-		events,
 	)
 
-	select {
-	case ev := <-events:
-		require.Failf(t, "unexpected event for skipped transient symlink", "%+v", ev)
-	default:
-	}
+	requireNoLocalPatch(t, batches, "the skipped transient symlink's events")
 }
 
 // Validates: R-2.4.6
@@ -164,24 +137,20 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 
 	require.NoError(t, os.Remove(linkPath))
 
-	events := make(chan changeEvent, 4)
+	batches := localBatches(obs, 4)
 	obs.HandleFsEvent(
 		t.Context(),
 		fsnotify.Event{Name: linkPath, Op: fsnotify.Remove},
 		watcher,
 		tree,
-		events,
 	)
 
-	select {
-	case ev := <-events:
-		require.Failf(t, "unexpected delete event for skipped symlink", "%+v", ev)
-	default:
-	}
+	requireNoLocalPatch(t, batches, "the skipped symlink's delete")
 
 	result, err := obs.FullScan(t.Context(), tree)
 	require.NoError(t, err)
-	assert.Nil(t, findEvent(result.Events, "link.txt"), "safety scan should not resurrect a delete for an excluded symlink")
+	assert.Nil(t, findRow(result.Rows, "link.txt"), "a safety scan holds no row for an excluded symlink")
+	assert.NotNil(t, findRow(result.Rows, "real.txt"))
 }
 
 // Validates: R-2.4.6
@@ -368,10 +337,12 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 			obs.PendingTimers = make(map[string]syncTimer)
 			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
-			events := make(chan changeEvent, 10)
+			if tt.baseType == ItemTypeFolder {
+				registerWatchedForTest(obs, tt.fsPath)
+			}
 			name := filepath.Base(tt.dbRelPath)
 
-			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), tt.fsPath, tt.dbRelPath, name, events)
+			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), tt.fsPath, tt.dbRelPath, name)
 
 			removed := watcher.getRemovedPaths()
 			if tt.wantRemove {
@@ -386,7 +357,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 }
 
 // Validates: R-6.7.20
-func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
+func TestHandleDelete_SendsTheRemovalOfThePath(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -413,19 +384,14 @@ func TestHandleDelete_EmitsDeleteEvent(t *testing.T) {
 			obs.PendingTimers = make(map[string]syncTimer)
 			obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
-			events := make(chan changeEvent, 10)
-			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/target", "target", "target", events)
+			batches := localBatches(obs, 10)
+			obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/target", "target", "target")
 
-			select {
-			case ev := <-events:
-				assert.Equal(t, ChangeDelete, ev.Type)
-				assert.Equal(t, "target", ev.Path)
-				assert.Equal(t, "target", ev.Name)
-				assert.Equal(t, tt.baseType, ev.ItemType)
-				assert.True(t, ev.IsDeleted)
-			default:
-				require.Fail(t, "expected a ChangeDelete event")
-			}
+			patches := drainLocalPatches(batches)
+			require.Len(t, patches, 1, "one delete sends one patch")
+			assert.Equal(t, []string{"target"}, patches[0].deletedPrefixes)
+			assert.Empty(t, patches[0].rows)
+			assert.True(t, patches[0].dirty)
 		})
 	}
 }
@@ -444,8 +410,7 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	// Set up a pending timer for "file.txt".
 	obs.PendingTimers["file.txt"] = realClock{}.AfterFunc(time.Hour, func() {})
 
-	events := make(chan changeEvent, 10)
-	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt", events)
+	obs.HandleDelete(t.Context(), watcher, mustOpenSyncTree(t, "/sync"), "/sync/file.txt", "file.txt", "file.txt")
 
 	assert.Empty(t, obs.PendingTimers, "handleDelete should cancel pending timer")
 }
@@ -473,7 +438,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	obs.PendingTimers = make(map[string]syncTimer)
 	obs.HashRequests = make(chan hashRequest, hashRequestBufSize)
 
-	events := make(chan changeEvent, 10)
+	registerWatchedForTest(obs, dirPath)
 
 	fsEvent := fsnotify.Event{
 		Name: dirPath,
@@ -483,7 +448,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 	// that still exists is ignored (D-011).
 	require.NoError(t, os.Remove(dirPath))
 
-	obs.HandleFsEvent(t.Context(), fsEvent, watcher, mustOpenSyncTree(t, syncRoot), events)
+	obs.HandleFsEvent(t.Context(), fsEvent, watcher, mustOpenSyncTree(t, syncRoot))
 
 	removed := watcher.getRemovedPaths()
 	require.Len(t, removed, 1, "expected Remove call for folder delete")
@@ -504,14 +469,14 @@ func TestHandleFsEvent_SyncRootLifecycleEventDoesNotEmitContentDelete(t *testing
 		ItemType: ItemTypeFile,
 	})
 	obs := newLocalObserver(baseline, synctest.TestLogger(t), 0)
-	events := make(chan changeEvent, 10)
+	batches := localBatches(obs, 10)
 
 	obs.HandleFsEvent(t.Context(), fsnotify.Event{
 		Name: syncRoot,
 		Op:   fsnotify.Remove,
-	}, watcher, mustOpenSyncTree(t, syncRoot), events)
+	}, watcher, mustOpenSyncTree(t, syncRoot))
 
-	assert.Empty(t, events)
+	assert.Empty(t, drainLocalPatches(batches))
 	assert.Empty(t, watcher.getRemovedPaths())
 }
 
@@ -538,7 +503,7 @@ func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []localStat
 
 	syncRoot := t.TempDir()
 	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, syncRoot),
-		filepath.Join(syncRoot, rel), rel, filepath.Base(rel), make(chan changeEvent, 1))
+		filepath.Join(syncRoot, rel), rel, filepath.Base(rel))
 
 	var batch localObservation
 	select {

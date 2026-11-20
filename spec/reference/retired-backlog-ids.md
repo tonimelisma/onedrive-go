@@ -41,7 +41,6 @@ and nothing in `spec/` resolves them.
 | `B-117` | `internal/sync/observer_local_handlers_test.go` |
 | `B-118` | `internal/sync/observer_local_handlers_test.go` |
 | `B-119` | `internal/sync/errors.go`, `internal/sync/scanner.go` |
-| `B-125` | `internal/sync/observer_local.go`, `internal/sync/observer_remote.go`, `internal/sync/observer_remote_test.go` |
 | `B-127` | `internal/sync/observer_remote.go`, `internal/sync/observer_remote_test.go` |
 | `B-132` | `internal/sync/executor_test.go` |
 | `B-146` | `internal/graph/auth_browser.go` |
