@@ -871,3 +871,24 @@ func TestAddDrive_RecordsTheDrivesOwner(t *testing.T) {
 		})
 	}
 }
+
+// A sign-in reads the user, which is what the account identity check asks
+// for, so it records the next check as an answered check does.
+//
+// Validates: R-6.8.31, R-3.3.1
+func TestLogin_RecordsTheIdentityCheck(t *testing.T) {
+	f := newEnrollFixture(t, true)
+	req := f.loginRequest()
+	now := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+
+	_, err := addDrive(&req, defaultConfigIO(), noWaitLocker(), now, testLogger(t))
+	require.NoError(t, err)
+
+	catalog, err := LoadCatalogForDataDir(f.dataDir)
+	require.NoError(t, err)
+	account, found := catalog.AccountByCanonicalID(req.Drive)
+	require.True(t, found)
+	assert.Equal(t, now.Add(IdentityCheckAnsweredInterval).Format(time.RFC3339), account.IdentityCheckDueAt)
+	assert.False(t, account.IdentityCheckDue(now.Add(IdentityCheckAnsweredInterval-time.Second)))
+	assert.True(t, account.IdentityCheckDue(now.Add(IdentityCheckAnsweredInterval)))
+}

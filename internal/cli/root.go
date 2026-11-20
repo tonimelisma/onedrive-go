@@ -137,7 +137,12 @@ type cliSeams struct {
 	// overlay's budget (statusLiveBudget) runs out, so a test ends the budget
 	// itself instead of waiting 10 s or racing a shorter clock.
 	statusLiveBudgetContext func(context.Context) (context.Context, context.CancelFunc)
-	cpAwaitCopy             func(context.Context, *CLIContext, *graph.Client, string) (string, error)
+	// identityCheckBudgetContext replaces the context that ends when the
+	// account identity check's budget (identityCheckBudget) runs out.
+	identityCheckBudgetContext func(context.Context) (context.Context, context.CancelFunc)
+	// now replaces time.Now for when an account's identity check is due.
+	now         func() time.Time
+	cpAwaitCopy func(context.Context, *CLIContext, *graph.Client, string) (string, error)
 	// asideRestoreTimeout replaces restoreAsideTimeout when non-zero.
 	asideRestoreTimeout time.Duration
 	// effectiveUID replaces os.Geteuid for the sync root refusal.

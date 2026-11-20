@@ -415,6 +415,19 @@ email, it:
      default derived from the old ID; a name Graph or the user supplied stays
      (`TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress`)
 
+Commands learn of a change from the CLI's account identity check, which is
+a freshness step and never a precondition (R-6.8.31). The catalog account
+record carries when that check is next due (`identity_check_due_at`, RFC 3339
+in UTC): `RecordAccountIdentityCheck` writes it under the catalog lock, 24
+hours (`IdentityCheckAnsweredInterval`) after an answered check and 15
+minutes (`IdentityCheckUnansweredInterval`) after one OneDrive did not
+answer, and a login records the 24 hours in its own catalog write
+(`TestLogin_RecordsTheIdentityCheck`). `CatalogAccount.IdentityCheckDue`
+treats a record without the time, an unparsable one and one further ahead
+than 24 hours (a clock that went back) as due. An email change is a local
+label change: the sign-in and the drive IDs stay valid, so learning of it up
+to a day late breaks nothing.
+
 A state DB is never renamed here. It moves with its whole file family under
 the store lock that excludes every engine using it, which `internal/sync`
 owns (`syncengine.MoveStateDBs`) and config cannot import, so the CLI passes

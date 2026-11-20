@@ -21,10 +21,19 @@ type sqlTxRunner interface {
 	PrepareContext(context.Context, string) (*sql.Stmt, error)
 }
 
+// perfTx is a store transaction that records itself on the perf collector of
+// the context it began with, once, when it ends: on Commit, whether or not the
+// commit succeeded (database/sql marks the transaction done before it asks the
+// driver to commit, and a commit refused for an ended context leaves the
+// rollback to the context's watcher), or on a Rollback that ended it. The
+// Rollback every store function defers after its Commit returns
+// sql.ErrTxDone and records nothing. A perfTx belongs to the goroutine that
+// began it, like the function that defers its rollback.
 type perfTx struct {
 	*sql.Tx
 	collector *perf.Collector
 	startedAt time.Time
+	recorded  bool
 }
 
 func beginPerfTx(ctx context.Context, db *sql.DB) (*perfTx, error) {
@@ -46,7 +55,7 @@ func (tx *perfTx) Commit() error {
 	}
 
 	err := tx.Tx.Commit()
-	recordPerfTx(tx)
+	tx.record()
 	if err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
@@ -60,7 +69,9 @@ func (tx *perfTx) Rollback() error {
 	}
 
 	err := tx.Tx.Rollback()
-	recordPerfTx(tx)
+	if !errors.Is(err, sql.ErrTxDone) {
+		tx.record()
+	}
 	if err != nil {
 		return fmt.Errorf("rollback transaction: %w", err)
 	}
@@ -88,8 +99,14 @@ func finalizeTxRollback(err error, tx txRollbacker, action string) error {
 	return errors.Join(err, rollbackErr)
 }
 
-func recordPerfTx(tx *perfTx) {
-	if tx == nil || tx.collector == nil {
+// record records the transaction's time from begin to now on its collector,
+// the first time it is called.
+func (tx *perfTx) record() {
+	if tx.recorded {
+		return
+	}
+	tx.recorded = true
+	if tx.collector == nil {
 		return
 	}
 
