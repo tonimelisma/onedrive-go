@@ -47,7 +47,7 @@ func TestExecutePreparedPlan_APassThatEndsAtItsFirstDispatchLeavesItsWork(t *tes
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := newOneShotRunner(eng.Engine).executePreparedPlan(ctx, runtime, &syncdomain.Baseline{})
+	err := newOneShotRunner(eng.Engine).executePreparedPlan(ctx, runtime, syncdomain.NewBaselineSnapshot(nil))
 	require.Error(t, err, "admission refuses a canceled run")
 	assert.Zero(t, report.Succeeded+report.Failed, "%+v", report)
 	assert.Equal(t, len(runtime.Plan.Actions), report.LeftForNextSync, "neither completed nor failed: left")

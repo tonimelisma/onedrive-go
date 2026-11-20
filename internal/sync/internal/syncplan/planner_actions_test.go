@@ -727,7 +727,7 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 			Mtime:    123,
 		}},
 		nil,
-		syncdomain.NewBaselineForTest(nil),
+		syncdomain.NewBaselineSnapshot(nil),
 	)
 
 	require.Len(t, plan.Actions, 1)
@@ -883,7 +883,7 @@ func planCurrentStateForInputs(
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 ) *syncdomain.ActionPlan {
 	t.Helper()
 
@@ -1094,7 +1094,7 @@ func planForUnavailableLocalMoveSource(t *testing.T) *syncdomain.ActionPlan {
 			Path:      "docs/source.txt",
 			IssueType: syncdomain.IssueLocalReadDenied,
 		}},
-		syncdomain.NewBaselineForTest([]*syncdomain.BaselineEntry{{
+		syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{{
 			Path:     "docs/source.txt",
 			DriveID:  driveid.New(syncfixture.EngineTestDriveID),
 			ItemID:   "baseline-source",
@@ -1138,7 +1138,7 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *syncdomain.ActionPla
 			IssueType: syncdomain.IssueRemoteReadDenied,
 			ScopeKey:  syncdomain.SKPermRemoteRead("Shared"),
 		}},
-		syncdomain.NewBaselineForTest([]*syncdomain.BaselineEntry{{
+		syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{{
 			Path:     "Shared/dest.txt",
 			DriveID:  driveid.New(syncfixture.EngineTestDriveID),
 			ItemID:   "baseline-dest",

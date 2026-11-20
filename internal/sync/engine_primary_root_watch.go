@@ -12,7 +12,7 @@ import (
 
 func (rt *watchRuntime) startPrimaryRootWatch(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	batches chan<- syncobserve.RemoteObservationBatch,
 	errs chan<- error,
 	pollInterval time.Duration,

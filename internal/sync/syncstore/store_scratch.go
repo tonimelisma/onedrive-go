@@ -50,7 +50,7 @@ type keptLocalFolderRow struct {
 // planning. The caller owns the returned cleanup function.
 func (s *SyncStore) CreateScratchPlanningStore(
 	ctx context.Context,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 ) (_ *SyncStore, cleanup func(context.Context) error, err error) {
 	if baseline == nil {
 		return nil, nil, fmt.Errorf("sync: scratch planning store requires baseline")
@@ -112,7 +112,7 @@ func (s *SyncStore) CreateScratchPlanningStore(
 
 func (s *SyncStore) readScratchPlanningSeed(
 	ctx context.Context,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 ) (seed scratchPlanningSeed, err error) {
 	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
@@ -181,17 +181,14 @@ func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPl
 	return nil
 }
 
-func cloneBaselineEntries(baseline *syncdomain.Baseline) []syncdomain.BaselineEntry {
+func cloneBaselineEntries(baseline syncdomain.BaselineView) []syncdomain.BaselineEntry {
 	if baseline == nil {
 		return nil
 	}
 
 	entries := make([]syncdomain.BaselineEntry, 0, baseline.Len())
-	baseline.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
-		if entry == nil {
-			return
-		}
-		entries = append(entries, *entry)
+	baseline.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) {
+		entries = append(entries, entry)
 	})
 
 	return entries

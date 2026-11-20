@@ -27,7 +27,7 @@ func (flow *engineFlow) failAfterControlStateError(current *syncdomain.TrackedAc
 func (flow *engineFlow) applyRuntimeCompletionStage(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	if r == nil {
 		return nil, nil
@@ -73,7 +73,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	handled, err := flow.maybeHandlePermissionFailure(ctx, decision, current, r, bl)
 	if err != nil {
@@ -124,7 +124,7 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	if decision.Class == errclass.ClassSuperseded {
 		flow.noteProbationMemberFinished(trialScopeKey, r.TrialScopeGeneration)
@@ -521,7 +521,7 @@ func partitionPublicationFrontier(ready []*syncdomain.TrackedAction) ([]*syncdom
 
 func (flow *engineFlow) failPublicationDrainAction(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	current *syncdomain.TrackedAction,
 	cause error,
 ) ([]*syncdomain.TrackedAction, error) {
@@ -534,7 +534,7 @@ func (flow *engineFlow) failPublicationDrainAction(
 
 func (flow *engineFlow) applyPublicationDrainAction(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	current *syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	if err := flow.applyPublicationMutation(ctx, current); err != nil {
@@ -564,7 +564,7 @@ func (flow *engineFlow) completePublicationDrainAction(
 // (reduceReadyFrontier).
 func (flow *engineFlow) runPublicationDrainStage(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	ready []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	concrete, publication := partitionPublicationFrontier(ready)

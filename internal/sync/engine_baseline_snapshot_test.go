@@ -46,38 +46,50 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	assert.NotNil(t, plan)
 }
 
-// Validates: R-2.17.2
-func TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent(t *testing.T) {
+// Validates: R-2.17.2, R-6.3.4
+//
+// Watch holds the view Load returned at startup for its whole run: every
+// commit, a folder move's reload included, must reach it. What a lookup
+// returned is a value, so a commit never changes an entry a reader already
+// holds.
+func TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent(t *testing.T) {
 	t.Parallel()
 
 	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New("d")
 
-	// Watch holds the pointer Load returned at startup for its whole run.
 	held, err := mgr.Load(ctx)
 	require.NoError(t, err)
-
-	for _, m := range []syncdomain.BaselineMutation{
-		{Action: syncdomain.ActionFolderCreate, Success: true, Path: "movesrc", DriveID: driveID, ItemID: "dir", ItemType: syncdomain.ItemTypeFolder},
-		{Action: syncdomain.ActionUpload, Success: true, Path: "movesrc/a.txt", DriveID: driveID, ItemID: "a", ItemType: syncdomain.ItemTypeFile},
-		{
-			Action: syncdomain.ActionRemoteMove, Success: true, Path: "movedst", OldPath: "movesrc",
-			DriveID: driveID, ItemID: "dir", ItemType: syncdomain.ItemTypeFolder,
-		},
-		// The commit after the folder move must still reach the held pointer.
-		{Action: syncdomain.ActionFolderCreate, Success: true, Path: "fm2", DriveID: driveID, ItemID: "fm2", ItemType: syncdomain.ItemTypeFolder},
-	} {
+	commit := func(m syncdomain.BaselineMutation) {
+		t.Helper()
 		require.NoError(t, mgr.CommitMutation(ctx, &m))
 	}
 
+	commit(syncdomain.BaselineMutation{Action: syncdomain.ActionFolderCreate, Success: true, Path: "movesrc", DriveID: driveID, ItemID: "dir", ItemType: syncdomain.ItemTypeFolder})
+	commit(syncdomain.BaselineMutation{Action: syncdomain.ActionUpload, Success: true, Path: "movesrc/a.txt", DriveID: driveID, ItemID: "a", ItemType: syncdomain.ItemTypeFile})
+	beforeMove, ok := held.GetByID("a")
+	require.True(t, ok)
+
+	commit(syncdomain.BaselineMutation{
+		Action: syncdomain.ActionRemoteMove, Success: true, Path: "movedst", OldPath: "movesrc",
+		DriveID: driveID, ItemID: "dir", ItemType: syncdomain.ItemTypeFolder,
+	})
+	// The commit after the folder move must still reach the held view.
+	commit(syncdomain.BaselineMutation{Action: syncdomain.ActionFolderCreate, Success: true, Path: "fm2", DriveID: driveID, ItemID: "fm2", ItemType: syncdomain.ItemTypeFolder})
+
 	for _, p := range []string{"movedst", "movedst/a.txt", "fm2"} {
-		_, ok := held.GetByPath(p)
-		assert.True(t, ok, "held baseline lacks %s", p)
+		_, found := held.GetByPath(p)
+		assert.True(t, found, "held baseline lacks %s", p)
 	}
-	_, ok := held.GetByPath("movesrc/a.txt")
-	assert.False(t, ok)
+	_, found := held.GetByPath("movesrc/a.txt")
+	assert.False(t, found)
+	afterMove, ok := held.GetByID("a")
+	require.True(t, ok)
+	assert.Equal(t, "movedst/a.txt", afterMove.Path)
+	assert.Equal(t, "movesrc/a.txt", beforeMove.Path, "a value read before the move is not rewritten under its reader")
+
 	current, err := mgr.Load(ctx)
 	require.NoError(t, err)
-	assert.Same(t, held, current, "Load must keep returning the pointer callers hold")
+	assert.Same(t, held, current, "Load must keep returning the view callers hold")
 }

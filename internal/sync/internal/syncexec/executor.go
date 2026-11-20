@@ -97,7 +97,7 @@ func (cfg *ExecutorConfig) SetPendingCreates(store PendingCreateStore) {
 // shared ExecutorConfig, parentChecks, guards itself.
 type Executor struct {
 	*ExecutorConfig
-	baseline *syncdomain.Baseline
+	baseline syncdomain.BaselineView
 }
 
 // NewExecutorConfig creates the executor configuration bound to a
@@ -277,7 +277,7 @@ func (cfg *ExecutorConfig) SetUploads(ul driveops.Uploader) {
 
 // NewExecution creates an ephemeral Executor for a single action execution.
 // Baseline is used for parent ID resolution (thread-safe via locked accessors).
-func NewExecution(cfg *ExecutorConfig, bl *syncdomain.Baseline) *Executor {
+func NewExecution(cfg *ExecutorConfig, bl syncdomain.BaselineView) *Executor {
 	return &Executor{
 		ExecutorConfig: cfg,
 		baseline:       bl,

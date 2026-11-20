@@ -38,7 +38,7 @@ type mountRootObservation struct {
 
 func (flow *engineFlow) observeMountRootRemote(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (mountRootObservation, error) {
 	eng := flow.engine
@@ -127,7 +127,7 @@ func (flow *engineFlow) observeMountRootRemote(
 // the enumeration, if any: unless it applies differences, confirmed orphans
 // are re-uploads, not deletes (R-2.15.3).
 func (e *Engine) mountRootEvents(
-	ctx context.Context, items []graph.Item, bl *syncdomain.Baseline, complete bool, kind syncdomain.ResyncKind,
+	ctx context.Context, items []graph.Item, bl syncdomain.BaselineView, complete bool, kind syncdomain.ResyncKind,
 ) ([]syncdomain.RemoteItem, bool) {
 	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
 	if !complete {
@@ -146,7 +146,7 @@ func convertMountRootItems(
 	items []graph.Item,
 	remoteRootItemID string,
 	remoteDriveID driveid.ID,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	logger *slog.Logger,
 	itemClient syncdomain.ItemClient,
 ) []syncdomain.RemoteItem {
@@ -159,7 +159,7 @@ func shouldFallbackMountRootDelta(err error) bool {
 	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
-func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *syncdomain.Baseline) []syncdomain.RemoteItem {
+func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl syncdomain.BaselineView) []syncdomain.RemoteItem {
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		seen[items[i].ID] = struct{}{}
@@ -310,7 +310,7 @@ func (flow *engineFlow) commitObservedItems(
 
 func (rt *watchRuntime) watchMountRootRemote(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	batches chan<- syncobserve.RemoteObservationBatch,
 	interval time.Duration,
 ) error {

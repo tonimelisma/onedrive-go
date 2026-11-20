@@ -49,7 +49,7 @@ const (
 // skipped (no content hash).
 func VerifyBaseline(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	tree *synctree.Root,
 	logger *slog.Logger,
 ) (*Report, error) {
@@ -58,7 +58,7 @@ func VerifyBaseline(
 
 func verifyBaselineWithHasher(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	tree verifyRoot,
 	computeHash hashComputer,
 	logger *slog.Logger,
@@ -67,7 +67,7 @@ func verifyBaselineWithHasher(
 
 	var ctxErr error
 
-	bl.ForEachPath(func(relPath string, entry *syncdomain.BaselineEntry) {
+	bl.ForEachPath(func(relPath string, entry syncdomain.BaselineEntry) {
 		if ctxErr != nil {
 			return
 		}
@@ -82,7 +82,7 @@ func verifyBaselineWithHasher(
 			return
 		}
 
-		result := verifyEntry(ctx, tree, relPath, entry, computeHash, logger)
+		result := verifyEntry(ctx, tree, relPath, &entry, computeHash, logger)
 		switch result.Status {
 		case VerifyOK:
 			report.Verified++

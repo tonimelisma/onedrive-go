@@ -14,7 +14,7 @@ import (
 
 // requireBaselineItemAt asserts that the baseline holds itemID at path with
 // the local hash want.
-func requireBaselineItemAt(t *testing.T, bl *syncdomain.Baseline, path, itemID, localHash string) {
+func requireBaselineItemAt(t *testing.T, bl syncdomain.BaselineView, path, itemID, localHash string) {
 	t.Helper()
 
 	entry, ok := bl.GetByPath(path)

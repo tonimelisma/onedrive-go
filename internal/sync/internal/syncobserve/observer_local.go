@@ -473,7 +473,7 @@ func (fw *fsnotifyWrapper) Errors() <-chan error          { return fw.w.Errors }
 // content. Stateless — syncRoot is a parameter of FullScan, allowing reuse
 // across passes.
 type LocalObserver struct {
-	baseline *syncdomain.Baseline
+	baseline syncdomain.BaselineView
 	logger   *slog.Logger
 	// hashCache, when set, is the durable record of hashes a full scan
 	// computed for files the baseline did not know (R-2.2.8): consulted
@@ -573,7 +573,7 @@ type LocalObserver struct {
 // of parallel goroutines used for file hashing during FullScan (0 → default 4).
 // The baseline must be loaded (from SyncStore.Load); it is read-only
 // during observation.
-func NewLocalObserver(baseline *syncdomain.Baseline, logger *slog.Logger, checkWorkers int) *LocalObserver {
+func NewLocalObserver(baseline syncdomain.BaselineView, logger *slog.Logger, checkWorkers int) *LocalObserver {
 	return &LocalObserver{
 		baseline:         baseline,
 		logger:           logger,
@@ -899,7 +899,7 @@ func (o *LocalObserver) ResetDroppedRetries() int64 {
 func (o *LocalObserver) EstimateDirCount() int {
 	count := 1 // sync root always needs a watch
 
-	o.baseline.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
+	o.baseline.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) {
 		if entry.ItemType == syncdomain.ItemTypeFolder {
 			count++
 		}

@@ -658,11 +658,14 @@ func (e *Executor) validateRemoteFolderDeleteChildren(ctx context.Context, drive
 }
 
 func (e *Executor) validateLiveFolderDeleteChild(action *syncdomain.Action, child *graph.Item) error {
-	var known *syncdomain.BaselineEntry
+	var (
+		known  syncdomain.BaselineEntry
+		synced bool
+	)
 	if e.baseline != nil {
-		known, _ = e.baseline.GetByID(child.ID)
+		known, synced = e.baseline.GetByID(child.ID)
 	}
-	if known == nil {
+	if !synced {
 		return stalePreconditionError("remote delete folder %s holds %q, which sync has not seen", action.Path, child.Name)
 	}
 	if child.IsFolder || known.ItemType != syncdomain.ItemTypeFile {
@@ -670,7 +673,7 @@ func (e *Executor) validateLiveFolderDeleteChild(action *syncdomain.Action, chil
 		// themselves are checked as the walk reaches them.
 		return nil
 	}
-	if liveFileChangedSinceSync(child, known) {
+	if liveFileChangedSinceSync(child, &known) {
 		return stalePreconditionError("remote delete folder %s holds %s, changed on OneDrive since it was synced", action.Path, known.Path)
 	}
 

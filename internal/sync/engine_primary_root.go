@@ -47,7 +47,7 @@ func primaryObservationCursorToken(
 
 func buildPrimaryWatchBatch(
 	engine *Engine,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	primaryEvents []syncdomain.RemoteItem,
 	newToken string,
 ) syncobserve.RemoteObservationBatch {
@@ -76,7 +76,7 @@ func (e *Engine) preferredMountRootObservationMode() syncdomain.RemoteObservatio
 
 func (flow *engineFlow) executePrimaryRootObservation(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (syncobserve.RemoteObservationBatch, error) {
 	if flow.engine.hasRemoteMountRoot() {
@@ -104,7 +104,7 @@ func (flow *engineFlow) rootReadFailureBatch(
 
 func (flow *engineFlow) executeDriveRootObservation(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (syncobserve.RemoteObservationBatch, error) {
 	if fullReconcile {
@@ -149,7 +149,7 @@ func (flow *engineFlow) executeDriveRootObservation(
 // A folder this client deleted itself is no longer in the baseline when its
 // tombstone echoes back, so propagating a local folder delete does not cost a
 // full enumeration.
-func deltaWindowDeletesSyncedFolder(bl *syncdomain.Baseline, events []syncdomain.RemoteItem) bool {
+func deltaWindowDeletesSyncedFolder(bl syncdomain.BaselineView, events []syncdomain.RemoteItem) bool {
 	if bl == nil {
 		return false
 	}
@@ -169,7 +169,7 @@ func deltaWindowDeletesSyncedFolder(bl *syncdomain.Baseline, events []syncdomain
 // and marks it as one, which also restarts the full-refresh cadence.
 func (flow *engineFlow) executeDriveRootFullObservation(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	kind syncdomain.ResyncKind,
 ) (syncobserve.RemoteObservationBatch, error) {
 	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
@@ -196,7 +196,7 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 
 func (flow *engineFlow) executeMountRootObservation(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (syncobserve.RemoteObservationBatch, error) {
 	observed, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)

@@ -430,7 +430,7 @@ func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualC
 	}
 }
 
-func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *syncdomain.Baseline) {
+func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl syncdomain.BaselineView) {
 	t.Helper()
 	testWatchRuntime(t, eng).runFullRemoteRefreshAsync(ctx, bl)
 }

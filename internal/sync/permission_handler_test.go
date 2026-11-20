@@ -43,7 +43,7 @@ func TestPermHandler_Handle403_NilChecker(t *testing.T) {
 
 	ph, _ := newTestPermHandler(t, nil)
 
-	result, err := ph.handle403(t.Context(), &syncdomain.Baseline{}, "some/path.txt", syncdomain.ActionUpload)
+	result, err := ph.handle403(t.Context(), syncdomain.NewBaselineSnapshot(nil), "some/path.txt", syncdomain.ActionUpload)
 	require.NoError(t, err)
 	assert.Equal(t, permissionEvidenceNone, result.Kind)
 }
@@ -55,7 +55,7 @@ func TestPermHandler_Handle403_NoPermissionRoot(t *testing.T) {
 	checker := &mockPermChecker{perms: map[string][]graph.Permission{}}
 	ph, _ := newTestPermHandler(t, checker)
 
-	result, err := ph.handle403(t.Context(), &syncdomain.Baseline{}, "unmatched/path.txt", syncdomain.ActionUpload)
+	result, err := ph.handle403(t.Context(), syncdomain.NewBaselineSnapshot(nil), "unmatched/path.txt", syncdomain.ActionUpload)
 	require.NoError(t, err)
 	assert.Equal(t, permissionEvidenceNone, result.Kind)
 }
@@ -77,7 +77,7 @@ func TestPermHandler_Handle403_BlockScopeReadFailureIsReturned(t *testing.T) {
 	assert.Nil(t, boundaries)
 	assert.Contains(t, err.Error(), "list remote block scopes")
 
-	result, err := ph.handle403(t.Context(), &syncdomain.Baseline{}, "some/path.txt", syncdomain.ActionUpload)
+	result, err := ph.handle403(t.Context(), syncdomain.NewBaselineSnapshot(nil), "some/path.txt", syncdomain.ActionUpload)
 	require.Error(t, err, "handle403 surfaces the store failure instead of probing as if nothing were blocked")
 	assert.Equal(t, permissionEvidenceNone, result.Kind)
 }

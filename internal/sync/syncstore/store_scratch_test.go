@@ -73,7 +73,7 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, refreshAt, syncdomain.RemoteObservationModeDelta))
 }
 
-func scratchPlanningBaseline(driveID driveid.ID) *syncdomain.Baseline {
+func scratchPlanningBaseline(driveID driveid.ID) syncdomain.BaselineView {
 	return syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{
 		{
 			Path:            "baseline.txt",

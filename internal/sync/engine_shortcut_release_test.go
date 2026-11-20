@@ -123,7 +123,7 @@ func releaseBaselineRow(t *testing.T, eng *testEngine, storedPath string) *syncd
 	row, ok := bl.GetByPath(storedPath)
 	require.True(t, ok, "baseline row for %s", storedPath)
 
-	return row
+	return &row
 }
 
 // countingDownloads counts, per item, the downloads client serves.
@@ -175,7 +175,7 @@ func releaseBaselinePaths(t *testing.T, eng *testEngine) []string {
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 	var paths []string
-	bl.ForEachPath(func(p string, entry *syncdomain.BaselineEntry) {
+	bl.ForEachPath(func(p string, entry syncdomain.BaselineEntry) {
 		if p != "" && entry.ItemType != syncdomain.ItemTypeRoot {
 			paths = append(paths, p)
 		}

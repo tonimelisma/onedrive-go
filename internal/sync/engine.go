@@ -309,7 +309,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 }
 
 // buildLocalObserver builds a local observer on the engine's real clock.
-func (e *Engine) buildLocalObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.LocalObserver {
+func (e *Engine) buildLocalObserver(bl syncdomain.BaselineView, logger *slog.Logger) *syncobserve.LocalObserver {
 	obs := syncobserve.NewLocalObserver(bl, logger, e.checkWorkers)
 	obs.SetClock(e.wallClock)
 
@@ -318,7 +318,7 @@ func (e *Engine) buildLocalObserver(bl *syncdomain.Baseline, logger *slog.Logger
 
 // buildRemoteObserver builds an observer of the engine's drive on the
 // engine's real clock.
-func (e *Engine) buildRemoteObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.RemoteObserver {
+func (e *Engine) buildRemoteObserver(bl syncdomain.BaselineView, logger *slog.Logger) *syncobserve.RemoteObserver {
 	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, logger)
 	obs.SetClock(e.wallClock)
 

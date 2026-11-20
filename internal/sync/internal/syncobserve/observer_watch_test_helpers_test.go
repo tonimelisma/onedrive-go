@@ -15,7 +15,7 @@ import (
 )
 
 type watchObserverTestOptions struct {
-	Baseline              *syncdomain.Baseline
+	Baseline              syncdomain.BaselineView
 	WriteCoalesceCooldown time.Duration
 	CollisionPeers        map[string]map[string]struct{}
 	DirNameCache          map[string]map[namekey.Key][]string

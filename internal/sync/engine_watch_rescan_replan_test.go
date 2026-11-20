@@ -154,7 +154,7 @@ func TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
-	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineForTest(nil), eng.logger, 1)
+	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), eng.logger, 1)
 	batches := make(chan syncobserve.LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
@@ -187,7 +187,7 @@ func TestWatchRuntime_FallbackScanRecordsAndClearsFindings(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineForTest(nil), eng.logger, 1)
+	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), eng.logger, 1)
 	batches := make(chan syncobserve.LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
@@ -262,7 +262,7 @@ func TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags(t *testing.T) {
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineForTest(nil), eng.logger, 1)
+	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), eng.logger, 1)
 	obs.SetMountBoundaryFlags(nil)
 	rt.resources.localObs = obs
 

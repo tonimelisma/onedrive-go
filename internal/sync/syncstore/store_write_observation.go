@@ -397,7 +397,7 @@ func (s *SyncStore) cacheAdoptedPlaceholders(adopted []*syncdomain.BaselineEntry
 		return
 	}
 	for _, entry := range adopted {
-		s.baseline.Put(entry)
+		s.baseline.put(*entry)
 	}
 }
 

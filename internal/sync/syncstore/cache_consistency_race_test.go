@@ -37,14 +37,14 @@ func TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation(t *testing.T) {
 		defer wg.Done()
 
 		for i := range rounds {
-			store.baseline.Put(&syncdomain.BaselineEntry{
+			store.baseline.put(syncdomain.BaselineEntry{
 				Path:      "file.txt",
 				ItemID:    "item",
 				DriveID:   driveid.New(syncfixture.TestDriveID),
 				ItemType:  syncdomain.ItemTypeFile,
 				LocalSize: int64(i),
 			})
-			store.baseline.Delete("file.txt")
+			store.baseline.delete("file.txt")
 		}
 	}()
 

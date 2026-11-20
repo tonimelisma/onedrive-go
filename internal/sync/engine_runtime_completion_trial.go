@@ -55,7 +55,7 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	current *syncdomain.TrackedAction,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	trialScopeKey syncdomain.ScopeKey,
 ) error {
 	flow.sched.markFinished(current)
@@ -134,7 +134,7 @@ func (flow *engineFlow) applyTrialReclassification(
 	ctx context.Context,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	handled, err := flow.applyTrialPermissionReclassification(ctx, r, bl)
 	if err != nil {
