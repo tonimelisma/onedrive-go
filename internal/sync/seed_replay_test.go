@@ -120,11 +120,11 @@ func (f *fakeSeedReplayTB) end() {
 
 // Validates: R-6.10.25
 //
-// A failing seed of each family logs exactly one replay line, and the line is
-// a complete command: its assignments are the failing run's variable and
-// seed, it carries -race exactly when this binary has the race detector, it
-// names a top-level test of this package, and its package path is this
-// package from the module root. A passing seed logs nothing.
+// A failing seed of each of this package's families logs exactly one replay
+// line, and the line is a complete command: its assignments are the failing
+// run's variable and seed, it carries -race exactly when this binary has the
+// race detector, it names a top-level test of this package, and its package
+// path is this package from the module root. A passing seed logs nothing.
 func TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed(t *testing.T) {
 	t.Parallel()
 
@@ -132,7 +132,6 @@ func TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed(t *testing.T) {
 	families := map[string]string{
 		"TestRunOnce_RandomizedBidirectionalEditsConverge": modelSeedVars().Single,
 		"TestModel_CrashAtSeededPointsRecovers":            modelSeedVars().Single,
-		"TestPlannerModel_RandomTriplesConverge":           syncfixture.PlannerSeedVars().Single,
 		"TestModel_ChaosGraphConverges":                    chaosSeedVars().Single,
 	}
 	sources := packageTestSources(t)
@@ -162,7 +161,7 @@ func TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed(t *testing.T) {
 	}
 
 	assert.Equal(t, "seed-replay: A=1 B=two go test -race -run '^TestX$' ./internal/sync",
-		syncfixture.SeedReplayLine("TestX", true, []syncfixture.SeedAssignment{{Name: "A", Value: "1"}, {Name: "B", Value: "two"}}),
+		syncfixture.SeedReplayLine("TestX", "./internal/sync", true, []syncfixture.SeedAssignment{{Name: "A", Value: "1"}, {Name: "B", Value: "two"}}),
 		"a second input that changes what a seed means is a second assignment")
 }
 

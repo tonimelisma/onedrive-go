@@ -249,8 +249,12 @@ func TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged(t *testing.T) {
 func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 	t.Parallel()
 
-	paths, err := filepath.Glob("*.go")
-	require.NoError(t, err)
+	var paths []string
+	for _, dir := range syncTreePackageDirs() {
+		found, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		paths = append(paths, found...)
+	}
 
 	fset := token.NewFileSet()
 	var literals, clocks, constructorCalls []string
@@ -268,16 +272,16 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 			ast.Inspect(decl, func(node ast.Node) bool {
 				switch n := node.(type) {
 				case *ast.CompositeLit:
-					if ident, ok := n.Type.(*ast.Ident); ok && ident.Name == "RealClock" && len(n.Elts) > 0 {
+					if nameOf(n.Type) == "RealClock" && len(n.Elts) > 0 {
 						literals = append(literals, owner)
 					}
 				case *ast.CallExpr:
-					ident, ok := n.Fun.(*ast.Ident)
+					name := nameOf(n.Fun)
 					switch {
-					case ok && ident.Name == "NewRealClock":
+					case name == "NewRealClock":
 						clocks = append(clocks, owner)
-					case ok && (ident.Name == "NewLocalObserver" || ident.Name == "NewRemoteObserver"):
-						constructorCalls = append(constructorCalls, ident.Name+" from "+owner)
+					case name == "NewLocalObserver" || name == "NewRemoteObserver":
+						constructorCalls = append(constructorCalls, name+" from "+owner)
 					}
 				}
 				return true
@@ -290,4 +294,17 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{"NewLocalObserver from buildLocalObserver", "NewRemoteObserver from buildRemoteObserver"},
 		constructorCalls, "every observer the engine builds gets the engine's real clock")
+}
+
+// nameOf is the name an expression ends in, qualified or not: Name for both
+// Name and pkg.Name, "" for any other expression.
+func nameOf(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return e.Sel.Name
+	}
+
+	return ""
 }

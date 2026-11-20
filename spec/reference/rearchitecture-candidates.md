@@ -171,7 +171,7 @@ an action; each is where a receipt would replace ad-hoc checks.
 lost final fragment" class.
 
 **Landed:** the pending-create record (#804) is a first durable intent, and
-#811 added the crash-point harness (`internal/sync/crash_points.go`, D-091):
+#811 added the crash-point harness (`internal/sync/syncdomain/crash_points.go`, D-091):
 six named commit boundaries with a test hook that kills the run at each, and
 recovery must converge. The env-var injector proposed below exists as an
 in-process hook.

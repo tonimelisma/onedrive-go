@@ -6,7 +6,7 @@ Implements: R-2.5.1 [designed], R-2.5.2 [verified], R-2.5.4 [designed], R-2.10.3
 
 | Behavior | Evidence |
 | --- | --- |
-| The per-mount SQLite store remains intentionally narrow, transactional, and explicit-reset based instead of migration-driven. | `internal/sync/schema_test.go`, `internal/sync/baseline_test.go`, `internal/sync/engine_run_once_test.go` |
+| The per-mount SQLite store remains intentionally narrow, transactional, and explicit-reset based instead of migration-driven. | `internal/sync/syncstore/schema_test.go`, `internal/sync/syncstore/baseline_test.go`, `internal/sync/engine_run_once_test.go` |
 | Remote-truth recovery from durable `remote_state` plus replanning remains part of the crash-recovery foundation. | `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestBootstrapSync_WithChanges` |
 
 ## One Database Per Mount
@@ -338,7 +338,7 @@ neither reads nor writes it.
 
 ## Schema Discipline
 
-`internal/sync/schema.go` owns the canonical schema directly. Fresh DBs
+`internal/sync/syncstore/schema.go` owns the canonical schema directly. Fresh DBs
 bootstrap that schema in one transaction, seed the zero-or-one-row
 `observation_state` table when absent, and reopen against the same shape.
 

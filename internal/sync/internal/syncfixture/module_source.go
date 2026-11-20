@@ -3,6 +3,7 @@ package syncfixture
 import (
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,8 +18,7 @@ import (
 func WalkModuleGoFiles(t *testing.T, visit func(path, rel string) error) int {
 	t.Helper()
 
-	moduleRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
+	moduleRoot := ModuleRoot(t)
 	files := 0
 	walkErr := filepath.WalkDir(moduleRoot, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -46,15 +46,16 @@ func WalkModuleGoFiles(t *testing.T, visit func(path, rel string) error) int {
 	return files
 }
 
-// WalkModuleProductFiles is walkModuleGoFiles without the test files: it
-// calls visit with every non-test Go file of the module and returns how many
-// it visited.
+// WalkModuleProductFiles is WalkModuleGoFiles without the test code: it
+// calls visit with every non-test Go file of the module outside the sync
+// tree's two test-helper packages, and returns how many it visited.
 func WalkModuleProductFiles(t *testing.T, visit func(path, rel string) error) int {
 	t.Helper()
 
 	files := 0
 	WalkModuleGoFiles(t, func(path, rel string) error {
-		if strings.HasSuffix(path, "_test.go") {
+		if strings.HasSuffix(path, "_test.go") || strings.HasPrefix(rel, "internal/sync/internal/syncfixture/") ||
+			strings.HasPrefix(rel, "internal/sync/internal/syncstoretest/") {
 			return nil
 		}
 		files++
@@ -62,4 +63,21 @@ func WalkModuleProductFiles(t *testing.T, visit func(path, rel string) error) in
 	})
 
 	return files
+}
+
+// ModuleRoot is the module's root directory: the nearest directory above the
+// test's working directory, its package's directory, that holds go.mod.
+func ModuleRoot(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqual(t, dir, parent, "no go.mod above the test's directory")
+		dir = parent
+	}
 }

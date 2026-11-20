@@ -13,7 +13,7 @@ import (
 )
 
 type MockSocketIOEndpointFetcher struct {
-	mu        sync.Mutex
+	mu        sync.Mutex // guards calls and the reads of Endpoints
 	Endpoints []*graph.SocketIOEndpoint
 	calls     int
 }

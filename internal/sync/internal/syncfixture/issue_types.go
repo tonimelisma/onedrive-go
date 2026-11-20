@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"testing"
@@ -47,11 +49,12 @@ func IssueTypeConstantsByName(t *testing.T) map[string]syncdomain.IssueType {
 }
 
 // StringConstantsOfType maps the name of every constant of the string type
-// typeName that file declares to its value, read from the source.
+// typeName that file, a file of the vocabulary package syncdomain, declares
+// to its value, read from the source.
 func StringConstantsOfType(t *testing.T, file, typeName string) map[string]string {
 	t.Helper()
 
-	parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.SkipObjectResolution)
+	parsed, err := parser.ParseFile(token.NewFileSet(), vocabularySource(t, file), nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 
 	constants := make(map[string]string)
@@ -158,4 +161,16 @@ func IssueTypeVerdicts[V any](t *testing.T, groups ...IssueTypeVerdictGroup[V]) 
 	t.Helper()
 
 	return verdictTable(t, groups...)
+}
+
+// vocabularySource is the path of file in syncdomain's directory, found from
+// this file's own place in the tree, so tests of any package read the same
+// declarations.
+func vocabularySource(t *testing.T, file string) string {
+	t.Helper()
+
+	_, self, _, ok := runtime.Caller(0)
+	require.True(t, ok, "the fixture knows its own source path")
+
+	return filepath.Join(filepath.Dir(self), "..", "..", "syncdomain", file)
 }

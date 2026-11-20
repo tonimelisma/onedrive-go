@@ -82,7 +82,7 @@ import (
 // The runs that break an invariant, and which, are checked in as
 // testdata/exhaustive/pairs.golden: a change shows up as a diff of that list;
 // refresh it with
-// `go test ./internal/sync -run TestPlannerExhaustive -update`.
+// `go test ./internal/sync/internal/syncplan -run TestPlannerExhaustive -update`.
 //
 // What the check does not see: the planner and the store are real, but every
 // pass writes the store anew from the model (a full listing, the baseline the

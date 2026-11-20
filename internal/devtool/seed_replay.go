@@ -61,7 +61,8 @@ type seedReplay struct {
 	race        bool
 	// test is the top-level test the replay runs.
 	test string
-	// pkg is its package from the module root (./internal/sync).
+	// pkg is its package from the module root (./internal/sync for the
+	// engine's families).
 	pkg string
 	// fromSubtestName marks a replay built from the name of a failing
 	// subtest, whose test printed no replay line.
@@ -125,7 +126,7 @@ func parseSeedReplay(command string) (seedReplay, bool) {
 		return seedReplay{}, false
 	}
 	test := seedReplayTestPattern.FindStringSubmatch(words[1])
-	if test == nil || words[2] != seedFamilyPackage {
+	if test == nil || !isSeedFamilyPackage(words[2], test[1]) {
 		return seedReplay{}, false
 	}
 	replay.test, replay.pkg = test[1], words[2]
@@ -174,7 +175,7 @@ func seedReplayFromSubtest(failure goTestFailure) (seedReplay, bool, error) {
 	top, subtest, nested := strings.Cut(failure.test, "/")
 	family, isFamily := seededFamilyOf(top)
 	pkg := normalizeFailedGoTestPackage(failure.pkg)
-	if !isFamily || !nested || (pkg != "" && pkg != seedFamilyPackage) {
+	if !isFamily || !nested || (pkg != "" && pkg != family.pkg) {
 		return seedReplay{}, false, nil
 	}
 	name, _, _ := strings.Cut(subtest, "/")
@@ -189,7 +190,7 @@ func seedReplayFromSubtest(failure goTestFailure) (seedReplay, bool, error) {
 	return seedReplay{
 		assignments:     []seedAssignment{{name: family.seedEnv, value: strconv.FormatUint(seed, 10)}},
 		test:            top,
-		pkg:             seedFamilyPackage,
+		pkg:             family.pkg,
 		fromSubtestName: true,
 	}, true, nil
 }

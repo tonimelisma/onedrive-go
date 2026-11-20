@@ -55,7 +55,7 @@ func TestRootReadFailureObservationFindingsBatch_CreatesBoundaryIssue(t *testing
 }
 
 // localScanIssueTypesInSource returns every IssueType constant named in a
-// production file of this package that builds a SkippedItem, with the files
+// production file of the sync tree that builds a SkippedItem, with the files
 // that name it: the issue types a local scan can report. It reads the source,
 // so a type a new finding names is seen the moment a builder names it,
 // without a second hand-kept list. A builder file naming a type for another
@@ -65,8 +65,12 @@ func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string
 	t.Helper()
 
 	constants := syncfixture.IssueTypeConstantsByName(t)
-	files, err := filepath.Glob("*.go")
-	require.NoError(t, err)
+	var files []string
+	for _, dir := range syncTreePackageDirs() {
+		found, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		files = append(files, found...)
+	}
 
 	reported := make(map[syncdomain.IssueType][]string)
 	fset := token.NewFileSet()
@@ -74,7 +78,7 @@ func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string
 		if strings.HasSuffix(file, "_test.go") {
 			continue
 		}
-		src, readErr := os.ReadFile(file) //nolint:gosec // the test reads its own package's source
+		src, readErr := os.ReadFile(file) //nolint:gosec // the test reads the sync tree's source
 		require.NoError(t, readErr)
 		if !bytes.Contains(src, []byte("SkippedItem")) {
 			// Only a file that names the type can build one; skipping the
@@ -115,9 +119,8 @@ func namesSkippedItemType(expr ast.Expr) bool {
 	if array, ok := expr.(*ast.ArrayType); ok {
 		expr = array.Elt
 	}
-	ident, ok := expr.(*ast.Ident)
 
-	return ok && ident.Name == "SkippedItem"
+	return nameOf(expr) == "SkippedItem"
 }
 
 // The local findings batch replaces the stored conditions of the types it

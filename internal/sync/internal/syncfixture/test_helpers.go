@@ -278,7 +278,7 @@ func (m *EngineMockClient) UploadToItem(ctx context.Context, driveID driveid.ID,
 
 type DebugEventRecorder struct {
 	Events  chan syncdomain.EngineDebugEvent
-	mu      sync.Mutex
+	mu      sync.Mutex // guards history
 	history []syncdomain.EngineDebugEvent
 }
 
@@ -506,7 +506,7 @@ func (r *DebugEventRecorder) RequireEventCount(
 }
 
 type ManualClock struct {
-	Mu     sync.Mutex
+	Mu     sync.Mutex // guards every field below and the state of each of Timers and Ticks
 	now    time.Time
 	jitter time.Duration
 	// jitterFn, when set, answers Jitter instead of the fixed jitter: a
@@ -1067,8 +1067,28 @@ func parseSeedVar(name string, raw string) (uint64, error) {
 // issue, the nightly check's key and `verify failed-test`.
 const SeedReplayPrefix = "seed-replay: "
 
-// seedReplayPackage is the package a replay runs, from the module root.
-const seedReplayPackage = "./internal/sync"
+// seedReplayPackage is the package a replay of this test binary's seeds runs,
+// from the module root: go test runs a package's tests in its directory, and
+// the directory's path below the one holding go.mod names the package.
+func seedReplayPackage() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	for root := dir; ; root = filepath.Dir(root) {
+		if _, statErr := os.Stat(filepath.Join(root, "go.mod")); statErr == nil {
+			rel, relErr := filepath.Rel(root, dir)
+			if relErr != nil {
+				return "."
+			}
+
+			return "./" + filepath.ToSlash(rel)
+		}
+		if filepath.Dir(root) == root {
+			return "."
+		}
+	}
+}
 
 // seedReplayTB is what logSeedReplayOnFailure needs of a test.
 type seedReplayTB interface {
@@ -1088,7 +1108,7 @@ type SeedAssignment struct {
 // LogSeedReplayOnFailure registers a cleanup that, when the seed's test
 // failed, logs the one command that reruns it:
 //
-//	seed-replay: <ENV>=<seed> [ONEDRIVE_GO_DISPATCH_ORDER=<order>] go test [-race] -run '^<TopLevelTest>$' ./internal/sync
+//	seed-replay: <ENV>=<seed> [ONEDRIVE_GO_DISPATCH_ORDER=<order>] go test [-race] -run '^<TopLevelTest>$' ./<package>
 //
 // with -race when this test binary was built with the race detector, under
 // which some families do other work for one seed, and the dispatch order when
@@ -1106,7 +1126,7 @@ func LogSeedReplayOnFailure(t seedReplayTB, envName string, seed uint64) {
 			return
 		}
 		test, _, _ := strings.Cut(t.Name(), "/")
-		t.Logf("%s", SeedReplayLine(test, RaceDetectorEnabled, assignments))
+		t.Logf("%s", SeedReplayLine(test, seedReplayPackage(), RaceDetectorEnabled, assignments))
 	})
 }
 
@@ -1123,8 +1143,8 @@ func seedReplayInputs(getenv func(string) string, envName string, seed uint64) [
 }
 
 // SeedReplayLine is the replay line of a seed of test: the assignments, then
-// go test of exactly that top-level test in this package.
-func SeedReplayLine(test string, race bool, assignments []SeedAssignment) string {
+// go test of exactly that top-level test in pkg.
+func SeedReplayLine(test, pkg string, race bool, assignments []SeedAssignment) string {
 	var b strings.Builder
 	b.WriteString(SeedReplayPrefix)
 	for _, assignment := range assignments {
@@ -1134,7 +1154,7 @@ func SeedReplayLine(test string, race bool, assignments []SeedAssignment) string
 	if race {
 		b.WriteString("-race ")
 	}
-	b.WriteString("-run '^" + test + "$' " + seedReplayPackage)
+	b.WriteString("-run '^" + test + "$' " + pkg)
 
 	return b.String()
 }

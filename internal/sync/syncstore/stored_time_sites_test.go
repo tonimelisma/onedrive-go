@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,14 +41,14 @@ func TestStoredTimes_EveryDecodeIsDeclared(t *testing.T) {
 	t.Parallel()
 
 	declared := map[string]map[string]int{
-		"internal/sync/domain_stored_time.go":       {decodesRangeBound: 2, decodesRemoteModTime: 1},
-		"internal/sync/block_scope_rows.go":         {decodesOrderedTime: 1},
-		"internal/sync/engine_runtime_lifecycle.go": {decodesOrderedTime: 1},
-		"internal/sync/engine_runtime_owners.go":    {decodesOrderedTime: 1},
-		"internal/sync/engine_watch_maintenance.go": {decodesOrderedTime: 3},
-		"internal/sync/domain_pending_create.go":    {decodesOrderedTime: 1},
-		"internal/sync/local_hash_reuse.go":         {inMemoryValue: 1},
-		"internal/sync/engine_housekeeping.go":      {inMemoryValue: 1},
+		"internal/sync/syncdomain/domain_stored_time.go":         {decodesRangeBound: 2, decodesRemoteModTime: 1},
+		"internal/sync/syncstore/block_scope_rows.go":            {decodesOrderedTime: 1},
+		"internal/sync/engine_runtime_lifecycle.go":              {decodesOrderedTime: 1},
+		"internal/sync/engine_runtime_owners.go":                 {decodesOrderedTime: 1},
+		"internal/sync/engine_watch_maintenance.go":              {decodesOrderedTime: 3},
+		"internal/sync/syncdomain/domain_pending_create.go":      {decodesOrderedTime: 1},
+		"internal/sync/internal/syncobserve/local_hash_reuse.go": {inMemoryValue: 1},
+		"internal/sync/engine_housekeeping.go":                   {inMemoryValue: 1},
 	}
 
 	found := countProductCalls(t, isTimeUnixFromNanoseconds, "internal/sync", "internal/driveops")
@@ -61,16 +61,16 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 	t.Parallel()
 
 	declared := map[string]map[string]int{
-		"internal/sync/domain_stored_time.go":      {encodesThroughTheSaturatingEncoder: 1},
-		"internal/sync/scanner.go":                 {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
-		"internal/sync/observer_local_handlers.go": {encodesLocalTimeForEquality: 4, inMemoryValue: 1},
-		"internal/sync/executor_preconditions.go":  {encodesLocalTimeForEquality: 3},
-		"internal/sync/executor_delete.go":         {encodesLocalTimeForEquality: 1, inMemoryValue: 2},
-		"internal/sync/executor_transfer.go":       {encodesLocalTimeForEquality: 2},
-		"internal/sync/local_hash_reuse.go":        {encodesLocalTimeForEquality: 1},
-		"internal/sync/scanner_hash_cache.go":      {encodesLocalTimeForEquality: 1},
-		"internal/sync/engine_shortcut_release.go": {encodesLocalTimeForEquality: 1},
-		"internal/sync/engine_housekeeping.go":     {inMemoryValue: 1},
+		"internal/sync/syncdomain/domain_stored_time.go":                {encodesThroughTheSaturatingEncoder: 1},
+		"internal/sync/internal/syncobserve/scanner.go":                 {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
+		"internal/sync/internal/syncobserve/observer_local_handlers.go": {encodesLocalTimeForEquality: 4, inMemoryValue: 1},
+		"internal/sync/internal/syncexec/executor_preconditions.go":     {encodesLocalTimeForEquality: 3},
+		"internal/sync/internal/syncexec/executor_delete.go":            {encodesLocalTimeForEquality: 1, inMemoryValue: 2},
+		"internal/sync/internal/syncexec/executor_transfer.go":          {encodesLocalTimeForEquality: 2},
+		"internal/sync/internal/syncobserve/local_hash_reuse.go":        {encodesLocalTimeForEquality: 1},
+		"internal/sync/internal/syncobserve/scanner_hash_cache.go":      {encodesLocalTimeForEquality: 1},
+		"internal/sync/engine_shortcut_release.go":                      {encodesLocalTimeForEquality: 1},
+		"internal/sync/engine_housekeeping.go":                          {inMemoryValue: 1},
 	}
 
 	found := countProductCalls(t, isPlainUnixNano, "internal/sync")
@@ -89,31 +89,49 @@ func declaredTotals(declared map[string]map[string]int) map[string]int {
 	return totals
 }
 
-// countProductCalls counts, per non-test Go file in the repository-relative
-// directories, the calls match accepts.
+// countProductCalls counts, per non-test Go file under the repository-relative
+// directories, the calls match accepts. The sync tree's test-helper packages
+// are test code and are left out.
 func countProductCalls(t *testing.T, match func(*ast.CallExpr) bool, dirs ...string) map[string]int {
 	t.Helper()
 
-	root := filepath.Join("..", "..")
+	root := filepath.Join("..", "..", "..")
 	counts := map[string]int{}
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(filepath.Join(root, dir))
-		require.NoError(t, err)
-		for _, entry := range entries {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
 			name := entry.Name()
-			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
+			if entry.IsDir() {
+				if name == "testdata" || name == "syncfixture" || name == "syncstoretest" {
+					return filepath.SkipDir
+				}
+
+				return nil
+			}
+			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
 			}
 			fset := token.NewFileSet()
-			file, parseErr := parser.ParseFile(fset, filepath.Join(root, dir, name), nil, parser.SkipObjectResolution)
-			require.NoError(t, parseErr, name)
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if parseErr != nil {
+				return parseErr
+			}
 			ast.Inspect(file, func(node ast.Node) bool {
 				if call, ok := node.(*ast.CallExpr); ok && match(call) {
-					counts[dir+"/"+name]++
+					counts[filepath.ToSlash(rel)]++
 				}
 				return true
 			})
-		}
+
+			return nil
+		})
+		require.NoError(t, err)
 	}
 
 	return counts

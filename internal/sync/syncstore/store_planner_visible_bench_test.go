@@ -27,7 +27,7 @@ import (
 // and prunes them with the correlated-scan statements this increment
 // replaced (the oracle in store_planner_visible_test.go), steady shape only.
 //
-// Run with: go test ./internal/sync -run '^$' -bench 'BenchmarkReplacePlannerVisibleState$' -benchtime 1x
+// Run with: go test ./internal/sync/syncstore -run '^$' -bench 'BenchmarkReplacePlannerVisibleState$' -benchtime 1x
 
 const (
 	benchPlannerVisibleTopFolders       = 10

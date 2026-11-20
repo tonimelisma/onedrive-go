@@ -23,7 +23,7 @@ import (
 // (sqlSubstrLocalStateSubtreeDelete): it reads every row of the table per
 // statement, where the range seeks the primary key.
 //
-// Run with: go test ./internal/sync -run '^$' -bench BenchmarkDeleteLocalStateSubtree -benchtime 5x
+// Run with: go test ./internal/sync/syncstore -run '^$' -bench BenchmarkDeleteLocalStateSubtree -benchtime 5x
 
 const (
 	benchLocalStateTopFolders     = 100

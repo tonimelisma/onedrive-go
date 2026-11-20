@@ -23,16 +23,18 @@ const (
 // and testPlannerReplay's.
 func nightlyTestSeedKeys() (string, string) {
 	return "internal/sync.TestRunOnce_RandomizedBidirectionalEditsConverge/ONEDRIVE_GO_MODEL_SEED=7001",
-		"internal/sync.TestPlannerModel_RandomTriplesConverge/ONEDRIVE_GO_PLANNER_SEED=12"
+		"internal/sync/internal/syncplan.TestPlannerModel_RandomTriplesConverge/ONEDRIVE_GO_PLANNER_SEED=12"
 }
 
 // seedFailureLog is the raw log of a job in which each replay's seed failed,
 // behind the timestamps CI adds, with extra in the failing tests' own output.
+// Each package's tests end with that package's FAIL line, as go test prints
+// them.
 func seedFailureLog(t *testing.T, extra string, commands ...string) string {
 	t.Helper()
 
 	var b strings.Builder
-	for _, command := range commands {
+	for i, command := range commands {
 		replay, ok := parseSeedReplay(command)
 		require.True(t, ok, command)
 		seed := replay.assignments[0].value
@@ -41,8 +43,13 @@ func seedFailureLog(t *testing.T, extra string, commands ...string) string {
 		b.WriteString("2026-11-14T10:41:00Z         test_helpers_test.go:480: " + seedReplayPrefix + command + "\n")
 		b.WriteString("2026-11-14T10:41:00Z     --- FAIL: " + replay.test + "/seed=" + seed + " (9.00s)\n")
 		b.WriteString("2026-11-14T10:41:00Z --- FAIL: " + replay.test + " (9.00s)\n")
+		if i+1 < len(commands) {
+			if next, nextOK := parseSeedReplay(commands[i+1]); nextOK && next.pkg == replay.pkg {
+				continue
+			}
+		}
+		b.WriteString("2026-11-14T10:41:01Z FAIL\t" + repoModulePath + strings.TrimPrefix(replay.pkg, ".") + "\t9.100s\n")
 	}
-	b.WriteString("2026-11-14T10:41:01Z FAIL\t" + repoModulePath + "/internal/sync\t9.100s\n")
 
 	return b.String()
 }

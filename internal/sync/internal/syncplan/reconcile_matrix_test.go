@@ -21,7 +21,7 @@ import (
 // a second), planned by the real comparison SQL and planner, with the plan
 // checked in as testdata/reconcile/matrix.golden. A change to any decision
 // shows up as a reviewable diff of that table; refresh it with
-// `go test ./internal/sync -run TestReconcileMatrix -update`.
+// `go test ./internal/sync/internal/syncplan -run TestReconcileMatrix -update`.
 
 //nolint:gochecknoglobals // flag registration is package-level by definition.
 var updateGolden = flag.Bool("update", false, "rewrite golden files from current output")

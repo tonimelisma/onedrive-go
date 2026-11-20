@@ -29,8 +29,10 @@ const minimumGoroutineLaunches = 20
 // package added later.
 func excludedPackages() map[string]string {
 	return map[string]string{
-		"internal/devtool":  "the developer tool behind cmd/devtool; onedrive-go never links it",
-		"internal/synctest": "test helpers; only test binaries link them",
+		"internal/devtool":                     "the developer tool behind cmd/devtool; onedrive-go never links it",
+		"internal/synctest":                    "test helpers; only test binaries link them",
+		"internal/sync/internal/syncfixture":   "test helpers; only test binaries link them",
+		"internal/sync/internal/syncstoretest": "test helpers; only test binaries link them",
 	}
 }
 
@@ -40,9 +42,9 @@ func excludedPackages() map[string]string {
 // scan, so the list cannot outlive its code.
 func goroutineBoundaryExceptions() map[string]string {
 	return map[string]string{
-		"internal/sync.worker": "a worker runs every action through safeExecuteAction, the boundary " +
+		"internal/sync/internal/syncexec.worker": "a worker runs every action through safeExecuteAction, the boundary " +
 			"that makes a panic that action's failure (R-6.3.8); the loop around it only receives from the dispatch channel",
-		"internal/sync.closeCompletionsWhenWorkersExit": "it waits for the workers and closes the completions " +
+		"internal/sync/internal/syncexec.closeCompletionsWhenWorkersExit": "it waits for the workers and closes the completions " +
 			"channel through a sync.Once; neither can panic",
 		"internal/sync.runWatchGoroutine": "it only runs a watch goroutine's function and closes its done channel; " +
 			"every function the watch starts there (the observers, the full remote refresh, the socket.io wake source) " +
@@ -121,15 +123,14 @@ func productPackages(t *testing.T) []goPackage {
 // could answer is unwound by the time anyone reads the report. So every
 // recover in product code hands its value to Recovered, which logs the stack
 // once, at Error: directly, or through a function of its package that calls
-// Recovered. A recover that only logged the value, or logged nothing, would
+// Recovered (for the sync tree, of any of its packages). A recover that only logged the value, or logged nothing, would
 // leave a panic that cannot be located.
 func TestPanicRecoverySitesCaptureTheStack(t *testing.T) {
 	t.Parallel()
 
 	sites := 0
 	var findings []string
-	for _, pkg := range productPackages(t) {
-		scan := newPackageScan(pkg)
+	for _, scan := range productScans(t) {
 		findings = append(findings, scan.recoverFindings()...)
 		sites += scan.recoverSites
 	}
@@ -157,8 +158,7 @@ func TestEveryGoroutineHasAPanicBoundary(t *testing.T) {
 	used := make(map[string]bool)
 	launches := 0
 	var findings []string
-	for _, pkg := range productPackages(t) {
-		scan := newPackageScan(pkg)
+	for _, scan := range productScans(t) {
 		launches += scan.launchCount()
 		findings = append(findings, scan.goroutineFindings(exceptions, used)...)
 	}
@@ -384,6 +384,41 @@ func newPackageScan(pkg goPackage) *packageScan {
 	}
 
 	return scan
+}
+
+// syncTree is the directory of the sync engine's packages. They were one
+// package until the engine was split along its authority boundaries, and a
+// boundary one of them declares (the clock's timer recover lives with the
+// vocabulary) serves the others, so they share their guards and recoverers.
+const syncTree = "internal/sync"
+
+// productScans scans every product package, the sync tree's packages sharing
+// their guards and recoverers.
+func productScans(t *testing.T) []*packageScan {
+	t.Helper()
+
+	var scans []*packageScan
+	guards, recoverers := map[string]bool{}, map[string]bool{}
+	for _, pkg := range productPackages(t) {
+		scan := newPackageScan(pkg)
+		scans = append(scans, scan)
+		if pkg.dir != syncTree && !strings.HasPrefix(pkg.dir, syncTree+"/") {
+			continue
+		}
+		for name := range scan.guards {
+			guards[name] = true
+		}
+		for name := range scan.recoverers {
+			recoverers[name] = true
+		}
+	}
+	for _, scan := range scans {
+		if scan.pkg.dir == syncTree || strings.HasPrefix(scan.pkg.dir, syncTree+"/") {
+			scan.guards, scan.recoverers = guards, recoverers
+		}
+	}
+
+	return scans
 }
 
 // directCalls are the calls a function body makes itself, leaving out those

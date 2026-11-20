@@ -30,11 +30,11 @@ type sourceSite struct {
 // on, so the shape alone cannot say the run is ending.
 func contextErrorReaders() map[sourceSite]string {
 	return map[sourceSite]string{
-		{file: "errors.go", function: "IsCancellationEcho"}: "once the run has ended, tells the cancellation's own " +
+		{file: "syncdomain/errors.go", function: "IsCancellationEcho"}: "once the run has ended, tells the cancellation's own " +
 			"error from a separate failure that landed during the stop and is still reported",
-		{file: "errors.go", function: "cancelCauseError.Is"}: "a cancel's cause answers to context.Canceled, so the " +
+		{file: "syncdomain/errors.go", function: "cancelCauseError.Is"}: "a cancel's cause answers to context.Canceled, so the " +
 			"work it interrupts reads as canceled",
-		{file: "domain_graph_error.go", function: "IsRequestTimeout"}: "with the run going on, a deadline is " +
+		{file: "syncdomain/domain_graph_error.go", function: "IsRequestTimeout"}: "with the run going on, a deadline is " +
 			"a request OneDrive never answered: retry work and outage evidence",
 		{file: "engine_result_classify.go", function: "isLiveRunCancel"}: "with the run going on, a cancel came " +
 			"from something narrower than the run",
@@ -108,15 +108,12 @@ func readsContextError(node ast.Node) bool {
 	}
 }
 
-// callsCancellationEcho reports a call of IsCancellationEcho.
+// callsCancellationEcho reports a call of IsCancellationEcho, qualified by
+// its package or, in the vocabulary itself, not.
 func callsCancellationEcho(node ast.Node) bool {
 	call, ok := node.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	ident, isIdent := call.Fun.(*ast.Ident)
 
-	return isIdent && ident.Name == "IsCancellationEcho"
+	return ok && nameOf(call.Fun) == "IsCancellationEcho"
 }
 
 // contextPackage is the name the scanned files import package context by.

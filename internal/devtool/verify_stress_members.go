@@ -25,24 +25,52 @@ const (
 // rule that says which tests of the tree must be declared.
 func stressSyncConcurrencySelection() *stressSelection {
 	return &stressSelection{
-		packages:  []stressRepeatedPackage{stressSyncConcurrencyPackage()},
+		packages:  stressSyncConcurrencyPackages(),
 		placement: stressSyncConcurrencyPlacement(),
 	}
 }
 
-// stressSyncConcurrencyPackage is the sync step's one package and its declared
-// tests.
-func stressSyncConcurrencyPackage() stressRepeatedPackage {
-	return stressRepeatedPackage{
-		dir: "internal/sync",
-		memberLists: []func() []string{
-			stressSyncRunWatchMembers,
-			stressSyncWatchRuntimeMembers,
-			stressSyncWatchMembers,
-			stressSyncOneShotAndWorkerPoolMembers,
-			stressSyncShutdownAndCancellationMembers,
+// stressSyncConcurrencyPackages are the sync step's packages and their
+// declared tests, the engine's first.
+func stressSyncConcurrencyPackages() []stressRepeatedPackage {
+	return []stressRepeatedPackage{
+		{
+			dir: "internal/sync",
+			memberLists: []func() []string{
+				stressSyncRunWatchMembers,
+				stressSyncWatchRuntimeMembers,
+				stressSyncWatchMembers,
+				stressSyncOneShotAndWorkerPoolMembers,
+				stressSyncShutdownAndCancellationMembers,
+			},
+			nonMemberList: stressSyncConcurrencyNonMembers,
 		},
-		nonMemberList: stressSyncConcurrencyNonMembers,
+		{
+			dir: "internal/sync/internal/syncobserve",
+			memberLists: []func() []string{
+				stressSyncObserveWatchMembers,
+				stressSyncObserveShutdownAndCancellationMembers,
+			},
+			nonMemberList: stressSyncObserveConcurrencyNonMembers,
+		},
+		{
+			dir: "internal/sync/internal/syncexec",
+			memberLists: []func() []string{
+				stressSyncExecOneShotAndWorkerPoolMembers,
+				stressSyncExecShutdownAndCancellationMembers,
+			},
+		},
+		{
+			dir: "internal/sync/syncstore",
+			memberLists: []func() []string{
+				stressSyncStoreShutdownAndCancellationMembers,
+			},
+			nonMemberList: stressSyncStoreConcurrencyNonMembers,
+		},
+		{
+			dir:           "internal/sync/syncshortcut",
+			nonMemberList: stressSyncShortcutConcurrencyNonMembers,
+		},
 	}
 }
 
@@ -164,20 +192,34 @@ func stressSyncWatchRuntimeMembers() []string {
 func stressSyncWatchMembers() []string {
 	return []string{
 		"TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree",
+		"TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded",
+		"TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal",
+		"TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff",
+		"TestWatchObserver_SeesBindingMadeAfterItWasBuilt",
+		"TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable",
+		"TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll",
+		"TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile",
+		"TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain",
+		"TestWatch_PollKeepsTheIntentOfAFileThatIsStillThere",
+		"TestWatch_PollThatMayHaveMissedTheCreateKeepsTheIntent",
+		"TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates",
+	}
+}
+
+// stressSyncObserveWatchMembers are the members of the watch's loop, observers and
+// scenarios.
+// These tests are in internal/sync/internal/syncobserve.
+func stressSyncObserveWatchMembers() []string {
+	return []string{
 		"TestHandleWrite_DeleteClearsTimer",
 		"TestHandleWrite_DifferentPathsNotCoalesced",
 		"TestHandleWrite_VirtualTime_RapidWritesCoalesceIntoOneHash",
-		"TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded",
 		"TestRemoteObserverWatch_BacksOffAfterATimedOutPollInsteadOfStopping",
-		"TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal",
 		"TestWatchLoop_BackoffEscalatesWithoutReset",
 		"TestWatchLoop_BackoffResetsOnSafetyScan",
 		"TestWatchLoop_ChmodCreateCombinedEvent",
 		"TestWatchLoop_MoveOutOfOrderRenameCreate",
-		"TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff",
 		"TestWatchLoop_TransientFileCreateDelete",
-		"TestWatchObserver_SeesBindingMadeAfterItWasBuilt",
-		"TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable",
 		"TestWatch_BackoffOnError",
 		"TestWatch_BackoffWithAWakeChannelWaitsOnTheRunClock",
 		"TestWatch_BatchHandlerError_ReturnsError",
@@ -200,13 +242,10 @@ func stressSyncWatchMembers() []string {
 		"TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor",
 		"TestWatch_EventOverflowRunsRecoveryScan",
 		"TestWatch_EveryPollHandsOverTheTimeItBegan",
-		"TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll",
 		"TestWatch_HashFailureModifyStillEmitsEvent",
 		"TestWatch_HashFailureStillEmitsCreate",
 		"TestWatch_IgnoresExcludedFiles",
 		"TestWatch_IntervalClamping",
-		"TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile",
-		"TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain",
 		"TestWatch_NetworkRootShortensSafetyScanInterval",
 		"TestWatch_NewDirectoryEMFILEStopsWatchingForFallback",
 		"TestWatch_NewDirectoryNestedRecursion",
@@ -217,14 +256,11 @@ func stressSyncWatchMembers() []string {
 		"TestWatch_OrphanUnderFetchedVaultStaysExcluded",
 		"TestWatch_OrphanWithReadableParent_AdvancesToken",
 		"TestWatch_OrphanWithUnreachableParent_AdvancesToken",
-		"TestWatch_PollKeepsTheIntentOfAFileThatIsStillThere",
-		"TestWatch_PollThatMayHaveMissedTheCreateKeepsTheIntent",
 		"TestWatch_PollsAtInterval",
 		"TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan",
 		"TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations",
 		"TestWatch_RenamedDirectoryDescendantEventsUseNewPath",
 		"TestWatch_RepeatedlyFailingRecoveryBacksOff",
-		"TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates",
 		"TestWatch_SafetyScan_ClearsPeers",
 		"TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations",
 		"TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup",
@@ -268,6 +304,14 @@ func stressSyncOneShotAndWorkerPoolMembers() []string {
 		"TestRunOnce_FinalDrainRemovesALeftoverDownloadPartialFirst",
 		"TestRunOnce_FinalDrainRemovesBundledJunkUnderTheConfiguredRule",
 		"TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure",
+	}
+}
+
+// stressSyncExecOneShotAndWorkerPoolMembers are the members of the one-shot
+// result loop, whole one-shot passes and the worker pool.
+// These tests are in internal/sync/internal/syncexec.
+func stressSyncExecOneShotAndWorkerPoolMembers() []string {
+	return []string{
 		"TestWorkerPool_ACompletionDroppedAfterTheStopIsLogged",
 		"TestWorkerPool_AStoppedPoolDeliversEveryCompletionItHasRoomFor",
 		"TestWorkerPool_ClosedDispatchChannelClosesCompletions",
@@ -292,14 +336,7 @@ func stressSyncOneShotAndWorkerPoolMembers() []string {
 // access, cancellation, timers and the shutdown and drain of running work.
 func stressSyncShutdownAndCancellationMembers() []string {
 	return []string{
-		"TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead",
-		"TestBaseline_ConcurrentAccess",
-		"TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut",
 		"TestCancelCauses_AnswerToCanceledAndNameTheirCancel",
-		"TestCancelPendingTimers",
-		"TestCancelRecoveryScan_StaleTimerFiringIsIgnored",
-		"TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation",
-		"TestCheckStoreIntegrity_CanceledCheckIsNotDamage",
 		"TestClassifyResult_StalledTransferIsRetryableNotShutdown",
 		"TestClassifyResult_SuccessAndShutdown",
 		"TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker",
@@ -313,15 +350,11 @@ func stressSyncShutdownAndCancellationMembers() []string {
 		"TestEngineFlow_ProcessTrialDecision_ShutdownCompletesWithoutTerminating",
 		"TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRepeatFatal",
 		"TestFault_ContextCancel_WorkerPool",
-		"TestFullDelta_ContextCanceled",
-		"TestFullScan_ContextCanceled",
-		"TestHandleDelete_CancelsCoalesceTimer",
 		"TestHandleObserverExit_DrainingOutsideShutdownViolatesInvariant",
 		"TestHandleObserverExit_LastObserverDuringShutdownIsNotAnError",
 		"TestHandleObserverExit_LastObserverOutsideShutdownReturnsError",
 		"TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitError",
 		"TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation",
-		"TestLocalWatch_ContextCancellation",
 		"TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart",
 		"TestPostSyncHousekeeping_CanceledContextIsQuiet",
 		"TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged",
@@ -340,11 +373,46 @@ func stressSyncShutdownAndCancellationMembers() []string {
 		"TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers",
 		"TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError",
 		"TestStartObservers_RefusalDuringDrainClassifiesAsShutdown",
-		"TestSyncStore_CloseWithCanceledContextStillCheckpoints",
+		"TestWaitForQuiescence_ContextCancel",
+	}
+}
+
+// stressSyncObserveShutdownAndCancellationMembers are the members of concurrent
+// access, cancellation, timers and the shutdown and drain of running work.
+// These tests are in internal/sync/internal/syncobserve.
+func stressSyncObserveShutdownAndCancellationMembers() []string {
+	return []string{
+		"TestCancelPendingTimers",
+		"TestCancelRecoveryScan_StaleTimerFiringIsIgnored",
+		"TestFullDelta_ContextCanceled",
+		"TestFullScan_ContextCanceled",
+		"TestHandleDelete_CancelsCoalesceTimer",
+		"TestLocalWatch_ContextCancellation",
 		"TestTrySend_ContextCanceled_NoDrop",
+	}
+}
+
+// stressSyncExecShutdownAndCancellationMembers are the members of concurrent
+// access, cancellation, timers and the shutdown and drain of running work.
+// These tests are in internal/sync/internal/syncexec.
+func stressSyncExecShutdownAndCancellationMembers() []string {
+	return []string{
+		"TestActionFreshness_CanceledContextFailsClosedWithoutStoreRead",
 		"TestUploadNewFile_CanceledCreateKeepsItsIntentQuietly",
 		"TestUploadNewFile_CreatedItemIsRecordedWhenTheActionIsCanceled",
-		"TestWaitForQuiescence_ContextCancel",
+	}
+}
+
+// stressSyncStoreShutdownAndCancellationMembers are the members of concurrent
+// access, cancellation, timers and the shutdown and drain of running work.
+// These tests are in internal/sync/syncstore.
+func stressSyncStoreShutdownAndCancellationMembers() []string {
+	return []string{
+		"TestBaseline_ConcurrentAccess",
+		"TestBaseline_GetCaseVariantsCopyIsSafeAgainstConcurrentPut",
+		"TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation",
+		"TestCheckStoreIntegrity_CanceledCheckIsNotDamage",
+		"TestSyncStore_CloseWithCanceledContextStillCheckpoints",
 	}
 }
 
@@ -360,10 +428,7 @@ func stressSyncConcurrencyNonMembers() []stressNonMember {
 		{test: "TestEngine_AcknowledgeChildFinalDrainSendsANonEmptyRootBackToTheFinalDrain", reason: stressNonMemberRootState},
 		{test: "TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemoteDelete", reason: stressNonMemberRootState},
 		{test: "TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain", reason: stressNonMemberRootState},
-		{test: "TestPlanShortcutRootReleaseCleanupSendsANonEmptyRootBackToTheFinalDrain", reason: stressNonMemberRootState},
 		{test: "TestReleaseLocalTree_RunsOnlyWhenTheDrainLetsIt", reason: stressNonMemberReleaseRule},
-		{test: "TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain", reason: stressNonMemberRootState},
-		{test: "TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable", reason: stressNonMemberRootState},
 		{test: "TestWatchConditionCountTotal_SumsRawCounts", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionCounts_SortsAndAggregatesProjectedGroups", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionSummaryFingerprint_IsTheSetOfConditionKinds", reason: stressNonMemberWatchSummary},
@@ -372,7 +437,43 @@ func stressSyncConcurrencyNonMembers() []stressNonMember {
 		{test: "TestWatchConditionSummary_StatesBreakdownAndHintOnce", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionSummary_WarnsOnlyForNewActionableKinds", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchHelpers_FailNamingWhatTheyWaitedFor", reason: stressNonMemberWatchHelpers},
+	}
+}
+
+// stressSyncObserveConcurrencyNonMembers are the sync tests the placement rule names
+// and the step leaves out: a word of the name means a state of a shortcut root,
+// a release rule, a log summary, a lookup structure or the tests' own wait
+// helpers, not concurrency. When in doubt a test stays a member: a one-shot
+// pass that runs the worker pool is one, whatever its subject.
+// These tests are in internal/sync/internal/syncobserve.
+func stressSyncObserveConcurrencyNonMembers() []stressNonMember {
+	return []stressNonMember{
 		{test: "TestWatchRechecks_FindTheNFDNamedLocalFile", reason: stressNonMemberWatchLookup},
 		{test: "TestWatchRegistry_SubtreeLookupFollowsTheIndexAndUnlinksEmptyBranches", reason: stressNonMemberWatchLookup},
+	}
+}
+
+// stressSyncStoreConcurrencyNonMembers are the sync tests the placement rule names
+// and the step leaves out: a word of the name means a state of a shortcut root,
+// a release rule, a log summary, a lookup structure or the tests' own wait
+// helpers, not concurrency. When in doubt a test stays a member: a one-shot
+// pass that runs the worker pool is one, whatever its subject.
+// These tests are in internal/sync/syncstore.
+func stressSyncStoreConcurrencyNonMembers() []stressNonMember {
+	return []stressNonMember{
+		{test: "TestSyncStore_EmptyCompleteShortcutTopologyMarksRemovedFinalDrain", reason: stressNonMemberRootState},
+		{test: "TestSyncStore_markShortcutChildFinalDrainReleasePendingIsDurable", reason: stressNonMemberRootState},
+	}
+}
+
+// stressSyncShortcutConcurrencyNonMembers are the sync tests the placement rule names
+// and the step leaves out: a word of the name means a state of a shortcut root,
+// a release rule, a log summary, a lookup structure or the tests' own wait
+// helpers, not concurrency. When in doubt a test stays a member: a one-shot
+// pass that runs the worker pool is one, whatever its subject.
+// These tests are in internal/sync/syncshortcut.
+func stressSyncShortcutConcurrencyNonMembers() []stressNonMember {
+	return []stressNonMember{
+		{test: "TestPlanShortcutRootReleaseCleanupSendsANonEmptyRootBackToTheFinalDrain", reason: stressNonMemberRootState},
 	}
 }

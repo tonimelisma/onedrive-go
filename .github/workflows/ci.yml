@@ -324,7 +324,7 @@ jobs:
           retention-days: 7
 
   # The nightly search of new model seeds: the four seeded model families of
-  # ./internal/sync without the race detector, from a start seed derived from
+  # the sync tree without the race detector, from a start seed derived from
   # the UTC date, so every night runs seeds no earlier night ran and a rerun
   # on the same UTC day runs the same ones; a later rerun of a night passes
   # `--seed-start` with the start that night printed. A failing seed fails

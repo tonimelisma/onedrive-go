@@ -13,11 +13,20 @@ import (
 )
 
 // detachedContextPackages are the packages whose shutdown paths the watch
-// control plane bounds: a store write detached from cancellation and left
+// control plane bounds, the sync tree's and multisync: a store write detached from cancellation and left
 // without a deadline is a wait nothing bounds, under a stop bound that
 // assumes every such wait has one.
 func detachedContextPackages() []string {
-	return []string{".", filepath.Join("..", "multisync")}
+	return append(syncTreePackageDirs(), filepath.Join("..", "multisync"))
+}
+
+// syncTreePackageDirs are the directories of the sync tree's product
+// packages, from this one: the engine's first.
+func syncTreePackageDirs() []string {
+	return []string{
+		".", "syncdomain", "syncshortcut", "syncstore",
+		filepath.Join("internal", "syncplan"), filepath.Join("internal", "syncobserve"), filepath.Join("internal", "syncexec"),
+	}
 }
 
 // unboundedDetachedContexts returns the context.WithoutCancel calls in file

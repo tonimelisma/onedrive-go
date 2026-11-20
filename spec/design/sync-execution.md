@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/action_freshness.go, internal/sync/active_scopes.go, internal/sync/dep_graph.go, internal/sync/executor.go, internal/sync/executor_conflict.go, internal/sync/executor_delete.go, internal/sync/executor_parent_checks.go, internal/sync/executor_preconditions.go, internal/sync/executor_transfer.go, internal/sync/scope.go, internal/sync/worker.go, internal/sync/executor_test_seams.go
+GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/active_scopes.go, internal/sync/internal/syncexec/dep_graph.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/scope.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go
 
 LAYER: 3
 

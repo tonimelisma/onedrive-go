@@ -207,7 +207,7 @@ func move(a, b string) error {
 func TestLocalpathFunctions_AreEachDeclaredReadingOrChanging(t *testing.T) {
 	t.Parallel()
 
-	files, err := filepath.Glob(filepath.Join("..", "localpath", "*.go"))
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "localpath", "*.go"))
 	require.NoError(t, err)
 	var exported []string
 	for _, path := range files {

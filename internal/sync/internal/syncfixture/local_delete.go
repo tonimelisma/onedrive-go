@@ -10,7 +10,7 @@ import (
 // This allows tests to verify which paths were passed to watcher.Remove().
 type recordingFsWatcher struct {
 	MockFsWatcher
-	mu        stdsync.Mutex
+	mu        stdsync.Mutex // guards removed and removeErr
 	removed   []string
 	removeErr error // injectable error for Remove()
 }

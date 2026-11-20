@@ -18,7 +18,7 @@ const FaultCommit = "COMMIT"
 var ErrInjectedFault = errors.New("injected fault: disk I/O error (SQLITE_FULL)")
 
 type SqlFault struct {
-	mu    stdsync.Mutex
+	mu    stdsync.Mutex // guards match, skip, err and Hits
 	match string
 	// skip is how many matching statements still run before the fault fires.
 	skip int
@@ -65,7 +65,7 @@ func (f *SqlFault) Fired() int {
 //nolint:gochecknoglobals // database/sql registers a driver once per process, and its connections find their fault by database path.
 var (
 	FaultDriverOnce stdsync.Once
-	faultsMu        stdsync.Mutex
+	faultsMu        stdsync.Mutex // guards faultsByPath
 	faultsByPath    = map[string]*SqlFault{}
 )
 

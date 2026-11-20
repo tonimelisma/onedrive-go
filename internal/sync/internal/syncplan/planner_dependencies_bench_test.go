@@ -23,7 +23,7 @@ import (
 // replaced (oracleBuildDependencies in planner_dependencies_test.go), at 10k
 // only: it is quadratic, 100k takes a quarter of an hour.
 //
-// Run with: go test ./internal/sync -run '^$' -bench 'BenchmarkBuildDependencies/actions=10000/' -benchtime 1x
+// Run with: go test ./internal/sync/internal/syncplan -run '^$' -bench 'BenchmarkBuildDependencies/actions=10000/' -benchtime 1x
 
 type dependencyBenchShape string
 

@@ -215,5 +215,5 @@ func isSQLiteDSNBuilderCall(expr ast.Expr) bool {
 		return ident.Name == "SqliteFileURI"
 	}
 
-	return isSelector(call.Fun, "synctest", "SQLiteFileURI")
+	return isSelector(call.Fun, "syncstore", "SqliteFileURI") || isSelector(call.Fun, "synctest", "SQLiteFileURI")
 }

@@ -23,7 +23,7 @@ import (
 //   - local-rename: the same rename made locally, the shape
 //     local_move_candidates and followed_local_ancestor_deletes join on.
 //
-// Run with: go test ./internal/sync -run '^$' -bench 'BenchmarkComparisonQueries/items=10000/' -benchtime 1x
+// Run with: go test ./internal/sync/syncstore -run '^$' -bench 'BenchmarkComparisonQueries/items=10000/' -benchtime 1x
 // (the pattern is a regexp: items=10000/ also matches items=100000/).
 
 const benchFilesPerFolder = 100

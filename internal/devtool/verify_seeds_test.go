@@ -7,7 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -118,7 +118,7 @@ func TestNightlySeedStrideCoversEveryCount(t *testing.T) {
 // Validates: R-6.10.25
 //
 // The run pattern names the family table's tests, which exist in
-// internal/sync, so a rename cannot leave the nightly searching nothing, and
+// the sync tree, so a rename cannot leave the nightly searching nothing, and
 // every variable the profile sets is one the model tests read.
 func TestSeedsRunPatternNamesExistingTests(t *testing.T) {
 	t.Parallel()
@@ -129,25 +129,26 @@ func TestSeedsRunPatternNamesExistingTests(t *testing.T) {
 	require.Len(t, names, familyCount, "engine, crash, planner, chaos")
 	for _, name := range names {
 		assert.Regexp(t, `(?m)^func `+regexp.QuoteMeta(name)+`\(t \*testing\.T\) \{$`, sources,
-			"the seeds pattern names %s, which internal/sync does not define", name)
+			"the seeds pattern names %s, which the sync tree does not define", name)
 	}
 	for _, name := range []string{
 		seedsModelSeedEnv, seedsModelCountEnv, seedsModelStartEnv,
 		seedsPlannerSeedEnv, seedsPlannerCountEnv, seedsPlannerStartEnv,
 		seedsChaosCountEnv, seedsChaosStartEnv, seedsDispatchOrderEnv,
 	} {
-		assert.Contains(t, sources, `"`+name+`"`, "internal/sync's tests read no variable %s", name)
+		assert.Contains(t, sources, `"`+name+`"`, "the sync tree's tests read no variable %s", name)
 	}
 }
 
 // Validates: R-6.10.25
 //
-// The replay line has one writer, internal/sync's logSeedReplayOnFailure, and
-// one reader, here. The writer's prefix, package and dispatch-order variable
-// are this reader's, and each family of the table runs its seeds as seed=<n>
-// subtests that call the writer, inside the subtest, with the family's own
-// variable, so a family that stops printing its line fails here, not on the
-// night it is needed. No other test hands the writer its own t: a test that
+// The replay line has one writer, the sync fixtures' LogSeedReplayOnFailure,
+// and one reader, here. The writer's prefix and dispatch-order variable are
+// this reader's, each family's test is in the package the table names (the
+// writer names the package its caller runs in), and each family of the table
+// runs its seeds as seed=<n> subtests that call the writer, inside the
+// subtest, with the family's own variable, so a family that stops printing its
+// line fails here, not on the night it is needed. No other test hands the writer its own t: a test that
 // prints replay lines and is not in the table is a family the reader does not
 // know.
 func TestSeededFamiliesLogTheirReplayLineWithTheirVariable(t *testing.T) {
@@ -155,20 +156,21 @@ func TestSeededFamiliesLogTheirReplayLineWithTheirVariable(t *testing.T) {
 
 	files := parseSyncTestFiles(t)
 	consts := syncStringConsts(t, files)
-	assert.Equal(t, seedReplayPrefix, consts["seedReplayPrefix"], "the writer's prefix")
-	assert.Equal(t, seedFamilyPackage, consts["seedReplayPackage"], "the writer's package")
-	assert.Equal(t, seedsDispatchOrderEnv, consts["dispatchOrderEnv"], "the dispatch-order variable")
+	assert.Equal(t, seedReplayPrefix, consts["SeedReplayPrefix"], "the writer's prefix")
+	assert.Equal(t, seedsDispatchOrderEnv, consts["DispatchOrderEnv"], "the dispatch-order variable")
 	families := []string{}
 	for _, family := range seededFamilies() {
 		families = append(families, family.test)
 		fn := syncTestFunc(files, family.test)
-		require.NotNil(t, fn, "internal/sync defines no %s", family.test)
+		require.NotNil(t, fn, "the sync tree defines no %s", family.test)
+		assert.NotNil(t, syncTestFunc(parsePackageTestFiles(t, family.pkg), family.test),
+			"%s is a test of %s, the package the writer names in its replays", family.test, family.pkg)
 		assert.Equal(t, []string{family.seedEnv}, replayWriterVariables(fn.Body, consts),
-			"%s calls logSeedReplayOnFailure once, with %s", family.test, family.seedEnv)
+			"%s calls LogSeedReplayOnFailure once, with %s", family.test, family.seedEnv)
 		subtest := seedSubtestBody(fn)
 		require.NotNil(t, subtest, "%s names each seed's subtest %s<n>", family.test, seedSubtestPrefix)
 		assert.Len(t, replayWriterVariables(subtest, consts), 1,
-			"%s calls logSeedReplayOnFailure inside the seed's subtest, whose name the line's reader needs", family.test)
+			"%s calls LogSeedReplayOnFailure inside the seed's subtest, whose name the line's reader needs", family.test)
 	}
 	slices.Sort(families)
 	assert.Equal(t, families, testsHandingTheWriterTheirT(files),
@@ -176,7 +178,7 @@ func TestSeededFamiliesLogTheirReplayLineWithTheirVariable(t *testing.T) {
 }
 
 // testsHandingTheWriterTheirT are the top-level functions of files that call
-// logSeedReplayOnFailure with the identifier t, sorted: the tests whose
+// LogSeedReplayOnFailure with the identifier t, sorted: the tests whose
 // failing seeds print a replay line. A test of the writer itself hands it a
 // fake and is not one of them.
 func testsHandingTheWriterTheirT(files []*ast.File) []string {
@@ -190,7 +192,7 @@ func testsHandingTheWriterTheirT(files []*ast.File) []string {
 			calls := false
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				call, isCall := node.(*ast.CallExpr)
-				if isCall && isIdent(call.Fun, "logSeedReplayOnFailure") && len(call.Args) > 0 && isIdent(call.Args[0], "t") {
+				if isCall && isReplayWriter(call.Fun) && len(call.Args) > 0 && isIdent(call.Args[0], "t") {
 					calls = true
 				}
 
@@ -206,12 +208,59 @@ func testsHandingTheWriterTheirT(files []*ast.File) []string {
 	return names
 }
 
-// parseSyncTestFiles parses internal/sync's test files.
+// syncTreeSources are the paths of the sync tree's test files and of its
+// test-fixture package, which holds the replay writer.
+func syncTreeSources(t *testing.T) []string {
+	t.Helper()
+
+	root := filepath.Join(repoRootFromDevtoolPackage(t), "internal", "sync")
+	fixtures := filepath.Join(root, "internal", "syncfixture")
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") || (filepath.Dir(path) == fixtures && strings.HasSuffix(path, ".go")) {
+			paths = append(paths, path)
+		}
+
+		return nil
+	})
+	require.NoError(t, err)
+
+	return paths
+}
+
+// parseSyncTestFiles parses the sync tree's test files and its test-fixture
+// package.
 func parseSyncTestFiles(t *testing.T) []*ast.File {
 	t.Helper()
 
-	paths, err := filepath.Glob(filepath.Join(repoRootFromDevtoolPackage(t), "internal", "sync", "*_test.go"))
+	return parseGoFiles(t, syncTreeSources(t))
+}
+
+// parsePackageTestFiles parses the test files of one package, pkg from the
+// module root.
+func parsePackageTestFiles(t *testing.T, pkg string) []*ast.File {
+	t.Helper()
+
+	paths, err := filepath.Glob(filepath.Join(repoRootFromDevtoolPackage(t), filepath.FromSlash(pkg), "*_test.go"))
 	require.NoError(t, err)
+
+	return parseGoFiles(t, paths)
+}
+
+// parseGoFiles parses the files at paths.
+func parseGoFiles(t *testing.T, paths []string) []*ast.File {
+	t.Helper()
+
 	fset := token.NewFileSet()
 	files := make([]*ast.File, 0, len(paths))
 	for _, path := range paths {
@@ -273,20 +322,25 @@ func syncTestFunc(files []*ast.File, name string) *ast.FuncDecl {
 }
 
 // replayWriterVariables are the values of the variable argument of every
-// logSeedReplayOnFailure call in body, each a constant of consts, or its
+// LogSeedReplayOnFailure call in body, each a constant of consts, or its
 // expression's kind when it is none.
 func replayWriterVariables(body *ast.BlockStmt, consts map[string]string) []string {
 	variables := []string{}
 	ast.Inspect(body, func(node ast.Node) bool {
 		call, isCall := node.(*ast.CallExpr)
-		if !isCall || !isIdent(call.Fun, "logSeedReplayOnFailure") || len(call.Args) < 2 {
+		if !isCall || !isReplayWriter(call.Fun) || len(call.Args) < 2 {
 			return true
 		}
 		variable := fmt.Sprintf("%T, not a constant", call.Args[1])
-		if ident, isIdentArg := call.Args[1].(*ast.Ident); isIdentArg {
-			if value, isConst := consts[ident.Name]; isConst {
-				variable = value
-			}
+		name := ""
+		switch arg := call.Args[1].(type) {
+		case *ast.Ident:
+			name = arg.Name
+		case *ast.SelectorExpr:
+			name = arg.Sel.Name
+		}
+		if value, isConst := consts[name]; isConst {
+			variable = value
 		}
 		variables = append(variables, variable)
 
@@ -323,25 +377,30 @@ func seedSubtestBody(fn *ast.FuncDecl) *ast.BlockStmt {
 }
 
 // isIdent reports whether expr is the identifier name.
+// isReplayWriter reports a call of the replay writer: the fixture package's
+// LogSeedReplayOnFailure, qualified or not.
+func isReplayWriter(fun ast.Expr) bool {
+	if sel, ok := fun.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "LogSeedReplayOnFailure"
+	}
+
+	return isIdent(fun, "LogSeedReplayOnFailure")
+}
+
 func isIdent(expr ast.Expr, name string) bool {
 	ident, ok := expr.(*ast.Ident)
 
 	return ok && ident.Name == name
 }
 
-// syncTestSources is the text of internal/sync's test files.
+// syncTestSources is the text of the sync tree's test files and its
+// test-fixture package.
 func syncTestSources(t *testing.T) string {
 	t.Helper()
 
-	dir := filepath.Join(repoRootFromDevtoolPackage(t), "internal", "sync")
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
 	var sources strings.Builder
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-		data, readErr := readFile(filepath.Join(dir, entry.Name()))
+	for _, path := range syncTreeSources(t) {
+		data, readErr := readFile(path)
 		require.NoError(t, readErr)
 		sources.Write(data)
 	}

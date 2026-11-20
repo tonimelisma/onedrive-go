@@ -45,7 +45,7 @@ func TestProductCode_RemovesATreeOnlyByTheVerifiedLocalDelete(t *testing.T) {
 	require.Greater(t, files, 100, "the walk reads the module's product files")
 
 	allowed := treeRemovalCall{
-		file:     "internal/sync/executor_delete.go",
+		file:     "internal/sync/internal/syncexec/executor_delete.go",
 		function: "RemoveDisposableChildren",
 		call:     "e.syncTree.RemoveAll",
 	}
