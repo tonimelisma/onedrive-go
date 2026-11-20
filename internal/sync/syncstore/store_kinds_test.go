@@ -122,7 +122,8 @@ func TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath(t *testing.T) {
 	ctx := t.Context()
 
 	_, err := queryComparisonRows(ctx, store.RawDBForTest(),
-		`SELECT 'docs/compared.txt', '', '', 'file', 1, 1, 1, 0, 0, 0, '', '', 0, '', '', 'bogus'`)
+		`SELECT 'docs/compared.txt', '', '', 'file', 1, 1, 1, 0, 0, 0, '', '', 0, '', '',
+			'file', 'file', 'file', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'bogus'`)
 	require.Error(t, err)
 	require.ErrorContains(t, err, `"docs/compared.txt"`)
 	require.ErrorContains(t, err, `"bogus"`)
@@ -234,7 +235,8 @@ func queryComparisonCaseGroups(t *testing.T, query string) []comparisonCaseGroup
 // 4 local and 4 remote item types and 512 flag combinations (442,368 inputs).
 // A classified comparison kind always gets a reconciliation, except a diverged
 // row that changed on neither side, which stage 1 proves never exists (the
-// product is synthetic, so this direction only). An unclassified comparison is
+// product is synthetic, so this direction only), and a create of a
+// root-typed entry, which no observer records and planning refuses. An unclassified comparison is
 // never reconciled into a decision, and every reconciliation kind is reachable.
 //
 // Exhaustive (several seconds, minutes under -race), like stage 1.
@@ -263,9 +265,9 @@ inputs AS (
 	FROM kinds k CROSS JOIN item_types it CROSS JOIN side_types lt CROSS JOIN side_types rt CROSS JOIN flags f
 ),
 classified AS (SELECT *, %s AS reconciliation_kind FROM inputs)
-SELECT comparison_kind, reconciliation_kind, local_changed, remote_changed, COUNT(*)
+SELECT comparison_kind, reconciliation_kind, local_changed, remote_changed, item_type = 'root', COUNT(*)
 FROM classified
-GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", "),
+GROUP BY 1, 2, 3, 4, 5`, reconciliationCaseFlagStates, strings.Join(kindValues, ", "),
 		strings.Join(flagColumns, ",\n\t\t"), sqlReconciliationKindCase)
 
 	rows, err := newTestStore(t).RawDBForTest().QueryContext(t.Context(), query)
@@ -278,10 +280,10 @@ GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", 
 	for rows.Next() {
 		var (
 			comparisonName, reconciliationName string
-			localChanged, remoteChanged        bool
+			localChanged, remoteChanged, root  bool
 			states                             int
 		)
-		require.NoError(t, rows.Scan(&comparisonName, &reconciliationName, &localChanged, &remoteChanged, &states))
+		require.NoError(t, rows.Scan(&comparisonName, &reconciliationName, &localChanged, &remoteChanged, &root, &states))
 		comparison, parseErr := syncdomain.ParseComparisonKind(comparisonName)
 		require.NoError(t, parseErr)
 		reconciliation, parseErr := syncdomain.ParseReconciliationKind(reconciliationName)
@@ -290,7 +292,9 @@ GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", 
 		produced[reconciliation] = true
 
 		unreachableDiverged := comparison == syncdomain.ComparisonDiverged && !localChanged && !remoteChanged
-		if reconciliation == syncdomain.ReconcileUnclassified && comparison != syncdomain.ComparisonUnclassified && !unreachableDiverged {
+		rootCreate := root && (comparison == syncdomain.ComparisonLocalOnlyCreate || comparison == syncdomain.ComparisonRemoteOnlyCreate)
+		if reconciliation == syncdomain.ReconcileUnclassified && comparison != syncdomain.ComparisonUnclassified &&
+			!unreachableDiverged && !rootCreate {
 			violations = append(violations, fmt.Sprintf("%s (local_changed=%t remote_changed=%t) is unclassified",
 				comparison, localChanged, remoteChanged))
 		}
@@ -306,4 +310,203 @@ GROUP BY 1, 2, 3, 4`, reconciliationCaseFlagStates, strings.Join(kindValues, ", 
 	for _, kind := range syncdomain.AllReconciliationKinds() {
 		assert.True(t, produced[kind], "no input yields %s", kind)
 	}
+}
+
+// stageOneState is the decision state of stage 1 input number i: each bit
+// in comparisonCaseInputs order, a present side as a file (stage 1 reads
+// presence only), and the move booleans formed from the candidate count as
+// the CASE tests them (count = 1 together with a target or a source).
+func stageOneState(i int) syncdomain.DecisionState {
+	bit := func(n int) bool { return i>>n&1 == 1 }
+	side := func(n int) syncdomain.SideType {
+		if bit(n) {
+			return syncdomain.SideFile
+		}
+		return syncdomain.SideAbsent
+	}
+	const (
+		bitCount = 3 + iota
+		bitLocalMoveTarget
+		bitLocalMoveSource
+		bitRemoteMoveTarget
+		bitRemoteMoveSource
+		bitLocalItemReplaced
+		bitDeleteAwaits
+		bitLocalCopyAwaits
+		bitRemoteCreateAwaits
+		bitKept
+		bitShadowed
+		bitCurrentEqual
+		bitLocalChanged
+		bitRemoteChanged
+	)
+
+	return syncdomain.DecisionState{
+		Baseline: side(0), Local: side(1), Remote: side(2),
+		LocalMoveSource:                bit(bitCount) && bit(bitLocalMoveTarget),
+		LocalMoveDest:                  bit(bitCount) && bit(bitLocalMoveSource),
+		RemoteMoveSource:               bit(bitRemoteMoveTarget),
+		RemoteMoveDest:                 bit(bitRemoteMoveSource),
+		LocalItemReplaced:              bit(bitLocalItemReplaced),
+		DeleteAwaitsAncestorMove:       bit(bitDeleteAwaits),
+		LocalCopyAwaitsAncestorMove:    bit(bitLocalCopyAwaits),
+		RemoteCreateAwaitsAncestorMove: bit(bitRemoteCreateAwaits),
+		KeptLocalFolder:                bit(bitKept),
+		RemoteMoveShadowed:             bit(bitShadowed),
+		CurrentEqual:                   bit(bitCurrentEqual),
+		LocalChanged:                   bit(bitLocalChanged),
+		RemoteChanged:                  bit(bitRemoteChanged),
+	}
+}
+
+// Validates: R-6.2.16
+//
+// The Go decision table is the SQL one, stage 1: over all 131,072
+// combinations of sqlComparisonKindCase's inputs, Decide's comparison kind
+// is the kind the CASE yields.
+func TestDecide_ComparisonMatchesTheSQLCaseOnEveryInput(t *testing.T) {
+	syncfixture.SkipInShort(t)
+	t.Parallel()
+
+	inputs := comparisonCaseInputs()
+	require.Len(t, inputs, comparisonCaseInputCount)
+	columns := make([]string, 0, len(inputs))
+	for bit, input := range inputs {
+		if input.isText {
+			columns = append(columns, fmt.Sprintf("CASE WHEN (i >> %d) & 1 = 1 THEN 'p' ELSE '' END AS %s", bit, input.column))
+			continue
+		}
+		columns = append(columns, fmt.Sprintf("(i >> %d) & 1 AS %s", bit, input.column))
+	}
+	query := fmt.Sprintf(`
+WITH RECURSIVE states(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM states WHERE i + 1 < %d),
+inputs AS (SELECT i, %s FROM states)
+SELECT i, %s FROM inputs ORDER BY i`, comparisonCaseStateCount, strings.Join(columns, ",\n\t"), sqlComparisonKindCase)
+
+	rows, err := newTestStore(t).RawDBForTest().QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	compared := 0
+	var disagreements []string
+	for rows.Next() {
+		var (
+			i    int
+			name string
+		)
+		require.NoError(t, rows.Scan(&i, &name))
+		sqlKind, parseErr := syncdomain.ParseComparisonKind(name)
+		require.NoError(t, parseErr)
+		compared++
+		if goKind := syncdomain.Decide(stageOneState(i)).Comparison; goKind != sqlKind && len(disagreements) < 10 {
+			disagreements = append(disagreements, fmt.Sprintf("input %d: SQL %s, Go %s", i, sqlKind, goKind))
+		}
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, comparisonCaseStateCount, compared)
+	assert.Empty(t, disagreements)
+}
+
+// Validates: R-6.2.16
+//
+// Stage 2: over all 442,368 inputs of sqlReconciliationKindCase (every
+// comparison kind, item type, local and remote side type and flag
+// combination), Reconcile yields the kind the CASE yields.
+func TestReconcile_MatchesTheSQLCaseOnEveryInput(t *testing.T) {
+	syncfixture.SkipInShort(t)
+	t.Parallel()
+
+	flags := reconciliationCaseFlags()
+	require.Len(t, flags, reconciliationCaseFlagCount)
+	flagColumns := make([]string, 0, len(flags))
+	for bit, flag := range flags {
+		flagColumns = append(flagColumns, fmt.Sprintf("(f.i >> %d) & 1 AS %s", bit, flag))
+	}
+	kindValues := make([]string, 0, len(syncdomain.AllComparisonKinds()))
+	for _, kind := range syncdomain.AllComparisonKinds() {
+		kindValues = append(kindValues, fmt.Sprintf("('%s')", kind))
+	}
+	query := fmt.Sprintf(`
+WITH RECURSIVE flags(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM flags WHERE i + 1 < %d),
+kinds(comparison_kind) AS (VALUES %s),
+item_types(item_type) AS (VALUES ('file'), ('folder'), ('root')),
+side_types(item_type) AS (VALUES (''), ('file'), ('folder'), ('root')),
+inputs AS (
+	SELECT k.comparison_kind, it.item_type, lt.item_type AS local_item_type, rt.item_type AS remote_item_type,
+		f.i AS flag_bits, %s
+	FROM kinds k CROSS JOIN item_types it CROSS JOIN side_types lt CROSS JOIN side_types rt CROSS JOIN flags f
+)
+SELECT comparison_kind, item_type, local_item_type, remote_item_type, flag_bits, %s FROM inputs`,
+		reconciliationCaseFlagStates, strings.Join(kindValues, ", "),
+		strings.Join(flagColumns, ",\n\t\t"), sqlReconciliationKindCase)
+
+	rows, err := newTestStore(t).RawDBForTest().QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	compared := 0
+	var disagreements []string
+	for rows.Next() {
+		var (
+			kindName, itemType, localType, remoteType, reconciliationName string
+			bits                                                          int
+		)
+		require.NoError(t, rows.Scan(&kindName, &itemType, &localType, &remoteType, &bits, &reconciliationName))
+		in, kind, sqlKind := reconcileCaseInput(t, kindName, itemType, localType, remoteType, bits, reconciliationName)
+		compared++
+		if goKind := syncdomain.Reconcile(kind, in); goKind != sqlKind && len(disagreements) < 10 {
+			disagreements = append(disagreements, fmt.Sprintf("%s %+v: SQL %s, Go %s", kind, in, sqlKind, goKind))
+		}
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, len(syncdomain.AllComparisonKinds())*reconciliationItemTypeCount*
+		reconciliationSideTypeCount*reconciliationSideTypeCount*reconciliationCaseFlagStates, compared)
+	assert.Empty(t, disagreements)
+}
+
+// reconcileCaseInput parses one stage 2 input row: the flags from bits in
+// reconciliationCaseFlags order.
+func reconcileCaseInput(
+	t *testing.T,
+	kindName, itemType, localType, remoteType string,
+	bits int,
+	reconciliationName string,
+) (syncdomain.ReconcileInputs, syncdomain.ComparisonKind, syncdomain.ReconciliationKind) {
+	t.Helper()
+
+	bit := func(n int) bool { return bits>>n&1 == 1 }
+	kind, err := syncdomain.ParseComparisonKind(kindName)
+	require.NoError(t, err)
+	reconciliation, err := syncdomain.ParseReconciliationKind(reconciliationName)
+	require.NoError(t, err)
+	side := func(name string) syncdomain.SideType {
+		parsed, parseErr := syncdomain.ParseSideType(name)
+		require.NoError(t, parseErr)
+		return parsed
+	}
+	const (
+		bitLocalChanged = iota
+		bitRemoteChanged
+		bitCurrentEqual // read by no rule; an input dimension all the same
+		bitLocalSubtreeChanged
+		bitRemoteSubtreeChanged
+		bitLocalTypeChanged
+		bitRemoteTypeChanged
+		bitRemoteItemReplaced
+		bitMetadataDrift
+	)
+
+	return syncdomain.ReconcileInputs{
+		ItemType:             side(itemType),
+		Local:                side(localType),
+		Remote:               side(remoteType),
+		LocalChanged:         bit(bitLocalChanged),
+		RemoteChanged:        bit(bitRemoteChanged),
+		LocalSubtreeChanged:  bit(bitLocalSubtreeChanged),
+		RemoteSubtreeChanged: bit(bitRemoteSubtreeChanged),
+		LocalTypeChanged:     bit(bitLocalTypeChanged),
+		RemoteTypeChanged:    bit(bitRemoteTypeChanged),
+		RemoteItemReplaced:   bit(bitRemoteItemReplaced),
+		MetadataDrift:        bit(bitMetadataDrift),
+	}, kind, reconciliation
 }

@@ -3,6 +3,7 @@ package syncstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -275,6 +276,7 @@ comparison_flags AS (
 		COALESCE(b.item_id, '') AS baseline_item_id,
 		COALESCE(r.item_id, '') AS remote_item_id,
 		COALESCE(b.item_type, l.item_type, r.item_type, '') AS item_type,
+		COALESCE(b.item_type, '') AS baseline_item_type,
 		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
 		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
 		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
@@ -479,6 +481,7 @@ comparison_state AS (
 		baseline_item_id,
 		remote_item_id,
 		item_type,
+		baseline_item_type,
 		baseline_present,
 		local_present,
 		remote_present,
@@ -570,6 +573,19 @@ SELECT
 	local_move_candidate_count,
 	remote_move_target,
 	remote_move_source,
+	baseline_item_type,
+	local_item_type,
+	remote_item_type,
+	local_item_replaced,
+	remote_item_replaced,
+	delete_awaits_ancestor_move,
+	local_copy_awaits_ancestor_move,
+	remote_create_awaits_ancestor_move,
+	kept_local_folder,
+	remote_move_shadowed,
+	local_subtree_changed,
+	remote_subtree_changed,
+	metadata_drift,
 	comparison_kind
 FROM comparison_state
 ORDER BY path`
@@ -651,7 +667,9 @@ ORDER BY path`
 			WHEN comparison_kind = 'remote_move_source' THEN 'remote_move'
 			WHEN comparison_kind = 'remote_move_dest' THEN 'remote_move'
 			WHEN comparison_kind = 'local_only_create' AND item_type = 'folder' THEN 'folder_create_remote'
-			WHEN comparison_kind = 'local_only_create' THEN 'upload'
+			-- A root-typed entry is no file to transfer; no observer records
+			-- one as new, and it is left unclassified, which planning refuses.
+			WHEN comparison_kind = 'local_only_create' AND item_type = 'file' THEN 'upload'
 			-- The local side moved this item too; its local move wins and
 			-- carries the item, so the remote copy is not a new download.
 			WHEN comparison_kind = 'remote_move_shadowed' THEN 'noop'
@@ -661,7 +679,7 @@ ORDER BY path`
 			-- followed_local_ancestor_deletes).
 			WHEN comparison_kind = 'delete_awaits_ancestor_move' THEN 'noop'
 			WHEN comparison_kind = 'remote_only_create' AND item_type = 'folder' THEN 'folder_create_local'
-			WHEN comparison_kind = 'remote_only_create' THEN 'download'
+			WHEN comparison_kind = 'remote_only_create' AND item_type = 'file' THEN 'download'
 			WHEN comparison_kind = 'create_equal' THEN 'baseline_update'
 			WHEN comparison_kind = 'create_conflict' THEN 'conflict_create_create'
 			-- Nothing transfers, but the baseline must learn the new metadata:
@@ -792,6 +810,7 @@ func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 		baselinePresent, localPresent              int
 		remotePresent, localChanged, remoteChanged int
 		currentEqual                               int
+		sideTypes                                  [3]string
 	)
 	err := rows.Scan(
 		&row.Path,
@@ -809,10 +828,29 @@ func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 		&row.LocalMoveCandidateCount,
 		&row.RemoteMoveTarget,
 		&row.RemoteMoveSource,
+		&sideTypes[0],
+		&sideTypes[1],
+		&sideTypes[2],
+		&row.LocalItemReplaced,
+		&row.RemoteItemReplaced,
+		&row.DeleteAwaitsAncestorMove,
+		&row.LocalCopyAwaitsAncestorMove,
+		&row.RemoteCreateAwaitsAncestorMove,
+		&row.KeptLocalFolder,
+		&row.RemoteMoveShadowed,
+		&row.LocalSubtreeChanged,
+		&row.RemoteSubtreeChanged,
+		&row.MetadataDrift,
 		&comparison,
 	)
 	if err != nil {
 		return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("sync: scanning comparison state row: %w", err)
+	}
+	for i, target := range []*syncdomain.SideType{&row.BaselineType, &row.LocalType, &row.RemoteType} {
+		*target, err = syncdomain.ParseSideType(sideTypes[i])
+		if err != nil {
+			return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("sync: reading the side types of %q: %w", row.Path, err)
+		}
 	}
 	if itemType.Valid {
 		row.ItemType, err = syncdomain.ParseItemType(itemType.String)
@@ -945,6 +983,37 @@ func QueryPlannerDecisionInputs(
 	}
 
 	return inputs, nil
+}
+
+// ErrDecisionDisagreement reports a path the Go decision table
+// (syncdomain.Decide) decides differently from the SQL one.
+var ErrDecisionDisagreement = errors.New("sync: the Go and SQL decision tables disagree")
+
+// CheckDecisionsAgree holds every row the SQL decision table classified to
+// the Go one: Decide over the row's decision state must yield the
+// comparison and reconciliation kinds the queries returned. The two row
+// sets come from one comparison chain over the same tables, so they hold
+// the same paths in the same order.
+func CheckDecisionsAgree(comparisons []syncdomain.SQLiteComparisonRow, reconciliations []syncdomain.SQLiteReconciliationRow) error {
+	if len(comparisons) != len(reconciliations) {
+		return fmt.Errorf("%w: %d comparison rows, %d reconciliation rows", ErrDecisionDisagreement, len(comparisons), len(reconciliations))
+	}
+	for i := range comparisons {
+		comparison, reconciliation := &comparisons[i], &reconciliations[i]
+		if comparison.Path != reconciliation.Path {
+			return fmt.Errorf("%w: row %d is %q in one query and %q in the other",
+				ErrDecisionDisagreement, i, comparison.Path, reconciliation.Path)
+		}
+		state := comparison.DecisionState()
+		got := syncdomain.Decide(state)
+		if got.Comparison != comparison.ComparisonKind || got.Comparison != reconciliation.ComparisonKind ||
+			got.Reconciliation != reconciliation.ReconciliationKind {
+			return fmt.Errorf("%w at %q: SQL %s/%s, Go %s/%s for %+v", ErrDecisionDisagreement, comparison.Path,
+				reconciliation.ComparisonKind, reconciliation.ReconciliationKind, got.Comparison, got.Reconciliation, state)
+		}
+	}
+
+	return nil
 }
 
 func SqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {
