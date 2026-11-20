@@ -2,8 +2,6 @@
 
 GOVERNS: internal/sync/syncdomain/actions.go, internal/sync/syncdomain/condition_keys.go, internal/sync/syncdomain/content_filter.go, internal/sync/syncdomain/core_types.go, internal/sync/syncdomain/crash_points.go, internal/sync/syncdomain/domain_clock.go, internal/sync/syncdomain/domain_debug_events.go, internal/sync/syncdomain/domain_delete_safety.go, internal/sync/syncdomain/domain_graph_error.go, internal/sync/syncdomain/domain_io_seams.go, internal/sync/syncdomain/domain_observation_mode.go, internal/sync/syncdomain/domain_path_kind.go, internal/sync/syncdomain/domain_runtime_decision.go, internal/sync/syncdomain/domain_worker.go, internal/sync/syncdomain/enums.go, internal/sync/syncdomain/errors.go, internal/sync/syncdomain/issue_types.go, internal/sync/syncdomain/permission_capability.go, internal/sync/syncdomain/retry_work_key.go, internal/sync/syncdomain/scope_block.go, internal/sync/syncdomain/scope_key.go, internal/sync/syncdomain/scope_semantics.go, internal/sync/syncdomain/tracked_action.go, internal/sync/syncdomain/types.go, internal/sync/syncdomain/worker_result.go, internal/sync/syncdomain/domain_baseline_mutation.go, internal/sync/syncdomain/domain_conflict_stem.go, internal/sync/syncdomain/domain_file_change_time.go, internal/sync/syncdomain/domain_item_type.go, internal/sync/syncdomain/domain_local_hash_cache.go, internal/sync/syncdomain/domain_observation_findings.go, internal/sync/syncdomain/domain_observation_state.go, internal/sync/syncdomain/domain_pending_create.go, internal/sync/syncdomain/domain_poll_interval.go, internal/sync/syncdomain/domain_remote_item.go, internal/sync/syncdomain/domain_sqlite_rows.go, internal/sync/syncdomain/domain_stored_time.go, internal/sync/syncdomain/domain_sync_root_identity.go, internal/sync/syncdomain/domain_row_types.go, internal/sync/syncdomain/domain_truth_status.go, internal/sync/syncdomain/domain_compare_kinds.go, internal/sync/syncdomain/domain_local_rules.go, internal/sync/syncdomain/doc.go
 
-LAYER: 0
-
 Implements: R-2.1 [verified], R-2.7 [verified]
 
 ## Overview
@@ -144,9 +142,9 @@ is a deterministic transform that sits *above* the store, not a foundation
 beneath it.
 
 Separating the vocabulary drops planning's inbound coupling to a single symbol
-and makes the family order a strict downward chain, which is what
-`devtool verify layering` enforces. See the layering section in
-[system.md](system.md).
+and makes the order a strict downward chain. Since the split each family is
+a package, and the compiler and depguard enforce the chain. See the layering
+section in [system.md](system.md).
 
 ## Verified By
 

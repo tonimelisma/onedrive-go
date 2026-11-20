@@ -159,7 +159,7 @@ func TestVerifyStepNamesSayWhetherTheyRunGoTest(t *testing.T) {
 	}
 	otherSteps := []verifyStepName{
 		formatStepName, lintStepName, workflowLintStepName, outputBoundariesStepName, testConventionsStepName,
-		specGovernsStepName, layeringStepName, retiredBacklogIDsStepName,
+		specGovernsStepName, retiredBacklogIDsStepName,
 		mutexOwnershipDocsStepName, requirementTraceabilityStepName, buildStepName, hostBuildStepName,
 		taggedVetStepName, coverageStepName, fullE2ECompileStepName, fullE2EDiscoveryStepName,
 	}
