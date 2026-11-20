@@ -316,7 +316,8 @@ func identifierKeys(t *testing.T) []string {
 	return keys
 }
 
-// productGoSources is the text of every non-test Go file under internal.
+// productGoSources is the text of every non-test Go file under internal,
+// the sync tree's test-helper packages left out.
 func productGoSources(t *testing.T) string {
 	t.Helper()
 
@@ -325,7 +326,16 @@ func productGoSources(t *testing.T) string {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if entry.IsDir() {
+			// the sync tree's test-helper packages are test code outside _test.go files
+			if name := filepath.ToSlash(path); strings.HasSuffix(name, "/internal/sync/internal/syncfixture") ||
+				strings.HasSuffix(name, "/internal/sync/internal/syncstoretest") {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		source, readErr := readProductSource(path)
@@ -372,7 +382,7 @@ func TestIdentifierKeysFollowTheProductsKeys(t *testing.T) {
 func TestThrottleKeyMaskFollowsTheProductsScopeKey(t *testing.T) {
 	t.Parallel()
 
-	file := parseProductFile(t, "internal", "sync", "scope_key.go")
+	file := parseProductFile(t, "internal", "sync", "syncdomain", "scope_key.go")
 	target := productConstant(t, file, "throttleDrivePrefix") + inventedPositionDrive
 	roles := plantedSuiteRoles()
 	assertMasked(t, roles, "a throttle scope key",
