@@ -44,7 +44,6 @@ func classifiedFolderModes() map[string]folderKind {
 	return map[string]folderKind{
 		userTreeModeHome:                          userTreeFolder,
 		"internal/cli.syncRootDirPerms":           syncRootFolder,
-		"internal/cli.tokenDirPerms":              managedStateFolder,
 		"internal/config.configDirPermissions":    managedStateFolder,
 		"internal/driveops.sessionDirPerms":       managedStateFolder,
 		"internal/localtrash.entryDirPerm":        managedStateFolder,

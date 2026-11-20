@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
@@ -190,7 +188,8 @@ func runSyncDaemonWithFactory(
 	}
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
-	runtime := driveops.NewSessionRuntime(holder, graph.UserAgent(version), logger)
+	cc := cliContextFrom(ctx)
+	runtime := cc.newSessionRuntime(holder, logger)
 
 	debugEventHook, closeDebugEvents, err := openSyncDebugEventHookFromEnv(logger)
 	if err != nil {
@@ -211,7 +210,6 @@ func runSyncDaemonWithFactory(
 		}()
 	}
 
-	cc := cliContextFrom(ctx)
 	orch := orchestratorFactory(&multisync.OrchestratorConfig{
 		Holder:                 holder,
 		StandaloneMounts:       standaloneSelection.Mounts,

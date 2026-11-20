@@ -1,6 +1,6 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_persist.go, internal/graph/auth_refresh.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/lock.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified], R-6.8.27 [verified], R-6.7.30 [verified], R-6.7.35 [verified], R-6.8.20 [verified]
 
@@ -108,8 +108,8 @@ Two OAuth2 flows:
 Token refresh is automatic for normal token sources. Tokens are stored as JSON
 files via `tokenfile` package (strict JSON — rejects unknown fields).
 `tokenfile.Load` returns `ErrNotFound` sentinel (never nil,nil). Dry-run sync
-uses the same token source as live sync; silent refresh and `OnTokenChange`
-token-file persistence remain part of normal authenticated Graph access.
+uses the same token source as live sync; silent refresh and the token-file
+write after it remain part of normal authenticated Graph access.
 The device-code boundary intentionally stays narrow: production calls
 `oauth2.Config.DeviceAuth` and `DeviceAccessToken` directly, while unit tests
 can inject those two calls independently to cover cancel/save/error behavior
@@ -151,9 +151,9 @@ and then fails with `refreshing access token: <context.Cause>`, which
 callers, and when nobody waits any more it still ends, by the sign-in
 client's `Timeout`, and its outcome serves the next caller. A failed refresh
 keeps the old token, so the next caller refreshes again. The token endpoint's
-answer is saved by the oauth2 config's `OnTokenChange` inside the refresh,
-before any caller is given the token, so only a refresh that finished with a
-token writes the token file. A panic in the refresh (oauth2 or the sign-in
+answer is written to the token file by the refresh goroutine before any
+caller is given the token, so only a refresh that finished with a token
+writes the token file (see the next paragraph). A panic in the refresh (oauth2 or the sign-in
 transport) is recovered at that goroutine's boundary through
 `panicguard.Recovered` ("Internal error while refreshing the sign-in", logged
 once at Error with its stack), and its callers get the error, which wraps
@@ -166,6 +166,48 @@ refreshes again (R-6.3.10, `TestTokenSource_ARefreshEndsWithTheCallersContext`,
 (`status`) therefore covers the refresh, and a cleanup that runs on a context
 detached from a canceled command (`replaceDestination`'s restore) can still
 refresh.
+
+**A refreshed sign-in that cannot be saved is an error its owner hears
+(R-6.8.26).** The build uses the upstream `golang.org/x/oauth2` module; every
+token a refresh produces, the expiry-driven one of `Token(ctx)` and the one a
+401 forces through `ForceRefresh(ctx)` alike, is written by one saver per
+token file (`tokenSaver`, `auth_persist.go`) on the bridge's refresh
+goroutine. The saver writes atomically through `tokenfile.Save`. Which
+sign-in is newer is decided by lineage, never by expiry, because access-token
+lifetimes vary: the sign-in service answers a refresh token with its
+successor and refuses the one it replaced, so a token is newer than the file
+exactly when it descends from the refresh token the file holds. The saver
+remembers that refresh token, and for an unsaved chain the one the file held
+when the chain began; it writes a token only while the file still holds the
+start of its chain, also when the new token expires first (a forced refresh
+soon after a refresh). A file holding anything else was written by another
+process and is newer: the unsaved chain is dropped, and a retry never writes
+over it (`TestForceRefresh_ShorterLifetimeIsStillSaved`,
+`TestPersistingTokenSource_RetryDoesNotOverwriteANewerFile`). A write that fails does not fail the refresh, since the token is in
+memory and the requests go on; the newest token stays pending and is written
+again at the next token use, and a write that succeeds clears the failure and
+logs the one Info line `refreshed sign-in` with the file. The failure is the
+bridge's `SaveError()`, read through `graph.TokenSaveError(ts)` (a source
+without it, a test fake, reports none); it wraps the exported
+`graph.ErrTokenNotSaved` and reads "couldn't save the refreshed sign-in to
+<file>; the next run may ask you to sign in again: <cause>", with no token
+material. `driveops.SessionRuntime.TokenSaveFailures()` lists the failures of
+the sources the runtime holds, by file. A one-shot command hears it once its
+work is done: main asks every runtime the command built
+(`CLIContext.newSessionRuntime`) and the failure becomes the command's error,
+exit status 1, or joins a failure the command already had
+(`withTokenSaveFailure`). A watch reads it on its periodic reconcile tick:
+one Error per distinct failure, the systemd status names the file while it is
+set, and the drives keep syncing; a watch stopped while a save is failing
+exits 1 instead of 0 (`TestPersistingTokenSource_SavesARefreshedToken`,
+`TestPersistingTokenSource_SaveFailureIsReportedAndRetried`,
+`TestPersistingTokenSource_NeverWritesAnOlderToken`,
+`TestTokenBridge_ForceRefreshIsSaved`,
+`TestTokenBridge_TokenUnderACallersDeadlineIsSaved`,
+`TestSessionRuntime_TokenSaveErrors`,
+`TestCLIContext_TokenSaveFailureIsTheCommandsError`,
+`TestRunWatch_UnsavedSignInIsLoggedOncePerDistinctFailure`,
+`TestSyncNotifier_StatusNamesAnUnsavedSignInWhileItIsSet`).
 
 **A failed sign-in request is marked as the sign-in service's (R-6.6.22).**
 Every request to the identity platform that fails, the token refresh, the
@@ -776,6 +818,72 @@ and it carries the User-Agent (R-6.8.17, R-6.8.18,
 
 Pre-authenticated requests (upload chunks, downloads) go through `httpClient.Do()` directly. The `doPreAuth` helper sets `req.GetBody` using the `makeReq` factory so `RetryTransport` can rewind request bodies between attempts (e.g., `io.SectionReader` for upload chunks). It also attaches a request-scoped redacted log target such as `preauth:upload chunk`, so transport retry logs never emit the pre-authenticated URL itself. Transport failures come back from `http.Client.Do` as `*url.Error`, whose text embeds the full request URL; `dispatchRequest` scrubs it to scheme and host (`redactURLError`) before the error is wrapped, so surfaced error text and logs never carry the credential either. Implements: R-6.8.17 [verified]
 
+## Refresh Across Processes
+
+The sign-in file is the one authority between processes that use the same
+account (a watch and a one-shot command, two commands): each holds its own
+token in memory, and the sign-in service replaces the refresh token on a
+refresh and refuses the replaced one, so a process that redeemed its stale
+copy used to be told "sign-in required" (R-6.8.30). Every refresh
+(`refreshShared`, `auth_refresh.go`) therefore runs under the file's lock,
+`tokenfile.AcquireLock` (`<token>.json.lock` beside it, built on the shared
+`filelock` package; token discovery takes only `.json` names):
+
+1. Take the lock, waiting no longer than `signInLockWait` (90 s) or what is
+   left of the starting caller's deadline, whichever is shorter. The bound is
+   longer than the longest sign-in request (the auth client's 60 s
+   `Timeout`; the two constants name each other), so a holder stuck in its
+   request releases before a waiter gives up. A wait that ends fails with
+   `tokenfile.ErrLockWaitEnded`, "another onedrive-go process is refreshing
+   the sign-in", never "sign-in required". A filesystem that cannot lock
+   (`tokenfile.ErrLockUnsupported`) logs one Warn per token source and the
+   refresh goes on without it.
+2. Read the file. No file means the account was signed out: "sign-in
+   required" (`ErrNotLoggedIn`), no request, nothing written, and a pending
+   failed save is dropped, so a running watch never undoes a sign-out.
+3. A file that holds neither the refresh token in memory nor the start of
+   this source's unsaved chain (the saver's lineage rule) was written by
+   another process. Its access token is used, with no request, while it is
+   valid; for a refresh a 401 forced, whenever it is not the rejected one.
+   The one Info line is "found a newer sign-in in the file and used it".
+   Otherwise its refresh token is the one redeemed. A file that is this
+   source's, or the start of its unsaved chain, has the refresh token in
+   memory redeemed, so a sign-in whose saves keep failing stays signed in
+   (`TestRefresh_PersistentSaveFailureStaysSignedIn`).
+4. Redeem it and save the answer under the same lock (`tokenSaver`, which
+   keeps a failed save pending and retries it under the lock at the next
+   token use, only while the file exists and still holds the start of the
+   chain).
+5. A refresh token the service refuses (`invalid_grant`) makes the file be
+   read once more; a different refresh token there (a writer that took no
+   lock, or a filesystem without locks) is redeemed, once; otherwise the
+   refusal stands.
+
+Login installs its sign-in through `tokenfile.Install` (an atomic write with
+the directory synced, then the pending file removed) and undoes it on a
+failed enrollment through `tokenfile.WithLock`; logout deletes through
+`graph.Logout` under the same lock, tells a running watch (whose reload
+drops its token sources), and a purge also removes the lock file. That the
+sign-in service refuses a replaced refresh token is the behaviour of the
+local test endpoint; it is not tested against the live service, and the
+client does not depend on the answer: with a service that accepts it, the
+lock only saves a request
+(`TestRefresh_TwoSourcesOneFile_SecondAdoptsFirstsToken`,
+`TestRefresh_RotatedTokenOnDiskIsUsedInsteadOfStaleMemory`,
+`TestRefresh_InvalidGrantRereadsAndRetriesOnce`,
+`TestRefresh_MissingFileIsSignInRequiredAndFileStaysAbsent`,
+`TestForceRefresh_AdoptsNewerTokenFromDisk`,
+`TestRefresh_LockWaitIsBounded`,
+`TestRefresh_LockWaitEndsWithTheCallersDeadline`,
+`TestAcquireLock_ExcludesAnotherHandleUntilReleased`,
+`TestAcquireLock_ExcludesAnotherProcess`,
+`TestDiscoverCIDFiles_SkipsTheSignInLockFile`,
+`TestLogin_InstallsTokenUnderLock`, `TestLogout_NotifiesDaemon`). A failed
+enrollment's undo puts back the sign-in the install replaced, read under the
+install's lock, and waits for the lock even when the login was canceled
+(`TestLogin_UndoRestoresTheSignInTheInstallReplaced`,
+`TestInstall_UndoAfterTheLoginEndedWaitsForTheLock`).
+
 ## 401 Token Refresh
 
 Implements: R-6.8.14 [verified], R-6.6.34 [verified]
@@ -881,17 +989,15 @@ The graph package intentionally keeps runtime ownership narrow:
 - Browser auth owns one callback server goroutine plus one result channel per login attempt. `doAuthCodeLogin` starts them, waits for the callback, and shuts them down before returning.
 - The token source (`tokenBridge`) owns the cached token and at most one refresh goroutine at a time. The goroutine is started by the first caller that needs a refresh, runs detached from every caller's cancellation, and ends with its one token-endpoint request, which the sign-in client's `Timeout` bounds; its boundary hands a panic to `panicguard.Recovered` and gives the error to its waiters. `Client` consumes the source synchronously and starts no goroutine of its own.
 - The sole raw `http.Client.Do` production boundary is `client_preauth.go`, where validated pre-authenticated URLs are dispatched.
-- `driveops.SessionRuntime` owns the long-lived HTTP clients, the auth client its default token sources refresh through, one token source per sign-in file, and any caller-scoped shared throttle gates. It has no background goroutines and no package-level mutable state; the runtime instance is the owner.
+- `driveops.SessionRuntime` owns the long-lived HTTP clients, the auth client its default token sources refresh through, one token source per sign-in file, and any caller-scoped shared throttle gates; it lists the save failures of the sources it holds (`TokenSaveFailures`, R-6.8.26).
+- Each token source owns the one writer of its sign-in file (`tokenSaver`): its mutex orders the writes, so it is held across a write, never across a refresh request. It has no background goroutines and no package-level mutable state; the runtime instance is the owner.
 - Account-level calls made before or without a drive session (identity probes, drive and shared-item discovery, SharePoint search, shared-drive naming, share-URL resolution) get their client from `SessionRuntime.BootstrapClient(tokenPath)`: that sign-in file's own bootstrap metadata client (`BootstrapMeta(tokenPath)`, so a throttle deadline is the throttled sign-in's), the runtime's base URL and the runtime's token source for that file, the one the drive sessions use. The CLI builds no token source of its own; a source scan in `internal/cli` keeps it so (R-6.8.27, `TestCLIBootstrapClientsUseTheSessionRuntime`). The one direct construction is login, which holds the source the sign-in just produced. No session constructor takes a context: a source keeps none and refreshes under each request's own, so one client serves requests with any deadline.
 
 ## Design Constraints
 
 - `graph/` exposes concrete types, not interfaces (`graph.Client`, `graph.Item`)
 - `graph/` does NOT import `config/` — callers pass token paths directly
-- `tokenfile/` imports no internal package but `fsroot` (stdlib, oauth2 and the rooted managed-state capability), and the `tokenfile-only-fsroot` depguard rule holds it to that
-- Token refresh uses a forked `golang.org/x/oauth2` (`github.com/tonimelisma/oauth2`, branch `on-token-change`) with `Config.OnTokenChange` callback for persistence. Tracks upstream proposal `golang/go#77502`.
-  - Two consequences are accepted deliberately and must be revisited when the upstream proposal resolves. A `replace` directive does not apply transitively, so this module cannot be consumed as a library by another module without that consumer adding the same `replace`; the product ships as a binary, so this costs nothing today. And the build depends on a personal repository remaining available, which is a single point of failure no amount of pinning removes.
-  - The fork is credential-handling code that will not receive upstream security advisories automatically, so `govulncheck` running on every CI verify is the compensating control, not an optional extra. Re-evaluate the fork whenever the upstream proposal moves.
+- `tokenfile/` imports no internal package but `fsroot` (stdlib, oauth2 and the rooted managed-state capability) and `filelock` (its sign-in lock), and the `tokenfile-only-fsroot-and-filelock` depguard rule holds it to that
 - Pre-authenticated URLs (`@microsoft.graph.downloadUrl`, upload session URLs) bypass the Graph API — use `httpClient.Do(req)` directly, no base URL prefix, no auth headers. Never log these URLs.
 - The authenticated-success hook is only a proof signal. It must remain optional, per-client, and side-effect free from the graph package's perspective. Graph owns when the hook fires; callers own any resulting state repair.
 - `graphtransport` is the single home for Graph-facing HTTP transport profile construction. Metadata and transfer clients use transport-level deadlines with `Timeout = 0`; no Graph-facing client uses `http.Client.Timeout`. The auth client (`AuthClient`) is not Graph-facing: it talks to the identity platform, whose answers are small, so it sets a 60 s `http.Client.Timeout` on top of a 30 s response-header deadline (R-6.8.27).

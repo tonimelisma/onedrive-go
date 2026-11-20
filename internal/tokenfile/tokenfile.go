@@ -2,8 +2,8 @@
 // files store a pure OAuth2 token — no metadata. Both config/ and graph/
 // import it, which avoids duplication and breaks the config→graph import
 // cycle. It imports no internal package but fsroot, through which every token
-// file is read and written, and the tokenfile-only-fsroot depguard rule holds
-// it to that.
+// file is read and written, and filelock, through which it is locked; the
+// tokenfile-only-fsroot-and-filelock depguard rule holds it to that.
 package tokenfile
 
 import (

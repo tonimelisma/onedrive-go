@@ -463,7 +463,15 @@ failures that no longer appear, except for drives waiting out a restart
 backoff, which make no attempt and so produce no result. The same memory keeps
 a persistently failing shortcut refresh or removed-shortcut cleanup at one
 WARN per distinct error; the cleanup failure also stays visible in `status`
-through the shortcut cleanup diagnostics.
+through the shortcut cleanup diagnostics. The reconcile tick also asks the
+session runtime for refreshed sign-ins its token sources could not save
+(`reportUnsavedSignIns`, R-6.8.26): each distinct failure is one ERROR,
+"Couldn't save a refreshed sign-in; still syncing, and trying again at the
+next request", with the file and the cause; a change in the set of failing
+files is a `WatchSignInSaveChanged` lifecycle event, which the CLI's status
+line follows; the drives keep syncing, and the sources retry the write at
+their next token use
+(`TestRunWatch_UnsavedSignInIsLoggedOncePerDistinctFailure`).
 
 A runner that exits with an error is not restarted in the same pass. Its
 restart waits 5 s, doubling per consecutive failure up to 5 min; a runner that

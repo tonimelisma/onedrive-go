@@ -53,7 +53,7 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 		return withPendingTokenRemoved(fmt.Errorf("cannot determine token path for drive %q", canonicalID.String()), tempPath)
 	}
 
-	restoreToken, err := installLoginToken(tempPath, finalTokenPath)
+	restoreToken, err := installLoginToken(ctx, tempPath, finalTokenPath)
 	if err != nil {
 		return withPendingTokenRemoved(err, tempPath)
 	}
@@ -116,28 +116,19 @@ type loginJSONOutput struct {
 	Completed    bool   `json:"completed"`
 }
 
-// installLoginToken moves the pending token to its final path and returns
-// what undoes that for a login whose enrollment then fails: the token that
-// was there before is written back, or the new one removed when there was
-// none. Config and catalog need no undoing; config.AddDrive leaves them as
-// they were when it fails.
-func installLoginToken(pendingPath, tokenPath string) (func() error, error) {
-	previous, hadPrevious, err := readManagedFileIfExists(tokenPath)
+// installLoginToken moves the pending token to its final path under the
+// sign-in file's lock and returns what undoes that for a login whose
+// enrollment then fails, under the same lock: the token the install replaced
+// (read under its lock) is written back, or the new one removed when there was
+// none (tokenfile.Install). Config and catalog need no undoing;
+// config.AddDrive leaves them as they were when it fails.
+func installLoginToken(ctx context.Context, pendingPath, tokenPath string) (func() error, error) {
+	undo, err := tokenfile.Install(ctx, pendingPath, tokenPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading the previous token: %w", err)
+		return nil, fmt.Errorf("installing the token: %w", err)
 	}
 
-	if moveErr := moveToken(pendingPath, tokenPath); moveErr != nil {
-		return nil, moveErr
-	}
-
-	return func() error {
-		if !hadPrevious {
-			return removePathIfExists(tokenPath)
-		}
-
-		return writeManagedFile(tokenPath, previous, tokenfile.FilePerms, tokenfile.DirPerms, ".token-*.tmp")
-	}, nil
+	return undo, nil
 }
 
 // printLoginResult prints what the login did: the welcome for a new account,

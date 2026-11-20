@@ -36,7 +36,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-// Fork adds Config.OnTokenChange callback for token persistence on refresh.
-// Tracks upstream golang/oauth2. Replace until upstream proposal golang/go#77502 lands.
-replace golang.org/x/oauth2 => github.com/tonimelisma/oauth2 v0.0.0-20260209071456-249baba404ab

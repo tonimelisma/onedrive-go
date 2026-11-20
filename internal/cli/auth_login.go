@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,16 +16,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
 // pendingTokenFile is the filename for the temporary token saved during login
 // before the canonical ID is known. This solves the chicken-and-egg problem:
 // we need a token to call /me, but the token filename depends on /me results.
 const pendingTokenFile = ".token-pending.json"
-
-// tokenDirPerms is the permission mode for token directories (owner only).
-const tokenDirPerms = 0o700
 
 // graphDriveTypeDocumentLibrary is the Graph API drive type for SharePoint libraries.
 const graphDriveTypeDocumentLibrary = "documentLibrary"
@@ -277,31 +272,6 @@ func discoverAccount(
 	logger.Info("constructed canonical ID", "canonical_id", cid.String())
 
 	return cid, user, orgName, primaryDriveID, nil
-}
-
-// moveToken renames the pending token file to its final canonical path.
-// Creates the destination directory if needed.
-func moveToken(src, dst string) error {
-	dir := filepath.Dir(dst)
-	if err := localpath.MkdirAll(dir, tokenDirPerms); err != nil {
-		baseErr := fmt.Errorf("creating token directory: %w", err)
-		if cleanupErr := removePathIfExists(src); cleanupErr != nil {
-			return errors.Join(baseErr, cleanupErr)
-		}
-
-		return baseErr
-	}
-
-	if err := localpath.Rename(src, dst); err != nil {
-		baseErr := fmt.Errorf("moving token to final path: %w", err)
-		if cleanupErr := removePathIfExists(src); cleanupErr != nil {
-			return errors.Join(baseErr, cleanupErr)
-		}
-
-		return baseErr
-	}
-
-	return nil
 }
 
 // printLoginSuccess prints the user-facing login output. Format differs

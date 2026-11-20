@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/filelock"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
@@ -47,7 +47,7 @@ var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 // lock one after the other. Nothing takes the catalog lock and then the
 // config lock, and nothing that holds either takes the email change lock.
 type configLocker struct {
-	flock        func(fd int, how int) error
+	flock        filelock.Flock
 	sleep        func(time.Duration)
 	timeout      time.Duration
 	pollInterval time.Duration
@@ -55,7 +55,6 @@ type configLocker struct {
 
 func defaultConfigLocker() configLocker {
 	return configLocker{
-		flock:        syscall.Flock,
 		sleep:        time.Sleep,
 		timeout:      configLockTimeout,
 		pollInterval: configLockPollInterval,
@@ -105,7 +104,7 @@ func (l configLocker) withMutationLock(path string, createDir bool, fn func() er
 		return lockErr
 	}
 	defer func() {
-		unlockErr := l.flock(fd, syscall.LOCK_UN)
+		unlockErr := filelock.Unlock(l.flock, fd)
 		if err == nil && unlockErr != nil {
 			err = fmt.Errorf("unlocking %s: %w", dir, unlockErr)
 		}
@@ -121,12 +120,12 @@ func (l configLocker) withMutationLock(path string, createDir bool, fn func() er
 func (l configLocker) acquire(fd int, dir string) error {
 	maxWaits := int(l.timeout / l.pollInterval)
 	for waits := 0; ; waits++ {
-		err := l.flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+		locked, err := filelock.TryLock(l.flock, fd)
 		switch {
-		case err == nil:
-			return nil
-		case !errors.Is(err, syscall.EWOULDBLOCK):
+		case err != nil:
 			return fmt.Errorf("locking %s: %w", dir, err)
+		case locked:
+			return nil
 		case waits >= maxWaits:
 			return fmt.Errorf("%s is %w: it stayed locked for %s; let the other onedrive-go command finish, then try again",
 				dir, ErrConfigLocked, l.timeout)

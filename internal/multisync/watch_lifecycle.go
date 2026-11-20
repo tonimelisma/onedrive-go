@@ -3,8 +3,10 @@ package multisync
 import "sort"
 
 // WatchLifecyclePhase is one transition of a running watch, reported so the
-// CLI can tell a service manager (sd_notify READY/RELOADING/STOPPING).
-type WatchLifecyclePhase int
+// CLI can tell a service manager (sd_notify READY/RELOADING/STOPPING). It and
+// ReloadOutcome are bytes so WatchLifecycleEvent, passed by value to the hook,
+// stays small.
+type WatchLifecyclePhase uint8
 
 const (
 	// WatchReady: startup finished and every drive that could start is
@@ -18,12 +20,16 @@ const (
 	WatchReloaded
 	// WatchStopping: the watch loop is shutting down.
 	WatchStopping
+	// WatchSignInSaveChanged: the set of sign-in files whose refreshed
+	// sign-in could not be saved changed; UnsavedSignIns is the new set,
+	// empty once every save succeeded.
+	WatchSignInSaveChanged
 )
 
 // ReloadOutcome is what a finished reload did with the config. A consumer
 // switches on it rather than inferring the outcome from Err, so a new kind of
 // outcome cannot be reported as one it is not.
-type ReloadOutcome int
+type ReloadOutcome uint8
 
 const (
 	// ReloadApplied: the config was applied; SyncRoots, Skipped and Paused
@@ -52,6 +58,9 @@ type WatchLifecycleEvent struct {
 	Paused []MountStartupResult
 	// Err is the reason of a Reloaded that kept the previous settings.
 	Err error
+	// UnsavedSignIns are the sign-in files whose refreshed sign-in could not
+	// be saved, sorted, on WatchSignInSaveChanged only.
+	UnsavedSignIns []string
 }
 
 // describesDrives reports whether the event carries the drive set: Ready,

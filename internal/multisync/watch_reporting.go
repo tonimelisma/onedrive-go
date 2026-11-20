@@ -1,8 +1,10 @@
 package multisync
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -35,8 +37,12 @@ type watchReportState struct {
 	// announcedStartFailures maps a startup-result key to the fingerprint
 	// (status plus error text) last passed to StartWarning.
 	announcedStartFailures map[string]string
-	// changeWarnings maps a warning key to the error text last logged at WARN.
+	// changeWarnings maps a warning key to the error text last logged at
+	// WARN or ERROR (logOnChange).
 	changeWarnings map[string]string
+	// unsavedSignIns are the sign-in files whose refreshed sign-in the last
+	// tick found unsaved, as last told to WatchLifecycle.
+	unsavedSignIns []string
 	// restarts holds backoff state for runners that exited with an error.
 	restarts map[mountID]*runnerRestartState
 }
@@ -159,6 +165,12 @@ func startupResultFingerprint(result *MountStartupResult) string {
 // when the error text changes; repeats of the same failure go to DEBUG. Call
 // clearWarnOnChange when the condition clears so a recurrence is reported.
 func (o *Orchestrator) warnOnChange(key string, message string, err error) {
+	o.logOnChange(o.logger.Warn, key, message, err)
+}
+
+// logOnChange is warnOnChange logging through logAt (the logger's Warn or
+// Error) the first time and when the error text changes.
+func (o *Orchestrator) logOnChange(logAt func(msg string, args ...any), key string, message string, err error) {
 	reports := o.watchReports()
 	text := err.Error()
 
@@ -167,11 +179,53 @@ func (o *Orchestrator) warnOnChange(key string, message string, err error) {
 		return
 	}
 	reports.changeWarnings[key] = text
-	o.logger.Warn(message, slog.Any("error", err))
+	logAt(message, slog.Any("error", err))
 }
 
 func (o *Orchestrator) clearWarnOnChange(key string) {
 	delete(o.watchReports().changeWarnings, key)
+}
+
+// tokenSaveReportKey is the logOnChange key of the refreshed sign-ins the
+// watch could not save.
+const tokenSaveReportKey = "token-save"
+
+// unsavedSignInMessage is the ERROR line of a refreshed sign-in the watch
+// could not save; the error names each file and its cause.
+const unsavedSignInMessage = "Couldn't save a refreshed sign-in; still syncing, and trying again at the next request"
+
+// reportUnsavedSignIns runs on the watch's periodic tick. A refreshed sign-in
+// a token source could not write to its file does not stop the watch, whose
+// requests use the token in memory, but the next start may need a new
+// sign-in (R-6.8.26). Each distinct failure is logged once at ERROR, the
+// service status names the files for as long as any is failing
+// (WatchSignInSaveChanged), and the watch syncs on; the sources retry the
+// write at their next token use.
+func (o *Orchestrator) reportUnsavedSignIns() {
+	if o.cfg == nil || o.cfg.Runtime == nil {
+		return
+	}
+
+	failures := o.cfg.Runtime.TokenSaveFailures()
+	paths := make([]string, 0, len(failures))
+	errs := make([]error, 0, len(failures))
+	for i := range failures {
+		paths = append(paths, failures[i].TokenPath)
+		errs = append(errs, failures[i].Err)
+	}
+
+	if len(errs) == 0 {
+		o.clearWarnOnChange(tokenSaveReportKey)
+	} else {
+		o.logOnChange(o.logger.Error, tokenSaveReportKey, unsavedSignInMessage, errors.Join(errs...))
+	}
+
+	reports := o.watchReports()
+	if slices.Equal(reports.unsavedSignIns, paths) {
+		return
+	}
+	reports.unsavedSignIns = paths
+	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchSignInSaveChanged, UnsavedSignIns: paths}, nil, nil)
 }
 
 // recordRunnerFailure updates a runner's backoff after it exited with err and

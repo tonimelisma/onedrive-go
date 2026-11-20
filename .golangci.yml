@@ -151,6 +151,7 @@ linters:
             - "**/internal/authstate/*.go"
             - "**/internal/driveid/*.go"
             - "**/internal/errclass/*.go"
+            - "**/internal/filelock/*.go"
             - "**/internal/localpath/*.go"
             - "**/internal/loglevel/*.go"
             - "**/internal/namekey/*.go"
@@ -165,16 +166,17 @@ linters:
         # mode an import is refused when a deny prefix matches it, unless an
         # allow entry matches it with a longer prefix, so the exact allow below
         # wins over the internal/ deny for that one package alone.
-        tokenfile-only-fsroot:
+        tokenfile-only-fsroot-and-filelock:
           list-mode: lax
           files:
             - "**/internal/tokenfile/*.go"
             - "!$test"
           allow:
             - github.com/tonimelisma/onedrive-go/internal/fsroot$
+            - github.com/tonimelisma/onedrive-go/internal/filelock$
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
-              desc: tokenfile imports no internal package but fsroot, through which every token file is read and written
+              desc: tokenfile imports no internal package but fsroot, through which every token file is read and written, and filelock, through which it is locked
         retry-only-perf:
           list-mode: lax
           files:

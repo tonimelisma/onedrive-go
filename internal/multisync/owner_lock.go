@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	gosync "sync"
-	"syscall"
 
+	"github.com/tonimelisma/onedrive-go/internal/filelock"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -49,9 +49,9 @@ func acquireOwnerLock(path, socketPath string) (*ownerLock, error) {
 			return nil, fmt.Errorf("open control lock %s: %w", path, err)
 		}
 
-		if lockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); lockErr != nil {
+		if locked, lockErr := filelock.TryLock(nil, int(file.Fd())); !locked {
 			closeErr := file.Close()
-			if errors.Is(lockErr, syscall.EWOULDBLOCK) {
+			if lockErr == nil {
 				return nil, &ControlSocketInUseError{Path: socketPath}
 			}
 			return nil, errors.Join(fmt.Errorf("lock control lock %s: %w", path, lockErr), closeErr)
