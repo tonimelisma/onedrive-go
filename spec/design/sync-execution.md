@@ -35,6 +35,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 
 | Behavior | Evidence |
 | --- | --- |
+| The executor's and its worker pools' test seams are one `Hooks` value (`executor_test_seams.go`), passed to `NewExecutorConfig`; its zero value hashes with QuickXorHash, keeps the full detached store-access and outcome-commit bounds and makes every crash point a no-op (R-6.10.29). | `TestHooks_ZeroValueIsProduction` |
 | A download replaces an existing local file only when its content hashes to the planned version, or to the baseline's local hash when the plan has no hash, so an unsynced edit that kept size and mtime survives (R-2.2.5). | `TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded` |
 | A remote move whose item already sits at the destination succeeds without a Graph call. | `TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving` |
 | Folder eTag churn from descendant changes neither supersedes a folder move nor conditions it, while a file's eTag mismatch still supersedes. | `TestExecutor_RemoteMove_FolderETagChurnFromChildrenDoesNotSupersede`, `TestExecutor_RemoteMove_FileETagMismatchStillSupersedes`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |

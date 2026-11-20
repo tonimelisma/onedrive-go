@@ -95,7 +95,7 @@ func newTestExecutorConfigWithPathConvergence(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence, Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 
@@ -3279,7 +3279,7 @@ func moveTestFileBaseline(t *testing.T, e *Executor, syncRoot, relPath string) *
 
 	info, err := os.Stat(filepath.Join(syncRoot, relPath))
 	require.NoError(t, err)
-	hash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, relPath))
+	hash, err := e.hashFile(t.Context(), filepath.Join(syncRoot, relPath))
 	require.NoError(t, err)
 	identity, err := e.syncTree.IdentityNoFollow(relPath)
 	require.NoError(t, err)

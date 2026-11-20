@@ -70,7 +70,7 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
 	clock := syncfixture.NewManualClock(time.Now())
 	obs.clock = clock
-	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 	obs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
 	obs.filesystemKind = func(string) (filesystemInfo, error) {
 		return filesystemInfo{kind: "cifs", remote: true}, nil

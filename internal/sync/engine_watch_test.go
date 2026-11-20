@@ -504,7 +504,7 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
 	watcher := syncfixture.NewEnospcWatcher(1)
-	eng.hooks.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
 
@@ -638,7 +638,7 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	clock := syncfixture.NewManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	watcher := newSignalingWatcher()
-	eng.hooks.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
 	refreshTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
@@ -731,7 +731,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	}
 
 	watcher := syncfixture.NewEnospcWatcher(1)
-	eng.hooks.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
 	degradedInterval := syncobserve.LocalWatchHealthySafetyScanInterval

@@ -54,10 +54,6 @@ type WorkerPool struct {
 	// test's dispatch order is also the execution order (D-090).
 	serialize bool
 
-	// outcomeCommitTimeout bounds the detached commit of a completed action's
-	// outcome: OutcomeCommitTimeout, which tests shorten.
-	outcomeCommitTimeout time.Duration
-
 	cancel    context.CancelCauseFunc
 	wg        stdsync.WaitGroup
 	closeOnce stdsync.Once
@@ -90,8 +86,7 @@ func NewWorkerPool(
 		// the number of actions, so workers never block). Watch mode passes
 		// watchCompletionBuf, which the watch loop reads as completions
 		// arrive, so blocking is unlikely under normal load.
-		completions:          make(chan syncdomain.ActionCompletion, planSize),
-		outcomeCommitTimeout: syncdomain.OutcomeCommitTimeout,
+		completions: make(chan syncdomain.ActionCompletion, planSize),
 	}
 }
 
@@ -243,9 +238,9 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *syncdomain.TrackedA
 }
 
 // commitOutcome persists a completed action's baseline mutation detached
-// from the caller's cancellation, bounded by the pool's outcomeCommitTimeout.
+// from the caller's cancellation, bounded by the pool's outcomeCommitBound.
 func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *syncdomain.BaselineMutation) error {
-	return RunDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
+	return RunDetachedStoreAccess(ctx, wp.outcomeCommitBound(), func(commitCtx context.Context) error {
 		return wp.baseline.CommitMutation(commitCtx, mutation)
 	})
 }

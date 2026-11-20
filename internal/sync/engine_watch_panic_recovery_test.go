@@ -90,7 +90,7 @@ func TestRecoverObserverPanic_FullChannelDoesNotBlock(t *testing.T) {
 func TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing(t *testing.T) {
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 
-	eng.hooks.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		panic("watcher factory exploded")
 	}
 

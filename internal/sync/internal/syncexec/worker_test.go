@@ -63,7 +63,7 @@ func newWorkerTestSetup(t *testing.T) (
 	}
 	ul := &syncfixture.WorkerMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil, Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 	return cfg, mgr, syncRoot

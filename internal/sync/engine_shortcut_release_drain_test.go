@@ -212,7 +212,7 @@ func TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook(t *testing
 			drain := newThreeFileRelease(t)
 			var trashed atomic.Int32
 			trashDir := drain.eng.trash.Dir()
-			drain.eng.execCfg.SetCrashHookForTest(func(point string) error {
+			drain.eng.armExecCrash(func(point string) error {
 				if point == syncdomain.CrashPointLocalDeleteTrashed && trashed.Add(1) == tc.trashFailsAfter {
 					return os.Chmod(trashDir, 0o500) //nolint:gosec // the test makes the trash refuse new entries
 				}
@@ -416,7 +416,7 @@ func TestReleaseLocalTree_ARestoreThatFailsStillPutsBackTheRestOfTheBatch(t *tes
 	rewriteBaselineLocalHash(t, eng, releaseFileA)
 	errRestore := errors.New("restore refused")
 	var commits atomic.Int32
-	eng.baseline.SetCrashHookForTest(func(point string) error {
+	eng.armStoreCrash(func(point string) error {
 		// The five rows are forgotten first; the next commit restores the
 		// refused Docs/a.txt (Docs/sub/b.txt left before it).
 		if point == syncdomain.CrashPointCommitOutcome && commits.Add(1) == releaseSyncedRows+1 {

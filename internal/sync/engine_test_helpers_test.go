@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,6 +79,49 @@ type testEngine struct {
 	*Engine
 	runtime *watchRuntime
 	flow    *engineFlow
+	// crash receives the engine's executor and store crash points; nil on
+	// an engine the test harness did not build.
+	crash *crashSwitch
+}
+
+// crashSwitch is a test engine's crash hooks, fixed when the engine is built:
+// it forwards the executor's and the store's crash points to the hook the
+// test armed last, so a test arms a crash after the engine has synced.
+type crashSwitch struct {
+	exec  atomic.Pointer[func(point string) error]
+	store atomic.Pointer[func(point string) error]
+}
+
+func (c *crashSwitch) execAt(point string) error {
+	return reachArmedCrash(c.exec.Load(), point)
+}
+
+func (c *crashSwitch) storeAt(point string) error {
+	return reachArmedCrash(c.store.Load(), point)
+}
+
+func reachArmedCrash(hook *func(point string) error, point string) error {
+	if hook == nil {
+		return nil
+	}
+
+	return (*hook)(point)
+}
+
+// armCrash makes hook the crash hook of both the executor and the store.
+func (te *testEngine) armCrash(hook func(point string) error) {
+	te.armExecCrash(hook)
+	te.armStoreCrash(hook)
+}
+
+// armExecCrash makes hook the executor's crash hook.
+func (te *testEngine) armExecCrash(hook func(point string) error) {
+	te.crash.exec.Store(&hook)
+}
+
+// armStoreCrash makes hook the store's crash hook.
+func (te *testEngine) armStoreCrash(hook func(point string) error) {
+	te.crash.store.Store(&hook)
 }
 
 type enginePathConvergenceStub struct{}
@@ -148,6 +192,9 @@ func newTestEngineInDirWith(
 	t.Helper()
 
 	inputs := newTestEngineInputs(t, mock, tmpDir)
+	crash := &crashSwitch{}
+	inputs.hooks.exec.CrashAt = crash.execAt
+	inputs.hooks.store.CrashAt = crash.storeAt
 	if configure != nil {
 		configure(inputs)
 	}
@@ -159,6 +206,7 @@ func newTestEngineInDirWith(
 	testEng := &testEngine{
 		Engine: eng,
 		flow:   flow,
+		crash:  crash,
 	}
 	seedTestEngineAccount(t, inputs.DataDir, inputs.AccountCanonicalID)
 
@@ -208,51 +256,9 @@ func newTestEngineWithLogger(t *testing.T, mock *syncfixture.EngineMockClient, l
 func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *syncfixture.EngineMockClient, logger *slog.Logger) (*testEngine, string) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
-	dataDir := filepath.Join(tmpDir, "data")
-	dbPath := filepath.Join(tmpDir, "test.db")
-	syncRoot := filepath.Join(tmpDir, "sync")
-
-	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
-	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
-
-	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	accountEmail := "sync-user@example.com"
-	accountCID := testEngineAccountCanonicalID()
-
-	eng, err := newEngine(ctx, &engineInputs{
-		DBPath:             dbPath,
-		SyncRoot:           syncRoot,
-		DataDir:            dataDir,
-		DriveID:            driveID,
-		AccountEmail:       accountEmail,
-		AccountCanonicalID: accountCID,
-		Fetcher:            mock,
-		SocketIOFetcher:    mock,
-		Items:              mock,
-		Downloads:          mock,
-		Uploads:            mock,
-		PathConvergence:    &enginePathConvergenceStub{},
-		FolderDelta:        mock,
-		RecursiveLister:    mock,
-		PermChecker:        mock,
-		Logger:             logger,
+	return newTestEngineInDirWith(t, ctx, mock, t.TempDir(), func(inputs *engineInputs) {
+		inputs.Logger = logger
 	})
-	require.NoError(t, err, "NewEngine")
-	eng.hooks.assertInvariants = true
-	applyRegisteredDispatchOrder(t, eng)
-	flow := newEngineFlow(eng)
-	testEng := &testEngine{
-		Engine: eng,
-		flow:   flow,
-	}
-	seedTestEngineAccount(t, dataDir, accountCID)
-
-	t.Cleanup(func() {
-		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
-	})
-
-	return testEng, syncRoot
 }
 
 func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, content []byte) *syncfixture.EngineMockClient {

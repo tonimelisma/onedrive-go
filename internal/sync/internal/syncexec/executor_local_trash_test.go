@@ -87,7 +87,7 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 				cfg.SetTrash(trash)
 			}
 			target := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", syncedContent)
-			cfg.hashReader = func(ctx context.Context, r io.Reader) (string, error) {
+			cfg.hooks.HashReader = func(ctx context.Context, r io.Reader) (string, error) {
 				hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
 				replacement := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
 				require.NoError(t, os.Rename(replacement, target))
@@ -141,7 +141,7 @@ func TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone(t *testing
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	trashDir := filepath.Join(t.TempDir(), "trash")
 	cfg.SetTrash(localtrash.Open(trashDir, nil))
-	cfg.hashReader = hashRemovingTrash(t, trashDir)
+	cfg.hooks.HashReader = hashRemovingTrash(t, trashDir)
 	syncfixture.WriteExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
 	outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
@@ -165,7 +165,7 @@ func TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove(t *testing.T) {
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	trashDir := filepath.Join(t.TempDir(), "trash")
 	cfg.SetTrash(localtrash.Open(trashDir, nil))
-	cfg.hashReader = hashRemovingTrash(t, trashDir)
+	cfg.hooks.HashReader = hashRemovingTrash(t, trashDir)
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	syncfixture.WriteExecTestFile(t, syncRoot, "b.txt", "bravo\n")
@@ -342,7 +342,7 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 	syncfixture.WriteExecTestFile(t, syncRoot, "b.txt", "bravo\n")
-	plannedHash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, "b.txt"))
+	plannedHash, err := e.hashFile(t.Context(), filepath.Join(syncRoot, "b.txt"))
 	require.NoError(t, err)
 	info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
 	require.NoError(t, err)

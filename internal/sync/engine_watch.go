@@ -409,10 +409,6 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 	localObs.SetSafetyScan(syncobserve.LocalWatchHealthySafetyScanInterval, true)
 	localObs.SetDebugEvents(rt.deps.emit)
 
-	if rt.engine.hooks.localWatcherFactory != nil {
-		localObs.SetWatcherFactory(rt.engine.hooks.localWatcherFactory)
-	}
-
 	return localObs, nil
 }
 

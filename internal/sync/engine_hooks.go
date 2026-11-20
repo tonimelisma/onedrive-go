@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -56,9 +57,12 @@ type engineHooks struct {
 	// engine's real clock. Observers the engine builds stay on the real
 	// clock either way (buildLocalObserver).
 	clock syncdomain.SyncClock
-	// localWatcherFactory replaces the local observer's fsnotify watcher
-	// factory, so a test can simulate inotify watch exhaustion (ENOSPC).
-	localWatcherFactory func() (syncobserve.FsWatcher, error)
+	// exec, store and observe are the test seams of the executor, the state
+	// store and the local observers the engine builds, passed through to
+	// each unchanged.
+	exec    syncexec.Hooks
+	store   syncstore.Hooks
+	observe syncobserve.Hooks
 	// socketIOWakeSourceFactory replaces the watch-mode websocket wake
 	// source (newSocketIOWakeSource).
 	socketIOWakeSourceFactory func(
@@ -74,10 +78,6 @@ type engineHooks struct {
 	// emulated filesystem under the engine through it: a case-insensitive
 	// volume, injected errno (D-094).
 	interposeSyncTree func(synctree.Handle) synctree.Handle
-	// storeDriver names the database/sql driver the engine opens its store
-	// through; empty uses the SQLite driver. Tests open it through a
-	// fault-injecting driver.
-	storeDriver string
 }
 
 // runClock is the clock a run reads: the engine's real clock unless a test
@@ -97,14 +97,4 @@ func (e *Engine) newSocketIOWakeSource(opts syncobserve.SocketIOWakeSourceOption
 	}
 
 	return syncobserve.NewSocketIOWakeSourceWithOptions(e.socketIOFetcher, e.driveID, opts)
-}
-
-// storeDriverName is the database/sql driver the engine opens its store
-// through: the SQLite driver unless a test named another.
-func (h *engineHooks) storeDriverName() string {
-	if h.storeDriver == "" {
-		return syncstore.SqliteDriverName
-	}
-
-	return h.storeDriver
 }

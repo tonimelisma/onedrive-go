@@ -89,8 +89,7 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 		point: syncdomain.CrashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.SetCrashHookForTest(capture.hook)
-	h.eng.baseline.SetCrashHookForTest(capture.hook)
+	h.eng.armCrash(capture.hook)
 	h.beginRound(t)
 	syncHarnessUntilQuiet(t, h)
 	require.True(t, capture.captured, "the conflict copy's upload reached %s", capture.point)

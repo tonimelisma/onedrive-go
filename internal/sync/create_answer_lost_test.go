@@ -35,7 +35,7 @@ func newScenarioCreateExecutor(t *testing.T, remote *moveScenarioRemote) (*synce
 	require.NoError(t, err)
 	client := remote.client(t)
 	_, logger := syncfixture.NewDebugLogBuffer()
-	cfg := syncexec.NewExecutorConfig(client, client, client, syncTree, remote.driveID, logger, nil)
+	cfg := syncexec.NewExecutorConfig(client, client, client, syncTree, remote.driveID, logger, nil, syncexec.Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(client, client, nil, logger))
 	store := syncstoretest.NewTestStore(t)
 	cfg.SetPendingCreates(store)

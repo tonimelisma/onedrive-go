@@ -77,7 +77,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	eng, syncRoot := newTestEngine(t, mock)
 	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
 	recorder := attachDebugEventRecorder(eng)
-	eng.hooks.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return syncfixture.NewEnospcWatcher(1 << 20), nil
 	}
 

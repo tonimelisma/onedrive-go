@@ -345,8 +345,7 @@ func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
 		_, err := r.eng.baseline.RawDBForTest().ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 		require.NoError(r.t, err)
 	}
-	r.eng.execCfg.SetCrashHookForTest(capture.hook)
-	r.eng.baseline.SetCrashHookForTest(capture.hook)
+	r.eng.armCrash(capture.hook)
 
 	return capture
 }

@@ -29,7 +29,7 @@ func newPendingCreateTestExecutor(t *testing.T, ul driveops.Uploader, logger *sl
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 	dl := &syncfixture.ExecutorMockDownloader{}
-	cfg := NewExecutorConfig(&syncfixture.ExecutorMockItemClient{}, dl, ul, syncTree, driveid.New(syncfixture.TestDriveID), logger, nil)
+	cfg := NewExecutorConfig(&syncfixture.ExecutorMockItemClient{}, dl, ul, syncTree, driveid.New(syncfixture.TestDriveID), logger, nil, Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	store := syncstoretest.NewTestStore(t)
 	cfg.SetPendingCreates(store)

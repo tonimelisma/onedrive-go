@@ -645,8 +645,8 @@ func (e *Executor) recordPendingCreate(
 // detached from its action's context: OutcomeCommitTimeout unless a test
 // shortened it.
 func (cfg *ExecutorConfig) detachedStoreBound() time.Duration {
-	if cfg.storeAccessTimeout > 0 {
-		return cfg.storeAccessTimeout
+	if cfg.hooks.StoreAccessTimeout > 0 {
+		return cfg.hooks.StoreAccessTimeout
 	}
 
 	return syncdomain.OutcomeCommitTimeout

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -49,18 +48,11 @@ type ExecutorConfig struct {
 	// driveops.WithDiskCheck when constructing the TransferManager.
 	transferMgr *driveops.TransferManager
 
-	// crashAt, when set, is called at each crash point (crash_points.go):
-	// an error stops the operation there as a crash would (D-091).
-	// Test-only; nil in production.
-	crashAt func(point string) error
+	// hooks are the executor's and its worker pools' test seams; the zero
+	// value is production.
+	hooks Hooks
 
-	// Injectable for testing.
-	nowFunc  func() time.Time
-	hashFunc func(ctx context.Context, filePath string) (string, error)
-	// hashReader hashes an open descriptor; destructive actions verify the
-	// exact inode they then remove or replace through it (D-010). It stops
-	// when the action's context ends.
-	hashReader      func(ctx context.Context, r io.Reader) (string, error)
+	nowFunc         func() time.Time
 	pathConvergence driveops.PathConvergence
 
 	// trash keeps what local deletes remove and what downloads replace
@@ -70,11 +62,6 @@ type ExecutorConfig struct {
 	// pendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15). Nil in executor-only tests.
 	pendingCreates PendingCreateStore
-
-	// storeAccessTimeout bounds every store access the executor runs detached
-	// from its action's context. Zero means OutcomeCommitTimeout; tests
-	// shorten it.
-	storeAccessTimeout time.Duration
 
 	// parentChecks remembers the remote parents already read live for the
 	// plan being executed, so sibling creates do not read them again.
@@ -105,6 +92,7 @@ type Executor struct {
 func NewExecutorConfig(
 	items syncdomain.ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
 	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,
+	hooks Hooks,
 ) *ExecutorConfig {
 	cfg := &ExecutorConfig{
 		items:           items,
@@ -113,9 +101,8 @@ func NewExecutorConfig(
 		syncTree:        syncTree,
 		driveID:         driveID,
 		logger:          logger,
+		hooks:           hooks,
 		nowFunc:         time.Now,
-		hashFunc:        driveops.ComputeQuickXorHashContext,
-		hashReader:      driveops.ComputeQuickXorHashFromReaderContext,
 		pathConvergence: pathConvergence,
 		parentChecks:    newRemoteParentChecks(),
 	}
@@ -1138,9 +1125,9 @@ func fillRemoteOutcomeFromBaseline(o *syncdomain.ActionOutcome, baseline *syncdo
 
 // reachCrashPoint calls the crash hook at point (crash_points.go).
 func (cfg *ExecutorConfig) reachCrashPoint(point string) error {
-	if cfg == nil || cfg.crashAt == nil {
+	if cfg == nil || cfg.hooks.CrashAt == nil {
 		return nil
 	}
 
-	return cfg.crashAt(point)
+	return cfg.hooks.CrashAt(point)
 }

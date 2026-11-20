@@ -165,7 +165,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	storeOwnedByEngine := false
 	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
-	bm, err := syncstore.OpenEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.hooks.storeDriverName())
+	bm, err := syncstore.OpenEngineSyncStore(ctx, cfg.DBPath, cfg.Logger, cfg.hooks.store)
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -183,6 +183,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.DriveID,
 		cfg.Logger,
 		cfg.PathConvergence,
+		cfg.hooks.exec,
 	)
 	rootIdentity := syncdomain.NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
 	trash := configureEngineExecutor(execCfg, cfg, bm, rootIdentity)
@@ -251,10 +252,12 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	return e, nil
 }
 
-// buildLocalObserver builds a local observer on the engine's real clock.
+// buildLocalObserver builds a local observer on the engine's real clock,
+// with the engine's observer test seams.
 func (e *Engine) buildLocalObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.LocalObserver {
 	obs := syncobserve.NewLocalObserver(bl, logger, e.checkWorkers)
 	obs.SetClock(e.wallClock)
+	obs.SetHooks(e.hooks.observe)
 
 	return obs
 }

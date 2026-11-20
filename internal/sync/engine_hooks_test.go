@@ -11,12 +11,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
-	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // An engine built with zero hooks behaves as production does: the real
 // clock, the real websocket wake source, the full worker pool and pass
-// bound, the SQLite store driver and no invariant checks.
+// bound and no invariant checks. The executor's, store's and observer's
+// hooks prove their own zero value.
 //
 // Validates: R-6.10.29
 func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
@@ -35,7 +35,6 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 
 	assert.IsType(t, syncdomain.RealClock{}, eng.runClock(), "the run clock is the real clock")
 	assert.Equal(t, eng.wallClock, eng.runClock(), "the run clock is the engine's own real clock")
-	assert.Equal(t, syncstore.SqliteDriverName, inputs.hooks.storeDriverName(), "the store opens through SQLite")
 	assert.Equal(t, configuredWorkers, eng.workerPoolSize(), "the pool runs the configured workers")
 	assert.Equal(t, oneShotMaxPasses, eng.oneShotPasses(), "one-shot runs make the full pass bound")
 	assert.False(t, newEngineFlow(eng).invariantChecksEnabled(), "invariant checks are off")

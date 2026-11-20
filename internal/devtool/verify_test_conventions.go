@@ -86,6 +86,7 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 			violations = append(violations, integrationTestNameViolations(fset, rel, file)...)
 		} else {
 			violations = append(violations, testSeamUseViolations(fset, rel, file)...)
+			violations = append(violations, hookSettingViolations(fset, rel, file)...)
 		}
 
 		return nil
@@ -184,6 +185,86 @@ func testSeamUseViolations(fset *token.FileSet, rel string, file *ast.File) []te
 	})
 
 	return violations
+}
+
+// hooksTypeSuffix ends the name of a hooks type: a package's test seams in
+// one value whose zero value is production behavior (engineHooks,
+// syncexec.Hooks).
+const hooksTypeSuffix = "Hooks"
+
+// hooksFieldNames are the names a struct field holding a hooks value has.
+func hooksFieldNames() []string {
+	return []string{"hooks", hooksTypeSuffix}
+}
+
+// hookSettingViolations holds every place a production file sets a test seam:
+// a composite literal of a hooks type with a field in it, or an assignment
+// to a field of a hooks value at any depth (x.hooks.F = ...). Production
+// code may pass a hooks value through, an empty one included, and read its
+// fields; setting one is a test's job (R-6.10.29). The rule is by name, without type
+// information: a type whose name ends in Hooks, a field named hooks or Hooks.
+func hookSettingViolations(fset *token.FileSet, rel string, file *ast.File) []testConventionViolation {
+	var violations []testConventionViolation
+	report := func(node ast.Node, message string) {
+		violations = append(violations, testConventionViolation{
+			Path:    rel,
+			Line:    fset.Position(node.Pos()).Line,
+			Message: message,
+		})
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.CompositeLit:
+			if name := typeExprName(node.Type); strings.HasSuffix(name, hooksTypeSuffix) && len(node.Elts) > 0 {
+				report(node, fmt.Sprintf("%s is a hooks type: only test files may build one with a field set; "+
+					"production passes the zero value", name))
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				if field, ok := hooksFieldAssigned(lhs); ok {
+					report(lhs, fmt.Sprintf("%s is a test seam: only test files may assign a field of a hooks value", field))
+				}
+			}
+		}
+
+		return true
+	})
+
+	return violations
+}
+
+// typeExprName is the name of a composite literal's type: T, pkg.T, or empty
+// for any other form.
+func typeExprName(expr ast.Expr) string {
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		return expr.Name
+	case *ast.SelectorExpr:
+		return expr.Sel.Name
+	default:
+		return ""
+	}
+}
+
+// hooksFieldAssigned reports whether lhs is a field of a hooks value, at any
+// depth (x.hooks.F, x.Hooks.F, x.hooks.observe.F), and names it from the
+// hooks field down.
+func hooksFieldAssigned(lhs ast.Expr) (string, bool) {
+	field, ok := lhs.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	path := field.Sel.Name
+	for holder, ok := field.X.(*ast.SelectorExpr); ok; holder, ok = holder.X.(*ast.SelectorExpr) {
+		path = holder.Sel.Name + "." + path
+		for _, name := range hooksFieldNames() {
+			if holder.Sel.Name == name {
+				return path, true
+			}
+		}
+	}
+
+	return "", false
 }
 
 // testHelperImportViolations holds every import of a test-helper package in a

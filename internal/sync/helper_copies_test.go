@@ -59,11 +59,21 @@ const (
 func newPendingCreateTestExecutor(t *testing.T, ul driveops.Uploader, logger *slog.Logger) (*syncexec.Executor, *syncstore.SyncStore, string) {
 	t.Helper()
 
+	return newPendingCreateTestExecutorWithHooks(t, ul, logger, syncexec.Hooks{})
+}
+
+// newPendingCreateTestExecutorWithHooks is newPendingCreateTestExecutor with
+// the executor's test seams.
+func newPendingCreateTestExecutorWithHooks(
+	t *testing.T, ul driveops.Uploader, logger *slog.Logger, hooks syncexec.Hooks,
+) (*syncexec.Executor, *syncstore.SyncStore, string) {
+	t.Helper()
+
 	syncRoot := t.TempDir()
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 	dl := &syncfixture.ExecutorMockDownloader{}
-	cfg := syncexec.NewExecutorConfig(&syncfixture.ExecutorMockItemClient{}, dl, ul, syncTree, driveid.New(syncfixture.TestDriveID), logger, nil)
+	cfg := syncexec.NewExecutorConfig(&syncfixture.ExecutorMockItemClient{}, dl, ul, syncTree, driveid.New(syncfixture.TestDriveID), logger, nil, hooks)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	store := syncstoretest.NewTestStore(t)
 	cfg.SetPendingCreates(store)
@@ -92,7 +102,7 @@ func newTestExecutorConfigWithPathConvergence(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence)
+	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, pathConvergence, syncexec.Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
 
@@ -199,6 +209,16 @@ func newWorkerTestSetup(t *testing.T) (
 ) {
 	t.Helper()
 
+	return newWorkerTestSetupWithHooks(t, syncexec.Hooks{})
+}
+
+// newWorkerTestSetupWithHooks is newWorkerTestSetup with the executor's and
+// its pools' test seams.
+func newWorkerTestSetupWithHooks(t *testing.T, hooks syncexec.Hooks) (
+	*syncexec.ExecutorConfig, *syncstore.SyncStore, string,
+) {
+	t.Helper()
+
 	mgr := syncstoretest.NewTestManager(t)
 
 	syncRoot := t.TempDir()
@@ -223,7 +243,7 @@ func newWorkerTestSetup(t *testing.T) (
 	}
 	ul := &syncfixture.WorkerMockUploader{}
 
-	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg := syncexec.NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil, hooks)
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
 	return cfg, mgr, syncRoot

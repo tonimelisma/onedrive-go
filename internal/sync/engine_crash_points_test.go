@@ -327,8 +327,7 @@ func crashAndRecover(t *testing.T, point string, lostWAL bool) (*crashCapture, *
 		point: point, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.SetCrashHookForTest(capture.hook)
-	h.eng.baseline.SetCrashHookForTest(capture.hook)
+	h.eng.armCrash(capture.hook)
 	h.beginRound(t)
 	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)

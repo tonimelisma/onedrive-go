@@ -206,9 +206,9 @@ func TestWatchLoop_BackoffResetsOnSafetyScan(t *testing.T) {
 			sleep:     recorder.sleep,
 			tickCh:    tickCh,
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		hooks: Hooks{WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
-		},
+		}},
 	}
 
 	batches := localBatches(obs, 50)
@@ -264,9 +264,9 @@ func TestWatchLoop_BackoffEscalatesWithoutReset(t *testing.T) {
 			sleep:     recorder.sleep,
 			tickCh:    make(chan time.Time),
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		hooks: Hooks{WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
-		},
+		}},
 	}
 
 	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
@@ -387,9 +387,9 @@ func TestWatchLoop_MoveOutOfOrderRenameCreate(t *testing.T) {
 			sleep:     func(_ context.Context, _ time.Duration) error { return nil },
 			tickCh:    make(chan time.Time),
 		},
-		watcherFactory: func() (FsWatcher, error) {
+		hooks: Hooks{WatcherFactory: func() (FsWatcher, error) {
 			return mockWatcher, nil
-		},
+		}},
 	}
 
 	batches := localBatches(obs, 10)

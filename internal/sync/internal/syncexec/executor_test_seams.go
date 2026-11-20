@@ -2,6 +2,7 @@ package syncexec
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"time"
 
@@ -14,9 +15,56 @@ import (
 // its configuration, its worker pool and its scope state. A ...ForTest
 // function is used only by tests and the sync test-helper packages.
 
-// SetCrashHookForTest installs the hook the executor's crash points call.
-func (cfg *ExecutorConfig) SetCrashHookForTest(hook func(point string) error) {
-	cfg.crashAt = hook
+// Hooks are the test seams of the executor and of the worker pools built on
+// its configuration, passed in when the configuration is built. The zero
+// value is production behavior, and production code passes a Hooks value
+// through without setting a field (R-6.10.29).
+type Hooks struct {
+	// CrashAt is called at each crash point (crash_points.go): an error
+	// stops the operation there as a crash would (D-091).
+	CrashAt func(point string) error
+	// HashFile replaces the QuickXorHash of a file by path.
+	HashFile func(ctx context.Context, filePath string) (string, error)
+	// HashReader replaces the QuickXorHash of an open descriptor, which
+	// destructive actions verify the exact inode they then remove or
+	// replace through (D-010).
+	HashReader func(ctx context.Context, r io.Reader) (string, error)
+	// StoreAccessTimeout, when positive, shortens the bound of every store
+	// access the executor runs detached from its action's context.
+	StoreAccessTimeout time.Duration
+	// OutcomeCommitTimeout, when positive, shortens the bound of a worker's
+	// detached commit of a completed action's outcome.
+	OutcomeCommitTimeout time.Duration
+}
+
+// hashFile hashes the file at filePath. It stops when ctx ends.
+func (cfg *ExecutorConfig) hashFile(ctx context.Context, filePath string) (string, error) {
+	hash := cfg.hooks.HashFile
+	if hash == nil {
+		hash = driveops.ComputeQuickXorHashContext
+	}
+
+	return hash(ctx, filePath)
+}
+
+// hashOpenFile hashes an open descriptor. It stops when ctx ends.
+func (cfg *ExecutorConfig) hashOpenFile(ctx context.Context, r io.Reader) (string, error) {
+	hash := cfg.hooks.HashReader
+	if hash == nil {
+		hash = driveops.ComputeQuickXorHashFromReaderContext
+	}
+
+	return hash(ctx, r)
+}
+
+// outcomeCommitBound is the bound of a worker's detached outcome commit:
+// OutcomeCommitTimeout unless a test shortened it.
+func (wp *WorkerPool) outcomeCommitBound() time.Duration {
+	if wp.cfg.hooks.OutcomeCommitTimeout > 0 {
+		return wp.cfg.hooks.OutcomeCommitTimeout
+	}
+
+	return syncdomain.OutcomeCommitTimeout
 }
 
 // NowForTest is the executor's clock reading.
@@ -45,11 +93,6 @@ func (cfg *ExecutorConfig) LoggerForTest() *slog.Logger {
 	return cfg.logger
 }
 
-// SetStoreAccessTimeoutForTest bounds the executor's detached store access.
-func (cfg *ExecutorConfig) SetStoreAccessTimeoutForTest(timeout time.Duration) {
-	cfg.storeAccessTimeout = timeout
-}
-
 // UploadNewFileForTest uploads localPath as a new item (uploadNewFile).
 func (e *Executor) UploadNewFileForTest(
 	ctx context.Context, action *syncdomain.Action, driveID driveid.ID, parentID, source, localPath string,
@@ -74,11 +117,6 @@ func (wp *WorkerPool) ExecuteActionForTest(ctx context.Context, ta *syncdomain.T
 // DispatchActionForTest runs one action's executor call (dispatchAction).
 func (wp *WorkerPool) DispatchActionForTest(ctx context.Context, exec *Executor, ta *syncdomain.TrackedAction) syncdomain.ActionOutcome {
 	return wp.dispatchAction(ctx, exec, ta)
-}
-
-// SetOutcomeCommitTimeoutForTest bounds the detached commit of an outcome.
-func (wp *WorkerPool) SetOutcomeCommitTimeoutForTest(timeout time.Duration) {
-	wp.outcomeCommitTimeout = timeout
 }
 
 // HasWindowForTest reports whether scope detection holds a window for key.

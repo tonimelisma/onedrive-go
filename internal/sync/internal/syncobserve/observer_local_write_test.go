@@ -286,9 +286,9 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	})
 
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                synctest.TestLogger(t),
-		writeCoalesceCooldown: 100 * time.Millisecond,
+		baseline: baseline,
+		logger:   synctest.TestLogger(t),
+		hooks:    Hooks{WriteCoalesceCooldown: 100 * time.Millisecond},
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncdomain.SyncTimer),
 			HashRequests:  make(chan HashRequest, 10),
@@ -331,9 +331,9 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 	})
 
 	obs := &LocalObserver{
-		baseline:              baseline,
-		logger:                synctest.TestLogger(t),
-		writeCoalesceCooldown: 100 * time.Millisecond,
+		baseline: baseline,
+		logger:   synctest.TestLogger(t),
+		hooks:    Hooks{WriteCoalesceCooldown: 100 * time.Millisecond},
 		localWatchState: localWatchState{
 			PendingTimers: make(map[string]syncdomain.SyncTimer),
 			HashRequests:  make(chan HashRequest, 10),
@@ -438,7 +438,6 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 			PendingTimers: make(map[string]syncdomain.SyncTimer),
 			HashRequests:  make(chan HashRequest, HashRequestBufSize),
 		},
-		writeCoalesceCooldown: 50 * time.Millisecond,
 		clock: &observerTestClock{
 			SyncClock: syncdomain.RealClock{},
 			afterFunc: syncdomain.RealClock{}.AfterFunc,
@@ -447,8 +446,11 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 			},
 			tickCh: make(chan time.Time),
 		},
-		watcherFactory: func() (FsWatcher, error) {
-			return mockWatcher, nil
+		hooks: Hooks{
+			WriteCoalesceCooldown: 50 * time.Millisecond,
+			WatcherFactory: func() (FsWatcher, error) {
+				return mockWatcher, nil
+			},
 		},
 	}
 

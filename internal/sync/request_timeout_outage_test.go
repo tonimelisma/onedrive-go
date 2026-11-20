@@ -480,7 +480,7 @@ const workerTestCommitBound = 20 * time.Millisecond
 func wedgedCommitCompletion(t *testing.T) syncdomain.ActionCompletion {
 	t.Helper()
 
-	cfg, store, _ := newWorkerTestSetup(t)
+	cfg, store, _ := newWorkerTestSetupWithHooks(t, syncexec.Hooks{OutcomeCommitTimeout: workerTestCommitBound})
 	var wedge atomic.Pointer[sql.Conn]
 	cfg.SetItemsForTest(&syncfixture.WorkerMockItemClient{
 		CreateFolderFn: func(ctx context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
@@ -494,7 +494,6 @@ func wedgedCommitCompletion(t *testing.T) syncdomain.ActionCompletion {
 		},
 	})
 	pool := syncexec.NewWorkerPool(cfg, nil, store, synctest.TestLogger(t), 1)
-	pool.SetOutcomeCommitTimeoutForTest(workerTestCommitBound)
 
 	pool.ExecuteActionForTest(t.Context(), &syncdomain.TrackedAction{ID: 1, Action: syncdomain.Action{
 		Type:       syncdomain.ActionFolderCreate,
@@ -610,9 +609,9 @@ func TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure(t *testing.T) 
 
 		return created, nil
 	}}
-	e, store, syncRoot := newPendingCreateTestExecutor(t, ul, synctest.TestLogger(t))
+	e, store, syncRoot := newPendingCreateTestExecutorWithHooks(t, ul, synctest.TestLogger(t),
+		syncexec.Hooks{StoreAccessTimeout: workerTestCommitBound})
 	e.SetPendingCreates(unansweringRecordStore{PendingCreateStore: store, bound: workerTestCommitBound})
-	e.SetStoreAccessTimeoutForTest(workerTestCommitBound)
 	local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 
 	_, uploadErr := e.UploadNewFileForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},

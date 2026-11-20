@@ -168,8 +168,7 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 		point: syncdomain.CrashPointDownloadRenamed, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.SetCrashHookForTest(capture.hook)
-	h.eng.baseline.SetCrashHookForTest(capture.hook)
+	h.eng.armCrash(capture.hook)
 	h.beginRound(t)
 	report := runScenarioPass(t, h.eng)
 	require.Equal(t, 1, report.Downloads, "the replacing file is downloaded")

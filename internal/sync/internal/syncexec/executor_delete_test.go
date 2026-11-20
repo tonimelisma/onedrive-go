@@ -101,7 +101,7 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	dl := &syncfixture.ExecutorMockDownloader{}
 	ul := &syncfixture.ExecutorMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil, Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
 	cfg.SetContentFilter(syncdomain.ContentFilterConfig{IgnoreJunkFiles: true})
 	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
@@ -127,6 +127,7 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 		driveID,
 		logger,
 		nil,
+		Hooks{},
 	)
 	cfg.SetTransferMgr(driveops.NewTransferManager(&syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, nil, logger))
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
@@ -191,7 +192,7 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	}
 	pathConvergence := &executorPathConvergenceStub{}
 
-	cfg := NewExecutorConfig(items, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, syncTree, driveID, logger, pathConvergence)
+	cfg := NewExecutorConfig(items, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, syncTree, driveID, logger, pathConvergence, Hooks{})
 	cfg.SetTransferMgr(driveops.NewTransferManager(&syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, nil, logger))
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 

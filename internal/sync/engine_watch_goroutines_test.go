@@ -87,7 +87,7 @@ func TestRunWatch_ReturnsOnlyAfterObserversHaveExited(t *testing.T) {
 		return ctx.Err()
 	})
 	eng, _ := newTestEngine(t, mock)
-	eng.hooks.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		<-polling
 		panic("local watcher exploded")
 	}

@@ -132,12 +132,12 @@ func TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName(t *test
 			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 			trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 			cfg.SetTrash(trash)
-			cfg.SetCrashHookForTest(func(point string) error {
+			cfg.hooks.CrashAt = func(point string) error {
 				if point == syncdomain.CrashPointLocalMoveDestinationTrashed {
 					syncfixture.WriteExecTestFile(t, syncRoot, entry.dst, "saved meanwhile\n")
 				}
 				return nil
-			})
+			}
 			e := NewExecution(cfg, syncfixture.EmptyBaseline())
 			entry.create(t, syncRoot)
 			syncfixture.WriteExecTestFile(t, syncRoot, entry.dst, "bravo\n")
@@ -227,7 +227,7 @@ func TestExecutor_LocalMove_DestinationHashStopsWhenTheContextEnds(t *testing.T)
 func plannedDestination(t *testing.T, e *Executor, syncRoot, rel string) *syncdomain.LocalState {
 	t.Helper()
 
-	hash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, rel))
+	hash, err := e.hashFile(t.Context(), filepath.Join(syncRoot, rel))
 	require.NoError(t, err)
 	info, err := os.Stat(filepath.Join(syncRoot, rel))
 	require.NoError(t, err)
