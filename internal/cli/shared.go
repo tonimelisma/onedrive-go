@@ -55,7 +55,7 @@ func runSharedList(ctx context.Context, cc *CLIContext) error {
 		return err
 	}
 
-	discovery := discoverSharedTargets(ctx, cc, filterAccountViews(snapshot.Accounts, cc.Flags.Account))
+	discovery := discoverSharedTargets(ctx, cc, cc.runtime(), filterAccountViews(snapshot.Accounts, cc.Flags.Account))
 	items := sharedListItemsFromTargets(discovery.Targets)
 	if cc.Flags.JSON {
 		return printSharedJSON(cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)

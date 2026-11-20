@@ -38,6 +38,10 @@ type CatalogAccount struct {
 	PrimaryDriveID        string           `json:"primary_drive_id,omitempty"`
 	PrimaryDriveCanonical string           `json:"primary_drive_canonical_id,omitempty"`
 	AuthRequirementReason authstate.Reason `json:"auth_requirement_reason,omitempty"`
+	// IdentityCheckDueAt is when the account's identity (the email Graph
+	// reports for it) is next asked for, RFC 3339 in UTC. Empty means due.
+	// See RecordAccountIdentityCheck.
+	IdentityCheckDueAt string `json:"identity_check_due_at,omitempty"`
 }
 
 type CatalogDrive struct {

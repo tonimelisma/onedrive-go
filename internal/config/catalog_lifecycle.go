@@ -21,6 +21,65 @@ type AccountLogin struct {
 	PrimaryDriveID driveid.ID
 }
 
+// IdentityCheckAnsweredInterval is how long after an identity check OneDrive
+// answered (or a sign-in, which reads the same user) the next one is due. An
+// email change is a local label change only: the sign-in and the drive IDs
+// stay valid, so learning of it up to this late breaks nothing.
+const IdentityCheckAnsweredInterval = 24 * time.Hour
+
+// IdentityCheckUnansweredInterval is how long after an identity check OneDrive
+// did not answer the next one is due.
+const IdentityCheckUnansweredInterval = 15 * time.Minute
+
+// IdentityCheckDue reports whether the account's identity check is due at
+// now: when the record holds no time, one that does not parse, a time not
+// after now, or a time further ahead than IdentityCheckAnsweredInterval, which
+// only a clock that went back leaves.
+func (a *CatalogAccount) IdentityCheckDue(now time.Time) bool {
+	if a.IdentityCheckDueAt == "" {
+		return true
+	}
+	dueAt, err := time.Parse(time.RFC3339, a.IdentityCheckDueAt)
+	if err != nil {
+		return true
+	}
+
+	return !dueAt.After(now) || dueAt.Sub(now) > IdentityCheckAnsweredInterval
+}
+
+// recordIdentityCheck sets when the account's next identity check is due:
+// IdentityCheckAnsweredInterval after now when OneDrive answered,
+// IdentityCheckUnansweredInterval after now when it did not.
+func (a *CatalogAccount) recordIdentityCheck(now time.Time, answered bool) {
+	interval := IdentityCheckUnansweredInterval
+	if answered {
+		interval = IdentityCheckAnsweredInterval
+	}
+	a.IdentityCheckDueAt = now.Add(interval).UTC().Format(time.RFC3339)
+}
+
+// RecordAccountIdentityCheck records an identity check of the account in the
+// catalog, under the catalog lock, so checks of several accounts that end
+// together keep each other's record. An account the catalog no longer holds
+// is left alone.
+func RecordAccountIdentityCheck(accountCID driveid.CanonicalID, now time.Time, answered bool) error {
+	err := UpdateCatalog(func(catalog *Catalog) error {
+		account, found := catalog.AccountByCanonicalID(accountCID)
+		if !found {
+			return nil
+		}
+		account.recordIdentityCheck(now, answered)
+		catalog.UpsertAccount(&account)
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("record identity check of %s: %w", accountCID, err)
+	}
+
+	return nil
+}
+
 // recordLogin upserts the account and its primary drive with what a sign-in
 // learned. The account's record is written without an auth requirement: the
 // sign-in it records works, so a requirement that stood ends in this same
@@ -37,6 +96,8 @@ func (c *Catalog) recordLogin(accountCID driveid.CanonicalID, login *AccountLogi
 		PrimaryDriveID:        login.PrimaryDriveID.String(),
 		PrimaryDriveCanonical: accountCID.String(),
 	}
+	// The sign-in read the user, which is the identity check's answer.
+	account.recordIdentityCheck(now, true)
 
 	drive := CatalogDrive{
 		CanonicalID:           accountCID.String(),

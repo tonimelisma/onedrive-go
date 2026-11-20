@@ -245,16 +245,16 @@ func reconcileSyncAccounts(
 ) bool {
 	reconciled := false
 
-	for _, accountCID := range accountCIDs {
-		reconcileResult, probeErr := cc.probeAccountIdentity(ctx, accountCID, "sync-bootstrap")
-		if probeErr != nil {
+	results, errs := cc.probeAccountIdentities(ctx, accountCIDs, "sync-bootstrap")
+	for i, accountCID := range accountCIDs {
+		if errs[i] != nil {
 			logger.Debug("skip email reconciliation during sync bootstrap",
 				"account", accountCID.String(),
-				"error", probeErr,
+				"error", errs[i],
 			)
 			continue
 		}
-		if reconcileResult.Changed() {
+		if results[i].Changed() {
 			reconciled = true
 		}
 	}

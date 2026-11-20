@@ -4,11 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
+	"strconv"
 	stdsync "sync"
 	"testing"
 
@@ -16,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -306,8 +314,9 @@ func placeholdersWithoutIntentIn(t *testing.T, db *sql.DB, remote *moveScenarioR
 // crashRecoveryScenario is a synced tree and one round of edits that passes
 // every crash point: a local rename (remote move), a remote rename (local
 // move), a local create (upload), a remote create (download), a remote edit
-// (an observation window), a remote delete (local delete into the trash)
-// and a local delete (remote delete).
+// (an observation window), a remote delete (local delete into the trash),
+// a local delete (remote delete) and a remote rename onto a synced file
+// OneDrive deleted (a local move that replaces its destination).
 func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	t.Helper()
 
@@ -319,6 +328,8 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	remote.addFile(t, "item-f", "root", crashDeletedRemotelyPath, crashDeletedRemotelyContent)
 	remote.addFile(t, crashDeletedLocallyItemID, "root", crashDeletedLocallyPath, "g\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	remote.addFile(t, "item-r", "item-docs", "r.txt", crashReplacingContent)
+	remote.addFile(t, "item-s", "item-docs", path.Base(crashReplacedPath), crashReplacedContent)
 	h := newSyncHarness(t, remote)
 	h.eng.serializeWorkers = true
 	runScenarioPass(t, h.eng)
@@ -334,14 +345,20 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	remote.putFileAt(t, "e.txt", "e edited\n")
 	remote.deleteRemotely("item-f")
 	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, crashDeletedLocallyPath)))
+	remote.deleteAt(t, crashReplacedPath)
+	remote.moveAt(t, "docs/r.txt", crashReplacedPath)
 
 	return remote, h
 }
 
-// The create and delete edits of crashRecoveryScenario: c.txt is created
-// locally and so uploaded as a new file, the one create of the round; f.txt
-// is deleted on OneDrive and so leaves the local tree for the trash; g.txt is
-// deleted locally and so is deleted on OneDrive.
+// The create, delete and replace edits of crashRecoveryScenario: c.txt is
+// created locally and so uploaded as a new file, the one create of the round;
+// f.txt is deleted on OneDrive and so leaves the local tree for the trash;
+// g.txt is deleted locally and so is deleted on OneDrive; docs/s.txt is
+// deleted on OneDrive and docs/r.txt renamed onto its name there, so the local
+// move takes the synced docs/s.txt into the trash before it renames. That
+// move is dispatched last, after the plain local move of docs/b2.txt, so a
+// crash at exec.local_move_done cuts the plain one.
 const (
 	crashCreatedLocallyPath     = "c.txt"
 	crashCreatedLocallyContent  = "c local\n"
@@ -349,9 +366,14 @@ const (
 	crashDeletedRemotelyContent = "f\n"
 	crashDeletedLocallyPath     = "g.txt"
 	crashDeletedLocallyItemID   = "item-g"
+	crashReplacedPath           = "docs/s.txt"
+	crashReplacedContent        = "s\n"
+	crashReplacingContent       = "r\n"
 )
 
-// allCrashPoints is every crash point crashRecoveryScenario reaches.
+// allCrashPoints is every crash point crash_points.go declares, each of which
+// crashRecoveryScenario reaches. TestModel_CrashAtSeededPointsRecovers draws
+// from it by index, so a new point goes last.
 func allCrashPoints() []string {
 	return []string{
 		crashPointRemoteMoveDone,
@@ -363,7 +385,58 @@ func allCrashPoints() []string {
 		crashPointRemoteDeleteDone,
 		crashPointCommitObservation,
 		crashPointCommitOutcome,
+		crashPointLocalMoveDestinationTrashed,
 	}
+}
+
+// Validates: R-6.5.2
+//
+// allCrashPoints, the list the every-point test crashes at and the seeded
+// crash model draws from, holds every crash point crash_points.go declares,
+// once, and nothing else: a point declared without being added is named here.
+func TestAllCrashPoints_HoldsEveryDeclaredCrashPoint(t *testing.T) {
+	t.Parallel()
+
+	points := allCrashPoints()
+	declared := declaredCrashPoints(t)
+	require.NotEmpty(t, declared, "crash_points.go declares no crash point")
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
+		assert.Equal(t, 1, countOf(points, declared[name]), "allCrashPoints holds %s (%q) once", name, declared[name])
+	}
+	values := slices.Collect(maps.Values(declared))
+	for _, point := range points {
+		assert.Contains(t, values, point, "allCrashPoints holds %q, which crash_points.go does not declare", point)
+	}
+}
+
+// declaredCrashPoints maps the name of every constant crash_points.go
+// declares to its value, read from the source.
+func declaredCrashPoints(t *testing.T) map[string]string {
+	t.Helper()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), "crash_points.go", nil, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	declared := map[string]string{}
+	for _, decl := range parsed.Decls {
+		gen, isGen := decl.(*ast.GenDecl)
+		if !isGen || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, isValue := spec.(*ast.ValueSpec)
+			require.True(t, isValue)
+			require.Len(t, value.Values, len(value.Names), "every crash point constant has its own value")
+			for i, name := range value.Names {
+				lit, isLit := value.Values[i].(*ast.BasicLit)
+				require.True(t, isLit && lit.Kind == token.STRING, "%s is a string literal", name.Name)
+				point, unquoteErr := strconv.Unquote(lit.Value)
+				require.NoError(t, unquoteErr)
+				declared[name.Name] = point
+			}
+		}
+	}
+
+	return declared
 }
 
 // crashAndRecover runs the scenario round with a capture armed at point and
@@ -415,6 +488,25 @@ func countOf(values []string, want string) int {
 	return n
 }
 
+// assertTrashHoldsReplacedOnce asserts that the trash holds one entry of the
+// file replaced at p, holding content.
+func assertTrashHoldsReplacedOnce(t *testing.T, trash *localtrash.Trash, p, content string) {
+	t.Helper()
+
+	entries, err := trash.List()
+	require.NoError(t, err)
+	var replaced []localtrash.Entry
+	for i := range entries {
+		if entries[i].Reason == localtrash.ReasonReplaced && entries[i].Path == p {
+			replaced = append(replaced, entries[i])
+		}
+	}
+	require.Len(t, replaced, 1, "the file replaced at %s is in the trash exactly once: %+v", p, entries)
+	data, err := localpath.ReadFile(replaced[0].ItemPath)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+}
+
 func crashCaseName(point string, lostWAL bool) string {
 	if lostWAL {
 		return point + "/lost-wal"
@@ -423,7 +515,7 @@ func crashCaseName(point string, lostWAL bool) string {
 	return point
 }
 
-// Validates: R-6.5.1, R-2.17.1, R-6.5.2, R-5.6.15
+// Validates: R-6.5.1, R-2.17.1, R-6.5.2, R-5.6.15, R-2.17.9
 func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 	t.Parallel()
 
@@ -441,6 +533,9 @@ func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 						harnessLocalTree(t, recovered.syncRoot)[crashCreatedLocallyPath],
 						"the cut create's file holds its content at its own name")
 				}
+				// Whether the crash came before the replacing move or between
+				// its two steps, the file it displaced leaves for the trash once.
+				assertTrashHoldsReplacedOnce(t, recovered.eng.trash, crashReplacedPath, crashReplacedContent)
 			})
 		}
 	}

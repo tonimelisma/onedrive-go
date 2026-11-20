@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
@@ -47,37 +48,60 @@ type sharedDiscoveryResult struct {
 func discoverSharedTargets(
 	ctx context.Context,
 	cc *CLIContext,
+	runtime *driveops.SessionRuntime,
 	accounts []accountView,
 ) sharedDiscoveryResult {
 	result := sharedDiscoveryResult{}
 	seen := make(map[string]struct{})
 
-	for i := range accounts {
-		entry := &accounts[i]
+	// Each account is searched at the same time (runBounded); its results
+	// are kept at its index and merged in account order below.
+	perAccount := make([]sharedDiscoveryResult, len(accounts))
+	runBounded(ctx, cc.Logger, len(accounts),
+		func(i int) string { return "while searching the items shared with " + accounts[i].Email },
+		func(i int) {
+			entry := &accounts[i]
+			if entry.AuthHealth.State == authStateAuthenticationNeeded {
+				perAccount[i].AccountsRequiringAuth = []accountAuthRequirement{authRequirement(
+					entry.Email,
+					entry.DisplayName,
+					entry.DriveType,
+					entry.StateDBCount,
+					entry.AuthHealth,
+				)}
+				return
+			}
 
-		if entry.AuthHealth.State == authStateAuthenticationNeeded {
-			result.AccountsRequiringAuth = append(result.AccountsRequiringAuth, authRequirement(
-				entry.Email,
-				entry.DisplayName,
-				entry.DriveType,
-				entry.StateDBCount,
-				entry.AuthHealth,
-			))
-			continue
-		}
+			targets, authRequired, degraded := discoverSharedTargetsForAccount(ctx, cc, runtime, entry)
+			perAccount[i] = sharedDiscoveryResult{
+				Targets:               targets,
+				AccountsRequiringAuth: authRequired,
+				AccountsDegraded:      degraded,
+			}
+		},
+		// A panic is this account's failed search, reported the way a
+		// failed search is, while the other accounts are searched.
+		func(i int) {
+			entry := &accounts[i]
+			perAccount[i] = sharedDiscoveryResult{AccountsDegraded: []accountDegradedNotice{
+				sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType),
+			}}
+		},
+	)
 
-		accountTargets, accountAuthRequired, accountDegraded := discoverSharedTargetsForAccount(ctx, cc, entry)
-		result.AccountsRequiringAuth = append(result.AccountsRequiringAuth, accountAuthRequired...)
-		result.AccountsDegraded = append(result.AccountsDegraded, accountDegraded...)
+	for i := range perAccount {
+		result.AccountsRequiringAuth = append(result.AccountsRequiringAuth, perAccount[i].AccountsRequiringAuth...)
+		result.AccountsDegraded = append(result.AccountsDegraded, perAccount[i].AccountsDegraded...)
 
-		for i := range accountTargets {
-			key := accountTargets[i].AccountEmail + "\x00" + accountTargets[i].RemoteDriveID + "\x00" + accountTargets[i].RemoteItemID
+		accountTargets := perAccount[i].Targets
+		for j := range accountTargets {
+			key := accountTargets[j].AccountEmail + "\x00" + accountTargets[j].RemoteDriveID + "\x00" + accountTargets[j].RemoteItemID
 			if _, ok := seen[key]; ok {
 				continue
 			}
 
 			seen[key] = struct{}{}
-			result.Targets = append(result.Targets, accountTargets[i])
+			result.Targets = append(result.Targets, accountTargets[j])
 		}
 	}
 
@@ -106,6 +130,7 @@ func discoverSharedTargets(
 func discoverSharedTargetsForAccount(
 	ctx context.Context,
 	cc *CLIContext,
+	runtime *driveops.SessionRuntime,
 	entry *accountView,
 ) ([]sharedDiscoveryTarget, []accountAuthRequirement, []accountDegradedNotice) {
 	logger := cc.Logger
@@ -132,7 +157,7 @@ func discoverSharedTargetsForAccount(
 			continue
 		}
 
-		client, err := cc.runtime().BootstrapClient(tokenPath)
+		client, err := runtime.BootstrapClient(tokenPath)
 		if err != nil {
 			logger.Debug("shared discovery token load failed",
 				"account", tokenCID.String(),

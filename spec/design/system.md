@@ -286,7 +286,12 @@ performance data.
   observation, replan idle) on the collector it was constructed with. HTTP
   requests and retries, store transactions and transfers are recorded on the
   collector the call's context carries (`perf.FromContext`); a context that
-  carries none records nothing. `perf.WithCollector` replaces the context's
+  carries none records nothing. A store transaction is recorded once, when it
+  ends: by its commit, whether or not the commit succeeded, or by a rollback
+  that ended it, with the time from its begin to that call. The rollback a
+  store function defers after its commit ends nothing and records nothing
+  (`TestPerfTx_RecordsEachEndedTransactionOnce`,
+  `TestPerfTx_RecordsAFailedCommitOnce`). `perf.WithCollector` replaces the context's
   collector rather than adding one, and every collector forwards each record to
   its parent, so the rule for an owner is to carry the most specific collector
   in the context: `internal/multisync` puts each mount's collector in that

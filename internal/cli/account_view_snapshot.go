@@ -58,9 +58,10 @@ func loadAccountViewSnapshot(ctx context.Context, cc *CLIContext) (accountViewSn
 }
 
 // loadAccountViewSnapshotWithBestEffortIdentityRefresh refreshes token-backed
-// account identity before building the offline account view. The snapshot owns
-// this best-effort freshness step so command handlers and downstream discovery
-// helpers do not duplicate `/me` probe logic.
+// account identity, for every account at the same time and under one budget
+// (probeAccountIdentities), before building the offline account view. The
+// snapshot owns this best-effort freshness step so command handlers and
+// downstream discovery helpers do not duplicate `/me` probe logic.
 func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 	ctx context.Context,
 	cc *CLIContext,
@@ -74,15 +75,18 @@ func loadAccountViewSnapshotWithBestEffortIdentityRefresh(
 		return accountViewSnapshot{}, fmt.Errorf("loading config and catalog: %w", err)
 	}
 
+	var tokenCIDs []driveid.CanonicalID
 	for _, key := range validated.Catalog.SortedAccountKeys() {
 		account := validated.Catalog.Accounts[key]
-		tokenCID, hasID := account.ID()
-		if !hasID {
-			continue
+		if tokenCID, hasID := account.ID(); hasID {
+			tokenCIDs = append(tokenCIDs, tokenCID)
 		}
-		if _, err := cc.probeAccountIdentity(ctx, tokenCID, "account-view"); err != nil {
+	}
+	_, errs := cc.probeAccountIdentities(ctx, tokenCIDs, "account-view")
+	for i, err := range errs {
+		if err != nil {
 			logger.Debug("skip email reconciliation during account view refresh",
-				"account", account.CanonicalID,
+				"account", tokenCIDs[i].String(),
 				"error", err,
 			)
 		}
@@ -129,17 +133,54 @@ func loadDriveListSnapshot(
 		siteLimit = sharePointSiteUnlimited
 	}
 
+	// The drive discovery and the shared search run side by side. Each
+	// guards its own accounts' panics; a panic outside them is the whole
+	// discovery's failure, reported for every account as a failed one is.
+	// The runtime is built here, on the command goroutine, and handed to the
+	// discoveries, which run on goroutines of their own (CLIContext.runtime).
+	runtime := cc.runtime()
 	recorder := newAuthProofRecorder(logger)
-	available, discoveredAuthRequired, discoveredDegraded, gaps := discoverAvailableDrives(
-		ctx,
-		viewSnapshot.Config,
-		viewSnapshot.Accounts,
-		siteLimit,
-		logger,
-		recorder,
-		cc.runtime(),
+	var (
+		available              []driveListEntry
+		discoveredAuthRequired []accountAuthRequirement
+		discoveredDegraded     []accountDegradedNotice
+		gaps                   sharePointGaps
+		sharedDiscovery        sharedDiscoveryResult
 	)
-	sharedDiscovery := discoverSharedTargets(ctx, cc, viewSnapshot.Accounts)
+	discoveries := []func(){
+		func() {
+			available, discoveredAuthRequired, discoveredDegraded, gaps = discoverAvailableDrives(
+				ctx,
+				viewSnapshot.Config,
+				viewSnapshot.Accounts,
+				siteLimit,
+				logger,
+				recorder,
+				runtime,
+			)
+		},
+		func() { sharedDiscovery = discoverSharedTargets(ctx, cc, runtime, viewSnapshot.Accounts) },
+	}
+	discoveryFailed := []func(){
+		func() {
+			for _, tokenCID := range accountViewTokenIDs(viewSnapshot.Accounts) {
+				discoveredDegraded = append(discoveredDegraded,
+					tokenDriveCatalogDegradedNotice(viewSnapshot.Accounts, tokenCID, logger))
+			}
+		},
+		func() {
+			for i := range viewSnapshot.Accounts {
+				entry := &viewSnapshot.Accounts[i]
+				sharedDiscovery.AccountsDegraded = append(sharedDiscovery.AccountsDegraded,
+					sharedDiscoveryDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType))
+			}
+		},
+	}
+	runBounded(ctx, logger, len(discoveries),
+		func(int) string { return "while discovering drives" },
+		func(i int) { discoveries[i]() },
+		func(i int) { discoveryFailed[i]() },
+	)
 	available = append(available, sharedFoldersToEntries(projectSharedFolders(viewSnapshot.Config, sharedDiscovery.Targets))...)
 	slices.SortFunc(available, func(a, b driveListEntry) int {
 		return cmp.Compare(a.CanonicalID, b.CanonicalID)
