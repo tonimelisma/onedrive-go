@@ -111,6 +111,10 @@ func (e *DeltaExpiredError) Error() string {
 	return ErrDeltaExpired.Error()
 }
 
+// Reason says why a cursor this client gave up on cannot be continued;
+// empty for an expiry Graph reported.
+func (e *DeltaExpiredError) Reason() string { return e.reason }
+
 func (e *DeltaExpiredError) Is(target error) bool { return target == ErrDeltaExpired }
 
 func (e *DeltaExpiredError) Unwrap() error { return e.cause }

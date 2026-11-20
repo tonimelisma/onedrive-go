@@ -52,7 +52,7 @@ const OutcomeCommitTimeout = 30 * time.Second
 type WorkerPool struct {
 	cfg           *ExecutorConfig
 	dispatchCh    <-chan *TrackedAction
-	baseline      *SyncStore
+	baseline      ExecutorStore
 	logger        *slog.Logger
 	perfCollector *perf.Collector
 
@@ -84,7 +84,7 @@ type WorkerPool struct {
 func NewWorkerPool(
 	cfg *ExecutorConfig,
 	dispatchCh <-chan *TrackedAction,
-	baseline *SyncStore,
+	baseline ExecutorStore,
 	logger *slog.Logger,
 	planSize int,
 ) *WorkerPool {
@@ -105,6 +105,14 @@ func NewWorkerPool(
 		completions:          make(chan ActionCompletion, planSize),
 		outcomeCommitTimeout: OutcomeCommitTimeout,
 	}
+}
+
+// SetRuntimeOptions sets the perf collector the workers report to and
+// whether the pool runs a single worker (see serialize). Must be called
+// before Start.
+func (wp *WorkerPool) SetRuntimeOptions(collector *perf.Collector, serialize bool) {
+	wp.perfCollector = collector
+	wp.serialize = serialize
 }
 
 // Start spawns a flat pool of goroutines, all reading from the single dispatch
@@ -250,6 +258,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *TrackedAction) {
 // from the caller's cancellation, bounded by the pool's outcomeCommitTimeout.
 func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *BaselineMutation) error {
 	return RunDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
+		//nolint:wrapcheck // the store's commit error names what it was committing
 		return wp.baseline.CommitMutation(commitCtx, mutation)
 	})
 }

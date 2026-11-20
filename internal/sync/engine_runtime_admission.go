@@ -64,7 +64,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 			continue
 		}
 
-		freshness, err := EvaluateActionFreshnessFromStore(ctx, flow.deps.store, &ta.Action)
+		freshness, err := EvaluateActionFreshnessFromStore(ctx, executorStoreOf(flow.deps.store), &ta.Action)
 		if err != nil {
 			return filtered, append(admissionDispatchActions(filtered), ta), err
 		}
@@ -241,4 +241,15 @@ func (flow *engineFlow) discardScopeWithoutBlockedWork(ctx context.Context, scop
 	}
 
 	return flow.discardScope(ctx, scopeKey)
+}
+
+// executorStoreOf is the executor's view of store. A missing store stays
+// missing: a nil *SyncStore would otherwise become a non-nil ExecutorStore,
+// and the freshness check skips only when it has no store at all.
+func executorStoreOf(store *SyncStore) ExecutorStore {
+	if store == nil {
+		return nil
+	}
+
+	return store
 }

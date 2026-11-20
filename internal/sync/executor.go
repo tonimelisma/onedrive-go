@@ -157,6 +157,11 @@ func (cfg *ExecutorConfig) Items() ItemClient {
 	return cfg.items
 }
 
+// SyncTree is the sync root the executor acts in.
+func (cfg *ExecutorConfig) SyncTree() *synctree.Root {
+	return cfg.syncTree
+}
+
 func (e *Executor) confirmRemotePathVisible(ctx context.Context, action *Action) {
 	pathConvergence, remotePath, ok := e.pathConvergenceForAction(action)
 	if !ok {

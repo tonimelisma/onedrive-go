@@ -88,6 +88,18 @@ type RemoteObserver struct {
 // deltaExpiredRecovery runs a full refresh for an expired delta token.
 type deltaExpiredRecovery func(ctx context.Context, kind ResyncKind) (RemoteObservationBatch, error)
 
+// SetClock replaces the observer's time capability. Must be called before
+// the observer fetches.
+func (o *RemoteObserver) SetClock(clock SyncClock) {
+	o.clock = clock
+}
+
+// SetDebugEvents installs the engine's debug event sink (see debugEvents).
+// Must be called before Watch.
+func (o *RemoteObserver) SetDebugEvents(emit func(EngineDebugEvent)) {
+	o.debugEvents = emit
+}
+
 // SetDeltaExpiredRecovery wires the full refresh Watch runs after a 410.
 func (o *RemoteObserver) SetDeltaExpiredRecovery(recovery deltaExpiredRecovery) {
 	o.recoverExpiredDelta = recovery
@@ -282,7 +294,7 @@ func (o *RemoteObserver) fullDelta(
 		if loopErr := loop.next(newToken, pageRaw); loopErr != nil {
 			o.stats.errors.Add(1)
 			o.logger.Warn("OneDrive's change list loops; rescanning the whole drive",
-				slog.String("reason", loopErr.reason), slog.Int("pages_fetched", page+1))
+				slog.String("reason", loopErr.Reason()), slog.Int("pages_fetched", page+1))
 
 			return nil, "", ShortcutTopologyBatch{}, 0, loopErr
 		}

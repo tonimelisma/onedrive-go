@@ -40,7 +40,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 
 		return batch, nil
 	})
-	remoteObs.debugEvents = rt.deps.emit
+	remoteObs.SetDebugEvents(rt.deps.emit)
 	rt.resources.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 

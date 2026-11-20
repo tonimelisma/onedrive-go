@@ -689,6 +689,26 @@ func (o *LocalObserver) cancelPendingTimer(path string) {
 	}
 }
 
+// SetClock replaces the observer's time capability (see clock). Must be
+// called before the observer scans or watches.
+func (o *LocalObserver) SetClock(clock SyncClock) {
+	o.clock = clock
+}
+
+// SetDebugEvents installs the engine's debug event sink (see debugEvents).
+// Must be called before Watch.
+func (o *LocalObserver) SetDebugEvents(emit func(EngineDebugEvent)) {
+	o.debugEvents = emit
+}
+
+// SetSafetyScan sets the healthy safety-scan interval and whether Watch runs
+// one safety scan at startup, closing the gap between the bootstrap scan and
+// the first watch event. Must be called before Watch.
+func (o *LocalObserver) SetSafetyScan(interval time.Duration, atStartup bool) {
+	o.safetyScanInterval = interval
+	o.startupSafetyScan = atStartup
+}
+
 // SetWatcherFactory overrides the default fsnotify watcher factory. Used by
 // tests to inject a mock factory that simulates inotify watch limit exhaustion
 // (ENOSPC) or other platform-specific failure modes.
@@ -851,6 +871,14 @@ func (o *LocalObserver) DroppedEvents() int64 {
 // engine to log per-pass drops without double-counting across passes.
 func (o *LocalObserver) ResetDroppedEvents() int64 {
 	return o.droppedEvents.Swap(0)
+}
+
+// RestoreDropped adds counts taken with ResetDroppedEvents and
+// ResetDroppedRetries back, so a recovery that failed is retried on the next
+// maintenance tick.
+func (o *LocalObserver) RestoreDropped(events, retries int64) {
+	o.droppedEvents.Add(events)
+	o.droppedRetries.Add(retries)
 }
 
 // DroppedRetries returns the cumulative number of hash requests dropped

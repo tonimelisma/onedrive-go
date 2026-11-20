@@ -357,7 +357,7 @@ func (flow *engineFlow) observeLocal(
 	// This scan runs no timers. Its racily-clean window is measured on the
 	// run's clock, the one every other time decision of the run reads.
 	if flow.deps.clock != nil {
-		obs.clock = flow.deps.clock
+		obs.SetClock(flow.deps.clock)
 	}
 	if recordHashes {
 		cache, cacheErr := eng.baseline.NewLocalHashCache(ctx)
@@ -489,7 +489,7 @@ func (flow *engineFlow) loadCurrentInputs(
 	store *SyncStore,
 	defaultDriveID driveid.ID,
 ) (currentInputs, error) {
-	tx, err := BeginPerfTx(ctx, store.db)
+	tx, err := store.BeginPerfTx(ctx)
 	if err != nil {
 		return currentInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
 	}

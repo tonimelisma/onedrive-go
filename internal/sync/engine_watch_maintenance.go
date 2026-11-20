@@ -32,8 +32,7 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		Kind:           LocalTruthSuspect,
 		RecoveryReason: LocalTruthRecoveryDroppedEvents,
 	}); err != nil {
-		rt.resources.localObs.droppedEvents.Add(droppedEvents)
-		rt.resources.localObs.droppedRetries.Add(droppedRetries)
+		rt.resources.localObs.RestoreDropped(droppedEvents, droppedRetries)
 		level := slog.LevelWarn
 		if errText := err.Error(); errText == rt.loop.lastDroppedRescanErr {
 			// Already reported; the next maintenance tick retries it.

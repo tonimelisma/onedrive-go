@@ -58,7 +58,7 @@ func (flow *engineFlow) observeMountRootRemote(
 		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
 		orphanKind := ResyncKindApplyDifferences
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			orphanKind = NewDeltaExpiredError(err).kind
+			orphanKind = ResyncKindOf(NewDeltaExpiredError(err))
 			// Self-healing: the next call re-enumerates the shared folder from
 			// scratch, so nothing needs the user's attention.
 			eng.logger.Info("Change history for a shared folder expired; rescanning the folder",

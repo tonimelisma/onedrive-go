@@ -27,6 +27,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 - Does Not Own: planning, retry scheduling, scope activation policy, or store schema
 - Source of Truth: planner-produced `ActionPlan` plus the rooted capabilities injected into the executor
 - Allowed Side Effects: sync-root filesystem mutation, Graph transfer calls, and store success commits through the engine
+- Store Access: the worker pool and the freshness check see the store only as `ExecutorStore` (`action_freshness.go`): the reads that check an action is still fresh and the commit of its outcome. The engine hands `*SyncStore` over as one
 - Mutable Runtime Owner: workers own only action execution. The engine owns
   runtime quiescence, held-work timing, admission, and dependency completion
   decisions above the worker pool.

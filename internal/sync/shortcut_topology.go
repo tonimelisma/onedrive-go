@@ -197,6 +197,12 @@ func (r ShortcutChildAckRef) IsZero() bool {
 	return r.bindingItemID == ""
 }
 
+// Matches reports whether record is the shortcut root this acknowledgement
+// names.
+func (r ShortcutChildAckRef) Matches(record *ShortcutRootRecord) bool {
+	return record.BindingItemID == r.bindingItemID
+}
+
 // ShortcutRootIdentity is the parent-engine-issued local directory identity
 // token for a managed shortcut root. Control-plane code carries this value as
 // child engine input, but only sync opens the filesystem and decides whether it

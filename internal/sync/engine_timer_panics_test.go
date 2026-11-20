@@ -240,10 +240,10 @@ func TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged(t *testing.T) {
 //
 // A timer callback's panic ends the run only when the callback ran on the
 // clock that reports to the engine's timer panics. So the engine builds that
-// one real clock, in newEngine, and every observer it builds runs on it: the
-// observer constructors are called only from the two engine methods that set
-// the clock. The constructors' own zero clock is for tests that build an
-// observer by hand.
+// one real clock, in newEngine through NewRealClock, and every observer it
+// builds runs on it: the observer constructors are called only from the two
+// engine methods that set the clock. The constructors' own zero clock is for
+// tests that build an observer by hand.
 func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 	t.Parallel()
 
@@ -251,7 +251,7 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 	require.NoError(t, err)
 
 	fset := token.NewFileSet()
-	var clocks, constructorCalls []string
+	var literals, clocks, constructorCalls []string
 	for _, path := range paths {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -267,10 +267,14 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 				switch n := node.(type) {
 				case *ast.CompositeLit:
 					if ident, ok := n.Type.(*ast.Ident); ok && ident.Name == "RealClock" && len(n.Elts) > 0 {
-						clocks = append(clocks, owner)
+						literals = append(literals, owner)
 					}
 				case *ast.CallExpr:
-					if ident, ok := n.Fun.(*ast.Ident); ok && (ident.Name == "NewLocalObserver" || ident.Name == "NewRemoteObserver") {
+					ident, ok := n.Fun.(*ast.Ident)
+					switch {
+					case ok && ident.Name == "NewRealClock":
+						clocks = append(clocks, owner)
+					case ok && (ident.Name == "NewLocalObserver" || ident.Name == "NewRemoteObserver"):
 						constructorCalls = append(constructorCalls, ident.Name+" from "+owner)
 					}
 				}
@@ -279,6 +283,7 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 		}
 	}
 
+	assert.Equal(t, []string{"NewRealClock"}, literals, "a real clock with timer panics is built only by NewRealClock")
 	assert.Equal(t, []string{"newEngine"}, clocks, "one real clock with the engine's timer panics, built in newEngine")
 	assert.ElementsMatch(t,
 		[]string{"NewLocalObserver from buildLocalObserver", "NewRemoteObserver from buildRemoteObserver"},

@@ -49,6 +49,12 @@ func NewDepGraph(logger *slog.Logger) *DepGraph {
 	}
 }
 
+// SetOwnerCheck installs the check every method runs first (see ownerCheck);
+// nil removes it.
+func (g *DepGraph) SetOwnerCheck(check func()) {
+	g.ownerCheck = check
+}
+
 // Add registers an action and wires up its dependencies in a single call. If
 // all dependencies are already satisfied (depIDs is empty or all deps already
 // completed/unknown), the TrackedAction is returned as immediately ready.

@@ -186,7 +186,7 @@ func (rt *watchRuntime) initWatchInfra(
 	// plan's. Active scope state is loaded from the persisted block_scopes
 	// table into watch-owned runtime state.
 	rt.sched.graph = NewDepGraph(rt.deps.logger)
-	rt.sched.graph.ownerCheck = rt.engine.runOwnerCheck
+	rt.sched.graph.SetOwnerCheck(rt.engine.runOwnerCheck)
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
@@ -199,9 +199,8 @@ func (rt *watchRuntime) initWatchInfra(
 	// actually ready to receive it.
 	rt.sched.dispatchCh = make(chan *TrackedAction, watchDispatchBuf)
 
-	pool := NewWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, rt.deps.store, rt.deps.logger, watchCompletionBuf)
-	pool.perfCollector = rt.engine.collector()
-	pool.serialize = rt.engine.serializeWorkers
+	pool := NewWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, executorStoreOf(rt.deps.store), rt.deps.logger, watchCompletionBuf)
+	pool.SetRuntimeOptions(rt.engine.collector(), rt.engine.serializeWorkers)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
@@ -403,9 +402,8 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 		}
 	})
 	localObs.SetLocalObservationBatchChannel(localBatches)
-	localObs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
-	localObs.startupSafetyScan = true
-	localObs.debugEvents = rt.deps.emit
+	localObs.SetSafetyScan(LocalWatchHealthySafetyScanInterval, true)
+	localObs.SetDebugEvents(rt.deps.emit)
 
 	if rt.engine.localWatcherFactory != nil {
 		localObs.SetWatcherFactory(rt.engine.localWatcherFactory)

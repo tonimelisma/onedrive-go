@@ -594,7 +594,7 @@ func (e *Engine) releaseEntryRemains(storedPath string) bool {
 // symbolic link. The release never acts on one (surveyReleaseTree). An
 // unreadable path counts as crossing one: its row stays.
 func releaseRowCrossesSymlink(exec *Executor, row *BaselineEntry) bool {
-	_, crosses, err := exec.SymlinkBoundaryForPath(exec.syncTree.Spelling(row.Path))
+	_, crosses, err := exec.SymlinkBoundaryForPath(exec.SyncTree().Spelling(row.Path))
 
 	return crosses || err != nil
 }

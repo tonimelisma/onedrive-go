@@ -102,6 +102,34 @@ func (s *SyncRootIdentity) Expected() *synctree.RootIdentity {
 	return &copied
 }
 
+// CompleteBinding runs bind once while the identity still has to be
+// recorded, serialized with every other binding so two commits cannot write
+// two tokens. bind gets a copy of the expected identity (nil when none was
+// taken) and returns the identity the store recorded; that identity becomes
+// the expected one and the binding is done. A failed bind leaves the binding
+// pending. ran is false when no binding was pending; bind did not run then.
+func (s *SyncRootIdentity) CompleteBinding(
+	bind func(expected *synctree.RootIdentity) (*synctree.RootIdentity, error),
+) (ran bool, err error) {
+	if s == nil || !s.bindPending.Load() {
+		return false, nil
+	}
+
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	if !s.bindPending.Load() {
+		return false, nil
+	}
+
+	bound, err := bind(s.Expected())
+	if err != nil {
+		return true, err
+	}
+	s.current.Store(bound)
+	s.bindPending.Store(false)
+	return true, nil
+}
+
 // Validate refuses tree when it is not the expected sync folder.
 func (s *SyncRootIdentity) Validate(tree *synctree.Root) error {
 	if s == nil {

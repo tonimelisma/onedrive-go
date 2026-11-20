@@ -276,7 +276,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		shortcutNamespaceID:    cfg.ShortcutNamespaceID,
 		shortcutChildWorkSink:  cfg.ShortcutChildWorkSink,
 		enableWebsocket:        cfg.EnableWebsocket,
-		wallClock:              RealClock{logger: cfg.Logger, panics: &TimerPanics{}},
+		wallClock:              NewRealClock(cfg.Logger, &TimerPanics{}),
 		socketIOWakeSourceFactory: func(
 			fetcher SocketIOEndpointFetcher,
 			driveID driveid.ID,
@@ -305,7 +305,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 // buildLocalObserver builds a local observer on the engine's real clock.
 func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *LocalObserver {
 	obs := NewLocalObserver(bl, logger, e.checkWorkers)
-	obs.clock = e.wallClock
+	obs.SetClock(e.wallClock)
 
 	return obs
 }
@@ -314,7 +314,7 @@ func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *LocalObs
 // engine's real clock.
 func (e *Engine) buildRemoteObserver(bl *Baseline, logger *slog.Logger) *RemoteObserver {
 	obs := NewRemoteObserver(e.fetcher, bl, e.driveID, logger)
-	obs.clock = e.wallClock
+	obs.SetClock(e.wallClock)
 
 	return obs
 }
@@ -422,20 +422,27 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // write two tokens, and the folder would keep the one the store did not
 // record. It reports what the commit changed and marks nothing itself.
 func (e *Engine) commitLocalSnapshot(ctx context.Context, commit LocalSnapshotCommit) (LocalSnapshotCommitResult, error) {
-	identity := e.syncRootIdentity
-	if identity == nil || !identity.bindPending.Load() {
+	var result LocalSnapshotCommitResult
+	ran, err := e.syncRootIdentity.CompleteBinding(func(expected *synctree.RootIdentity) (*synctree.RootIdentity, error) {
+		var bindErr error
+		var bound *synctree.RootIdentity
+		result, bound, bindErr = e.commitLocalSnapshotBinding(ctx, &commit, expected)
+		return bound, bindErr
+	})
+	if !ran {
 		return e.commitLocalSnapshotUnbound(ctx, &commit)
 	}
+	return result, err
+}
 
-	identity.bindMu.Lock()
-	defer identity.bindMu.Unlock()
-	if !identity.bindPending.Load() {
-		return e.commitLocalSnapshotUnbound(ctx, &commit)
-	}
-
-	expected := identity.Expected()
+// commitLocalSnapshotBinding is commitLocalSnapshot while a binding is
+// pending: it marks the folder, commits with the binding, and returns the
+// identity the store recorded.
+func (e *Engine) commitLocalSnapshotBinding(
+	ctx context.Context, commit *LocalSnapshotCommit, expected *synctree.RootIdentity,
+) (LocalSnapshotCommitResult, *synctree.RootIdentity, error) {
 	if expected == nil {
-		return LocalSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
+		return LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
 	bind.Token = ""
@@ -447,28 +454,26 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, commit LocalSnapshotCo
 		e.logger.Debug("sync folder cannot carry a bind token; binding on inode and filesystem id",
 			slog.Any("error", err))
 	default:
-		return LocalSnapshotCommitResult{}, fmt.Errorf("sync: binding sync folder: %w", err)
+		return LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: %w", err)
 	}
 
 	commit.Bind = &bind
-	result, err := e.baseline.CommitLocalSnapshot(ctx, &commit)
+	result, err := e.baseline.CommitLocalSnapshot(ctx, commit)
 	if err != nil {
-		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
+		return result, nil, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
 	}
 	bound := result.Bound
 	if bound != nil && bound.Token != bind.Token && bound.Token != "" {
 		// Another binding won in the store; the folder must carry the token
 		// the store recorded, not the one just written.
 		if markErr := e.syncTree.SetRootMark(bound.Token); markErr != nil {
-			return result, fmt.Errorf("sync: restoring the recorded sync folder marker: %w", markErr)
+			return result, nil, fmt.Errorf("sync: restoring the recorded sync folder marker: %w", markErr)
 		}
 	}
 	if bound == nil {
 		bound = &bind
 	}
-	identity.current.Store(bound)
-	identity.bindPending.Store(false)
-	return result, nil
+	return result, bound, nil
 }
 
 func (e *Engine) commitLocalSnapshotUnbound(

@@ -12,14 +12,14 @@ import (
 // returned context carries the engine's perf collector (withOwnCollector).
 func (e *Engine) beginRun(ctx context.Context) (context.Context, func(error) error) {
 	runCtx, cancel := context.WithCancel(e.withOwnCollector(ctx))
-	e.wallClock.panics.Bind(cancel)
+	e.wallClock.Panics().Bind(cancel)
 	if e.ownerCheckFactory != nil {
 		e.runOwnerCheck = e.ownerCheckFactory()
 	}
 
 	return runCtx, func(err error) error {
 		e.runOwnerCheck = nil
-		panicErr := e.wallClock.panics.Unbind()
+		panicErr := e.wallClock.Panics().Unbind()
 		cancel()
 
 		return withTimerPanic(err, panicErr)

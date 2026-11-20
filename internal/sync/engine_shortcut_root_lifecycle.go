@@ -506,10 +506,10 @@ func (e *Engine) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ac
 	if e == nil || e.baseline == nil || ack.Ref.IsZero() {
 		return nil
 	}
-	return e.finalizeShortcutRootReleaseByBinding(ctx, ack.Ref.bindingItemID)
+	return e.finalizeShortcutRootReleaseByBinding(ctx, ack.Ref)
 }
 
-func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindingItemID string) error {
+func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, ref ShortcutChildAckRef) error {
 	records, err := e.baseline.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots before child drain release: %w", err)
@@ -519,7 +519,7 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, bindi
 	var cleanupErr error
 	for i := range records {
 		record := NormalizeShortcutRootRecord(&records[i])
-		if record.BindingItemID != bindingItemID || !ShortcutRootStateAwaitsReleaseCleanup(record.State) {
+		if !ref.Matches(&record) || !ShortcutRootStateAwaitsReleaseCleanup(record.State) {
 			nextRecords = append(nextRecords, record)
 			continue
 		}

@@ -40,9 +40,21 @@ const (
 	actionFreshnessSourceRemoteTruth
 )
 
+// ExecutorStore is the executor's view of the sync store: the reads that
+// check an action is still fresh and the commit of its outcome. *SyncStore
+// implements it; the engine hands it over (executorStoreOf).
+type ExecutorStore interface {
+	CommitMutation(ctx context.Context, outcome *BaselineMutation) error
+	GetLocalStateByPath(ctx context.Context, path string) (*LocalStateRow, bool, error)
+	GetRemoteStateByID(ctx context.Context, driveID driveid.ID, itemID string) (*RemoteStateRow, bool, error)
+	GetRemoteStateByPath(ctx context.Context, path string, driveID driveid.ID) (*RemoteStateRow, bool, error)
+	Load(ctx context.Context) (*Baseline, error)
+	ReadObservationState(ctx context.Context) (*ObservationState, error)
+}
+
 func EvaluateActionFreshnessFromStore(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 ) (actionFreshnessDecision, error) {
 	// Worker and admission validation fail closed on cancellation. A stopping
@@ -74,7 +86,7 @@ func EvaluateActionFreshnessFromStore(
 
 func loadActionFreshnessInputs(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 ) (actionFreshnessInputs, error) {
 	inputs := actionFreshnessInputs{}
@@ -100,7 +112,7 @@ func loadActionFreshnessInputs(
 
 func loadLocalActionFreshnessInputs(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 	inputs *actionFreshnessInputs,
 ) error {
@@ -132,7 +144,7 @@ func loadLocalActionFreshnessInputs(
 
 func loadRemoteActionFreshnessInputs(
 	ctx context.Context,
-	store *SyncStore,
+	store ExecutorStore,
 	action *Action,
 	inputs *actionFreshnessInputs,
 ) error {
@@ -176,7 +188,7 @@ func loadRemoteActionFreshnessInputs(
 // and re-paths the subtree. Looked up by path, a download or local move into
 // a folder renamed earlier in the same pass was declared stale and replanned
 // on the next pass. Absence (a planned create) is still checked by path.
-func loadPlannedRemoteTruth(ctx context.Context, store *SyncStore, action *Action) (*RemoteStateRow, bool, error) {
+func loadPlannedRemoteTruth(ctx context.Context, store ExecutorStore, action *Action) (*RemoteStateRow, bool, error) {
 	if planned := action.View.Remote; planned != nil && !planned.IsDeleted && planned.ItemID != "" {
 		row, found, err := store.GetRemoteStateByID(ctx, driveid.ID{}, planned.ItemID)
 		if err != nil {

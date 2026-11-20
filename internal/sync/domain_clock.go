@@ -37,6 +37,18 @@ type RealClock struct {
 	panics *TimerPanics
 }
 
+// NewRealClock is the wall clock whose timer callbacks log their panics to
+// logger and hand them to panics.
+func NewRealClock(logger *slog.Logger, panics *TimerPanics) RealClock {
+	return RealClock{logger: logger, panics: panics}
+}
+
+// Panics is the timer panics the clock's callbacks report to; nil for a
+// clock built without them.
+func (c RealClock) Panics() *TimerPanics {
+	return c.panics
+}
+
 func (RealClock) Now() time.Time { return time.Now() }
 
 // AfterFunc runs fn on a goroutine of its own once delay has passed, inside

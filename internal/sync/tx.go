@@ -49,6 +49,12 @@ func BeginPerfTx(ctx context.Context, db *sql.DB) (*perfTx, error) {
 	}, nil
 }
 
+// BeginPerfTx begins a measured transaction on the store's database, for a
+// read that spans several of the store's queries (BeginPerfTx).
+func (s *SyncStore) BeginPerfTx(ctx context.Context) (*perfTx, error) {
+	return BeginPerfTx(ctx, s.db)
+}
+
 func (tx *perfTx) Commit() error {
 	if tx == nil || tx.Tx == nil {
 		return nil
