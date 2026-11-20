@@ -47,7 +47,6 @@ func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
 	p.replanReady = nil
 	rt.resources.localBatches = nil
 	rt.resources.remoteBatches = nil
-	rt.resources.skippedItems = nil
 	p.maintenanceC = nil
 }
 

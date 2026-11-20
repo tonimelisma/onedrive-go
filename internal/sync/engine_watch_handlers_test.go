@@ -344,7 +344,8 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "publication failure must terminate instead of pretending the unresolved node was handled")
 }
 
-func TestWatchRuntime_HandleWatchSkippedSignal_ShutdownCancellationIsNonFatal(t *testing.T) {
+// Validates: R-2.8.22
+func TestWatchRuntime_ASnapshotTakenBeforeShutdownIsStillCommitted(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
@@ -352,14 +353,20 @@ func TestWatchRuntime_HandleWatchSkippedSignal_ShutdownCancellationIsNonFatal(t 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	done, err := rt.handleWatchSkippedSignal(ctx, []skippedItem{{
-		Path:   "bad?.txt",
-		Reason: IssueInvalidFilename,
-		Detail: "invalid filename",
-	}}, true)
-
+	err := rt.handleWatchLocalObservationBatch(ctx, &localObservation{
+		kind: localSnapshot,
+		findings: []skippedItem{{
+			Path:   "bad?.txt",
+			Reason: IssueInvalidFilename,
+			Detail: "invalid filename",
+		}},
+	})
 	require.NoError(t, err)
-	assert.False(t, done)
+
+	issues, err := eng.baseline.ListObservationIssues(t.Context())
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "bad?.txt", issues[0].Path)
 }
 
 func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnReductionFailure(t *testing.T) {

@@ -19,7 +19,7 @@ local-snapshot rows for `local_state`, and scoped local observation batches
 that the engine applies to `local_state`.
 
 In watch mode, that ownership is explicit: local observers emit engine-applied
-`localObservationBatch` values, while remote observers and full-refresh workers
+`localObservation` values (a patch, a snapshot, or a suspect-truth statement), while remote observers and full-refresh workers
 emit one `remoteObservationBatch` value that the watch loop applies durably. No
 observer goroutine commits state rows or observation cursors directly. Once the
 engine starts applying that batch as durable current truth, failures in local
@@ -27,8 +27,8 @@ row commits, remote row commits, cursor commits, or observation-findings
 reconciliation are fail-closed for that run/session rather than best-effort
 warnings.
 Those observer outputs are runtime-owned too: the watch runtime owns the local
-batch stream, remote-batch stream, skipped-item stream, observer error stream,
-refresh channels, and active-observer count, while the pipeline shell keeps only
+observation stream, remote-batch stream, observer error stream, refresh
+channels, and active-observer count, while the pipeline shell keeps only
 the non-runtime dependencies needed by the loop.
 
 The observation stack has four main pieces:
@@ -82,10 +82,10 @@ except that the type had once been public.
 | --- | --- |
 | A full scan refuses a sync folder that is not the one the state was built from (replaced, an emptied mount point, a re-pointed root symlink) and a sync folder that cannot be read, rather than reading either as deletions; every engine validates against an expected identity, parent-issued for shortcut children and store-recorded for primary roots. | `TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable`, `TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes`, `TestEngine_SymlinkedSyncDirRepointedIsRefused`, `TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused`, `TestFullScan_RootReadDirEIOReturnsError`, `TestNewEngine_RootTokenDecidesOverInode`, `TestRunOnce_RemoteDeleteAfterRebindingInTheSameEngineSucceeds`, `TestWatchObserver_SeesBindingMadeAfterItWasBuilt`, `TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker`, `TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut`, `TestMarkRoot_TokenThatDoesNotReadBackIsUnsupported`, `TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused`, `TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind`, `TestSameRoot_TokenDecidesWhenRecorded`, `TestSameRoot_BtrfsSubvolumeRootAlsoNeedsDevice`, `TestMarkRoot_FilesystemWithoutXattrsFallsBack`, `TestSameRoot_BirthTimeMustMatchWhenBothSidesKnowOne`, `TestRootIdentity_LinuxBirthTimeIsStatxBtime`, `TestNewEngine_RootWithoutTokenIsRefusedWhenBirthTimeDiffers` |
 | Synced paths the scan cannot represent (replaced by a skipped symlink or special file, renamed to an invalid, too-long or excluded name, unstat-able, unreadable) and mount points of other filesystems are recorded as unavailable truth on the synced path, so nothing is deleted on either side; a watch create of such an entry triggers an immediate safety scan. | `TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline`, `TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete`, `TestFullScan_HashEIOProducesNoUploadAndNoDelete`, `TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault`, `TestIsForeignMountPoint_CrossingRecordsTheBoundary`, `TestRunOnce_UnmountedNestedDiskWithFewFilesIsNotDeleted`, `TestFlaggedMountIsGone_MountedButEmptiedDiskIsNotABoundary`, `TestClearSyncRootIdentity_KeepsRecordedMountPoints`, `TestRootDeviceForScan_UnreadableRootAbortsScan` |
-| A full local scan clears every finding it no longer reports and keeps every one it reports again, an interrupted removal's leftover included; every watch-mode full scan (safety, recovery, and the fallback scan while watching is unavailable) forwards its finding set even when it is empty; every issue type a scan reports is a managed type of the local findings batch, checked against the scanner's source; only a regular file under a set-aside name is reported as an interrupted removal (R-6.4.9, R-2.8.21, R-2.8.22). | `TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover`, `TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone`, `TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet`, `TestWatchRuntime_FallbackScanRecordsAndClearsFindings`, `TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval` |
+| A full local scan clears every finding it no longer reports and keeps every one it reports again, an interrupted removal's leftover included; every watch-mode full scan (safety, recovery, and the fallback scan while watching is unavailable) sends its finding set in its snapshot even when it is empty; every issue type a scan reports is a managed type of the local findings batch, checked against the scanner's source; only a regular file under a set-aside name is reported as an interrupted removal (R-6.4.9, R-2.8.21, R-2.8.22). | `TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover`, `TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone`, `TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet`, `TestWatchRuntime_FallbackScanRecordsAndClearsFindings`, `TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty`, `TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval` |
 | A watch Remove or Rename event becomes a delete only when the exact name is really gone, so a lone MOVED_FROM, an atomic save or a misattributed event never deletes a file that is still there. | `TestHandleDelete_PathThatStillExistsEmitsNoDelete`, `TestHandleFsEvent_DeletePassesFsPath` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
-| Watch-mode local observation emits scoped engine-applied batches: exact file rows, directory-prefix deletes, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
+| Watch-mode local observation emits scoped engine-applied batches: exact file rows, subtree deletes for every removed path, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_DirectoryDeleteRemovesPrefix`, `TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree`, `TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows`, `TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/observer_remote_test.go` |
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released (R-2.8.22). | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
@@ -409,16 +409,31 @@ waiting on it.
 
 Watch-mode local observation also maintains `local_state` incrementally from
 re-observed scopes. File create/modify handlers stat and hash the exact file and
-emit an upsert row. File delete/rename-away handlers emit an exact path delete.
-Directory create handlers add watches, scan the new subtree, and emit rows for
-the observed directory tree. Directory delete/rename-away handlers emit a prefix
-delete for the removed directory. Safety scans emit a full local snapshot
-replacement and clear any suspect-local-truth marker after the engine commits
-the replacement. The snapshot carries no dirty hint of its own: the runtime
-replans when the snapshot changes committed truth (a row, or the truth-complete
-marker, R-2.8.17) and when the scan's skipped findings change the persisted
-issue set, which the engine reconciles from the separate skipped-items stream
-and reports as changed or not. A scan's events are counted against the
+emit an upsert row. Directory create handlers add watches, scan the new
+subtree, and emit rows for the observed directory tree. Every delete or
+rename-away removes the path and every row below it, whatever the observer
+knew about what the path was: a new directory whose watch could not be added
+is a folder neither the baseline nor the watch set knows, yet the scan of the
+new subtree stored its children's rows. Local observation reaches the
+runtime as one `localObservation` of one of three kinds on one channel: a
+patch (rows to write, paths and subtrees to remove), a snapshot (every row of
+one full scan with that scan's whole finding set and the mount points it
+crossed), or a statement that local truth is suspect; the runtime's apply
+switches over every kind. A snapshot commits through the one function the
+replan's own scan uses (`commitLocalScan`): findings, rows and crossed mounts
+in one store transaction (`CommitLocalSnapshot`), binding the sync folder
+while a bind is pending, so a scan's rows never land without its findings or
+its mounts. It clears any suspect-local-truth marker, and afterwards the
+observer's mount flags are set from the mounts the store holds, so a disk
+mounted during the watch is recognized as missing when it is unmounted
+(`TestLocalObserver_AFullScanSendsItsFindingsWithItsRows`,
+`TestWatchRuntime_ASnapshotCommitsRowsFindingsAndMountsTogether`,
+`TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags`). A snapshot
+dropped on a full channel asks for a recovery scan, as every dropped
+observation does. The snapshot carries no dirty hint of its own: the runtime
+replans when the commit changes committed truth (a row, or the
+truth-complete marker, R-2.8.17) or the persisted issue set
+(`TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty`). A scan's events are counted against the
 baseline, so during a backlog every safety scan re-reports every change the
 installed plan already covers; marking the runtime dirty for them retired the
 admitted plan at every safety scan, and with a replan slower than the safety
@@ -585,8 +600,8 @@ therefore only trustworthy to later stale-work validation when local truth is
 marked complete.
 
 The same engine-owned apply path records production perf counters for scoped
-local observation: scoped commit count, upsert count, exact path deletes,
-prefix deletes, full snapshot replacements, and suspect-local-truth recovery
+local observation: scoped commit count, upsert count, exact path deletes (the
+old path of a move batch), subtree deletes, full snapshot replacements, and suspect-local-truth recovery
 reasons. Those counters are aggregate-only; they never expose paths, inode
 facts, item IDs, or drive IDs.
 
@@ -625,7 +640,21 @@ Built-in local observation policy remains:
   NFC twin), and supplementary-plane characters ignored (`a.txt` collides with
   `a😀.txt`; the issue detail names both files and says why). Full scans,
   watch-mode collision caches and the baseline sibling index all group by that
-  key (`TestDetectCaseCollisions_FullCaseFoldingCollides`,
+  key. A second file or folder beside a synced item whose name differs only
+  in Unicode form has the synced item's stored path: neither entry is chosen,
+  the path's row keeps describing the synced item (for a file the synced
+  inode, or the baseline's facts when neither file is it), the twin's hash
+  jobs are dropped, a folder twin's content gets no rows, and the
+  case-collision issue blocks the path until one of the two is gone; two
+  folders with one stored path are outside this rule. Removing the twin is no
+  delete of the stored path, which still names the synced item
+  (`TestFullScan_UnicodeFormTwinOfSyncedFileIsACollision`,
+  `TestFullScan_UnicodeFormFolderTwinOfSyncedFileIsACollision`,
+  `TestFullScan_UnicodeFormFileTwinOfSyncedFolderIsACollision`,
+  `TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing`,
+  `TestRunOnce_UnicodeFormFolderTwinOfSyncedFileFailsNothing`,
+  `TestHandleDelete_UnicodeFormTwinKeepsTheSyncedFilesRow`,
+  `TestDetectCaseCollisions_FullCaseFoldingCollides`,
   `TestDetectCaseCollisions_EmojiOnlyDifferenceCollidesAndNamesBothFiles`,
   `TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself`)
 - a case collision needs both names on disk: a baseline name the scan no
@@ -790,15 +819,11 @@ filter excludes it like every entry with that name (it is neither synced nor
 walked), and nothing is reported. Until 2026-11-11 such a folder was reported
 as a set-aside file.
 
-In watch mode every full scan hands its finding set to the engine through
-`TrySendScanFindings`, the empty set included, because the empty set is what
-clears the last finding: the safety and recovery scans (`runSafetyScan`) and
-the periodic full scan that replaces watching while the watcher is
-unavailable (`runFallbackScan`, `sync-engine.md`). Until 2026-11-11 a safety
-scan forwarded only a non-empty set, so the last finding stayed until the
-next restart, and the fallback scan only logged its set, so while watching
-was unavailable no finding was recorded or cleared. A set dropped on a full
-channel is replaced by the next scan's, which is again the whole set.
+In watch mode every full scan hands its finding set to the engine inside its
+snapshot (`TrySendFullLocalSnapshot`), the empty set included, because the
+empty set is what clears the last finding: the safety and recovery scans
+(`runSafetyScan`) and the periodic full scan that replaces watching while the
+watcher is unavailable (`runFallbackScan`, `sync-engine.md`).
 
 A synced item moved *into* an excluded folder is still invisible: the walk
 does not descend excluded folders, so its identity is never seen. That case

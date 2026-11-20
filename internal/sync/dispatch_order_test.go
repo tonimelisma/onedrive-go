@@ -332,6 +332,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_UploadOnly_StillObservesRemoteDelta,
 		TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes,
 		TestRunOnce_LocalNFDNamedFileUploadsInOnePass,
+		TestRunOnce_UnicodeFormTwinOfSyncedFileUploadsNothing,
+		TestRunOnce_UnicodeFormFolderTwinOfSyncedFileFailsNothing,
 		TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile,
 		TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile,
 		TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile,

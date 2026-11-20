@@ -103,6 +103,10 @@ func stressSyncRunWatchMembers() []string {
 func stressSyncWatchRuntimeMembers() []string {
 	return []string{
 		"TestWatchRuntime_ADrainRecordsTheCompletionsItReceives",
+		"TestWatchRuntime_ASnapshotCommitsRowsFindingsAndMountsTogether",
+		"TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags",
+		"TestWatchRuntime_ASnapshotTakenBeforeShutdownIsStillCommitted",
+		"TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty",
 		"TestWatchRuntime_AStopsBoundStartsAtItsCancel",
 		"TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound",
 		"TestWatchRuntime_AnObserverWhoseRequestTimedOutIsWarnedAndReturned",
@@ -122,7 +126,6 @@ func stressSyncWatchRuntimeMembers() []string {
 		"TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependentsDuringBootstrap",
 		"TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnReductionFailure",
 		"TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublicationRetryOnEngineSide",
-		"TestWatchRuntime_HandleWatchSkippedSignal_ShutdownCancellationIsNonFatal",
 		"TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal",
 		"TestWatchRuntime_InitWatchInfraUsesUnbufferedDispatch",
 		"TestWatchRuntime_IsItsOwnSignalSinkAndInspector",

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -45,10 +47,76 @@ type scanAvailability struct {
 	crossedMounts []string
 	// tree is the scanned sync tree, for emptiness checks.
 	tree *synctree.Root
+	// syncedEntries holds, per stored path of a synced item, the file or
+	// folder whose row the scan keeps for it. A second entry with the same
+	// stored path is a Unicode-form twin (admitSyncedEntry).
+	syncedEntries map[string]syncedEntry
+	// mountBoundaryFlags are the folders recorded as crossed mount points
+	// when the scan started.
+	mountBoundaryFlags map[string]struct{}
+	// droppedHashJobs and droppedTrees are the on-disk paths of twins, and
+	// of folder twins' subtrees, whose hash jobs the walk queued before the
+	// synced item's own entry claimed the row.
+	droppedHashJobs map[string]struct{}
+	droppedTrees    []string
+}
+
+// syncedEntry is the entry a scan keeps for a synced item's stored path.
+type syncedEntry struct {
+	fsPath string
+	isDir  bool
+	// isSynced reports that the entry can be the synced item (isSyncedEntry).
+	isSynced bool
+	// twinReported is set once the path's collision is recorded.
+	twinReported bool
+}
+
+// skipError is what the walk returns for a refused entry: a folder twin is
+// not walked.
+func (e syncedEntry) skipError() error {
+	if e.isDir {
+		return filepath.SkipDir
+	}
+
+	return nil
+}
+
+// dropEntry sets aside an entry admitted earlier that turned out to be a
+// twin: its hash jobs, and for a folder the rows its walk found below it.
+func (a *scanAvailability) dropEntry(entry syncedEntry, dbRelPath string, currentRows map[string]localStateRow) {
+	a.droppedHashJobs[entry.fsPath] = struct{}{}
+	if !entry.isDir {
+		return
+	}
+	a.droppedTrees = append(a.droppedTrees, entry.fsPath+string(filepath.Separator))
+	below := dbRelPath + "/"
+	for rowPath := range currentRows {
+		if strings.HasPrefix(rowPath, below) {
+			delete(currentRows, rowPath)
+		}
+	}
+}
+
+// hashJobDropped reports whether the job for fsPath belongs to a twin.
+func (a *scanAvailability) hashJobDropped(fsPath string) bool {
+	if _, dropped := a.droppedHashJobs[fsPath]; dropped {
+		return true
+	}
+	for _, tree := range a.droppedTrees {
+		if strings.HasPrefix(fsPath, tree) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func newScanAvailability(rootDevice uint64) *scanAvailability {
-	return &scanAvailability{dirDevices: map[string]uint64{"": rootDevice}}
+	return &scanAvailability{
+		dirDevices:      map[string]uint64{"": rootDevice},
+		syncedEntries:   map[string]syncedEntry{},
+		droppedHashJobs: map[string]struct{}{},
+	}
 }
 
 // rootDeviceForScan is the device of the sync folder itself. Without it no
@@ -183,7 +251,7 @@ func (o *localObserver) flaggedMountIsGone(availability *scanAvailability, dbRel
 	if availability == nil {
 		return false
 	}
-	if _, flagged := o.mountBoundaryFlags[dbRelPath]; !flagged {
+	if _, flagged := availability.mountBoundaryFlags[dbRelPath]; !flagged {
 		return false
 	}
 	device := availability.dirDevices[dbRelPath]

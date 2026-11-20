@@ -28,8 +28,8 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		return
 	}
 
-	if err := rt.handleWatchLocalObservationBatch(ctx, &localObservationBatch{
-		markSuspect:    true,
+	if err := rt.handleWatchLocalObservationBatch(ctx, &localObservation{
+		kind:           localTruthSuspect,
 		recoveryReason: localTruthRecoveryDroppedEvents,
 	}); err != nil {
 		rt.resources.localObs.droppedEvents.Add(droppedEvents)

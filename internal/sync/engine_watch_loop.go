@@ -240,8 +240,6 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return rt.handleWatchProtectedRootEventSignal(ctx, &event, ok)
 	case batch, ok := <-rt.resources.remoteBatches:
 		return rt.handleWatchRemoteBatchSignal(ctx, &batch, ok)
-	case skipped, ok := <-rt.resources.skippedItems:
-		return rt.handleWatchSkippedSignal(ctx, skipped, ok)
 	case <-rt.resources.refreshCh:
 		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 		return false, nil
@@ -310,7 +308,7 @@ func (rt *watchRuntime) handleWatchCompletionSignal(
 
 func (rt *watchRuntime) handleWatchLocalObservationBatchSignal(
 	ctx context.Context,
-	batch *localObservationBatch,
+	batch *localObservation,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -370,42 +368,6 @@ func (rt *watchRuntime) handleWatchRemoteBatchSignal(
 	}
 
 	return false, rt.handleRemoteObservationBatch(ctx, batch)
-}
-
-func (rt *watchRuntime) handleWatchSkippedSignal(
-	ctx context.Context,
-	skipped []skippedItem,
-	ok bool,
-) (bool, error) {
-	if !ok {
-		rt.resources.skippedItems = nil
-		return false, nil
-	}
-
-	// Findings observed before a shutdown are still recorded: detached from
-	// the cancellation, under the bound every detached store write has.
-	reconcileCtx := ctx
-	if ctx.Err() != nil {
-		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
-		defer cancel()
-		reconcileCtx = detached
-	}
-
-	changed, err := rt.reconcileSkippedObservationFindings(reconcileCtx, skipped)
-	if err != nil && isWatchShutdownError(ctx, err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	// Findings are planner input: a file that became unsyncable, or
-	// syncable again, replans like a changed row. A persistent finding every
-	// safety scan re-reports does not (R-2.8.21).
-	if changed && rt.resources.dirtyBuf != nil {
-		rt.resources.dirtyBuf.MarkDirty()
-	}
-
-	return false, nil
 }
 
 func (rt *watchRuntime) handleWatchRefreshResultSignal(

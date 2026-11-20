@@ -127,6 +127,9 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 	}
 	o.scanAvailability = newScanAvailability(rootDevice)
 	o.scanAvailability.tree = tree
+	if flags := o.mountBoundaryFlags.Load(); flags != nil {
+		o.scanAvailability.mountBoundaryFlags = *flags
+	}
 	defer func() { o.scanAvailability = nil }()
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
@@ -169,6 +172,7 @@ func (o *localObserver) FullScan(ctx context.Context, tree *synctree.Root) (scan
 
 	// Phase 2: Hash — parallel file hashing. Panics in hash goroutines are
 	// recovered and converted to SkippedItems (defensive coding).
+	jobs = withoutDroppedHashJobs(jobs, o.scanAvailability)
 	if len(jobs) > 0 {
 		hashEvents, hashRows, hashSkipped, err := o.hashPhase(ctx, jobs)
 		if err != nil {
@@ -535,6 +539,10 @@ func (o *localObserver) processEntry(
 		return nil
 	}
 
+	if admitted, skipErr := o.admitSyncedEntry(fsPath, dbRelPath, info, currentRows, skipped); !admitted {
+		return skipErr
+	}
+
 	return o.processObservedInfo(
 		fsPath,
 		dbRelPath,
@@ -548,6 +556,116 @@ func (o *localObserver) processEntry(
 		skipped,
 		scanStartNano,
 	)
+}
+
+// admitSyncedEntry reports whether the walk classifies an entry as the entry
+// of its stored path. A second file or folder whose name maps to the stored
+// path of a synced item (the same name in another Unicode form) is a local
+// name collision in which neither entry is chosen (R-2.13.2): the case-
+// collision finding blocks the path until one of the two is gone, and the
+// path's row keeps describing the synced item.
+//
+// The synced item is the entry of the baseline's kind; for a file it must
+// also be the inode the baseline recorded, so of two files the synced one
+// keeps the row with its own change, if any. When neither entry is the
+// synced file, the row keeps the baseline's facts. The other entry's size,
+// time and hash never become the row: its hash jobs are dropped, and a folder
+// twin is not walked, or, walked first, loses the rows found below it. Two
+// folders with one stored path are not handled here. Symlinks, special files,
+// mounts and protected roots never reach here, and a stored path with no
+// synced item is the collision check's case. The error is filepath.SkipDir
+// when the refused entry is a folder.
+func (o *localObserver) admitSyncedEntry(
+	fsPath, dbRelPath string, info fs.FileInfo, currentRows map[string]localStateRow, skipped *[]skippedItem,
+) (bool, error) {
+	if !info.Mode().IsRegular() && !info.IsDir() {
+		return true, nil
+	}
+	base, found := o.baseline.GetByPath(dbRelPath)
+	if !found || (base.ItemType != ItemTypeFile && base.ItemType != ItemTypeFolder) {
+		return true, nil
+	}
+
+	availability := o.scanAvailability
+	entries := availability.syncedEntries
+	current := syncedEntry{fsPath: fsPath, isDir: info.IsDir(), isSynced: isSyncedEntry(info, base)}
+	first, seen := entries[dbRelPath]
+	if !seen {
+		entries[dbRelPath] = current
+		return true, nil
+	}
+	if first.isDir && current.isDir && base.ItemType == ItemTypeFolder {
+		return true, nil
+	}
+
+	if !first.twinReported {
+		*skipped = append(*skipped, skippedItem{
+			Path:   dbRelPath,
+			Reason: issueCaseCollision,
+			Detail: sameUnicodeFormCollisionDetail,
+		})
+		o.logger.Debug("a second entry has a synced item's name in another Unicode form",
+			slog.String("path", dbRelPath))
+	}
+	first.twinReported = true
+	current.twinReported = true
+
+	switch {
+	case first.isSynced:
+		entries[dbRelPath] = first
+		return false, current.skipError()
+	case current.isSynced:
+		availability.dropEntry(first, dbRelPath, currentRows)
+		entries[dbRelPath] = current
+		return true, nil
+	default:
+		availability.dropEntry(first, dbRelPath, currentRows)
+		entries[dbRelPath] = first
+		currentRows[dbRelPath] = baselineLocalStateRow(base)
+		return false, current.skipError()
+	}
+}
+
+// isSyncedEntry reports whether info can be the synced item base records:
+// an entry of its kind, and for a file the inode the baseline recorded.
+func isSyncedEntry(info fs.FileInfo, base *BaselineEntry) bool {
+	if base.ItemType == ItemTypeFolder {
+		return info.IsDir()
+	}
+
+	return info.Mode().IsRegular() && sameBaselineIdentity(info, base)
+}
+
+// baselineLocalStateRow is the local row the last sync recorded for an item.
+func baselineLocalStateRow(base *BaselineEntry) localStateRow {
+	return localStateRow{
+		Path:             base.Path,
+		ItemType:         base.ItemType,
+		Hash:             base.LocalHash,
+		Size:             base.LocalSize,
+		Mtime:            base.LocalMtime,
+		Ctime:            base.LocalCtime,
+		LocalDevice:      base.LocalDevice,
+		LocalInode:       base.LocalInode,
+		LocalBirthTime:   base.LocalBirthTime,
+		LocalHasIdentity: base.LocalHasIdentity,
+	}
+}
+
+// withoutDroppedHashJobs removes the jobs of twins admitSyncedEntry set
+// aside: a file twin's own job and every job below a folder twin.
+func withoutDroppedHashJobs(jobs []hashJob, availability *scanAvailability) []hashJob {
+	if len(availability.droppedHashJobs) == 0 && len(availability.droppedTrees) == 0 {
+		return jobs
+	}
+	kept := jobs[:0]
+	for i := range jobs {
+		if !availability.hashJobDropped(jobs[i].fsPath) {
+			kept = append(kept, jobs[i])
+		}
+	}
+
+	return kept
 }
 
 func (o *localObserver) processObservedInfo(
@@ -1064,6 +1182,13 @@ func collisionDetail(prefix, name string, others []string) string {
 	return fmt.Sprintf("%s: OneDrive treats %q and %q as the same name; rename one of them", detail, name, others[0])
 }
 
+// sameUnicodeFormCollisionDetail is the finding's detail for two entries of
+// one folder whose names differ only in Unicode form: stored paths are NFC
+// (R-2.13.1), so both have one path, and naming the other would print the
+// same name twice.
+const sameUnicodeFormCollisionDetail = "another file here has the same name in a different Unicode form " +
+	"(for example é typed as e plus an accent); rename one of them"
+
 // appendMultiGroupCollisions handles SkippedItem construction for groups with
 // multiple events (event-vs-event collisions).
 func appendMultiGroupCollisions(
@@ -1098,11 +1223,7 @@ func appendMultiGroupCollisions(
 
 		detail := collisionDetail("conflicts with", filepath.Base(events[idx].Path), others)
 		if sameForm {
-			// Paths are NFC-normalized, so two files whose names differ only
-			// in Unicode form (composed "é" vs "e" + combining accent) arrive
-			// with identical paths: naming the other one would print the same
-			// name twice.
-			detail = "another file here has the same name in a different Unicode form (for example é typed as e plus an accent); rename one of them"
+			detail = sameUnicodeFormCollisionDetail
 			if len(others) > 0 {
 				detail += "; it also conflicts with " + strings.Join(others, ", ")
 			}

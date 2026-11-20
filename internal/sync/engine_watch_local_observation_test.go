@@ -30,7 +30,7 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 		Size:     1,
 	}}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{
 		rows: []localStateRow{
 			{
 				Path:             "stale.txt",
@@ -94,7 +94,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 		{Path: "kept.txt", ItemType: ItemTypeFile},
 	}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{
 		deletedPaths: []string{"deleted.txt"},
 		dirty:        true,
 	})
@@ -127,7 +127,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 		{Path: "dir-sibling.txt", ItemType: ItemTypeFile},
 	}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{
 		deletedPrefixes: []string{"dir"},
 		dirty:           true,
 	})
@@ -158,8 +158,8 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 	}))
 	require.NoError(t, eng.baseline.MarkLocalTruthSuspect(t.Context(), localTruthRecoveryDroppedEvents))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{
-		fullSnapshot: true,
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{
+		kind: localSnapshot,
 		rows: []localStateRow{
 			{Path: "fresh.txt", ItemType: ItemTypeFile, Hash: "fresh"},
 		},
@@ -191,8 +191,8 @@ func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) 
 		{Path: "known.txt", ItemType: ItemTypeFile},
 	}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{
-		markSuspect:    true,
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{
+		kind:           localTruthSuspect,
 		recoveryReason: localTruthRecoveryDroppedEvents,
 	})
 	require.NoError(t, err)

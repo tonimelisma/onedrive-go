@@ -362,10 +362,10 @@ func explainPlannerVisiblePrunes(t *testing.T, store *SyncStore) string {
 		queryPlanText(t, tx, sqlPrunePlannerVisibleRemoteDescendants)
 }
 
-func queryPlanText(t *testing.T, tx sqlTxRunner, query string) string {
+func queryPlanText(t *testing.T, tx sqlTxRunner, query string, args ...any) string {
 	t.Helper()
 
-	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query)
+	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 

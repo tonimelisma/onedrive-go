@@ -822,7 +822,7 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = newDirtyBuffer(eng.logger)
 
-	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &localObservationBatch{dirty: true}))
+	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &localObservation{dirty: true}))
 	rt.markDirtyFromRemoteBatch(&remoteObservationBatch{
 		emitted: []changeEvent{
 			{Path: "alpha.txt"},

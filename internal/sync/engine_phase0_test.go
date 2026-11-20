@@ -605,7 +605,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	_, err = testEngineFlow(t, eng).refreshLocalCurrentState(ctx, bl)
+	_, err = testEngineFlow(t, eng).refreshAndCommitLocalCurrentState(ctx, bl)
 	require.NoError(t, err)
 
 	observationIssues, err := eng.baseline.ListObservationIssues(ctx)
