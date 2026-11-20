@@ -116,7 +116,28 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
   probes, not a Unicode standard form (OneDrive behaves like a collation),
   and every probed pair, including the 500-pair systematic probe M-1 kept in
   `internal/namekey/testdata`, is a test case
-  (`TestKey_MatchesProbedOneDriveCollisions`, `TestKey_MatchesTheSystematicProbe`, R-2.12.3).
+  (`TestOf_MatchesProbedOneDriveCollisions`, `TestOf_MatchesTheSystematicProbe`, R-2.12.3).
+  A name has two forms there besides its bytes. Its key (`namekey.Key`, made
+  by `Of`) is what OneDrive compares, and a path's key (`namekey.PathKey`,
+  made by `OfPath`, segment by segment, with `HasPrefix` for "at or below on
+  a segment boundary") is another type: a key is a comparison value only,
+  never displayed, stored, sent or joined into a path, and the compiler
+  refuses one where a name or a path is wanted
+  (`TestOfPath_HasPrefix_SegmentBoundary`). Its stored form (`Stored`, and
+  `StoredPath` for a slash-separated path, which equals the join of its
+  segments' stored forms: `TestStoredPath_EqualsPerSegment`) is the NFC form
+  this client records (R-2.13.1); no other production code imports the
+  normalizer, which a `depguard` rule holds (`norm-only-namekey`, the test
+  filesystem shim apart). `Relate` says how two names relate under both
+  (`Unrelated`, `Twin`: one stored form, two OneDrive names, `SameName`,
+  `SameStored`, `Identical`; `TestRelate_ProbeCorpus`,
+  `TestOf_StoredComposition_KelvinClass`), and every lookup of one entry
+  among siblings by name asks `Find` (a OneDrive listing: the exact
+  spelling, else the only entry of the same key and stored form, else the
+  only entry of the same key; never a twin; two in the best tier are
+  ambiguous) or `FindStored` (a local directory: the only entry of a stored
+  form; two are a local collision), so no caller picks by listing order
+  (`TestFind_TieBreak`, `TestFindStored_TwoEntriesAreAmbiguous`).
 - Both `graph` and `config` import `tokenfile` for token file I/O.
 - Callers pass token paths to `graph` — no config coupling.
 - `graphtransport` owns Graph-facing HTTP transport profile construction. `driveops` owns the session runtime that reuses those profiles and chooses between bootstrap, interactive, and sync paths.

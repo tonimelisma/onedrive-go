@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -351,14 +352,15 @@ func (e *executor) resolvedParentIDForOutcome(action *Action, item *graph.Item) 
 	return ""
 }
 
-// adoptExistingRemoteFolder handles a 409 on a folder create. A folder with
-// exactly this name already being there is the outcome the create wanted (a
-// lost response to our own earlier create, or another device creating the
-// same folder): adopt it, as observing it would have. A sibling spelled
-// differently that OneDrive treats as the same name is a durable name
-// collision; anything else under the name (a file, or nothing listed yet) is
-// a stale precondition for the planner to resolve. Retried as it is, the
-// create would meet the same 409 every time.
+// adoptExistingRemoteFolder handles a 409 on a folder create, by what the
+// listing holds under the name (classifyCreateConflict). A folder of the
+// wanted name is the outcome the create wanted (a lost response to our own
+// earlier create, or another device creating the same folder): adopt it, as
+// observing it would have. A sibling spelled differently that OneDrive treats
+// as the same name is a durable name collision; anything else under the name
+// (a file, a sibling of another name that only shares the stored form, or
+// nothing listed yet) is a stale precondition for the planner to resolve.
+// Retried as it is, the create would meet the same 409 every time.
 //
 // A listing that fails is the listing's failure, classified by its own
 // answer: it proves nothing about the name. Joined to the 409, an outage or a
@@ -371,24 +373,24 @@ func (e *executor) adoptExistingRemoteFolder(
 		return nil, fmt.Errorf("resolving the refused create of folder %s: listing its parent: %w", name, err)
 	}
 
-	for i := range children {
-		if children[i].IsFolder && children[i].ID != "" && nfcNormalize(children[i].Name) == nfcNormalize(name) {
+	child, found := classifyCreateConflict(children, name)
+	switch found {
+	case createConflictWanted:
+		if child.IsFolder {
 			e.logger.Debug("adopted existing remote folder after create conflict",
 				slog.String("name", name),
-				slog.String("item_id", children[i].ID),
+				slog.String("item_id", child.ID),
 			)
 
-			return &children[i], nil
+			return child, nil
 		}
-	}
-	// A sibling spelled differently that OneDrive treats as the same name
-	// is a durable name collision for the user, as for an upload; as a
-	// stale precondition it was replanned and refused on every pass.
-	for i := range children {
-		if children[i].ID != "" && namekey.Equal(children[i].Name, name) &&
-			nfcNormalize(children[i].Name) != nfcNormalize(name) {
-			return nil, &remoteNameTakenError{localName: name, remoteName: children[i].Name, err: conflictErr}
-		}
+	case createConflictRival:
+		// A sibling spelled differently that OneDrive treats as the same
+		// name is a durable name collision for the user, as for an upload;
+		// as a stale precondition it was replanned and refused on every
+		// pass.
+		return nil, &remoteNameTakenError{localName: name, remoteName: child.Name, err: conflictErr}
+	case createConflictNothing:
 	}
 
 	return nil, stalePreconditionError("folder create %s: OneDrive already has another item with this name", name)
@@ -684,25 +686,29 @@ func (e *executor) respellLocal(newPath string) error {
 }
 
 // storedNameSpelling returns the spelling the parent directory holds for the
-// entry OneDrive would call path's name.
+// entry OneDrive would call path's name. It asks the OneDrive question of a
+// local listing (namekey.Find): the entry spelled so, else the only one of a
+// name OneDrive treats as the same; with none, path's own name. Two such
+// entries and none spelled so are an error: renaming either onto the name
+// would pick one of two files by listing order.
 func (e *executor) storedNameSpelling(path string) (string, error) {
-	entries, err := e.syncTree.ReadDir(filepath.Dir(path))
+	dir := filepath.Dir(path)
+	entries, err := e.syncTree.ReadDir(dir)
 	if err != nil {
-		return "", fmt.Errorf("reading %s after a spelling rename: %w", filepath.Dir(path), normalizeSyncTreePathError(err))
+		return "", fmt.Errorf("reading %s after a spelling rename: %w", dir, normalizeSyncTreePathError(err))
 	}
 
 	base := filepath.Base(path)
-	stored := base
-	for _, entry := range entries {
-		if entry.Name() == base {
-			return base, nil
-		}
-		if namekey.Equal(entry.Name(), base) {
-			stored = entry.Name()
-		}
+	match := namekey.Find(entries, base, func(entry *fs.DirEntry) (string, bool) { return (*entry).Name(), true })
+	switch {
+	case match.Ambiguous:
+		return "", fmt.Errorf("giving %s its spelling: %s holds more than one entry OneDrive treats as that name",
+			path, dir)
+	case !match.Found():
+		return base, nil
 	}
 
-	return stored, nil
+	return entries[match.Index].Name(), nil
 }
 
 // localSpellingRenameAttempts bounds the temporary sibling names tried for a

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -16,7 +17,7 @@ type watchObserverTestOptions struct {
 	Baseline              *Baseline
 	WriteCoalesceCooldown time.Duration
 	CollisionPeers        map[string]map[string]struct{}
-	DirNameCache          map[string]map[string][]string
+	DirNameCache          map[string]map[namekey.Key][]string
 	RecentLocalDeletes    map[string]struct{}
 	HashFunc              func(ctx context.Context, path string) (string, error)
 	AfterFunc             func(time.Duration, func()) syncTimer

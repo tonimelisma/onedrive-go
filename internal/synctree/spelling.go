@@ -5,9 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // Spelling returns rel as the filesystem spells it: each component that
@@ -84,7 +83,8 @@ func spellingWalk(root rootHandle, clean string) string {
 }
 
 // uniqueEquivalentEntry finds the one entry of dir (rooted, "" for the sync
-// root) whose name has component's NFC form.
+// root) whose name has component's stored form (namekey.FindStored); two such
+// entries are a local name collision and find none.
 func uniqueEquivalentEntry(root rootHandle, dir string, component string) (string, bool) {
 	if dir == "" {
 		dir = "."
@@ -94,19 +94,12 @@ func uniqueEquivalentEntry(root rootHandle, dir string, component string) (strin
 		return "", false
 	}
 
-	want := norm.NFC.String(component)
-	match := ""
-	for _, entry := range entries {
-		if norm.NFC.String(entry.Name()) != want {
-			continue
-		}
-		if match != "" {
-			return "", false
-		}
-		match = entry.Name()
+	match := namekey.FindStored(entries, namekey.Stored(component), func(entry *fs.DirEntry) string { return (*entry).Name() })
+	if !match.Found() {
+		return "", false
 	}
 
-	return match, match != ""
+	return entries[match.Index].Name(), true
 }
 
 // SpellingOfParent returns rel with its parent folders spelled as on disk

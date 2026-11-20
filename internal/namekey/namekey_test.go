@@ -11,18 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Validates: R-2.12.3
-func TestKey_MatchesProbedOneDriveCollisions(t *testing.T) {
-	t.Parallel()
+// probedPair is one pair of names created in one folder on OneDrive
+// Personal: collide means the second create answered 409 nameAlreadyExists.
+type probedPair struct {
+	name    string
+	a, b    string
+	collide bool
+}
 
-	// Pairs from probes 2, 3, L-03, L-30 and L-33 on OneDrive Personal: both
-	// names were created in one folder with conflictBehavior=fail; collide
-	// means the second create answered 409 nameAlreadyExists.
-	tests := []struct {
-		name    string
-		a, b    string
-		collide bool
-	}{
+// probedPairs are the pairs from probes 2, 3, L-03, L-30 and L-33 on
+// OneDrive Personal, created with conflictBehavior=fail.
+func probedPairs() []probedPair {
+	return []probedPair{
 		{name: "ascii case", a: "Todo.md", b: "TODO.md", collide: true},
 		{name: "NFC and NFD", a: "café.txt", b: "café.txt", collide: true},
 		{name: "sharp s full folding", a: "straße.txt", b: "STRASSE.txt", collide: true},
@@ -51,23 +51,16 @@ func TestKey_MatchesProbedOneDriveCollisions(t *testing.T) {
 		{name: "soft hyphen", a: "a\u00ADb.txt", b: "ab.txt", collide: false},
 		{name: "different names", a: "a.txt", b: "b.txt", collide: false},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.collide, Equal(tt.a, tt.b), "Key(%q)=%q Key(%q)=%q", tt.a, Key(tt.a), tt.b, Key(tt.b))
-		})
-	}
 }
 
-// Validates: R-2.12.3
-func TestKey_MatchesTheSystematicProbe(t *testing.T) {
-	t.Parallel()
+// systematicProbePairs reads every pair of probe M-1
+// (testdata/probe-m1-personal.tsv): code points where Unicode case folding
+// and simple lowercasing differ, the composition exclusions, the canonical
+// singletons and the default ignorables, each created as "pNNNN-<a>.t" and
+// "pNNNN-<b>.t".
+func systematicProbePairs(t *testing.T) []probedPair {
+	t.Helper()
 
-	// Every pair of probe M-1 (testdata/probe-m1-personal.tsv): code points
-	// where Unicode case folding and simple lowercasing differ, the
-	// composition exclusions, the canonical singletons and the default
-	// ignorables, each created as "pNNNN-<a>.t" and "pNNNN-<b>.t".
 	f, err := os.Open("testdata/probe-m1-personal.tsv")
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, f.Close()) }()
@@ -85,7 +78,7 @@ func TestKey_MatchesTheSystematicProbe(t *testing.T) {
 		return b.String()
 	}
 
-	pairs := 0
+	var pairs []probedPair
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -94,30 +87,56 @@ func TestKey_MatchesTheSystematicProbe(t *testing.T) {
 		}
 		fields := strings.Split(line, "\t")
 		require.Len(t, fields, 4, line)
-		a := "p-" + decode(fields[1]) + ".t"
-		b := "p-" + decode(fields[2]) + ".t"
-		assert.Equal(t, fields[3] == "SAME", Equal(a, b), "%s %s vs %s (OneDrive: %s)", fields[0], fields[1], fields[2], fields[3])
-		pairs++
+		pairs = append(pairs, probedPair{
+			name:    fields[0] + " " + fields[1] + " vs " + fields[2] + " (OneDrive: " + fields[3] + ")",
+			a:       "p-" + decode(fields[1]) + ".t",
+			b:       "p-" + decode(fields[2]) + ".t",
+			collide: fields[3] == "SAME",
+		})
 	}
 	require.NoError(t, scanner.Err())
-	assert.Greater(t, pairs, 500)
+
+	return pairs
 }
 
 // Validates: R-2.12.3
-func TestKey_ASCIIFastPathAgreesWithFolding(t *testing.T) {
+func TestOf_MatchesProbedOneDriveCollisions(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "readme.md", Key("README.md"))
-	assert.Equal(t, "already-lower.txt", Key("already-lower.txt"))
-	assert.Equal(t, Key("x.txt"), Key("X️.txt"), "an ignored character must not change the folding path")
-	assert.Equal(t, Key("README.md")+"é", Key("README.mdÉ"))
+	for _, tt := range probedPairs() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.collide, Equal(tt.a, tt.b), "Of(%q)=%q Of(%q)=%q", tt.a, Of(tt.a), tt.b, Of(tt.b))
+		})
+	}
 }
 
 // Validates: R-2.12.3
-func TestKey_InvalidUTF8DoesNotPanic(t *testing.T) {
+func TestOf_MatchesTheSystematicProbe(t *testing.T) {
 	t.Parallel()
 
-	assert.NotPanics(t, func() { Key("caf\xe9.txt") })
+	pairs := systematicProbePairs(t)
+	for _, pair := range pairs {
+		assert.Equal(t, pair.collide, Equal(pair.a, pair.b), pair.name)
+	}
+	assert.Greater(t, len(pairs), 500)
+}
+
+// Validates: R-2.12.3
+func TestOf_ASCIIFastPathAgreesWithFolding(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, Key("readme.md"), Of("README.md"))
+	assert.Equal(t, Key("already-lower.txt"), Of("already-lower.txt"))
+	assert.Equal(t, Of("x.txt"), Of("X️.txt"), "an ignored character must not change the folding path")
+	assert.Equal(t, Of("README.md")+"é", Of("README.mdÉ"))
+}
+
+// Validates: R-2.12.3
+func TestOf_InvalidUTF8DoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	assert.NotPanics(t, func() { Of("caf\xe9.txt") })
 }
 
 // Validates: R-2.12.3

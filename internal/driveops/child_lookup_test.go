@@ -215,11 +215,99 @@ func TestFindExistingChild_TheListingPrefersTheNameAsSpelled(t *testing.T) {
 			}
 			client := newTestSession(t, http.HandlerFunc(fake.serve)).Meta
 
-			item, found, err := FindExistingChild(t.Context(), client, driveid.New("abcdef0123456789"), lookupParent, "a.txt")
+			child, err := FindExistingChild(t.Context(), client, driveid.New("abcdef0123456789"), lookupParent, "a.txt")
 			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, tc.wantID, item.ID)
+			require.NotNil(t, child.Item)
+			assert.False(t, child.Ambiguous)
+			assert.Equal(t, tc.wantID, child.Item.ID)
 			assert.Equal(t, tc.wantPages, fake.pages.Load())
+		})
+	}
+}
+
+// Two children of names OneDrive treats as the same, neither spelled as
+// asked, are not found: the lookup does not take the first one listed. The
+// same child listed twice is one candidate.
+//
+// Validates: R-2.12.3
+func TestFindExistingChild_TwoFoldedCandidatesIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		label     string
+		children  []namedChild
+		wantID    string
+		ambiguous bool
+	}{
+		{
+			label:     "two other spellings",
+			children:  []namedChild{{id: "upper-id", name: "A.TXT"}, {id: "title-id", name: "A.txt"}, {id: "other-id", name: "b.txt"}},
+			ambiguous: true,
+		},
+		{
+			label:    "one other spelling listed twice",
+			children: []namedChild{{id: "upper-id", name: "A.TXT"}, {id: "upper-id", name: "A.TXT"}, {id: "other-id", name: "b.txt"}},
+			wantID:   "upper-id",
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &namedFolders{
+				t:          t,
+				children:   map[string][]namedChild{lookupParent: tc.children},
+				readMisses: map[string]bool{lookupParent: true},
+			}
+			client := newTestSession(t, http.HandlerFunc(fake.serve)).Meta
+
+			child, err := FindExistingChild(t.Context(), client, driveid.New("abcdef0123456789"), lookupParent, "a.txt")
+			require.NoError(t, err)
+			assert.Equal(t, tc.ambiguous, child.Ambiguous)
+			if tc.wantID == "" {
+				assert.Nil(t, child.Item)
+				return
+			}
+			require.NotNil(t, child.Item)
+			assert.Equal(t, tc.wantID, child.Item.ID)
+		})
+	}
+}
+
+// An upload whose answer carried no item is found again by its name as
+// spelled when the folder also holds another spelling of it, and is not
+// found when it holds two other spellings and not its own.
+//
+// Validates: R-2.12.3, R-5.5.2
+func TestLookupUploadTarget_PrefersExactSpelling(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		label    string
+		children []namedChild
+		wantID   string
+	}{
+		{label: "exact after another spelling", children: []namedChild{{id: "upper-id", name: "A.TXT"}, {id: "exact-id", name: "a.txt"}}, wantID: "exact-id"},
+		{label: "two other spellings", children: []namedChild{{id: "upper-id", name: "A.TXT"}, {id: "title-id", name: "A.txt"}}},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &namedFolders{
+				t:          t,
+				children:   map[string][]namedChild{lookupParent: tc.children},
+				readMisses: map[string]bool{lookupParent: true},
+			}
+			client := newTestSession(t, http.HandlerFunc(fake.serve)).Meta
+
+			item, err := newTestTM(&tmSimpleDownloader{}, client, nil).lookupUploadTarget(t.Context(),
+				uploadTarget{driveID: driveid.New("abcdef0123456789"), parentID: lookupParent, name: "a.txt"})
+			if tc.wantID == "" {
+				require.ErrorIs(t, err, graph.ErrNotFound)
+				require.ErrorContains(t, err, "more than one item")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantID, item.ID)
 		})
 	}
 }

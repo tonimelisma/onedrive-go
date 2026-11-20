@@ -125,31 +125,18 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	return nil, fmt.Errorf("graph: create folder empty success response: %w", lastErr)
 }
 
+// findCreatedFolder picks the folder a create of name made from its
+// parent's listing (namekey.Find): the folder spelled as asked, else the only
+// one OneDrive treats as that name. Two such folders and none spelled as
+// asked are not found. A folder the listing repeats counts once.
 func findCreatedFolder(children []Item, name string) (Item, bool) {
-	var foldedMatch Item
-	hasFoldedMatch := false
-
-	for i := range children {
-		child := children[i]
-		if !child.IsFolder {
-			continue
-		}
-
-		if child.Name == name {
-			return child, true
-		}
-
-		if namekey.Equal(child.Name, name) {
-			if hasFoldedMatch {
-				return Item{}, false
-			}
-
-			foldedMatch = child
-			hasFoldedMatch = true
-		}
+	children = WithoutRepeats(children)
+	match := namekey.Find(children, name, func(child *Item) (string, bool) { return child.Name, child.IsFolder })
+	if !match.Found() {
+		return Item{}, false
 	}
 
-	return foldedMatch, hasFoldedMatch
+	return children[match.Index], true
 }
 
 // ErrMoveNoChanges is returned when MoveItem is called with both newParentID

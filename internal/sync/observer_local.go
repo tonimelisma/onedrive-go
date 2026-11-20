@@ -29,6 +29,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -99,7 +100,7 @@ type localWatchState struct {
 	// dirNameCache caches namespace key→original name mappings per directory
 	// for O(1) collision lookups. Built lazily on first check; invalidated
 	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
-	DirNameCache map[string]map[string][]string // dirPath → namekey.Key → []originalNames
+	DirNameCache map[string]map[namekey.Key][]string // dirPath → name key → []originalNames
 
 	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
 	// current watch session. Used to suppress false-positive baseline
@@ -159,7 +160,7 @@ func newLocalWatchState() localWatchState {
 	return localWatchState{
 		PendingTimers:        make(map[string]syncTimer),
 		HashRequests:         make(chan hashRequest, hashRequestBufSize),
-		DirNameCache:         make(map[string]map[string][]string),
+		DirNameCache:         make(map[string]map[namekey.Key][]string),
 		RecentLocalDeletes:   make(map[string]struct{}),
 		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),

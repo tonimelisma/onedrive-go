@@ -19,6 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // Exhaustive planner check. A synced tree of two folders and two files (the
@@ -401,12 +403,12 @@ func exFree(side map[string]pmItem, local bool, p, moving string) bool {
 		_, taken := side[p]
 		return !taken
 	}
-	key := pathNameKey(p)
+	key := namekey.OfPath(p)
 	for held := range side {
 		if moving != "" && (held == moving || strings.HasPrefix(held, moving+"/")) {
 			continue
 		}
-		if pathNameKey(held) == key {
+		if namekey.OfPath(held) == key {
 			return false
 		}
 	}
@@ -482,8 +484,8 @@ func exHistories(t *testing.T, start exStart, local bool) [][]exEdit {
 // exConnected reports whether the user actions of a pair, its start's
 // included, form one group of related paths. Each action is given as the name
 // keys of the paths it acts on (exActionKeys).
-func exConnected(groups ...[][]string) bool {
-	var actions [][]string
+func exConnected(groups ...[][]namekey.PathKey) bool {
+	var actions [][]namekey.PathKey
 	for _, group := range groups {
 		actions = append(actions, group...)
 	}
@@ -513,12 +515,12 @@ func exConnected(groups ...[][]string) bool {
 }
 
 // exActionKeys gives each edit as the name keys of the paths it acts on.
-func exActionKeys(edits []exEdit) [][]string {
-	keys := make([][]string, 0, len(edits))
+func exActionKeys(edits []exEdit) [][]namekey.PathKey {
+	keys := make([][]namekey.PathKey, 0, len(edits))
 	for _, e := range edits {
-		var paths []string
+		var paths []namekey.PathKey
 		for _, p := range e.paths() {
-			paths = append(paths, pathNameKey(p))
+			paths = append(paths, namekey.OfPath(p))
 		}
 		keys = append(keys, paths)
 	}
@@ -528,10 +530,10 @@ func exActionKeys(edits []exEdit) [][]string {
 
 // exRelated reports whether two actions act on a path at, above or below
 // each other's, as OneDrive compares names.
-func exRelated(a, b []string) bool {
+func exRelated(a, b []namekey.PathKey) bool {
 	for _, ka := range a {
 		for _, kb := range b {
-			if ka == kb || strings.HasPrefix(ka, kb+"/") || strings.HasPrefix(kb, ka+"/") {
+			if ka.HasPrefix(kb) || kb.HasPrefix(ka) {
 				return true
 			}
 		}
@@ -570,7 +572,7 @@ func exPairs(t *testing.T) []exPair {
 		localHistories := exHistories(t, start, true)
 		remoteHistories := exHistories(t, start, false)
 		startKeys := exActionKeys(append(slices.Clone(start.local), start.remote...))
-		remoteKeys := make([][][]string, len(remoteHistories))
+		remoteKeys := make([][][]namekey.PathKey, len(remoteHistories))
 		for i, remote := range remoteHistories {
 			remoteKeys[i] = exActionKeys(remote)
 		}
@@ -692,12 +694,13 @@ func (r *exRun) untouchedDeletes() []string {
 	var gone []string
 	for _, local := range []bool{true, false} {
 		present := map[string]bool{}
+		presentKeys := map[namekey.PathKey]bool{}
 		for p, item := range r.side(local) {
 			present[r.basePath(local, item)] = true
-			present[pathNameKey(p)] = true
+			presentKeys[namekey.OfPath(p)] = true
 		}
 		for _, base := range exSyncedPaths() {
-			if !present[base] && !present[pathNameKey(base)] && r.leftAsSynced(!local, base) {
+			if !present[base] && !presentKeys[namekey.OfPath(base)] && r.leftAsSynced(!local, base) {
 				gone = append(gone, base)
 			}
 		}
@@ -879,7 +882,7 @@ func (r *exRun) checkKept(before map[bool]map[string]bool, kept map[string]bool)
 func (r *exRun) resolveCaseCollision() bool {
 	for _, remotePath := range sortedKeys(r.remote) {
 		for localPath := range r.local {
-			if localPath == remotePath || pathNameKey(localPath) != pathNameKey(remotePath) {
+			if localPath == remotePath || namekey.OfPath(localPath) != namekey.OfPath(remotePath) {
 				continue
 			}
 			to := r.freeRemoteName(path.Dir(remotePath))
@@ -1147,9 +1150,9 @@ func (w *exWorld) remoteFolderAt(dir string) (string, bool) {
 	if item, ok := w.remote[dir]; ok {
 		return dir, item.folder
 	}
-	key := pathNameKey(dir)
+	key := namekey.OfPath(dir)
 	for held, item := range w.remote {
-		if pathNameKey(held) == key {
+		if namekey.OfPath(held) == key {
 			return held, item.folder
 		}
 	}

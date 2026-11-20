@@ -144,7 +144,7 @@ func (e *executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known b
 	if item == nil || item.Name == "" {
 		return false, false
 	}
-	if nfcNormalize(item.Name) != nfcNormalize(slashpath.Base(relPath)) {
+	if namekey.Stored(item.Name) != namekey.Stored(slashpath.Base(relPath)) {
 		return false, true
 	}
 
@@ -161,7 +161,7 @@ func (e *executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known b
 		return false, false
 	}
 
-	return nfcNormalize(item.ParentPath) == nfcNormalize(parentDir), true
+	return namekey.StoredPath(item.ParentPath) == namekey.StoredPath(parentDir), true
 }
 
 func remoteRowMatchesLivePreconditionForAction(action *Action, row *remoteStateRow, planned *remoteState) bool {
@@ -296,7 +296,7 @@ func remoteStateRowFromGraphItem(item *graph.Item) *remoteStateRow {
 		if item.ParentPath != "" {
 			path = slashpath.Join(item.ParentPath, item.Name)
 		}
-		path = nfcNormalize(path)
+		path = namekey.StoredPath(path)
 	}
 
 	resolvedType := ItemTypeFile

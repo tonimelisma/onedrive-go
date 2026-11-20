@@ -104,3 +104,87 @@ func TestPutFile_ExistingFolderIsAnError(t *testing.T) {
 	_, err := putFile(t.Context(), client, tm, driveid.New("d"), "parent", "report", local, driveops.UploadOpts{})
 	require.ErrorContains(t, err, "is a folder")
 }
+
+// putListingServer is a Graph fake whose folder "parent" holds the files
+// listed: the create answers 409, the read of the name finds nothing (the
+// path route lags behind the listing), the listing holds the files, and an
+// overwrite by ID is answered 412.
+func putListingServer(t *testing.T, listed string) (*httptest.Server, *[]string) {
+	t.Helper()
+
+	var mu stdsync.Mutex
+	var log []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.Copy(io.Discard, r.Body)
+		assert.NoError(t, err)
+		mu.Lock()
+		log = append(log, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/children"):
+			w.WriteHeader(http.StatusConflict)
+			writePutTestBody(t, w, []byte(`{"error":{"code":"nameAlreadyExists","message":"Name already exists"}}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/children"):
+			writePutTestBody(t, w, []byte(`{"value":[`+listed+`]}`))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/drives/000000000000000d/items/parent:/"):
+			w.WriteHeader(http.StatusNotFound)
+			writePutTestBody(t, w, []byte(`{"error":{"code":"itemNotFound","message":"not yet"}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/createUploadSession"):
+			w.WriteHeader(http.StatusPreconditionFailed)
+			writePutTestBody(t, w, []byte(`{"error":{"code":"resourceModified"}}`))
+		default:
+			w.WriteHeader(http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, &log
+}
+
+// A folder whose listing holds the name as spelled and another spelling
+// OneDrive treats as the same overwrites the one spelled as asked; one that
+// holds two other spellings and not this one overwrites neither and answers
+// the service's conflict.
+//
+// Validates: R-1.3.8, R-2.12.3
+func TestPutFile_PrefersExactSpellingOverCaseVariant(t *testing.T) {
+	t.Parallel()
+
+	file := func(id, name string) string {
+		return `{"id":"` + id + `","name":"` + name + `","eTag":"\"e,1\"","file":{},"parentReference":{"id":"parent"}}`
+	}
+
+	for _, tc := range []struct {
+		label  string
+		listed string
+		wantTo string
+	}{
+		{label: "exact after a case variant", listed: file("upper", "A.TXT") + "," + file("exact", "a.txt"), wantTo: "exact"},
+		{label: "two case variants", listed: file("upper", "A.TXT") + "," + file("title", "A.txt")},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			srv, log := putListingServer(t, tc.listed)
+			client := newTestGraphClient(t, srv.URL)
+			tm := driveops.NewTransferManager(client, client, nil, slog.Default())
+
+			local := filepath.Join(t.TempDir(), "a.txt")
+			require.NoError(t, os.WriteFile(local, []byte("new"), 0o600))
+
+			_, err := putFile(t.Context(), client, tm, driveid.New("d"), "parent", "a.txt", local, driveops.UploadOpts{})
+			if tc.wantTo == "" {
+				require.ErrorIs(t, err, graph.ErrConflict)
+				for _, request := range *log {
+					assert.NotContains(t, request, "/items/upper/")
+					assert.NotContains(t, request, "/items/title/")
+				}
+				return
+			}
+			require.ErrorIs(t, err, graph.ErrPreconditionFailed)
+			assert.Contains(t, *log, "POST /drives/000000000000000d/items/"+tc.wantTo+"/createUploadSession")
+		})
+	}
+}

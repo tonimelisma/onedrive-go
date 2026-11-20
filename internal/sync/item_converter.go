@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // inflightParent tracks a non-root item seen in the current delta batch,
@@ -836,7 +837,7 @@ func (c *itemConverter) applyBaselineKind(ev *changeEvent, item *graph.Item, exi
 }
 
 func effectiveItemName(item *graph.Item, existing *BaselineEntry) string {
-	name := nfcNormalize(item.Name)
+	name := namekey.Stored(item.Name)
 	if name != "" || existing == nil {
 		return name
 	}
@@ -871,13 +872,13 @@ func (c *itemConverter) materializePathWithBaselineFallback(
 func (c *itemConverter) materializePath(
 	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID,
 ) string {
-	return c.materializePathPreferringIDChain(item, nfcNormalize(item.Name), itemDriveID, inflight, true)
+	return c.materializePathPreferringIDChain(item, namekey.Stored(item.Name), itemDriveID, inflight, true)
 }
 
 func (c *itemConverter) materializePathForUntrackedDelete(
 	item *graph.Item, inflight map[string]inflightParent, itemDriveID driveid.ID,
 ) string {
-	name := nfcNormalize(item.Name)
+	name := namekey.Stored(item.Name)
 	if name == "" {
 		return ""
 	}

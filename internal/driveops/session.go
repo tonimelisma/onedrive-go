@@ -15,7 +15,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
@@ -872,14 +871,15 @@ func (s *MountSession) resolveItemFromMountRoot(ctx context.Context, remotePath 
 	var current *graph.Item
 
 	for idx, segment := range segments {
-		match, found, err := FindExistingChild(ctx, s.Meta, s.DriveID, currentID, segment)
+		child, err := FindExistingChild(ctx, s.Meta, s.DriveID, currentID, segment)
 		switch {
 		case err != nil:
 			return nil, fmt.Errorf("segment %q: %w", segment, err)
-		case !found:
-			return nil, fmt.Errorf("segment %q: %w", segment, graph.ErrNotFound)
+		case child.Item == nil:
+			return nil, fmt.Errorf("segment %q%s: %w", segment, child.ambiguity(), graph.ErrNotFound)
 		}
 
+		match := child.Item
 		current = match
 		currentID = match.ID
 
@@ -937,73 +937,74 @@ func (s *MountSession) resolveItemFromParentListing(ctx context.Context, remoteP
 	}
 
 	parentPath, name := SplitParentAndName(clean)
-	match, ok, err := s.findInParentListing(ctx, parentPath, name)
+	child, err := s.findInParentListing(ctx, parentPath, name)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %q from the listing of its parent: %w", clean, err)
 	}
-	if !ok {
-		return nil, fmt.Errorf("resolve %q from the listing of parent %q: %w", clean, parentPath, graph.ErrNotFound)
+	if child.Item == nil {
+		return nil, fmt.Errorf("resolve %q from the listing of parent %q%s: %w", clean, parentPath, child.ambiguity(), graph.ErrNotFound)
 	}
 
-	return &match, nil
+	return child.Item, nil
 }
 
 // findInParentListing finds name in the listing of the folder at parentPath
-// (ListChildrenPages), read up to the page that holds it. A listing by ID
-// names its folder; a listing by path hands on only children its answers
-// place at the path (graph.Client.ListChildrenByPathPages). When a folder
-// below the root is not found that way, it resolves the folder with
+// (ListChildrenPages), read up to the page that holds it (graph.NameSeek). A
+// listing by ID names its folder; a listing by path hands on only children
+// its answers place at the path (graph.Client.ListChildrenByPathPages). When
+// a folder below the root is not found that way, it resolves the folder with
 // resolveConvergingPath (a read by path, then its own parent's listing) and
 // lists it by ID. Any other failure is the error, so answers that disagree
 // on the folder at parentPath (graph.ErrPathAnswersDisagree) end the lookup
 // instead of sending it to one of them.
-func (s *MountSession) findInParentListing(ctx context.Context, parentPath, name string) (graph.Item, bool, error) {
-	seek := nameOnPage{name: name}
-	err := s.ListChildrenPages(ctx, parentPath, seek.visit)
+func (s *MountSession) findInParentListing(ctx context.Context, parentPath, name string) (ChildByName, error) {
+	seek := graph.NewNameSeek(name)
+	err := s.ListChildrenPages(ctx, parentPath, seek.Visit)
 	if err == nil {
-		return seek.match, seek.found, nil
+		return childOf(seek), nil
 	}
 	if !errors.Is(err, graph.ErrNotFound) || parentPath == "" {
-		return graph.Item{}, false, err
+		return ChildByName{}, err
 	}
 
 	parentItem, err := s.resolveConvergingPath(ctx, parentPath)
 	if err != nil {
-		return graph.Item{}, false, err
+		return ChildByName{}, err
 	}
 
-	seek = nameOnPage{name: name}
-	if err := s.Meta.ListChildrenPages(ctx, s.DriveID, parentItem.ID, seek.visit); err != nil {
-		return graph.Item{}, false, fmt.Errorf("list children of parent %q by id: %w", parentPath, err)
+	seek = graph.NewNameSeek(name)
+	if err := s.Meta.ListChildrenPages(ctx, s.DriveID, parentItem.ID, seek.Visit); err != nil {
+		return ChildByName{}, fmt.Errorf("list children of parent %q by id: %w", parentPath, err)
 	}
 
-	return seek.match, seek.found, nil
+	return childOf(seek), nil
 }
 
-// nameOnPage is a listing's visit that looks for one name: it keeps the
-// child of that name and stops the listing at the page that holds it as
-// spelled, so a name near the top of a large folder costs one page. Failing
-// that spelling it keeps the first child of a name OneDrive treats as the
-// same (namekey.Equal) and reads on, as a later page could hold the exact
-// spelling.
-type nameOnPage struct {
-	name  string
-	match graph.Item
-	found bool
+// ChildByName is what a lookup of one name in a folder found.
+type ChildByName struct {
+	// Item is the child that holds the name: the one spelled so, else the
+	// only one OneDrive treats as that name. Nil when no child holds it, and
+	// when Ambiguous.
+	Item *graph.Item
+	// Ambiguous reports that more than one child holds a name OneDrive
+	// treats as the same and none is spelled as asked, so none is taken.
+	Ambiguous bool
 }
 
-func (n *nameOnPage) visit(page []graph.Item) bool {
-	for i := range page {
-		switch {
-		case page[i].Name == n.name:
-			n.match, n.found = page[i], true
-			return false
-		case !n.found && namekey.Equal(page[i].Name, n.name):
-			n.match, n.found = page[i], true
-		}
+func childOf(seek *graph.NameSeek) ChildByName {
+	item, match := seek.Match()
+
+	return ChildByName{Item: item, Ambiguous: match.Ambiguous}
+}
+
+// ambiguity is the clause a not-found message gains when more than one
+// child holds the name: empty when none does.
+func (c ChildByName) ambiguity() string {
+	if c.Ambiguous {
+		return ": more than one item in the folder holds that name"
 	}
 
-	return true
+	return ""
 }
 
 // CleanRemotePath is path in the one form a remote path takes: its names
@@ -1035,12 +1036,13 @@ func (s *Session) EnsureFolder(ctx context.Context, parentID, name string) (*gra
 		return item, err
 	}
 
-	existing, found, findErr := FindExistingChild(ctx, s.Meta, s.DriveID, parentID, name)
+	child, findErr := FindExistingChild(ctx, s.Meta, s.DriveID, parentID, name)
+	existing := child.Item
 	switch {
 	case findErr != nil:
 		return nil, fmt.Errorf("resolving existing folder %q: %w", name, findErr)
-	case !found:
-		return nil, fmt.Errorf("folder %q reported as existing but not found in parent", name)
+	case existing == nil:
+		return nil, fmt.Errorf("folder %q reported as existing but not found in parent%s", name, child.ambiguity())
 	case !existing.IsFolder:
 		return nil, fmt.Errorf("%q is a file on OneDrive", existing.Name)
 	}
@@ -1066,34 +1068,34 @@ type ChildLookup interface {
 // measured for a child named $value, which the listing holds), or a read that
 // finds nothing equal, which the listing can still hold while the path route
 // lags behind it. The listing is read a page at a time and stops at the page
-// that holds the name as spelled (nameOnPage). Any other failed read is the
-// error. The bool is false when neither finds it. An item of the name that
-// carries no ID is an error: no later request could name it.
+// that holds the name as spelled (graph.NameSeek); failing that spelling, a
+// child is taken only when it is the one child of that name, and two are
+// Ambiguous. Any other failed read is the error. The Item is nil when
+// neither finds it. An item of the name that carries no ID is an error: no
+// later request could name it.
 func FindExistingChild(
 	ctx context.Context, lookup ChildLookup, driveID driveid.ID, parentID, name string,
-) (*graph.Item, bool, error) {
+) (ChildByName, error) {
 	item, err := lookup.GetChildByName(ctx, driveID, parentID, name)
 	switch {
 	case err == nil && item.ID == "":
-		return nil, false, fmt.Errorf("the read of %q in its folder answered without an item ID", item.Name)
+		return ChildByName{}, fmt.Errorf("the read of %q in its folder answered without an item ID", item.Name)
 	case err == nil:
-		return item, true, nil
+		return ChildByName{Item: item}, nil
 	case !readCannotSettleName(err):
-		return nil, false, fmt.Errorf("reading the name in its folder: %w", err)
+		return ChildByName{}, fmt.Errorf("reading the name in its folder: %w", err)
 	}
 
-	seek := nameOnPage{name: name}
-	if err := lookup.ListChildrenPages(ctx, driveID, parentID, seek.visit); err != nil {
-		return nil, false, fmt.Errorf("listing the folder: %w", err)
+	seek := graph.NewNameSeek(name)
+	if err := lookup.ListChildrenPages(ctx, driveID, parentID, seek.Visit); err != nil {
+		return ChildByName{}, fmt.Errorf("listing the folder: %w", err)
 	}
-	switch {
-	case !seek.found:
-		return nil, false, nil
-	case seek.match.ID == "":
-		return nil, false, fmt.Errorf("the listing of the folder holds %q without an item ID", seek.match.Name)
+	child := childOf(seek)
+	if child.Item != nil && child.Item.ID == "" {
+		return ChildByName{}, fmt.Errorf("the listing of the folder holds %q without an item ID", child.Item.Name)
 	}
 
-	return &seek.match, true, nil
+	return child, nil
 }
 
 // readCannotSettleName reports whether a failed read of one name leaves the

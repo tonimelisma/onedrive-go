@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -251,20 +250,15 @@ func moveTargetPath(destPath string, dest destInfo) string {
 }
 
 // isWithinRemotePath reports whether target is root or inside it, comparing
-// segments under OneDrive's name equivalence (namekey).
+// segments under OneDrive's name equivalence (namekey). An empty root is the
+// drive root, which holds every path.
 func isWithinRemotePath(target, root string) bool {
 	r := driveops.CleanRemotePath(root)
 	if r == "" {
 		return true
 	}
 
-	targetSegments := strings.Split(driveops.CleanRemotePath(target), "/")
-	rootSegments := strings.Split(r, "/")
-	if len(targetSegments) < len(rootSegments) {
-		return false
-	}
-
-	return namekey.EqualPath(strings.Join(targetSegments[:len(rootSegments)], "/"), r)
+	return namekey.OfPath(driveops.CleanRemotePath(target)).HasPrefix(namekey.OfPath(r))
 }
 
 // joinDisplayPath names child inside the remote folder dir with the leading

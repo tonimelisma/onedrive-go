@@ -509,6 +509,77 @@ func (c *Client) ListChildren(ctx context.Context, driveID driveid.ID, parentID 
 	})
 }
 
+// WithoutRepeats returns items with each item ID kept once, at its first
+// position: a paged listing can repeat an item across pages, and a lookup by
+// name among siblings would count the repeat as a second candidate. Items
+// without an ID are all kept. items is not modified.
+func WithoutRepeats(items []Item) []Item {
+	seen := make(map[string]bool, len(items))
+	kept := make([]Item, 0, len(items))
+	for i := range items {
+		if id := items[i].ID; id != "" {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+		}
+		kept = append(kept, items[i])
+	}
+
+	return kept
+}
+
+// NameSeek finds one name in a folder's listing read a page at a time: its
+// Visit is the listing's ChildrenPageFunc. It keeps the children of names
+// OneDrive treats as the same (namekey.Equal), each item once however often
+// the pages repeat it, and stops the listing at the page that holds the name
+// as spelled, so a name near the top of a large folder costs one page. Match
+// then picks among them by namekey.Find: a later page could hold the exact
+// spelling, and the listing order decides nothing.
+type NameSeek struct {
+	name       string
+	candidates []Item
+	seenIDs    map[string]bool
+	exact      bool
+}
+
+// NewNameSeek returns a NameSeek for name.
+func NewNameSeek(name string) *NameSeek {
+	return &NameSeek{name: name, seenIDs: make(map[string]bool)}
+}
+
+// Visit takes one page of the listing and reports whether to read on.
+func (s *NameSeek) Visit(page []Item) bool {
+	for i := range page {
+		child := &page[i]
+		if !namekey.Equal(child.Name, s.name) {
+			continue
+		}
+		if child.ID != "" {
+			if s.seenIDs[child.ID] {
+				continue
+			}
+			s.seenIDs[child.ID] = true
+		}
+		s.candidates = append(s.candidates, *child)
+		s.exact = s.exact || child.Name == s.name
+	}
+
+	return !s.exact
+}
+
+// Match returns the child that holds the name, when one does, and the
+// lookup's answer: Ambiguous when more than one child holds it and none is
+// spelled as asked.
+func (s *NameSeek) Match() (*Item, namekey.Match) {
+	match := namekey.Find(s.candidates, s.name, func(child *Item) (string, bool) { return child.Name, true })
+	if !match.Found() {
+		return nil, match
+	}
+
+	return &s.candidates[match.Index], match
+}
+
 // ListChildrenByPathPages is ListChildrenPages for a folder identified by
 // path. Its route resolves the path as a read's does, and a read by path can
 // answer an item from another path, so the children are held to the path as

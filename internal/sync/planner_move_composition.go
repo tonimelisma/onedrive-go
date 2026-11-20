@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // Move composition decides, once per synced item, where the item ends up and
@@ -199,10 +201,10 @@ type moveComposition struct {
 	// OneDrive, none when only the baseline is behind (a re-key).
 	deferredMoves map[string][]actionType
 	// ownLandings holds, per side and under OneDrive's name folding
-	// (pathNameKey), the path of each new folder a deferred item moves into
+	// (namekey.OfPath), the path of each new folder a deferred item moves into
 	// at its own path there (holdOwnLandings): a later pass makes it, once
 	// the item has left.
-	ownLandings map[moveCoord]map[string]bool
+	ownLandings map[moveCoord]map[namekey.PathKey]bool
 }
 
 // deferredRelocationsInMode counts the deferred relocations mode runs: one
@@ -515,7 +517,7 @@ func joinMovePath(dir, name string) string {
 const remoteOccupantClaim = unsyncedParentPrefix + "occupant"
 
 func (c *moveComposer) findTargetCollision() []string {
-	byTarget := make(map[string][]string, len(c.keys))
+	byTarget := make(map[namekey.PathKey][]string, len(c.keys))
 	hasLocalOrigin := false
 	for _, key := range c.keys {
 		// An item present on one side only is a create or delete SQLite
@@ -524,7 +526,7 @@ func (c *moveComposer) findTargetCollision() []string {
 		if c.unresolvable[key] || !c.isMoveParticipant(c.nodes[key]) {
 			continue
 		}
-		folded := pathNameKey(c.targetPath(key))
+		folded := namekey.OfPath(c.targetPath(key))
 		byTarget[folded] = append(byTarget[folded], key)
 		hasLocalOrigin = hasLocalOrigin || c.origin[key] == moveTargetFromLocal
 	}
@@ -537,17 +539,17 @@ func (c *moveComposer) findTargetCollision() []string {
 			if _, isNode := c.byPath[moveCoordRemote][occupied]; isNode {
 				continue
 			}
-			folded := pathNameKey(c.remoteTargetPath(occupied))
+			folded := namekey.OfPath(c.remoteTargetPath(occupied))
 			if claims, ok := byTarget[folded]; ok {
 				byTarget[folded] = append(claims, remoteOccupantClaim)
 			}
 		}
 	}
-	folded := make([]string, 0, len(byTarget))
+	folded := make([]namekey.PathKey, 0, len(byTarget))
 	for p := range byTarget {
 		folded = append(folded, p)
 	}
-	sort.Strings(folded)
+	slices.Sort(folded)
 	for _, p := range folded {
 		if len(byTarget[p]) > 1 {
 			return byTarget[p]
@@ -597,8 +599,8 @@ type moveEmitter struct {
 	result moveComposition
 	// foldedByPath and foldedOccupied index the snapshot by folded path,
 	// built on first use (occupantAt, occupiedFolded).
-	foldedByPath   [moveCoordCount]map[string]string
-	foldedOccupied [moveCoordCount]map[string]bool
+	foldedByPath   [moveCoordCount]map[namekey.PathKey]string
+	foldedOccupied [moveCoordCount]map[namekey.PathKey]bool
 	// undecidedRemoteFolders lists the folders OneDrive relocates that are
 	// still pending, listed on first use and shrunk as they are decided
 	// (remoteFolderUndecided).
@@ -832,12 +834,12 @@ func (e *moveEmitter) holdOwnLandings() {
 				continue
 			}
 			if e.result.ownLandings == nil {
-				e.result.ownLandings = map[moveCoord]map[string]bool{}
+				e.result.ownLandings = map[moveCoord]map[namekey.PathKey]bool{}
 			}
 			if e.result.ownLandings[side] == nil {
-				e.result.ownLandings[side] = map[string]bool{}
+				e.result.ownLandings[side] = map[namekey.PathKey]bool{}
 			}
-			e.result.ownLandings[side][pathNameKey(folder)] = true
+			e.result.ownLandings[side][namekey.OfPath(folder)] = true
 		}
 	}
 }
@@ -925,7 +927,7 @@ func (e *moveEmitter) freeParkingPath(p string) string {
 	for i := 1; i <= len(e.keys)+1; i++ {
 		suffix := moveSwapInfix + strconv.Itoa(i) + ext
 		candidate := joinMovePath(dir, truncateNameBytes(stem, moveNameMaxBytes-len(suffix))+suffix)
-		if !taken[pathNameKey(candidate)] {
+		if !taken[namekey.OfPath(candidate)] {
 			return candidate
 		}
 	}
@@ -933,20 +935,20 @@ func (e *moveEmitter) freeParkingPath(p string) string {
 	return ""
 }
 
-func (e *moveEmitter) takenPathsFolded() map[string]bool {
-	taken := make(map[string]bool, len(e.occupancy.local)+len(e.occupancy.remote))
+func (e *moveEmitter) takenPathsFolded() map[namekey.PathKey]bool {
+	taken := make(map[namekey.PathKey]bool, len(e.occupancy.local)+len(e.occupancy.remote))
 	for _, occupied := range []map[string]bool{e.occupancy.local, e.occupancy.remote} {
 		for p := range occupied {
-			taken[pathNameKey(p)] = true
+			taken[namekey.OfPath(p)] = true
 		}
 	}
 	for coord := range moveCoordCount {
 		for p := range e.byPath[coord] {
-			taken[pathNameKey(p)] = true
+			taken[namekey.OfPath(p)] = true
 		}
 	}
 	for i := range e.result.moves {
-		taken[pathNameKey(e.result.moves[i].newPath)] = true
+		taken[namekey.OfPath(e.result.moves[i].newPath)] = true
 	}
 
 	return taken
@@ -1527,7 +1529,7 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 	}
 	for i := range e.result.moves {
 		earlier := &e.result.moves[i]
-		if earlier.side == side && pathNameKey(e.nodes[earlier.key].paths[side]) == pathNameKey(snapshotPath) {
+		if earlier.side == side && namekey.OfPath(e.nodes[earlier.key].paths[side]) == namekey.OfPath(snapshotPath) {
 			return true, moveDisplaceNever
 		}
 	}
@@ -1548,12 +1550,12 @@ func (e *moveEmitter) occupantAt(side moveCoord, p string) (string, bool) {
 		return key, true
 	}
 	if e.foldedByPath[side] == nil {
-		e.foldedByPath[side] = make(map[string]string, len(e.byPath[side]))
+		e.foldedByPath[side] = make(map[namekey.PathKey]string, len(e.byPath[side]))
 		for held, key := range e.byPath[side] {
-			e.foldedByPath[side][pathNameKey(held)] = key
+			e.foldedByPath[side][namekey.OfPath(held)] = key
 		}
 	}
-	key, ok := e.foldedByPath[side][pathNameKey(p)]
+	key, ok := e.foldedByPath[side][namekey.OfPath(p)]
 
 	return key, ok
 }
@@ -1565,13 +1567,13 @@ func (e *moveEmitter) occupiedFolded(side moveCoord, occupied map[string]bool, p
 		return true
 	}
 	if e.foldedOccupied[side] == nil {
-		e.foldedOccupied[side] = make(map[string]bool, len(occupied))
+		e.foldedOccupied[side] = make(map[namekey.PathKey]bool, len(occupied))
 		for held := range occupied {
-			e.foldedOccupied[side][pathNameKey(held)] = true
+			e.foldedOccupied[side][namekey.OfPath(held)] = true
 		}
 	}
 
-	return e.foldedOccupied[side][pathNameKey(p)]
+	return e.foldedOccupied[side][namekey.OfPath(p)]
 }
 
 // snapshotPath maps a path as it will be when a move runs back to the
@@ -2048,11 +2050,11 @@ func dropCreatesOntoComposedItems(
 // atOrBelowOwnLanding reports whether p is, under OneDrive's name folding,
 // the path of a new folder a deferred item moves into at its own path on
 // that side (ownLandings), or lies below one.
-func atOrBelowOwnLanding(p string, landings map[string]bool) bool {
+func atOrBelowOwnLanding(p string, landings map[namekey.PathKey]bool) bool {
 	if len(landings) == 0 {
 		return false
 	}
-	key := pathNameKey(p)
+	key := namekey.OfPath(p)
 	if landings[key] {
 		return true
 	}
@@ -2250,7 +2252,7 @@ func deletesAheadOfTheirContent(
 	for _, edge := range leftOut {
 		deleted, create := &actions[edge.deleteIdx], &actions[edge.createIdx]
 		if roots[edge.deleteIdx] || !actionAllowedInMode(deleted, mode) ||
-			pathNameKey(carriedTo[edge.deleteIdx]) == pathNameKey(create.Path) ||
+			namekey.OfPath(carriedTo[edge.deleteIdx]) == namekey.OfPath(create.Path) ||
 			waitsFor(carried, edge.createIdx, edge.deleteIdx) {
 			continue
 		}
