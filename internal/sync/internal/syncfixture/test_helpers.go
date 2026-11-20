@@ -854,6 +854,7 @@ func (c *ObservingClock) Sleep(ctx context.Context, delay time.Duration) error {
 		c.OnSleep(delay)
 	}
 
+	//nolint:wrapcheck // decorator delegates to the wrapped clock; adding context here would attribute the failure to the test seam rather than the clock that produced it
 	return c.SyncClock.Sleep(ctx, delay)
 }
 
