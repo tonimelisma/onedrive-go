@@ -3,6 +3,8 @@ package devtool
 import (
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"maps"
 	"os"
@@ -267,7 +269,9 @@ func TestGolangciConfig_DepguardPackagePatternsNameExistingPackages(t *testing.T
 // lax rule over its non-test files that refuses the whole tree and allows,
 // by exact path, the tree packages the table below lets it import. A package
 // added to the tree without a rule, a rule for a package that is gone, and a
-// rule that allows another import than the table all fail here.
+// rule that allows another import than the table all fail here. Because
+// depguard sees only the lint's GOOS, the test also reads the imports of every
+// non-test file of the tree, build constraints ignored, against the table.
 func TestGolangciConfig_EverySyncTreePackageHasItsImportRule(t *testing.T) {
 	t.Parallel()
 
@@ -329,6 +333,37 @@ func TestGolangciConfig_EverySyncTreePackageHasItsImportRule(t *testing.T) {
 			got = list
 		}
 		assert.Equal(t, want, got, "%s allows exactly the tree packages it may import", dir)
+		assertTreeImportsAllowed(t, root, dir, tree, allowed)
+	}
+}
+
+// assertTreeImportsAllowed holds every non-test Go file of dir, whatever its
+// build constraints, to the tree packages its package may import. depguard
+// sees only the files of the GOOS it runs under, and the required lint runs
+// on Linux, so a file built only on macOS is checked here.
+func assertTreeImportsAllowed(t *testing.T, root, dir, tree string, allowed []string) {
+	t.Helper()
+
+	ok := map[string]bool{}
+	for _, pkg := range allowed {
+		ok[tree+"/"+pkg] = true
+	}
+	paths, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(dir), "*.go"))
+	require.NoError(t, err)
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		require.NoError(t, parseErr)
+		for _, spec := range file.Imports {
+			imported, unquoteErr := strconv.Unquote(spec.Path.Value)
+			require.NoError(t, unquoteErr)
+			if imported != tree && !strings.HasPrefix(imported, tree+"/") {
+				continue
+			}
+			assert.True(t, ok[imported], "%s imports %s, which %s may not import", filepath.Base(path), imported, dir)
+		}
 	}
 }
 
