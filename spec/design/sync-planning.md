@@ -89,7 +89,7 @@ intent; multisync receives only that child work intent.
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
-| The decision table's kinds are typed enums whose names the SQL literals match exactly, and a name the enum lacks fails the row scan naming the path. Every reachable state is classified (stage 1 over all 131,072 comparison inputs, stage 2 over 442,368 reconciliation inputs); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKindCases_LiteralsAreExactlyTheKinds`, `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath`, `TestComparisonKindCase_ClassifiesEveryReachableState`, `TestReconciliationKindCase_ReconcilesEveryClassifiedComparison`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath` |
+| The decision table's kinds are typed enums whose names the SQL literals match exactly, and a name the enum lacks fails the row scan naming the path. Every reachable state is classified (stage 1 over all 131,072 comparison inputs, stage 2 over 442,368 reconciliation inputs); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKindCases_LiteralsAreExactlyTheKinds`, `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath`, `TestComparisonKindCase_ClassifiesEveryReachableState`, `TestReconciliationKindCase_ReconcilesEveryClassifiedComparison`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_ComparisonMatchesTheSQLCaseOnEveryInput`, `TestReconcile_MatchesTheSQLCaseOnEveryInput`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule`, `TestRunOnce_GoAndSQLDecisionDisagreementFailsThePass` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/syncstore/store_planner_visible_test.go` |
 
 ## Inputs
@@ -302,6 +302,37 @@ with it), run by the full profiles and nightly CI. The guard is for the
 next change to the table, a comparison kind added without a reconciliation
 rule or a flag expression that yields NULL; the old fallback planned such a
 row as `noop`, so its path silently stopped syncing.
+
+### The decision table in Go
+
+`domain_decide.go` holds the same table in Go: `Decide(DecisionState)` is
+`classify` then `Reconcile`, pure and total. `DecisionState` is what each side
+holds at the path (`SideType`: absent, file, folder, root) and the 17
+per-path facts the comparison query derives (content changes, replacements,
+move pairing, the ancestor-move waits); the item type and the two
+type-changed flags are derived from the side types. The comparison query
+returns every input of the table, and `SQLiteComparisonRow.DecisionState`
+reads them, so every pass decides each row twice, by SQL and by Go, and
+`CheckDecisionsAgree` fails the pass on a disagreement, naming the path and
+both answers (`TestRunOnce_GoAndSQLDecisionDisagreementFailsThePass`). The
+two tables are proven equal stage by stage over every SQL input
+(`TestDecide_ComparisonMatchesTheSQLCaseOnEveryInput`, 131,072 inputs;
+`TestReconcile_MatchesTheSQLCaseOnEveryInput`, 442,368 inputs), and the
+planner tests, the reconciliation matrix and the planner model check
+agreement and `DecisionState.Valid` on every row they plan.
+
+`Valid` states the flag definitions as rules (a flag about an absent side is
+false, a type change is a content change, a folder has no content to change,
+two folders are equal, and so on). Over all 8,388,608 normalized states
+(23,077 of them valid), `TestDecide_EveryValidStateHasTheTableProperties`
+proves that a valid state is unclassified only when no side holds the path or
+it would create a drive root, that no valid state uploads a local folder or
+downloads onto a remote folder, and that every reconciliation kind is reached.
+A root-typed entry only one side holds (the `(absent, root, absent)` cell and
+its remote mirror) was an upload or a download; no observer records one (the
+remote observer drops the drive root, the local scanner records only files
+and folders), and a drive root is no file, so it is unclassified and planning
+refuses it (`TestDecide_ARootOnlyOneSideHoldsIsUnclassified`).
 
 `equal_again` is every row whose three sides are present, that changed on
 some side, and whose content is proven equal (`current_equal = 1`), whichever

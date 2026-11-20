@@ -566,7 +566,8 @@ func (flow *engineFlow) loadCurrentInputsTx(
 }
 
 // queryPlannerRowsTx reads the comparison and reconciliation rows over the
-// planner-visible tables. When a row came back unclassified, it also reads
+// planner-visible tables and holds every classified row's kinds to the Go
+// decision table (syncstore.CheckDecisionsAgree). When a row came back unclassified, it also reads
 // that row's decision-table inputs in the same transaction, the only place
 // they can be read (the planner-visible tables are transaction-local), so the
 // plan error PlanCurrentState returns names them (R-6.2.16). A plan whose
@@ -598,6 +599,11 @@ func (flow *engineFlow) queryPlannerRowsTx(
 	}
 	first := syncplan.FirstUnclassifiedRow(reconciliations)
 	if first < 0 {
+		// Every classified row is decided twice, by SQL and by Go, until
+		// the Go table replaces the SQL one; a disagreement fails the pass.
+		if err := syncstore.CheckDecisionsAgree(comparisons, reconciliations); err != nil {
+			return nil, nil, err
+		}
 		return comparisons, reconciliations, nil
 	}
 	reconciliations[first].DecisionInputs, err = syncstore.QueryPlannerDecisionInputs(
