@@ -54,10 +54,10 @@ func TestReplaceLocalState_UnchangedSnapshotWritesNoRows(t *testing.T) {
 	require.NoError(t, store.ReplaceLocalState(ctx, localSnapshotRows()))
 	writes := installLocalStateWriteCounter(t, store)
 
-	changed, err := store.ReplaceLocalStateReportingChange(ctx, localSnapshotRows())
+	result, err := store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: localSnapshotRows()})
 	require.NoError(t, err)
 
-	assert.False(t, changed)
+	assert.False(t, result.rowsChanged)
 	assert.Zero(t, writes(), "an idle safety scan must not rewrite local_state")
 }
 
@@ -75,9 +75,9 @@ func TestReplaceLocalState_WritesOnlyTheDifference(t *testing.T) {
 	next = next[:3]      // empty.txt removed
 	next = append(next, localStateRow{Path: "new.txt", ItemType: ItemTypeFile, Hash: "hn", Size: 1})
 
-	changed, err := store.ReplaceLocalStateReportingChange(ctx, next)
+	result, err := store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: next})
 	require.NoError(t, err)
-	assert.True(t, changed)
+	assert.True(t, result.rowsChanged)
 	// One REPLACE (counted as one insert; SQLite fires delete triggers for
 	// REPLACE only with recursive_triggers), one insert, one delete.
 	assert.LessOrEqual(t, writes(), 4, "only the changed, added and removed rows are written")
@@ -96,15 +96,15 @@ func TestReplaceLocalState_RestoringCompleteTruthReportsChange(t *testing.T) {
 	require.NoError(t, store.ReplaceLocalState(ctx, localSnapshotRows()))
 	require.NoError(t, store.MarkLocalTruthSuspect(ctx, localTruthRecoveryWatcherError))
 
-	changed, err := store.ReplaceLocalStateReportingChange(ctx, localSnapshotRows())
+	result, err := store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: localSnapshotRows()})
 	require.NoError(t, err)
-	assert.True(t, changed, "work held while local truth was suspect must replan once truth is complete again")
+	assert.True(t, result.rowsChanged, "work held while local truth was suspect must replan once truth is complete again")
 
 	state, err := store.ReadObservationState(ctx)
 	require.NoError(t, err)
 	assert.True(t, state.LocalTruthComplete)
 
-	changed, err = store.ReplaceLocalStateReportingChange(ctx, localSnapshotRows())
+	result, err = store.CommitLocalSnapshot(ctx, &localSnapshotCommit{rows: localSnapshotRows()})
 	require.NoError(t, err)
-	assert.False(t, changed, "an unchanged snapshot over complete truth is still no change")
+	assert.False(t, result.rowsChanged, "an unchanged snapshot over complete truth is still no change")
 }

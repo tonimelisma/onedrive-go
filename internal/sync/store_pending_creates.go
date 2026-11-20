@@ -506,25 +506,8 @@ func (s *SyncStore) dropRecordsAtUnscannedPathsTx(ctx context.Context, tx sqlTxR
 
 // listRecordedItemPathsTx returns the paths of the rows that name an item.
 func listRecordedItemPathsTx(ctx context.Context, tx sqlTxRunner) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT path FROM pending_creates WHERE item_id <> '' ORDER BY path`)
-	if err != nil {
-		return nil, fmt.Errorf("sync: listing the records of created items: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
-
-	var paths []string
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return nil, fmt.Errorf("sync: reading the record of a created item: %w", err)
-		}
-		paths = append(paths, path)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: listing the records of created items: %w", err)
-	}
-
-	return paths, nil
+	return queryPathsTx(ctx, tx,
+		`SELECT path FROM pending_creates WHERE item_id <> '' ORDER BY path`, "the records of created items")
 }
 
 // baselineBeforeOutcome is what the baseline held before an outcome was

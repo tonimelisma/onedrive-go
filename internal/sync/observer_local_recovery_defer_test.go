@@ -36,8 +36,8 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	})
 	// One undelivered batch is all it takes: the runtime has not drained
 	// what it was already sent.
-	batches := make(chan localObservationBatch, 1)
-	batches <- localObservationBatch{deletedPaths: []string{"queued"}}
+	batches := make(chan localObservation, 1)
+	batches <- localObservation{deletedPaths: []string{"queued"}}
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
@@ -59,7 +59,7 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	second.fn()
 
 	snapshot := receiveWithin(t, batches, "recovery full snapshot once the runtime has room")
-	require.True(t, snapshot.fullSnapshot)
+	require.Equal(t, localSnapshot, snapshot.kind)
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
 	// The after-scan hook runs once the snapshot is handed over, on the
 	// observer's goroutine; the receive above does not wait for it.
@@ -90,8 +90,8 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 		AfterSafetyScan: func() { scans.Add(1) },
 		TickCh:          tick,
 	})
-	batches := make(chan localObservationBatch, 1)
-	batches <- localObservationBatch{deletedPaths: []string{"queued"}}
+	batches := make(chan localObservation, 1)
+	batches <- localObservation{deletedPaths: []string{"queued"}}
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir, make(chan changeEvent, 10))
@@ -106,7 +106,7 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 	recovery.fn()
 
 	snapshot := receiveWithin(t, batches, "full snapshot once the runtime has room")
-	require.True(t, snapshot.fullSnapshot)
+	require.Equal(t, localSnapshot, snapshot.kind)
 	assert.True(t, containsLocalRow(snapshot.rows, "missed.txt"))
 	assert.Eventually(t, func() bool { return scans.Load() == 1 }, eventWait, 10*time.Millisecond,
 		"the after-scan hook runs once the snapshot is handed over")

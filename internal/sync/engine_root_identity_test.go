@@ -472,7 +472,7 @@ func TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			errs[i] = eng.commitLocalSnapshot(t.Context(), nil, nil)
+			_, errs[i] = eng.commitLocalSnapshot(t.Context(), localSnapshotCommit{})
 		}()
 	}
 	group.Wait()

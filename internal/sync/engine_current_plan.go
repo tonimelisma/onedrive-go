@@ -116,9 +116,8 @@ type currentObservation struct {
 type localCurrentRefreshStep string
 
 const (
-	localCurrentRefreshStepObservation       localCurrentRefreshStep = "local_observation"
-	localCurrentRefreshStepFindingsReconcile localCurrentRefreshStep = "local_observation_findings_reconcile"
-	localCurrentRefreshStepSnapshotCommit    localCurrentRefreshStep = "local_snapshot_commit"
+	localCurrentRefreshStepObservation    localCurrentRefreshStep = "local_observation"
+	localCurrentRefreshStepSnapshotCommit localCurrentRefreshStep = "local_snapshot_commit"
 )
 
 type localCurrentRefreshError struct {
@@ -219,7 +218,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 			return nil, nil, err
 		}
 	}
-	if _, err := flow.applyObservationFindingsBatch(
+	if err := flow.applyObservationFindingsBatch(
 		ctx,
 		&observationBatch.findings,
 		recordSkippedOneDriveItems,
@@ -287,7 +286,7 @@ func (flow *engineFlow) observeLocalCurrentState(
 	return localResult, nil
 }
 
-func (flow *engineFlow) refreshLocalCurrentState(
+func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
 	bl *Baseline,
 ) (scanResult, error) {
@@ -295,23 +294,9 @@ func (flow *engineFlow) refreshLocalCurrentState(
 	if err != nil {
 		return scanResult{}, err
 	}
-
-	if _, err := flow.reconcileSkippedObservationFindings(ctx, localResult.Skipped); err != nil {
-		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepFindingsReconcile, err)
-	}
-
-	return localResult, nil
-}
-
-func (flow *engineFlow) refreshAndCommitLocalCurrentState(
-	ctx context.Context,
-	bl *Baseline,
-) (scanResult, error) {
-	localResult, err := flow.refreshLocalCurrentState(ctx, bl)
-	if err != nil {
-		return scanResult{}, err
-	}
-	if err := flow.commitCurrentLocalSnapshot(ctx, localResult); err != nil {
+	if _, err := flow.commitLocalScan(
+		ctx, buildLocalStateRows(localResult), localResult.Skipped, localResult.CrossedMounts,
+	); err != nil {
 		return scanResult{}, localCurrentRefreshFailure(localCurrentRefreshStepSnapshotCommit, err)
 	}
 
@@ -399,13 +384,6 @@ func (flow *engineFlow) observeLocal(
 	return result, nil
 }
 
-func (flow *engineFlow) commitCurrentLocalSnapshot(
-	ctx context.Context,
-	localResult scanResult,
-) error {
-	return flow.engine.commitLocalSnapshot(ctx, buildLocalStateRows(localResult), localResult.CrossedMounts)
-}
-
 // errReadingPlanningState is the one wrap of a planning-state load error,
 // the same in a one-shot pass, a dry run and every watch replan: the store's
 // own error under it names the read that failed.
@@ -447,14 +425,12 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 	}
 	flow.logSkippedObservationFindings(localResult.Skipped, flow.knownObservationIssues(ctx))
 	localFindings := localObservationFindingsBatchFromSkippedItems(flow.engine.driveID, localResult.Skipped)
-	if reconcileErr := scratchStore.ReconcileObservationFindings(ctx, &localFindings); reconcileErr != nil {
-		return nil, fmt.Errorf("sync: reconciling dry-run local observation findings in scratch store: %w", reconcileErr)
-	}
-
-	localRows := buildLocalStateRows(localResult)
-	replaceErr := scratchStore.ReplaceLocalState(ctx, localRows)
-	if replaceErr != nil {
-		return nil, fmt.Errorf("sync: replacing dry-run local snapshot in scratch store: %w", replaceErr)
+	if _, commitErr := scratchStore.CommitLocalSnapshot(ctx, &localSnapshotCommit{
+		rows:          buildLocalStateRows(localResult),
+		findings:      &localFindings,
+		crossedMounts: localResult.CrossedMounts,
+	}); commitErr != nil {
+		return nil, fmt.Errorf("sync: committing dry-run local snapshot to scratch store: %w", commitErr)
 	}
 
 	inputs, err := flow.loadCurrentInputs(ctx, scratchStore, flow.engine.driveID)

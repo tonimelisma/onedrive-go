@@ -405,3 +405,17 @@ func expectedLocalStateRows() []localStateRow {
 		},
 	}
 }
+
+// Validates: R-2.8.8
+func TestDeleteLocalStatePrefix_SeeksThePrimaryKey(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	plan := queryPlanText(t, store.rawDB(), sqlDeleteLocalStateSubtree, localStateSubtreeArgs("docs")...)
+
+	assert.Regexp(t, `SEARCH local_state USING COVERING INDEX sqlite_autoindex_local_state_\d+ \(path=\?\)`, plan,
+		"the delete must find the path itself by the primary key; query plan:\n%s", plan)
+	assert.Regexp(t, `SEARCH local_state USING COVERING INDEX sqlite_autoindex_local_state_\d+ \(path>\? AND path<\?\)`, plan,
+		"the delete must range-scan the rows below the path; query plan:\n%s", plan)
+	assert.NotContains(t, plan, "SCAN local_state", "the delete must not read every row; query plan:\n%s", plan)
+}

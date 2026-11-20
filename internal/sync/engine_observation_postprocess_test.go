@@ -358,7 +358,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 }
 
 // Validates: R-2.1.2, R-2.10.4
-func TestReconcileSkippedObservationFindings_ReturnsErrorOnFailure(t *testing.T) {
+func TestCommitLocalScan_ReturnsErrorOnFailure(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &engineMockClient{})
@@ -368,11 +368,11 @@ func TestReconcileSkippedObservationFindings_ReturnsErrorOnFailure(t *testing.T)
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	_, err := rt.reconcileSkippedObservationFindings(ctx, []skippedItem{{
+	_, err := rt.commitLocalScan(ctx, nil, []skippedItem{{
 		Path:   "blocked.txt",
 		Reason: IssueInvalidFilename,
 		Detail: "invalid",
-	}})
+	}}, nil)
 	require.Error(t, err)
 }
 

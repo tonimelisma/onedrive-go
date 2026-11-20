@@ -185,7 +185,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 		bl:          bl,
 		replanReady: make(chan dirtyBatch),
 	}
-	rt.resources.localBatches = make(chan localObservationBatch)
+	rt.resources.localBatches = make(chan localObservation)
 	rt.resources.remoteBatches = make(chan remoteObservationBatch)
 
 	cancel()

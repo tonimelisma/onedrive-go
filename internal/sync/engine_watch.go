@@ -249,7 +249,6 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.resources.observerErrs = nil
 		rt.resources.localBatches = nil
 		rt.resources.remoteBatches = nil
-		rt.resources.skippedItems = nil
 		rt.resources.activeObservers = 0
 		rt.resources.remoteObs = nil
 		rt.resources.localObs = nil
@@ -346,19 +345,13 @@ func (rt *watchRuntime) startObservers(
 		return err
 	}
 
-	localBatches := make(chan localObservationBatch, watchObservationBuf)
+	localBatches := make(chan localObservation, watchObservationBuf)
 	protectedRootEvents := make(chan protectedRootEvent, watchObservationBuf)
 	remoteBatches := make(chan remoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
-	// Carries each watch-mode full scan's finding set (TrySendScanFindings).
-	// Each set is the whole set, so a set dropped on a full buffer costs
-	// nothing the next scan does not resend; two sets cover a scan finishing
-	// while the loop has not yet taken the previous one.
-	skippedCh := make(chan []skippedItem, 2)
-
 	// Every step that can fail runs before the first goroutine starts, so a
 	// start that fails leaves nothing running.
-	localObs, err := rt.buildWatchLocalObserver(ctx, bl, localBatches, protectedRootEvents, skippedCh)
+	localObs, err := rt.buildWatchLocalObserver(ctx, bl, localBatches, protectedRootEvents)
 	if err != nil {
 		return err
 	}
@@ -372,7 +365,6 @@ func (rt *watchRuntime) startObservers(
 
 	rt.resources.observerErrs = errs
 	rt.resources.activeObservers = watchObserverCount
-	rt.resources.skippedItems = skippedCh
 	rt.resources.localBatches = localBatches
 	rt.resources.protectedRootEvents = protectedRootEvents
 	rt.resources.remoteBatches = remoteBatches
@@ -389,9 +381,8 @@ const watchObserverCount = 2
 func (rt *watchRuntime) buildWatchLocalObserver(
 	ctx context.Context,
 	bl *Baseline,
-	localBatches chan<- localObservationBatch,
+	localBatches chan<- localObservation,
 	protectedRootEvents chan<- protectedRootEvent,
-	skippedCh chan<- []skippedItem,
 ) (*localObserver, error) {
 	localObs := rt.engine.buildLocalObserver(bl, rt.deps.logger)
 	hashCache, err := rt.engine.baseline.newLocalHashCache(ctx)
@@ -419,7 +410,6 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 			)
 		}
 	})
-	localObs.SetSkippedChannel(skippedCh)
 	localObs.SetLocalObservationBatchChannel(localBatches)
 	localObs.safetyScanInterval = localWatchHealthySafetyScanInterval
 	localObs.startupSafetyScan = true
@@ -437,7 +427,7 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 func (rt *watchRuntime) startLocalObserver(
 	ctx context.Context,
 	localObs *localObserver,
-	localBatches chan<- localObservationBatch,
+	localBatches chan<- localObservation,
 	protectedRootEvents chan<- protectedRootEvent,
 	errs chan<- error,
 ) {
@@ -702,7 +692,6 @@ func (rt *watchRuntime) runFallbackScan(
 	for i := range result.Events {
 		obs.TrySendChangeEventOnly(ctx, events, &result.Events[i])
 	}
-	obs.TrySendScanFindings(result.Skipped)
 	rt.deps.emit(engineDebugEvent{Type: engineDebugEventObserverFallbackScanned, Observer: engineDebugObserverLocal})
 
 	return true

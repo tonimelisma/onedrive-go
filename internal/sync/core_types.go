@@ -26,7 +26,7 @@ type skippedItem struct {
 // never stored in the database. An event carries no source: remote events
 // reach the engine only in a remoteObservationBatch and local ones only
 // through the local observer's own paths (its event channel, scan results,
-// localObservationBatch), so where an event came from is known by where it is.
+// localObservation), so where an event came from is known by where it is.
 //
 // Per-observer field contract:
 //

@@ -757,8 +757,8 @@ watch observers and full-refresh goroutines emit one loop-applied
 observation commits, cursor commits, observation-finding reconciliation, dirty
 marking, and refresh-timer re-arm.
 Observer lifecycle follows that same runtime-owned model. `startObservers`
-populates the watch runtime's observer error stream, local-event stream,
-remote-batch stream, skipped-item stream, refresh channels, and active-observer
+populates the watch runtime's observer error stream, local-observation stream,
+remote-batch stream, refresh channels, and active-observer
 count directly. `watchPipeline` keeps only loop inputs that are not already
 runtime-owned: baseline, replan-ready debounce output, worker completions,
 maintenance ticks, worker pool, and cleanup.
@@ -814,7 +814,7 @@ which signal channel is authoritative.
 
 Local watcher events are scheduler hints plus scoped local-truth updates. The
 local observer re-observes the affected file, directory, or safety-scan
-snapshot and emits a `localObservationBatch`; the watch loop applies that batch
+snapshot and emits a `localObservation`; the watch loop applies it
 to `local_state`/`observation_state` before marking the dirty scheduler. Remote
 delta batches and full remote refresh results similarly arrive as loop-applied
 durable observation batches. Websocket wakes remain scheduler hints only. After
@@ -1561,7 +1561,7 @@ the same expression that detaches it:
 | clearing the intent of a create that succeeded | `executor_transfer.go` `clearPendingCreateIntent` | `OutcomeCommitTimeout` |
 | dropping the record of a placeholder the cleanup removed | `executor_transfer.go` `forgetRemovedPlaceholder` | `OutcomeCommitTimeout` |
 | clearing a succeeded action's retry work | `engine_retry_trial.go` `clearRetryWorkOnActionSuccess` | `OutcomeCommitTimeout` |
-| findings observed before a shutdown | `engine_watch_loop.go` `handleWatchSkippedSignal` | `OutcomeCommitTimeout` |
+| a local snapshot observed before a shutdown | `engine_watch_local_observation.go` `applyLocalSnapshot` | `OutcomeCommitTimeout` |
 | persisted-invariant checks (tests and debug only) | `engine_runtime_invariants.go` | `OutcomeCommitTimeout` |
 | the records of the completions a stopping run drains | `engine_runtime_shutdown.go` `processShutdownCompletion` | one `OutcomeCommitTimeout` for the whole drain, measured from the cancel (`stopDrain`) |
 | the WAL checkpoint in `SyncStore.Close` | `store.go` | `StoreCloseCheckpointTimeout` (10 s) |
