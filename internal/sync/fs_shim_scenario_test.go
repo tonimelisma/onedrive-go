@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -24,7 +26,7 @@ const fsShimFileCount = 3
 func shimScenarioRemote(t *testing.T, folder string) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-folder", "root", folder)
 	for i := range fsShimFileCount {
 		remote.addFile(t, fmt.Sprintf("item-%d", i), "item-folder", fmt.Sprintf("f%d.txt", i), fmt.Sprintf("content %d\n", i))
@@ -49,9 +51,9 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 		errno syscall.Errno
 		// scope is the one block scope every download must wait under; zero
 		// means the failures stay per item.
-		scope ScopeKey
+		scope syncdomain.ScopeKey
 	}{
-		{name: "ENOSPC", errno: syscall.ENOSPC, scope: SKDiskLocal()},
+		{name: "ENOSPC", errno: syscall.ENOSPC, scope: syncdomain.SKDiskLocal()},
 		{name: "EFBIG", errno: syscall.EFBIG},
 		{name: "EIO", errno: syscall.EIO},
 		{name: "ENAMETOOLONG", errno: syscall.ENAMETOOLONG},
@@ -67,7 +69,7 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 			h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 			h.beginRound(t)
 
-			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			require.Positive(t, shim.Hits(), "the downloads met the filesystem")
 
@@ -99,7 +101,7 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 			shim.SetRules()
 			for range 3 {
 				clock.advance(modelPassInterval)
-				_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+				_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 				require.NoError(t, err)
 			}
 			assertSyncInvariants(t, h)
@@ -116,7 +118,7 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 func TestCaseInsensitiveShim_RemoteCaseOnlyRenameConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-a", "item-docs", "readme.txt", "readme\n")
 	eng, syncRoot := newTestEngineOnFS(t, remote.client(t), synctest.CaseInsensitive)
@@ -130,7 +132,7 @@ func TestCaseInsensitiveShim_RemoteCaseOnlyRenameConverges(t *testing.T) {
 		runScenarioPass(t, eng)
 	}
 
-	assert.Equal(t, map[string]string{"Docs": modelFolderSentinel, "Docs/README.txt": "readme\n"}, harnessLocalTree(t, syncRoot))
+	assert.Equal(t, map[string]string{"Docs": syncfixture.ModelFolderSentinel, "Docs/README.txt": "readme\n"}, harnessLocalTree(t, syncRoot))
 	assertSyncInvariants(t, h)
 }
 
@@ -141,16 +143,16 @@ func TestCaseInsensitiveShim_RemoteCaseOnlyRenameConverges(t *testing.T) {
 func TestCaseInsensitiveShim_RemoteCaseVariantOfALocalFileKeepsBoth(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngineOnFS(t, remote.client(t), synctest.CaseInsensitive)
 	eng.clock = &modelClock{}
 	h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
-	writeLocalFile(t, syncRoot, "notes.txt", "local\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "notes.txt", "local\n")
 	h.beginRound(t)
 	remote.putFileAt(t, "NOTES.txt", "remote\n")
 
 	for range 3 {
-		_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 

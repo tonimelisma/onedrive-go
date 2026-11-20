@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 	// plus the slack; a store slow enough to need two is wedged, and ending
 	// the watch is then the right outcome. A bound at or below one write's
 	// limit would call a slow clean stop stuck.
-	watchRunnerStopTimeout = syncengine.OutcomeCommitTimeout + watchRunnerStopSlack
+	watchRunnerStopTimeout = syncdomain.OutcomeCommitTimeout + watchRunnerStopSlack
 )
 
 // nextWatchRunnerGeneration names the next watch runner. Only the RunWatch

@@ -3,6 +3,9 @@ package sync
 import (
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // runtimeDeps are the capabilities every per-run flow needs regardless of what
@@ -18,9 +21,9 @@ import (
 // configuration and collaborators a particular decision consults.
 type runtimeDeps struct {
 	logger *slog.Logger
-	store  *SyncStore
-	clock  SyncClock
-	events func(EngineDebugEvent)
+	store  *syncstore.SyncStore
+	clock  syncdomain.SyncClock
+	events func(syncdomain.EngineDebugEvent)
 }
 
 func newRuntimeDeps(engine *Engine) runtimeDeps {
@@ -47,7 +50,7 @@ func (d runtimeDeps) since(start time.Time) time.Duration {
 // diagnostics: they never own or redirect control flow.
 //
 //nolint:gocritic // Value semantics are intentional so runtime hooks cannot mutate engine-owned events, matching Engine.emitDebugEvent.
-func (d runtimeDeps) emit(event EngineDebugEvent) {
+func (d runtimeDeps) emit(event syncdomain.EngineDebugEvent) {
 	if d.events == nil {
 		return
 	}

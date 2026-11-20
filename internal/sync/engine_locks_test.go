@@ -16,19 +16,21 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 )
 
 func secondEngineInputs(t *testing.T, syncRoot string, logger *slog.Logger) *engineInputs {
 	t.Helper()
 
 	other := t.TempDir()
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 
 	return &engineInputs{
 		DBPath:          filepath.Join(other, "other.db"),
 		SyncRoot:        syncRoot,
 		DataDir:         other,
-		DriveID:         driveid.New(engineTestDriveID),
+		DriveID:         driveid.New(syncfixture.EngineTestDriveID),
 		AccountEmail:    engineTestEmail,
 		Fetcher:         mock,
 		SocketIOFetcher: mock,
@@ -51,7 +53,7 @@ func TestEngine_SecondEngineOnSameRootRefused(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 	dataDir := t.TempDir()
 
-	firstInputs := secondEngineInputs(t, syncRoot, testLogger(t))
+	firstInputs := secondEngineInputs(t, syncRoot, syncfixture.TestLogger(t))
 	firstInputs.DataDir = dataDir
 	first, err := newEngine(t.Context(), firstInputs)
 	require.NoError(t, err)
@@ -60,7 +62,7 @@ func TestEngine_SecondEngineOnSameRootRefused(t *testing.T) {
 	// folder through a symlink must be refused before it opens its store.
 	link := filepath.Join(t.TempDir(), "alias")
 	require.NoError(t, os.Symlink(syncRoot, link))
-	secondInputs := secondEngineInputs(t, link, testLogger(t))
+	secondInputs := secondEngineInputs(t, link, syncfixture.TestLogger(t))
 	secondInputs.DataDir = dataDir
 	_, err = newEngine(t.Context(), secondInputs)
 	require.ErrorIs(t, err, ErrSyncRootInUse)
@@ -68,7 +70,7 @@ func TestEngine_SecondEngineOnSameRootRefused(t *testing.T) {
 
 	require.NoError(t, first.Close(t.Context()))
 
-	thirdInputs := secondEngineInputs(t, syncRoot, testLogger(t))
+	thirdInputs := secondEngineInputs(t, syncRoot, syncfixture.TestLogger(t))
 	thirdInputs.DataDir = dataDir
 	third, err := newEngine(t.Context(), thirdInputs)
 	require.NoError(t, err, "the folder is free once its engine closes")
@@ -85,18 +87,18 @@ func TestEngine_SecondEngineOnSameStoreRefused(t *testing.T) {
 	t.Parallel()
 
 	dataDir := t.TempDir()
-	firstInputs := secondEngineInputs(t, t.TempDir(), testLogger(t))
+	firstInputs := secondEngineInputs(t, t.TempDir(), syncfixture.TestLogger(t))
 	firstInputs.DataDir = dataDir
 	first, err := newEngine(t.Context(), firstInputs)
 	require.NoError(t, err)
 
 	otherFolder := t.TempDir()
-	secondInputs := secondEngineInputs(t, otherFolder, testLogger(t))
+	secondInputs := secondEngineInputs(t, otherFolder, syncfixture.TestLogger(t))
 	secondInputs.DataDir = dataDir
 	secondInputs.DBPath = firstInputs.DBPath
 	_, err = newEngine(t.Context(), secondInputs)
 	require.ErrorIs(t, err, ErrSyncStoreInUse)
-	folderLock, err := acquireSyncRootLock(dataDir, otherFolder, testLogger(t), nil)
+	folderLock, err := acquireSyncRootLock(dataDir, otherFolder, syncfixture.TestLogger(t), nil)
 	require.NoError(t, err, "the refused engine let go of its folder")
 	require.NoError(t, folderLock.release())
 
@@ -117,17 +119,17 @@ func TestLockDriveForOfflineChange_ContendsWithAnEngineOnTheFolderAtItsPath(t *t
 	syncRoot := t.TempDir()
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	engineLock, err := acquireSyncRootLock(dataDir, syncRoot, testLogger(t), nil)
+	engineLock, err := acquireSyncRootLock(dataDir, syncRoot, syncfixture.TestLogger(t), nil)
 	require.NoError(t, err)
 
-	_, err = LockDriveForOfflineChange(t.Context(), dataDir, syncRoot, dbPath, testLogger(t))
+	_, err = LockDriveForOfflineChange(t.Context(), dataDir, syncRoot, dbPath, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, ErrSyncRootInUse, "an engine holds the folder")
 
 	require.NoError(t, engineLock.release())
-	release, err := LockDriveForOfflineChange(t.Context(), dataDir, syncRoot, dbPath, testLogger(t))
+	release, err := LockDriveForOfflineChange(t.Context(), dataDir, syncRoot, dbPath, syncfixture.TestLogger(t))
 	require.NoError(t, err, "the folder is free once the engine lets go")
 
-	_, err = acquireSyncRootLock(dataDir, syncRoot, testLogger(t), nil)
+	_, err = acquireSyncRootLock(dataDir, syncRoot, syncfixture.TestLogger(t), nil)
 	require.ErrorIs(t, err, ErrSyncRootInUse, "no engine starts during the offline change")
 	require.NoError(t, release())
 }
@@ -145,24 +147,24 @@ func TestLockDriveForOfflineChange_ContendsWithAnEngineWhoseFolderMoved(t *testi
 	parent := t.TempDir()
 	syncRoot := filepath.Join(parent, "sync")
 	require.NoError(t, os.Mkdir(syncRoot, 0o750))
-	inputs := secondEngineInputs(t, syncRoot, testLogger(t))
+	inputs := secondEngineInputs(t, syncRoot, syncfixture.TestLogger(t))
 	engine, err := newEngine(t.Context(), inputs)
 	require.NoError(t, err)
 	require.NoError(t, os.Rename(syncRoot, filepath.Join(parent, "moved")))
 	require.NoError(t, os.Mkdir(syncRoot, 0o750))
 
-	_, err = LockDriveForOfflineChange(t.Context(), inputs.DataDir, syncRoot, inputs.DBPath, testLogger(t))
+	_, err = LockDriveForOfflineChange(t.Context(), inputs.DataDir, syncRoot, inputs.DBPath, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, ErrSyncStoreInUse, "the engine on the moved folder still has the store open")
-	folderLock, err := acquireSyncRootLock(inputs.DataDir, syncRoot, testLogger(t), nil)
+	folderLock, err := acquireSyncRootLock(inputs.DataDir, syncRoot, syncfixture.TestLogger(t), nil)
 	require.NoError(t, err, "a refused change leaves the folder at the path unlocked")
 	require.NoError(t, folderLock.release())
 
 	require.NoError(t, engine.Close(t.Context()))
-	release, err := LockDriveForOfflineChange(t.Context(), inputs.DataDir, syncRoot, inputs.DBPath, testLogger(t))
+	release, err := LockDriveForOfflineChange(t.Context(), inputs.DataDir, syncRoot, inputs.DBPath, syncfixture.TestLogger(t))
 	require.NoError(t, err)
 	_, err = newEngine(t.Context(), inputs)
 	require.ErrorIs(t, err, ErrSyncRootInUse, "no engine starts on the folder during the change")
-	elsewhere := secondEngineInputs(t, t.TempDir(), testLogger(t))
+	elsewhere := secondEngineInputs(t, t.TempDir(), syncfixture.TestLogger(t))
 	elsewhere.DataDir = inputs.DataDir
 	elsewhere.DBPath = inputs.DBPath
 	_, err = newEngine(t.Context(), elsewhere)
@@ -179,20 +181,20 @@ func TestLockDriveForOfflineChange_WithoutAFolderTakesTheStoreLock(t *testing.T)
 	t.Parallel()
 
 	dataDir := t.TempDir()
-	inputs := secondEngineInputs(t, t.TempDir(), testLogger(t))
+	inputs := secondEngineInputs(t, t.TempDir(), syncfixture.TestLogger(t))
 	inputs.DataDir = dataDir
 	release, err := LockDriveForOfflineChange(t.Context(), dataDir, filepath.Join(t.TempDir(), "gone"),
-		inputs.DBPath, testLogger(t))
+		inputs.DBPath, syncfixture.TestLogger(t))
 	require.NoError(t, err)
 
-	_, err = LockDriveForOfflineChange(t.Context(), dataDir, "", inputs.DBPath, testLogger(t))
+	_, err = LockDriveForOfflineChange(t.Context(), dataDir, "", inputs.DBPath, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, ErrSyncStoreInUse)
 	_, err = newEngine(t.Context(), inputs)
 	require.ErrorIs(t, err, ErrSyncStoreInUse)
 	assert.NoFileExists(t, inputs.DBPath, "the refused engine never created its state store")
 	require.NoError(t, release())
 
-	release, err = LockDriveForOfflineChange(t.Context(), dataDir, "", inputs.DBPath, testLogger(t))
+	release, err = LockDriveForOfflineChange(t.Context(), dataDir, "", inputs.DBPath, syncfixture.TestLogger(t))
 	require.NoError(t, err, "the release let go of the store")
 	require.NoError(t, release())
 }
@@ -231,7 +233,7 @@ func TestSyncRootLock_IsADataDirFileKeyedByDeviceAndInode(t *testing.T) {
 
 	syncRoot := t.TempDir()
 	dataDir := t.TempDir()
-	lock, err := acquireSyncRootLock(dataDir, syncRoot, testLogger(t), nil)
+	lock, err := acquireSyncRootLock(dataDir, syncRoot, syncfixture.TestLogger(t), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, lock.release()) })
 
@@ -297,7 +299,7 @@ func lockFileName(t *testing.T, fd int, names map[string]string) string {
 func TestEngineLocks_ReleasedInReverseOnlyAfterTheStoreCloses(t *testing.T) {
 	t.Parallel()
 
-	inputs := secondEngineInputs(t, t.TempDir(), testLogger(t))
+	inputs := secondEngineInputs(t, t.TempDir(), syncfixture.TestLogger(t))
 	rootLockPath, err := syncRootLockPath(inputs.DataDir, inputs.SyncRoot)
 	require.NoError(t, err)
 	storeLockPath, err := syncStoreLockPath(inputs.DataDir, inputs.DBPath)
@@ -330,7 +332,7 @@ func TestEngineLocks_ReleasedWhenStartupFailsAfterTakingThem(t *testing.T) {
 	t.Parallel()
 
 	syncRoot := t.TempDir()
-	inputs := secondEngineInputs(t, syncRoot, testLogger(t))
+	inputs := secondEngineInputs(t, syncRoot, syncfixture.TestLogger(t))
 	// A directory where the state DB should be: the store cannot open.
 	require.NoError(t, os.MkdirAll(inputs.DBPath, 0o750))
 	_, err := newEngine(t.Context(), inputs)
@@ -338,11 +340,11 @@ func TestEngineLocks_ReleasedWhenStartupFailsAfterTakingThem(t *testing.T) {
 	require.NotErrorIs(t, err, ErrSyncRootInUse)
 	require.NotErrorIs(t, err, ErrSyncStoreInUse)
 
-	release, err := LockDriveForOfflineChange(t.Context(), inputs.DataDir, "", inputs.DBPath, testLogger(t))
+	release, err := LockDriveForOfflineChange(t.Context(), inputs.DataDir, "", inputs.DBPath, syncfixture.TestLogger(t))
 	require.NoError(t, err, "the failed start released the store")
 	require.NoError(t, release())
 
-	retry := secondEngineInputs(t, syncRoot, testLogger(t))
+	retry := secondEngineInputs(t, syncRoot, syncfixture.TestLogger(t))
 	retry.DataDir = inputs.DataDir
 	engine, err := newEngine(t.Context(), retry)
 	require.NoError(t, err, "the failed start released the folder")
@@ -378,7 +380,7 @@ func TestMoveStateDBs_MovesTheWholeFamily(t *testing.T) {
 	require.NoError(t, os.WriteFile(from+"-wal", []byte("log"), 0o600))
 	require.NoError(t, os.WriteFile(to+"-journal", []byte("journal of a store long gone"), 0o600))
 
-	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{{From: from, To: to}}, recordNothing, testLogger(t)))
+	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{{From: from, To: to}}, recordNothing, syncfixture.TestLogger(t)))
 
 	for _, path := range config.StateDBFamily(from) {
 		assert.NoFileExists(t, path)
@@ -408,11 +410,11 @@ func TestMoveStateDBs_RefusesEveryMoveWhileOneStoreIsInUse(t *testing.T) {
 	for _, move := range moves {
 		writeStateFamily(t, move.From, "kept")
 	}
-	release, err := LockDriveForOfflineChange(t.Context(), dataDir, "", moves[1].From, testLogger(t))
+	release, err := LockDriveForOfflineChange(t.Context(), dataDir, "", moves[1].From, syncfixture.TestLogger(t))
 	require.NoError(t, err)
 
 	recorded := 0
-	err = MoveStateDBs(t.Context(), dataDir, moves, func() error { recorded++; return nil }, testLogger(t))
+	err = MoveStateDBs(t.Context(), dataDir, moves, func() error { recorded++; return nil }, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, ErrSyncStoreInUse)
 	assert.Zero(t, recorded, "a refused move is never put on record")
 	for _, move := range moves {
@@ -421,7 +423,7 @@ func TestMoveStateDBs_RefusesEveryMoveWhileOneStoreIsInUse(t *testing.T) {
 	}
 	require.NoError(t, release())
 
-	again, err := LockDriveForOfflineChange(t.Context(), dataDir, "", moves[0].From, testLogger(t))
+	again, err := LockDriveForOfflineChange(t.Context(), dataDir, "", moves[0].From, syncfixture.TestLogger(t))
 	require.NoError(t, err, "the refused move let go of the stores it had locked")
 	require.NoError(t, again())
 }
@@ -443,7 +445,7 @@ func TestMoveStateDBs_RefusesATargetThatExists(t *testing.T) {
 
 	recorded := 0
 	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{free, move},
-		func() error { recorded++; return nil }, testLogger(t))
+		func() error { recorded++; return nil }, syncfixture.TestLogger(t))
 	require.ErrorContains(t, err, "already exists")
 	require.ErrorContains(t, err, "remove "+move.To)
 	assert.Zero(t, recorded, "a refused move is never put on record")
@@ -484,13 +486,13 @@ func TestMoveStateDBs_RecordsTheChangeOnceBeforeTheFirstRename(t *testing.T) {
 			for _, path := range config.StateDBFamily(move.To) {
 				assert.NoFileExists(t, path, "nothing stands at a new name when the change goes on record")
 			}
-			_, lockErr := LockDriveForOfflineChange(t.Context(), dataDir, "", move.To, testLogger(t))
+			_, lockErr := LockDriveForOfflineChange(t.Context(), dataDir, "", move.To, syncfixture.TestLogger(t))
 			require.ErrorIs(t, lockErr, ErrSyncStoreInUse, "the move holds every store when it goes on record")
 		}
 		return nil
 	}
 
-	require.NoError(t, MoveStateDBs(t.Context(), dataDir, moves, record, testLogger(t)))
+	require.NoError(t, MoveStateDBs(t.Context(), dataDir, moves, record, syncfixture.TestLogger(t)))
 	assert.Equal(t, 1, recorded)
 	for _, move := range moves {
 		for i, path := range config.StateDBFamily(move.To) {
@@ -512,7 +514,7 @@ func TestMoveStateDBs_AChangeThatCannotBeRecordedRenamesNothing(t *testing.T) {
 	writeStateFamily(t, move.From, "kept")
 	failed := errors.New("no room for the journal")
 
-	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, func() error { return failed }, testLogger(t))
+	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, func() error { return failed }, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, failed)
 	for i, path := range config.StateDBFamily(move.From) {
 		assert.FileExists(t, path)
@@ -529,18 +531,18 @@ func TestMoveStateDBs_FoldsTheLogIntoTheDatabaseBeforeItMoves(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	donorPath := walDonor(t, dir)
+	donorPath := syncstoretest.WalDonor(t, dir)
 	move := config.StateDBMove{From: filepath.Join(dir, "old.db"), To: filepath.Join(dir, "new.db")}
-	copyStateFile(t, donorPath, move.From)
-	copyStateFile(t, donorPath+"-wal", move.From+"-wal")
+	syncfixture.CopyStateFile(t, donorPath, move.From)
+	syncfixture.CopyStateFile(t, donorPath+"-wal", move.From+"-wal")
 
-	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, recordNothing, testLogger(t)))
+	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, recordNothing, syncfixture.TestLogger(t)))
 
 	for _, path := range config.StateDBFamily(move.From) {
 		assert.NoFileExists(t, path)
 	}
 	assert.NoFileExists(t, move.To+"-wal", "the log was folded into the database, so one file moved")
-	assert.True(t, sqliteHasTable(t, openPlainSQLite(t, move.To), staleMarkerTable),
+	assert.True(t, syncfixture.SqliteHasTable(t, syncstoretest.OpenPlainSQLite(t, move.To), syncfixture.StaleMarkerTable),
 		"the state committed to the log is in the moved database")
 }
 
@@ -553,19 +555,19 @@ func TestMoveStateDBs_AResumedMoveKeepsWhatItAlreadyMoved(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	donorPath := walDonor(t, dir)
+	donorPath := syncstoretest.WalDonor(t, dir)
 	logMoved := config.StateDBMove{From: filepath.Join(dir, "log-old.db"), To: filepath.Join(dir, "log-new.db")}
-	copyStateFile(t, donorPath, logMoved.From)
-	copyStateFile(t, donorPath+"-wal", logMoved.To+"-wal")
+	syncfixture.CopyStateFile(t, donorPath, logMoved.From)
+	syncfixture.CopyStateFile(t, donorPath+"-wal", logMoved.To+"-wal")
 	allMoved := config.StateDBMove{From: filepath.Join(dir, "all-old.db"), To: filepath.Join(dir, "all-new.db")}
 	writeStateFamily(t, allMoved.To, "moved before the interruption")
 	neverThere := config.StateDBMove{From: filepath.Join(dir, "none-old.db"), To: filepath.Join(dir, "none-new.db")}
 
 	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(),
-		[]config.StateDBMove{logMoved, allMoved, neverThere}, nil, testLogger(t)))
+		[]config.StateDBMove{logMoved, allMoved, neverThere}, nil, syncfixture.TestLogger(t)))
 
 	assert.NoFileExists(t, logMoved.From)
-	assert.True(t, sqliteHasTable(t, openPlainSQLite(t, logMoved.To), staleMarkerTable),
+	assert.True(t, syncfixture.SqliteHasTable(t, syncstoretest.OpenPlainSQLite(t, logMoved.To), syncfixture.StaleMarkerTable),
 		"the state committed to the log must survive the resumed move")
 	for _, path := range config.StateDBFamily(allMoved.To) {
 		content, err := os.ReadFile(path) //nolint:gosec // test-owned temp path
@@ -591,7 +593,7 @@ func TestMoveStateDBs_AResumedMoveWithADatabaseAtBothNamesSaysWhichToRemove(t *t
 	require.NoError(t, os.WriteFile(move.From, []byte("created after the change"), 0o600))
 	require.NoError(t, os.WriteFile(move.To, []byte("moved"), 0o600))
 
-	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, nil, testLogger(t))
+	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, nil, syncfixture.TestLogger(t))
 	require.ErrorContains(t, err, "remove "+move.From)
 	require.ErrorContains(t, err, "after the account's email changed")
 	created, readErr := os.ReadFile(move.From)
@@ -628,7 +630,7 @@ func writeUnfinishedEmailChange(t *testing.T, dataDir, oldName, newName string) 
 func emailChangeEngineInputs(t *testing.T, dataDir, name string) *engineInputs {
 	t.Helper()
 
-	inputs := secondEngineInputs(t, t.TempDir(), testLogger(t))
+	inputs := secondEngineInputs(t, t.TempDir(), syncfixture.TestLogger(t))
 	inputs.DataDir = dataDir
 	inputs.DBPath = filepath.Join(dataDir, name)
 
@@ -657,7 +659,7 @@ func TestEngine_RefusesToStartWhileAnEmailChangeIsUnfinished(t *testing.T) {
 		_, err := newEngine(t.Context(), inputs)
 		require.ErrorIs(t, err, ErrEmailChangeUnfinished, name)
 		assert.NoFileExists(t, inputs.DBPath, "the refused engine never created a state store")
-		release, lockErr := LockDriveForOfflineChange(t.Context(), dataDir, inputs.SyncRoot, inputs.DBPath, testLogger(t))
+		release, lockErr := LockDriveForOfflineChange(t.Context(), dataDir, inputs.SyncRoot, inputs.DBPath, syncfixture.TestLogger(t))
 		require.NoError(t, lockErr, "the refused engine let go of its locks")
 		require.NoError(t, release())
 	}
@@ -704,7 +706,7 @@ func TestMoveStateDBs_RemovesTheLeftoversOfAStoreWithoutItsDatabase(t *testing.T
 	require.NoError(t, os.WriteFile(move.From+"-wal", []byte("log of a deleted store"), 0o600))
 	require.NoError(t, os.WriteFile(move.From+"-journal", []byte("journal of a deleted store"), 0o600))
 
-	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, recordNothing, testLogger(t)))
+	require.NoError(t, MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, recordNothing, syncfixture.TestLogger(t)))
 	for _, path := range config.StateDBFamily(move.From) {
 		assert.NoFileExists(t, path)
 	}
@@ -726,11 +728,11 @@ func TestMoveStateDBs_KeepsLeftoversWhileTheirStoreIsLocked(t *testing.T) {
 	dir := t.TempDir()
 	move := config.StateDBMove{From: filepath.Join(dir, "old.db"), To: filepath.Join(dir, "new.db")}
 	require.NoError(t, os.WriteFile(move.From+"-wal", []byte("log"), 0o600))
-	release, err := LockDriveForOfflineChange(t.Context(), dataDir, "", move.From, testLogger(t))
+	release, err := LockDriveForOfflineChange(t.Context(), dataDir, "", move.From, syncfixture.TestLogger(t))
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, release()) })
 
-	err = MoveStateDBs(t.Context(), dataDir, []config.StateDBMove{move}, recordNothing, testLogger(t))
+	err = MoveStateDBs(t.Context(), dataDir, []config.StateDBMove{move}, recordNothing, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, ErrSyncStoreInUse)
 	assert.FileExists(t, move.From+"-wal")
 }
@@ -750,7 +752,7 @@ func TestMoveStateDBs_ASourceThatCannotBeCheckedIsAnError(t *testing.T) {
 	require.NoError(t, os.Chmod(locked, 0))
 	t.Cleanup(func() { assert.NoError(t, os.Chmod(locked, 0o700)) }) //nolint:gosec // restore a test folder for cleanup
 
-	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, recordNothing, testLogger(t))
+	err := MoveStateDBs(t.Context(), t.TempDir(), []config.StateDBMove{move}, recordNothing, syncfixture.TestLogger(t))
 	require.ErrorIs(t, err, os.ErrPermission)
 	assert.NoFileExists(t, move.To)
 }

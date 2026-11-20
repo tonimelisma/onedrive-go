@@ -18,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // moveScenarioRemote is a small in-memory OneDrive for multi-pass engine
@@ -152,7 +154,7 @@ func (r *moveScenarioRemote) touch(id string) {
 // bumpAncestorETags models OneDrive changing every ancestor folder's eTag when
 // something beneath it changes.
 func (r *moveScenarioRemote) bumpAncestorETags(parentID string) {
-	for id := parentID; id != "" && id != StrRoot; {
+	for id := parentID; id != "" && id != syncdomain.StrRoot; {
 		item, ok := r.items[id]
 		if !ok {
 			return
@@ -208,7 +210,7 @@ func (r *moveScenarioRemote) setContent(t *testing.T, id, content string) {
 		r.versions = append(r.versions, previous)
 	}
 	item.Size = int64(len(content))
-	item.QuickXorHash = hashContentQuickXor(t, content)
+	item.QuickXorHash = syncfixture.HashContentQuickXor(t, content)
 	if content == "" && r.hashlessEmptyFiles {
 		item.QuickXorHash = ""
 	}
@@ -306,7 +308,7 @@ func (r *moveScenarioRemote) childIDs(parentID string) []string {
 // pathOf is id's root-relative path, "" for the root.
 func (r *moveScenarioRemote) pathOf(id string) string {
 	var parts []string
-	for current := id; current != "" && current != StrRoot; {
+	for current := id; current != "" && current != syncdomain.StrRoot; {
 		item, ok := r.items[current]
 		if !ok {
 			return ""
@@ -320,7 +322,7 @@ func (r *moveScenarioRemote) pathOf(id string) string {
 
 // itemAt resolves a root-relative path case-insensitively, as OneDrive does.
 func (r *moveScenarioRemote) itemAt(remotePath string) (*graph.Item, bool) {
-	current := r.items[StrRoot]
+	current := r.items[syncdomain.StrRoot]
 	if remotePath == "" {
 		return current, true
 	}
@@ -346,7 +348,7 @@ func (r *moveScenarioRemote) tree() map[string]string {
 func (r *moveScenarioRemote) treeLocked() map[string]string {
 	out := make(map[string]string, len(r.items))
 	for id, item := range r.items {
-		if id == StrRoot {
+		if id == syncdomain.StrRoot {
 			continue
 		}
 		if item.IsFolder {
@@ -488,7 +490,7 @@ func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
 		r.mu.Lock()
 		r.fullDeltaAt = append(r.fullDeltaAt, time.Now())
 		r.mu.Unlock()
-		return deltaPageWithItems(r.snapshot(), next)
+		return syncfixture.DeltaPageWithItems(r.snapshot(), next)
 	}
 
 	r.mu.Lock()
@@ -520,7 +522,7 @@ func (r *moveScenarioRemote) delta(token string) *graph.DeltaPage {
 	}
 	r.shuffleLocked(items)
 
-	return deltaPageWithItems(items, next)
+	return syncfixture.DeltaPageWithItems(items, next)
 }
 
 func parseScenarioDeltaToken(token string) (int, bool) {
@@ -532,47 +534,47 @@ func parseScenarioDeltaToken(token string) (int, bool) {
 	return seq, true
 }
 
-func (r *moveScenarioRemote) client(t *testing.T) *engineMockClient {
+func (r *moveScenarioRemote) client(t *testing.T) *syncfixture.EngineMockClient {
 	t.Helper()
 
-	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+	return &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
 			return r.delta(token), nil
 		},
-		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+		GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 			return r.getItem(itemID)
 		},
-		getItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
+		GetItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
 			return r.getItemByPath(remotePath)
 		},
-		listChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
+		ListChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
 			return r.listChildren(parentID), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			return r.download(itemID, w)
 		},
-		moveItemOptsFn: func(
+		MoveItemOptsFn: func(
 			_ context.Context, _ driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 		) (*graph.Item, error) {
 			return r.moveItem(itemID, newParentID, newName, opts)
 		},
-		createFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
+		CreateFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
 			return r.createFolder(parentID, name)
 		},
-		deleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, ifMatch string) error {
+		DeleteItemIfMatchFn: func(_ context.Context, _ driveid.ID, itemID, ifMatch string) error {
 			return r.deleteItem(itemID, ifMatch)
 		},
-		uploadFn: func(
+		UploadFn: func(
 			_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
 		) (*graph.Item, error) {
 			return r.upload(t, parentID, name, content, size)
 		},
-		uploadCreatingFn: func(
+		UploadCreatingFn: func(
 			_ context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 		) (*graph.Item, error) {
 			return r.uploadCreating(t, parentID, name, content, size, onCreated)
 		},
-		uploadToItemFn: func(
+		UploadToItemFn: func(
 			_ context.Context, _ driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc,
 		) (*graph.Item, error) {
 			return r.uploadToItem(t, itemID, ifMatch, content, size)

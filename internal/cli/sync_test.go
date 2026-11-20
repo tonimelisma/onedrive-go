@@ -22,6 +22,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -52,7 +54,7 @@ func TestRunOnceResultError_DriveFailures(t *testing.T) {
 		{
 			name: "one success",
 			reports: []*multisync.MountReport{
-				{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}},
+				{Report: &syncengine.Report{Mode: syncdomain.SyncBidirectional}},
 			},
 			wantNil: true,
 		},
@@ -70,8 +72,8 @@ func TestRunOnceResultError_DriveFailures(t *testing.T) {
 					Identity: testStandaloneMountIdentity(
 						driveid.MustCanonicalID("personal:reset@example.com"),
 					),
-					Err: &syncengine.StateStoreIncompatibleError{
-						Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+					Err: &syncstore.StateStoreIncompatibleError{
+						Reason: syncstore.StateStoreIncompatibleReasonIncompatibleSchema,
 					},
 				},
 			},
@@ -142,14 +144,14 @@ func installDryRunSuccessRunner(t *testing.T, cc *CLIContext) *bool {
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.SyncMode,
+		mode syncdomain.SyncMode,
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		controlSocketPath string,
 	) multisync.RunOnceResult {
 		called = true
 		require.Len(t, drives, 1)
-		assert.Equal(t, syncengine.SyncBidirectional, mode)
+		assert.Equal(t, syncdomain.SyncBidirectional, mode)
 		assert.True(t, opts.DryRun)
 		assert.NotEmpty(t, controlSocketPath)
 		return multisync.RunOnceResult{
@@ -180,11 +182,11 @@ func TestSyncModeFromFlags(t *testing.T) {
 	tests := []struct {
 		name string
 		flag string
-		want syncengine.SyncMode
+		want syncdomain.SyncMode
 	}{
-		{"default bidirectional", "", syncengine.SyncBidirectional},
-		{"download-only", "download-only", syncengine.SyncDownloadOnly},
-		{"upload-only", "upload-only", syncengine.SyncUploadOnly},
+		{"default bidirectional", "", syncdomain.SyncBidirectional},
+		{"download-only", "download-only", syncdomain.SyncDownloadOnly},
+		{"upload-only", "upload-only", syncdomain.SyncUploadOnly},
 	}
 
 	for _, tt := range tests {
@@ -473,14 +475,14 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.SyncMode,
+		mode syncdomain.SyncMode,
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		controlSocketPath string,
 	) multisync.RunOnceResult {
 		called = true
 		assert.Len(t, drives, 1)
-		assert.Equal(t, syncengine.SyncBidirectional, mode)
+		assert.Equal(t, syncdomain.SyncBidirectional, mode)
 		assert.True(t, opts.DryRun)
 		assert.NotEmpty(t, controlSocketPath)
 
@@ -505,7 +507,7 @@ sync_dir = %q
 		}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 	require.NoError(t, err)
 	assert.True(t, called)
 }
@@ -536,7 +538,7 @@ sync_dir = %q
 	}
 	called := installDryRunSuccessRunner(t, cc)
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 	require.NoError(t, err)
 	assert.True(t, *called)
 	assert.Contains(t, status.String(), "cannot open log file")
@@ -565,7 +567,7 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		_ syncengine.SyncMode,
+		_ syncdomain.SyncMode,
 		_ syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -580,13 +582,13 @@ sync_dir = %q
 					Identity:       testStandaloneMountIdentity(drives[0].CanonicalID),
 					DisplayName:    drives[0].DisplayName,
 					Status:         multisync.MountStartupFatal,
-					Err:            fmt.Errorf("%w: %s is missing or is not a folder", syncengine.ErrMountRootUnavailable, drives[0].SyncDir),
+					Err:            fmt.Errorf("%w: %s is missing or is not a folder", syncdomain.ErrMountRootUnavailable, drives[0].SyncDir),
 				}},
 			},
 		}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sync folder unavailable")
 	assert.True(t, called)
@@ -619,7 +621,7 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		_ syncengine.SyncMode,
+		_ syncdomain.SyncMode,
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -633,7 +635,7 @@ sync_dir = %q
 
 	dryRun := true
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
-		Mode:   syncengine.SyncBidirectional,
+		Mode:   syncdomain.SyncBidirectional,
 		DryRun: &dryRun,
 	})
 	require.NoError(t, err)
@@ -667,7 +669,7 @@ sync_dir = %q
 		_ context.Context,
 		_ *config.Holder,
 		_ []*config.ResolvedDrive,
-		_ syncengine.SyncMode,
+		_ syncdomain.SyncMode,
 		opts syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -680,12 +682,12 @@ sync_dir = %q
 					Status: multisync.MountStartupRunnable,
 				}},
 			},
-			Reports: []*multisync.MountReport{{Report: &syncengine.Report{Mode: syncengine.SyncBidirectional}}},
+			Reports: []*multisync.MountReport{{Report: &syncengine.Report{Mode: syncdomain.SyncBidirectional}}},
 		}
 	}
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
-		Mode:   syncengine.SyncBidirectional,
+		Mode:   syncdomain.SyncBidirectional,
 		DryRun: &override,
 	})
 	require.NoError(t, err)
@@ -713,7 +715,7 @@ sync_dir = %q
 			context.Context,
 			*config.Holder,
 			[]string,
-			syncengine.SyncMode,
+			syncdomain.SyncMode,
 			syncengine.WatchOptions,
 			*slog.Logger,
 			io.Writer,
@@ -725,7 +727,7 @@ sync_dir = %q
 	}
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
-		Mode:  syncengine.SyncBidirectional,
+		Mode:  syncdomain.SyncBidirectional,
 		Watch: true,
 	})
 	require.Error(t, err)
@@ -757,7 +759,7 @@ sync_dir = %q
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
-		syncengine.SyncMode,
+		syncdomain.SyncMode,
 		syncengine.RunOptions,
 		*slog.Logger,
 		string,
@@ -766,7 +768,7 @@ sync_dir = %q
 		return multisync.RunOnceResult{}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called, "one-shot sync owner must stop before engine startup when the socket path is impossible")
@@ -799,7 +801,7 @@ sync_dir = %q
 		context.Context,
 		*config.Holder,
 		[]*config.ResolvedDrive,
-		syncengine.SyncMode,
+		syncdomain.SyncMode,
 		syncengine.RunOptions,
 		*slog.Logger,
 		string,
@@ -808,7 +810,7 @@ sync_dir = %q
 		return multisync.RunOnceResult{}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve control socket path")
 	assert.False(t, called)
@@ -839,7 +841,7 @@ sync_dir = %q
 		context.Context,
 		*config.Holder,
 		[]string,
-		syncengine.SyncMode,
+		syncdomain.SyncMode,
 		syncengine.WatchOptions,
 		*slog.Logger,
 		io.Writer,
@@ -850,7 +852,7 @@ sync_dir = %q
 	}
 
 	err := runSyncCommand(t.Context(), cc, syncCommandOptions{
-		Mode:  syncengine.SyncBidirectional,
+		Mode:  syncdomain.SyncBidirectional,
 		Watch: true,
 	})
 	require.Error(t, err)
@@ -885,7 +887,7 @@ paused = true
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.SyncMode,
+		mode syncdomain.SyncMode,
 		_ syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -928,7 +930,7 @@ paused = true
 		}
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 	require.NoError(t, err)
 	assert.True(t, called)
 	assert.Contains(t, output.String(), "Skipped (paused).")
@@ -971,7 +973,7 @@ func runOneShotWithReports(t *testing.T, drives ...oneShotDrive) (string, error)
 		_ context.Context,
 		_ *config.Holder,
 		resolved []*config.ResolvedDrive,
-		_ syncengine.SyncMode,
+		_ syncdomain.SyncMode,
 		_ syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,
@@ -1004,7 +1006,7 @@ func runOneShotWithReports(t *testing.T, drives ...oneShotDrive) (string, error)
 		return result
 	}
 
-	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncengine.SyncBidirectional})
+	err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
 
 	return output.String(), err
 }
@@ -1072,8 +1074,8 @@ func TestRunSyncCommand_PlanInvariantViolationExitsNonZero(t *testing.T) {
 // Validates: R-6.6.28
 func TestRunSyncCommand_DeferredByModeExitsZero(t *testing.T) {
 	out, err := runOneShotWithReports(t, oneShotDrive{email: "test@example.com", report: &syncengine.Report{
-		Mode:           syncengine.SyncDownloadOnly,
-		DeferredByMode: syncengine.DeferredCounts{Uploads: 3},
+		Mode:           syncdomain.SyncDownloadOnly,
+		DeferredByMode: syncdomain.DeferredCounts{Uploads: 3},
 	}})
 
 	require.NoError(t, err)

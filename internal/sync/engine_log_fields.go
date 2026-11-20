@@ -4,9 +4,10 @@ import (
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *ActionCompletion) []any {
+func (flow *engineFlow) resultLogFields(decision *syncdomain.ResultDecision, r *syncdomain.ActionCompletion) []any {
 	if flow == nil || decision == nil || r == nil {
 		return nil
 	}
@@ -42,9 +43,9 @@ func (flow *engineFlow) resultLogFields(decision *ResultDecision, r *ActionCompl
 
 func (flow *engineFlow) summaryLogFields(
 	class errclass.Class,
-	conditionKey ConditionKey,
+	conditionKey syncdomain.ConditionKey,
 	path string,
-	scopeKey ScopeKey,
+	scopeKey syncdomain.ScopeKey,
 ) []any {
 	if flow == nil {
 		return nil

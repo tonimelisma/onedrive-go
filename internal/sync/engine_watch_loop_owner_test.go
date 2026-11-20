@@ -13,6 +13,10 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // Validates: R-2.10.10
@@ -22,14 +26,14 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.localBatches = make(chan LocalObservation)
-	rt.resources.remoteBatches = make(chan RemoteObservationBatch)
+	rt.resources.localBatches = make(chan syncobserve.LocalObservation)
+	rt.resources.remoteBatches = make(chan syncobserve.RemoteObservationBatch)
 	rt.resources.observerErrs = make(chan error)
 	rt.resources.activeObservers = 1
 
 	p := &watchPipeline{
 		runtime:      rt,
-		replanReady:  make(chan DirtyBatch),
+		replanReady:  make(chan syncobserve.DirtyBatch),
 		maintenanceC: make(chan time.Time),
 	}
 
@@ -95,14 +99,14 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	action := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	action := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "bootstrap.txt",
 		DriveID: eng.driveID,
 		ItemID:  "bootstrap-item",
 	}, 1, nil)
 	require.NotNil(t, action)
-	rt.replaceOutbox([]*TrackedAction{action})
+	rt.replaceOutbox([]*syncdomain.TrackedAction{action})
 	rt.enterBootstrap()
 
 	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
@@ -138,7 +142,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain(t 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	replanReady := make(chan DirtyBatch)
+	replanReady := make(chan syncobserve.DirtyBatch)
 	close(replanReady)
 
 	done, err := rt.runNonDrainingWatchStep(ctx, &watchPipeline{
@@ -161,7 +165,7 @@ func TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn(t *tes
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	replanReady := make(chan DirtyBatch)
+	replanReady := make(chan syncobserve.DirtyBatch)
 	close(replanReady)
 
 	err := rt.runWatchLoop(ctx, &watchPipeline{
@@ -184,7 +188,7 @@ func TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase(
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	replanReady := make(chan DirtyBatch)
+	replanReady := make(chan syncobserve.DirtyBatch)
 	close(replanReady)
 
 	err := rt.runWatchLoop(ctx, &watchPipeline{
@@ -204,7 +208,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors(t 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	replanReady := make(chan DirtyBatch)
+	replanReady := make(chan syncobserve.DirtyBatch)
 	close(replanReady)
 
 	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
@@ -225,11 +229,11 @@ func TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady(t *testing.T) 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	replanReady := make(chan DirtyBatch, 1)
-	replanReady <- DirtyBatch{}
+	replanReady := make(chan syncobserve.DirtyBatch, 1)
+	replanReady <- syncobserve.DirtyBatch{}
 
 	var done bool
-	err := runWithin(t, t.Context(), "runNonDrainingWatchStep to consume replanReady while idle", func(ctx context.Context) error {
+	err := syncfixture.RunWithin(t, t.Context(), "runNonDrainingWatchStep to consume replanReady while idle", func(ctx context.Context) error {
 		var stepErr error
 		done, stepErr = rt.runNonDrainingWatchStep(ctx, &watchPipeline{
 			runtime:     rt,
@@ -248,18 +252,18 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 	for attempt := range 32 {
 		eng := newSingleOwnerEngine(t)
 		rt := testWatchRuntime(t, eng)
-		replanReady := make(chan DirtyBatch, 1)
-		replanReady <- DirtyBatch{}
+		replanReady := make(chan syncobserve.DirtyBatch, 1)
+		replanReady <- syncobserve.DirtyBatch{}
 
-		queued := rt.sched.graph.Add(&Action{
-			Type:    ActionDownload,
+		queued := rt.sched.graph.Add(&syncdomain.Action{
+			Type:    syncdomain.ActionDownload,
 			Path:    "old.txt",
 			DriveID: eng.driveID,
 			ItemID:  "old-item",
 		}, int64(attempt+1), nil)
 		require.NotNil(t, queued)
 		rt.sched.markQueued(queued)
-		rt.replaceOutbox([]*TrackedAction{queued})
+		rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 
 		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
 			runtime:     rt,
@@ -284,23 +288,23 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	queued := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	queued := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "old.txt",
 		DriveID: eng.driveID,
 		ItemID:  "old-item",
 	}, 1, nil)
 	require.NotNil(t, queued)
 	rt.sched.markQueued(queued)
-	rt.replaceOutbox([]*TrackedAction{queued})
-	rt.queuePendingReplan(DirtyBatch{FullRefresh: true})
+	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
+	rt.queuePendingReplan(syncobserve.DirtyBatch{FullRefresh: true})
 	require.Empty(t, rt.currentOutbox())
 	require.Empty(t, rt.sched.queuedByID)
 	require.NoError(t, os.RemoveAll(syncRoot))
@@ -308,7 +312,7 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	replanned, err := rt.runPendingWatchReplan(t.Context(), &watchPipeline{
 		runtime: rt,
 		bl:      bl,
-		mode:    SyncBidirectional,
+		mode:    syncdomain.SyncBidirectional,
 	})
 
 	require.NoError(t, err)
@@ -336,10 +340,10 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			eng, syncRoot := newTestEngine(t, &engineMockClient{})
+			eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
 			setupWatchEngine(t, eng)
 			rt := testWatchRuntime(t, eng)
-			rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+			rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 			bl, err := eng.baseline.Load(t.Context())
 			require.NoError(t, err)
 			require.NoError(t, os.RemoveAll(syncRoot))
@@ -347,8 +351,8 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 			err = rt.handleWatchReplanReady(t.Context(), &watchPipeline{
 				runtime: rt,
 				bl:      bl,
-				mode:    SyncBidirectional,
-			}, DirtyBatch{FullRefresh: tc.fullRefresh})
+				mode:    syncdomain.SyncBidirectional,
+			}, syncobserve.DirtyBatch{FullRefresh: tc.fullRefresh})
 
 			require.NoError(t, err)
 			assert.False(t, rt.hasPendingReplan())
@@ -374,17 +378,17 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	queued := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	queued := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "old.txt",
 		DriveID: eng.driveID,
 		ItemID:  "old-item",
 	}, 1, nil)
 	require.NotNil(t, queued)
 	rt.sched.markQueued(queued)
-	rt.replaceOutbox([]*TrackedAction{queued})
+	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 
-	rt.queuePendingReplan(DirtyBatch{})
+	rt.queuePendingReplan(syncobserve.DirtyBatch{})
 
 	assert.True(t, rt.hasPendingReplan())
 	assert.True(t, rt.canPrepareNow())
@@ -392,19 +396,19 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	assert.Empty(t, rt.sched.queuedByID)
 	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "retiring old outbox must not complete dependency nodes as success")
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededPendingReplanRetirementCount)
-	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventOldOutboxRetired && event.Count == 1
+	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired && event.Count == 1
 	}, 1, "pending replan should emit retired outbox count")
-	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventDispatchPausedForReplan &&
+	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventDispatchPausedForReplan &&
 			!event.At.IsZero() &&
 			event.Count == 1 &&
 			event.Outbox == 1 &&
 			event.Running == 0 &&
 			event.IdleWorkers == 2
 	}, 1, "pending replan should record queue and idle-worker counters before retiring old outbox")
-	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventOldOutboxRetired &&
+	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired &&
 			!event.At.IsZero() &&
 			event.Delay == 0 &&
 			event.Count == 1 &&
@@ -421,7 +425,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	eng := newSingleOwnerEngine(t)
 	eng.perfCollector = perf.NewCollector(nil)
 	eng.transferWorkers = 2
-	clock := newManualClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	advance := clock.Advance
 	installManualClockForTestEngine(eng, clock)
 	recorder := attachDebugEventRecorder(eng)
@@ -430,30 +434,30 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	root := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	root := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "parent.txt",
 		DriveID: eng.driveID,
 		ItemID:  "parent-item",
 	}, 1, nil)
 	require.NotNil(t, root)
-	child := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	child := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "child.txt",
 		DriveID: eng.driveID,
 		ItemID:  "child-item",
-		View:    &PathView{Path: "child.txt"},
+		View:    &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	require.Nil(t, child)
 	rt.sched.markRunning(root)
-	rt.queuePendingReplan(DirtyBatch{})
+	rt.queuePendingReplan(syncobserve.DirtyBatch{})
 	advance(10 * time.Millisecond)
 
-	err = rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &ActionCompletion{
+	err = rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 		Path:       "parent.txt",
 		ItemID:     "parent-item",
 		DriveID:    eng.driveID,
-		ActionType: ActionDownload,
+		ActionType: syncdomain.ActionDownload,
 		Success:    true,
 		ActionID:   1,
 	})
@@ -465,14 +469,14 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	assert.Empty(t, rt.sched.queuedByID)
 	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "released child should remain uncompleted until replacement runtime is installed")
 	assert.Equal(t, int64(10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
-	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWaitingForRunningActions &&
+	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWaitingForRunningActions &&
 			!event.At.IsZero() &&
 			event.Running == 1 &&
 			event.IdleWorkers == 1
 	}, 1, "pending replan should record that old running work is still draining")
-	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventOldOutboxRetired &&
+	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired &&
 			event.Note == "released_ready_frontier" &&
 			!event.At.IsZero() &&
 			event.Count == 1 &&
@@ -491,7 +495,7 @@ func TestWatchRuntime_InitWatchInfraUsesUnbufferedDispatch(t *testing.T) {
 	rt := newWatchRuntime(eng.Engine)
 	ctx, cancel := context.WithCancel(t.Context())
 
-	pipe, err := rt.initWatchInfra(ctx, SyncBidirectional, WatchOptions{})
+	pipe, err := rt.initWatchInfra(ctx, syncdomain.SyncBidirectional, WatchOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, pipe)
 	defer func() {
@@ -512,8 +516,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 		itemID string
 		name   string
 	}
-	mock := &engineMockClient{
-		moveItemFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
+	mock := &syncfixture.EngineMockClient{
+		MoveItemFn: func(_ context.Context, _ driveid.ID, itemID, newParentID, newName string) (*graph.Item, error) {
 			moved.itemID = itemID
 			moved.name = newName
 			assert.Empty(t, newParentID)
@@ -522,35 +526,35 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	setupWatchEngine(t, eng)
-	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
 	require.NoError(t, err)
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutNamespaceTestID,
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Docs",
 		LocalAlias:        "Docs",
 		RemoteDriveID:     driveid.New("drive-1"),
 		RemoteItemID:      "target-1",
 		RemoteIsFolder:    true,
-		State:             ShortcutRootStateActive,
+		State:             syncshortcut.ShortcutRootStateActive,
 		ProtectedPaths:    []string{"Shared/Docs"},
 		LocalRootIdentity: &identity,
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	var published ShortcutChildWorkSnapshot
-	eng.shortcutChildWorkSink = func(_ context.Context, publication ShortcutChildWorkSnapshot) error {
+	var published syncshortcut.ShortcutChildWorkSnapshot
+	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		published = publication
 		return nil
 	}
 	rt := testWatchRuntime(t, eng)
 
-	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &ProtectedRootEvent{}, true)
+	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &syncshortcut.ProtectedRootEvent{}, true)
 
 	require.NoError(t, err)
 	assert.False(t, done)

@@ -14,65 +14,71 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.1.2, R-2.10.4
 func TestLocalObservationFindingsBatchFromSkippedItems_UnreadableDirectoryCreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
-	batch := localObservationFindingsBatchFromSkippedItems(driveid.New(testDriveID), []SkippedItem{{
+	batch := localObservationFindingsBatchFromSkippedItems(driveid.New(syncfixture.TestDriveID), []syncdomain.SkippedItem{{
 		Path:               "Private",
-		Reason:             IssueLocalReadDenied,
+		Reason:             syncdomain.IssueLocalReadDenied,
 		Detail:             "directory not accessible",
 		BlocksReadBoundary: true,
 	}})
 
 	require.Len(t, batch.Issues, 1)
 	assert.Equal(t, "Private", batch.Issues[0].Path)
-	assert.Equal(t, IssueLocalReadDenied, batch.Issues[0].IssueType)
-	assert.Equal(t, SKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
+	assert.Equal(t, syncdomain.IssueLocalReadDenied, batch.Issues[0].IssueType)
+	assert.Equal(t, syncdomain.SKPermLocalRead("Private"), batch.Issues[0].ScopeKey)
 	// Which types are managed is checked against the scanner's source by
 	// TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports.
-	assert.Equal(t, LocalObservationManagedIssueTypes(), batch.ManagedIssueTypes)
+	assert.Equal(t, syncdomain.LocalObservationManagedIssueTypes(), batch.ManagedIssueTypes)
 }
 
 // Validates: R-2.1.2, R-2.10.4
 func TestRootReadFailureObservationFindingsBatch_CreatesBoundaryIssue(t *testing.T) {
 	t.Parallel()
 
-	for _, issueType := range []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound} {
-		batch := rootReadFailureObservationFindingsBatch(driveid.New(testDriveID), issueType)
+	for _, issueType := range []syncdomain.IssueType{syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound} {
+		batch := rootReadFailureObservationFindingsBatch(driveid.New(syncfixture.TestDriveID), issueType)
 
 		require.Len(t, batch.Issues, 1)
 		assert.Equal(t, "/", batch.Issues[0].Path)
 		assert.Equal(t, issueType, batch.Issues[0].IssueType)
-		assert.Equal(t, SKPermRemoteRead(""), batch.Issues[0].ScopeKey)
-		assert.Equal(t, []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound}, batch.ManagedIssueTypes,
+		assert.Equal(t, syncdomain.SKPermRemoteRead(""), batch.Issues[0].ScopeKey)
+		assert.Equal(t, []syncdomain.IssueType{syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound}, batch.ManagedIssueTypes,
 			"a root observation replaces whichever root read issue an earlier answer left")
 	}
 }
 
 // localScanIssueTypesInSource returns every IssueType constant named in a
-// production file of this package that builds a SkippedItem, with the files
+// production file of the sync tree that builds a SkippedItem, with the files
 // that name it: the issue types a local scan can report. It reads the source,
 // so a type a new finding names is seen the moment a builder names it,
 // without a second hand-kept list. A builder file naming a type for another
 // reason is over-reported, which is the safe direction for the check that
 // uses it.
-func localScanIssueTypesInSource(t *testing.T) map[IssueType][]string {
+func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string {
 	t.Helper()
 
-	constants := issueTypeConstantsByName(t)
-	files, err := filepath.Glob("*.go")
-	require.NoError(t, err)
+	constants := syncfixture.IssueTypeConstantsByName(t)
+	var files []string
+	for _, dir := range syncTreePackageDirs() {
+		found, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		files = append(files, found...)
+	}
 
-	reported := make(map[IssueType][]string)
+	reported := make(map[syncdomain.IssueType][]string)
 	fset := token.NewFileSet()
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
 		}
-		src, readErr := os.ReadFile(file) //nolint:gosec // the test reads its own package's source
+		src, readErr := os.ReadFile(file) //nolint:gosec // the test reads the sync tree's source
 		require.NoError(t, readErr)
 		if !bytes.Contains(src, []byte("SkippedItem")) {
 			// Only a file that names the type can build one; skipping the
@@ -83,7 +89,7 @@ func localScanIssueTypesInSource(t *testing.T) map[IssueType][]string {
 		require.NoError(t, parseErr)
 
 		buildsSkippedItem := false
-		named := make(map[IssueType]struct{})
+		named := make(map[syncdomain.IssueType]struct{})
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.CompositeLit:
@@ -113,9 +119,8 @@ func namesSkippedItemType(expr ast.Expr) bool {
 	if array, ok := expr.(*ast.ArrayType); ok {
 		expr = array.Elt
 	}
-	ident, ok := expr.(*ast.Ident)
 
-	return ok && ident.Name == "SkippedItem"
+	return nameOf(expr) == "SkippedItem"
 }
 
 // The local findings batch replaces the stored conditions of the types it
@@ -133,21 +138,21 @@ func TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports(t *t
 	// keptUnmanaged names each type a local scan reports that the local
 	// findings batch leaves unmanaged on purpose, with the reason it must
 	// outlive the scan that stops reporting it. None does today.
-	keptUnmanaged := map[IssueType]string{}
+	keptUnmanaged := map[syncdomain.IssueType]string{}
 	// clearedOnly names each type the local findings batch manages though no
 	// scan reports it, with the reason a scan must clear it.
-	clearedOnly := map[IssueType]string{
-		IssueRemovedFolderKept: "a removed shared folder's release records it after the run's last plan; " +
+	clearedOnly := map[syncdomain.IssueType]string{
+		syncdomain.IssueRemovedFolderKept: "a removed shared folder's release records it after the run's last plan; " +
 			"the next full scan clears it, so a release that runs again records what is still there " +
 			"and a folder shared again keeps no stale report",
 	}
 
 	reported := localScanIssueTypesInSource(t)
-	require.Contains(t, reported, IssueLocalInterruptedRemoval, "the source reading must see the scanner's findings")
-	require.Contains(t, reported, IssueInvalidFilename, "the source reading must see the scanner's findings")
+	require.Contains(t, reported, syncdomain.IssueLocalInterruptedRemoval, "the source reading must see the scanner's findings")
+	require.Contains(t, reported, syncdomain.IssueInvalidFilename, "the source reading must see the scanner's findings")
 
-	managed := make(map[IssueType]struct{})
-	for _, issueType := range LocalObservationManagedIssueTypes() {
+	managed := make(map[syncdomain.IssueType]struct{})
+	for _, issueType := range syncdomain.LocalObservationManagedIssueTypes() {
 		_, duplicate := managed[issueType]
 		assert.False(t, duplicate, "%s is listed twice", issueType)
 		managed[issueType] = struct{}{}

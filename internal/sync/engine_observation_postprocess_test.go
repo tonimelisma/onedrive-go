@@ -11,15 +11,21 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
-func testRemoteCreateEvent(path string, itemID string, driveID string) RemoteItem {
-	return RemoteItem{ObservedItem: ObservedItem{
+func testRemoteCreateEvent(path string, itemID string, driveID string) syncdomain.RemoteItem {
+	return syncdomain.RemoteItem{ObservedItem: syncdomain.ObservedItem{
 		Path:     path,
 		ItemID:   itemID,
 		ParentID: "root",
 		DriveID:  mustParseDriveID(driveID),
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     fmt.Sprintf("hash-%s", itemID),
 		Size:     12,
 		Mtime:    123,
@@ -29,11 +35,11 @@ func testRemoteCreateEvent(path string, itemID string, driveID string) RemoteIte
 
 func testMountRootWatchBatch(
 	engine *Engine,
-	mode RemoteObservationMode,
-	events []RemoteItem,
+	mode syncdomain.RemoteObservationMode,
+	events []syncdomain.RemoteItem,
 	cursorToken string,
-	findings ObservationFindingsBatch,
-) RemoteObservationBatch {
+	findings syncdomain.ObservationFindingsBatch,
+) syncobserve.RemoteObservationBatch {
 	batch := buildRemoteObservationBatch(
 		engine,
 		mode,
@@ -42,7 +48,7 @@ func testMountRootWatchBatch(
 		false,
 		findings,
 	)
-	batch.Source = RemoteObservationBatchMountRoot
+	batch.Source = syncobserve.RemoteObservationBatchMountRoot
 	batch.ApplyAck = make(chan error, 1)
 
 	return batch
@@ -60,35 +66,35 @@ func mustParseDriveID(raw string) driveid.ID {
 func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCommitCursor(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	applyErr := errors.New("persist topology")
-	eng.shortcutChildWorkSink = func(_ context.Context, _ ShortcutChildWorkSnapshot) error {
+	eng.shortcutChildWorkSink = func(_ context.Context, _ syncshortcut.ShortcutChildWorkSnapshot) error {
 		return applyErr
 	}
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "cursor-empty-complete")
 	batch.CursorToken = "cursor-empty-complete"
-	batch.ShortcutTopology = ShortcutTopologyBatch{
+	batch.ShortcutTopology = syncshortcut.ShortcutTopologyBatch{
 		NamespaceID: "personal:owner@example.com",
-		Kind:        ShortcutTopologyObservationComplete,
+		Kind:        syncshortcut.ShortcutTopologyObservationComplete,
 	}
 	err := rt.handleRemoteObservationBatch(t.Context(), &batch)
 	require.ErrorIs(t, err, applyErr)
-	assert.Empty(t, readObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
+	assert.Empty(t, syncstoretest.ReadObservationCursorForTest(t, eng.baseline, t.Context(), eng.driveID.String()))
 }
 
 // Validates: R-2.1.2
 func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -98,21 +104,21 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "item-primary", remoteRow.ItemID)
-	assert.Equal(t, "cursor-primary", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
+	assert.Equal(t, "cursor-primary", syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 }
 
 // Validates: R-2.1.2
 func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	eng.contentFilter = ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
 	}, "cursor-hidden")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -122,7 +128,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "item-hidden", remoteRow.ItemID)
-	assert.Equal(t, "cursor-hidden", readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
+	assert.Equal(t, "cursor-hidden", syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 	assert.Nil(t, rt.resources.dirtyBuf.FlushImmediate())
 }
 
@@ -130,7 +136,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 func TestRemoteChangeHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 	t.Parallel()
 
-	filter := ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	filter := syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
 	tests := []struct {
 		name string
 		path string
@@ -177,7 +183,7 @@ func TestRemoteChangeHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			change := RemoteChange{Path: tt.path, OldPath: tt.old, ItemType: ItemTypeFile}
+			change := syncobserve.RemoteChange{Path: tt.path, OldPath: tt.old, ItemType: syncdomain.ItemTypeFile}
 			assert.Equal(t, tt.want, remoteChangeHasPlannerVisibleEffect(filter, &change))
 		})
 	}
@@ -187,7 +193,7 @@ func TestRemoteChangeHasPlannerVisibleEffect_TransitionMatrix(t *testing.T) {
 func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendingCursor(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
@@ -195,12 +201,12 @@ func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendin
 	pendingCursor := "cursor-shared"
 	batch := testMountRootWatchBatch(
 		eng.Engine,
-		RemoteObservationModeDelta,
-		[]RemoteItem{
+		syncdomain.RemoteObservationModeDelta,
+		[]syncdomain.RemoteItem{
 			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
 		pendingCursor,
-		NewRemoteObservationFindingsBatch(),
+		syncdomain.NewRemoteObservationFindingsBatch(),
 	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -209,19 +215,19 @@ func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendin
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "item-shared", remoteRow.ItemID)
-	assert.Equal(t, pendingCursor, readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
+	assert.Equal(t, pendingCursor, syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String()))
 }
 
 // Validates: R-2.8.3
 func TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerImmediately(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, eng.driveID, "cursor-shared"))
@@ -229,21 +235,21 @@ func TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerI
 		ctx,
 		eng.driveID,
 		clock.Now(),
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 	))
 	require.NoError(t, rt.armFullRefreshTimer(ctx))
 
-	initialDueAt := clock.Now().Add(FullRemoteRefreshInterval)
-	enumerateDueAt := clock.Now().Add(RemoteRefreshEnumerateInterval)
+	initialDueAt := clock.Now().Add(syncdomain.FullRemoteRefreshInterval)
+	enumerateDueAt := clock.Now().Add(syncstore.RemoteRefreshEnumerateInterval)
 	assert.True(t, clock.HasPendingTimerAt(initialDueAt))
 	assert.False(t, clock.HasPendingTimerAt(enumerateDueAt))
 
 	batch := testMountRootWatchBatch(
 		eng.Engine,
-		RemoteObservationModeEnumerate,
+		syncdomain.RemoteObservationModeEnumerate,
 		nil,
 		"",
-		NewRemoteObservationFindingsBatch(),
+		syncdomain.NewRemoteObservationFindingsBatch(),
 	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -259,17 +265,17 @@ func TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerI
 func TestHandleRemoteObservationBatch_MountRootReconcilesRemoteReadDeniedFindings(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
 	batch := testMountRootWatchBatch(
 		eng.Engine,
-		RemoteObservationModeEnumerate,
+		syncdomain.RemoteObservationModeEnumerate,
 		nil,
 		"",
-		rootReadFailureObservationFindingsBatch(eng.driveID, IssueRemoteReadDenied),
+		rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied),
 	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -278,8 +284,8 @@ func TestHandleRemoteObservationBatch_MountRootReconcilesRemoteReadDeniedFinding
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "/", issues[0].Path)
-	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
-	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+	assert.Equal(t, syncdomain.IssueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, syncdomain.SKPermRemoteRead(""), issues[0].ScopeKey)
 
 	scopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -290,15 +296,15 @@ func TestHandleRemoteObservationBatch_MountRootReconcilesRemoteReadDeniedFinding
 func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindingsOnHealthyPoll(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	findings := rootReadFailureObservationFindingsBatch(eng.driveID, IssueRemoteReadDenied)
+	findings := rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -317,14 +323,14 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitError(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -336,7 +342,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
@@ -344,7 +350,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
-	batch.Findings = rootReadFailureObservationFindingsBatch(eng.driveID, IssueRemoteReadDenied)
+	batch.Findings = rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied)
 
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.Error(t, err)
@@ -355,16 +361,16 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 func TestCommitLocalScan_ReturnsErrorOnFailure(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	_, err := rt.commitLocalScan(ctx, nil, []SkippedItem{{
+	_, err := rt.commitLocalScan(ctx, nil, []syncdomain.SkippedItem{{
 		Path:   "blocked.txt",
-		Reason: IssueInvalidFilename,
+		Reason: syncdomain.IssueInvalidFilename,
 		Detail: "invalid",
 	}}, nil)
 	require.Error(t, err)
@@ -374,23 +380,23 @@ func TestCommitLocalScan_ReturnsErrorOnFailure(t *testing.T) {
 func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	batch := buildRemoteObservationBatch(
 		eng.Engine,
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 		nil,
 		"",
 		true,
-		rootReadFailureObservationFindingsBatch(eng.driveID, IssueRemoteReadDenied),
+		rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied),
 	)
-	batch.Source = RemoteObservationBatchFullRefresh
+	batch.Source = syncobserve.RemoteObservationBatchFullRefresh
 	batch.ArmFullRefreshTimer = true
 	batch.MarkFullRefreshIfIdle = true
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -405,39 +411,39 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationReconcile(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "blocked.txt",
 		DriveID:  eng.driveID,
 		ItemID:   "blocked-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
-	serviceScope := &ActiveScope{
-		Key:           SKService(),
+	serviceScope := &syncdomain.ActiveScope{
+		Key:           syncdomain.SKService(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}
 	rt.scopes.upsertActiveScope(serviceScope)
 
 	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
-	batch.Findings = rootReadFailureObservationFindingsBatch(eng.driveID, IssueRemoteReadDenied)
+	batch.Findings = rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied)
 	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
 	activeScopes := rt.scopes.snapshotActiveScopes()
 	require.Len(t, activeScopes, 1)
-	assert.Equal(t, SKService(), activeScopes[0].Key)
+	assert.Equal(t, syncdomain.SKService(), activeScopes[0].Key)
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
+	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
 	require.NoError(t, err)
 	assert.Empty(t, runtime.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
 }
@@ -462,23 +468,23 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			eng, _ := newTestEngine(t, &engineMockClient{})
+			eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 			setupWatchEngine(t, eng)
 			rt := testWatchRuntime(t, eng)
 			ctx := t.Context()
 			now := eng.nowFunc()
-			require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, eng.driveID, now, RemoteObservationModeDelta))
+			require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, eng.driveID, now, syncdomain.RemoteObservationModeDelta))
 
-			bl := NewBaselineForTest(nil)
+			bl := syncdomain.NewBaselineForTest(nil)
 			if tc.inBase {
-				bl.Put(&BaselineEntry{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: ItemTypeFolder})
+				bl.Put(&syncdomain.BaselineEntry{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: syncdomain.ItemTypeFolder})
 			}
-			batch := buildPrimaryWatchBatch(eng.Engine, bl, []RemoteItem{{ObservedItem: ObservedItem{
+			batch := buildPrimaryWatchBatch(eng.Engine, bl, []syncdomain.RemoteItem{{ObservedItem: syncdomain.ObservedItem{
 				Path:      "bin",
 				ItemID:    "item-bin",
 				ParentID:  "root",
 				DriveID:   eng.driveID,
-				ItemType:  ItemTypeFile,
+				ItemType:  syncdomain.ItemTypeFile,
 				IsDeleted: true,
 			}}}, "cursor-after-delete")
 			require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
@@ -487,11 +493,11 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 			require.NoError(t, err)
 			if tc.wantPull {
 				assert.Less(t, state.NextFullRemoteRefreshAt, now.Add(time.Hour).UnixNano(), "the full refresh is due soon, not in 24 h")
-				assert.GreaterOrEqual(t, state.NextFullRemoteRefreshAt, now.Add(FullRefreshAfterFolderDeleteDelay).UnixNano(),
+				assert.GreaterOrEqual(t, state.NextFullRemoteRefreshAt, now.Add(syncdomain.FullRefreshAfterFolderDeleteDelay).UnixNano(),
 					"but deferred, so a burst of folder deletions shares one enumeration")
 				return
 			}
-			assert.Equal(t, now.Add(FullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
+			assert.Equal(t, now.Add(syncdomain.FullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 		})
 	}
 }

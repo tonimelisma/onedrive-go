@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func (flow *engineFlow) startRuntimeStage(
 	ctx context.Context,
 	runtime *runtimePlan,
-	bl *Baseline,
-) ([]*TrackedAction, bool, error) {
+	bl *syncdomain.Baseline,
+) ([]*syncdomain.TrackedAction, bool, error) {
 	if runtime == nil || runtime.Plan == nil {
 		return nil, false, nil
 	}
@@ -21,7 +24,7 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	flow.initializeRuntimeState(runtime)
-	flow.sched.graph = NewDepGraph(flow.deps.logger)
+	flow.sched.graph = syncexec.NewDepGraph(flow.deps.logger)
 	flow.sched.graph.SetOwnerCheck(flow.engine.runOwnerCheck)
 
 	if len(plan.Actions) == 0 {
@@ -49,9 +52,9 @@ func (flow *engineFlow) startRuntimeStage(
 // through the engine's dispatch order.
 func (flow *engineFlow) reduceReadyFrontierStage(
 	ctx context.Context,
-	bl *Baseline,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
+	bl *syncdomain.Baseline,
+	ready []*syncdomain.TrackedAction,
+) ([]*syncdomain.TrackedAction, error) {
 	frontier, err := flow.reduceReadyFrontier(ctx, bl, ready)
 	if flow.engine.dispatchOrder != nil && len(frontier) > 1 {
 		frontier = flow.engine.dispatchOrder(frontier)
@@ -66,9 +69,9 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 // held work stays held for the next sync.
 func (flow *engineFlow) reduceReadyFrontier(
 	ctx context.Context,
-	bl *Baseline,
-	ready []*TrackedAction,
-) ([]*TrackedAction, error) {
+	bl *syncdomain.Baseline,
+	ready []*syncdomain.TrackedAction,
+) ([]*syncdomain.TrackedAction, error) {
 	if isStoppingRun(ctx) {
 		return ready, nil
 	}
@@ -90,7 +93,7 @@ func (flow *engineFlow) reduceReadyFrontier(
 	return append(reduced, released...), err
 }
 
-func (flow *engineFlow) registerPlanActions(plan *ActionPlan) []*TrackedAction {
+func (flow *engineFlow) registerPlanActions(plan *syncdomain.ActionPlan) []*syncdomain.TrackedAction {
 	flow.pruneSupersedeStreaks(plan)
 	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
@@ -102,7 +105,7 @@ func (flow *engineFlow) registerPlanActions(plan *ActionPlan) []*TrackedAction {
 	}
 
 	actionIDs := flow.sched.allocatePlanActionIDs(len(plan.Actions))
-	initialReady := make([]*TrackedAction, 0, len(plan.Actions))
+	initialReady := make([]*syncdomain.TrackedAction, 0, len(plan.Actions))
 
 	for i := range plan.Actions {
 		flow.sched.graph.Register(&plan.Actions[i], actionIDs[i])

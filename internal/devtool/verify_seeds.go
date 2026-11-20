@@ -50,22 +50,24 @@ const (
 	// frontier in, in place of a seed's own shuffle; a seed run under it
 	// replays only with it.
 	seedsDispatchOrderEnv = "ONEDRIVE_GO_DISPATCH_ORDER"
-	// seedFamilyPackage is the package of every seeded family, from the
-	// module root, and seedSubtestPrefix starts the name of each family's
-	// subtest of one seed: seed=<n>.
-	seedFamilyPackage        = "./internal/sync"
+	// seedEnginePackage and seedPlannerPackage are the packages of the
+	// seeded families, from the module root, and seedSubtestPrefix starts the
+	// name of each family's subtest of one seed: seed=<n>.
+	seedEnginePackage        = "./internal/sync"
+	seedPlannerPackage       = "./internal/sync/internal/syncplan"
 	seedSubtestPrefix        = "seed="
 	nightlySeedEpochYear     = 2026
 	nightlySeedEpochMonth    = time.January
 	nightlySeedEpochMonthDay = 1
 )
 
-// seededFamily is one seeded model family of internal/sync: its top-level
-// test and the variable that names one seed of it, the first assignment of
-// its replay line.
+// seededFamily is one seeded model family of the sync tree: its top-level
+// test, the variable that names one seed of it, the first assignment of its
+// replay line, and its package from the module root.
 type seededFamily struct {
 	test    string
 	seedEnv string
+	pkg     string
 }
 
 // seededFamilies are the four families, the one table of them devtool holds:
@@ -76,11 +78,26 @@ type seededFamily struct {
 // internal/sync's tests).
 func seededFamilies() []seededFamily {
 	return []seededFamily{
-		{test: "TestRunOnce_RandomizedBidirectionalEditsConverge", seedEnv: seedsModelSeedEnv},
-		{test: "TestModel_CrashAtSeededPointsRecovers", seedEnv: seedsModelSeedEnv},
-		{test: "TestPlannerModel_RandomTriplesConverge", seedEnv: seedsPlannerSeedEnv},
-		{test: "TestModel_ChaosGraphConverges", seedEnv: seedsModelSeedEnv},
+		{test: "TestRunOnce_RandomizedBidirectionalEditsConverge", seedEnv: seedsModelSeedEnv, pkg: seedEnginePackage},
+		{test: "TestModel_CrashAtSeededPointsRecovers", seedEnv: seedsModelSeedEnv, pkg: seedEnginePackage},
+		{test: "TestPlannerModel_RandomTriplesConverge", seedEnv: seedsPlannerSeedEnv, pkg: seedPlannerPackage},
+		{test: "TestModel_ChaosGraphConverges", seedEnv: seedsModelSeedEnv, pkg: seedEnginePackage},
 	}
+}
+
+// isSeedFamilyPackage reports whether pkg can hold test's seeds: the
+// package of test's family, or of any family for a test that is none.
+func isSeedFamilyPackage(pkg, test string) bool {
+	if family, ok := seededFamilyOf(test); ok {
+		return pkg == family.pkg
+	}
+	for _, family := range seededFamilies() {
+		if family.pkg == pkg {
+			return true
+		}
+	}
+
+	return false
 }
 
 // seededFamilyOf is the family whose top-level test is test.

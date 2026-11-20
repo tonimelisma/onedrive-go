@@ -10,7 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 func testParentProcessRoot() string {
@@ -32,38 +32,38 @@ func testParentMountSpec() *mountSpec {
 	}
 }
 
-func testChildRecord(t *testing.T, parentID mountID, bindingID, relativePath string) syncengine.ShortcutChildRunCommand {
+func testChildRecord(t *testing.T, parentID mountID, bindingID, relativePath string) syncshortcut.ShortcutChildRunCommand {
 	t.Helper()
 
-	return syncengine.ShortcutChildRunCommand{
+	return syncshortcut.ShortcutChildRunCommand{
 		ChildMountID: config.ChildMountID(parentID.String(), bindingID),
 		DisplayName:  filepath.Base(filepath.FromSlash(relativePath)),
-		Engine: syncengine.ShortcutChildEngineSpec{
+		Engine: syncshortcut.ShortcutChildEngineSpec{
 			LocalRoot:     filepath.Join(testParentProcessRoot(), filepath.FromSlash(relativePath)),
 			RemoteDriveID: "remote-drive",
 			RemoteItemID:  "remote-root",
 		},
-		Mode:   syncengine.ShortcutChildRunModeNormal,
+		Mode:   syncshortcut.ShortcutChildRunModeNormal,
 		AckRef: testShortcutChildAckRef(t, bindingID),
 	}
 }
 
-func finalDrainChildRecord(t *testing.T, parentID mountID, bindingID, relativePath string) syncengine.ShortcutChildRunCommand {
+func finalDrainChildRecord(t *testing.T, parentID mountID, bindingID, relativePath string) syncshortcut.ShortcutChildRunCommand {
 	t.Helper()
 
 	child := testChildRecord(t, parentID, bindingID, relativePath)
-	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 	return child
 }
 
-func processSnapshot(namespaceID string, children ...syncengine.ShortcutChildRunCommand) syncengine.ShortcutChildWorkSnapshot {
+func processSnapshot(namespaceID string, children ...syncshortcut.ShortcutChildRunCommand) syncshortcut.ShortcutChildWorkSnapshot {
 	return processSnapshotForRoot(namespaceID, "/tmp/parent", children...)
 }
 
 func processSnapshotForParent(
 	parent *StandaloneMountConfig,
-	children ...syncengine.ShortcutChildRunCommand,
-) syncengine.ShortcutChildWorkSnapshot {
+	children ...syncshortcut.ShortcutChildRunCommand,
+) syncshortcut.ShortcutChildWorkSnapshot {
 	namespaceID := ""
 	parentRoot := ""
 	if parent != nil {
@@ -76,8 +76,8 @@ func processSnapshotForParent(
 func processSnapshotForRoot(
 	namespaceID string,
 	parentRoot string,
-	children ...syncengine.ShortcutChildRunCommand,
-) syncengine.ShortcutChildWorkSnapshot {
+	children ...syncshortcut.ShortcutChildRunCommand,
+) syncshortcut.ShortcutChildWorkSnapshot {
 	for i := range children {
 		if children[i].Engine.LocalRoot != "" && parentRoot != "" {
 			rel, relErr := filepath.Rel(testParentProcessRoot(), children[i].Engine.LocalRoot)
@@ -87,7 +87,7 @@ func processSnapshotForRoot(
 			}
 		}
 	}
-	return syncengine.ShortcutChildWorkSnapshot{
+	return syncshortcut.ShortcutChildWorkSnapshot{
 		NamespaceID: namespaceID,
 		RunCommands: children,
 	}
@@ -95,9 +95,9 @@ func processSnapshotForRoot(
 
 func cleanupRequestSnapshot(
 	namespaceID string,
-	requests ...syncengine.ShortcutChildCleanupCommand,
-) syncengine.ShortcutChildWorkSnapshot {
-	return syncengine.ShortcutChildWorkSnapshot{
+	requests ...syncshortcut.ShortcutChildCleanupCommand,
+) syncshortcut.ShortcutChildWorkSnapshot {
+	return syncshortcut.ShortcutChildWorkSnapshot{
 		NamespaceID:     namespaceID,
 		CleanupCommands: requests,
 	}
@@ -106,7 +106,7 @@ func cleanupRequestSnapshot(
 func seedShortcutChildRunCommand(
 	cache *parentChildWorkSnapshots,
 	parent *StandaloneMountConfig,
-	child *syncengine.ShortcutChildRunCommand,
+	child *syncshortcut.ShortcutChildRunCommand,
 ) {
 	if parent == nil || child == nil || child.ChildMountID == "" {
 		return
@@ -132,7 +132,7 @@ func TestReceiveParentChildWorkSnapshot_StoresSnapshotInMemory(t *testing.T) {
 
 	assert.True(t, changed)
 	require.Len(t, publication.RunCommands, 1)
-	assert.Equal(t, syncengine.ShortcutChildRunModeNormal, publication.RunCommands[0].Mode)
+	assert.Equal(t, syncshortcut.ShortcutChildRunModeNormal, publication.RunCommands[0].Mode)
 	assert.Equal(t, filepath.Join(parent.syncRoot(), "Shared", "Docs"), publication.RunCommands[0].Engine.LocalRoot)
 	assert.Equal(t, "remote-drive", publication.RunCommands[0].Engine.RemoteDriveID)
 	assert.Equal(t, "remote-root", publication.RunCommands[0].Engine.RemoteItemID)
@@ -172,7 +172,7 @@ func TestReceiveParentChildWorkSnapshot_EmptySnapshotClearsCachedChildren(t *tes
 		testChildRecord(t, parent.id(), "binding-old", "Shortcut"),
 	))
 
-	publication, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, syncengine.ShortcutChildWorkSnapshot{
+	publication, changed := orch.receiveParentChildWorkSnapshotFromParent(cache, parent, syncshortcut.ShortcutChildWorkSnapshot{
 		NamespaceID: parent.id().String(),
 	})
 
@@ -187,7 +187,7 @@ func TestParentChildWorkSnapshotCache_ClonesSnapshot(t *testing.T) {
 	parent := testParentMountSpec()
 	orch := NewOrchestrator(&OrchestratorConfig{})
 	cache := newParentChildWorkSnapshots()
-	identity := &syncengine.ShortcutRootIdentity{Device: 1, Inode: 2}
+	identity := &syncshortcut.ShortcutRootIdentity{Device: 1, Inode: 2}
 	child := testChildRecord(t, parent.id(), "binding-1", "Shortcuts/Docs")
 	child.Engine.LocalRootIdentity = identity
 	publication := processSnapshot(parent.id().String(), child)
@@ -213,16 +213,16 @@ func TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests(t *testing.T) 
 
 	parent := testParentMountSpec()
 	cache := newParentChildWorkSnapshots()
-	cache.receive(parent.id(), syncengine.ShortcutChildWorkSnapshot{
+	cache.receive(parent.id(), syncshortcut.ShortcutChildWorkSnapshot{
 		NamespaceID: parent.id().String(),
 	})
 
 	publication, changed := cache.receive(parent.id(), cleanupRequestSnapshot(
 		parent.id().String(),
-		syncengine.ShortcutChildCleanupCommand{
+		syncshortcut.ShortcutChildCleanupCommand{
 			ChildMountID: config.ChildMountID(parent.id().String(), "binding-old"),
 			LocalRoot:    filepath.Join(parent.syncRoot(), "Shortcuts", "Old"),
-			Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			Reason:       syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 			AckRef:       testShortcutChildAckRef(t, "binding-old"),
 		},
 	))
@@ -245,10 +245,10 @@ func TestReceiveParentChildWorkSnapshot_UsesParentCleanupRequests(t *testing.T) 
 
 	publication, changed = cache.receive(parent.id(), cleanupRequestSnapshot(
 		parent.id().String(),
-		syncengine.ShortcutChildCleanupCommand{
+		syncshortcut.ShortcutChildCleanupCommand{
 			ChildMountID: config.ChildMountID(parent.id().String(), "binding-old"),
 			LocalRoot:    filepath.Join(parent.syncRoot(), "Shortcuts", "Old"),
-			Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			Reason:       syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 			AckRef:       testShortcutChildAckRef(t, "binding-old"),
 		},
 	))
@@ -266,13 +266,13 @@ func TestParentCleanupRequestUsesExplicitArtifactScope(t *testing.T) {
 	requestedMountID := config.ChildMountID(parent.id().String(), "binding-cleanup")
 	decisions, err := buildRuntimeWorkForParents(
 		[]*mountSpec{parent},
-		map[mountID]syncengine.ShortcutChildWorkSnapshot{
+		map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
 			parent.id(): cleanupRequestSnapshot(
 				parent.id().String(),
-				syncengine.ShortcutChildCleanupCommand{
+				syncshortcut.ShortcutChildCleanupCommand{
 					ChildMountID: requestedMountID,
 					LocalRoot:    requestedRoot,
-					Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+					Reason:       syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 					AckRef:       testShortcutChildAckRef(t, "binding-cleanup"),
 				},
 			),
@@ -295,30 +295,30 @@ func TestParentCleanupRequestRequiresExplicitArtifactScope(t *testing.T) {
 	parent := testParentMountSpec()
 	cases := []struct {
 		name    string
-		request syncengine.ShortcutChildCleanupCommand
+		request syncshortcut.ShortcutChildCleanupCommand
 		want    string
 	}{
 		{
 			name: "child mount ID",
-			request: syncengine.ShortcutChildCleanupCommand{
+			request: syncshortcut.ShortcutChildCleanupCommand{
 				LocalRoot: filepath.Join(t.TempDir(), "child"),
-				Reason:    syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				Reason:    syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 				AckRef:    testShortcutChildAckRef(t, "binding-cleanup"),
 			},
 			want: "missing child mount ID",
 		},
 		{
 			name: "local root",
-			request: syncengine.ShortcutChildCleanupCommand{
+			request: syncshortcut.ShortcutChildCleanupCommand{
 				ChildMountID: config.ChildMountID(parent.id().String(), "binding-cleanup"),
-				Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				Reason:       syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 				AckRef:       testShortcutChildAckRef(t, "binding-cleanup"),
 			},
 			want: "missing child local root",
 		},
 		{
 			name: "reason",
-			request: syncengine.ShortcutChildCleanupCommand{
+			request: syncshortcut.ShortcutChildCleanupCommand{
 				ChildMountID: config.ChildMountID(parent.id().String(), "binding-cleanup"),
 				LocalRoot:    filepath.Join(t.TempDir(), "child"),
 				AckRef:       testShortcutChildAckRef(t, "binding-cleanup"),
@@ -327,10 +327,10 @@ func TestParentCleanupRequestRequiresExplicitArtifactScope(t *testing.T) {
 		},
 		{
 			name: "ack ref",
-			request: syncengine.ShortcutChildCleanupCommand{
+			request: syncshortcut.ShortcutChildCleanupCommand{
 				ChildMountID: config.ChildMountID(parent.id().String(), "binding-cleanup"),
 				LocalRoot:    filepath.Join(t.TempDir(), "child"),
-				Reason:       syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				Reason:       syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 			},
 			want: "missing acknowledgement reference",
 		},
@@ -339,7 +339,7 @@ func TestParentCleanupRequestRequiresExplicitArtifactScope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := buildRuntimeWorkForParents(
 				[]*mountSpec{parent},
-				map[mountID]syncengine.ShortcutChildWorkSnapshot{
+				map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
 					parent.id(): cleanupRequestSnapshot(parent.id().String(), tt.request),
 				},
 				t.TempDir(),
@@ -367,7 +367,7 @@ func TestParentSamePathReplacementPublishesOnlyOldFinalDrainChild(t *testing.T) 
 	assert.True(t, changed)
 	require.Len(t, publication.RunCommands, 1)
 	assert.Equal(t, config.ChildMountID(parent.id().String(), "binding-old"), publication.RunCommands[0].ChildMountID)
-	assert.Equal(t, syncengine.ShortcutChildRunModeFinalDrain, publication.RunCommands[0].Mode)
+	assert.Equal(t, syncshortcut.ShortcutChildRunModeFinalDrain, publication.RunCommands[0].Mode)
 }
 
 // Validates: R-2.8.1, R-4.1.4

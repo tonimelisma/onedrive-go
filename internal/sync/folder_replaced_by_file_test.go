@@ -10,6 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // A synced folder, with a subfolder, that ends up replaced by a file of the
@@ -35,28 +38,28 @@ func TestPublicationMutation_RecordsTheObservedItem(t *testing.T) {
 
 	for _, tc := range []struct {
 		name     string
-		baseline ItemType
-		observed ItemType
+		baseline syncdomain.ItemType
+		observed syncdomain.ItemType
 		// The observed sides' hashes and the remote's eTag; empty is unknown.
 		localHash, remoteHash, remoteETag string
 		wantLocalHash, wantRemoteHash     string
 	}{
 		{
-			name: "folder replaced by a file", baseline: ItemTypeFolder, observed: ItemTypeFile,
+			name: "folder replaced by a file", baseline: syncdomain.ItemTypeFolder, observed: syncdomain.ItemTypeFile,
 			localHash: "hash-after", remoteHash: "hash-after", remoteETag: "etag-after",
 			wantLocalHash: "hash-after", wantRemoteHash: "hash-after",
 		},
 		{
-			name: "file replaced by a folder", baseline: ItemTypeFile, observed: ItemTypeFolder,
+			name: "file replaced by a folder", baseline: syncdomain.ItemTypeFile, observed: syncdomain.ItemTypeFolder,
 			remoteETag: "etag-after",
 		},
 		{
-			name: "file whose hash OneDrive omits", baseline: ItemTypeFile, observed: ItemTypeFile,
+			name: "file whose hash OneDrive omits", baseline: syncdomain.ItemTypeFile, observed: syncdomain.ItemTypeFile,
 			localHash: "hash-before", remoteETag: "etag-after",
 			wantLocalHash: "hash-before", wantRemoteHash: "hash-before",
 		},
 		{
-			name: "file observed without an eTag", baseline: ItemTypeFile, observed: ItemTypeFile,
+			name: "file observed without an eTag", baseline: syncdomain.ItemTypeFile, observed: syncdomain.ItemTypeFile,
 			localHash: "hash-after", remoteHash: "hash-after",
 			wantLocalHash: "hash-after", wantRemoteHash: "hash-after",
 		},
@@ -64,22 +67,22 @@ func TestPublicationMutation_RecordsTheObservedItem(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			action := &Action{
-				Type:    ActionBaselineUpdate,
+			action := &syncdomain.Action{
+				Type:    syncdomain.ActionBaselineUpdate,
 				Path:    replacedFolderPath,
 				ItemID:  "item-before",
-				DriveID: driveid.New(engineTestDriveID),
-				View: &PathView{
-					Baseline: &BaselineEntry{
+				DriveID: driveid.New(syncfixture.EngineTestDriveID),
+				View: &syncdomain.PathView{
+					Baseline: &syncdomain.BaselineEntry{
 						ItemID: "item-before", ItemType: tc.baseline,
 						LocalHash: "hash-before", RemoteHash: "hash-before", ETag: "etag-before",
 					},
-					Remote: &RemoteState{ItemID: "item-after", ItemType: tc.observed, Hash: tc.remoteHash, ETag: tc.remoteETag},
-					Local:  &LocalState{ItemType: tc.observed, Hash: tc.localHash},
+					Remote: &syncdomain.RemoteState{ItemID: "item-after", ItemType: tc.observed, Hash: tc.remoteHash, ETag: tc.remoteETag},
+					Local:  &syncdomain.LocalState{ItemType: tc.observed, Hash: tc.localHash},
 				},
 			}
 
-			mutation, err := PublicationMutationFromAction(action, driveid.New(engineTestDriveID))
+			mutation, err := syncstore.PublicationMutationFromAction(action, driveid.New(syncfixture.EngineTestDriveID))
 			require.NoError(t, err)
 			assert.Equal(t, tc.observed, mutation.ItemType, "the observed sides decide the type")
 			assert.Equal(t, "item-after", mutation.ItemID)
@@ -104,7 +107,7 @@ func TestRunOnce_AFolderBothSidesReplacedWithTheSameFileConverges(t *testing.T) 
 	remote.deleteAt(t, replacedFolderPath)
 	remote.putFileAt(t, replacedFolderPath, replacingFileContent)
 	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, replacedFolderPath)))
-	writeLocalFile(t, syncRoot, replacedFolderPath, replacingFileContent)
+	syncfixture.WriteLocalFile(t, syncRoot, replacedFolderPath, replacingFileContent)
 
 	assertPublishesTheReplacingFileInOnePass(t, eng, remote)
 }
@@ -122,7 +125,7 @@ func TestCrashRecovery_AFolderReplacedOnOneDriveWhoseDownloadWasCutConverges(t *
 	t.Parallel()
 
 	for _, lostWAL := range []bool{false, true} {
-		t.Run(crashCaseName(CrashPointDownloadRenamed, lostWAL), func(t *testing.T) {
+		t.Run(crashCaseName(syncdomain.CrashPointDownloadRenamed, lostWAL), func(t *testing.T) {
 			t.Parallel()
 
 			recovered := crashAfterTheReplacingDownload(t, lostWAL)
@@ -136,7 +139,7 @@ func TestCrashRecovery_AFolderReplacedOnOneDriveWhoseDownloadWasCutConverges(t *
 // remoteWithReplacedFolder is a OneDrive holding the folder the scenarios
 // replace and its subfolder.
 func remoteWithReplacedFolder() *moveScenarioRemote {
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-notes", "root", replacedFolderPath)
 	remote.addFolder("item-drafts", "item-notes", replacedFolderChildName)
 
@@ -162,7 +165,7 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 	remote.deleteAt(t, replacedFolderPath)
 	remote.putFileAt(t, replacedFolderPath, replacingFileContent)
 	capture := &crashCapture{
-		point: CrashPointDownloadRenamed, lostWAL: lostWAL,
+		point: syncdomain.CrashPointDownloadRenamed, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	h.eng.execCfg.SetCrashHookForTest(capture.hook)
@@ -196,19 +199,19 @@ func assertPublishesTheReplacingFileInOnePass(t *testing.T, eng *testEngine, rem
 	require.NoError(t, err)
 	entry, ok := bl.GetByPath(replacedFolderPath)
 	require.True(t, ok, "the replacing file has a baseline row")
-	assert.Equal(t, ItemTypeFile, entry.ItemType, "the baseline records the file, not the folder it replaced")
+	assert.Equal(t, syncdomain.ItemTypeFile, entry.ItemType, "the baseline records the file, not the folder it replaced")
 	assert.Equal(t, item.ID, entry.ItemID)
 	_, childKept := bl.GetByPath(path.Join(replacedFolderPath, replacedFolderChildName))
 	assert.False(t, childKept, "the folder's subtree left the baseline")
 
 	var stored struct {
-		itemType   ItemType
+		itemType   syncdomain.ItemType
 		remoteHash string
 	}
 	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(t.Context(),
 		`SELECT item_type, COALESCE(remote_hash, '') FROM baseline WHERE path = ?`, replacedFolderPath).Scan(
 		&stored.itemType, &stored.remoteHash))
-	assert.Equal(t, ItemTypeFile, stored.itemType, "the stored row records the file")
+	assert.Equal(t, syncdomain.ItemTypeFile, stored.itemType, "the stored row records the file")
 	assert.Equal(t, item.QuickXorHash, stored.remoteHash, "the stored row holds the file's hash")
 
 	assertPassPlannedNothing(t, runScenarioPass(t, eng))

@@ -1,5 +1,9 @@
 package sync
 
+import (
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+)
+
 type permissionEvidenceKind int
 
 const (
@@ -16,7 +20,7 @@ type permissionEvidence struct {
 	Kind         permissionEvidenceKind
 	TriggerPath  string
 	BoundaryPath string
-	IssueType    IssueType
+	IssueType    syncdomain.IssueType
 	LastError    string
 	HTTPStatus   int
 }

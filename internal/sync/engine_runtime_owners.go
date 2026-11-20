@@ -2,6 +2,9 @@ package sync
 
 import (
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // The four owners below split engineFlow's mutable state by authority. Each
@@ -17,8 +20,8 @@ import (
 // actionScheduler owns dependency-ready dispatch: which actions exist, which
 // are queued, and which are running.
 type actionScheduler struct {
-	graph        *DepGraph
-	dispatchCh   chan *TrackedAction
+	graph        *syncexec.DepGraph
+	dispatchCh   chan *syncdomain.TrackedAction
 	nextActionID int64
 	queuedByID   map[int64]struct{}
 	runningByID  map[int64]struct{}
@@ -43,15 +46,15 @@ func newActionScheduler() actionScheduler {
 // retryLedger owns exact held work: the actions currently held and their
 // release ordering. The durable retry rows they follow are retryWork's.
 type retryLedger struct {
-	heldByKey     map[RetryWorkKey]*heldAction
-	heldByScope   map[ScopeKey][]RetryWorkKey
+	heldByKey     map[syncdomain.RetryWorkKey]*heldAction
+	heldByScope   map[syncdomain.ScopeKey][]syncdomain.RetryWorkKey
 	nextHeldOrder uint64
 }
 
 func newRetryLedger() retryLedger {
 	return retryLedger{
-		heldByKey:   make(map[RetryWorkKey]*heldAction),
-		heldByScope: make(map[ScopeKey][]RetryWorkKey),
+		heldByKey:   make(map[syncdomain.RetryWorkKey]*heldAction),
+		heldByScope: make(map[syncdomain.ScopeKey][]syncdomain.RetryWorkKey),
 	}
 }
 
@@ -60,9 +63,9 @@ func newRetryLedger() retryLedger {
 // The ledger has no lock: only the goroutine that runs the engine's RunOnce
 // or RunWatch reads and writes it, admission checks and snapshots included.
 type scopeLedger struct {
-	active []ActiveScope
+	active []syncdomain.ActiveScope
 
-	state *ScopeState
+	state *syncexec.ScopeState
 
 	// ownerCheck, when set, runs at the top of every accessor of active; nil
 	// in production. Tests install a check that fails when the ledger is
@@ -102,9 +105,9 @@ type runResults struct {
 
 // heldAction is one action waiting for a retry deadline or a blocked scope.
 type heldAction struct {
-	Tracked   *TrackedAction
+	Tracked   *syncdomain.TrackedAction
 	Reason    heldReason
-	ScopeKey  ScopeKey
+	ScopeKey  syncdomain.ScopeKey
 	NextRetry time.Time
 	HeldOrder uint64
 }
@@ -116,7 +119,7 @@ const (
 	heldReasonScope heldReason = "scope"
 )
 
-func (s *actionScheduler) trackedActionForCompletion(r *ActionCompletion) *TrackedAction {
+func (s *actionScheduler) trackedActionForCompletion(r *syncdomain.ActionCompletion) *syncdomain.TrackedAction {
 	if r == nil || s.graph == nil {
 		return nil
 	}
@@ -129,14 +132,14 @@ func (s *actionScheduler) trackedActionForCompletion(r *ActionCompletion) *Track
 	return ta
 }
 
-func (s *actionScheduler) markQueued(ta *TrackedAction) {
+func (s *actionScheduler) markQueued(ta *syncdomain.TrackedAction) {
 	if ta == nil {
 		return
 	}
 	s.queuedByID[ta.ID] = struct{}{}
 }
 
-func (s *actionScheduler) markRunning(ta *TrackedAction) {
+func (s *actionScheduler) markRunning(ta *syncdomain.TrackedAction) {
 	if ta == nil {
 		return
 	}
@@ -156,7 +159,7 @@ func (s *actionScheduler) markRunning(ta *TrackedAction) {
 // reports whether a worker had it: only a worker-run action counts toward
 // the slow start (its success is a request the drive accepted), and its
 // in-flight slot is given back here whatever became of it.
-func (s *actionScheduler) markFinished(ta *TrackedAction) bool {
+func (s *actionScheduler) markFinished(ta *syncdomain.TrackedAction) bool {
 	if ta == nil {
 		return false
 	}
@@ -187,7 +190,7 @@ func (s *actionScheduler) allocatePlanActionIDs(count int) []int64 {
 	return actionIDs
 }
 
-func (l *retryLedger) releaseHeldAction(key RetryWorkKey) *TrackedAction {
+func (l *retryLedger) releaseHeldAction(key syncdomain.RetryWorkKey) *syncdomain.TrackedAction {
 	held, ok := l.heldByKey[key]
 	if !ok || held == nil {
 		return nil
@@ -231,7 +234,7 @@ func (l *retryLedger) earliestHeldRetryAt() (time.Time, bool) {
 
 func (l *retryLedger) applyPersistedRetryAdmission(
 	now time.Time,
-	ta *TrackedAction,
+	ta *syncdomain.TrackedAction,
 	decision *admissionDecision,
 	work *retryWork,
 ) {
@@ -249,7 +252,7 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 		(!ta.IsTrial || ta.TrialScopeKey.IsZero() || row.ScopeKey != ta.TrialScopeKey):
 		decision.Kind = admissionHoldScope
 		decision.ScopeKey = row.ScopeKey
-	case StoredTimeIsSet(row.NextRetryAt):
+	case syncdomain.StoredTimeIsSet(row.NextRetryAt):
 		nextRetryAt := time.Unix(0, row.NextRetryAt)
 		if nextRetryAt.After(now) {
 			decision.Kind = admissionHoldRetry
@@ -258,35 +261,35 @@ func (l *retryLedger) applyPersistedRetryAdmission(
 	}
 }
 
-func (l *scopeLedger) replaceActiveScopes(blocks []ActiveScope) {
+func (l *scopeLedger) replaceActiveScopes(blocks []syncdomain.ActiveScope) {
 	l.checkOwner()
 
 	l.active = l.active[:0]
 	l.active = append(l.active, blocks...)
 }
 
-func (l *scopeLedger) upsertActiveScope(block *ActiveScope) {
+func (l *scopeLedger) upsertActiveScope(block *syncdomain.ActiveScope) {
 	l.checkOwner()
 
-	l.active = UpsertScope(l.active, block)
+	l.active = syncexec.UpsertScope(l.active, block)
 }
 
-func (l *scopeLedger) removeActiveScope(key ScopeKey) {
+func (l *scopeLedger) removeActiveScope(key syncdomain.ScopeKey) {
 	l.checkOwner()
 
-	l.active = RemoveScope(l.active, key)
+	l.active = syncexec.RemoveScope(l.active, key)
 }
 
-func (l *scopeLedger) lookupActiveScope(key ScopeKey) (ActiveScope, bool) {
+func (l *scopeLedger) lookupActiveScope(key syncdomain.ScopeKey) (syncdomain.ActiveScope, bool) {
 	l.checkOwner()
 
-	return LookupScope(l.active, key)
+	return syncexec.LookupScope(l.active, key)
 }
 
-func (l *scopeLedger) hasActiveScope(key ScopeKey) bool {
+func (l *scopeLedger) hasActiveScope(key syncdomain.ScopeKey) bool {
 	l.checkOwner()
 
-	return HasScope(l.active, key)
+	return syncexec.HasScope(l.active, key)
 }
 
 // earliestPauseTrialAt is the soonest next trial among the active scopes
@@ -314,20 +317,20 @@ func (l *scopeLedger) earliestPauseTrialAt() (time.Time, bool) {
 
 // isPauseScope reports whether a scope is one OneDrive asked for with a
 // Retry-After: the drive's throttle or the service outage scope.
-func isPauseScope(key ScopeKey) bool {
+func isPauseScope(key syncdomain.ScopeKey) bool {
 	return key.IsThrottleTarget() || key.IsGlobal()
 }
 
-func (l *scopeLedger) findBlockingScope(ta *TrackedAction) ScopeKey {
+func (l *scopeLedger) findBlockingScope(ta *syncdomain.TrackedAction) syncdomain.ScopeKey {
 	l.checkOwner()
 
-	return FindBlockingScope(l.active, ta)
+	return syncexec.FindBlockingScope(l.active, ta)
 }
 
-func (l *scopeLedger) snapshotActiveScopes() []ActiveScope {
+func (l *scopeLedger) snapshotActiveScopes() []syncdomain.ActiveScope {
 	l.checkOwner()
 
-	blocks := make([]ActiveScope, len(l.active))
+	blocks := make([]syncdomain.ActiveScope, len(l.active))
 	copy(blocks, l.active)
 
 	return blocks

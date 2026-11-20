@@ -20,6 +20,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Validates: R-2.10.71, R-6.6.30
@@ -33,10 +36,10 @@ import (
 func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
 	creates := 0
-	client.createFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
+	client.CreateFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
 		creates++
 		return nil, &graph.GraphError{
 			StatusCode: http.StatusBadRequest,
@@ -48,11 +51,11 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
-	clock := newManualClock(time.Date(2026, 11, 2, 22, 23, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 2, 22, 23, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "deep"), 0o750))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	assert.Equal(t, 1, creates)
@@ -61,8 +64,8 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "deep", rows[0].Path)
-	assert.Equal(t, ActionFolderCreate, rows[0].ActionType)
-	assert.Equal(t, IssuePathTooLong, rows[0].ConditionType, "the refusal is kept with the row")
+	assert.Equal(t, syncdomain.ActionFolderCreate, rows[0].ActionType)
+	assert.Equal(t, syncdomain.IssuePathTooLong, rows[0].ConditionType, "the refusal is kept with the row")
 	assert.GreaterOrEqual(t, rows[0].NextRetryAt-clock.Now().UnixNano(), int64(durableRecheckDelay),
 		"a condition the user must clear waits on the durable curve")
 
@@ -74,13 +77,13 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	// Before the row is due nothing is retried; once due, the refusal is
 	// tried again, backs off further and is not announced again.
 	clock.Advance(durableRecheckDelay / 2)
-	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Zero(t, report.Failed+report.Succeeded, "held with backoff: %+v", report)
 	assert.Equal(t, 1, creates)
 
 	clock.Advance(retryBackoffCeilingForTest)
-	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	assert.Equal(t, 2, creates)
@@ -88,7 +91,7 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, 2, rows[0].AttemptCount)
-	assert.Equal(t, IssuePathTooLong, rows[0].ConditionType)
+	assert.Equal(t, syncdomain.IssuePathTooLong, rows[0].ConditionType)
 	assert.Equal(t, 1, strings.Count(logBuf.String(), "Not syncing deep:"), "a retry of the same refusal is not re-announced")
 }
 
@@ -107,18 +110,18 @@ func TestRunOnce_FolderOneDriveRefusesAsTooLongIsAConditionNotAnonymousRetryWork
 func TestRunOnce_ARefusalOnlyTheUserCanClearIsLeftAsItsCondition(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	client.createFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
+	client.CreateFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
 		return nil, &graph.GraphError{
 			StatusCode: http.StatusBadRequest,
 			Message:    scenarioPathLimitRefusal,
 			Err:        graph.ErrBadRequest,
 		}
 	}
-	logger, logs := newCapturedLogger()
+	logger, logs := syncfixture.NewCapturedLogger()
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
-	clock := newManualClock(time.Date(2026, 11, 2, 22, 23, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 2, 22, 23, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	var activities []Activity
 	eng.SetActivityHook(func(a Activity) { activities = append(activities, a) })
@@ -126,20 +129,20 @@ func TestRunOnce_ARefusalOnlyTheUserCanClearIsLeftAsItsCondition(t *testing.T) {
 
 	for _, run := range []string{"the first refusal", "a retry"} {
 		activities = nil
-		report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+		report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 		require.NoError(t, err)
 
 		require.Len(t, activities, 1, run)
 		assert.Equal(t, "deep", activities[0].Path, run)
-		assert.Equal(t, ConditionPathTooLong, activities[0].ConditionKey, run)
-		assert.Equal(t, IssuePathTooLong, activities[0].ConditionType, run)
+		assert.Equal(t, syncdomain.ConditionPathTooLong, activities[0].ConditionKey, run)
+		assert.Equal(t, syncdomain.IssuePathTooLong, activities[0].ConditionType, run)
 		assert.False(t, activities[0].WillRetry, run)
 		assert.Equal(t, run == "the first refusal", activities[0].ConditionStarts, run)
 		assert.Equal(t, 1, report.Failed, "%s: every failed action is still counted as done work", run)
 		assert.Equal(t, LeftWork{StillOpen: 1}, report.LeftWork(), run)
 
 		activities = nil
-		report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+		report, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 		require.NoError(t, err)
 		assert.Empty(t, activities, "%s: held until its retry is due", run)
 		assert.Equal(t, LeftWork{WillRetry: 1}, report.LeftWork(), run)
@@ -161,30 +164,30 @@ func TestRunOnce_ARefusalOnlyTheUserCanClearIsLeftAsItsCondition(t *testing.T) {
 func TestRunOnce_ARefusalAfterItsRetryWorkWasDroppedStartsTheConditionAgain(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	client.createFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
+	client.CreateFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
 		return nil, &graph.GraphError{
 			StatusCode: http.StatusBadRequest,
 			Message:    scenarioPathLimitRefusal,
 			Err:        graph.ErrBadRequest,
 		}
 	}
-	logger, logs := newCapturedLogger()
+	logger, logs := syncfixture.NewCapturedLogger()
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
 	var activities []Activity
 	eng.SetActivityHook(func(a Activity) { activities = append(activities, a) })
 	deep := filepath.Join(syncRoot, "deep")
 	require.NoError(t, os.Mkdir(deep, 0o750))
 
-	_, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.Len(t, activities, 1)
 	assert.True(t, activities[0].ConditionStarts, "the first refusal starts the condition")
 
 	activities = nil
 	require.NoError(t, os.Remove(deep))
-	_, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, activities, "the plan has nothing to do for the deleted folder")
 	rows, err := eng.baseline.ListRetryWork(t.Context())
@@ -192,10 +195,10 @@ func TestRunOnce_ARefusalAfterItsRetryWorkWasDroppedStartsTheConditionAgain(t *t
 	require.Empty(t, rows, "the plan dropped the folder's retry work")
 
 	require.NoError(t, os.Mkdir(deep, 0o750))
-	_, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.Len(t, activities, 1)
-	assert.Equal(t, ConditionPathTooLong, activities[0].ConditionKey)
+	assert.Equal(t, syncdomain.ConditionPathTooLong, activities[0].ConditionKey)
 	assert.True(t, activities[0].ConditionStarts, "the condition starts again")
 
 	assert.Equal(t, 2, strings.Count(logs.String(), `level=INFO msg="Not syncing deep:`), logs.String())
@@ -222,59 +225,59 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 	refused := errors.New("refused")
 	for _, tc := range []struct {
 		name       string
-		decision   ResultDecision
-		action     ActionType
+		decision   syncdomain.ResultDecision
+		action     syncdomain.ActionType
 		httpStatus int
 		err        error
 		awaits     bool
 	}{
 		{
 			name:     "a condition only the user can clear",
-			decision: actionableDecision(IssuePathTooLong, ConditionPathTooLong),
+			decision: actionableDecision(syncdomain.IssuePathTooLong, syncdomain.ConditionPathTooLong),
 			err:      refused,
 			awaits:   true,
 		},
 		{
 			name:     "an actionable failure that names no condition",
-			decision: actionableDecision("", ConditionUnexpectedCondition),
+			decision: actionableDecision("", syncdomain.ConditionUnexpectedCondition),
 			err:      refused,
 		},
 		{
 			name: "a transient failure",
-			decision: ResultDecision{
-				Class: errclass.ClassRetryableTransient, Persistence: PersistRetryWork,
-				ConditionType: IssueServiceOutage, ConditionKey: ConditionServiceOutage,
+			decision: syncdomain.ResultDecision{
+				Class: errclass.ClassRetryableTransient, Persistence: syncdomain.PersistRetryWork,
+				ConditionType: syncdomain.IssueServiceOutage, ConditionKey: syncdomain.ConditionServiceOutage,
 			},
 			err: refused,
 		},
 		{
 			name:     "a denial the local permission probe owns",
-			decision: actionableDecision(IssueLocalWriteDenied, ConditionLocalWriteDenied),
+			decision: actionableDecision(syncdomain.IssueLocalWriteDenied, syncdomain.ConditionLocalWriteDenied),
 			err:      fmt.Errorf("write file: %w", os.ErrPermission),
 		},
 		{
 			name:       "a write denial the remote permission probe owns",
-			decision:   actionableDecision(IssueRemoteWriteDenied, ConditionRemoteWriteDenied),
-			action:     ActionUpload,
+			decision:   actionableDecision(syncdomain.IssueRemoteWriteDenied, syncdomain.ConditionRemoteWriteDenied),
+			action:     syncdomain.ActionUpload,
 			httpStatus: http.StatusForbidden,
 			err:        &graph.GraphError{StatusCode: http.StatusForbidden, Message: "Access denied", Err: graph.ErrForbidden},
 		},
 		{
 			name:     "an upload OneDrive stored differently than it was sent",
-			decision: actionableDecision(IssueUploadVerification, ConditionUploadVerification),
-			action:   ActionUpload,
+			decision: actionableDecision(syncdomain.IssueUploadVerification, syncdomain.ConditionUploadVerification),
+			action:   syncdomain.ActionUpload,
 			err:      fmt.Errorf("upload: %w", driveops.ErrUploadVerificationFailed),
 		},
 		{
 			name:     "a download OneDrive served differently than it describes",
-			decision: actionableDecision(IssueDownloadIntegrity, ConditionDownloadIntegrity),
+			decision: actionableDecision(syncdomain.IssueDownloadIntegrity, syncdomain.ConditionDownloadIntegrity),
 			err:      fmt.Errorf("download: %w", driveops.ErrDownloadIntegrity),
 		},
 	} {
 		flow.resetResultStats()
 		activities = nil
 		// The zero action is ActionDownload.
-		completion := &ActionCompletion{ActionType: tc.action, Path: "a.txt", HTTPStatus: tc.httpStatus, Err: tc.err}
+		completion := &syncdomain.ActionCompletion{ActionType: tc.action, Path: "a.txt", HTTPStatus: tc.httpStatus, Err: tc.err}
 		require.Equal(t, tc.httpStatus == http.StatusForbidden, shouldHandleRemote403Permission(completion), tc.name)
 
 		eng.emitActivity(completion, &tc.decision, true)
@@ -293,10 +296,10 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 
 // actionableDecision is the decision for an action refused per item, recorded
 // as retry work with conditionType.
-func actionableDecision(conditionType IssueType, key ConditionKey) ResultDecision {
-	return ResultDecision{
+func actionableDecision(conditionType syncdomain.IssueType, key syncdomain.ConditionKey) syncdomain.ResultDecision {
+	return syncdomain.ResultDecision{
 		Class:         errclass.ClassActionable,
-		Persistence:   PersistRetryWork,
+		Persistence:   syncdomain.PersistRetryWork,
 		ConditionType: conditionType,
 		ConditionKey:  key,
 	}
@@ -311,10 +314,10 @@ func assertStatusListsRefusalUnderItsCondition(t *testing.T, eng *testEngine) {
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
 	require.Len(t, snapshot.ActionableRetryWork, 1, "status reads the row as a condition")
-	assert.Equal(t, IssuePathTooLong, snapshot.ActionableRetryWork[0].ConditionType)
+	assert.Equal(t, syncdomain.IssuePathTooLong, snapshot.ActionableRetryWork[0].ConditionType)
 	assert.Zero(t, snapshot.RetryingItems, "not counted as retrying")
-	groups := ProjectStoredConditionGroups(&snapshot)
+	groups := syncstore.ProjectStoredConditionGroups(&snapshot)
 	require.Len(t, groups, 1)
-	assert.Equal(t, ConditionPathTooLong, groups[0].ConditionKey)
+	assert.Equal(t, syncdomain.ConditionPathTooLong, groups[0].ConditionKey)
 	assert.Equal(t, []string{"deep"}, groups[0].Paths)
 }

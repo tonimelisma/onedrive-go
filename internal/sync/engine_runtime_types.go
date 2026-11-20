@@ -3,6 +3,8 @@ package sync
 import (
 	"sync/atomic"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // engineFlow holds mutable per-run execution state shared by one-shot and
@@ -75,10 +77,10 @@ func newEngineFlow(engine *Engine) *engineFlow {
 		sched:     newActionScheduler(),
 		retries:   newRetryLedger(),
 		scopes:    scopeLedger{ownerCheck: engine.runOwnerCheck},
-		retryWork: retryWork{rows: make(map[RetryWorkKey]RetryWorkRow)},
+		retryWork: retryWork{rows: make(map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow)},
 
 		supersedeStreaks: make(map[string]int),
-		stopBound:        OutcomeCommitTimeout,
+		stopBound:        syncdomain.OutcomeCommitTimeout,
 	}
 	return flow
 }
@@ -89,7 +91,7 @@ type oneShotRunner struct {
 	// outbox is the admitted work the results loop has not handed to a
 	// worker yet. Owned by the results loop goroutine; a scope activation
 	// applied by that goroutine takes blocked work back out of it.
-	outbox []*TrackedAction
+	outbox []*syncdomain.TrackedAction
 }
 
 func newOneShotRunner(engine *Engine) *oneShotRunner {
@@ -103,7 +105,7 @@ func newOneShotRunner(engine *Engine) *oneShotRunner {
 
 // takeAdmittedWorkBlockedBy satisfies admittedWorkOwner for the one-shot
 // results loop.
-func (r *oneShotRunner) takeAdmittedWorkBlockedBy(key ScopeKey) []*TrackedAction {
+func (r *oneShotRunner) takeAdmittedWorkBlockedBy(key syncdomain.ScopeKey) []*syncdomain.TrackedAction {
 	taken, kept := takeOutboxBlockedBy(r.outbox, key)
 	if len(taken) == 0 {
 		return nil

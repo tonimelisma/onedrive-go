@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Validates: R-6.3.8
@@ -15,7 +17,7 @@ import (
 func TestHandleObserverExit_LastObserverOutsideShutdownReturnsError(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 1
 
@@ -29,7 +31,7 @@ func TestHandleObserverExit_LastObserverOutsideShutdownReturnsError(t *testing.T
 func TestHandleObserverExit_RemainingObserverKeepsWatchAlive(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 2
 
@@ -43,7 +45,7 @@ func TestHandleObserverExit_RemainingObserverKeepsWatchAlive(t *testing.T) {
 func TestHandleObserverExit_LastObserverDuringShutdownIsNotAnError(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 1
 
@@ -58,7 +60,7 @@ func TestHandleObserverExit_LastObserverDuringShutdownIsNotAnError(t *testing.T)
 func TestHandleObserverExit_DrainingOutsideShutdownViolatesInvariant(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 1
 	require.True(t, rt.enterDraining())

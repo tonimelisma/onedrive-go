@@ -9,6 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependents(t *testing.T) {
@@ -17,31 +21,31 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	root := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	root := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "sync.txt",
 		DriveID: driveID,
 		ItemID:  "sync-item",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	dependent := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
 		ItemID:  "cleanup-item",
@@ -49,11 +53,11 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before completion")
 
 	p := &watchPipeline{bl: bl}
-	err = rt.handleWatchActionCompletion(ctx, p, &ActionCompletion{
+	err = rt.handleWatchActionCompletion(ctx, p, &syncdomain.ActionCompletion{
 		Path:       "sync.txt",
 		ItemID:     "sync-item",
 		DriveID:    driveID,
-		ActionType: ActionDownload,
+		ActionType: syncdomain.ActionDownload,
 		Success:    true,
 		ActionID:   1,
 	})
@@ -71,16 +75,16 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
@@ -88,37 +92,37 @@ func TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork(t *testing.T) 
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	unlocked := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	unlocked := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "after.txt",
 		DriveID: driveID,
 		ItemID:  "after-item",
-		View:    &PathView{Path: "after.txt"},
+		View:    &syncdomain.PathView{Path: "after.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, unlocked)
 
-	held := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	held := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "held.txt",
 		DriveID: driveID,
 		ItemID:  "held-item",
 	}, 3, nil)
 	require.NotNil(t, held)
-	rt.holdAction(held, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
+	rt.holdAction(held, heldReasonRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*syncdomain.TrackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID, "publication drain should only enqueue dependents unlocked by publication success")
-	assert.Contains(t, rt.retries.heldByKey, RetryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication drain")
+	assert.Contains(t, rt.retries.heldByKey, syncdomain.RetryWorkKeyForAction(&held.Action), "unrelated held retry work should not be released by publication drain")
 }
 
 // Validates: R-2.10.5, R-2.10.33
@@ -129,48 +133,48 @@ func TestRunPublicationDrainStage_PublicationSuccessClearsRetryWorkAndAdmitsDepe
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 	now := eng.nowFunc()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
-	row := RetryWorkRow{
+	row := syncdomain.RetryWorkRow{
 		Path:         "cleanup.txt",
-		ActionType:   ActionCleanup,
+		ActionType:   syncdomain.ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(time.Minute).UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
-	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	dependent := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	dependent := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "after.txt",
 		DriveID: driveID,
 		ItemID:  "after-item",
-		View:    &PathView{Path: "after.txt"},
+		View:    &syncdomain.PathView{Path: "after.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*syncdomain.TrackedAction{publication})
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, int64(2), outbox[0].ID)
@@ -184,44 +188,44 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
 	rt.initializeRuntimeState(&runtimePlan{})
-	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
-	rt.scopes.state.UpdateScope(&ActionCompletion{
+	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state.UpdateScope(&syncdomain.ActionCompletion{
 		Path:       "service.txt",
-		ActionType: ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 		DriveID:    driveID,
 		HTTPStatus: 503,
 		ErrMsg:     "service unavailable",
 	})
-	require.True(t, rt.scopes.state.HasWindowForTest(SKService()))
+	require.True(t, rt.scopes.state.HasWindowForTest(syncdomain.SKService()))
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, bl, []*syncdomain.TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
-	assert.True(t, rt.scopes.state.HasWindowForTest(SKService()),
+	assert.True(t, rt.scopes.state.HasWindowForTest(syncdomain.SKService()),
 		"publication-only successes must not clear unrelated scope failure windows")
 }
 
@@ -233,37 +237,37 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "seed.txt",
 		DriveID:  eng.driveID,
 		ItemID:   "seed-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: driveid.New("0000000000000002"),
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, &syncdomain.Baseline{}, []*syncdomain.TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
-	work := RetryWorkKeyForAction(&publication.Action)
+	work := syncdomain.RetryWorkKeyForAction(&publication.Action)
 	require.Contains(t, rt.retries.heldByKey, work)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, ctx)
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, "cleanup.txt", retryRows[0].Path)
-	assert.Equal(t, ActionCleanup, retryRows[0].ActionType)
+	assert.Equal(t, syncdomain.ActionCleanup, retryRows[0].ActionType)
 }
 
 // Validates: R-2.10.33
@@ -275,36 +279,36 @@ func TestWatchRuntime_HandleWatchHeldRelease_RetryTickReducesReleasedPublication
 	ctx := t.Context()
 	now := eng.nowFunc()
 
-	require.NoError(t, eng.baseline.CommitMutation(ctx, &BaselineMutation{
-		Action:   ActionDownload,
+	require.NoError(t, eng.baseline.CommitMutation(ctx, &syncdomain.BaselineMutation{
+		Action:   syncdomain.ActionDownload,
 		Success:  true,
 		Path:     "cleanup.txt",
 		DriveID:  eng.driveID,
 		ItemID:   "cleanup-item",
 		ParentID: "root",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 	}))
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	row := RetryWorkRow{
+	row := syncdomain.RetryWorkRow{
 		Path:         "cleanup.txt",
-		ActionType:   ActionCleanup,
+		ActionType:   syncdomain.ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(-time.Second).UnixNano(),
 	}
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
-	rt.initializeRuntimeState(&runtimePlan{RetryRows: []RetryWorkRow{row}})
+	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
-	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	rt.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
 	err = rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: bl}, false)
 	require.NoError(t, err)
@@ -326,8 +330,8 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
@@ -336,7 +340,7 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, &Baseline{}, []*TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, &syncdomain.Baseline{}, []*syncdomain.TrackedAction{publication})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, outbox)
@@ -353,11 +357,11 @@ func TestWatchRuntime_ASnapshotTakenBeforeShutdownIsStillCommitted(t *testing.T)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	err := rt.handleWatchLocalObservationBatch(ctx, &LocalObservation{
-		Kind: LocalSnapshot,
-		Findings: []SkippedItem{{
+	err := rt.handleWatchLocalObservationBatch(ctx, &syncobserve.LocalObservation{
+		Kind: syncobserve.LocalSnapshot,
+		Findings: []syncdomain.SkippedItem{{
 			Path:   "bad?.txt",
-			Reason: IssueInvalidFilename,
+			Reason: syncdomain.IssueInvalidFilename,
 			Detail: "invalid filename",
 		}},
 	})
@@ -379,26 +383,26 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 
 	rt.initializeRuntimeState(&runtimePlan{})
 
-	concrete := rt.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	concrete := rt.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
-		View: &PathView{Path: "retry.txt"},
+		View: &syncdomain.PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
-	rt.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	rt.holdAction(concrete, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
-	publication := rt.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
 	}, 2, nil)
 	require.NotNil(t, publication)
-	rt.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	rt.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: &Baseline{}}, false)
+	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: &syncdomain.Baseline{}}, false)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, rt.currentOutbox(), "released frontier should be shutdown-completed when reduction fails")
 	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "only the publication action should remain unresolved on fail-closed termination")

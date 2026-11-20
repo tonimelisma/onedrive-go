@@ -13,7 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type verifyRoot interface {
@@ -49,7 +49,7 @@ const (
 // skipped (no content hash).
 func VerifyBaseline(
 	ctx context.Context,
-	bl *syncengine.Baseline,
+	bl *syncdomain.Baseline,
 	tree *synctree.Root,
 	logger *slog.Logger,
 ) (*Report, error) {
@@ -58,7 +58,7 @@ func VerifyBaseline(
 
 func verifyBaselineWithHasher(
 	ctx context.Context,
-	bl *syncengine.Baseline,
+	bl *syncdomain.Baseline,
 	tree verifyRoot,
 	computeHash hashComputer,
 	logger *slog.Logger,
@@ -67,7 +67,7 @@ func verifyBaselineWithHasher(
 
 	var ctxErr error
 
-	bl.ForEachPath(func(relPath string, entry *syncengine.BaselineEntry) {
+	bl.ForEachPath(func(relPath string, entry *syncdomain.BaselineEntry) {
 		if ctxErr != nil {
 			return
 		}
@@ -78,7 +78,7 @@ func verifyBaselineWithHasher(
 		}
 
 		// Skip folders and root entries — no content hash to verify.
-		if entry.ItemType != syncengine.ItemTypeFile {
+		if entry.ItemType != syncdomain.ItemTypeFile {
 			return
 		}
 
@@ -107,7 +107,7 @@ func verifyBaselineWithHasher(
 	return report, nil
 }
 
-func unreadableResult(entry *syncengine.BaselineEntry, err error) Result {
+func unreadableResult(entry *syncdomain.BaselineEntry, err error) Result {
 	return Result{
 		Path:     entry.Path,
 		Status:   VerifyUnreadable,
@@ -121,7 +121,7 @@ func verifyEntry(
 	ctx context.Context,
 	tree verifyRoot,
 	relPath string,
-	entry *syncengine.BaselineEntry,
+	entry *syncdomain.BaselineEntry,
 	computeHash hashComputer,
 	logger *slog.Logger,
 ) Result {

@@ -662,7 +662,7 @@ This work is intentionally staged.
 
 ## Comparison SQL Micro-Benchmarks
 
-`BenchmarkComparisonQueries` (`internal/sync/sqlite_compare_bench_test.go`)
+`BenchmarkComparisonQueries` (`internal/sync/syncstore/sqlite_compare_bench_test.go`)
 times `QueryComparisonState` plus `QueryReconciliationState`, the two queries
 every plan runs, over synced trees of 10k and 100k items in folders of 100:
 a quiet tree, a OneDrive rename of a folder holding half the items (the
@@ -698,7 +698,7 @@ to 15 on 2 cores), so wall times are upper bounds; the CPU seconds, from a
 CPU profile of the same runs divided by the iterations, are the comparable
 figures.
 
-`BenchmarkBuildDependencies` (`internal/sync/planner_dependencies_bench_test.go`)
+`BenchmarkBuildDependencies` (`internal/sync/internal/syncplan/planner_dependencies_bench_test.go`)
 times `buildDependencies` over the action lists of a first upload (a remote
 folder create per folder of 10 files, an upload per file) and a mixed plan
 (every tenth folder renamed on one side with work under its source and
@@ -725,7 +725,7 @@ the actions times their depth (10k to 100k is 8x), and the equivalence test
 `TestBuildDependencies_MatchesScanningOracle` holds the new builder to the
 oracle's edges, duplicates included, over random plans of every shape.
 
-`BenchmarkReplacePlannerVisibleState` (`internal/sync/store_planner_visible_bench_test.go`)
+`BenchmarkReplacePlannerVisibleState` (`internal/sync/syncstore/store_planner_visible_bench_test.go`)
 times `ReplacePlannerVisibleStateTx`, the TEMP-table build inside every
 plan's read transaction, over 9,910 rows a side against a baseline of the
 same tree (ten top folders of 90 folders of 10 files): a quiet tree, and one

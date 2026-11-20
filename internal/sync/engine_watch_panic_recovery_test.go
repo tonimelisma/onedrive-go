@@ -10,6 +10,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -31,9 +34,9 @@ func TestRecoverObserverPanic_DeliversPanicAsObserverError(t *testing.T) {
 		panic("observer exploded")
 	}()
 
-	receiveWithin(t, done, "the panicking goroutine to finish")
+	syncfixture.ReceiveWithin(t, done, "the panicking goroutine to finish")
 
-	err := receiveWithin(t, errs, "the panic's error")
+	err := syncfixture.ReceiveWithin(t, errs, "the panic's error")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "observer exploded")
 	assert.Contains(t, err.Error(), "local")
@@ -51,7 +54,7 @@ func TestRecoverObserverPanic_CleanExitReportsNothing(t *testing.T) {
 		defer recoverObserverPanic(synctest.TestLogger(t), "remote", errs)
 	}()
 
-	receiveWithin(t, done, "the observer goroutine to finish")
+	syncfixture.ReceiveWithin(t, done, "the observer goroutine to finish")
 
 	assert.Empty(t, errs, "a clean observer exit must not synthesize an error")
 }
@@ -75,7 +78,7 @@ func TestRecoverObserverPanic_FullChannelDoesNotBlock(t *testing.T) {
 		panic("observer exploded")
 	}()
 
-	receiveWithin(t, done, "the panicking goroutine to finish despite the full channel")
+	syncfixture.ReceiveWithin(t, done, "the panicking goroutine to finish despite the full channel")
 }
 
 // Validates: R-6.3.8
@@ -85,15 +88,15 @@ func TestRecoverObserverPanic_FullChannelDoesNotBlock(t *testing.T) {
 // the process. Before recovery was wired in, this test crashed the test
 // binary instead of failing.
 func TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing(t *testing.T) {
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
 		panic("watcher factory exploded")
 	}
 
-	_, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
+	_, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
-	err := receiveWithin(t, done, "watch mode to report the observer panic")
+	err := syncfixture.ReceiveWithin(t, done, "watch mode to report the observer panic")
 	require.Error(t, err, "a panicking observer must fail watch mode")
 	assert.Contains(t, err.Error(), "watcher factory exploded")
 }
@@ -108,8 +111,8 @@ func TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing(t *testing.T) {
 func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			panic("delta exploded")
 		},
 	}
@@ -122,7 +125,7 @@ func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T
 
 	setupWatchEngine(t, e)
 	rt := testWatchRuntime(t, e)
-	rt.resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 
@@ -132,7 +135,7 @@ func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T
 		require.Error(t, applyErr, "a panicking refresh must fail the mount")
 		assert.Contains(t, applyErr.Error(), "delta exploded")
 		assert.Contains(t, applyErr.Error(), "full remote refresh")
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "the refresh panic was not delivered to the loop")
 	}
 
@@ -146,10 +149,10 @@ func TestRunFullRemoteRefreshAsync_PanicFailsMountInsteadOfCrashing(t *testing.T
 // its interval. Before the recover was wired in, this test crashed the
 // binary instead of stopping cleanly.
 func TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning(t *testing.T) {
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.enableWebsocket = true
 	entered := make(chan struct{})
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ syncdomain.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			runFn: func(context.Context, chan<- struct{}) error {
 				close(entered)
@@ -158,11 +161,11 @@ func TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning(t *testing.T) {
 		}
 	}
 
-	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, quietWatchOptions())
 
-	receiveWithin(t, entered, "the wake source to start")
+	syncfixture.ReceiveWithin(t, entered, "the wake source to start")
 
 	cancel()
-	require.NoError(t, receiveWithin(t, done, "watch mode to stop after the wake source panic"),
+	require.NoError(t, syncfixture.ReceiveWithin(t, done, "watch mode to stop after the wake source panic"),
 		"watch keeps running without its wake source and stops cleanly")
 }

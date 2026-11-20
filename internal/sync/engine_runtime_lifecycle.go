@@ -6,6 +6,10 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // loadActiveScopes refreshes watch runtime scope state from the persisted
@@ -23,9 +27,9 @@ func (rt *watchRuntime) loadActiveScopes(ctx context.Context) error {
 		return fmt.Errorf("sync: listing active scopes: %w", err)
 	}
 
-	activeScopes := make([]ActiveScope, 0, len(blocks))
+	activeScopes := make([]syncdomain.ActiveScope, 0, len(blocks))
 	for i := range blocks {
-		activeScopes = append(activeScopes, ActiveScopeFromBlockScopeRow(blocks[i]))
+		activeScopes = append(activeScopes, syncdomain.ActiveScopeFromBlockScopeRow(blocks[i]))
 	}
 	flow.scopes.replaceActiveScopes(activeScopes)
 
@@ -48,7 +52,7 @@ func (flow *engineFlow) normalizePersistedScopes(
 	if err != nil {
 		return fmt.Errorf("sync: listing blocked retry_work rows: %w", err)
 	}
-	for _, step := range PlanPersistedScopeNormalization(blocks, blockedRetries) {
+	for _, step := range syncstore.PlanPersistedScopeNormalization(blocks, blockedRetries) {
 		if dropErr := flow.dropStartupScopeRow(ctx, step.Key, step.Note); dropErr != nil {
 			return dropErr
 		}
@@ -73,19 +77,19 @@ func (flow *engineFlow) normalizePersistedScopes(
 	return nil
 }
 
-func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key ScopeKey, note string) error {
+func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key syncdomain.ScopeKey, note string) error {
 	if err := flow.deps.store.DeleteBlockScope(ctx, key); err != nil {
 		return fmt.Errorf("sync: deleting startup scope %s: %w", key.String(), err)
 	}
-	flow.deps.emit(EngineDebugEvent{
-		Type:     EngineDebugEventStartupScopeNormalized,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:     syncdomain.EngineDebugEventStartupScopeNormalized,
 		ScopeKey: key,
 		Note:     note,
 	})
 	return nil
 }
 
-func (flow *engineFlow) activateScope(ctx context.Context, block *ActiveScope) error {
+func (flow *engineFlow) activateScope(ctx context.Context, block *syncdomain.ActiveScope) error {
 	if block == nil {
 		return fmt.Errorf("sync: activating scope: missing block")
 	}
@@ -93,8 +97,8 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *ActiveScope) e
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)
 	}
 
-	flow.deps.emit(EngineDebugEvent{
-		Type:     EngineDebugEventScopeActivated,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:     syncdomain.EngineDebugEventScopeActivated,
 		ScopeKey: block.Key,
 	})
 
@@ -105,8 +109,8 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *ActiveScope) e
 
 // persistActiveScope writes a scope's timing to both authorities, the store
 // row and the ledger, without announcing an activation.
-func (flow *engineFlow) persistActiveScope(ctx context.Context, block *ActiveScope) error {
-	persisted, err := BlockScopeRowFromActiveScope(*block)
+func (flow *engineFlow) persistActiveScope(ctx context.Context, block *syncdomain.ActiveScope) error {
+	persisted, err := syncdomain.BlockScopeRowFromActiveScope(*block)
 	if err != nil {
 		return err
 	}
@@ -123,8 +127,8 @@ func (flow *engineFlow) persistActiveScope(ctx context.Context, block *ActiveSco
 // activating 429 stopped it, or the first generation of a new scope. The
 // trial never moves earlier than a deadline the scope already holds
 // (latestTrialDeadline).
-func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration, now time.Time) *ActiveScope {
-	block := &ActiveScope{
+func (flow *engineFlow) newBlockActivation(key syncdomain.ScopeKey, interval time.Duration, now time.Time) *syncdomain.ActiveScope {
+	block := &syncdomain.ActiveScope{
 		Key:           key,
 		TrialInterval: interval,
 		NextTrialAt:   now.Add(interval),
@@ -151,7 +155,7 @@ func (flow *engineFlow) newBlockActivation(key ScopeKey, interval time.Duration,
 // extension (R-6.8.24). A scope on probation holds no server deadline: its
 // trial is the stall-recovery re-arm one interval out, and the 429 that
 // ends the probation sets the deadline outright.
-func latestTrialDeadline(current *ActiveScope, requested time.Time) time.Time {
+func latestTrialDeadline(current *syncdomain.ActiveScope, requested time.Time) time.Time {
 	if current.ReleaseAllowance == 0 && current.NextTrialAt.After(requested) {
 		return current.NextTrialAt
 	}
@@ -161,7 +165,7 @@ func latestTrialDeadline(current *ActiveScope, requested time.Time) time.Time {
 
 func (flow *engineFlow) extendScopeTrial(
 	ctx context.Context,
-	scopeKey ScopeKey,
+	scopeKey syncdomain.ScopeKey,
 	retryAfter time.Duration,
 ) error {
 	block, ok := flow.scopes.lookupActiveScope(scopeKey)
@@ -169,7 +173,7 @@ func (flow *engineFlow) extendScopeTrial(
 		return nil
 	}
 
-	newInterval := ComputeTrialInterval(retryAfter)
+	newInterval := syncstore.ComputeTrialInterval(retryAfter)
 	nextAt := flow.deps.now().Add(newInterval)
 
 	flow.deps.logger.Debug("extending trial interval",
@@ -201,7 +205,7 @@ func (flow *engineFlow) extendScopeTrial(
 	return nil
 }
 
-func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey ScopeKey) error {
+func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey syncdomain.ScopeKey) error {
 	block, ok := flow.scopes.lookupActiveScope(scopeKey)
 	if !ok {
 		return nil
@@ -228,7 +232,7 @@ func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey ScopeKey) 
 // scopeHasBlockedRetryWork asks the store whether any retry_work row is
 // blocked under scopeKey: a count of that scope's rows, not a listing of
 // every blocked row.
-func (flow *engineFlow) scopeHasBlockedRetryWork(ctx context.Context, scopeKey ScopeKey) (bool, error) {
+func (flow *engineFlow) scopeHasBlockedRetryWork(ctx context.Context, scopeKey syncdomain.ScopeKey) (bool, error) {
 	hasBlockedWork, err := flow.deps.store.ScopeHasBlockedRetryWork(ctx, scopeKey)
 	if err != nil {
 		return false, fmt.Errorf("sync: checking blocked retry work for scope %s: %w", scopeKey.String(), err)
@@ -237,7 +241,7 @@ func (flow *engineFlow) scopeHasBlockedRetryWork(ctx context.Context, scopeKey S
 	return hasBlockedWork, nil
 }
 
-func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeKey) error {
+func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey syncdomain.ScopeKey) error {
 	if scopeKey.IsZero() {
 		return nil
 	}
@@ -247,10 +251,10 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeK
 		return fmt.Errorf("rearm or discard scope %s: %w", scopeKey.String(), err)
 	}
 
-	switch DecideTimedBlockScopeAction(hasBlockedWork) {
-	case TimedBlockScopeKeep:
+	switch syncstore.DecideTimedBlockScopeAction(hasBlockedWork) {
+	case syncstore.TimedBlockScopeKeep:
 		return flow.rearmScopeTrial(ctx, scopeKey)
-	case TimedBlockScopeDiscard:
+	case syncstore.TimedBlockScopeDiscard:
 		return flow.discardScope(ctx, scopeKey)
 	}
 
@@ -262,9 +266,9 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey ScopeK
 // persists the completion's work blocked under that scope before activating
 // it (persistFailureWithScopeEffects). A completion with no status is fed
 // too: a request OneDrive never answered is outage evidence.
-func (flow *engineFlow) detectScope(r *ActionCompletion) ScopeUpdateResult {
+func (flow *engineFlow) detectScope(r *syncdomain.ActionCompletion) syncdomain.ScopeUpdateResult {
 	if flow.scopes.state == nil {
-		return ScopeUpdateResult{}
+		return syncdomain.ScopeUpdateResult{}
 	}
 
 	return flow.scopes.state.UpdateScope(r)
@@ -272,9 +276,9 @@ func (flow *engineFlow) detectScope(r *ActionCompletion) ScopeUpdateResult {
 
 // applyBlockScope persists and activates a new block scope using the same
 // timing policy as trial extension and rearm.
-func (flow *engineFlow) applyBlockScope(ctx context.Context, sr ScopeUpdateResult) error {
+func (flow *engineFlow) applyBlockScope(ctx context.Context, sr syncdomain.ScopeUpdateResult) error {
 	now := flow.deps.now()
-	interval := ComputeTrialInterval(sr.RetryAfter)
+	interval := syncstore.ComputeTrialInterval(sr.RetryAfter)
 
 	block := flow.newBlockActivation(sr.ScopeKey, interval, now)
 	wasActive := flow.scopes.hasActiveScope(sr.ScopeKey)
@@ -296,9 +300,9 @@ func (flow *engineFlow) applyBlockScope(ctx context.Context, sr ScopeUpdateResul
 
 func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	ctx context.Context,
-	from ScopeKey,
-	to ScopeKey,
-	conditionType IssueType,
+	from syncdomain.ScopeKey,
+	to syncdomain.ScopeKey,
+	conditionType syncdomain.IssueType,
 	retryAfter time.Duration,
 ) error {
 	if to.IsZero() {
@@ -306,14 +310,14 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	}
 
 	now := flow.deps.now()
-	interval := ComputeTrialInterval(retryAfter)
+	interval := syncstore.ComputeTrialInterval(retryAfter)
 	block := flow.newBlockActivation(to, interval, now)
 	wasActive := flow.scopes.hasActiveScope(to)
 	if err := flow.persistActiveScope(ctx, block); err != nil {
 		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
 	}
-	flow.deps.emit(EngineDebugEvent{
-		Type:     EngineDebugEventScopeActivated,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:     syncdomain.EngineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
 	flow.handOverColdStart(to)
@@ -349,8 +353,8 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 // the user can act on (storage full, local disk full, no permission) are one
 // Warn in plain words.
 func (flow *engineFlow) logBlockScopeActivated(
-	key ScopeKey,
-	conditionType IssueType,
+	key syncdomain.ScopeKey,
+	conditionType syncdomain.IssueType,
 	interval time.Duration,
 	wasActive bool,
 ) {
@@ -364,7 +368,7 @@ func (flow *engineFlow) logBlockScopeActivated(
 		return
 	}
 
-	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, WaitText(interval))
+	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, syncobserve.WaitText(interval))
 	if clearsAutomatically {
 		flow.deps.logger.Info(line, fields...)
 		return
@@ -379,10 +383,12 @@ func (flow *engineFlow) logBlockScopeActivated(
 // (ConditionClearsAutomatically), the same one that keeps the watch condition
 // summary below a warning, so the two cannot disagree; a condition with no
 // family is not known to clear by itself.
-func blockScopeActivationLine(key ScopeKey, conditionType IssueType, retryIn string) (line string, clearsAutomatically bool) {
-	family, hasFamily := ConditionKeyForIssueType(conditionType)
+func blockScopeActivationLine(
+	key syncdomain.ScopeKey, conditionType syncdomain.IssueType, retryIn string,
+) (line string, clearsAutomatically bool) {
+	family, hasFamily := syncdomain.ConditionKeyForIssueType(conditionType)
 
-	return blockScopeActivationWording(key, conditionType, retryIn), hasFamily && ConditionClearsAutomatically(family)
+	return blockScopeActivationWording(key, conditionType, retryIn), hasFamily && syncdomain.ConditionClearsAutomatically(family)
 }
 
 // blockScopeActivationWording words the activation line of a condition's
@@ -390,57 +396,57 @@ func blockScopeActivationLine(key ScopeKey, conditionType IssueType, retryIn str
 // holds the switch to that), so a new condition is worded on purpose. The
 // conditions with no wording of their own, like a value outside the enum,
 // are named in words after the scope.
-func blockScopeActivationWording(key ScopeKey, conditionType IssueType, retryIn string) string {
+func blockScopeActivationWording(key syncdomain.ScopeKey, conditionType syncdomain.IssueType, retryIn string) string {
 	switch conditionType {
-	case IssueRateLimited:
+	case syncdomain.IssueRateLimited:
 		return "OneDrive is limiting requests; pausing affected transfers and retrying in " + retryIn
-	case IssueServiceOutage:
+	case syncdomain.IssueServiceOutage:
 		return "OneDrive is temporarily unavailable; pausing transfers and retrying in " + retryIn
-	case IssueQuotaExceeded:
+	case syncdomain.IssueQuotaExceeded:
 		return "OneDrive storage is full; uploads are paused until space is freed (checking again in " + retryIn + ")"
-	case IssueDiskFull:
+	case syncdomain.IssueDiskFull:
 		// The same scope covers the min_free_space reserve and a real
 		// ENOSPC/EDQUOT write (inodes included); the per-file error names
 		// which one, so this line names both limits.
 		return "The local disk is full or below the min_free_space reserve; downloads are paused " +
 			"until there is room (checking again in " + retryIn + ")"
-	case IssueLocalReadOnly:
+	case syncdomain.IssueLocalReadOnly:
 		return "The local filesystem holding " + key.Humanize() + " is read-only; local changes there are " +
 			"paused until it is writable again (checking again in " + retryIn + ")"
-	case IssueInvalidFilename,
-		IssuePathTooLong,
-		IssueFileTooLarge,
-		IssueHashPanic,
-		IssueUnauthorized,
-		IssueRemoteWriteDenied,
-		IssueRemoteReadDenied,
-		IssueRemoteRootNotFound,
-		IssueLocalReadDenied,
-		IssueLocalWriteDenied,
-		IssueCaseCollision,
-		IssueRemoteNameTwin,
-		IssueFileTooLargeForSpace,
-		IssueLocalNameTooLong,
-		IssueDeletesHeld,
-		IssueLocalUnsyncableReplacement,
-		IssueLocalMountBoundary,
-		IssueLocalMountMissing,
-		IssueRemoteFolderUnverifiable,
-		IssueLocalInterruptedRemoval,
-		IssueRemovedFolderKept,
-		IssueLocalFileTooLarge,
-		IssueLocalBusy,
-		IssueLocalCrossDevice,
-		IssueUnsupportedOperation,
-		IssueMalwareDetected,
-		IssueLocalDatabaseOpen,
-		IssueUploadVerification,
-		IssueDownloadIntegrity,
-		IssueRequestTimeout,
-		IssueTransientConflict,
-		IssueTransientNotFound,
-		IssueResourceLocked,
-		IssueTransferURLRejected:
+	case syncdomain.IssueInvalidFilename,
+		syncdomain.IssuePathTooLong,
+		syncdomain.IssueFileTooLarge,
+		syncdomain.IssueHashPanic,
+		syncdomain.IssueUnauthorized,
+		syncdomain.IssueRemoteWriteDenied,
+		syncdomain.IssueRemoteReadDenied,
+		syncdomain.IssueRemoteRootNotFound,
+		syncdomain.IssueLocalReadDenied,
+		syncdomain.IssueLocalWriteDenied,
+		syncdomain.IssueCaseCollision,
+		syncdomain.IssueRemoteNameTwin,
+		syncdomain.IssueFileTooLargeForSpace,
+		syncdomain.IssueLocalNameTooLong,
+		syncdomain.IssueDeletesHeld,
+		syncdomain.IssueLocalUnsyncableReplacement,
+		syncdomain.IssueLocalMountBoundary,
+		syncdomain.IssueLocalMountMissing,
+		syncdomain.IssueRemoteFolderUnverifiable,
+		syncdomain.IssueLocalInterruptedRemoval,
+		syncdomain.IssueRemovedFolderKept,
+		syncdomain.IssueLocalFileTooLarge,
+		syncdomain.IssueLocalBusy,
+		syncdomain.IssueLocalCrossDevice,
+		syncdomain.IssueUnsupportedOperation,
+		syncdomain.IssueMalwareDetected,
+		syncdomain.IssueLocalDatabaseOpen,
+		syncdomain.IssueUploadVerification,
+		syncdomain.IssueDownloadIntegrity,
+		syncdomain.IssueRequestTimeout,
+		syncdomain.IssueTransientConflict,
+		syncdomain.IssueTransientNotFound,
+		syncdomain.IssueResourceLocked,
+		syncdomain.IssueTransferURLRejected:
 		return pausedScopeLine(key, conditionType, retryIn)
 	default:
 		return pausedScopeLine(key, conditionType, retryIn)
@@ -449,7 +455,7 @@ func blockScopeActivationWording(key ScopeKey, conditionType IssueType, retryIn 
 
 // pausedScopeLine is the activation line of a block scope whose condition
 // has no wording of its own: the scope, and the condition in words.
-func pausedScopeLine(key ScopeKey, conditionType IssueType, retryIn string) string {
+func pausedScopeLine(key syncdomain.ScopeKey, conditionType syncdomain.IssueType, retryIn string) string {
 	return "Paused syncing " + key.Humanize() + " (" + strings.ReplaceAll(string(conditionType), "_", " ") +
 		"); checking again in " + retryIn
 }
@@ -459,7 +465,7 @@ func pausedScopeLine(key ScopeKey, conditionType IssueType, retryIn string) stri
 // action whose row the store deleted goes back to admission. Used when the
 // blocked subtree itself disappears, and when a scope's last blocked work
 // moved under another scope.
-func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
+func (flow *engineFlow) discardScope(ctx context.Context, key syncdomain.ScopeKey) error {
 	deleted, err := flow.retryWork.discardScope(ctx, flow.deps.store, key)
 	if err != nil {
 		return fmt.Errorf("sync: %w", err)
@@ -467,7 +473,7 @@ func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
 	now := flow.deps.now()
 	for _, work := range deleted {
 		if ta := flow.retries.releaseHeldAction(work); ta != nil {
-			flow.holdAction(ta, heldReasonRetry, ScopeKey{}, now)
+			flow.holdAction(ta, heldReasonRetry, syncdomain.ScopeKey{}, now)
 		}
 	}
 
@@ -476,8 +482,8 @@ func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
 	if len(deleted) > 0 {
 		flow.signals.armRetryTimer()
 	}
-	flow.deps.emit(EngineDebugEvent{
-		Type:     EngineDebugEventScopeDiscarded,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:     syncdomain.EngineDebugEventScopeDiscarded,
 		ScopeKey: key,
 	})
 
@@ -489,8 +495,8 @@ func (flow *engineFlow) discardScope(ctx context.Context, key ScopeKey) error {
 
 func (flow *engineFlow) persistBlockedRetryWork(
 	ctx context.Context,
-	work RetryWorkKey,
-	scopeKey ScopeKey,
+	work syncdomain.RetryWorkKey,
+	scopeKey syncdomain.ScopeKey,
 ) error {
 	if scopeKey.IsZero() {
 		return fmt.Errorf("persist blocked retry_work for %s: missing scope key", work.Path)
@@ -502,8 +508,8 @@ func (flow *engineFlow) persistBlockedRetryWork(
 
 func (flow *engineFlow) clearBlockedRetryWorkForScope(
 	ctx context.Context,
-	work RetryWorkKey,
-	scopeKey ScopeKey,
+	work syncdomain.RetryWorkKey,
+	scopeKey syncdomain.ScopeKey,
 ) error {
 	if scopeKey.IsZero() {
 		return nil
@@ -515,13 +521,13 @@ func (flow *engineFlow) clearBlockedRetryWorkForScope(
 // recordBlockedRetryWork records retry_work for an action that is currently
 // blocked by an active scope. Blocked rows have no retry timing until the
 // scope is released or trialed.
-func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *Action, scopeKey ScopeKey) error {
-	return flow.persistBlockedRetryWork(ctx, RetryWorkKeyForAction(action), scopeKey)
+func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *syncdomain.Action, scopeKey syncdomain.ScopeKey) error {
+	return flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForAction(action), scopeKey)
 }
 
 func (flow *engineFlow) holdActionFromPersistedRetryState(
-	current *TrackedAction,
-	work RetryWorkKey,
+	current *syncdomain.TrackedAction,
+	work syncdomain.RetryWorkKey,
 ) error {
 	if current == nil {
 		return nil
@@ -537,24 +543,24 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 	}
 
 	nextRetry := time.Time{}
-	if StoredTimeIsSet(row.NextRetryAt) {
+	if syncdomain.StoredTimeIsSet(row.NextRetryAt) {
 		nextRetry = time.Unix(0, row.NextRetryAt)
 	}
-	flow.holdAction(current, heldReasonRetry, ScopeKey{}, nextRetry)
+	flow.holdAction(current, heldReasonRetry, syncdomain.ScopeKey{}, nextRetry)
 	return nil
 }
 
 func (flow *engineFlow) holdActionUnderScope(
 	ctx context.Context,
-	current *TrackedAction,
-	r *ActionCompletion,
-	scopeKey ScopeKey,
+	current *syncdomain.TrackedAction,
+	r *syncdomain.ActionCompletion,
+	scopeKey syncdomain.ScopeKey,
 ) error {
 	if current == nil {
 		return nil
 	}
 
-	if err := flow.persistBlockedRetryWork(ctx, RetryWorkKeyForCompletion(r), scopeKey); err != nil {
+	if err := flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForCompletion(r), scopeKey); err != nil {
 		return err
 	}
 	flow.holdAction(current, heldReasonScope, scopeKey, time.Time{})
@@ -564,17 +570,17 @@ func (flow *engineFlow) holdActionUnderScope(
 
 func (flow *engineFlow) rehomeBlockedRetryWork(
 	ctx context.Context,
-	r *ActionCompletion,
-	scopeKey ScopeKey,
+	r *syncdomain.ActionCompletion,
+	scopeKey syncdomain.ScopeKey,
 ) error {
-	return flow.persistBlockedRetryWork(ctx, RetryWorkKeyForCompletion(r), scopeKey)
+	return flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForCompletion(r), scopeKey)
 }
 
 func (flow *engineFlow) drainDueHeldWorkNow(
 	ctx context.Context,
-) ([]*TrackedAction, error) {
+) ([]*syncdomain.TrackedAction, error) {
 	now := flow.deps.now()
-	var ready []*TrackedAction
+	var ready []*syncdomain.TrackedAction
 
 	for _, key := range flow.dueRetryKeys(now) {
 		ta := flow.retries.releaseHeldAction(key)
@@ -582,7 +588,7 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 			continue
 		}
 		ta.IsTrial = false
-		ta.TrialScopeKey = ScopeKey{}
+		ta.TrialScopeKey = syncdomain.ScopeKey{}
 		ta.TrialScopeGeneration = 0
 		ta.AdmitAt = time.Time{}
 		ready = append(ready, ta)

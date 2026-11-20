@@ -8,12 +8,13 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // resolveRemoteItemID looks up the remote item ID for a local path from the
 // baseline. Pure data lookup — no store access needed.
-func resolveRemoteItemID(bl *Baseline, localPath string, driveID driveid.ID) string {
+func resolveRemoteItemID(bl *syncdomain.Baseline, localPath string, driveID driveid.ID) string {
 	entry, ok := bl.GetByPath(localPath)
 	if !ok {
 		return ""

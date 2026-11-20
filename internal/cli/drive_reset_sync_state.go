@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func newDriveResetSyncStateCmd() *cobra.Command {
@@ -111,7 +112,7 @@ func runDriveResetSyncStateWithInput(
 	syncDir := driveSyncDir(cfg, cid, cc.Logger)
 	if err := changeDriveStateUnderLock(ctx, syncDir, dbPath, refuseOfflineChange(resetSyncStateAction), cc.Logger,
 		func() error {
-			if resetErr := syncengine.ResetStateDB(ctx, dbPath, cc.Logger); resetErr != nil {
+			if resetErr := syncstore.ResetStateDB(ctx, dbPath, cc.Logger); resetErr != nil {
 				return fmt.Errorf("reset sync state DB: %w", resetErr)
 			}
 			return nil

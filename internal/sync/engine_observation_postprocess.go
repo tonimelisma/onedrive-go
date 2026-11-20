@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type fatalObserverError struct {
@@ -34,7 +37,7 @@ func isFatalObserverError(err error) bool {
 
 func (rt *watchRuntime) applyRemoteObservationBatch(
 	ctx context.Context,
-	batch *RemoteObservationBatch,
+	batch *syncobserve.RemoteObservationBatch,
 ) error {
 	if batch == nil {
 		return nil
@@ -46,7 +49,7 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 
 	commitToken := ""
 	progress := *batch
-	if batch.Source == RemoteObservationBatchPrimaryWatch && !batch.MarkFullRemoteRefresh {
+	if batch.Source == syncobserve.RemoteObservationBatchPrimaryWatch && !batch.MarkFullRemoteRefresh {
 		commitToken = batch.CursorToken
 		progress.CursorToken = ""
 	}
@@ -92,26 +95,26 @@ func (rt *watchRuntime) applyRemoteObservationBatch(
 // findings of a remote observation batch.
 const recordSkippedOneDriveItems = "record skipped OneDrive items"
 
-func batchObservationFailureMessage(source RemoteObservationBatchSource) string {
+func batchObservationFailureMessage(source syncobserve.RemoteObservationBatchSource) string {
 	switch source {
-	case RemoteObservationBatchPrimaryWatch:
+	case syncobserve.RemoteObservationBatchPrimaryWatch:
 		return recordSkippedOneDriveItems
-	case RemoteObservationBatchMountRoot:
+	case syncobserve.RemoteObservationBatchMountRoot:
 		return "record skipped shared folder items"
-	case RemoteObservationBatchFullRefresh:
+	case syncobserve.RemoteObservationBatchFullRefresh:
 		return "record skipped items from the full OneDrive check"
 	default:
 		return recordSkippedOneDriveItems
 	}
 }
 
-func batchObservationDebugNote(source RemoteObservationBatchSource) string {
+func batchObservationDebugNote(source syncobserve.RemoteObservationBatchSource) string {
 	switch source {
-	case RemoteObservationBatchPrimaryWatch:
+	case syncobserve.RemoteObservationBatchPrimaryWatch:
 		return engineDebugNotePrimaryWatch
-	case RemoteObservationBatchMountRoot:
+	case syncobserve.RemoteObservationBatchMountRoot:
 		return engineDebugNoteMountRootWatch
-	case RemoteObservationBatchFullRefresh:
+	case syncobserve.RemoteObservationBatchFullRefresh:
 		return engineDebugNoteFullRefresh
 	default:
 		return ""
@@ -120,7 +123,7 @@ func batchObservationDebugNote(source RemoteObservationBatchSource) string {
 
 func (rt *watchRuntime) handleRemoteObservationBatch(
 	ctx context.Context,
-	batch *RemoteObservationBatch,
+	batch *syncobserve.RemoteObservationBatch,
 ) error {
 	if batch == nil {
 		return nil
@@ -133,7 +136,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 		return nil
 	}
 
-	if batch.Source == RemoteObservationBatchFullRefresh {
+	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh {
 		defer func() {
 			rt.resources.refreshActive = false
 		}()
@@ -145,24 +148,24 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	// Committed: every create the poll saw has been claimed by now.
 	rt.dropGoneCreateIntentsAfterPoll(ctx, batch.PollStartedAt)
 
-	if batch.Source == RemoteObservationBatchFullRefresh {
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshCommitted})
+	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh {
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshCommitted})
 	}
 
-	if batch.Source == RemoteObservationBatchFullRefresh && ctx.Err() != nil {
+	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh && ctx.Err() != nil {
 		if rt.resources.dirtyBuf != nil {
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}
 		batch.FinishApplied(nil)
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshApplied})
 		return nil
 	}
 
 	rt.markDirtyFromRemoteBatch(batch)
 	batch.FinishApplied(nil)
 
-	if batch.Source == RemoteObservationBatchFullRefresh {
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshApplied})
+	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh {
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshApplied})
 	}
 
 	return nil
@@ -170,7 +173,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 
 func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 	ctx context.Context,
-	batch *RemoteObservationBatch,
+	batch *syncobserve.RemoteObservationBatch,
 	err error,
 ) error {
 	if batch == nil {
@@ -178,14 +181,14 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 	}
 
 	switch batch.Source {
-	case RemoteObservationBatchPrimaryWatch, RemoteObservationBatchMountRoot:
+	case syncobserve.RemoteObservationBatchPrimaryWatch, syncobserve.RemoteObservationBatchMountRoot:
 		batch.FinishApplied(err)
 		if ctx.Err() != nil {
 			return err
 		}
 
 		return newFatalObserverError(fmt.Errorf("apply %s batch: %w", batch.Source, err))
-	case RemoteObservationBatchFullRefresh:
+	case syncobserve.RemoteObservationBatchFullRefresh:
 		// The full refresh is re-armed below and retried, so this is a
 		// Warn, and a Ctrl-C landing during its commit is not reported.
 		if ctx.Err() == nil {
@@ -196,7 +199,7 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 		if rt.resources.dirtyBuf != nil {
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshApplied})
 		batch.FinishApplied(nil)
 		return nil
 	default:
@@ -205,7 +208,7 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 	}
 }
 
-func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *RemoteObservationBatch) {
+func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *syncobserve.RemoteObservationBatch) {
 	if rt == nil || rt.resources.dirtyBuf == nil || batch == nil {
 		return
 	}
@@ -219,7 +222,7 @@ func (rt *watchRuntime) markDirtyFromRemoteBatch(batch *RemoteObservationBatch) 
 	}
 }
 
-func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *RemoteObservationBatch) bool {
+func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *syncobserve.RemoteObservationBatch) bool {
 	if rt == nil || rt.engine == nil || batch == nil || len(batch.Changes) == 0 {
 		return false
 	}
@@ -227,7 +230,7 @@ func (rt *watchRuntime) remoteBatchHasPlannerVisibleEffects(batch *RemoteObserva
 	return remoteChangesHavePlannerVisibleEffects(rt.engine.contentFilter, batch.Changes)
 }
 
-func remoteChangesHavePlannerVisibleEffects(filter ContentFilterConfig, changes []RemoteChange) bool {
+func remoteChangesHavePlannerVisibleEffects(filter syncdomain.ContentFilterConfig, changes []syncobserve.RemoteChange) bool {
 	for i := range changes {
 		if remoteChangeHasPlannerVisibleEffect(filter, &changes[i]) {
 			return true
@@ -236,8 +239,8 @@ func remoteChangesHavePlannerVisibleEffects(filter ContentFilterConfig, changes 
 	return false
 }
 
-func remoteChangeHasPlannerVisibleEffect(filter ContentFilterConfig, change *RemoteChange) bool {
-	visibility := NewContentFilter(filter)
+func remoteChangeHasPlannerVisibleEffect(filter syncdomain.ContentFilterConfig, change *syncobserve.RemoteChange) bool {
+	visibility := syncdomain.NewContentFilter(filter)
 	if visibility.Visible(change.Path, change.ItemType) {
 		return true
 	}

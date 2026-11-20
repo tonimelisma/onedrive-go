@@ -5,6 +5,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 type MountStartupStatus string
@@ -75,7 +76,7 @@ func classifyMountStartupError(err error) MountStartupStatus {
 }
 
 func isIncompatibleStoreStartupError(err error) bool {
-	return err != nil && syncengine.IsStateStoreIncompatible(err)
+	return err != nil && syncstore.IsStateStoreIncompatible(err)
 }
 
 type StartupSelectionSummary struct {

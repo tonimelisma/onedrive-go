@@ -23,6 +23,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -65,13 +69,13 @@ func newSilentTLSServer(t *testing.T) string {
 func tlsHandshakeTimedOutError(t *testing.T) error {
 	t.Helper()
 
-	transport := &http.Transport{TLSHandshakeTimeout: stalledRequestTimeout}
+	transport := &http.Transport{TLSHandshakeTimeout: syncfixture.StalledRequestTimeout}
 	t.Cleanup(transport.CloseIdleConnections)
-	client, err := graph.NewClient(newSilentTLSServer(t), &http.Client{Transport: transport}, stalledServerToken{},
+	client, err := graph.NewClient(newSilentTLSServer(t), &http.Client{Transport: transport}, syncfixture.StalledServerToken{},
 		slog.New(slog.DiscardHandler), "silent-tls-server")
 	require.NoError(t, err)
 
-	_, err = client.GetItem(t.Context(), driveid.New(engineTestDriveID), "silent-item")
+	_, err = client.GetItem(t.Context(), driveid.New(syncfixture.EngineTestDriveID), "silent-item")
 	require.Error(t, err)
 
 	return fmt.Errorf("get the silent item: %w", err)
@@ -99,10 +103,10 @@ func (s failingTokenSource) Token(context.Context) (string, error) {
 func signInTimedOutError(t *testing.T) error {
 	t.Helper()
 
-	server, _ := newStalledServer(t)
+	server, _ := syncfixture.NewStalledServer(t)
 	refresh, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL, http.NoBody)
 	require.NoError(t, err)
-	resp, refreshErr := (&http.Client{Timeout: stalledRequestTimeout}).Do(refresh)
+	resp, refreshErr := (&http.Client{Timeout: syncfixture.StalledRequestTimeout}).Do(refresh)
 	if resp != nil {
 		require.NoError(t, resp.Body.Close())
 	}
@@ -112,7 +116,7 @@ func signInTimedOutError(t *testing.T) error {
 	client, err := graph.NewClient(unreachedGraphURL, &http.Client{}, signIn, slog.New(slog.DiscardHandler), "silent-sign-in")
 	require.NoError(t, err)
 
-	_, err = client.GetItem(t.Context(), driveid.New(engineTestDriveID), "item-without-a-token")
+	_, err = client.GetItem(t.Context(), driveid.New(syncfixture.EngineTestDriveID), "item-without-a-token")
 	var signInErr *graph.SignInRequestError
 	require.ErrorAs(t, err, &signInErr, "the failure is the sign-in service's")
 
@@ -215,15 +219,15 @@ func completionsToBlockTheService(t *testing.T, err error) int {
 	t.Helper()
 
 	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
-	detection := NewScopeState(func() time.Time { return now }, slog.New(slog.DiscardHandler))
-	for paths := 1; paths <= 2*ServiceWindowThreshold; paths++ {
-		result := detection.UpdateScope(&ActionCompletion{
+	detection := syncexec.NewScopeState(func() time.Time { return now }, slog.New(slog.DiscardHandler))
+	for paths := 1; paths <= 2*syncexec.ServiceWindowThreshold; paths++ {
+		result := detection.UpdateScope(&syncdomain.ActionCompletion{
 			Path:       fmt.Sprintf("file-%d", paths),
 			Err:        err,
-			HTTPStatus: ExtractHTTPStatus(err),
+			HTTPStatus: syncdomain.ExtractHTTPStatus(err),
 		})
 		if result.Block {
-			assert.Equal(t, SKService(), result.ScopeKey)
+			assert.Equal(t, syncdomain.SKService(), result.ScopeKey)
 			return paths
 		}
 	}
@@ -241,24 +245,24 @@ func TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504(t *testing.
 	t.Parallel()
 
 	answered := &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
-	gatewayTimeout := classifyResult(&ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered})
-	require.Equal(t, SKService(), gatewayTimeout.ScopeEvidence)
-	require.Equal(t, ServiceWindowThreshold, completionsToBlockTheService(t, answered))
+	gatewayTimeout := classifyResult(&syncdomain.ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered})
+	require.Equal(t, syncdomain.SKService(), gatewayTimeout.ScopeEvidence)
+	require.Equal(t, syncexec.ServiceWindowThreshold, completionsToBlockTheService(t, answered))
 
 	for _, request := range timedOutRequests() {
 		t.Run(request.name, func(t *testing.T) {
 			t.Parallel()
 
 			err := request.err(t)
-			got := classifyResult(&ActionCompletion{Err: err, HTTPStatus: ExtractHTTPStatus(err)})
+			got := classifyResult(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err)})
 
 			assert.Equal(t, resultRequeue, got.Class, "%v", err)
-			assert.Equal(t, PersistRetryWork, got.Persistence)
-			assert.Equal(t, IssueRequestTimeout, got.ConditionType, "the file's issue names the timeout")
+			assert.Equal(t, syncdomain.PersistRetryWork, got.Persistence)
+			assert.Equal(t, syncdomain.IssueRequestTimeout, got.ConditionType, "the file's issue names the timeout")
 			assert.Equal(t, gatewayTimeout.ScopeEvidence, got.ScopeEvidence, "the scope a 504 is evidence of")
 			assert.Equal(t, gatewayTimeout.RunScopeDetection, got.RunScopeDetection)
 			assert.Equal(t, gatewayTimeout.TrialHint, got.TrialHint, "a trial that times out is the scope's evidence")
-			assert.Equal(t, ServiceWindowThreshold, completionsToBlockTheService(t, err), "the window a 504 crosses")
+			assert.Equal(t, syncexec.ServiceWindowThreshold, completionsToBlockTheService(t, err), "the window a 504 crosses")
 		})
 	}
 }
@@ -270,11 +274,11 @@ func TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504(t *testing.
 func stalledOutageEngine(t *testing.T, folders int, logger *slog.Logger) (*testEngine, *atomic.Int64) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	server, _ := newStalledServer(t)
-	stalled, requests := stalledGraphClient(t, server, &http.Client{Timeout: stalledRequestTimeout})
-	client.createFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	server, _ := syncfixture.NewStalledServer(t)
+	stalled, requests := syncfixture.StalledGraphClient(t, server, &http.Client{Timeout: syncfixture.StalledRequestTimeout})
+	client.CreateFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
 		return stalled.CreateFolder(ctx, driveID, parentID, name)
 	}
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
@@ -295,23 +299,23 @@ func stalledOutageEngine(t *testing.T, folders int, logger *slog.Logger) (*testE
 func TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope(t *testing.T) {
 	t.Parallel()
 
-	eng, requests := stalledOutageEngine(t, ServiceWindowThreshold, slog.New(slog.DiscardHandler))
+	eng, requests := stalledOutageEngine(t, syncexec.ServiceWindowThreshold, slog.New(slog.DiscardHandler))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, int64(ServiceWindowThreshold), requests.Load(), "errors: %v", report.Errors)
+	assert.Equal(t, int64(syncexec.ServiceWindowThreshold), requests.Load(), "errors: %v", report.Errors)
 
 	scopes, err := eng.baseline.ListBlockScopes(t.Context())
 	require.NoError(t, err)
 	require.Len(t, scopes, 1, "the timeouts crossed the service window")
-	assert.Equal(t, SKService(), scopes[0].Key)
+	assert.Equal(t, syncdomain.SKService(), scopes[0].Key)
 
 	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
-	require.Len(t, rows, ServiceWindowThreshold)
+	require.Len(t, rows, syncexec.ServiceWindowThreshold)
 	blocked := 0
 	for i := range rows {
-		assert.Equal(t, SKService(), rows[i].ScopeKey, "each timeout is the outage's evidence: %s", rows[i].Path)
+		assert.Equal(t, syncdomain.SKService(), rows[i].ScopeKey, "each timeout is the outage's evidence: %s", rows[i].Path)
 		if rows[i].Blocked {
 			blocked++
 		}
@@ -328,7 +332,7 @@ func TestRunOnce_OneTimedOutRequestOpensNoOutageScope(t *testing.T) {
 
 	eng, requests := stalledOutageEngine(t, 1, slog.New(slog.DiscardHandler))
 
-	_, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), requests.Load())
 
@@ -350,19 +354,19 @@ func TestRunOnce_OneTimedOutRequestOpensNoOutageScope(t *testing.T) {
 func TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := stalledOutageEngine(t, ServiceWindowThreshold+2, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := stalledOutageEngine(t, syncexec.ServiceWindowThreshold+2, logger)
 
-	_, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(logs.String(), "OneDrive is temporarily unavailable"), "the scope starts once")
 
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
-	groups := ProjectStoredConditionGroups(&snapshot)
+	groups := syncstore.ProjectStoredConditionGroups(&snapshot)
 	require.Len(t, groups, 1, "the issues name the outage once: %+v", groups)
-	assert.Equal(t, ConditionServiceOutage, groups[0].ConditionKey)
-	assert.Equal(t, SKService(), groups[0].ScopeKey)
+	assert.Equal(t, syncdomain.ConditionServiceOutage, groups[0].ConditionKey)
+	assert.Equal(t, syncdomain.SKService(), groups[0].ScopeKey)
 
 	setupWatchEngine(t, eng)
 	testWatchRuntime(t, eng).logWatchSummary(t.Context())
@@ -382,38 +386,38 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
-	setTestBlockScope(t, eng, &BlockScope{Key: SKService(), NextTrialAt: eng.nowFunc()})
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: syncdomain.SKService(), NextTrialAt: eng.nowFunc()})
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "dir",
-		ActionType:   ActionFolderCreate,
-		ScopeKey:     SKService(),
+		ActionType:   syncdomain.ActionFolderCreate,
+		ScopeKey:     syncdomain.SKService(),
 		Blocked:      true,
 		AttemptCount: 1,
 	}))
-	current := rt.sched.graph.Add(&Action{Type: ActionFolderCreate, Path: "dir", DriveID: eng.driveID}, 1, nil)
+	current := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "dir", DriveID: eng.driveID}, 1, nil)
 	require.NotNil(t, current)
 
 	timedOut := stalledGraphRequestError(t, clientTimeoutKind())
-	completion := &ActionCompletion{
+	completion := &syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "dir",
-		ActionType:    ActionFolderCreate,
+		ActionType:    syncdomain.ActionFolderCreate,
 		DriveID:       eng.driveID,
 		Err:           timedOut,
 		ErrMsg:        timedOut.Error(),
 		IsTrial:       true,
-		TrialScopeKey: SKService(),
+		TrialScopeKey: syncdomain.SKService(),
 	}
 	decision := classifyResult(completion)
-	_, err := flow.applyTrialCompletionDecision(t.Context(), SKService(), &decision, current, completion, nil)
+	_, err := flow.applyTrialCompletionDecision(t.Context(), syncdomain.SKService(), &decision, current, completion, nil)
 	require.NoError(t, err)
 
-	scope, active := rt.scopes.lookupActiveScope(SKService())
+	scope, active := rt.scopes.lookupActiveScope(syncdomain.SKService())
 	require.True(t, active, "the outage goes on")
 	assert.Equal(t, eng.nowFunc().Add(time.Minute), scope.NextTrialAt, "the next trial is a trial interval away")
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, rows, 1)
-	assert.Equal(t, SKService(), rows[0].ScopeKey)
+	assert.Equal(t, syncdomain.SKService(), rows[0].ScopeKey)
 	assert.True(t, rows[0].Blocked, "the trial's work waits for the next trial")
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
@@ -421,7 +425,7 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 // servicePathsInWindow is the count of paths the service window of flow's
 // scope detection holds now.
 func servicePathsInWindow(flow *engineFlow) int {
-	count, _ := flow.scopes.state.WindowPathCountForTest(SKService(), flow.deps.now())
+	count, _ := flow.scopes.state.WindowPathCountForTest(syncdomain.SKService(), flow.deps.now())
 
 	return count
 }
@@ -439,7 +443,7 @@ func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 	timedOut := stalledGraphRequestError(t, clientTimeoutKind())
-	notEvidence := []*ActionCompletion{
+	notEvidence := []*syncdomain.ActionCompletion{
 		{Err: timedOut, RunEnded: true},
 		{Err: keepaliveTimedOutReadError(), RunEnded: true},
 		{Err: fmt.Errorf("create folder: %w", context.DeadlineExceeded), RunEnded: true},
@@ -447,9 +451,9 @@ func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 		{Err: fmt.Errorf("create folder: %w", context.Canceled)},
 		{Err: localReadTimedOutError()},
 	}
-	apply := func(i int, completion *ActionCompletion) {
+	apply := func(i int, completion *syncdomain.ActionCompletion) {
 		completion.Path = fmt.Sprintf("dir-%d", i)
-		completion.ActionType = ActionFolderCreate
+		completion.ActionType = syncdomain.ActionFolderCreate
 		decision := classifyResult(completion)
 		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, completion, nil)
 		require.NoError(t, err)
@@ -459,10 +463,10 @@ func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 		apply(i, completion)
 	}
 	assert.Zero(t, servicePathsInWindow(flow), "none of them is the service's silence")
-	localRead := classifyResult(&ActionCompletion{Err: localReadTimedOutError()})
-	assert.NotEqual(t, IssueRequestTimeout, localRead.ConditionType, "a local read is no request")
+	localRead := classifyResult(&syncdomain.ActionCompletion{Err: localReadTimedOutError()})
+	assert.NotEqual(t, syncdomain.IssueRequestTimeout, localRead.ConditionType, "a local read is no request")
 
-	apply(len(notEvidence), &ActionCompletion{Err: timedOut})
+	apply(len(notEvidence), &syncdomain.ActionCompletion{Err: timedOut})
 	assert.Equal(t, 1, servicePathsInWindow(flow), "the live run's timeout is")
 }
 
@@ -473,13 +477,13 @@ const workerTestCommitBound = 20 * time.Millisecond
 // wedgedCommitCompletion runs a folder create whose request succeeds and
 // whose outcome commit finds the store's one connection taken until the
 // commit's bound has expired, and returns the action's completion.
-func wedgedCommitCompletion(t *testing.T) ActionCompletion {
+func wedgedCommitCompletion(t *testing.T) syncdomain.ActionCompletion {
 	t.Helper()
 
 	cfg, store, _ := newWorkerTestSetup(t)
 	var wedge atomic.Pointer[sql.Conn]
-	cfg.SetItemsForTest(&workerMockItemClient{
-		createFolderFn: func(ctx context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+	cfg.SetItemsForTest(&syncfixture.WorkerMockItemClient{
+		CreateFolderFn: func(ctx context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
 			conn, err := store.RawDBForTest().Conn(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("take the store's connection: %w", err)
@@ -489,21 +493,21 @@ func wedgedCommitCompletion(t *testing.T) ActionCompletion {
 			return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
 		},
 	})
-	pool := NewWorkerPool(cfg, nil, store, synctest.TestLogger(t), 1)
+	pool := syncexec.NewWorkerPool(cfg, nil, store, synctest.TestLogger(t), 1)
 	pool.SetOutcomeCommitTimeoutForTest(workerTestCommitBound)
 
-	pool.ExecuteActionForTest(t.Context(), &TrackedAction{ID: 1, Action: Action{
-		Type:       ActionFolderCreate,
+	pool.ExecuteActionForTest(t.Context(), &syncdomain.TrackedAction{ID: 1, Action: syncdomain.Action{
+		Type:       syncdomain.ActionFolderCreate,
 		Path:       "Projects",
-		DriveID:    driveid.New(engineTestDriveID),
-		CreateSide: CreateRemote,
-		View:       &PathView{Path: "Projects"},
+		DriveID:    driveid.New(syncfixture.EngineTestDriveID),
+		CreateSide: syncdomain.CreateRemote,
+		View:       &syncdomain.PathView{Path: "Projects"},
 	}})
 	conn := wedge.Load()
 	require.NotNil(t, conn, "the create ran and took the connection")
 	require.NoError(t, conn.Close())
 
-	return receiveWithin(t, pool.Completions(), "the completion of the action whose commit failed")
+	return syncfixture.ReceiveWithin(t, pool.Completions(), "the completion of the action whose commit failed")
 }
 
 // lastJoinedCause follows err as the sync console does to print a failure's
@@ -538,13 +542,13 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 	wedged := wedgedCommitCompletion(t)
 	require.False(t, wedged.Success)
 	require.ErrorIs(t, wedged.Err, context.DeadlineExceeded, "the commit gave up at its bound")
-	require.ErrorIs(t, wedged.Err, ErrStoreAccessTimedOut)
-	assert.Equal(t, ErrStoreAccessTimedOut.Error(), lastJoinedCause(wedged.Err).Error(),
+	require.ErrorIs(t, wedged.Err, syncdomain.ErrStoreAccessTimedOut)
+	assert.Equal(t, syncdomain.ErrStoreAccessTimedOut.Error(), lastJoinedCause(wedged.Err).Error(),
 		"the console prints the sentence of the database that did not answer")
 
 	decision := classifyResult(&wedged)
-	assert.NotEqual(t, IssueRequestTimeout, decision.ConditionType, "a store is not a request: %v", wedged.Err)
-	failedCommit := classifyResult(&ActionCompletion{Err: errors.New("sync: commit outcome: disk I/O error")})
+	assert.NotEqual(t, syncdomain.IssueRequestTimeout, decision.ConditionType, "a store is not a request: %v", wedged.Err)
+	failedCommit := classifyResult(&syncdomain.ActionCompletion{Err: errors.New("sync: commit outcome: disk I/O error")})
 	assert.Equal(t, failedCommit, decision, "the class of a failed commit")
 	whileStopping := wedged
 	whileStopping.RunEnded = true
@@ -553,7 +557,7 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
-	for i := range ServiceWindowThreshold {
+	for i := range syncexec.ServiceWindowThreshold {
 		completion := wedged
 		completion.Path = fmt.Sprintf("folder-%d", i)
 		completion.ActionID = int64(i + 1)
@@ -561,7 +565,7 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 		_, err := flow.applyNormalCompletionDecision(t.Context(), &perFile, nil, &completion, nil)
 		require.NoError(t, err)
 	}
-	assert.False(t, rt.scopes.hasActiveScope(SKService()), "a store that stopped answering is no outage of OneDrive")
+	assert.False(t, rt.scopes.hasActiveScope(syncdomain.SKService()), "a store that stopped answering is no outage of OneDrive")
 }
 
 // unansweringRecordStore is a pending-create store whose record of a created
@@ -571,11 +575,11 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 // that does not take the executor's store bound fails the test quickly
 // instead of waiting out OutcomeCommitTimeout.
 type unansweringRecordStore struct {
-	PendingCreateStore
+	syncexec.PendingCreateStore
 	bound time.Duration
 }
 
-func (s unansweringRecordStore) RecordPendingCreate(ctx context.Context, _ *PendingCreate) error {
+func (s unansweringRecordStore) RecordPendingCreate(ctx context.Context, _ *syncdomain.PendingCreate) error {
 	deadline, bounded := ctx.Deadline()
 	if !bounded {
 		return errors.New("the record's context has no deadline")
@@ -599,7 +603,7 @@ func TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure(t *testing.T) 
 	t.Parallel()
 
 	created := &graph.Item{ID: "new-item", ETag: `"c,1"`}
-	ul := &creatingTestUploader{create: func(_ context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
+	ul := &syncfixture.CreatingTestUploader{Create: func(_ context.Context, onCreated graph.CreatedFunc) (*graph.Item, error) {
 		if hookErr := onCreated(created); hookErr != nil {
 			return nil, &graph.CreatedItemError{Item: created, Err: hookErr}
 		}
@@ -609,16 +613,16 @@ func TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure(t *testing.T) 
 	e, store, syncRoot := newPendingCreateTestExecutor(t, ul, synctest.TestLogger(t))
 	e.SetPendingCreates(unansweringRecordStore{PendingCreateStore: store, bound: workerTestCommitBound})
 	e.SetStoreAccessTimeoutForTest(workerTestCommitBound)
-	local := writeExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+	local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 
-	_, uploadErr := e.UploadNewFileForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-		driveid.New(testDriveID), GraphRootID, "doc.txt", local)
+	_, uploadErr := e.UploadNewFileForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},
+		driveid.New(syncfixture.TestDriveID), syncexec.GraphRootID, "doc.txt", local)
 	require.ErrorIs(t, uploadErr, context.DeadlineExceeded, "the record gave up at its bound")
-	require.ErrorIs(t, uploadErr, ErrStoreAccessTimedOut)
+	require.ErrorIs(t, uploadErr, syncdomain.ErrStoreAccessTimedOut)
 
-	completion := ActionCompletion{Err: uploadErr, Path: "doc.txt", ActionType: ActionUpload}
+	completion := syncdomain.ActionCompletion{Err: uploadErr, Path: "doc.txt", ActionType: syncdomain.ActionUpload}
 	decision := classifyResult(&completion)
-	assert.NotEqual(t, IssueRequestTimeout, decision.ConditionType, "a store is not a request: %v", uploadErr)
+	assert.NotEqual(t, syncdomain.IssueRequestTimeout, decision.ConditionType, "a store is not a request: %v", uploadErr)
 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
@@ -640,16 +644,16 @@ func TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid(t *testing.T)
 	wedged := wedgedCommitCompletion(t)
 	wedged.RunEnded = true
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &wedged, nil))
 	require.NoError(t, flow.endStopDrain())
 	assert.Equal(t, []string{wedged.Path}, retryWorkPaths(t, eng.baseline), "the stop records the failure")
-	assert.Zero(t, countLevel(logs.String(), "WARN"), "nothing is lost: %s", logs.String())
+	assert.Zero(t, syncfixture.CountLevel(logs.String(), "WARN"), "nothing is lost: %s", logs.String())
 
-	logger, logs = newCapturedLogger()
-	eng, _ = newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs = syncfixture.NewCapturedLogger()
+	eng, _ = newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow = testEngineFlow(t, eng)
 	flow.stopBound = workerTestCommitBound
 	stopped := stoppedContext(t)
@@ -657,8 +661,8 @@ func TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid(t *testing.T)
 	release := holdStoreConnection(t, eng.baseline)
 	require.NoError(t, flow.processShutdownCompletion(stopped, &wedged, nil))
 	release()
-	require.ErrorIs(t, flow.endStopDrain(), ErrStoreAccessTimedOut, "the stop ends with the store failure")
+	require.ErrorIs(t, flow.endStopDrain(), syncdomain.ErrStoreAccessTimedOut, "the stop ends with the store failure")
 	assert.Empty(t, retryWorkPaths(t, eng.baseline))
-	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the lost record is said once: %s", logs.String())
+	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "WARN"), "the lost record is said once: %s", logs.String())
 	assert.Contains(t, logs.String(), "The stop's time ran out before 1 result was recorded")
 }

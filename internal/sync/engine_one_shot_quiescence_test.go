@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.1.7, R-2.17.7
@@ -23,7 +25,7 @@ import (
 func TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-doc", "root", "doc")
 	remote.addFile(t, "item-plan", "item-doc", "plan.txt", "plan v1\n")
 	h := newSyncHarness(t, remote)
@@ -31,7 +33,7 @@ func TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline(t *testing.T) 
 
 	h.beginRound(t)
 	remote.moveAt(t, "doc", "docs-renamed")
-	writeLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
 
 	report := runScenarioPass(t, h.eng)
 
@@ -54,7 +56,7 @@ func TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline(t *testing.T) 
 func TestRunOnce_OneShotDryRunPlansOnePass(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-doc", "root", "doc")
 	remote.addFile(t, "item-plan", "item-doc", "plan.txt", "plan v1\n")
 	h := newSyncHarness(t, remote)
@@ -62,9 +64,9 @@ func TestRunOnce_OneShotDryRunPlansOnePass(t *testing.T) {
 
 	h.beginRound(t)
 	remote.moveAt(t, "doc", "docs-renamed")
-	writeLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
 
-	report, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	report, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Moves)
 	assert.Zero(t, report.Uploads, "the edit is planned only after the rename, which a dry run never makes")
@@ -94,22 +96,22 @@ func requireScenarioRemoteID(t *testing.T, remote *moveScenarioRemote, remotePat
 func TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-doc", "root", "doc")
 	remote.addFile(t, "item-plan", "item-doc", "plan.txt", "plan v1\n")
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
 
 	remote.moveAt(t, "doc", "docs-renamed")
-	writeLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
+	syncfixture.WriteLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
 
-	cancel, done := runWatchInBackground(t, h.eng, SyncBidirectional, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, h.eng, syncdomain.SyncBidirectional, quietWatchOptions())
 
 	require.Eventually(t, func() bool {
 		return remote.tree()["docs-renamed/plan.txt"] == "plan v2 locally\n"
-	}, eventWait, 10*time.Millisecond, "the edit reaches OneDrive with no further event")
+	}, syncfixture.EventWait, 10*time.Millisecond, "the edit reaches OneDrive with no further event")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 	requireScenarioLocalFile(t, h.syncRoot, "docs-renamed/plan.txt", "plan v2 locally\n")
 }
 
@@ -122,7 +124,7 @@ func TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass(t *testing.T)
 func TestRunWatch_FinishesTheRemoteEditBehindARekey(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-file", "root", "a.txt", "alpha\n")
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
@@ -131,26 +133,26 @@ func TestRunWatch_FinishesTheRemoteEditBehindARekey(t *testing.T) {
 	remote.move("item-file", "root", "b.txt")
 	remote.setContent(t, "item-file", "edited online\n")
 
-	cancel, done := runWatchInBackground(t, h.eng, SyncBidirectional, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, h.eng, syncdomain.SyncBidirectional, quietWatchOptions())
 
 	require.Eventually(t, func() bool {
 		data, err := os.ReadFile(filepath.Join(h.syncRoot, "b.txt"))
 		return err == nil && string(data) == "edited online\n"
-	}, eventWait, 10*time.Millisecond, "the remote edit is downloaded with no further event")
+	}, syncfixture.EventWait, 10*time.Millisecond, "the remote edit is downloaded with no further event")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 	assert.Zero(t, remote.uploads)
 }
 
 // plannedFollowUp plans current truth without executing it and returns what
 // the plan leaves for the next pass.
-func plannedFollowUp(t *testing.T, eng *testEngine) PlanFollowUp {
+func plannedFollowUp(t *testing.T, eng *testEngine) syncdomain.PlanFollowUp {
 	t.Helper()
 
 	runner := newOneShotRunner(eng.Engine)
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	runtime, err := runner.runDryRunCurrentPlan(t.Context(), bl, SyncBidirectional, RunOptions{DryRun: true})
+	runtime, err := runner.runDryRunCurrentPlan(t.Context(), bl, syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err)
 
 	return runtime.Plan.FollowUp
@@ -164,7 +166,7 @@ func plannedFollowUp(t *testing.T, eng *testEngine) PlanFollowUp {
 func TestPlanFollowUp_CountsWorkLeftForTheNextPass(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-doc", "root", "doc")
 	remote.addFile(t, "item-plan", "item-doc", "plan.txt", "plan v1\n")
 	remote.addFile(t, "item-a", "root", "a.txt", "A\n")
@@ -172,12 +174,12 @@ func TestPlanFollowUp_CountsWorkLeftForTheNextPass(t *testing.T) {
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
 
-	assert.Equal(t, PlanFollowUp{}, plannedFollowUp(t, h.eng), "a converged tree leaves nothing")
-	assert.False(t, PlanFollowUp{}.Pending())
+	assert.Equal(t, syncdomain.PlanFollowUp{}, plannedFollowUp(t, h.eng), "a converged tree leaves nothing")
+	assert.False(t, syncdomain.PlanFollowUp{}.Pending())
 
 	remote.moveAt(t, "doc", "docs-renamed")
-	writeLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
-	assert.Equal(t, PlanFollowUp{Renames: 1}, plannedFollowUp(t, h.eng), "the folder move leaves the edit")
+	syncfixture.WriteLocalFile(t, h.syncRoot, "doc/plan.txt", "plan v2 locally\n")
+	assert.Equal(t, syncdomain.PlanFollowUp{Renames: 1}, plannedFollowUp(t, h.eng), "the folder move leaves the edit")
 
 	remote.moveAt(t, "a.txt", "swap.txt")
 	remote.moveAt(t, "b.txt", "a.txt")
@@ -197,12 +199,12 @@ func TestReport_WithPassAddsWorkAndKeepsTheLastHeldState(t *testing.T) {
 
 	errFirst := assert.AnError
 	first := &Report{
-		Mode: SyncUploadOnly, Moves: 1, Uploads: 2, ConflictCopies: 1, Succeeded: 4, Failed: 1,
-		Errors: []error{errFirst}, DeferredByMode: DeferredCounts{Downloads: 3}, HeldRemoteDeletes: 2,
+		Mode: syncdomain.SyncUploadOnly, Moves: 1, Uploads: 2, ConflictCopies: 1, Succeeded: 4, Failed: 1,
+		Errors: []error{errFirst}, DeferredByMode: syncdomain.DeferredCounts{Downloads: 3}, HeldRemoteDeletes: 2,
 	}
 	second := &Report{
-		Mode: SyncUploadOnly, Uploads: 1, FolderCreates: 1, Succeeded: 2,
-		DeferredByMode: DeferredCounts{Downloads: 3}, HeldLocalDeletes: 1,
+		Mode: syncdomain.SyncUploadOnly, Uploads: 1, FolderCreates: 1, Succeeded: 2,
+		DeferredByMode: syncdomain.DeferredCounts{Downloads: 3}, HeldLocalDeletes: 1,
 	}
 
 	var run *Report
@@ -212,7 +214,7 @@ func TestReport_WithPassAddsWorkAndKeepsTheLastHeldState(t *testing.T) {
 	require.NotNil(t, run)
 	run = run.withPass(second)
 
-	assert.Equal(t, SyncUploadOnly, run.Mode)
+	assert.Equal(t, syncdomain.SyncUploadOnly, run.Mode)
 	assert.Equal(t, 1, run.Moves)
 	assert.Equal(t, 3, run.Uploads)
 	assert.Equal(t, 1, run.FolderCreates)
@@ -220,7 +222,7 @@ func TestReport_WithPassAddsWorkAndKeepsTheLastHeldState(t *testing.T) {
 	assert.Equal(t, 6, run.Succeeded)
 	assert.Equal(t, 1, run.Failed)
 	assert.Equal(t, []error{errFirst}, run.Errors)
-	assert.Equal(t, DeferredCounts{Downloads: 3}, run.DeferredByMode, "held back by the mode once, not once per pass")
+	assert.Equal(t, syncdomain.DeferredCounts{Downloads: 3}, run.DeferredByMode, "held back by the mode once, not once per pass")
 	assert.Zero(t, run.HeldRemoteDeletes)
 	assert.Equal(t, 1, run.HeldLocalDeletes)
 	assert.Equal(t, 4, first.Succeeded, "the first pass's own report is not changed")
@@ -234,8 +236,8 @@ func TestReport_WithPassAddsWorkAndKeepsTheLastHeldState(t *testing.T) {
 func TestOneShotFollowUp_StopsWithoutProgressOnFailureAndAtTheBound(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{logger: testLogger(t)}
-	leaves := PlanFollowUp{Renames: 1}
+	eng := &Engine{logger: syncfixture.TestLogger(t)}
+	leaves := syncdomain.PlanFollowUp{Renames: 1}
 	ok := &Report{Succeeded: 1}
 	tests := []struct {
 		name     string

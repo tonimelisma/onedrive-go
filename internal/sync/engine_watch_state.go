@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 type watchLoopState struct {
 	phase                         watchRuntimePhase
-	outbox                        []*TrackedAction
-	pendingReplan                 DirtyBatch
+	outbox                        []*syncdomain.TrackedAction
+	pendingReplan                 syncobserve.DirtyBatch
 	hasPendingReplan              bool
 	pendingReplanAt               time.Time
 	pendingReplanDrainIdleAt      time.Time
@@ -23,7 +26,7 @@ type watchLoopState struct {
 	// child-set signatures.
 	lastSummarySignature string
 	lastSummaryBreakdown string
-	lastRemoteBlocked    map[ScopeKey]string
+	lastRemoteBlocked    map[syncdomain.ScopeKey]string
 	// summaryReadFailing is set while the reads of the conditions for the
 	// watch summary fail: the streak's first failure warns, its recovery is
 	// noted once.
@@ -79,18 +82,18 @@ type watchTimerState struct {
 	// Trial and retry timers are armed by the watch loop. The channels stay
 	// persistent so timer callbacks only signal the loop; they never mutate
 	// loop-owned state directly.
-	trialTimer SyncTimer
+	trialTimer syncdomain.SyncTimer
 	trialCh    chan struct{}
 
 	// Retry timer — the watch loop releases due held retries on each tick.
-	retryTimer   SyncTimer
+	retryTimer   syncdomain.SyncTimer
 	retryTimerCh chan struct{} // persistent, buffered(1)
 
 	// Admit timer — wakes the loop when the earliest parked outbox entry
 	// (TrackedAction.AdmitAt, a jittered ramp batch member) becomes due.
 	// admitTimerAt is the instant the armed timer fires at, so a step that
 	// finds the same parked head does not re-arm it.
-	admitTimer   SyncTimer
+	admitTimer   syncdomain.SyncTimer
 	admitTimerAt time.Time
 	admitCh      chan struct{} // persistent, buffered(1)
 }
@@ -99,15 +102,15 @@ type watchResources struct {
 	// Dirty debounce buffer. Local and remote observers mark coarse replan or
 	// full-refresh requests here; the watch loop refreshes snapshots and replans
 	// from SQLite current truth after the debounce window closes.
-	dirtyBuf *DirtyBuffer
+	dirtyBuf *syncobserve.DirtyBuffer
 
 	// Observer lifecycle is runtime-owned. startObservers populates these fields
 	// directly; the watch loop nils channels as sources close and tracks how many
 	// observer goroutines still own the shared error stream.
 	observerErrs        <-chan error
-	localBatches        <-chan LocalObservation
-	protectedRootEvents <-chan ProtectedRootEvent
-	remoteBatches       <-chan RemoteObservationBatch
+	localBatches        <-chan syncobserve.LocalObservation
+	protectedRootEvents <-chan syncshortcut.ProtectedRootEvent
+	remoteBatches       <-chan syncobserve.RemoteObservationBatch
 	activeObservers     int
 
 	// lastObserverErr is the most recent error an observer exited with while
@@ -119,8 +122,8 @@ type watchResources struct {
 	lastObserverErr error
 
 	// Observer references — set in startObservers, nil'd on shutdown.
-	remoteObs *RemoteObserver
-	localObs  *LocalObserver
+	remoteObs *syncobserve.RemoteObserver
+	localObs  *syncobserve.LocalObserver
 
 	// goroutines owns the observers, the full remote refresh and the
 	// socket.io wake source: the pipeline's cleanup cancels them and waits
@@ -133,9 +136,9 @@ type watchResources struct {
 	// goroutines send through them asynchronously; the loop disables select cases
 	// by phase instead of racing those senders by niling channel fields.
 	refreshActive  bool
-	refreshTimer   SyncTimer
+	refreshTimer   syncdomain.SyncTimer
 	refreshCh      chan time.Time
-	refreshResults chan RemoteObservationBatch
+	refreshResults chan syncobserve.RemoteObservationBatch
 }
 
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
@@ -165,7 +168,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 		engineFlow: newEngineFlow(engine),
 		loop: watchLoopState{
 			phase:             watchRuntimePhaseRunning,
-			lastRemoteBlocked: make(map[ScopeKey]string),
+			lastRemoteBlocked: make(map[syncdomain.ScopeKey]string),
 		},
 		timers: watchTimerState{
 			ownerCheck:   engine.runOwnerCheck,
@@ -175,7 +178,7 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 		},
 		resources: watchResources{
 			refreshCh:      make(chan time.Time, 1),
-			refreshResults: make(chan RemoteObservationBatch, 1),
+			refreshResults: make(chan syncobserve.RemoteObservationBatch, 1),
 		},
 	}
 
@@ -225,11 +228,11 @@ func (rt *watchRuntime) enterDraining() bool {
 	return true
 }
 
-func (rt *watchRuntime) currentOutbox() []*TrackedAction {
+func (rt *watchRuntime) currentOutbox() []*syncdomain.TrackedAction {
 	return rt.loop.outbox
 }
 
-func (rt *watchRuntime) replaceOutbox(outbox []*TrackedAction) {
+func (rt *watchRuntime) replaceOutbox(outbox []*syncdomain.TrackedAction) {
 	if len(outbox) == 0 {
 		rt.loop.outbox = nil
 		return
@@ -242,13 +245,13 @@ func (rt *watchRuntime) canPrepareNow() bool {
 	return len(rt.loop.outbox) == 0 && rt.sched.runningCount == 0
 }
 
-func (rt *watchRuntime) queuePendingReplan(batch DirtyBatch) {
+func (rt *watchRuntime) queuePendingReplan(batch syncobserve.DirtyBatch) {
 	wasPending := rt.loop.hasPendingReplan
 	rt.loop.hasPendingReplan = true
 	if !wasPending {
 		rt.loop.pendingReplanAt = rt.deps.now()
 		rt.startPendingReplanDrainIdleTracking(rt.loop.pendingReplanAt)
-		rt.emitRuntimeDebugEvent(EngineDebugEventPendingReplanSet, "", 0, time.Time{})
+		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventPendingReplanSet, "", 0, time.Time{})
 	}
 	if batch.FullRefresh {
 		rt.loop.pendingReplan.FullRefresh = true
@@ -260,13 +263,13 @@ func (rt *watchRuntime) hasPendingReplan() bool {
 	return rt.loop.hasPendingReplan
 }
 
-func (rt *watchRuntime) takePendingReplan() (DirtyBatch, bool) {
+func (rt *watchRuntime) takePendingReplan() (syncobserve.DirtyBatch, bool) {
 	if !rt.hasPendingReplan() {
-		return DirtyBatch{}, false
+		return syncobserve.DirtyBatch{}, false
 	}
 
 	batch := rt.loop.pendingReplan
-	rt.loop.pendingReplan = DirtyBatch{}
+	rt.loop.pendingReplan = syncobserve.DirtyBatch{}
 	rt.loop.hasPendingReplan = false
 	rt.loop.pendingReplanAt = time.Time{}
 	rt.loop.pendingReplanDrainIdleAt = time.Time{}
@@ -281,7 +284,7 @@ func (rt *watchRuntime) pendingReplanStartedAt() time.Time {
 
 // outboxEntry returns outbox entry i, or nil for the "nothing to dispatch"
 // index.
-func (rt *watchRuntime) outboxEntry(i int) *TrackedAction {
+func (rt *watchRuntime) outboxEntry(i int) *syncdomain.TrackedAction {
 	if i < 0 || i >= len(rt.loop.outbox) {
 		return nil
 	}
@@ -293,12 +296,12 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	outbox := rt.currentOutbox()
 	if len(outbox) == 0 {
 		if rt.sched.runningCount > 0 {
-			rt.emitRuntimeDebugEvent(EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
+			rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 		}
 		return
 	}
 
-	rt.emitRuntimeDebugEvent(EngineDebugEventDispatchPausedForReplan, "", len(outbox), rt.pendingReplanStartedAt())
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventDispatchPausedForReplan, "", len(outbox), rt.pendingReplanStartedAt())
 	for _, ta := range outbox {
 		// Retired old-runtime nodes stay unresolved; the replacement runtime
 		// rebuilds dependency state from current truth.
@@ -306,9 +309,9 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	}
 	rt.replaceOutbox(nil)
 	rt.engine.collector().RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(outbox))
-	rt.emitRuntimeDebugEvent(EngineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
 	if rt.sched.runningCount > 0 {
-		rt.emitRuntimeDebugEvent(EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
+		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 	}
 }
 
@@ -316,7 +319,7 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 // activates takes the admitted work it blocks back out of the outbox before
 // a worker reaches it (R-6.8.24). Loop goroutine only, like every other
 // outbox mutation.
-func (rt *watchRuntime) takeAdmittedWorkBlockedBy(key ScopeKey) []*TrackedAction {
+func (rt *watchRuntime) takeAdmittedWorkBlockedBy(key syncdomain.ScopeKey) []*syncdomain.TrackedAction {
 	taken, kept := takeOutboxBlockedBy(rt.currentOutbox(), key)
 	if len(taken) == 0 {
 		return nil
@@ -326,7 +329,7 @@ func (rt *watchRuntime) takeAdmittedWorkBlockedBy(key ScopeKey) []*TrackedAction
 	return taken
 }
 
-func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedAction) {
+func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*syncdomain.TrackedAction) {
 	if len(ready) == 0 {
 		return
 	}
@@ -334,7 +337,7 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*TrackedActi
 		rt.sched.markFinished(ta)
 	}
 	rt.engine.collector().RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(ready))
-	rt.emitRuntimeDebugEvent(EngineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
 }
 
 func (rt *watchRuntime) recordReplanWorkerIdle(phase perf.ReplanIdlePhase, start time.Time, idleWorkers int) {
@@ -369,7 +372,7 @@ func (rt *watchRuntime) advancePendingReplanDrainIdleTracking() {
 	rt.loop.pendingReplanDrainIdleWorkers = rt.idleWorkers()
 }
 
-func (rt *watchRuntime) rescheduleReplanIntent(batch DirtyBatch) error {
+func (rt *watchRuntime) rescheduleReplanIntent(batch syncobserve.DirtyBatch) error {
 	if rt.resources.dirtyBuf == nil {
 		return fmt.Errorf("sync: reschedule watch replan: dirty buffer not initialized")
 	}
@@ -400,12 +403,12 @@ func (rt *watchRuntime) idleWorkers() int {
 }
 
 func (rt *watchRuntime) emitRuntimeDebugEvent(
-	eventType EngineDebugEventType,
+	eventType syncdomain.EngineDebugEventType,
 	note string,
 	count int,
 	start time.Time,
 ) {
-	event := EngineDebugEvent{
+	event := syncdomain.EngineDebugEvent{
 		Type:        eventType,
 		Note:        note,
 		Count:       count,
@@ -455,7 +458,7 @@ func signalTimerChannel(ch chan<- struct{}) bool {
 	}
 }
 
-func (rt *watchRuntime) resetTrialTimer(next SyncTimer) {
+func (rt *watchRuntime) resetTrialTimer(next syncdomain.SyncTimer) {
 	rt.timers.checkOwner()
 
 	if rt.timers.trialTimer != nil {
@@ -472,7 +475,7 @@ func (rt *watchRuntime) hasTrialTimer() bool {
 	return rt.timers.trialTimer != nil
 }
 
-func (rt *watchRuntime) resetRetryTimer(next SyncTimer) {
+func (rt *watchRuntime) resetRetryTimer(next syncdomain.SyncTimer) {
 	rt.timers.checkOwner()
 
 	if rt.timers.retryTimer != nil {
@@ -528,7 +531,7 @@ func (rt *watchRuntime) admitTimerChan() <-chan struct{} {
 	return rt.timers.admitCh
 }
 
-func (rt *watchRuntime) resetRefreshTimer(next SyncTimer) {
+func (rt *watchRuntime) resetRefreshTimer(next syncdomain.SyncTimer) {
 	rt.timers.checkOwner()
 
 	if rt.resources.refreshTimer != nil {
@@ -563,7 +566,7 @@ func (rt *watchRuntime) hasActiveRefresh() bool {
 // noteInstalledPlan records whether a newly installed plan leaves work for
 // the next pass. A replan the loop queued itself extends the follow-up
 // streak; any other replan starts a new one.
-func (rt *watchRuntime) noteInstalledPlan(plan *ActionPlan) {
+func (rt *watchRuntime) noteInstalledPlan(plan *syncdomain.ActionPlan) {
 	f := &rt.loop.followUp
 	if f.queued {
 		f.streak++

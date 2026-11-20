@@ -15,6 +15,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Modification times at and beyond the ends of what Unix nanoseconds hold,
@@ -63,7 +64,7 @@ func setRemoteModified(remote *moveScenarioRemote, id string, at time.Time) {
 func TestRunOnce_ARemoteFileDated2300DownloadsWithTheLastStorableTime(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-far", "root", "far.txt", "from the far future\n")
 	setRemoteModified(remote, "item-far", time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC))
 
@@ -85,7 +86,7 @@ func TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime(t *testin
 
 	// 1601-01-01 is the Windows file-time epoch, which real items carry.
 	windowsEpoch := time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-old", "root", "old.txt", "from long ago\n")
 	setRemoteModified(remote, "item-old", windowsEpoch)
 
@@ -114,7 +115,7 @@ func TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime(t *testin
 func TestRunOnce_ALocalFolderForARemoteFolderDated2300GetsTheLastStorableTime(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-far", "root", "far")
 	setRemoteModified(remote, "item-far", time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC))
 
@@ -143,13 +144,13 @@ func TestRunOnce_ALocalFileDated2300UploadsAndConverges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			client := remote.client(t)
 			// The one-request create, which carries the modification time;
 			// the remote keeps the time it was sent, as OneDrive keeps
 			// fileSystemInfo.
-			client.uploadCreatingFn = nil
-			client.uploadFn = func(
+			client.UploadCreatingFn = nil
+			client.UploadFn = func(
 				_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, _ graph.ProgressFunc,
 			) (*graph.Item, error) {
 				item, err := remote.upload(t, parentID, name, content, size)
@@ -165,7 +166,7 @@ func TestRunOnce_ALocalFileDated2300UploadsAndConverges(t *testing.T) {
 			}
 
 			eng, syncRoot := newTestEngine(t, client)
-			writeLocalFile(t, syncRoot, "far.txt", "to the far future\n")
+			syncfixture.WriteLocalFile(t, syncRoot, "far.txt", "to the far future\n")
 			setFileTimeAtOrPastUnixNanoEnd(t, filepath.Join(syncRoot, "far.txt"), tc.at)
 			report := runScenarioPass(t, eng)
 			require.Equal(t, 1, report.Uploads)
@@ -211,7 +212,7 @@ func TestRunOnce_AFileRedatedToTheEpochConverges(t *testing.T) {
 		t.Run(tc.side, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "item-a", "root", "a.txt", "a\n")
 			eng, syncRoot := newTestEngine(t, remote.client(t))
 			runScenarioPass(t, eng)
@@ -230,7 +231,7 @@ func TestRunOnce_AFileRedatedToTheEpochConverges(t *testing.T) {
 func TestRunOnce_ARemoteFileDatedTheEpochKeepsItsTimeLocally(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-a", "root", "a.txt", "a\n")
 	setRemoteModified(remote, "item-a", time.Unix(0, 0))
 	eng, syncRoot := newTestEngine(t, remote.client(t))

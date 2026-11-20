@@ -3,6 +3,8 @@ package sync
 import (
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // A fresh plan opens into its backlog slowly (R-6.8.25). Measured on a
@@ -47,7 +49,7 @@ type coldStartRamp struct {
 
 // coldStartTarget is the ramp key of an action: its throttle target, or ""
 // for an action that sends nothing to a drive, which no ramp gates.
-func coldStartTarget(ta *TrackedAction) string {
+func coldStartTarget(ta *syncdomain.TrackedAction) string {
 	if ta == nil {
 		return ""
 	}
@@ -89,7 +91,7 @@ func (s *actionScheduler) coldStartRampFor(target string) *coldStartRamp {
 // coldStartAdmits reports whether the target's allowance has room for one
 // more action in flight. A scheduler with no ceiling (no plan installed) and
 // an action with no target are never gated.
-func (s *actionScheduler) coldStartAdmits(ta *TrackedAction) bool {
+func (s *actionScheduler) coldStartAdmits(ta *syncdomain.TrackedAction) bool {
 	target := coldStartTarget(ta)
 	if target == "" || s.coldStartCeiling <= 0 {
 		return true
@@ -102,7 +104,7 @@ func (s *actionScheduler) coldStartAdmits(ta *TrackedAction) bool {
 // noteColdStartSuccess counts a successful completion of an action a worker
 // ran toward the target's round and reports the raised allowance when the
 // round completes (zero when it did not, or the ramp is over).
-func (s *actionScheduler) noteColdStartSuccess(ta *TrackedAction) int {
+func (s *actionScheduler) noteColdStartSuccess(ta *syncdomain.TrackedAction) int {
 	target := coldStartTarget(ta)
 	if target == "" || s.coldStartCeiling <= 0 {
 		return 0
@@ -126,19 +128,19 @@ func (s *actionScheduler) noteColdStartSuccess(ta *TrackedAction) int {
 // present and future. It returns the targets whose ramps were gating until
 // now, so the caller can say so once; other scope kinds say nothing about
 // request rate and change nothing.
-func (s *actionScheduler) handOverColdStart(key ScopeKey) []string {
+func (s *actionScheduler) handOverColdStart(key syncdomain.ScopeKey) []string {
 	if s.coldStartCeiling <= 0 {
 		return nil
 	}
 	var handed []string
 	switch key.Kind {
-	case ScopeThrottleTarget:
+	case syncdomain.ScopeThrottleTarget:
 		if ramp := s.coldStartRampFor(key.ThrottleTargetKey()); !ramp.handedOver {
 			ramp.handedOver = true
 			ramp.allowance = s.coldStartCeiling
 			handed = append(handed, key.ThrottleTargetKey())
 		}
-	case ScopeService:
+	case syncdomain.ScopeService:
 		s.coldStartServiceHandedOver = true
 		for target, ramp := range s.coldStart {
 			if ramp.handedOver {
@@ -148,8 +150,8 @@ func (s *actionScheduler) handOverColdStart(key ScopeKey) []string {
 			ramp.allowance = s.coldStartCeiling
 			handed = append(handed, target)
 		}
-	case ScopeQuotaOwn, ScopePermDirRead, ScopePermDirWrite, ScopePermRemoteRead,
-		ScopePermRemoteWrite, ScopeDiskLocal, ScopeLocalReadOnly, ScopeDeleteSafety:
+	case syncdomain.ScopeQuotaOwn, syncdomain.ScopePermDirRead, syncdomain.ScopePermDirWrite, syncdomain.ScopePermRemoteRead,
+		syncdomain.ScopePermRemoteWrite, syncdomain.ScopeDiskLocal, syncdomain.ScopeLocalReadOnly, syncdomain.ScopeDeleteSafety:
 	}
 
 	return handed
@@ -158,10 +160,10 @@ func (s *actionScheduler) handOverColdStart(key ScopeKey) []string {
 // handOverColdStart is the flow's side of a block activation: the scope
 // owns admission to what it blocks from now on (R-6.8.24), so the cold
 // start stops gating it. Said once per target at Debug.
-func (flow *engineFlow) handOverColdStart(key ScopeKey) {
+func (flow *engineFlow) handOverColdStart(key syncdomain.ScopeKey) {
 	for _, target := range flow.sched.handOverColdStart(key) {
-		flow.deps.emit(EngineDebugEvent{
-			Type:     EngineDebugEventColdStartHandedOver,
+		flow.deps.emit(syncdomain.EngineDebugEvent{
+			Type:     syncdomain.EngineDebugEventColdStartHandedOver,
 			ScopeKey: key,
 			Note:     target,
 		})
@@ -174,13 +176,13 @@ func (flow *engineFlow) handOverColdStart(key ScopeKey) {
 
 // noteColdStartSuccess counts a worker-run action's success toward its
 // target's slow-start round and reports a raised allowance at Debug.
-func (flow *engineFlow) noteColdStartSuccess(ta *TrackedAction) {
+func (flow *engineFlow) noteColdStartSuccess(ta *syncdomain.TrackedAction) {
 	allowance := flow.sched.noteColdStartSuccess(ta)
 	if allowance == 0 {
 		return
 	}
-	flow.deps.emit(EngineDebugEvent{
-		Type:  EngineDebugEventColdStartAllowanceRaised,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:  syncdomain.EngineDebugEventColdStartAllowanceRaised,
 		Note:  coldStartTarget(ta),
 		Count: allowance,
 	})
@@ -203,7 +205,7 @@ func (flow *engineFlow) noteColdStartSuccess(ta *TrackedAction) {
 // taken when the head's target is full and its own is not. The scan is
 // linear in the outbox; the outbox is a plan's ready frontier, and the
 // common case stops at its head.
-func (flow *engineFlow) nextDispatchable(outbox []*TrackedAction, now time.Time) (int, time.Time) {
+func (flow *engineFlow) nextDispatchable(outbox []*syncdomain.TrackedAction, now time.Time) (int, time.Time) {
 	var nextAdmitAt time.Time
 	for i, ta := range outbox {
 		if ta == nil {
@@ -225,11 +227,11 @@ func (flow *engineFlow) nextDispatchable(outbox []*TrackedAction, now time.Time)
 
 // markDispatched records that outbox entry i is going to a worker and
 // removes it from the outbox, which is returned, order kept.
-func (flow *engineFlow) markDispatched(outbox []*TrackedAction, i int) []*TrackedAction {
+func (flow *engineFlow) markDispatched(outbox []*syncdomain.TrackedAction, i int) []*syncdomain.TrackedAction {
 	ta := outbox[i]
 	flow.sched.markRunning(ta)
-	flow.deps.emit(EngineDebugEvent{
-		Type: EngineDebugEventActionDispatched,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type: syncdomain.EngineDebugEventActionDispatched,
 		Path: ta.Action.Path,
 		Note: coldStartTarget(ta),
 	})

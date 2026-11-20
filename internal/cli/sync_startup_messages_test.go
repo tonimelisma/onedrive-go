@@ -10,7 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func TestShellQuoteArg_EscapesSingleQuotes(t *testing.T) {
@@ -36,8 +36,8 @@ func TestFormatStartupResultMessage_StandaloneIncompatibleStoreUsesDriveCommands
 	message := formatStartupResultMessage(&multisync.MountStartupResult{
 		Identity: testStandaloneMountIdentity(cid),
 		Status:   multisync.MountStartupIncompatibleStore,
-		Err: &syncengine.StateStoreIncompatibleError{
-			Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+		Err: &syncstore.StateStoreIncompatibleError{
+			Reason: syncstore.StateStoreIncompatibleReasonIncompatibleSchema,
 		},
 	})
 
@@ -55,8 +55,8 @@ func TestFormatStartupResultMessage_ChildIncompatibleStoreUsesMountStatePath(t *
 			ProjectionKind: multisync.MountProjectionChild,
 		},
 		Status: multisync.MountStartupIncompatibleStore,
-		Err: &syncengine.StateStoreIncompatibleError{
-			Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+		Err: &syncstore.StateStoreIncompatibleError{
+			Reason: syncstore.StateStoreIncompatibleReasonIncompatibleSchema,
 		},
 	})
 

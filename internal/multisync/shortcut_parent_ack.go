@@ -3,7 +3,7 @@ package multisync
 import (
 	"context"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // shortcutChildAckHandle is the only parent-ack capability multisync keeps.
@@ -11,11 +11,11 @@ import (
 // multisync tests may inject fakes without constructing sync's concrete handle.
 type shortcutChildAckHandle interface {
 	IsZero() bool
-	AcknowledgeChildFinalDrain(context.Context, syncengine.ShortcutChildDrainAck) (syncengine.ShortcutChildWorkSnapshot, error)
+	AcknowledgeChildFinalDrain(context.Context, syncshortcut.ShortcutChildDrainAck) (syncshortcut.ShortcutChildWorkSnapshot, error)
 	AcknowledgeChildArtifactsPurged(
 		context.Context,
-		syncengine.ShortcutChildArtifactCleanupAck,
-	) (syncengine.ShortcutChildWorkSnapshot, error)
+		syncshortcut.ShortcutChildArtifactCleanupAck,
+	) (syncshortcut.ShortcutChildWorkSnapshot, error)
 }
 
 func shortcutChildAckHandleIsZero(handle shortcutChildAckHandle) bool {

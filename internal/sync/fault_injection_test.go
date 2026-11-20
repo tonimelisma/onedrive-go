@@ -11,6 +11,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,27 +30,27 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t,
-		&executorMockItemClient{},
-		&executorMockDownloader{},
-		&executorMockUploader{},
+		&syncfixture.ExecutorMockItemClient{},
+		&syncfixture.ExecutorMockDownloader{},
+		&syncfixture.ExecutorMockUploader{},
 	)
 	// Create a local file so the upload has something to read.
-	writeExecTestFile(t, syncRoot, "file.txt", "content")
+	syncfixture.WriteExecTestFile(t, syncRoot, "file.txt", "content")
 
-	dg := NewDepGraph(testLogger(t))
-	dispatchCh := make(chan *TrackedAction, 4)
-	mgr := newTestManager(t)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, testLogger(t), 10)
+	dg := syncexec.NewDepGraph(syncfixture.TestLogger(t))
+	dispatchCh := make(chan *syncdomain.TrackedAction, 4)
+	mgr := syncstoretest.NewTestManager(t)
+	pool := syncexec.NewWorkerPool(cfg, dispatchCh, mgr, syncfixture.TestLogger(t), 10)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
 	pool.Start(ctx, 2)
 
-	action := &Action{
-		Type:   ActionUpload,
+	action := &syncdomain.Action{
+		Type:   syncdomain.ActionUpload,
 		Path:   "file.txt",
 		ItemID: "item-1",
-		View:   &PathView{Remote: &RemoteState{ItemID: "parent"}},
+		View:   &syncdomain.PathView{Remote: &syncdomain.RemoteState{ItemID: "parent"}},
 	}
 	ta := dg.Add(action, 0, nil)
 	if ta != nil {
@@ -67,16 +72,16 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	mgr, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
+	mgr, err := syncstore.NewSyncStore(t.Context(), dbPath, syncfixture.TestLogger(t))
 	require.NoError(t, err)
 
 	ctx := t.Context()
 
 	// Seed a baseline entry.
-	require.NoError(t, mgr.CommitMutation(ctx, MutationFromActionOutcome(&ActionOutcome{
-		Action: ActionDownload, Success: true, Path: "file.txt",
-		DriveID: driveid.New(engineTestDriveID), ItemID: "item-1",
-		ParentID: "root", ItemType: ItemTypeFile, RemoteHash: "hash1",
+	require.NoError(t, mgr.CommitMutation(ctx, syncdomain.MutationFromActionOutcome(&syncdomain.ActionOutcome{
+		Action: syncdomain.ActionDownload, Success: true, Path: "file.txt",
+		DriveID: driveid.New(syncfixture.EngineTestDriveID), ItemID: "item-1",
+		ParentID: "root", ItemType: syncdomain.ItemTypeFile, RemoteHash: "hash1",
 		LocalSize:       100,
 		LocalSizeKnown:  true,
 		RemoteSize:      100,
@@ -87,10 +92,10 @@ func TestFault_BaselineCommitError(t *testing.T) {
 	require.NoError(t, mgr.Close(t.Context()))
 
 	// CommitMutation should return an error, not panic.
-	err = mgr.CommitMutation(ctx, MutationFromActionOutcome(&ActionOutcome{
-		Action: ActionDownload, Success: true, Path: "file2.txt",
-		DriveID: driveid.New(engineTestDriveID), ItemID: "item-2",
-		ParentID: "root", ItemType: ItemTypeFile,
+	err = mgr.CommitMutation(ctx, syncdomain.MutationFromActionOutcome(&syncdomain.ActionOutcome{
+		Action: syncdomain.ActionDownload, Success: true, Path: "file2.txt",
+		DriveID: driveid.New(syncfixture.EngineTestDriveID), ItemID: "item-2",
+		ParentID: "root", ItemType: syncdomain.ItemTypeFile,
 	}))
 	assert.Error(t, err)
 }
@@ -109,7 +114,7 @@ func TestFault_PartialFileCleanup(t *testing.T) {
 
 	// CleanTransferArtifacts should remove it.
 	result := driveops.CleanTransferArtifacts(
-		mustOpenSyncTree(t, syncRoot), nil, testLogger(t), driveops.TransferArtifactCleanupOptions{},
+		syncfixture.MustOpenSyncTree(t, syncRoot), nil, syncfixture.TestLogger(t), driveops.TransferArtifactCleanupOptions{},
 	)
 	require.NoError(t, result.PartialsErr)
 	assert.Equal(t, 1, result.PartialsRemoved)

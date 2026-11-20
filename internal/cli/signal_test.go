@@ -26,6 +26,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -204,7 +205,7 @@ func runSyncWatchFirstSignalHelper() {
 			ctx context.Context,
 			_ *config.Holder,
 			_ []string,
-			_ syncengine.SyncMode,
+			_ syncdomain.SyncMode,
 			_ syncengine.WatchOptions,
 			_ *slog.Logger,
 			_ io.Writer,
@@ -236,7 +237,7 @@ type fakeSyncDaemonOrchestrator struct{}
 
 func (o *fakeSyncDaemonOrchestrator) RunWatch(
 	ctx context.Context,
-	_ syncengine.SyncMode,
+	_ syncdomain.SyncMode,
 	_ syncengine.WatchOptions,
 ) error {
 	mustWriteHelperLine("watch-daemon-ready")

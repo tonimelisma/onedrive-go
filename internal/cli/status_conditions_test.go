@@ -10,7 +10,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func TestDescribeStatusCondition_CoversFamiliesAndFallback(t *testing.T) {
@@ -36,41 +37,41 @@ func TestDescribeStatusCondition_CoversFamiliesAndFallback(t *testing.T) {
 func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 	t.Parallel()
 
-	snapshot := &syncengine.DriveStatusSnapshot{
+	snapshot := &syncstore.DriveStatusSnapshot{
 		BaselineFileCount: 11,
 		RemoteDriftItems:  2,
 		RetryingItems:     3,
-		ObservationIssues: []syncengine.ObservationIssueRow{
+		ObservationIssues: []syncdomain.ObservationIssueRow{
 			{
 				Path:      "/z.txt",
-				IssueType: syncengine.IssueInvalidFilename,
+				IssueType: syncdomain.IssueInvalidFilename,
 			},
 			{
 				Path:      "/y.txt",
-				IssueType: syncengine.IssueInvalidFilename,
+				IssueType: syncdomain.IssueInvalidFilename,
 			},
 		},
-		BlockScopes: []*syncengine.BlockScope{
+		BlockScopes: []*syncdomain.BlockScope{
 			{
-				Key:           syncengine.SKPermRemoteWrite("Shared/A"),
+				Key:           syncdomain.SKPermRemoteWrite("Shared/A"),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 			{
-				Key:           syncengine.SKPermRemoteWrite("Shared/B"),
+				Key:           syncdomain.SKPermRemoteWrite("Shared/B"),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 		},
-		BlockedRetryWork: []syncengine.RetryWorkRow{
-			{Path: "Shared/A/d.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
-			{Path: "Shared/A/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
-			{Path: "Shared/A/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
-			{Path: "Shared/A/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/A"), Blocked: true},
-			{Path: "Shared/B/d.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
-			{Path: "Shared/B/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
-			{Path: "Shared/B/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
-			{Path: "Shared/B/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/B"), Blocked: true},
+		BlockedRetryWork: []syncdomain.RetryWorkRow{
+			{Path: "Shared/A/d.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/A/c.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/A/b.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/A/a.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/A"), Blocked: true},
+			{Path: "Shared/B/d.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/B"), Blocked: true},
+			{Path: "Shared/B/c.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/B"), Blocked: true},
+			{Path: "Shared/B/b.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/B"), Blocked: true},
+			{Path: "Shared/B/a.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/B"), Blocked: true},
 		},
 	}
 
@@ -104,9 +105,9 @@ func TestBuildSyncStateInfo_DefaultsSamplingAndSorting(t *testing.T) {
 func TestBuildSyncStateInfo_NamesWhatARemovedSharedFolderKept(t *testing.T) {
 	t.Parallel()
 
-	kept := syncengine.IssueType("removed_folder_kept")
-	info := buildSyncStateInfo(&syncengine.DriveStatusSnapshot{
-		ObservationIssues: []syncengine.ObservationIssueRow{
+	kept := syncdomain.IssueType("removed_folder_kept")
+	info := buildSyncStateInfo(&syncstore.DriveStatusSnapshot{
+		ObservationIssues: []syncdomain.ObservationIssueRow{
 			{Path: "Docs/link", IssueType: kept},
 			{Path: "Docs/pipe", IssueType: kept},
 		},
@@ -114,7 +115,7 @@ func TestBuildSyncStateInfo_NamesWhatARemovedSharedFolderKept(t *testing.T) {
 
 	require.Len(t, info.Conditions, 1)
 	condition := info.Conditions[0]
-	assert.Equal(t, string(syncengine.ConditionRemovedFolderKept), condition.ConditionKey)
+	assert.Equal(t, string(syncdomain.ConditionRemovedFolderKept), condition.ConditionKey)
 	assert.Equal(t, "Kept in a removed shared folder", condition.Title)
 	assert.Contains(t, condition.Reason, "This shared folder was removed from your OneDrive")
 	assert.Contains(t, condition.Reason, "folders that cannot be written to", "it names every kind the release keeps")
@@ -128,21 +129,21 @@ func TestBuildSyncStateInfo_NamesWhatARemovedSharedFolderKept(t *testing.T) {
 func TestBuildStatusConditionJSON_UsesCliOwnedPresentationBoundary(t *testing.T) {
 	t.Parallel()
 
-	groups := buildStatusConditionJSON(&syncengine.DriveStatusSnapshot{
-		ObservationIssues: []syncengine.ObservationIssueRow{
-			{Path: "/bad:name.txt", IssueType: syncengine.IssueInvalidFilename},
+	groups := buildStatusConditionJSON(&syncstore.DriveStatusSnapshot{
+		ObservationIssues: []syncdomain.ObservationIssueRow{
+			{Path: "/bad:name.txt", IssueType: syncdomain.IssueInvalidFilename},
 		},
-		BlockScopes: []*syncengine.BlockScope{
+		BlockScopes: []*syncdomain.BlockScope{
 			{
-				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
+				Key:           syncdomain.SKPermRemoteWrite("Shared/Docs"),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 		},
-		BlockedRetryWork: []syncengine.RetryWorkRow{
-			{Path: "Shared/Docs/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
-			{Path: "Shared/Docs/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
-			{Path: "Shared/Docs/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+		BlockedRetryWork: []syncdomain.RetryWorkRow{
+			{Path: "Shared/Docs/a.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/b.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/c.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
 		},
 	}, statusStoreRootDrive, false, 2)
 
@@ -176,14 +177,14 @@ func TestBuildSyncStateInfo_NilSnapshotUsesDefaults(t *testing.T) {
 func TestStatusScopeKindFromScopeKey_CoversKinds(t *testing.T) {
 	t.Parallel()
 
-	assert.Empty(t, statusScopeKindFromScopeKey(syncengine.ScopeKey{}))
-	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncengine.SKThrottleDrive(driveid.New("drive-123"))))
-	assert.Equal(t, statusScopeService, statusScopeKindFromScopeKey(syncengine.SKService()))
-	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncengine.SKQuotaOwn()))
-	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermRemoteWrite("Shared/Docs")))
-	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncengine.SKPermLocalWrite("/tmp")))
-	assert.Equal(t, statusScopeDisk, statusScopeKindFromScopeKey(syncengine.SKDiskLocal()))
-	assert.Equal(t, statusScopeFile, statusScopeKindFromScopeKey(syncengine.ScopeKey{Kind: syncengine.ScopeKeyKind(99)}))
+	assert.Empty(t, statusScopeKindFromScopeKey(syncdomain.ScopeKey{}))
+	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncdomain.SKThrottleDrive(driveid.New("drive-123"))))
+	assert.Equal(t, statusScopeService, statusScopeKindFromScopeKey(syncdomain.SKService()))
+	assert.Equal(t, statusScopeDrive, statusScopeKindFromScopeKey(syncdomain.SKQuotaOwn()))
+	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncdomain.SKPermRemoteWrite("Shared/Docs")))
+	assert.Equal(t, statusScopeDirectory, statusScopeKindFromScopeKey(syncdomain.SKPermLocalWrite("/tmp")))
+	assert.Equal(t, statusScopeDisk, statusScopeKindFromScopeKey(syncdomain.SKDiskLocal()))
+	assert.Equal(t, statusScopeFile, statusScopeKindFromScopeKey(syncdomain.ScopeKey{Kind: syncdomain.ScopeKeyKind(99)}))
 }
 
 func TestSampleStrings_CoversVerboseAndTruncation(t *testing.T) {
@@ -202,54 +203,54 @@ func TestSortStatusConditions_OrdersByCountThenConditionKeyThenScope(t *testing.
 	t.Parallel()
 
 	groups := []statusConditionJSON{
-		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "Invalid filename", Count: 1, Scope: "z"},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "z"},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "a"},
-		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "Sign-in required", Count: 2, Scope: ""},
+		{ConditionKey: string(syncdomain.ConditionInvalidFilename), Title: "Invalid filename", Count: 1, Scope: "z"},
+		{ConditionKey: string(syncdomain.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "z"},
+		{ConditionKey: string(syncdomain.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncdomain.ConditionAuthenticationRequired), Title: "Sign-in required", Count: 2, Scope: ""},
 	}
 
 	sortStatusConditions(groups)
 	assert.Equal(t, []statusConditionJSON{
-		{ConditionKey: string(syncengine.ConditionAuthenticationRequired), Title: "Sign-in required", Count: 2, Scope: ""},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "a"},
-		{ConditionKey: string(syncengine.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "z"},
-		{ConditionKey: string(syncengine.ConditionInvalidFilename), Title: "Invalid filename", Count: 1, Scope: "z"},
+		{ConditionKey: string(syncdomain.ConditionAuthenticationRequired), Title: "Sign-in required", Count: 2, Scope: ""},
+		{ConditionKey: string(syncdomain.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "a"},
+		{ConditionKey: string(syncdomain.ConditionRemoteWriteDenied), Title: "Shared folder writes blocked", Count: 2, Scope: "z"},
+		{ConditionKey: string(syncdomain.ConditionInvalidFilename), Title: "Invalid filename", Count: 1, Scope: "z"},
 	}, groups)
 }
 
 func TestProjectStoredConditionGroups_MergesScopeFamiliesAndDedupesPaths(t *testing.T) {
 	t.Parallel()
 
-	snapshot := &syncengine.DriveStatusSnapshot{
-		ObservationIssues: []syncengine.ObservationIssueRow{
-			{Path: "/bad:name.txt", IssueType: syncengine.IssueInvalidFilename},
+	snapshot := &syncstore.DriveStatusSnapshot{
+		ObservationIssues: []syncdomain.ObservationIssueRow{
+			{Path: "/bad:name.txt", IssueType: syncdomain.IssueInvalidFilename},
 		},
-		BlockScopes: []*syncengine.BlockScope{
+		BlockScopes: []*syncdomain.BlockScope{
 			{
-				Key:           syncengine.SKPermRemoteWrite("Shared/Docs"),
+				Key:           syncdomain.SKPermRemoteWrite("Shared/Docs"),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 		},
-		BlockedRetryWork: []syncengine.RetryWorkRow{
-			{Path: "Shared/Docs/b.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
-			{Path: "Shared/Docs/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
-			{Path: "Shared/Docs/a.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
-			{Path: "Shared/Docs/c.txt", ScopeKey: syncengine.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+		BlockedRetryWork: []syncdomain.RetryWorkRow{
+			{Path: "Shared/Docs/b.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/a.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/a.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
+			{Path: "Shared/Docs/c.txt", ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Blocked: true},
 		},
 	}
 
-	groups := syncengine.ProjectStoredConditionGroups(snapshot)
+	groups := syncstore.ProjectStoredConditionGroups(snapshot)
 	require.Len(t, groups, 2)
 
-	assert.Equal(t, syncengine.ConditionRemoteWriteDenied, groups[0].ConditionKey)
-	assert.Equal(t, syncengine.IssueRemoteWriteDenied, groups[0].ConditionType)
-	assert.Equal(t, syncengine.SKPermRemoteWrite("Shared/Docs"), groups[0].ScopeKey)
+	assert.Equal(t, syncdomain.ConditionRemoteWriteDenied, groups[0].ConditionKey)
+	assert.Equal(t, syncdomain.IssueRemoteWriteDenied, groups[0].ConditionType)
+	assert.Equal(t, syncdomain.SKPermRemoteWrite("Shared/Docs"), groups[0].ScopeKey)
 	assert.Equal(t, 4, groups[0].Count)
 	assert.Equal(t, []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt", "Shared/Docs/c.txt"}, groups[0].Paths)
 
-	assert.Equal(t, syncengine.ConditionInvalidFilename, groups[1].ConditionKey)
-	assert.Equal(t, syncengine.IssueInvalidFilename, groups[1].ConditionType)
+	assert.Equal(t, syncdomain.ConditionInvalidFilename, groups[1].ConditionKey)
+	assert.Equal(t, syncdomain.IssueInvalidFilename, groups[1].ConditionType)
 	assert.Equal(t, 1, groups[1].Count)
 	assert.Equal(t, []string{"/bad:name.txt"}, groups[1].Paths)
 }
@@ -545,7 +546,7 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 
 type descriptorCase struct {
 	name       string
-	key        syncengine.ConditionKey
+	key        syncdomain.ConditionKey
 	wantTitle  string
 	wantReason string
 	wantAction string
@@ -555,42 +556,42 @@ func descriptorAuthAndRemoteCases(authPresentation authstate.Presentation) []des
 	return []descriptorCase{
 		{
 			name:       "authentication required",
-			key:        syncengine.ConditionAuthenticationRequired,
+			key:        syncdomain.ConditionAuthenticationRequired,
 			wantTitle:  "Sign-in required",
 			wantReason: authPresentation.Reason,
 			wantAction: authPresentation.Action,
 		},
 		{
 			name:       "quota exceeded",
-			key:        syncengine.ConditionQuotaExceeded,
+			key:        syncdomain.ConditionQuotaExceeded,
 			wantTitle:  "Storage full",
 			wantReason: "The OneDrive storage quota for this sync scope is full.",
 			wantAction: "Free up space in the owning drive, or ask the shared-folder owner to do so.",
 		},
 		{
 			name:       "service outage",
-			key:        syncengine.ConditionServiceOutage,
+			key:        syncdomain.ConditionServiceOutage,
 			wantTitle:  "Service outage",
 			wantReason: "OneDrive service is temporarily unavailable.",
 			wantAction: "Wait for the service to recover (automatic retry in progress).",
 		},
 		{
 			name:       "rate limited",
-			key:        syncengine.ConditionRateLimited,
+			key:        syncdomain.ConditionRateLimited,
 			wantTitle:  "Rate limited",
 			wantReason: "OneDrive asked this remote location to slow down.",
 			wantAction: "Wait for the retry window to expire (automatic retry in progress).",
 		},
 		{
 			name:       "remote write denied",
-			key:        syncengine.ConditionRemoteWriteDenied,
+			key:        syncdomain.ConditionRemoteWriteDenied,
 			wantTitle:  "Shared folder writes blocked",
 			wantReason: "This shared folder is read-only for your current write attempts. Downloads continue normally.",
 			wantAction: "Remove or ignore local write changes here, or ask the owner for edit permissions if the write was intended.",
 		},
 		{
 			name:       "remote read denied",
-			key:        syncengine.ConditionRemoteReadDenied,
+			key:        syncdomain.ConditionRemoteReadDenied,
 			wantTitle:  "Remote read blocked",
 			wantReason: "This remote content can no longer be downloaded with your current permissions.",
 			wantAction: "Restore access to the shared item, or remove the blocked content from this sync scope.",
@@ -599,7 +600,7 @@ func descriptorAuthAndRemoteCases(authPresentation authstate.Presentation) []des
 			// By key alone it is a drive's own root; a shared folder's root is
 			// told apart by TestBuildSyncStateInfo_RootReadFailureSaysWhatTheRootIs.
 			name:       "remote root not found",
-			key:        syncengine.ConditionRemoteRootNotFound,
+			key:        syncdomain.ConditionRemoteRootNotFound,
 			wantTitle:  "Synced folder not found",
 			wantReason: "OneDrive answered that the folder this drive syncs was not found.",
 			wantAction: "Check on the OneDrive website that the folder still exists. If it is gone, " +
@@ -612,49 +613,49 @@ func descriptorFilesystemCases() []descriptorCase {
 	return []descriptorCase{
 		{
 			name:       "local read denied",
-			key:        syncengine.ConditionLocalReadDenied,
+			key:        syncdomain.ConditionLocalReadDenied,
 			wantTitle:  "Local read blocked",
 			wantReason: "The local file or directory can't be read.",
 			wantAction: "Restore read access (for example with chmod) so it can be uploaded.",
 		},
 		{
 			name:       "local write denied",
-			key:        syncengine.ConditionLocalWriteDenied,
+			key:        syncdomain.ConditionLocalWriteDenied,
 			wantTitle:  "Local write blocked",
 			wantReason: "The local destination path can no longer be created, renamed, or updated.",
 			wantAction: "Restore local write access so downloads and local filesystem updates can complete.",
 		},
 		{
 			name:       "invalid filename",
-			key:        syncengine.ConditionInvalidFilename,
+			key:        syncdomain.ConditionInvalidFilename,
 			wantTitle:  "Invalid filename",
 			wantReason: "OneDrive does not allow these names: they contain a forbidden character, are reserved, or end in a space or period.",
 			wantAction: "Rename the files so OneDrive accepts their names.",
 		},
 		{
 			name:       "path too long",
-			key:        syncengine.ConditionPathTooLong,
+			key:        syncdomain.ConditionPathTooLong,
 			wantTitle:  "Path too long",
 			wantReason: "The full path is longer than OneDrive allows: 400 characters, and in practice a few dozen fewer.",
 			wantAction: "Shorten the path by renaming files or folders.",
 		},
 		{
 			name:       "file too large",
-			key:        syncengine.ConditionFileTooLarge,
+			key:        syncdomain.ConditionFileTooLarge,
 			wantTitle:  "File too large",
 			wantReason: "The file exceeds the maximum upload size.",
 			wantAction: "Reduce the file size or move it out of the sync dir.",
 		},
 		{
 			name:       "case collision",
-			key:        syncengine.ConditionCaseCollision,
+			key:        syncdomain.ConditionCaseCollision,
 			wantTitle:  "Case collision",
 			wantReason: "Two files have names OneDrive treats as the same (they differ only in letter case, in how accents are composed, or in emoji).",
 			wantAction: "Rename one of the conflicting files.",
 		},
 		{
 			name:       "remote name twin",
-			key:        syncengine.ConditionRemoteNameTwin,
+			key:        syncdomain.ConditionRemoteNameTwin,
 			wantTitle:  "Two OneDrive items, one name here",
 			wantReason: "OneDrive has two items that this computer would store under one name (they differ only in how their characters are composed). Neither syncs.",
 			wantAction: "Rename one of them on OneDrive.",
@@ -666,28 +667,28 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 	return []descriptorCase{
 		{
 			name:       "disk full",
-			key:        syncengine.ConditionDiskFull,
+			key:        syncdomain.ConditionDiskFull,
 			wantTitle:  "Disk full",
 			wantReason: "The local disk is full, out of inodes or quota, or below the min_free_space reserve (1 GB unless configured).",
 			wantAction: "Free up local disk space (or delete files if inodes ran out), or lower min_free_space in the config file.",
 		},
 		{
 			name:       "local read-only",
-			key:        syncengine.ConditionLocalReadOnly,
+			key:        syncdomain.ConditionLocalReadOnly,
 			wantTitle:  "Local folder read-only",
 			wantReason: "The local filesystem holding this folder is mounted read-only, so downloads and local changes cannot be written.",
 			wantAction: "Remount the filesystem read-write; syncing resumes automatically.",
 		},
 		{
 			name:       "hash error",
-			key:        syncengine.ConditionHashError,
+			key:        syncdomain.ConditionHashError,
 			wantTitle:  "Hash error",
 			wantReason: "File hashing failed unexpectedly.",
 			wantAction: "Check file integrity and retry.",
 		},
 		{
 			name:       "file too large for space",
-			key:        syncengine.ConditionFileTooLargeForSpace,
+			key:        syncdomain.ConditionFileTooLargeForSpace,
 			wantTitle:  "File too large for available space",
 			wantReason: "The file is larger than available local disk space.",
 			wantAction: "Free up local disk space to fit this file.",
@@ -698,7 +699,7 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 func descriptorFallbackCase() descriptorCase {
 	return descriptorCase{
 		name:       "unexpected fallback",
-		key:        syncengine.ConditionKey("custom_condition"),
+		key:        syncdomain.ConditionKey("custom_condition"),
 		wantTitle:  "Sync issue",
 		wantReason: "An unexpected sync issue needs attention.",
 		wantAction: "Check logs for details or rerun status after the next sync pass.",
@@ -709,8 +710,8 @@ func descriptorFallbackCase() descriptorCase {
 func TestRetryingPaths_OneAttemptIsSingular(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"docs/a.txt (upload, 1 attempt)"}, retryingPaths([]syncengine.RetryWorkRow{
-		{Path: "docs/a.txt", ActionType: syncengine.ActionUpload, AttemptCount: 1},
+	assert.Equal(t, []string{"docs/a.txt (upload, 1 attempt)"}, retryingPaths([]syncdomain.RetryWorkRow{
+		{Path: "docs/a.txt", ActionType: syncdomain.ActionUpload, AttemptCount: 1},
 	}, false, 1))
 }
 
@@ -718,12 +719,12 @@ func TestRetryingPaths_OneAttemptIsSingular(t *testing.T) {
 func TestBuildSyncStateInfo_ListsRetryingWork(t *testing.T) {
 	t.Parallel()
 
-	snapshot := &syncengine.DriveStatusSnapshot{
+	snapshot := &syncstore.DriveStatusSnapshot{
 		RetryingItems: 3,
-		RetryingWork: []syncengine.RetryWorkRow{
-			{Path: "docs/a.txt", ActionType: syncengine.ActionUpload, AttemptCount: 9},
-			{Path: "docs/new.txt", OldPath: "docs/old.txt", ActionType: syncengine.ActionRemoteMove, AttemptCount: 4},
-			{Path: "docs/c.txt", ActionType: syncengine.ActionDownload, AttemptCount: 3},
+		RetryingWork: []syncdomain.RetryWorkRow{
+			{Path: "docs/a.txt", ActionType: syncdomain.ActionUpload, AttemptCount: 9},
+			{Path: "docs/new.txt", OldPath: "docs/old.txt", ActionType: syncdomain.ActionRemoteMove, AttemptCount: 4},
+			{Path: "docs/c.txt", ActionType: syncdomain.ActionDownload, AttemptCount: 3},
 		},
 	}
 

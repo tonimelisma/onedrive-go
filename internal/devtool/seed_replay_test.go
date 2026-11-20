@@ -15,7 +15,7 @@ import (
 
 const (
 	testEngineReplay  = "ONEDRIVE_GO_MODEL_SEED=7001 go test -run '^TestRunOnce_RandomizedBidirectionalEditsConverge$' ./internal/sync"
-	testPlannerReplay = "ONEDRIVE_GO_PLANNER_SEED=12 go test -race -run '^TestPlannerModel_RandomTriplesConverge$' ./internal/sync"
+	testPlannerReplay = "ONEDRIVE_GO_PLANNER_SEED=12 go test -race -run '^TestPlannerModel_RandomTriplesConverge$' ./internal/sync/internal/syncplan"
 )
 
 // seedReplayJSONLine is the -json event go test prints for a replay line a
@@ -65,7 +65,7 @@ func TestSeedReplaysFromLog(t *testing.T) {
 		assignments: []seedAssignment{{name: "ONEDRIVE_GO_PLANNER_SEED", value: "12"}},
 		race:        true,
 		test:        "TestPlannerModel_RandomTriplesConverge",
-		pkg:         "./internal/sync",
+		pkg:         "./internal/sync/internal/syncplan",
 	}, replays[1])
 	assert.Empty(t, seedReplaysFromLog("ok  \t"+repoModulePath+"/internal/sync\t3.1s\n"))
 }

@@ -18,7 +18,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -26,7 +27,7 @@ type shortcutChildE2ERecord struct {
 	MountID           string
 	NamespaceID       string
 	RelativeLocalPath string
-	State             syncengine.ShortcutRootState
+	State             syncshortcut.ShortcutRootState
 	StateReason       string
 }
 
@@ -379,7 +380,7 @@ func findActiveShortcutChild(
 			continue
 		}
 
-		return record, record.State == syncengine.ShortcutRootStateActive && record.StateReason == "", nil
+		return record, record.State == syncshortcut.ShortcutRootStateActive && record.StateReason == "", nil
 	}
 
 	return shortcutChildE2ERecord{}, false, nil
@@ -437,7 +438,7 @@ func syncShortcutDownloadUntilProjected(
 		},
 		"--download-only",
 	)
-	assert.Equal(t, syncengine.ShortcutRootStateActive, record.State)
+	assert.Equal(t, syncshortcut.ShortcutRootStateActive, record.State)
 	assert.Empty(t, record.StateReason)
 
 	return record, attempt
@@ -470,16 +471,16 @@ func readShortcutChildRecords(
 
 	parentID := driveid.MustCanonicalID(fixture.ParentDrive)
 	statePath := e2eDriveStatePath(env, parentID)
-	roots, err := syncengine.ReadShortcutRootStatusSnapshot(t.Context(), statePath, parentID.String(), "", nil)
+	roots, err := syncstore.ReadShortcutRootStatusSnapshot(t.Context(), statePath, parentID.String(), "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("read shortcut child mounts of %s: %w", suiteDriveRoles.Role(parentID.String()), err)
 	}
 	records := make([]shortcutChildE2ERecord, 0, len(roots))
 	for i := range roots {
 		root := roots[i]
-		state := syncengine.ShortcutRootState(root.Metadata.DisplayState)
+		state := syncshortcut.ShortcutRootState(root.Metadata.DisplayState)
 		if state == "" {
-			state = syncengine.ShortcutRootStateActive
+			state = syncshortcut.ShortcutRootStateActive
 		}
 		stateReason := root.Metadata.StateReason
 		records = append(records, shortcutChildE2ERecord{

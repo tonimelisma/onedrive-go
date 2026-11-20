@@ -1,0 +1,87 @@
+package syncfixture
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+)
+
+// StalledRequestTimeout is the transport timeout of a request to a stalled
+// server: short, so no test waits a second, and long enough for a loopback
+// request to be sent before it fires.
+const StalledRequestTimeout = 40 * time.Millisecond
+
+// NewStalledServer starts a loopback server that never answers: each request
+// waits until its client gives up. It returns the server and the count of
+// requests that reached it, which a request the client gave up on may join
+// late or never: count dispatches with stalledGraphClient's count instead.
+func NewStalledServer(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+
+	var requests atomic.Int64
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-released:
+		}
+	}))
+	t.Cleanup(server.Close)
+	// Cleanups run last-registered first: the handlers are released before
+	// the server waits for them.
+	t.Cleanup(func() { close(released) })
+
+	return server, &requests
+}
+
+// StalledGraphClient is a graph client whose every request goes to server
+// through httpClient, and the count of the requests it dispatched. The count
+// is taken on the client's side, so it is complete the moment a request has
+// failed, whether or not the request reached the server.
+func StalledGraphClient(
+	t *testing.T, server *httptest.Server, httpClient *http.Client,
+) (*graph.Client, *atomic.Int64) {
+	t.Helper()
+
+	next := httpClient.Transport
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	counter := &dispatchCounter{next: next}
+	counted := *httpClient
+	counted.Transport = counter
+	client, err := graph.NewClient(server.URL, &counted, StalledServerToken{},
+		slog.New(slog.DiscardHandler), "stalled-server")
+	require.NoError(t, err)
+
+	return client, &counter.dispatched
+}
+
+// dispatchCounter counts the requests handed to its transport.
+type dispatchCounter struct {
+	next       http.RoundTripper
+	dispatched atomic.Int64
+}
+
+func (c *dispatchCounter) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.dispatched.Add(1)
+
+	//nolint:wrapcheck // the transport's own answer, unchanged, as the client would get it without the count
+	return c.next.RoundTrip(req)
+}
+
+// StalledServerToken hands graph a fixed token.
+type StalledServerToken struct{}
+
+func (StalledServerToken) Token(context.Context) (string, error) {
+	return "stalled-server", nil
+}

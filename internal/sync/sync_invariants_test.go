@@ -11,6 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Invariant library (D-095). One assertion of everything a converged sync
@@ -67,7 +70,7 @@ func newSyncHarness(t *testing.T, remote *moveScenarioRemote) *syncHarness {
 
 // newSyncHarnessWithClient syncs with remote through client, a wrapper of
 // remote's own client (the chaos layer).
-func newSyncHarnessWithClient(t *testing.T, remote *moveScenarioRemote, client *engineMockClient) *syncHarness {
+func newSyncHarnessWithClient(t *testing.T, remote *moveScenarioRemote, client *syncfixture.EngineMockClient) *syncHarness {
 	t.Helper()
 
 	eng, syncRoot := newTestEngine(t, client)
@@ -83,7 +86,7 @@ func (h *syncHarness) beginRound(t *testing.T) {
 	h.held = h.held[:0]
 	for _, tree := range []map[string]string{harnessLocalTree(t, h.syncRoot), h.remote.tree()} {
 		for _, content := range tree {
-			if content != modelFolderSentinel {
+			if content != syncfixture.ModelFolderSentinel {
 				h.held = append(h.held, content)
 			}
 		}
@@ -108,7 +111,7 @@ func assertSyncInvariants(t *testing.T, h *syncHarness) bool {
 func assertQuietNextPass(t *testing.T, eng *testEngine) bool {
 	t.Helper()
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	return assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates+
@@ -248,7 +251,7 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			if withFolders {
-				out[rel] = modelFolderSentinel
+				out[rel] = syncfixture.ModelFolderSentinel
 			}
 			return nil
 		}

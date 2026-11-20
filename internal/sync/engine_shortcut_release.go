@@ -13,6 +13,9 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -113,7 +116,7 @@ func (e *Engine) releaseLocalTree(ctx context.Context, report *Report) error {
 // again without it, so it is not work the run left. The next run observes the
 // root again before it plans anything.
 func (e *Engine) forgetSharedFolderReadFailure(ctx context.Context, report *Report) error {
-	batch := NewRemoteObservationFindingsBatch()
+	batch := syncdomain.NewRemoteObservationFindingsBatch()
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {
 		return fmt.Errorf("sync: clearing the read failure of a released shared folder: %w", err)
 	}
@@ -140,10 +143,10 @@ func releaseMayRun(holds *LocalTreeHolds, sharedFolderUnreachable bool) bool {
 // the whole tree: OneDrive answered "not found" or "forbidden" for the folder
 // this engine syncs (IssueTypeIsRootReadFailure), recorded at the root read
 // scope, so nothing in it can be uploaded or read.
-func sharedFolderUnreadable(issues []ObservationIssueRow) bool {
-	root := SKPermRemoteRead("")
+func sharedFolderUnreadable(issues []syncdomain.ObservationIssueRow) bool {
+	root := syncdomain.SKPermRemoteRead("")
 	for i := range issues {
-		if IssueTypeIsRootReadFailure(issues[i].IssueType) && issues[i].ScopeKey == root {
+		if syncdomain.IssueTypeIsRootReadFailure(issues[i].IssueType) && issues[i].ScopeKey == root {
 			return true
 		}
 	}
@@ -246,7 +249,7 @@ func (n releaseSurveyNames) accountsFor(storedPath string) bool {
 
 // addUnmatched files an entry the baseline does not hold as it is: a visible
 // one is work for the next drain, a hidden one is content sync does not sync.
-func (s *releaseSurvey) addUnmatched(filter ContentFilter, storedPath string, itemType ItemType) {
+func (s *releaseSurvey) addUnmatched(filter syncdomain.ContentFilter, storedPath string, itemType syncdomain.ItemType) {
 	if filter.Visible(storedPath, itemType) {
 		s.unsynced = append(s.unsynced, storedPath)
 		return
@@ -259,11 +262,11 @@ func (s *releaseSurvey) addUnmatched(filter ContentFilter, storedPath string, it
 // the sync folder and each synced folder, that cannot be written to. A synced
 // file counts as removable while its stat facts match the baseline
 // (releaseFileLooksUnchanged); its content is verified by the delete itself.
-func (e *Engine) surveyReleaseTree(bl *Baseline) (releaseSurvey, error) {
+func (e *Engine) surveyReleaseTree(bl *syncdomain.Baseline) (releaseSurvey, error) {
 	walk := releaseSurveyWalk{
 		engine:   e,
-		exec:     NewExecution(e.execCfg, bl),
-		filter:   NewContentFilter(e.contentFilter),
+		exec:     syncexec.NewExecution(e.execCfg, bl),
+		filter:   syncdomain.NewContentFilter(e.contentFilter),
 		baseline: bl,
 	}
 	if err := walk.dir("", ""); err != nil {
@@ -275,9 +278,9 @@ func (e *Engine) surveyReleaseTree(bl *Baseline) (releaseSurvey, error) {
 
 type releaseSurveyWalk struct {
 	engine   *Engine
-	exec     *Executor
-	filter   ContentFilter
-	baseline *Baseline
+	exec     *syncexec.Executor
+	filter   syncdomain.ContentFilter
+	baseline *syncdomain.Baseline
 	survey   releaseSurvey
 }
 
@@ -323,15 +326,15 @@ func (w *releaseSurveyWalk) entry(stored, onDisk, name string) error {
 		// link, and a link to a folder holds rows it could not verify.
 		w.survey.notOnOneDrive = append(w.survey.notOnOneDrive, storedPath)
 	case info.IsDir():
-		if synced && row.ItemType == ItemTypeFolder {
+		if synced && row.ItemType == syncdomain.ItemTypeFolder {
 			return w.dir(storedPath, diskPath)
 		}
 		if w.exec.IsDisposable(name, true) && w.exec.FindNonDisposable(diskPath) == "" {
 			return nil
 		}
-		w.survey.addUnmatched(w.filter, storedPath, ItemTypeFolder)
+		w.survey.addUnmatched(w.filter, storedPath, syncdomain.ItemTypeFolder)
 	case info.Mode().IsRegular():
-		if synced && row.ItemType == ItemTypeFile {
+		if synced && row.ItemType == syncdomain.ItemTypeFile {
 			if !releaseFileLooksUnchanged(row, info) {
 				w.survey.unsynced = append(w.survey.unsynced, storedPath)
 			}
@@ -340,7 +343,7 @@ func (w *releaseSurveyWalk) entry(stored, onDisk, name string) error {
 		if w.exec.IsDisposable(name, false) {
 			return nil
 		}
-		w.survey.addUnmatched(w.filter, storedPath, ItemTypeFile)
+		w.survey.addUnmatched(w.filter, storedPath, syncdomain.ItemTypeFile)
 	default:
 		w.survey.notOnOneDrive = append(w.survey.notOnOneDrive, storedPath)
 	}
@@ -373,7 +376,7 @@ func (w *releaseSurveyWalk) writable(onDisk string) bool {
 // identity anyway. The local delete still verifies the content. Nor is the
 // racily-clean window applied: it guards trusting a stored hash, and the
 // survey trusts none.
-func releaseFileLooksUnchanged(row *BaselineEntry, info os.FileInfo) bool {
+func releaseFileLooksUnchanged(row *syncdomain.BaselineEntry, info os.FileInfo) bool {
 	if row.LocalSizeKnown && info.Size() != row.LocalSize {
 		return false
 	}
@@ -411,7 +414,7 @@ func displayReleasePath(stored string) string {
 // ends the release: the rest of its batch gets its rows back, in the same
 // restore as the refused row, and no later batch starts. What left before it
 // stays gone: the next drain creates nothing new locally.
-func (e *Engine) releaseBaselineRows(ctx context.Context, bl *Baseline, stopAtFirstRefusal bool) (int, []releaseRefusal, error) {
+func (e *Engine) releaseBaselineRows(ctx context.Context, bl *syncdomain.Baseline, stopAtFirstRefusal bool) (int, []releaseRefusal, error) {
 	rows := releaseRowsDeepestFirst(bl)
 	if len(rows) == 0 {
 		return 0, nil, nil
@@ -420,14 +423,14 @@ func (e *Engine) releaseBaselineRows(ctx context.Context, bl *Baseline, stopAtFi
 	if err != nil {
 		return 0, nil, fmt.Errorf("sync: reading local_state before releasing the local tree: %w", err)
 	}
-	localByPath := make(map[string]*LocalState, len(localRows))
+	localByPath := make(map[string]*syncdomain.LocalState, len(localRows))
 	for i := range localRows {
-		localByPath[localRows[i].Path] = LocalStateFromSnapshotRow(&localRows[i])
+		localByPath[localRows[i].Path] = syncplan.LocalStateFromSnapshotRow(&localRows[i])
 	}
 
 	run := releaseRun{
 		engine:             e,
-		exec:               NewExecution(e.execCfg, bl),
+		exec:               syncexec.NewExecution(e.execCfg, bl),
 		localByPath:        localByPath,
 		stopAtFirstRefusal: stopAtFirstRefusal,
 	}
@@ -444,8 +447,8 @@ func (e *Engine) releaseBaselineRows(ctx context.Context, bl *Baseline, stopAtFi
 // entries it kept and why, and whether a refusal ended it.
 type releaseRun struct {
 	engine             *Engine
-	exec               *Executor
-	localByPath        map[string]*LocalState
+	exec               *syncexec.Executor
+	localByPath        map[string]*syncdomain.LocalState
 	stopAtFirstRefusal bool
 	released           int
 	refused            []releaseRefusal
@@ -468,15 +471,15 @@ type releaseRefusal struct {
 
 // releaseRowsDeepestFirst copies the baseline's rows below the sync folder,
 // children before their folder.
-func releaseRowsDeepestFirst(bl *Baseline) []BaselineEntry {
-	var rows []BaselineEntry
-	bl.ForEachPath(func(_ string, entry *BaselineEntry) {
-		if entry.Path == "" || entry.ItemType == ItemTypeRoot {
+func releaseRowsDeepestFirst(bl *syncdomain.Baseline) []syncdomain.BaselineEntry {
+	var rows []syncdomain.BaselineEntry
+	bl.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
+		if entry.Path == "" || entry.ItemType == syncdomain.ItemTypeRoot {
 			return
 		}
 		rows = append(rows, *entry)
 	})
-	slices.SortFunc(rows, func(a, b BaselineEntry) int {
+	slices.SortFunc(rows, func(a, b syncdomain.BaselineEntry) int {
 		if depth := cmp.Compare(strings.Count(b.Path, "/"), strings.Count(a.Path, "/")); depth != 0 {
 			return depth
 		}
@@ -488,9 +491,9 @@ func releaseRowsDeepestFirst(bl *Baseline) []BaselineEntry {
 
 // batch forgets a batch of rows, checkpoints the store, then removes their
 // entries (releaseBaselineRows).
-func (r *releaseRun) batch(ctx context.Context, batch []BaselineEntry) error {
+func (r *releaseRun) batch(ctx context.Context, batch []syncdomain.BaselineEntry) error {
 	e := r.engine
-	forgotten := make([]*BaselineEntry, 0, len(batch))
+	forgotten := make([]*syncdomain.BaselineEntry, 0, len(batch))
 	for i := range batch {
 		row := &batch[i]
 		if releaseRowCrossesSymlink(r.exec, row) {
@@ -524,10 +527,10 @@ func (r *releaseRun) batch(ctx context.Context, batch []BaselineEntry) error {
 		// folder is not empty) or kept as a folder of ignored content: the
 		// entry stays, and so does its row.
 		e.logger.Debug("release kept a synced entry", slog.String("path", row.Path), slog.Any("error", outcome.Error))
-		var changed *LocalContentChangedError
+		var changed *syncexec.LocalContentChangedError
 		refusal := releaseRefusal{path: row.Path, err: outcome.Error, contentChanged: errors.As(outcome.Error, &changed)}
 		r.refused = append(r.refused, refusal)
-		restore := []*BaselineEntry{releaseRowToRestore(row, refusal.contentChanged)}
+		restore := []*syncdomain.BaselineEntry{releaseRowToRestore(row, refusal.contentChanged)}
 		if r.stopAtFirstRefusal {
 			// The rest of the batch comes back in the same restore, so one
 			// row that fails to come back does not keep the others out.
@@ -548,7 +551,7 @@ func (r *releaseRun) batch(ctx context.Context, batch []BaselineEntry) error {
 // releaseRowToRestore is the row a refused entry gets back: as it was, or
 // without its change time when the delete proved the file's content changed,
 // so the next scan reads the file instead of trusting the row.
-func releaseRowToRestore(row *BaselineEntry, contentChanged bool) *BaselineEntry {
+func releaseRowToRestore(row *syncdomain.BaselineEntry, contentChanged bool) *syncdomain.BaselineEntry {
 	if !contentChanged {
 		return row
 	}
@@ -593,7 +596,7 @@ func (e *Engine) releaseEntryRemains(storedPath string) bool {
 // releaseRowCrossesSymlink reports whether a row's path is, or lies below, a
 // symbolic link. The release never acts on one (surveyReleaseTree). An
 // unreadable path counts as crossing one: its row stays.
-func releaseRowCrossesSymlink(exec *Executor, row *BaselineEntry) bool {
+func releaseRowCrossesSymlink(exec *syncexec.Executor, row *syncdomain.BaselineEntry) bool {
 	_, crosses, err := exec.SymlinkBoundaryForPath(exec.SyncTree().Spelling(row.Path))
 
 	return crosses || err != nil
@@ -601,13 +604,13 @@ func releaseRowCrossesSymlink(exec *Executor, row *BaselineEntry) bool {
 
 // releaseAction is the local delete of one synced entry, planned from its
 // baseline row and, for a folder, the local truth the drain's last scan saw.
-func releaseAction(row *BaselineEntry, local *LocalState) Action {
-	return Action{
-		Type:    ActionLocalDelete,
+func releaseAction(row *syncdomain.BaselineEntry, local *syncdomain.LocalState) syncdomain.Action {
+	return syncdomain.Action{
+		Type:    syncdomain.ActionLocalDelete,
 		DriveID: row.DriveID,
 		ItemID:  row.ItemID,
 		Path:    row.Path,
-		View: &PathView{
+		View: &syncdomain.PathView{
 			Path:     row.Path,
 			Baseline: row,
 			Local:    local,
@@ -619,9 +622,9 @@ func releaseAction(row *BaselineEntry, local *LocalState) Action {
 // before the entry is removed (releaseBaselineRows). It is exempt from the
 // delete-safety hold: the release is not the user's delete and deletes
 // nothing on OneDrive.
-func releaseForgetMutation(row *BaselineEntry) *BaselineMutation {
-	return &BaselineMutation{
-		Action:               ActionLocalDelete,
+func releaseForgetMutation(row *syncdomain.BaselineEntry) *syncdomain.BaselineMutation {
+	return &syncdomain.BaselineMutation{
+		Action:               syncdomain.ActionLocalDelete,
 		Success:              true,
 		Path:                 row.Path,
 		DriveID:              row.DriveID,
@@ -632,9 +635,9 @@ func releaseForgetMutation(row *BaselineEntry) *BaselineMutation {
 }
 
 // releaseRestoreMutation puts a forgotten row back as it was.
-func releaseRestoreMutation(row *BaselineEntry) *BaselineMutation {
-	return &BaselineMutation{
-		Action:                ActionBaselineUpdate,
+func releaseRestoreMutation(row *syncdomain.BaselineEntry) *syncdomain.BaselineMutation {
+	return &syncdomain.BaselineMutation{
+		Action:                syncdomain.ActionBaselineUpdate,
 		Success:               true,
 		Path:                  row.Path,
 		DriveID:               row.DriveID,
@@ -665,8 +668,8 @@ func releaseRestoreMutation(row *BaselineEntry) *BaselineMutation {
 // a row whose entry stays must not be lost to a shutdown. A row whose entry
 // is gone, or cannot be checked, stays forgotten: an entry without its row is
 // adopted by the next run, a row without its entry is not safe.
-func (e *Engine) restoreForgottenRows(ctx context.Context, rows []*BaselineEntry, cause error) error {
-	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+func (e *Engine) restoreForgottenRows(ctx context.Context, rows []*syncdomain.BaselineEntry, cause error) error {
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncdomain.OutcomeCommitTimeout)
 	defer cancel()
 
 	errs := []error{cause}
@@ -686,12 +689,12 @@ func (e *Engine) restoreForgottenRows(ctx context.Context, rows []*BaselineEntry
 // after a release, under the rule a folder delete applies to junk, and
 // returns what still stands that no survey names: an entry the release could
 // not remove, which keeps the folder like any other.
-func (e *Engine) emptyReleasedRoot(bl *Baseline) (releaseSurvey, error) {
+func (e *Engine) emptyReleasedRoot(bl *syncdomain.Baseline) (releaseSurvey, error) {
 	entries, err := e.syncTree.ReadDir("")
 	if err != nil {
 		return releaseSurvey{}, fmt.Errorf("sync: reading the sync folder after releasing it: %w", err)
 	}
-	exec := NewExecution(e.execCfg, bl)
+	exec := syncexec.NewExecution(e.execCfg, bl)
 	var junk []os.DirEntry
 	var survey releaseSurvey
 	for _, entry := range entries {
@@ -735,7 +738,7 @@ func (e *Engine) recordReleaseKept(
 	ctx context.Context,
 	report *Report,
 	survey releaseSurvey,
-	issues []ObservationIssueRow,
+	issues []syncdomain.ObservationIssueRow,
 	sharedFolderUnreachable bool,
 ) error {
 	kept := slices.Concat(survey.notOnOneDrive, survey.notWritable, survey.notRemoved)
@@ -751,19 +754,19 @@ func (e *Engine) recordReleaseKept(
 
 	otherIssue := make(map[string]bool, len(issues))
 	for i := range issues {
-		if issues[i].IssueType != IssueRemovedFolderKept {
+		if issues[i].IssueType != syncdomain.IssueRemovedFolderKept {
 			otherIssue[issues[i].Path] = true
 		}
 	}
-	batch := ObservationFindingsBatch{ManagedIssueTypes: []IssueType{IssueRemovedFolderKept}}
+	batch := syncdomain.ObservationFindingsBatch{ManagedIssueTypes: []syncdomain.IssueType{syncdomain.IssueRemovedFolderKept}}
 	for _, keptPath := range kept {
 		if keptPath == "" || otherIssue[keptPath] {
 			continue
 		}
-		batch.Issues = append(batch.Issues, ObservationIssue{
+		batch.Issues = append(batch.Issues, syncdomain.ObservationIssue{
 			Path:      keptPath,
 			DriveID:   e.driveID,
-			IssueType: IssueRemovedFolderKept,
+			IssueType: syncdomain.IssueRemovedFolderKept,
 		})
 	}
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {

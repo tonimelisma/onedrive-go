@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -211,7 +213,7 @@ func TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook(t *testing
 			var trashed atomic.Int32
 			trashDir := drain.eng.trash.Dir()
 			drain.eng.execCfg.SetCrashHookForTest(func(point string) error {
-				if point == CrashPointLocalDeleteTrashed && trashed.Add(1) == tc.trashFailsAfter {
+				if point == syncdomain.CrashPointLocalDeleteTrashed && trashed.Add(1) == tc.trashFailsAfter {
 					return os.Chmod(trashDir, 0o500) //nolint:gosec // the test makes the trash refuse new entries
 				}
 				return nil
@@ -306,7 +308,7 @@ func assertReleaseKeptTheThird(t *testing.T, drain *countedRelease, report *Repo
 func newThreeFileRelease(t *testing.T) *countedRelease {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", releaseSyncedFolder)
 	for _, name := range []string{"a", "b", "c"} {
 		remote.addFile(t, "item-"+name, "item-docs", name+".txt", name+"\n")
@@ -386,7 +388,7 @@ func TestReleaseLocalTree_ARowWithoutAModificationTimeWaitsForTheNextDrain(t *te
 	require.Equal(t, int64(1), rows)
 	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(t.Context()))
 
-	report := &Report{Mode: SyncBidirectional}
+	report := &Report{Mode: syncdomain.SyncBidirectional}
 	require.NoError(t, eng.releaseLocalTree(t.Context(), report))
 
 	assert.Zero(t, report.Released, "nothing leaves")
@@ -417,13 +419,13 @@ func TestReleaseLocalTree_ARestoreThatFailsStillPutsBackTheRestOfTheBatch(t *tes
 	eng.baseline.SetCrashHookForTest(func(point string) error {
 		// The five rows are forgotten first; the next commit restores the
 		// refused Docs/a.txt (Docs/sub/b.txt left before it).
-		if point == CrashPointCommitOutcome && commits.Add(1) == releaseSyncedRows+1 {
+		if point == syncdomain.CrashPointCommitOutcome && commits.Add(1) == releaseSyncedRows+1 {
 			return errRestore
 		}
 		return nil
 	})
 
-	report := &Report{Mode: SyncBidirectional}
+	report := &Report{Mode: syncdomain.SyncBidirectional}
 	err := eng.releaseLocalTree(t.Context(), report)
 
 	require.ErrorIs(t, err, errRestore)

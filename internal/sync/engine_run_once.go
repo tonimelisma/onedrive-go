@@ -5,6 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // oneShotMaxPasses bounds the passes one RunOnce makes, and the follow-up
@@ -38,7 +44,7 @@ const oneShotMaxPasses = 4
 // and which are the last pass's). A timer callback that panics during the run
 // ends it with an error wrapping panicguard.ErrPanic, beside the report it has
 // (beginRun).
-func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (_ *Report, err error) {
+func (e *Engine) RunOnce(ctx context.Context, mode syncdomain.SyncMode, opts RunOptions) (_ *Report, err error) {
 	runCtx, end := e.beginRun(ctx)
 	defer func() { err = end(err) }()
 
@@ -46,7 +52,7 @@ func (e *Engine) RunOnce(ctx context.Context, mode SyncMode, opts RunOptions) (_
 }
 
 // runOnce is the one-shot sync RunOnce runs under its bound context.
-func (e *Engine) runOnce(ctx context.Context, mode SyncMode, opts RunOptions) (*Report, error) {
+func (e *Engine) runOnce(ctx context.Context, mode syncdomain.SyncMode, opts RunOptions) (*Report, error) {
 	start := e.nowFunc()
 	runner := newOneShotRunner(e)
 
@@ -186,7 +192,7 @@ func (e *Engine) readIssuesTheRunLeft(ctx context.Context, report *Report) error
 // oneShotPass is what one live pass of RunOnce did.
 type oneShotPass struct {
 	report   *Report
-	followUp PlanFollowUp
+	followUp syncdomain.PlanFollowUp
 	executed bool
 }
 
@@ -330,8 +336,8 @@ func (e *Engine) oneShotPasses() int {
 func (e *Engine) runOneShotLivePass(
 	ctx context.Context,
 	runner *oneShotRunner,
-	bl *Baseline,
-	mode SyncMode,
+	bl *syncdomain.Baseline,
+	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (oneShotPass, error) {
 	passStart := e.nowFunc()
@@ -374,7 +380,7 @@ func (e *Engine) runOneShotLivePass(
 // passWithoutActions is the pass of a plan with nothing to execute. It keeps
 // the plan's follow-up: a plan whose every action was dropped until the next
 // pass has no action to run, and that dropped work is still the next sync's.
-func (e *Engine) passWithoutActions(passStart time.Time, mode SyncMode, opts RunOptions, runtime *runtimePlan) oneShotPass {
+func (e *Engine) passWithoutActions(passStart time.Time, mode syncdomain.SyncMode, opts RunOptions, runtime *runtimePlan) oneShotPass {
 	report := runtime.Report
 	if report.DeferredByMode.Total() == 0 && report.HeldLocalDeletes+report.HeldRemoteDeletes == 0 {
 		report = e.completeRunOnceWithoutChanges(passStart, mode, opts)
@@ -389,8 +395,8 @@ func (e *Engine) passWithoutActions(passStart time.Time, mode SyncMode, opts Run
 func (e *Engine) runOnceDryRun(
 	ctx context.Context,
 	runner *oneShotRunner,
-	bl *Baseline,
-	mode SyncMode,
+	bl *syncdomain.Baseline,
+	mode syncdomain.SyncMode,
 	opts RunOptions,
 	start time.Time,
 ) (*Report, error) {
@@ -407,7 +413,7 @@ func (e *Engine) runOnceDryRun(
 func (r *oneShotRunner) executePreparedPlan(
 	ctx context.Context,
 	runtime *runtimePlan,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 ) error {
 	if runtime == nil {
 		return nil
@@ -445,7 +451,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// results loop's outbox, until a worker actually takes it, so a scope
 	// that activates can still take it back (R-6.8.24). A plan-sized buffer
 	// moved the whole outbox into the channel at once.
-	r.sched.dispatchCh = make(chan *TrackedAction)
+	r.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
 	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
@@ -454,18 +460,18 @@ func (r *oneShotRunner) executePreparedPlan(
 		return nil
 	}
 
-	pool := NewWorkerPool(r.engine.execCfg, r.sched.dispatchCh, executorStoreOf(r.deps.store), r.deps.logger, len(plan.Actions))
+	pool := syncexec.NewWorkerPool(r.engine.execCfg, r.sched.dispatchCh, executorStoreOf(r.deps.store), r.deps.logger, len(plan.Actions))
 	pool.SetRuntimeOptions(r.engine.collector(), r.engine.serializeWorkers)
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.
 	runCtx, cancelPass := context.WithCancelCause(ctx)
-	defer cancelPass(ErrOneShotPassEnded)
+	defer cancelPass(syncdomain.ErrOneShotPassEnded)
 	pool.Start(runCtx, r.engine.transferWorkers)
 
 	// Process completions until the engine-owned runtime settles. Held retry/scope
 	// actions intentionally keep graph nodes unresolved, so the dependency graph
 	// tracks only dependency satisfaction, not runtime completion.
-	failPass := func() { cancelPass(ErrOneShotPassFailed) }
+	failPass := func() { cancelPass(syncdomain.ErrOneShotPassFailed) }
 	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, failPass, bl, pool.Completions(), initialOutbox)
 	pool.Stop()
 	if drainErr != nil {
@@ -484,10 +490,10 @@ func (r *oneShotRunner) executePreparedPlan(
 
 func (r *oneShotRunner) dispatchInitialReadyActions(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	runtime *runtimePlan,
 	report *Report,
-) ([]*TrackedAction, bool, error) {
+) ([]*syncdomain.TrackedAction, bool, error) {
 	initialOutbox, dispatched, err := r.startRuntimeStage(ctx, runtime, bl)
 	if err != nil {
 		r.recordPassCounts(report, len(runtime.Plan.Actions))
@@ -507,23 +513,23 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 // buildReportFromCounts populates a Report with plan counts and directionally
 // deferred work observed by the planner.
 func buildReportFromCounts(
-	counts map[ActionType]int,
-	deferred DeferredCounts,
-	mode SyncMode,
+	counts map[syncdomain.ActionType]int,
+	deferred syncdomain.DeferredCounts,
+	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) *Report {
 	return &Report{
 		Mode:            mode,
 		DryRun:          opts.DryRun,
-		FolderCreates:   counts[ActionFolderCreate],
-		Moves:           counts[ActionLocalMove] + counts[ActionRemoteMove],
-		Downloads:       counts[ActionDownload],
-		Uploads:         counts[ActionUpload],
-		LocalDeletes:    counts[ActionLocalDelete],
-		RemoteDeletes:   counts[ActionRemoteDelete],
-		ConflictCopies:  counts[ActionConflictCopy],
-		BaselineUpdates: counts[ActionBaselineUpdate],
-		Cleanups:        counts[ActionCleanup],
+		FolderCreates:   counts[syncdomain.ActionFolderCreate],
+		Moves:           counts[syncdomain.ActionLocalMove] + counts[syncdomain.ActionRemoteMove],
+		Downloads:       counts[syncdomain.ActionDownload],
+		Uploads:         counts[syncdomain.ActionUpload],
+		LocalDeletes:    counts[syncdomain.ActionLocalDelete],
+		RemoteDeletes:   counts[syncdomain.ActionRemoteDelete],
+		ConflictCopies:  counts[syncdomain.ActionConflictCopy],
+		BaselineUpdates: counts[syncdomain.ActionBaselineUpdate],
+		Cleanups:        counts[syncdomain.ActionCleanup],
 		DeferredByMode:  deferred,
 	}
 }
@@ -533,7 +539,7 @@ func buildReportFromCounts(
 // persist the restart-safe full-remote cadence timestamp here.
 func (flow *engineFlow) commitPendingRemoteObservation(
 	ctx context.Context,
-	observation *RemoteObservationBatch,
+	observation *syncobserve.RemoteObservationBatch,
 ) (bool, error) {
 	if observation == nil {
 		return false, nil
@@ -578,7 +584,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 			// Deferred, not now: one burst of folder deletions shares one
 			// enumeration, and a deadline only ever moves earlier, so
 			// refreshes stay this far apart.
-			flow.deps.now().Add(FullRefreshAfterFolderDeleteDelay),
+			flow.deps.now().Add(syncdomain.FullRefreshAfterFolderDeleteDelay),
 		)
 		if err != nil {
 			return false, fmt.Errorf("sync: pulling full remote refresh forward: %w", err)
@@ -586,11 +592,11 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 
 		return deadlineChanged, nil
 	}
-	if observation.ObservationMode == RemoteObservationModeEnumerate {
+	if observation.ObservationMode == syncdomain.RemoteObservationModeEnumerate {
 		deadlineChanged, err := flow.deps.store.ClampFullRemoteRefreshDeadline(
 			ctx,
 			flow.engine.driveID,
-			flow.deps.now().Add(RemoteRefreshEnumerateInterval),
+			flow.deps.now().Add(syncstore.RemoteRefreshEnumerateInterval),
 		)
 		if err != nil {
 			return false, fmt.Errorf("sync: clamping full remote refresh: %w", err)
@@ -605,9 +611,9 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // fullRemoteObservation is what a full enumeration with orphan detection
 // observed.
 type fullRemoteObservation struct {
-	events   []RemoteItem
+	events   []syncdomain.RemoteItem
 	token    string
-	topology ShortcutTopologyBatch
+	topology syncshortcut.ShortcutTopologyBatch
 	// orphansUndecided reports an item missing from the enumeration whose
 	// lookup failed. It is kept, not deleted, but the delta position saved
 	// with this enumeration will never report it again: only another full
@@ -623,8 +629,8 @@ type fullRemoteObservation struct {
 // be uploaded again, or did not say, turns orphans into re-uploads instead.
 func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
-	bl *Baseline,
-	kind ResyncKind,
+	bl *syncdomain.Baseline,
+	kind syncdomain.ResyncKind,
 ) (fullRemoteObservation, error) {
 	eng := flow.engine
 	obs := eng.buildRemoteObserver(bl, eng.logger)
@@ -650,7 +656,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	}
 
 	// Detect orphans: baseline entries whose ItemID is not in the seen set.
-	orphans := FindBaselineOrphans(bl, seen, eng.driveID, "")
+	orphans := syncstore.FindBaselineOrphans(bl, seen, eng.driveID, "")
 
 	// remote_state can also hold items that were never synced (one whose name
 	// the local filesystem cannot store is never downloaded). A missed delete
@@ -660,7 +666,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	if err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: listing remote state for full refresh: %w", err)
 	}
-	orphans = append(orphans, FindRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
+	orphans = append(orphans, syncstore.FindRemoteStateOrphans(remoteRows, seen, orphans, eng.driveID)...)
 
 	// A complete enumeration that omits an item is not proof it is gone
 	// (Graph omits items transiently); only a live 404 or deleted facet is.
@@ -687,7 +693,7 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 // markOrphansForReupload turns confirmed orphans into re-uploads: their
 // remote rows go, and so does their synced agreement, so a surviving local
 // copy plans as an upload rather than a local delete (R-2.15.3).
-func markOrphansForReupload(orphans []RemoteItem) {
+func markOrphansForReupload(orphans []syncdomain.RemoteItem) {
 	for i := range orphans {
 		orphans[i].ReuploadLocal = true
 	}

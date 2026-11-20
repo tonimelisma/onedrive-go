@@ -11,30 +11,34 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{{
 		Path:     "stale.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "old",
 		Size:     1,
 	}}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{
-		Rows: []LocalStateRow{
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{
+		Rows: []syncdomain.LocalStateRow{
 			{
 				Path:             "stale.txt",
-				ItemType:         ItemTypeFile,
+				ItemType:         syncdomain.ItemTypeFile,
 				Hash:             "new",
 				Size:             2,
 				Mtime:            22,
@@ -44,7 +48,7 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 			},
 			{
 				Path:     "fresh.txt",
-				ItemType: ItemTypeFile,
+				ItemType: syncdomain.ItemTypeFile,
 				Hash:     "fresh",
 				Size:     3,
 			},
@@ -55,16 +59,16 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 
 	rows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, []LocalStateRow{
+	assert.Equal(t, []syncdomain.LocalStateRow{
 		{
 			Path:     "fresh.txt",
-			ItemType: ItemTypeFile,
+			ItemType: syncdomain.ItemTypeFile,
 			Hash:     "fresh",
 			Size:     3,
 		},
 		{
 			Path:             "stale.txt",
-			ItemType:         ItemTypeFile,
+			ItemType:         syncdomain.ItemTypeFile,
 			Hash:             "new",
 			Size:             2,
 			Mtime:            22,
@@ -83,18 +87,18 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{
-		{Path: "deleted.txt", ItemType: ItemTypeFile},
-		{Path: "kept.txt", ItemType: ItemTypeFile},
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
+		{Path: "deleted.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "kept.txt", ItemType: syncdomain.ItemTypeFile},
 	}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{
 		DeletedPaths: []string{"deleted.txt"},
 		Dirty:        true,
 	})
@@ -102,7 +106,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 
 	rows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, []LocalStateRow{{Path: "kept.txt", ItemType: ItemTypeFile}}, rows)
+	assert.Equal(t, []syncdomain.LocalStateRow{{Path: "kept.txt", ItemType: syncdomain.ItemTypeFile}}, rows)
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	snapshot := eng.collector().Snapshot()
 	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
@@ -113,21 +117,21 @@ func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
 func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{
-		{Path: "dir", ItemType: ItemTypeFolder},
-		{Path: "dir/file.txt", ItemType: ItemTypeFile},
-		{Path: "dir/nested", ItemType: ItemTypeFolder},
-		{Path: "dir/nested/deep.txt", ItemType: ItemTypeFile},
-		{Path: "dir-sibling.txt", ItemType: ItemTypeFile},
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
+		{Path: "dir", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "dir/file.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "dir/nested", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "dir/nested/deep.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "dir-sibling.txt", ItemType: syncdomain.ItemTypeFile},
 	}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{
 		DeletedPrefixes: []string{"dir"},
 		Dirty:           true,
 	})
@@ -135,7 +139,7 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 
 	rows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, []LocalStateRow{{Path: "dir-sibling.txt", ItemType: ItemTypeFile}}, rows)
+	assert.Equal(t, []syncdomain.LocalStateRow{{Path: "dir-sibling.txt", ItemType: syncdomain.ItemTypeFile}}, rows)
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	snapshot := eng.collector().Snapshot()
 	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
@@ -146,31 +150,31 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, eng.baseline.MarkLocalTruthSuspect(t.Context(), LocalTruthRecoveryDroppedEvents))
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{
-		{Path: "stale.txt", ItemType: ItemTypeFile},
+	require.NoError(t, eng.baseline.MarkLocalTruthSuspect(t.Context(), syncdomain.LocalTruthRecoveryDroppedEvents))
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
+		{Path: "stale.txt", ItemType: syncdomain.ItemTypeFile},
 	}))
-	require.NoError(t, eng.baseline.MarkLocalTruthSuspect(t.Context(), LocalTruthRecoveryDroppedEvents))
+	require.NoError(t, eng.baseline.MarkLocalTruthSuspect(t.Context(), syncdomain.LocalTruthRecoveryDroppedEvents))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{
-		Kind: LocalSnapshot,
-		Rows: []LocalStateRow{
-			{Path: "fresh.txt", ItemType: ItemTypeFile, Hash: "fresh"},
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{
+		Kind: syncobserve.LocalSnapshot,
+		Rows: []syncdomain.LocalStateRow{
+			{Path: "fresh.txt", ItemType: syncdomain.ItemTypeFile, Hash: "fresh"},
 		},
 	})
 	require.NoError(t, err)
 
 	rows, err := eng.baseline.ListLocalState(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, []LocalStateRow{{Path: "fresh.txt", ItemType: ItemTypeFile, Hash: "fresh"}}, rows)
+	assert.Equal(t, []syncdomain.LocalStateRow{{Path: "fresh.txt", ItemType: syncdomain.ItemTypeFile, Hash: "fresh"}}, rows)
 
-	state := readObservationStateForTest(t, eng.baseline, t.Context())
+	state := syncstoretest.ReadObservationStateForTest(t, eng.baseline, t.Context())
 	assert.True(t, state.LocalTruthComplete)
 	assert.Empty(t, state.LocalTruthRecoveryReason)
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
@@ -181,25 +185,25 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.perfCollector = perf.NewCollector(nil)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{
-		{Path: "known.txt", ItemType: ItemTypeFile},
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
+		{Path: "known.txt", ItemType: syncdomain.ItemTypeFile},
 	}))
 
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{
-		Kind:           LocalTruthSuspect,
-		RecoveryReason: LocalTruthRecoveryDroppedEvents,
+	err := rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{
+		Kind:           syncobserve.LocalTruthSuspect,
+		RecoveryReason: syncdomain.LocalTruthRecoveryDroppedEvents,
 	})
 	require.NoError(t, err)
 
-	state := readObservationStateForTest(t, eng.baseline, t.Context())
+	state := syncstoretest.ReadObservationStateForTest(t, eng.baseline, t.Context())
 	assert.False(t, state.LocalTruthComplete)
-	assert.Equal(t, LocalTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
+	assert.Equal(t, syncdomain.LocalTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	assert.Equal(t, 1, eng.collector().Snapshot().LocalObservationSuspectDroppedEventsCount)
 }
@@ -208,25 +212,25 @@ func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) 
 func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	rt.resources.localObs = NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	rt.resources.localObs = syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	rt.resources.localObs.RestoreDropped(1, 1)
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []LocalStateRow{
-		{Path: "known.txt", ItemType: ItemTypeFile},
+	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
+		{Path: "known.txt", ItemType: syncdomain.ItemTypeFile},
 	}))
 
 	rt.handleMaintenanceTick(t.Context())
 
-	state := readObservationStateForTest(t, eng.baseline, t.Context())
+	state := syncstoretest.ReadObservationStateForTest(t, eng.baseline, t.Context())
 	assert.False(t, state.LocalTruthComplete)
-	assert.Equal(t, LocalTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
+	assert.Equal(t, syncdomain.LocalTruthRecoveryDroppedEvents, state.LocalTruthRecoveryReason)
 	assert.Zero(t, rt.resources.localObs.DroppedEvents())
 	assert.Zero(t, rt.resources.localObs.DroppedRetries())
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
@@ -239,16 +243,16 @@ func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t
 func TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	var logBuf bytes.Buffer
 	rt.deps.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	rt.resources.localObs = NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	rt.resources.localObs = syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
 	rt.resources.localObs.RestoreDropped(1, 0)
 
 	// A canceled context makes marking local truth suspect fail the same way
@@ -287,7 +291,7 @@ func TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce(t *testing.T) {
 func TestWatchRuntime_BootstrapWaitLogsOnlyWhenCountsChange(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	var logBuf bytes.Buffer

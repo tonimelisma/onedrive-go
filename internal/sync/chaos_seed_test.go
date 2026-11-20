@@ -17,6 +17,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // What a chaos seed fixes, and the line that reruns one. A seed fixes the
@@ -112,26 +113,26 @@ func chaosOrderRun(ctx context.Context, arrange chaosArrangement) ([]chaosDraw, 
 
 // chaosOrderClient is a fake OneDrive whose every answer depends on the
 // request alone, so what a call gets depends on nothing but the layer's draws.
-func chaosOrderClient() *engineMockClient {
-	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+func chaosOrderClient() *syncfixture.EngineMockClient {
+	return &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
 			items := []graph.Item{{ID: "root", IsRoot: true}}
 			for i := range chaosOrderWindowItems {
 				items = append(items, graph.Item{ID: fmt.Sprintf("%s-item-%d", token, i)})
 			}
 			return &graph.DeltaPage{Items: items, DeltaLink: "after-" + token}, nil
 		},
-		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+		GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 			return &graph.Item{ID: itemID}, nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			n, err := io.WriteString(w, "the content of "+itemID)
 			if err != nil {
 				return int64(n), fmt.Errorf("write download: %w", err)
 			}
 			return int64(n), nil
 		},
-		uploadFn: func(
+		UploadFn: func(
 			_ context.Context, _ driveid.ID, parentID, name string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
 		) (*graph.Item, error) {
 			return &graph.Item{ID: parentID + "/" + name, Name: name}, nil
@@ -144,7 +145,7 @@ func chaosOrderClient() *engineMockClient {
 // it returns makes the stream's next call and reports whether another follows.
 type chaosOrderStream struct {
 	name string
-	step func(ctx context.Context, client *engineMockClient) func() bool
+	step func(ctx context.Context, client *syncfixture.EngineMockClient) func() bool
 	seen []string
 }
 
@@ -152,19 +153,19 @@ type chaosOrderStream struct {
 // streams of different operations, and two delta streams whose listings
 // follow their windows' pages.
 func chaosOrderStreams() []*chaosOrderStream {
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
 	return []*chaosOrderStream{
-		chaosRepeatedCalls("get-item item-a", func(ctx context.Context, client *engineMockClient) string {
-			_, err := client.getItemFn(ctx, driveID, "item-a")
+		chaosRepeatedCalls("get-item item-a", func(ctx context.Context, client *syncfixture.EngineMockClient) string {
+			_, err := client.GetItemFn(ctx, driveID, "item-a")
 			return chaosOutcome(err)
 		}),
-		chaosRepeatedCalls("download item-b", func(ctx context.Context, client *engineMockClient) string {
-			n, err := client.downloadFn(ctx, driveID, "item-b", io.Discard)
+		chaosRepeatedCalls("download item-b", func(ctx context.Context, client *syncfixture.EngineMockClient) string {
+			n, err := client.DownloadFn(ctx, driveID, "item-b", io.Discard)
 			return strconv.FormatInt(n, 10) + " bytes, " + chaosOutcome(err)
 		}),
-		chaosRepeatedCalls("upload root/c.txt", func(ctx context.Context, client *engineMockClient) string {
-			_, err := client.uploadFn(ctx, driveID, "root", "c.txt", strings.NewReader("c"), 1, time.Time{}, nil)
+		chaosRepeatedCalls("upload root/c.txt", func(ctx context.Context, client *syncfixture.EngineMockClient) string {
+			_, err := client.UploadFn(ctx, driveID, "root", "c.txt", strings.NewReader("c"), 1, time.Time{}, nil)
 			return chaosOutcome(err)
 		}),
 		chaosListings(driveID, ""),
@@ -174,9 +175,9 @@ func chaosOrderStreams() []*chaosOrderStream {
 
 // chaosRepeatedCalls is a stream that makes call chaosOrderCallsPerStep times
 // a step.
-func chaosRepeatedCalls(name string, call func(context.Context, *engineMockClient) string) *chaosOrderStream {
+func chaosRepeatedCalls(name string, call func(context.Context, *syncfixture.EngineMockClient) string) *chaosOrderStream {
 	stream := &chaosOrderStream{name: name}
-	stream.step = func(ctx context.Context, client *engineMockClient) func() bool {
+	stream.step = func(ctx context.Context, client *syncfixture.EngineMockClient) func() bool {
 		left := chaosOrderCallsPerStep
 		return func() bool {
 			stream.seen = append(stream.seen, call(ctx, client))
@@ -193,10 +194,10 @@ func chaosRepeatedCalls(name string, call func(context.Context, *engineMockClien
 // the remote observer does.
 func chaosListings(driveID driveid.ID, token string) *chaosOrderStream {
 	stream := &chaosOrderStream{name: "listings from " + strconv.Quote(token)}
-	stream.step = func(ctx context.Context, client *engineMockClient) func() bool {
+	stream.step = func(ctx context.Context, client *syncfixture.EngineMockClient) func() bool {
 		listings, next, attempts := 0, token, 0
 		return func() bool {
-			page, err := client.deltaFn(ctx, driveID, next)
+			page, err := client.DeltaFn(ctx, driveID, next)
 			attempts++
 			switch {
 			case err != nil:

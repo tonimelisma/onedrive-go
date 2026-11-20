@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Re-admission after a timed block scope ramps instead of flooding
@@ -84,20 +87,22 @@ func slowStartThresholdAfterThrottle(transferWorkers, allowanceAtThrottle, previ
 // them under the scope. Only the loop goroutine that owns the outbox calls
 // it, from inside a completion it is applying.
 type admittedWorkOwner interface {
-	takeAdmittedWorkBlockedBy(key ScopeKey) []*TrackedAction
+	takeAdmittedWorkBlockedBy(key syncdomain.ScopeKey) []*syncdomain.TrackedAction
 }
 
 // noAdmittedWork is the owner of a flow that has no outbox of its own.
 type noAdmittedWork struct{}
 
-func (noAdmittedWork) takeAdmittedWorkBlockedBy(ScopeKey) []*TrackedAction { return nil }
+func (noAdmittedWork) takeAdmittedWorkBlockedBy(syncdomain.ScopeKey) []*syncdomain.TrackedAction {
+	return nil
+}
 
 // takeOutboxBlockedBy splits an outbox into the actions key blocks, which are
 // returned, and the rest, which is the new outbox. Order is kept on both
 // sides.
-func takeOutboxBlockedBy(outbox []*TrackedAction, key ScopeKey) (taken, kept []*TrackedAction) {
+func takeOutboxBlockedBy(outbox []*syncdomain.TrackedAction, key syncdomain.ScopeKey) (taken, kept []*syncdomain.TrackedAction) {
 	for _, ta := range outbox {
-		if ta != nil && ScopeBlocksTrackedAction(key, ta, ta.Action.ThrottleTargetKey()) {
+		if ta != nil && syncexec.ScopeBlocksTrackedAction(key, ta, ta.Action.ThrottleTargetKey()) {
 			taken = append(taken, ta)
 			continue
 		}
@@ -111,7 +116,7 @@ func takeOutboxBlockedBy(outbox []*TrackedAction, key ScopeKey) (taken, kept []*
 // holds it under key, persisted blocked, through the ordinary scope-hold
 // admission path. Work a worker already took is not reachable here; it
 // finishes and its outcome is classified normally.
-func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key ScopeKey) error {
+func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key syncdomain.ScopeKey) error {
 	taken := flow.admitted.takeAdmittedWorkBlockedBy(key)
 	if len(taken) == 0 {
 		return nil
@@ -123,15 +128,15 @@ func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key Sco
 			Action:       ta,
 			Kind:         admissionHoldScope,
 			ScopeKey:     key,
-			RetryWorkKey: RetryWorkKeyForAction(&ta.Action),
+			RetryWorkKey: syncdomain.RetryWorkKeyForAction(&ta.Action),
 		})
 	}
 	if _, err := flow.applyAdmissionDecisions(ctx, decisions); err != nil {
 		return fmt.Errorf("retire %d admitted actions under %s: %w", len(taken), key.String(), err)
 	}
 
-	flow.deps.emit(EngineDebugEvent{
-		Type:     EngineDebugEventAdmittedWorkRetired,
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:     syncdomain.EngineDebugEventAdmittedWorkRetired,
 		ScopeKey: key,
 		Count:    len(taken),
 	})
@@ -145,8 +150,8 @@ func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key Sco
 
 // heldScopeBatch is the first `limit` held entries of a scope in held order:
 // the next ramp batch.
-func (flow *engineFlow) heldScopeBatch(key ScopeKey, limit int) []RetryWorkKey {
-	batch := make([]RetryWorkKey, 0, limit)
+func (flow *engineFlow) heldScopeBatch(key syncdomain.ScopeKey, limit int) []syncdomain.RetryWorkKey {
+	batch := make([]syncdomain.RetryWorkKey, 0, limit)
 	for _, work := range flow.retries.heldByScope[key] {
 		if len(batch) == limit {
 			break
@@ -164,7 +169,7 @@ func (flow *engineFlow) heldScopeBatch(key ScopeKey, limit int) []RetryWorkKey {
 // superseded). Nothing is released for it: a batch whose last member failed
 // waits for the next due trial, one interval out, which resets the count and
 // continues the ramp from its success.
-func (flow *engineFlow) noteProbationMemberFinished(key ScopeKey, generation uint64) {
+func (flow *engineFlow) noteProbationMemberFinished(key syncdomain.ScopeKey, generation uint64) {
 	scope, active := flow.scopes.lookupActiveScope(key)
 	if !active || scope.Generation != generation || scope.ReleaseAllowance == 0 {
 		return
@@ -186,9 +191,9 @@ func (flow *engineFlow) noteProbationMemberFinished(key ScopeKey, generation uin
 // the drive just said it is still limited, or the backlog is already free.
 func (flow *engineFlow) releaseScopeBatch(
 	ctx context.Context,
-	key ScopeKey,
+	key syncdomain.ScopeKey,
 	generation uint64,
-) ([]*TrackedAction, error) {
+) ([]*syncdomain.TrackedAction, error) {
 	scope, active := flow.scopes.lookupActiveScope(key)
 	if !active || scope.Generation != generation {
 		flow.deps.logger.Debug("trial succeeded for a scope that was re-blocked or released meanwhile; releasing nothing",
@@ -214,7 +219,7 @@ func (flow *engineFlow) releaseScopeBatch(
 		return nil, fmt.Errorf("sync: releasing %d blocked actions under %s: %w", len(batchKeys), key.String(), err)
 	}
 
-	batch := make([]*TrackedAction, 0, len(batchKeys))
+	batch := make([]*syncdomain.TrackedAction, 0, len(batchKeys))
 	for _, work := range batchKeys {
 		ta := flow.retries.releaseHeldAction(work)
 		if ta == nil {
@@ -229,8 +234,8 @@ func (flow *engineFlow) releaseScopeBatch(
 
 	if removed {
 		flow.scopes.removeActiveScope(key)
-		flow.deps.emit(EngineDebugEvent{
-			Type:     EngineDebugEventScopeReleased,
+		flow.deps.emit(syncdomain.EngineDebugEvent{
+			Type:     syncdomain.EngineDebugEventScopeReleased,
 			ScopeKey: key,
 			Count:    len(batch),
 		})
@@ -250,8 +255,8 @@ func (flow *engineFlow) releaseScopeBatch(
 		if err := flow.persistActiveScope(ctx, &scope); err != nil {
 			return batch, fmt.Errorf("keep scope %s on probation: %w", key.String(), err)
 		}
-		flow.deps.emit(EngineDebugEvent{
-			Type:     EngineDebugEventScopeBatchReleased,
+		flow.deps.emit(syncdomain.EngineDebugEvent{
+			Type:     syncdomain.EngineDebugEventScopeBatchReleased,
 			ScopeKey: key,
 			Count:    len(batch),
 		})

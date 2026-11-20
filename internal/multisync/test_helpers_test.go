@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 
 	_ "modernc.org/sqlite"
@@ -44,13 +45,13 @@ func testStandaloneMountIdentity(cid driveid.CanonicalID) MountIdentity {
 	}
 }
 
-func testShortcutChildAckRef(t *testing.T, bindingItemID string) syncengine.ShortcutChildAckRef {
+func testShortcutChildAckRef(t *testing.T, bindingItemID string) syncshortcut.ShortcutChildAckRef {
 	t.Helper()
 
 	ctx := t.Context()
 	const namespaceID = "personal:owner@example.com"
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := syncengine.NewSyncStore(ctx, dbPath, slog.New(slog.DiscardHandler))
+	store, err := syncstore.NewSyncStore(ctx, dbPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(ctx))

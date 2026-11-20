@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -23,7 +23,7 @@ func TestReportKeptFinalDrains_NoticesOnceUntilReasonChanges(t *testing.T) {
 
 	parent := testStandaloneMount(t, "personal:kept-drain@example.com", "Parent")
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-kept", "Shortcuts/Docs")
-	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 	decisions, err := buildRuntimeWork([]StandaloneMountConfig{parent}, testParentSnapshots(&parent, child), t.TempDir())
 	require.NoError(t, err)
 	var childMount *mountSpec

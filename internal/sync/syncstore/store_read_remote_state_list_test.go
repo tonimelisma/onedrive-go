@@ -1,0 +1,151 @@
+package syncstore
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+)
+
+// Validates: R-2.2
+func TestSyncStore_ListRemoteStateAndRejectMismatchedDriveLookup(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(syncfixture.TestDriveID)
+
+	require.NoError(t, store.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{
+			DriveID:  driveID,
+			ItemID:   "item-b",
+			Path:     "docs/b.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash-b",
+		},
+		{
+			DriveID:  driveID,
+			ItemID:   "item-a",
+			Path:     "docs/a.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash-a",
+		},
+	}, "delta-token", driveID))
+
+	rows, err := store.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, driveID, rows[0].DriveID)
+	assert.Equal(t, driveID, rows[1].DriveID)
+	assert.ElementsMatch(t, []string{"docs/a.txt", "docs/b.txt"}, []string{rows[0].Path, rows[1].Path})
+
+	row, found, err := store.GetRemoteStateByPath(ctx, "docs/a.txt", driveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, row)
+	assert.Equal(t, "item-a", row.ItemID)
+}
+
+// Validates: R-2.2
+func TestSyncStore_ListRemoteState_PreservesPerRowDriveOwnership(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	contentDriveID := driveid.New("mount-drive")
+	sharedDriveID := driveid.New("shared-drive")
+
+	require.NoError(t, store.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{
+			DriveID:  contentDriveID,
+			ItemID:   "item-configured",
+			Path:     "docs/configured.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash-configured",
+		},
+		{
+			DriveID:  sharedDriveID,
+			ItemID:   "item-shared",
+			Path:     "Shared/shared.txt",
+			ItemType: syncdomain.ItemTypeFile,
+			Hash:     "hash-shared",
+		},
+	}, "delta-token", contentDriveID))
+
+	rows, err := store.ListRemoteState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+
+	byPath := make(map[string]syncdomain.RemoteStateRow, len(rows))
+	for i := range rows {
+		byPath[rows[i].Path] = rows[i]
+	}
+
+	assert.Equal(t, contentDriveID, byPath["docs/configured.txt"].DriveID)
+	assert.Equal(t, sharedDriveID, byPath["Shared/shared.txt"].DriveID)
+}
+
+// Validates: R-2.2
+func TestSyncStore_GetRemoteStateByPath_RejectsMismatchedDriveWhenStateAlreadyConfigured(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	contentDriveID := driveid.New("mount-drive")
+	attemptedDriveID := driveid.New("attempted-drive")
+
+	require.NoError(t, store.CommitObservation(ctx, []syncdomain.ObservedItem{{
+		DriveID:  contentDriveID,
+		ItemID:   "item-a",
+		Path:     "docs/a.txt",
+		ItemType: syncdomain.ItemTypeFile,
+		Hash:     "hash-a",
+	}}, "delta-token", contentDriveID))
+
+	row, found, err := store.GetRemoteStateByPath(ctx, "docs/a.txt", attemptedDriveID)
+	require.Error(t, err)
+	assert.Nil(t, row)
+	assert.False(t, found)
+	assert.Contains(t, err.Error(), "belongs to a different OneDrive drive")
+}
+
+// Validates: R-2.2
+func TestSyncStore_CommitObservation_UpdatesPerRowDriveOwnershipWithoutOtherMetadataChanges(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	contentDriveID := driveid.New("mount-drive")
+	sharedDriveID := driveid.New("shared-drive")
+
+	require.NoError(t, store.CommitObservation(ctx, []syncdomain.ObservedItem{{
+		ItemID:   "item-shared",
+		Path:     "Shared/shared.txt",
+		ItemType: syncdomain.ItemTypeFile,
+		Hash:     "hash-shared",
+		Size:     42,
+		Mtime:    1234,
+		ETag:     "etag-shared",
+	}}, "delta-1", contentDriveID))
+
+	require.NoError(t, store.CommitObservation(ctx, []syncdomain.ObservedItem{{
+		DriveID:  sharedDriveID,
+		ItemID:   "item-shared",
+		Path:     "Shared/shared.txt",
+		ItemType: syncdomain.ItemTypeFile,
+		Hash:     "hash-shared",
+		Size:     42,
+		Mtime:    1234,
+		ETag:     "etag-shared",
+	}}, "delta-2", contentDriveID))
+
+	row, found, err := store.GetRemoteStateByPath(ctx, "Shared/shared.txt", contentDriveID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, row)
+	assert.Equal(t, sharedDriveID, row.DriveID)
+}

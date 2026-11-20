@@ -7,13 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.17.2
 func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
@@ -38,7 +41,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 
 	// Before: "sync: missing baseline entry for comparison path" tore down
 	// the drive runner.
-	plan, err := eng.buildCurrentActionPlanFromInputs(&inputs, cached, SyncBidirectional, RunOptions{})
+	plan, err := eng.buildCurrentActionPlanFromInputs(&inputs, cached, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.NotNil(t, plan)
 }
@@ -47,7 +50,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 func TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New("d")
 
@@ -55,15 +58,15 @@ func TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent(t *testing.T) 
 	held, err := mgr.Load(ctx)
 	require.NoError(t, err)
 
-	for _, m := range []BaselineMutation{
-		{Action: ActionFolderCreate, Success: true, Path: "movesrc", DriveID: driveID, ItemID: "dir", ItemType: ItemTypeFolder},
-		{Action: ActionUpload, Success: true, Path: "movesrc/a.txt", DriveID: driveID, ItemID: "a", ItemType: ItemTypeFile},
+	for _, m := range []syncdomain.BaselineMutation{
+		{Action: syncdomain.ActionFolderCreate, Success: true, Path: "movesrc", DriveID: driveID, ItemID: "dir", ItemType: syncdomain.ItemTypeFolder},
+		{Action: syncdomain.ActionUpload, Success: true, Path: "movesrc/a.txt", DriveID: driveID, ItemID: "a", ItemType: syncdomain.ItemTypeFile},
 		{
-			Action: ActionRemoteMove, Success: true, Path: "movedst", OldPath: "movesrc",
-			DriveID: driveID, ItemID: "dir", ItemType: ItemTypeFolder,
+			Action: syncdomain.ActionRemoteMove, Success: true, Path: "movedst", OldPath: "movesrc",
+			DriveID: driveID, ItemID: "dir", ItemType: syncdomain.ItemTypeFolder,
 		},
 		// The commit after the folder move must still reach the held pointer.
-		{Action: ActionFolderCreate, Success: true, Path: "fm2", DriveID: driveID, ItemID: "fm2", ItemType: ItemTypeFolder},
+		{Action: syncdomain.ActionFolderCreate, Success: true, Path: "fm2", DriveID: driveID, ItemID: "fm2", ItemType: syncdomain.ItemTypeFolder},
 	} {
 		require.NoError(t, mgr.CommitMutation(ctx, &m))
 	}

@@ -7,7 +7,7 @@ Implements: R-6.10.7 [verified]
 | Behavior | Evidence |
 | --- | --- |
 | Threat-boundary claims are backed by rooted filesystem, Graph redaction, and package-level behavior tests. | `internal/fsroot/fsroot_test.go`, `internal/localpath/localpath_test.go`, `internal/graph/client_test.go` |
-| Durable-state and degraded-mode trust assumptions are exercised by sync-store, startup diagnosis, and reset-guidance tests. | `internal/sync/engine_run_once_test.go`, `internal/sync/schema_test.go`, `internal/cli/status_test.go`, `internal/cli/sync_runtime_test.go` |
+| Durable-state and degraded-mode trust assumptions are exercised by sync-store, startup diagnosis, and reset-guidance tests. | `internal/sync/engine_run_once_test.go`, `internal/sync/syncstore/schema_test.go`, `internal/cli/status_test.go`, `internal/cli/sync_runtime_test.go` |
 
 ## Assets
 
@@ -79,7 +79,7 @@ Explicit non-goals:
 | Mitigation | Evidence |
 |------------|----------|
 | Rooted filesystem boundaries and atomic replacement writes | `internal/fsroot/fsroot_test.go` (`TestRoot_AtomicWrite_WritesFileAtomically`, `TestRoot_AtomicWrite_RejectsRootEscape`, `TestRoot_Remove_RefusesSymlinkedParent`, `TestRoot_Rename_RefusesSymlinkedParent`, `TestRoot_AtomicWrite_RefusesSymlinkedParent`, `TestRoot_Stat_RefusesSymlinkedParent`, `TestRoot_CreateTemp_RefusesSymlinkedDir`, `TestRoot_OpenFile_CreateFailureKeepsItsErrno`), `internal/localpath/localpath_test.go` (`TestAtomicWrite`, `TestAtomicWrite_CleansTempOnRenameFailure`) |
-| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/graph/download_test.go` (`TestDownload_RejectsUntrustedDownloadURL`), `internal/graph/redaction_test.go` (`TestIsSensitiveURL_SocketIONotificationURLs`), `internal/sync/socketio_test.go` (`TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL`) |
+| Graph normalization, redaction, and pre-auth boundary discipline | `internal/graph/client_test.go` (`TestDo_DebugLogsNeverExposeBearerToken`, `TestDoPreAuth_ErrorBodyCappedAt64KiB`, `TestDoOnce_401_RefreshSucceeds`), `internal/graph/download_test.go` (`TestDownload_RejectsUntrustedDownloadURL`), `internal/graph/redaction_test.go` (`TestIsSensitiveURL_SocketIONotificationURLs`), `internal/sync/internal/syncobserve/socketio_test.go` (`TestSocketIOWakeSource_DialFailureNeverLogsTheNotificationURL`) |
 | Managed token/config file validation and rooted writes | `internal/graph/auth_test.go` (`TestSaveToken_AtomicWrite`, `TestLoadToken_InvalidJSON`), `internal/config/write_test.go` (`TestAtomicWriteFile_WritesFile`) |
 | Owner-only config and log files against other local users | `internal/config/write_test.go` (`TestAtomicWriteFile_SetsPermissions`), `internal/logfile/logfile_test.go` (`TestOpen_Permissions`, `TestOpen_CreatesParentDirs`) |
 | Observer-side invalid-path and permission containment | `internal/sync/permission_handler_test.go` (`TestPermHandler_HandleLocalPermission_DirectoryLevel`, `TestPermHandler_Handle403_NoPermissionRoot`), `internal/sync/engine_watch_test.go` (`TestHandleObserverExit_LastObserverOutsideShutdownReturnsError`) |

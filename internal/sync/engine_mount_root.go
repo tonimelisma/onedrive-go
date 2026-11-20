@@ -10,6 +10,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func (e *Engine) hasRemoteMountRoot() bool {
@@ -22,9 +25,9 @@ func (e *Engine) mountRootDeltaSupported() bool {
 
 // mountRootObservation is what one mount-root observation saw.
 type mountRootObservation struct {
-	events []RemoteItem
+	events []syncdomain.RemoteItem
 	token  string
-	mode   RemoteObservationMode
+	mode   syncdomain.RemoteObservationMode
 	// complete marks a whole-folder enumeration (a delta without a token,
 	// after a requested refresh or an expired token).
 	complete bool
@@ -35,30 +38,30 @@ type mountRootObservation struct {
 
 func (flow *engineFlow) observeMountRootRemote(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	fullReconcile bool,
 ) (mountRootObservation, error) {
 	eng := flow.engine
 	if !eng.hasRemoteMountRoot() {
-		return mountRootObservation{mode: RemoteObservationModeEnumerate},
+		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate},
 			fmt.Errorf("sync: mount-root observation requires a remote root item ID")
 	}
 
-	if eng.preferredMountRootObservationMode() == RemoteObservationModeDelta {
+	if eng.preferredMountRootObservationMode() == syncdomain.RemoteObservationModeDelta {
 		token := ""
 		if !fullReconcile {
 			state, err := eng.baseline.ReadObservationState(ctx)
 			if err != nil {
-				return mountRootObservation{mode: RemoteObservationModeDelta}, fmt.Errorf("sync: reading observation state: %w", err)
+				return mountRootObservation{mode: syncdomain.RemoteObservationModeDelta}, fmt.Errorf("sync: reading observation state: %w", err)
 			}
 
 			token = state.Cursor
 		}
 
 		items, newToken, err := eng.folderDelta.DeltaFolderAll(ctx, eng.driveID, eng.remoteRootItemID, token)
-		orphanKind := ResyncKindApplyDifferences
+		orphanKind := syncdomain.ResyncKindApplyDifferences
 		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			orphanKind = ResyncKindOf(NewDeltaExpiredError(err))
+			orphanKind = syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(err))
 			// Self-healing: the next call re-enumerates the shared folder from
 			// scratch, so nothing needs the user's attention.
 			eng.logger.Info("Change history for a shared folder expired; rescanning the folder",
@@ -74,13 +77,13 @@ func (flow *engineFlow) observeMountRootRemote(
 			events, undecided := eng.mountRootEvents(ctx, items, bl, fullReconcile, orphanKind)
 
 			return mountRootObservation{
-				events: events, token: newToken, mode: RemoteObservationModeDelta,
+				events: events, token: newToken, mode: syncdomain.RemoteObservationModeDelta,
 				complete: fullReconcile, orphansUndecided: undecided,
 			}, nil
 		}
 
 		if eng.recursiveLister == nil || !shouldFallbackMountRootDelta(err) {
-			return mountRootObservation{mode: RemoteObservationModeDelta}, fmt.Errorf("sync: mount-root delta: %w", err)
+			return mountRootObservation{mode: syncdomain.RemoteObservationModeDelta}, fmt.Errorf("sync: mount-root delta: %w", err)
 		}
 
 		// The fallback is retried on every poll, but the condition does not
@@ -100,23 +103,23 @@ func (flow *engineFlow) observeMountRootRemote(
 	}
 
 	if eng.recursiveLister == nil {
-		return mountRootObservation{mode: RemoteObservationModeEnumerate},
+		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate},
 			fmt.Errorf("sync: recursive lister not available for mount root %s", eng.remoteRootItemID)
 	}
 
 	items, err := eng.recursiveLister.ListChildrenRecursive(ctx, eng.driveID, eng.remoteRootItemID)
 	if err != nil {
-		return mountRootObservation{mode: RemoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root recursive listing: %w", err)
+		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate}, fmt.Errorf("sync: mount-root recursive listing: %w", err)
 	}
 	if err := validateMountRootListingParents(items, eng.remoteRootItemID); err != nil {
-		return mountRootObservation{mode: RemoteObservationModeEnumerate}, err
+		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate}, err
 	}
 
 	// A listing keeps no position: an undecided orphan is judged again by
 	// the next listing, every pass, so it needs no refresh pulled forward.
-	events, _ := eng.mountRootEvents(ctx, items, bl, true, ResyncKindApplyDifferences)
+	events, _ := eng.mountRootEvents(ctx, items, bl, true, syncdomain.ResyncKindApplyDifferences)
 
-	return mountRootObservation{events: events, mode: RemoteObservationModeEnumerate, complete: true}, nil
+	return mountRootObservation{events: events, mode: syncdomain.RemoteObservationModeEnumerate, complete: true}, nil
 }
 
 // mountRootEvents converts a mount-root enumeration, adding confirmed orphan
@@ -124,8 +127,8 @@ func (flow *engineFlow) observeMountRootRemote(
 // the enumeration, if any: unless it applies differences, confirmed orphans
 // are re-uploads, not deletes (R-2.15.3).
 func (e *Engine) mountRootEvents(
-	ctx context.Context, items []graph.Item, bl *Baseline, complete bool, kind ResyncKind,
-) ([]RemoteItem, bool) {
+	ctx context.Context, items []graph.Item, bl *syncdomain.Baseline, complete bool, kind syncdomain.ResyncKind,
+) ([]syncdomain.RemoteItem, bool) {
 	events := convertMountRootItems(ctx, items, e.remoteRootItemID, e.driveID, bl, e.logger, e.itemsClient)
 	if !complete {
 		return events, false
@@ -143,11 +146,11 @@ func convertMountRootItems(
 	items []graph.Item,
 	remoteRootItemID string,
 	remoteDriveID driveid.ID,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	logger *slog.Logger,
-	itemClient ItemClient,
-) []RemoteItem {
-	converter := NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
+	itemClient syncdomain.ItemClient,
+) []syncdomain.RemoteItem {
+	converter := syncobserve.NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
 	converter.RemoteRootItemID = remoteRootItemID
 	return converter.ConvertItems(ctx, items)
 }
@@ -156,13 +159,13 @@ func shouldFallbackMountRootDelta(err error) bool {
 	return errors.Is(err, graph.ErrMethodNotAllowed) || errors.Is(err, graph.ErrNotFound)
 }
 
-func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *Baseline) []RemoteItem {
+func detectMountRootOrphans(items []graph.Item, remoteDriveID driveid.ID, bl *syncdomain.Baseline) []syncdomain.RemoteItem {
 	seen := make(map[string]struct{}, len(items))
 	for i := range items {
 		seen[items[i].ID] = struct{}{}
 	}
 
-	return FindBaselineOrphans(bl, seen, remoteDriveID, "")
+	return syncstore.FindBaselineOrphans(bl, seen, remoteDriveID, "")
 }
 
 // validateMountRootListingParents rejects a recursive listing whose items do
@@ -184,7 +187,7 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 		}
 		if _, ok := folders[items[i].ParentID]; !ok {
 			return fmt.Errorf("%w: shared folder listing returned %q under a folder it did not list",
-				ErrRemoteObservationIncomplete, items[i].Name)
+				syncdomain.ErrRemoteObservationIncomplete, items[i].Name)
 		}
 	}
 
@@ -200,8 +203,8 @@ func validateMountRootListingParents(items []graph.Item, remoteRootItemID string
 // mount; an item still inside, one whose parent cannot be resolved, or a
 // lookup that failed is left for the next listing.
 func (e *Engine) confirmMountRootOrphans(
-	ctx context.Context, listed []graph.Item, orphans []RemoteItem,
-) (confirmed []RemoteItem, undecided bool) {
+	ctx context.Context, listed []graph.Item, orphans []syncdomain.RemoteItem,
+) (confirmed []syncdomain.RemoteItem, undecided bool) {
 	inside := make(map[string]struct{}, len(listed)+1)
 	inside[e.remoteRootItemID] = struct{}{}
 	for i := range listed {
@@ -221,14 +224,14 @@ func (e *Engine) confirmMountRootOrphans(
 // soon (observeRemoteFullWithShortcutTopology).
 func (e *Engine) confirmEnumerationOrphans(
 	ctx context.Context,
-	orphans []RemoteItem,
+	orphans []syncdomain.RemoteItem,
 	inside map[string]struct{},
-) (confirmed []RemoteItem, undecided bool) {
+) (confirmed []syncdomain.RemoteItem, undecided bool) {
 	if len(orphans) == 0 || e.itemsClient == nil {
 		return orphans, false
 	}
 
-	confirmed = make([]RemoteItem, 0, len(orphans))
+	confirmed = make([]syncdomain.RemoteItem, 0, len(orphans))
 	for i := range orphans {
 		orphan := orphans[i]
 		live, err := e.itemsClient.GetItem(ctx, e.driveID, orphan.ItemID)
@@ -293,7 +296,7 @@ func (e *Engine) liveItemLeftMount(ctx context.Context, live *graph.Item, inside
 
 func (flow *engineFlow) commitObservedItems(
 	ctx context.Context,
-	observed []ObservedItem,
+	observed []syncdomain.ObservedItem,
 	token string,
 ) error {
 	eng := flow.engine
@@ -307,17 +310,17 @@ func (flow *engineFlow) commitObservedItems(
 
 func (rt *watchRuntime) watchMountRootRemote(
 	ctx context.Context,
-	bl *Baseline,
-	batches chan<- RemoteObservationBatch,
+	bl *syncdomain.Baseline,
+	batches chan<- syncobserve.RemoteObservationBatch,
 	interval time.Duration,
 ) error {
-	if interval < MinPollInterval {
-		interval = MinPollInterval
+	if interval < syncdomain.MinPollInterval {
+		interval = syncdomain.MinPollInterval
 	}
 
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
 	bo.SetMaxOverride(interval)
-	var outage PollOutageLog
+	var outage syncobserve.PollOutageLog
 
 	for {
 		// When the poll began, before its first page was asked for: once the
@@ -339,7 +342,7 @@ func (rt *watchRuntime) watchMountRootRemote(
 		outage.Recovered(ctx, rt.deps.logger, "Checking the shared folder for changes works again")
 		observationBatch.PollStartedAt = pollStartedAt
 		if err := rt.handleMountRootObservationResult(ctx, batches, interval, bo, &observationBatch); err != nil {
-			if RunEnded(ctx, err) {
+			if syncdomain.RunEnded(ctx, err) {
 				return nil
 			}
 			return err
@@ -349,10 +352,10 @@ func (rt *watchRuntime) watchMountRootRemote(
 
 func (rt *watchRuntime) handleMountRootObservationResult(
 	ctx context.Context,
-	batches chan<- RemoteObservationBatch,
+	batches chan<- syncobserve.RemoteObservationBatch,
 	interval time.Duration,
 	bo *retry.Backoff,
-	observationBatch *RemoteObservationBatch,
+	observationBatch *syncobserve.RemoteObservationBatch,
 ) error {
 	if shouldSkipMountRootWatchBatch(observationBatch) {
 		bo.Reset()
@@ -363,7 +366,7 @@ func (rt *watchRuntime) handleMountRootObservationResult(
 		return nil
 	}
 
-	observationBatch.Source = RemoteObservationBatchMountRoot
+	observationBatch.Source = syncobserve.RemoteObservationBatchMountRoot
 	observationBatch.ApplyAck = make(chan error, 1)
 	if dispatchErr := rt.dispatchMountRootBatch(ctx, batches, observationBatch); dispatchErr != nil {
 		return dispatchErr
@@ -378,7 +381,7 @@ func (rt *watchRuntime) handleMountRootObservationResult(
 	return nil
 }
 
-func shouldSkipMountRootWatchBatch(batch *RemoteObservationBatch) bool {
+func shouldSkipMountRootWatchBatch(batch *syncobserve.RemoteObservationBatch) bool {
 	if batch == nil {
 		return true
 	}
@@ -386,16 +389,16 @@ func shouldSkipMountRootWatchBatch(batch *RemoteObservationBatch) bool {
 	return len(batch.Changes) == 0 &&
 		!batch.HasObservationFindings() &&
 		batch.DeferredProgress() == nil &&
-		batch.ObservationMode != RemoteObservationModeEnumerate
+		batch.ObservationMode != syncdomain.RemoteObservationModeEnumerate
 }
 
 func (rt *watchRuntime) handleMountRootPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
-	outage *PollOutageLog,
+	outage *syncobserve.PollOutageLog,
 	err error,
 ) (bool, error) {
-	if RunEnded(ctx, err) {
+	if syncdomain.RunEnded(ctx, err) {
 		return true, nil
 	}
 
@@ -410,8 +413,8 @@ func (rt *watchRuntime) handleMountRootPollError(
 
 func (rt *watchRuntime) dispatchMountRootBatch(
 	ctx context.Context,
-	batches chan<- RemoteObservationBatch,
-	batch *RemoteObservationBatch,
+	batches chan<- syncobserve.RemoteObservationBatch,
+	batch *syncobserve.RemoteObservationBatch,
 ) error {
 	if batch == nil {
 		return nil
@@ -435,7 +438,7 @@ func (rt *watchRuntime) sleepMountRootWatch(
 	if sleepErr == nil {
 		return false, nil
 	}
-	if RunEnded(ctx, sleepErr) {
+	if syncdomain.RunEnded(ctx, sleepErr) {
 		return true, nil
 	}
 

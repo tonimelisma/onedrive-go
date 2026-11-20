@@ -1,0 +1,567 @@
+package syncstore
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+)
+
+const (
+	sqlReadObservationState = `SELECT
+				content_drive_id,
+				cursor,
+				next_full_remote_refresh_at,
+				local_truth_complete,
+				local_truth_recovery_reason,
+				sync_root_bound,
+				sync_root_device,
+				sync_root_inode,
+				sync_root_fsid,
+				sync_root_birth_time,
+				sync_root_token,
+				sync_root_rebind,
+				undecided_refresh_streak
+			FROM observation_state
+			LIMIT 1`
+	sqlEnsureObservationStateRow = `INSERT INTO observation_state
+		(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason)
+		SELECT '', '', 0, 0, ''
+		WHERE NOT EXISTS (SELECT 1 FROM observation_state)`
+)
+
+const (
+	RemoteRefreshEnumerateInterval = time.Hour
+)
+
+func remoteRefreshIntervalForMode(mode syncdomain.RemoteObservationMode) time.Duration {
+	switch mode {
+	case syncdomain.RemoteObservationModeDelta:
+		return syncdomain.FullRemoteRefreshInterval
+	case syncdomain.RemoteObservationModeEnumerate:
+		return RemoteRefreshEnumerateInterval
+	default:
+		return syncdomain.FullRemoteRefreshInterval
+	}
+}
+
+func applyRemoteRefreshSchedule(state *syncdomain.ObservationState, at time.Time, mode syncdomain.RemoteObservationMode) {
+	state.NextFullRemoteRefreshAt = syncdomain.StoredTimeNano(at.Add(remoteRefreshIntervalForMode(mode)))
+}
+
+func (s *SyncStore) contentDriveIDForRead(
+	ctx context.Context,
+	fallback driveid.ID,
+) (driveid.ID, error) {
+	if cached := s.contentDriveID(); !cached.IsZero() {
+		return cached, nil
+	}
+
+	contentDriveID, err := contentDriveIDForDB(ctx, s.db)
+	if err != nil {
+		return driveid.ID{}, err
+	}
+	if !contentDriveID.IsZero() {
+		s.rememberContentDriveID(contentDriveID)
+		return contentDriveID, nil
+	}
+
+	if !fallback.IsZero() {
+		s.rememberContentDriveID(fallback)
+		return fallback, nil
+	}
+
+	return driveid.ID{}, nil
+}
+
+func contentDriveIDForDB(ctx context.Context, runner SqlTxRunner) (driveid.ID, error) {
+	var raw string
+	if err := runner.QueryRowContext(ctx,
+		`SELECT content_drive_id FROM observation_state LIMIT 1`,
+	).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return driveid.ID{}, nil
+		}
+		return driveid.ID{}, fmt.Errorf("sync: reading content drive ID: %w", err)
+	}
+	if raw == "" {
+		return driveid.ID{}, nil
+	}
+
+	return driveid.New(raw), nil
+}
+
+func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
+	if expected.IsZero() || actual.IsZero() {
+		return nil
+	}
+	if expected.Equal(actual) {
+		return nil
+	}
+
+	return fmt.Errorf("sync: the saved sync state belongs to a different OneDrive drive (stored %s, now %s); "+
+		"reset it with onedrive-go drive reset-sync-state", actual, expected)
+}
+
+func (s *SyncStore) ReadObservationState(ctx context.Context) (*syncdomain.ObservationState, error) {
+	state, err := ReadObservationStateFromTx(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	s.rememberContentDriveID(state.ContentDriveID)
+
+	return state, nil
+}
+
+func (s *SyncStore) CommitObservationCursor(
+	ctx context.Context,
+	driveID driveid.ID,
+	cursor string,
+) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("sync: beginning observation cursor transaction: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback observation cursor transaction")
+	}()
+
+	state, err := ReadObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ensureErr := s.ensureContentDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+		return ensureErr
+	}
+
+	state.Cursor = cursor
+	if writeErr := s.writeObservationStateTx(ctx, tx, state); writeErr != nil {
+		return writeErr
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: committing observation cursor transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SyncStore) ClearObservationCursor(ctx context.Context) error {
+	state, err := s.ReadObservationState(ctx)
+	if err != nil {
+		return err
+	}
+	state.Cursor = ""
+	return s.replaceObservationState(ctx, state)
+}
+
+func (s *SyncStore) MarkFullRemoteRefresh(
+	ctx context.Context,
+	driveID driveid.ID,
+	at time.Time,
+	mode syncdomain.RemoteObservationMode,
+) error {
+	return s.markObservationRefresh(
+		ctx,
+		driveID,
+		"sync: beginning full remote refresh transaction",
+		"sync: rollback full remote refresh transaction",
+		"sync: committing full remote refresh transaction",
+		func(state *syncdomain.ObservationState) {
+			applyRemoteRefreshSchedule(state, at, mode)
+		},
+	)
+}
+
+// RecordFullRefreshOrphans records whether a full refresh left an orphan it
+// could not confirm, after MarkFullRemoteRefresh. An undecided orphan makes
+// the next full refresh due after undecidedRefreshDelay of the streak of such
+// refreshes, so a lookup that keeps failing does not re-enumerate the drive
+// every 15 minutes forever; a refresh that decides every orphan ends the
+// streak. It reports whether the deadline moved.
+func (s *SyncStore) RecordFullRefreshOrphans(
+	ctx context.Context,
+	driveID driveid.ID,
+	at time.Time,
+	undecided bool,
+) (bool, error) {
+	changed := false
+	err := s.markObservationRefresh(
+		ctx,
+		driveID,
+		"sync: beginning undecided-orphan refresh transaction",
+		"sync: rollback undecided-orphan refresh transaction",
+		"sync: committing undecided-orphan refresh transaction",
+		func(state *syncdomain.ObservationState) {
+			if !undecided {
+				state.UndecidedRefreshStreak = 0
+				return
+			}
+			state.UndecidedRefreshStreak++
+			deadline := syncdomain.StoredTimeNano(at.Add(undecidedRefreshDelay(state.UndecidedRefreshStreak)))
+			if !syncdomain.StoredTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
+				state.NextFullRemoteRefreshAt = deadline
+				changed = true
+			}
+		},
+	)
+
+	return changed, err
+}
+
+// undecidedRefreshDelay is how soon a full refresh follows the streak-th
+// consecutive one that left an orphan undecided: FullRefreshAfterFolderDeleteDelay,
+// doubling per refresh, up to the normal cadence.
+func undecidedRefreshDelay(streak int) time.Duration {
+	delay := syncdomain.FullRefreshAfterFolderDeleteDelay
+	for range streak - 1 {
+		delay *= 2
+		if delay >= syncdomain.FullRemoteRefreshInterval {
+			return syncdomain.FullRemoteRefreshInterval
+		}
+	}
+
+	return delay
+}
+
+func (s *SyncStore) ClampFullRemoteRefreshDeadline(
+	ctx context.Context,
+	driveID driveid.ID,
+	notAfter time.Time,
+) (bool, error) {
+	if notAfter.IsZero() {
+		return false, nil
+	}
+
+	deadline := syncdomain.StoredTimeNano(notAfter)
+	changed := false
+	err := s.markObservationRefresh(
+		ctx,
+		driveID,
+		"sync: beginning full remote refresh clamp transaction",
+		"sync: rollback full remote refresh clamp transaction",
+		"sync: committing full remote refresh clamp transaction",
+		func(state *syncdomain.ObservationState) {
+			if !syncdomain.StoredTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
+				state.NextFullRemoteRefreshAt = deadline
+				changed = true
+			}
+		},
+	)
+	return changed, err
+}
+
+func (s *SyncStore) markObservationRefresh(
+	ctx context.Context,
+	driveID driveid.ID,
+	beginMessage string,
+	rollbackMessage string,
+	commitMessage string,
+	update func(*syncdomain.ObservationState),
+) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("%s: %w", beginMessage, err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, rollbackMessage)
+	}()
+
+	state, err := ReadObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if ensureErr := s.ensureContentDriveIDTx(ctx, tx, driveID, state); ensureErr != nil {
+		return ensureErr
+	}
+
+	update(state)
+	if writeErr := s.writeObservationStateTx(ctx, tx, state); writeErr != nil {
+		return writeErr
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("%s: %w", commitMessage, commitErr)
+	}
+
+	return nil
+}
+
+func (s *SyncStore) contentDriveID() driveid.ID {
+	s.contentDriveMu.RLock()
+	defer s.contentDriveMu.RUnlock()
+
+	return s.cachedContentDriveID
+}
+
+func (s *SyncStore) rememberContentDriveID(id driveid.ID) {
+	if id.IsZero() {
+		return
+	}
+
+	s.contentDriveMu.Lock()
+	defer s.contentDriveMu.Unlock()
+
+	s.cachedContentDriveID = id
+}
+
+func ReadObservationStateFromTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+) (*syncdomain.ObservationState, error) {
+	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
+		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
+	}
+
+	var (
+		contentDriveID string
+		state          syncdomain.ObservationState
+		localComplete  int
+		rootBound      int
+		rootDevice     int64
+		rootInode      int64
+		rootFSID       int64
+		rootBirthTime  int64
+		rootToken      string
+		rootRebind     int
+	)
+
+	if err := tx.QueryRowContext(ctx, sqlReadObservationState).Scan(
+		&contentDriveID,
+		&state.Cursor,
+		&state.NextFullRemoteRefreshAt,
+		&localComplete,
+		&state.LocalTruthRecoveryReason,
+		&rootBound,
+		&rootDevice,
+		&rootInode,
+		&rootFSID,
+		&rootBirthTime,
+		&rootToken,
+		&rootRebind,
+		&state.UndecidedRefreshStreak,
+	); err != nil {
+		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
+	}
+	state.LocalTruthComplete = localComplete != 0
+	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootBirthTime, rootToken)
+	state.SyncRootRebind = rootRebind != 0
+
+	if contentDriveID != "" {
+		state.ContentDriveID = driveid.New(contentDriveID)
+	}
+
+	return &state, nil
+}
+
+func (s *SyncStore) ensureContentDriveIDTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	driveID driveid.ID,
+	state *syncdomain.ObservationState,
+) error {
+	if driveID.IsZero() {
+		return nil
+	}
+
+	if state.ContentDriveID.IsZero() {
+		state.ContentDriveID = driveID
+		if err := s.writeObservationStateTx(ctx, tx, state); err != nil {
+			return err
+		}
+		s.rememberContentDriveID(driveID)
+		return nil
+	}
+
+	if err := ensureMatchingContentDriveID(driveID, state.ContentDriveID); err != nil {
+		return err
+	}
+
+	s.rememberContentDriveID(state.ContentDriveID)
+	return nil
+}
+
+func (s *SyncStore) writeObservationStateTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	state *syncdomain.ObservationState,
+) error {
+	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
+		return err
+	}
+
+	if !state.ContentDriveID.IsZero() {
+		s.rememberContentDriveID(state.ContentDriveID)
+	}
+
+	return nil
+}
+
+func writeObservationStateToTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	state *syncdomain.ObservationState,
+) error {
+	rootIdentity := state.SyncRootIdentity
+	if rootIdentity == nil {
+		rootIdentity = &synctree.RootIdentity{}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_state`); err != nil {
+		return fmt.Errorf("sync: clearing observation_state before write: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO observation_state
+			(content_drive_id, cursor, next_full_remote_refresh_at, local_truth_complete, local_truth_recovery_reason,
+			 sync_root_bound, sync_root_device, sync_root_inode, sync_root_fsid, sync_root_birth_time,
+			 sync_root_token, sync_root_rebind, undecided_refresh_streak)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		state.ContentDriveID.String(),
+		state.Cursor,
+		state.NextFullRemoteRefreshAt,
+		boolInt(state.LocalTruthComplete),
+		state.LocalTruthRecoveryReason,
+		boolInt(state.SyncRootIdentity != nil),
+		int64(rootIdentity.Device),
+		int64(rootIdentity.Inode),
+		int64(rootIdentity.FileSystemID),
+		rootIdentity.BirthTime,
+		rootIdentity.Token,
+		boolInt(state.SyncRootRebind),
+		state.UndecidedRefreshStreak,
+	); err != nil {
+		return fmt.Errorf("sync: writing observation_state: %w", err)
+	}
+
+	return nil
+}
+
+func syncRootIdentityFromColumns(bound int, device, inode, fsid, birthTime int64, token string) *synctree.RootIdentity {
+	if bound == 0 {
+		return nil
+	}
+
+	return &synctree.RootIdentity{
+		Device:       uint64(device),
+		Inode:        uint64(inode),
+		FileSystemID: uint64(fsid),
+		BirthTime:    birthTime,
+		Token:        token,
+	}
+}
+
+// bindSyncRootIdentityTx records the fingerprint of the local folder this
+// state belongs to, inside the transaction that commits the local snapshot
+// taken of it. It never overwrites an existing binding: replacing it is the
+// explicit rebind decision (ClearSyncRootIdentity), never a side effect of a
+// scan that may itself be looking at the wrong folder.
+//
+// It returns the identity the store holds afterwards: the new one, or the
+// one already recorded.
+func bindSyncRootIdentityTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	identity synctree.RootIdentity,
+) (*synctree.RootIdentity, error) {
+	state, err := ReadObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if state.SyncRootIdentity != nil {
+		return state.SyncRootIdentity, nil
+	}
+	bound := identity
+	state.SyncRootIdentity = &bound
+	state.SyncRootRebind = false
+	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
+		return nil, err
+	}
+	return &bound, nil
+}
+
+// ClearSyncRootIdentity forgets the recorded sync-folder fingerprint and
+// allows the next start to bind the folder it finds even with a non-empty
+// baseline. It is the explicit rebind the user asks for after moving or
+// restoring the sync folder on purpose.
+// It keeps the recorded mount points (mount_boundaries): they are what tells
+// a disk that is not mounted inside the folder from deleted content, and
+// forgetting them would let the next sync delete that content on OneDrive.
+// A disk gone for good is let go of by removing its folder, which the next
+// snapshot prunes (recordMountBoundariesTx).
+func (s *SyncStore) ClearSyncRootIdentity(ctx context.Context) error {
+	return s.updateObservationState(ctx, func(state *syncdomain.ObservationState) {
+		state.SyncRootIdentity = nil
+		state.SyncRootRebind = true
+	})
+}
+
+func (s *SyncStore) MarkLocalTruthSuspect(ctx context.Context, reason string) error {
+	return s.updateObservationState(ctx, func(state *syncdomain.ObservationState) {
+		state.LocalTruthComplete = false
+		state.LocalTruthRecoveryReason = reason
+	})
+}
+
+func (s *SyncStore) updateObservationState(
+	ctx context.Context,
+	update func(*syncdomain.ObservationState),
+) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("sync: begin observation-state update tx: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback observation-state update tx")
+	}()
+
+	state, err := ReadObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	update(state)
+	if writeErr := s.writeObservationStateTx(ctx, tx, state); writeErr != nil {
+		return writeErr
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: commit observation-state update tx: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SyncStore) replaceObservationState(ctx context.Context, state *syncdomain.ObservationState) (err error) {
+	tx, err := BeginPerfTx(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("sync: begin observation-state replace tx: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback observation-state replace tx")
+	}()
+
+	if writeErr := s.writeObservationStateTx(ctx, tx, state); writeErr != nil {
+		return writeErr
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sync: commit observation-state replace tx: %w", err)
+	}
+
+	return nil
+}
+
+// BaselineEntryCount counts synced (non-root) baseline rows.
+func (s *SyncStore) BaselineEntryCount(ctx context.Context) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'`,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("sync: counting baseline rows: %w", err)
+	}
+	return count, nil
+}

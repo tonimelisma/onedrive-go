@@ -1,15 +1,20 @@
 package sync
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
+)
 
 type watchRemoteBlockedGroup struct {
-	ScopeKey     ScopeKey
+	ScopeKey     syncdomain.ScopeKey
 	BlockedPaths []string
 }
 
 // watchConditionCount is one raw condition-key count in the watch summary.
 type watchConditionCount struct {
-	Key   ConditionKey
+	Key   syncdomain.ConditionKey
 	Count int
 }
 
@@ -22,12 +27,12 @@ type watchConditionSummary struct {
 	RemoteBlocked  []watchRemoteBlockedGroup
 }
 
-func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) watchConditionSummary {
+func buildWatchConditionSummary(snapshot *syncstore.DriveStatusSnapshot) watchConditionSummary {
 	if snapshot == nil {
 		return watchConditionSummary{}
 	}
 
-	groups := ProjectStoredConditionGroups(snapshot)
+	groups := syncstore.ProjectStoredConditionGroups(snapshot)
 	remoteGroups := buildWatchRemoteBlockedGroups(snapshot)
 
 	summaryCounts := watchConditionCounts(groups)
@@ -40,12 +45,12 @@ func buildWatchConditionSummary(snapshot *DriveStatusSnapshot) watchConditionSum
 	}
 }
 
-func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteBlockedGroup {
+func buildWatchRemoteBlockedGroups(snapshot *syncstore.DriveStatusSnapshot) []watchRemoteBlockedGroup {
 	if snapshot == nil {
 		return nil
 	}
 
-	blockedByScope := GroupBlockedRetryWork(snapshot.BlockedRetryWork)
+	blockedByScope := syncstore.GroupBlockedRetryWork(snapshot.BlockedRetryWork)
 	var remoteGroups []watchRemoteBlockedGroup
 
 	for i := range snapshot.BlockScopes {
@@ -67,12 +72,12 @@ func buildWatchRemoteBlockedGroups(snapshot *DriveStatusSnapshot) []watchRemoteB
 	return remoteGroups
 }
 
-func watchConditionCounts(groups []StoredConditionGroup) []watchConditionCount {
+func watchConditionCounts(groups []syncstore.StoredConditionGroup) []watchConditionCount {
 	if len(groups) == 0 {
 		return nil
 	}
 
-	accumulator := make(map[ConditionKey]int)
+	accumulator := make(map[syncdomain.ConditionKey]int)
 	for i := range groups {
 		group := groups[i]
 		if group.ConditionKey == "" || group.Count <= 0 {
@@ -90,7 +95,7 @@ func watchConditionCounts(groups []StoredConditionGroup) []watchConditionCount {
 	}
 
 	sort.Slice(counts, func(i, j int) bool {
-		return ConditionKeyLess(counts[i].Key, counts[j].Key)
+		return syncdomain.ConditionKeyLess(counts[i].Key, counts[j].Key)
 	})
 
 	return counts

@@ -9,7 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func syncStateResetCommand(canonicalID driveid.CanonicalID) string {
@@ -43,7 +43,7 @@ func formatStartupResultMessage(result *multisync.MountStartupResult) string {
 }
 
 func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err error) string {
-	var incompatibleErr *syncengine.StateStoreIncompatibleError
+	var incompatibleErr *syncstore.StateStoreIncompatibleError
 	if !errors.As(err, &incompatibleErr) {
 		if err == nil {
 			return ""

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.17.2, R-2.15.3
@@ -21,11 +23,11 @@ import (
 // moved into a deleted folder (model test seed 28) is still resolved, by the
 // deferred refresh.
 func TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
-	inVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
-		remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	syncfixture.InVirtualTime(t, func(t *testing.T) { //nolint:thelper // a test body run in a synctest bubble, like a t.Run subtest
+		remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 		const folders = 6
 		for i := range folders {
 			id := fmt.Sprintf("item-f%d", i)
@@ -43,9 +45,9 @@ func TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes(t *testing.T) {
 			if minute < folders {
 				remote.deleteRemotely(fmt.Sprintf("item-f%d", minute))
 			}
-			_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+			_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{ConfirmDeletes: true})
 			require.NoError(t, err)
-			virtualWait(time.Minute)
+			syncfixture.VirtualWait(time.Minute)
 		}
 
 		var refreshes []time.Time
@@ -56,7 +58,7 @@ func TestRunOnce_VirtualTime_FolderDeletesSpaceFullRefreshes(t *testing.T) {
 		}
 		require.NotEmpty(t, refreshes, "the deferred full refresh ran")
 		for i := 1; i < len(refreshes); i++ {
-			assert.GreaterOrEqual(t, refreshes[i].Sub(refreshes[i-1]), FullRefreshAfterFolderDeleteDelay,
+			assert.GreaterOrEqual(t, refreshes[i].Sub(refreshes[i-1]), syncdomain.FullRefreshAfterFolderDeleteDelay,
 				"full refreshes %d and %d are too close", i-1, i)
 		}
 		assert.NoFileExists(t, filepath.Join(h.syncRoot, "moved.txt"), "the item moved into a deleted folder is resolved")

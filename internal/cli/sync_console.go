@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // syncConsole owns everything `sync` tells a person: what it is about to do,
@@ -53,7 +54,7 @@ type syncConsole struct {
 	// condition ends the entry, and one the engine marks as the condition
 	// starting is reported whatever the entry holds (conditionReportDue), so
 	// the map holds only paths whose last activity was such a refusal.
-	reportedConditions map[reportedPath]syncengine.ConditionKey
+	reportedConditions map[reportedPath]syncdomain.ConditionKey
 }
 
 // reportedPath is one path of one mount.
@@ -105,7 +106,7 @@ func (c *syncConsole) setMountCount(n int) {
 }
 
 // Starting announces a one-shot run so a long first sync is never silent.
-func (c *syncConsole) Starting(mounts []multisync.StandaloneMountConfig, mode syncengine.SyncMode, dryRun bool) {
+func (c *syncConsole) Starting(mounts []multisync.StandaloneMountConfig, mode syncdomain.SyncMode, dryRun bool) {
 	c.setMountCount(len(mounts))
 	if c.json {
 		c.jsonMountEvents("start", mounts, mode, dryRun)
@@ -126,7 +127,7 @@ func (c *syncConsole) Starting(mounts []multisync.StandaloneMountConfig, mode sy
 }
 
 // Watching announces watch mode, one line per mount.
-func (c *syncConsole) Watching(mounts []multisync.StandaloneMountConfig, mode syncengine.SyncMode) {
+func (c *syncConsole) Watching(mounts []multisync.StandaloneMountConfig, mode syncdomain.SyncMode) {
 	if c == nil {
 		return
 	}
@@ -309,7 +310,7 @@ func (c *syncConsole) conditionReportDue(mountID string, a *syncengine.Activity)
 		return false
 	}
 	if c.reportedConditions == nil {
-		c.reportedConditions = make(map[reportedPath]syncengine.ConditionKey)
+		c.reportedConditions = make(map[reportedPath]syncdomain.ConditionKey)
 	}
 	c.reportedConditions[key] = a.ConditionKey
 
@@ -566,13 +567,13 @@ func activityVerb(kind syncengine.ActivityKind) string {
 	return "process"
 }
 
-func modeSuffix(mode syncengine.SyncMode) string {
+func modeSuffix(mode syncdomain.SyncMode) string {
 	switch mode {
-	case syncengine.SyncDownloadOnly:
+	case syncdomain.SyncDownloadOnly:
 		return " (download only)"
-	case syncengine.SyncUploadOnly:
+	case syncdomain.SyncUploadOnly:
 		return " (upload only)"
-	case syncengine.SyncBidirectional:
+	case syncdomain.SyncBidirectional:
 		return ""
 	}
 

@@ -6,6 +6,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // startDrainLoop creates a real engine with DepGraph, watch-mode scope state,
@@ -13,19 +18,19 @@ import (
 // cancels the loop and waits for it to return; only the loop's goroutine
 // owns the scope ledger, so a test reads the ledger after stop. Calling stop
 // again does nothing.
-func startDrainLoop(t *testing.T) (chan ActionCompletion, func(), *testEngine) {
+func startDrainLoop(t *testing.T) (chan syncdomain.ActionCompletion, func(), *testEngine) {
 	t.Helper()
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	results := make(chan ActionCompletion, 16)
+	results := make(chan syncdomain.ActionCompletion, 16)
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
+	cancel, done := syncfixture.RunInBackground(t, t.Context(), func(ctx context.Context) error {
 		defer rt.stopTrialTimer()
 		runResultDrainLoopForTest(ctx, rt, bl, results)
 		return nil
@@ -47,10 +52,10 @@ func startDrainLoop(t *testing.T) (chan ActionCompletion, func(), *testEngine) {
 func runResultDrainLoopForTest(
 	ctx context.Context,
 	rt *watchRuntime,
-	bl *Baseline,
-	results <-chan ActionCompletion,
+	bl *syncdomain.Baseline,
+	results <-chan syncdomain.ActionCompletion,
 ) {
-	var outbox []*TrackedAction
+	var outbox []*syncdomain.TrackedAction
 
 	for {
 		if len(outbox) == 0 {
@@ -73,9 +78,9 @@ func runResultDrainLoopForTest(
 func runResultDrainLoopIdleForTest(
 	ctx context.Context,
 	rt *watchRuntime,
-	bl *Baseline,
-	results <-chan ActionCompletion,
-) ([]*TrackedAction, bool) {
+	bl *syncdomain.Baseline,
+	results <-chan syncdomain.ActionCompletion,
+) ([]*syncdomain.TrackedAction, bool) {
 	select {
 	case workerResult, ok := <-results:
 		if !ok {
@@ -98,10 +103,10 @@ func runResultDrainLoopIdleForTest(
 func runResultDrainLoopWithOutboxForTest(
 	ctx context.Context,
 	rt *watchRuntime,
-	bl *Baseline,
-	results <-chan ActionCompletion,
-	outbox []*TrackedAction,
-) ([]*TrackedAction, bool) {
+	bl *syncdomain.Baseline,
+	results <-chan syncdomain.ActionCompletion,
+	outbox []*syncdomain.TrackedAction,
+) ([]*syncdomain.TrackedAction, bool) {
 	select {
 	case rt.sched.dispatchCh <- outbox[0]:
 		return outbox[1:], false
@@ -126,10 +131,10 @@ func runResultDrainLoopWithOutboxForTest(
 func appendDrainOutcome(
 	rt *watchRuntime,
 	ctx context.Context,
-	bl *Baseline,
-	outbox []*TrackedAction,
-	workerResult *ActionCompletion,
-) ([]*TrackedAction, bool) {
+	bl *syncdomain.Baseline,
+	outbox []*syncdomain.TrackedAction,
+	workerResult *syncdomain.ActionCompletion,
+) ([]*syncdomain.TrackedAction, bool) {
 	ready, completionErr := rt.applyRuntimeCompletionStage(ctx, workerResult, bl)
 	if completionErr != nil {
 		return outbox, true
@@ -146,20 +151,20 @@ func mustNoDrainLoopError(err error) {
 
 // readReadyAction reads one TrackedAction from the ready channel with a
 // race-detector-friendly timeout.
-func readReadyAction(t *testing.T, ready <-chan *TrackedAction) *TrackedAction {
+func readReadyAction(t *testing.T, ready <-chan *syncdomain.TrackedAction) *syncdomain.TrackedAction {
 	t.Helper()
 
 	select {
 	case ta := <-ready:
 		return ta
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "timed out waiting for action on ready channel")
 	}
 
 	return nil
 }
 
-func readReady(t *testing.T, ready <-chan *TrackedAction) {
+func readReady(t *testing.T, ready <-chan *syncdomain.TrackedAction) {
 	t.Helper()
 	_ = readReadyAction(t, ready)
 }

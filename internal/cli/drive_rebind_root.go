@@ -11,7 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func newDriveRebindRootCmd() *cobra.Command {
@@ -63,12 +64,12 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 	syncDir := driveSyncDir(cfg, cid, cc.Logger)
 	// An unreadable state is exactly when a rebind may be needed, so it is
 	// not a reason to refuse; the count is shown as unknown.
-	synced, err := syncengine.SyncedFileCount(ctx, dbPath, cc.Logger)
+	synced, err := syncstore.SyncedFileCount(ctx, dbPath, cc.Logger)
 	if err != nil {
 		cc.Logger.Debug("could not read the sync state to count synced files", "error", err.Error())
 		synced = unknownFileCount
 	}
-	present, countErr := syncengine.CountSyncFolderFiles(syncDir)
+	present, countErr := syncdomain.CountSyncFolderFiles(syncDir)
 	if countErr != nil {
 		return fmt.Errorf("look at %s: %w", syncDir, countErr)
 	}
@@ -82,7 +83,7 @@ func runDriveRebindRootWithInput(ctx context.Context, cc *CLIContext, stdin io.R
 	// the folder at the path.
 	if err := changeDriveStateUnderLock(ctx, syncDir, dbPath, refuseOfflineChange(rebindRootAction), cc.Logger,
 		func() error {
-			if rebindErr := syncengine.RebindSyncRoot(ctx, dbPath, cc.Logger); rebindErr != nil {
+			if rebindErr := syncstore.RebindSyncRoot(ctx, dbPath, cc.Logger); rebindErr != nil {
 				return fmt.Errorf("rebind sync folder: %w", rebindErr)
 			}
 			return nil

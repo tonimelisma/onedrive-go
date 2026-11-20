@@ -12,6 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -42,14 +46,14 @@ func newRootSafetyPaths(t *testing.T) rootSafetyPaths {
 // openRootSafetyEngine opens a primary engine over paths. It returns the
 // construction error instead of failing, because refusing to start is the
 // behavior several tests pin.
-func openRootSafetyEngine(t *testing.T, paths rootSafetyPaths, mock *engineMockClient) (*testEngine, error) {
+func openRootSafetyEngine(t *testing.T, paths rootSafetyPaths, mock *syncfixture.EngineMockClient) (*testEngine, error) {
 	t.Helper()
 
 	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:          paths.dbPath,
 		SyncRoot:        paths.syncRoot,
 		DataDir:         paths.dataDir,
-		DriveID:         driveid.New(engineTestDriveID),
+		DriveID:         driveid.New(syncfixture.EngineTestDriveID),
 		AccountEmail:    engineTestEmail,
 		Fetcher:         mock,
 		SocketIOFetcher: mock,
@@ -60,7 +64,7 @@ func openRootSafetyEngine(t *testing.T, paths rootSafetyPaths, mock *engineMockC
 		FolderDelta:     mock,
 		RecursiveLister: mock,
 		PermChecker:     mock,
-		Logger:          testLogger(t),
+		Logger:          syncfixture.TestLogger(t),
 	})
 	if err != nil {
 		return nil, err
@@ -78,7 +82,7 @@ func closeRootSafetyEngine(t *testing.T, eng *testEngine) {
 func seedRootSafetyRemote(t *testing.T) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "Docs")
 	remote.addFile(t, "item-a", "item-docs", "a.txt", "alpha\n")
 	remote.addFile(t, "item-b", "item-docs", "b.txt", "bravo\n")
@@ -97,7 +101,7 @@ func TestNewEngine_RecordsSyncRootIdentityWithFirstCommittedSnapshot(t *testing.
 	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
 	require.NoError(t, err)
 
-	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err)
 	state, err := eng.baseline.ReadObservationState(t.Context())
 	require.NoError(t, err)
@@ -108,7 +112,7 @@ func TestNewEngine_RecordsSyncRootIdentityWithFirstCommittedSnapshot(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, state.SyncRootIdentity, "the first committed local snapshot records the sync folder identity")
 
-	actual, err := mustOpenSyncTree(t, paths.syncRoot).RootIdentity()
+	actual, err := syncfixture.MustOpenSyncTree(t, paths.syncRoot).RootIdentity()
 	require.NoError(t, err)
 	assert.Equal(t, actual, *state.SyncRootIdentity)
 	closeRootSafetyEngine(t, eng)
@@ -138,7 +142,7 @@ func TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes(t *testing.T) {
 
 	_, err = openRootSafetyEngine(t, paths, remote.client(t))
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Contains(t, err.Error(), "drive rebind-root", "the refusal names the explicit way out")
 	assert.Empty(t, remote.deletes, "an unmounted sync folder must not delete anything online")
 }
@@ -170,7 +174,7 @@ func TestEngine_SymlinkedSyncDirRepointedIsRefused(t *testing.T) {
 	require.NoError(t, os.Symlink(empty, paths.syncRoot))
 
 	_, err = openRootSafetyEngine(t, paths, remote.client(t))
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Empty(t, remote.deletes)
 }
 
@@ -189,8 +193,8 @@ func TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused(t *testing.T) {
 	require.NoError(t, os.Rename(paths.syncRoot, paths.syncRoot+".old"))
 	require.NoError(t, os.Mkdir(paths.syncRoot, 0o750))
 
-	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Empty(t, remote.deletes)
 }
 
@@ -238,7 +242,7 @@ func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testin
 	require.NoError(t, os.Mkdir(paths.syncRoot, 0o750))
 
 	_, err = openRootSafetyEngine(t, paths, remote.client(t))
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Empty(t, remote.deletes)
 }
 
@@ -248,9 +252,9 @@ func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testin
 func rewriteRecordedSyncRoot(t *testing.T, paths rootSafetyPaths, edit func(*synctree.RootIdentity)) {
 	t.Helper()
 
-	store, err := OpenSyncStoreForTest(t.Context(), paths.dbPath, testLogger(t), false)
+	store, err := syncstore.OpenSyncStoreForTest(t.Context(), paths.dbPath, syncfixture.TestLogger(t), false)
 	require.NoError(t, err)
-	require.NoError(t, store.UpdateObservationStateForTest(t.Context(), func(state *ObservationState) {
+	require.NoError(t, store.UpdateObservationStateForTest(t.Context(), func(state *syncdomain.ObservationState) {
 		require.NotNil(t, state.SyncRootIdentity)
 		edit(state.SyncRootIdentity)
 	}))
@@ -272,7 +276,7 @@ func TestNewEngine_RootWithoutTokenIsRefusedWhenBirthTimeDiffers(t *testing.T) {
 	runScenarioPass(t, eng)
 	closeRootSafetyEngine(t, eng)
 
-	live, err := mustOpenSyncTree(t, paths.syncRoot).RootIdentity()
+	live, err := syncfixture.MustOpenSyncTree(t, paths.syncRoot).RootIdentity()
 	require.NoError(t, err)
 	if live.BirthTime == 0 {
 		t.Skip("the test filesystem reports no birth time")
@@ -292,7 +296,7 @@ func TestNewEngine_RootWithoutTokenIsRefusedWhenBirthTimeDiffers(t *testing.T) {
 		recorded.BirthTime = live.BirthTime - 1
 	})
 	_, err = openRootSafetyEngine(t, paths, remote.client(t))
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Empty(t, remote.deletes)
 }
 
@@ -325,7 +329,7 @@ func TestNewEngine_RootTokenDecidesOverInode(t *testing.T) {
 	// A folder carrying some other folder's token is refused.
 	require.NoError(t, unix.Setxattr(paths.syncRoot, synctree.RootMarkAttribute, []byte("another-folder"), 0))
 	_, err = openRootSafetyEngine(t, paths, remote.client(t))
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 }
 
 // Validates: R-6.2.12
@@ -343,10 +347,10 @@ func TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind(t *testing.T)
 	closeRootSafetyEngine(t, eng)
 
 	_, err = openRootSafetyEngine(t, paths, remote.client(t))
-	require.ErrorIs(t, err, ErrMountRootUnavailable, "binding silently would accept an unmounted folder")
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable, "binding silently would accept an unmounted folder")
 	assert.Contains(t, err.Error(), "drive rebind-root")
 
-	require.NoError(t, RebindSyncRoot(t.Context(), paths.dbPath, testLogger(t)))
+	require.NoError(t, syncstore.RebindSyncRoot(t.Context(), paths.dbPath, syncfixture.TestLogger(t)))
 	rebound, err := openRootSafetyEngine(t, paths, remote.client(t))
 	require.NoError(t, err, "an explicit rebind allows binding the folder that is there")
 	runScenarioPass(t, rebound)
@@ -362,7 +366,7 @@ func TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind(t *testing.T)
 func resetAndReopen(t *testing.T, paths rootSafetyPaths, remote *moveScenarioRemote) *testEngine {
 	t.Helper()
 
-	require.NoError(t, ResetStateDB(t.Context(), paths.dbPath, testLogger(t)))
+	require.NoError(t, syncstore.ResetStateDB(t.Context(), paths.dbPath, syncfixture.TestLogger(t)))
 	eng, err := openRootSafetyEngine(t, paths, remote.client(t))
 	require.NoError(t, err, "a fresh state binds whatever folder is there")
 	return eng
@@ -411,7 +415,7 @@ func TestWatchObserver_SeesBindingMadeAfterItWasBuilt(t *testing.T) {
 
 	rebound := resetAndReopen(t, paths, remote)
 	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
-	watchObserver := NewLocalObserver(emptyBaseline(), testLogger(t), 0)
+	watchObserver := syncobserve.NewLocalObserver(syncfixture.EmptyBaseline(), syncfixture.TestLogger(t), 0)
 	watchObserver.SetSyncRootIdentity(rebound.syncRootIdentity)
 
 	runScenarioPass(t, rebound) // binds, writing a new marker
@@ -436,7 +440,7 @@ func TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, errs[i] = eng.commitLocalSnapshot(t.Context(), LocalSnapshotCommit{})
+			_, errs[i] = eng.commitLocalSnapshot(t.Context(), syncstore.LocalSnapshotCommit{})
 		}()
 	}
 	group.Wait()
@@ -457,21 +461,21 @@ func TestCommitLocalSnapshot_ConcurrentBindsLeaveOneMarker(t *testing.T) {
 func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.T) {
 	t.Parallel()
 
-	tree := mustOpenSyncTree(t, t.TempDir())
+	tree := syncfixture.MustOpenSyncTree(t, t.TempDir())
 	live, err := tree.RootIdentity()
 	require.NoError(t, err)
 
 	missing := live
 	missing.Token = "recorded-token"
-	err = ValidateExpectedSyncRootIdentity(tree, &missing, ErrSyncRootRebindHint)
-	require.ErrorIs(t, err, ErrMountRootUnavailable)
+	err = syncdomain.ValidateExpectedSyncRootIdentity(tree, &missing, syncdomain.ErrSyncRootRebindHint)
+	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Contains(t, err.Error(), "has no sync folder marker")
 	assert.Contains(t, err.Error(), synctree.RootMarkAttribute)
 	assert.Contains(t, err.Error(), "without extended attributes")
 	assert.Contains(t, err.Error(), "drive rebind-root")
 
 	require.NoError(t, tree.SetRootMark("someone-else"))
-	err = ValidateExpectedSyncRootIdentity(tree, &missing, ErrSyncRootRebindHint)
+	err = syncdomain.ValidateExpectedSyncRootIdentity(tree, &missing, syncdomain.ErrSyncRootRebindHint)
 	assert.Contains(t, err.Error(), "different sync folder marker")
 	assert.Contains(t, err.Error(), "drive rebind-root")
 }

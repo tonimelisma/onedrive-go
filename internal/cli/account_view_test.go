@@ -11,7 +11,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 const (
@@ -196,14 +197,14 @@ func TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement(t 
 func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {
 	t.Helper()
 
-	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.Close(t.Context()))
 	}()
 
-	if err := store.UpsertBlockScope(t.Context(), &syncengine.BlockScope{
-		Key:           syncengine.SKService(),
+	if err := store.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
+		Key:           syncdomain.SKService(),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   time.Date(2026, 4, 3, 8, 0, 5, 0, time.UTC),
 	}); err != nil {

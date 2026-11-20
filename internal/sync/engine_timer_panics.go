@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"errors"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // beginRun binds a run to the engine's timer panics. The run runs under the
@@ -33,7 +35,7 @@ func withTimerPanic(err, panicErr error) error {
 	switch {
 	case panicErr == nil:
 		return err
-	case err == nil, IsCancellationEcho(err):
+	case err == nil, syncdomain.IsCancellationEcho(err):
 		return panicErr
 	default:
 		return errors.Join(panicErr, err)

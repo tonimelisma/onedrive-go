@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // reportLastPassStateFields are the Report fields only LeftWork and
@@ -46,7 +48,7 @@ func TestReport_ProductCodeOutsideTheEngineReadsWhatARunLeftOnlyThroughItsMethod
 	fields := reportLastPassStateFields()
 	var selected []string
 	engineSelects := 0
-	files := walkModuleProductFiles(t, func(path, rel string) error {
+	files := syncfixture.WalkModuleProductFiles(t, func(path, rel string) error {
 		inEngine := filepath.Dir(path) == engineDir
 		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 		if parseErr != nil {

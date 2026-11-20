@@ -7,6 +7,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.10.33
@@ -16,8 +19,8 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsOrphanBlockScope(t *testing
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
-		Key:           SKService(),
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
+		Key:           syncdomain.SKService(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
@@ -33,14 +36,14 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
-	scopeKey := SKPermRemoteWrite("Shared/Docs")
+	scopeKey := syncdomain.SKPermRemoteWrite("Shared/Docs")
 
-	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
 		Key:           scopeKey,
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
-	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), testRetryWorkKey("Shared/Docs/file.txt", "", ActionUpload), scopeKey)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("Shared/Docs/file.txt", "", syncdomain.ActionUpload), scopeKey)
 	require.NoError(t, err)
 
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
@@ -53,8 +56,8 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath(t *tes
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
-		ActionType:   ActionUpload,
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
+		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: 1,
 		NextRetryAt:  eng.nowFunc().Add(time.Minute).UnixNano(),
 	}))
@@ -71,9 +74,9 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming(t *t
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "delayed.txt",
-		ActionType:   ActionUpload,
+		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: 1,
 	}))
 
@@ -89,9 +92,9 @@ func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts(t 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:        "delayed.txt",
-		ActionType:  ActionUpload,
+		ActionType:  syncdomain.ActionUpload,
 		NextRetryAt: eng.nowFunc().Add(time.Minute).UnixNano(),
 	}))
 
@@ -110,9 +113,9 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOf
 	flow := testEngineFlow(t, eng)
 
 	for path, stored := range map[string]int64{"before.txt": math.MinInt64, "past.txt": math.MaxInt64} {
-		require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+		require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 			Path:         path,
-			ActionType:   ActionUpload,
+			ActionType:   syncdomain.ActionUpload,
 			AttemptCount: 1,
 			NextRetryAt:  stored,
 		}))
@@ -128,9 +131,9 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming(t
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "delayed.txt",
-		ActionType:   ActionUpload,
+		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: 1,
 		NextRetryAt:  eng.nowFunc().Add(time.Minute).UnixNano(),
 	}))

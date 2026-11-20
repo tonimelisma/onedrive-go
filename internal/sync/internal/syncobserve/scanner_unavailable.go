@@ -1,0 +1,322 @@
+package syncobserve
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"path"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+)
+
+// Unavailable is not absent. A full scan builds local truth from what it
+// could represent; everything else used to be simply missing from that
+// truth, and a synced path that is missing reads as a delete. These helpers
+// turn each "could not represent" case into an observation issue on the
+// synced path, which the planner treats as unavailable local truth (no
+// remote delete, and for a folder none beneath it):
+//
+//   - a synced path now occupied by a symlink sync does not follow, or by a
+//     FIFO, socket or device (D-004);
+//   - a synced item renamed to a name OneDrive refuses or a path too long, or
+//     into an excluded name such as a dotfile (D-004, P-5), recognized by its
+//     filesystem identity reappearing under the skipped name;
+//   - a folder that is a mount point for another filesystem, which sync does
+//     not cross by default (D-003, P-11). The boundary is a read boundary, so
+//     whatever the baseline holds beneath it stays unavailable, and an
+//     unmounted disk leaves an empty folder that never held synced content.
+//
+// The scan is single-threaded through the walk, so the per-scan state below
+// is owned by FullScan for its duration.
+
+// scanAvailability is the per-scan state the unavailability checks need.
+type scanAvailability struct {
+	// dirDevices maps a scanned folder's relative path ("" for the root) to
+	// its device, so a child folder on a different device is a mount point.
+	dirDevices map[string]uint64
+	// baselineByIdentity indexes baseline rows by (device, inode), built on
+	// first use, so a skipped entry can be matched to the synced item it used
+	// to be. The key leaves the birth time out so a side without one still
+	// finds its row; the match is then confirmed with SameIdentity.
+	baselineByIdentity map[deviceInode]*syncdomain.BaselineEntry
+	// crossedMounts lists mount points crossed under cross_filesystems;
+	// the engine records them with the snapshot (mount_boundaries).
+	crossedMounts []string
+	// tree is the scanned sync tree, for emptiness checks.
+	tree *synctree.Root
+	// syncedEntries holds, per stored path of a synced item, the file or
+	// folder whose row the scan keeps for it. A second entry with the same
+	// stored path is a Unicode-form twin (admitSyncedEntry).
+	syncedEntries map[string]syncedEntry
+	// mountBoundaryFlags are the folders recorded as crossed mount points
+	// when the scan started.
+	mountBoundaryFlags map[string]struct{}
+	// droppedHashJobs and droppedTrees are the on-disk paths of twins, and
+	// of folder twins' subtrees, whose hash jobs the walk queued before the
+	// synced item's own entry claimed the row.
+	droppedHashJobs map[string]struct{}
+	droppedTrees    []string
+}
+
+// syncedEntry is the entry a scan keeps for a synced item's stored path.
+type syncedEntry struct {
+	fsPath string
+	isDir  bool
+	// isSynced reports that the entry can be the synced item (isSyncedEntry).
+	isSynced bool
+	// twinReported is set once the path's collision is recorded.
+	twinReported bool
+}
+
+// skipError is what the walk returns for a refused entry: a folder twin is
+// not walked.
+func (e syncedEntry) skipError() error {
+	if e.isDir {
+		return filepath.SkipDir
+	}
+
+	return nil
+}
+
+// dropEntry sets aside an entry admitted earlier that turned out to be a
+// twin: its hash jobs, and for a folder the rows its walk found below it.
+func (a *scanAvailability) dropEntry(entry syncedEntry, dbRelPath string, currentRows map[string]syncdomain.LocalStateRow) {
+	a.droppedHashJobs[entry.fsPath] = struct{}{}
+	if !entry.isDir {
+		return
+	}
+	a.droppedTrees = append(a.droppedTrees, entry.fsPath+string(filepath.Separator))
+	below := dbRelPath + "/"
+	for rowPath := range currentRows {
+		if strings.HasPrefix(rowPath, below) {
+			delete(currentRows, rowPath)
+		}
+	}
+}
+
+// hashJobDropped reports whether the job for fsPath belongs to a twin.
+func (a *scanAvailability) hashJobDropped(fsPath string) bool {
+	if _, dropped := a.droppedHashJobs[fsPath]; dropped {
+		return true
+	}
+	for _, tree := range a.droppedTrees {
+		if strings.HasPrefix(fsPath, tree) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func newScanAvailability(rootDevice uint64) *scanAvailability {
+	return &scanAvailability{
+		dirDevices:      map[string]uint64{"": rootDevice},
+		syncedEntries:   map[string]syncedEntry{},
+		droppedHashJobs: map[string]struct{}{},
+	}
+}
+
+// rootDeviceForScan is the device of the sync folder itself. Without it no
+// mount boundary below the root can be recognized, so a failure stops the
+// scan rather than letting it cross into other filesystems unnoticed.
+func rootDeviceForScan(tree *synctree.Root) (uint64, error) {
+	identity, err := tree.RootIdentity()
+	if err != nil {
+		return 0, fmt.Errorf("%w: reading the sync folder's device: %w", syncdomain.ErrMountRootUnavailable, err)
+	}
+	return identity.Device, nil
+}
+
+// deviceInode is the lookup key of an identity index; see baselineByIdentity.
+type deviceInode struct {
+	device uint64
+	inode  uint64
+}
+
+func (a *scanAvailability) baselineEntryWithIdentity(
+	baseline *syncdomain.Baseline, identity synctree.FileIdentity,
+) *syncdomain.BaselineEntry {
+	if a.baselineByIdentity == nil {
+		a.baselineByIdentity = make(map[deviceInode]*syncdomain.BaselineEntry)
+		if baseline != nil {
+			baseline.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
+				if entry == nil || !entry.LocalHasIdentity {
+					return
+				}
+				a.baselineByIdentity[deviceInode{device: entry.LocalDevice, inode: entry.LocalInode}] = entry
+			})
+		}
+	}
+	entry := a.baselineByIdentity[deviceInode{device: identity.Device, inode: identity.Inode}]
+	if entry == nil {
+		return nil
+	}
+	if entryIdentity, _ := entry.FileIdentity(); !synctree.SameIdentity(entryIdentity, identity) {
+		// The inode number was reused by another entry.
+		return nil
+	}
+
+	return entry
+}
+
+// recordSyncedPathReplaced keeps a synced path that now holds an entry sync
+// skips (a symlink it does not follow, a special file) unavailable instead
+// of deleted.
+func (o *LocalObserver) recordSyncedPathReplaced(skipped *[]syncdomain.SkippedItem, dbRelPath string, what string) {
+	entry, ok := o.baseline.GetByPath(dbRelPath)
+	if !ok {
+		return
+	}
+	*skipped = append(*skipped, syncdomain.SkippedItem{
+		Path:   dbRelPath,
+		Reason: syncdomain.IssueLocalUnsyncableReplacement,
+		Detail: fmt.Sprintf("this synced %s was replaced by %s, which sync does not sync; the OneDrive copy is kept",
+			itemNoun(entry.ItemType), what),
+		BlocksReadBoundary: entry.ItemType == syncdomain.ItemTypeFolder,
+	})
+}
+
+// recordSyncedItemMovedOutOfReach keeps a synced item that was renamed to
+// something sync skips (an invalid name, a too-long path, an excluded name)
+// unavailable at its synced path, recognized by its filesystem identity.
+func (o *LocalObserver) recordSyncedItemMovedOutOfReach(
+	skipped *[]syncdomain.SkippedItem,
+	availability *scanAvailability,
+	dbRelPath string,
+	d fs.DirEntry,
+) {
+	if availability == nil || d == nil {
+		return
+	}
+	info, err := d.Info()
+	if err != nil {
+		return
+	}
+	identity, ok := synctree.IdentityFromFileInfo(info)
+	if !ok || hasOtherHardLinks(info) {
+		// A second hard link is a second name for a file that may still be
+		// at its synced path; it is not evidence the synced name went away.
+		return
+	}
+	entry := availability.baselineEntryWithIdentity(o.baseline, identity)
+	if entry == nil || entry.Path == dbRelPath {
+		return
+	}
+	*skipped = append(*skipped, syncdomain.SkippedItem{
+		Path:   entry.Path,
+		Reason: syncdomain.IssueLocalUnsyncableReplacement,
+		Detail: fmt.Sprintf("this synced %s is now %s, which sync cannot sync; the OneDrive copy is kept",
+			itemNoun(entry.ItemType), dbRelPath),
+		BlocksReadBoundary: entry.ItemType == syncdomain.ItemTypeFolder,
+	})
+}
+
+// isForeignMountPoint records the folder's device and reports whether the
+// folder is the mount point of another filesystem that the scan must not
+// cross (P-11). Only current devices are compared (the folder and its parent,
+// both read in this scan), because device numbers can change between boots.
+// A mount point crossed under cross_filesystems is remembered in the scan
+// result, so a later scan can tell its unmounted, empty folder from deleted
+// content.
+func (o *LocalObserver) isForeignMountPoint(
+	availability *scanAvailability,
+	dbRelPath string,
+	identity synctree.FileIdentity,
+	hasIdentity bool,
+) bool {
+	if availability == nil || !hasIdentity {
+		return false
+	}
+	parentDevice, known := availability.dirDevices[parentRelPath(dbRelPath)]
+	availability.dirDevices[dbRelPath] = identity.Device
+	if !known || parentDevice == 0 || identity.Device == parentDevice {
+		return false
+	}
+	if o.filterConfig.CrossFilesystems {
+		availability.crossedMounts = append(availability.crossedMounts, dbRelPath)
+		return false
+	}
+
+	return true
+}
+
+// flaggedMountIsGone reports whether a folder recorded as a crossed mount
+// point no longer holds that filesystem: it now sits on its parent's device,
+// so the disk is not mounted and its synced content is unavailable, not
+// deleted (D-003). A flagged folder still on its own device is the mounted
+// disk, and emptying it is an ordinary delete the hold judges. Call after
+// isForeignMountPoint recorded the folder's device.
+func (o *LocalObserver) flaggedMountIsGone(availability *scanAvailability, dbRelPath string) bool {
+	if availability == nil {
+		return false
+	}
+	if _, flagged := availability.mountBoundaryFlags[dbRelPath]; !flagged {
+		return false
+	}
+	device := availability.dirDevices[dbRelPath]
+	parentDevice, known := availability.dirDevices[parentRelPath(dbRelPath)]
+	return known && parentDevice != 0 && device == parentDevice
+}
+
+func parentRelPath(dbRelPath string) string {
+	parent := path.Dir(dbRelPath)
+	if parent == "." {
+		return ""
+	}
+	return parent
+}
+
+func VanishedMountSkippedItem(dbRelPath string) syncdomain.SkippedItem {
+	return syncdomain.SkippedItem{
+		Path:   dbRelPath,
+		Reason: syncdomain.IssueLocalMountMissing,
+		Detail: "this folder was a mount point for another filesystem that is no longer mounted; " +
+			"its synced content is kept until the disk is back, and 'onedrive-go drive rebind-root' keeps it " +
+			"(if the disk is gone for good, remove this empty folder: sync then deletes its content on OneDrive)",
+		BlocksReadBoundary: true,
+	}
+}
+
+func MountBoundarySkippedItem(dbRelPath string) syncdomain.SkippedItem {
+	return syncdomain.SkippedItem{
+		Path:   dbRelPath,
+		Reason: syncdomain.IssueLocalMountBoundary,
+		Detail: "this folder is a mount point for another filesystem; sync does not cross into it " +
+			"(set cross_filesystems = true to sync it)",
+		BlocksReadBoundary: true,
+	}
+}
+
+// recordUnreadableEntry turns an entry the walk listed but could not stat
+// into a read boundary. Only "it vanished" is absence; an I/O error is not
+// (D-005).
+func recordUnreadableEntry(skipped *[]syncdomain.SkippedItem, dbRelPath string, err error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	*skipped = append(*skipped, syncdomain.SkippedItem{
+		Path:               dbRelPath,
+		Reason:             syncdomain.IssueLocalReadDenied,
+		Detail:             fmt.Sprintf("could not read this entry (%v); it is kept as it was", err),
+		BlocksReadBoundary: true,
+	})
+}
+
+func hasOtherHardLinks(info fs.FileInfo) bool {
+	if info == nil || !info.Mode().IsRegular() {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Nlink > 1
+}
+
+func itemNoun(itemType syncdomain.ItemType) string {
+	if itemType == syncdomain.ItemTypeFolder {
+		return syncdomain.StrFolder
+	}
+	return syncdomain.StrFile
+}

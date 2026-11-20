@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Validates: R-2.11, R-6.7.1
@@ -18,7 +20,7 @@ import (
 func TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 
 	// Bootstrap phase is quiescent here, so the shared loop reports done on
@@ -35,7 +37,7 @@ func TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError(t *testing.T
 func TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 
 	require.NoError(t, rt.runWatchUntilQuiescent(t.Context(), &watchPipeline{}, nil))
@@ -50,7 +52,7 @@ func TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean(t *testing.T) {
 func TestStartObservers_RefusalDuringDrainClassifiesAsShutdown(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)

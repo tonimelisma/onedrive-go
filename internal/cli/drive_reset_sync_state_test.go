@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
@@ -84,7 +85,7 @@ func TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB(t *testing.T)
 	require.NoError(t, runDriveResetSyncStateWithInput(t.Context(), cc, bytes.NewBufferString(""), true))
 	assert.Contains(t, out.String(), "Reset sync state DB for "+cid.String()+".")
 
-	store, err := syncengine.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 }

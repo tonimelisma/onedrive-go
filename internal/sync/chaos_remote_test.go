@@ -22,6 +22,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Chaos Graph layer (D-092). chaosGraph wraps the scenario fake's client and,
@@ -418,68 +420,68 @@ func (c *chaosGraph) lostResponseError(cc *chaosCall, op string) (chaosAnswer, e
 }
 
 // wrap returns a client whose every call passes through the chaos layer.
-func (c *chaosGraph) wrap(inner *engineMockClient) *engineMockClient {
+func (c *chaosGraph) wrap(inner *syncfixture.EngineMockClient) *syncfixture.EngineMockClient {
 	out := *inner
-	out.deltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
-		return c.delta(ctx, driveID, token, inner.deltaFn)
+	out.DeltaFn = func(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
+		return c.delta(ctx, driveID, token, inner.DeltaFn)
 	}
-	out.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+	out.GetItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
 		if err := c.before(c.call("get-item", itemID), "get-item"); err != nil {
 			return nil, err
 		}
-		return inner.getItemFn(ctx, driveID, itemID)
+		return inner.GetItemFn(ctx, driveID, itemID)
 	}
-	out.getItemByPathFn = func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
+	out.GetItemByPathFn = func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
 		if err := c.before(c.call("get-by-path", remotePath), "get-by-path"); err != nil {
 			return nil, err
 		}
-		return inner.getItemByPathFn(ctx, driveID, remotePath)
+		return inner.GetItemByPathFn(ctx, driveID, remotePath)
 	}
-	out.listChildrenFn = func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
+	out.ListChildrenFn = func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
 		if err := c.before(c.call("list-children", parentID), "list-children"); err != nil {
 			return nil, err
 		}
-		return inner.listChildrenFn(ctx, driveID, parentID)
+		return inner.ListChildrenFn(ctx, driveID, parentID)
 	}
-	out.downloadFn = func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
-		return c.download(ctx, driveID, itemID, w, inner.downloadFn)
+	out.DownloadFn = func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error) {
+		return c.download(ctx, driveID, itemID, w, inner.DownloadFn)
 	}
-	out.moveItemOptsFn = func(
+	out.MoveItemOptsFn = func(
 		ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 	) (*graph.Item, error) {
 		return chaosMutation(c, "move", itemID, func() (*graph.Item, error) {
-			return inner.moveItemOptsFn(ctx, driveID, itemID, newParentID, newName, opts)
+			return inner.MoveItemOptsFn(ctx, driveID, itemID, newParentID, newName, opts)
 		})
 	}
-	out.createFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	out.CreateFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
 		return chaosMutation(c, "create-folder", parentID+"/"+name, func() (*graph.Item, error) {
-			return inner.createFolderFn(ctx, driveID, parentID, name)
+			return inner.CreateFolderFn(ctx, driveID, parentID, name)
 		})
 	}
-	out.deleteItemIfMatchFn = func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error {
+	out.DeleteItemIfMatchFn = func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error {
 		_, err := chaosMutation(c, "delete", itemID, func() (*graph.Item, error) {
-			return nil, inner.deleteItemIfMatchFn(ctx, driveID, itemID, ifMatch)
+			return nil, inner.DeleteItemIfMatchFn(ctx, driveID, itemID, ifMatch)
 		})
 		return err
 	}
-	out.uploadFn = func(
+	out.UploadFn = func(
 		ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
 		return chaosMutation(c, "upload", parentID+"/"+name, func() (*graph.Item, error) {
-			return inner.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
+			return inner.UploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
 		})
 	}
-	out.uploadToItemFn = func(
+	out.UploadToItemFn = func(
 		ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
 		return chaosMutation(c, "upload-to-item", itemID, func() (*graph.Item, error) {
-			return inner.uploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
+			return inner.UploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 		})
 	}
-	out.uploadCreatingFn = func(
+	out.UploadCreatingFn = func(
 		ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 	) (*graph.Item, error) {
-		return c.uploadCreating(ctx, parentID, name, content, size, onCreated, inner.uploadCreatingFn)
+		return c.uploadCreating(ctx, parentID, name, content, size, onCreated, inner.UploadCreatingFn)
 	}
 
 	return &out
@@ -758,12 +760,12 @@ func (r *modelRun) concurrentRemoteWrite(cc *chaosCall) {
 	r.concurrentMu.Lock()
 	defer r.concurrentMu.Unlock()
 	r.logf("concurrent remote write %s", p)
-	r.concurrentEdits = append(r.concurrentEdits, modelEdit{side: modelRemoteSide, kind: modelOpConcurrentWrite, path: p, content: content})
+	r.concurrentEdits = append(r.concurrentEdits, syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: modelOpConcurrentWrite, Path: p, Content: content})
 }
 
 // takeConcurrentEdits returns and clears the edits the chaos layer's other
 // client made, so the batch's no-loss check covers them.
-func (r *modelRun) takeConcurrentEdits() []modelEdit {
+func (r *modelRun) takeConcurrentEdits() []syncfixture.ModelEdit {
 	r.concurrentMu.Lock()
 	defer r.concurrentMu.Unlock()
 	edits := r.concurrentEdits
@@ -795,13 +797,13 @@ func chaosRaceSeedFaults() []string {
 // search, from ONEDRIVE_GO_CHAOS_SEED_START (or name one seed with
 // ONEDRIVE_GO_MODEL_SEED).
 func TestModel_ChaosGraphConverges(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
 	for _, seed := range chaosSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			logSeedReplayOnFailure(t, modelSeedEnv, seed)
+			syncfixture.LogSeedReplayOnFailure(t, modelSeedEnv, seed)
 			run := runModelScenarioWith(t, seed, chaosRunOptions())
 			require.Positive(t, run.chaos.faultCount(), "the storm injected no fault")
 			if seed != chaosRaceSeed {
@@ -819,7 +821,7 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 // chaosRunOptions are the options of every chaos model run: the chaos layer,
 // over chaosBatches batches.
 func chaosRunOptions() modelOptions {
-	return modelOptions{chaos: true, batches: chaosBatches(raceDetectorEnabled)}
+	return modelOptions{chaos: true, batches: chaosBatches(syncfixture.RaceDetectorEnabled)}
 }
 
 // chaosBatches is the batch count of a chaos run: modelRaceBatches under the
@@ -834,8 +836,8 @@ func chaosBatches(race bool) int {
 
 // chaosSeedVars are the chaos run's variables; its one named seed is the
 // engine run's variable.
-func chaosSeedVars() seedVars {
-	return seedVars{single: modelSeedEnv, count: chaosSeedEnv, start: chaosSeedStartEnv}
+func chaosSeedVars() syncfixture.SeedVars {
+	return syncfixture.SeedVars{Single: modelSeedEnv, Count: chaosSeedEnv, Start: chaosSeedStartEnv}
 }
 
 // chaosSeeds is the chaos run's seeds: the ones the environment names, else
@@ -843,15 +845,15 @@ func chaosSeedVars() seedVars {
 func chaosSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
-	if raceDetectorEnabled && !chaosSeedVars().setIn(os.Getenv) {
+	if syncfixture.RaceDetectorEnabled && !chaosSeedVars().SetIn(os.Getenv) {
 		return []uint64{chaosRaceSeed}
 	}
 	count := chaosDefaultSeeds
-	if raceDetectorEnabled {
+	if syncfixture.RaceDetectorEnabled {
 		count = 1
 	}
 
-	return seedsFromEnv(t, chaosSeedVars(), count)
+	return syncfixture.SeedsFromEnv(t, chaosSeedVars(), count)
 }
 
 // Validates: R-5.6.15
@@ -867,7 +869,7 @@ func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.
 		attempts = 200
 		content  = "my words\n"
 	)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	c := newChaosGraph(1)
 	c.startStep(true)
 	client := c.wrap(remote.client(t))
@@ -876,7 +878,7 @@ func TestChaosGraph_LostCreateAnswerLeavesTheFileAndNeverRunsTheHook(t *testing.
 	for i := range attempts {
 		name := fmt.Sprintf("doc-%d.txt", i)
 		hookRan := false
-		_, err := client.uploadCreatingFn(t.Context(), GraphRootID, name, strings.NewReader(content), int64(len(content)),
+		_, err := client.UploadCreatingFn(t.Context(), syncexec.GraphRootID, name, strings.NewReader(content), int64(len(content)),
 			func(*graph.Item) error {
 				hookRan = true
 				return nil
@@ -911,7 +913,7 @@ func TestChaosGraph_TimeoutAfterCreateCanMoveThePlaceholderETag(t *testing.T) {
 		attempts = 200
 		content  = "my words\n"
 	)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	c := newChaosGraph(1)
 	c.churnPlaceholder = remote.churnETag
 	c.startStep(true)
@@ -921,7 +923,7 @@ func TestChaosGraph_TimeoutAfterCreateCanMoveThePlaceholderETag(t *testing.T) {
 	for i := range attempts {
 		name := fmt.Sprintf("doc-%d.txt", i)
 		var recorded *graph.Item
-		_, err := client.uploadCreatingFn(t.Context(), GraphRootID, name, strings.NewReader(content), int64(len(content)),
+		_, err := client.UploadCreatingFn(t.Context(), syncexec.GraphRootID, name, strings.NewReader(content), int64(len(content)),
 			func(created *graph.Item) error {
 				recorded = created
 				return nil

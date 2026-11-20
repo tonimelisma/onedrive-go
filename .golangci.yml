@@ -126,6 +126,130 @@ linters:
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
               desc: driveops must not import internal/sync
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: driveops must not import internal/sync
+        # The sync tree's packages import one another in one direction
+        # (spec/design/system.md, R-6.10.20): each rule allows the packages
+        # of the tree its package may import and refuses the rest. Tests may
+        # import more, so the rules leave them out; the compiler refuses a
+        # cycle. TestGolangciConfig_EverySyncTreePackageHasItsImportRule holds
+        # these rules to the tree.
+        sync-domain-imports-nothing-of-the-tree:
+          list-mode: lax
+          files:
+            - "**/internal/sync/syncdomain/*.go"
+            - "!$test"
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the vocabulary imports nothing of the sync tree
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the vocabulary imports nothing of the sync tree
+        sync-shortcut-only-domain:
+          list-mode: lax
+          files:
+            - "**/internal/sync/syncshortcut/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the shortcut-root planners import the vocabulary alone
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the shortcut-root planners import the vocabulary alone
+        sync-store-only-domain-and-shortcut:
+          list-mode: lax
+          files:
+            - "**/internal/sync/syncstore/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the store imports the vocabulary and the shortcut-root planners it runs in its transactions
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the store imports the vocabulary and the shortcut-root planners it runs in its transactions
+        sync-plan-only-domain:
+          list-mode: lax
+          files:
+            - "**/internal/sync/internal/syncplan/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the planner imports the vocabulary alone, never the store, the observers or the executor
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the planner imports the vocabulary alone, never the store, the observers or the executor
+        sync-observe-only-domain-and-shortcut:
+          list-mode: lax
+          files:
+            - "**/internal/sync/internal/syncobserve/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the observers import the vocabulary and the shortcut-root types, never the store, the planner or the executor
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the observers import the vocabulary and the shortcut-root types, never the store, the planner or the executor
+        sync-exec-only-domain:
+          list-mode: lax
+          files:
+            - "**/internal/sync/internal/syncexec/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the executor imports the vocabulary alone and reaches the store through its own interface
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the executor imports the vocabulary alone and reaches the store through its own interface
+        sync-engine-no-test-helpers:
+          list-mode: lax
+          files:
+            - "**/internal/sync/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut$
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncstore$
+            - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan$
+            - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve$
+            - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the engine imports the six stage packages, never a test-helper package
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the engine imports the six stage packages, never a test-helper package
+        sync-fixture-only-domain:
+          list-mode: lax
+          files:
+            - "**/internal/sync/internal/syncfixture/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the shared test fixtures import the vocabulary alone, so every package's tests can import them
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the shared test fixtures import the vocabulary alone, so every package's tests can import them
+        sync-storetest-only-domain-store-and-fixture:
+          list-mode: lax
+          files:
+            - "**/internal/sync/internal/syncstoretest/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut$
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncstore$
+            - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the test-store helpers import the vocabulary, the store and the fixtures
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the test-store helpers import the vocabulary, the store and the fixtures
         multisync-no-graph:
           files:
             - "**/internal/multisync/*.go"
@@ -415,6 +539,26 @@ linters:
         linters:
           - forbidigo
         text: models another system and is for tests only
+      # The sync tree's test-helper packages are test code that is not in
+      # _test.go files: they keep the exemptions tests have.
+      - path: internal/sync/internal/(syncfixture|syncstoretest)/
+        linters:
+          - lll
+          - mnd
+      - path: internal/sync/internal/(syncfixture|syncstoretest)/
+        linters:
+          - forbidigo
+        text: use fsroot, synctree, or localpath filesystem boundaries instead of raw os\.\* calls
+      # A call between two packages of the sync tree was a call inside one
+      # package before the split, and its error was returned as it is. The
+      # exclusion is anchored on the callee: a function of the tree or a
+      # method of one of its concrete types (pointer receiver). Calls from cli
+      # and multisync into the tree stay checked, and so does a call through
+      # an interface the tree declares, whose implementation may be anyone's.
+      - path: internal/sync/
+        linters:
+          - wrapcheck
+        text: 'sig: func (\(\*)?github\.com/tonimelisma/onedrive-go/internal/sync(/[a-z/]+)?\.[A-Za-z_]'
       # The filesystem boundary packages make the raw os.* calls; every other
       # forbidigo rule holds in them.
       - path: internal/(fsroot|synctree|localpath)/

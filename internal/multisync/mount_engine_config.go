@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // engineMountConfigForMount derives the sync-owned engine constructor input from
@@ -28,7 +29,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		RemoteRootItemID:       mount.remoteRootItemID(),
 		RemoteRootDeltaCapable: mount.remoteRootDeltaCapable(),
 		EnableWebsocket:        mount.enableWebsocket(),
-		LocalRules: syncengine.LocalObservationRules{
+		LocalRules: syncdomain.LocalObservationRules{
 			RejectSharePointRootForms: mount.rejectSharePointRootForms(),
 			PersonalNameRules:         mount.personalNameRules(),
 		},

@@ -11,14 +11,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // engineRunner is the interface the Orchestrator uses to run sync passes.
 // Implemented by *sync.Engine; mock implementations are used in tests.
 type engineRunner interface {
-	RunOnce(ctx context.Context, mode syncengine.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
-	RunWatch(ctx context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error
+	RunOnce(ctx context.Context, mode syncdomain.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error)
+	RunWatch(ctx context.Context, mode syncdomain.SyncMode, opts syncengine.WatchOptions) error
 	Close(ctx context.Context) error
 	ShortcutChildAckHandle() shortcutChildAckHandle
 }
@@ -32,7 +33,7 @@ type engineRunnerAdapter struct {
 // put "run sync engine once:" in front of every per-drive error a user sees.
 func (a engineRunnerAdapter) RunOnce(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.RunOptions,
 ) (*syncengine.Report, error) {
 	//nolint:wrapcheck // The engine error already carries its own context; see the adapter comment.
@@ -41,7 +42,7 @@ func (a engineRunnerAdapter) RunOnce(
 
 func (a engineRunnerAdapter) RunWatch(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 ) error {
 	//nolint:wrapcheck // The engine error already carries its own context; see the adapter comment.
@@ -90,7 +91,7 @@ type OrchestratorConfig struct {
 	Logger                 *slog.Logger
 	ControlSocketPath      string
 	StartWarning           func(StartupWarning)
-	DebugEventHook         func(syncengine.DebugEvent)
+	DebugEventHook         func(syncdomain.DebugEvent)
 	// ActivityHook receives each finished user-visible file action, tagged
 	// with the mount it happened in. It must not block.
 	ActivityHook func(MountActivity)

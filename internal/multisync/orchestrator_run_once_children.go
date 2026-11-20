@@ -10,6 +10,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // oneShotChildRuns owns child runner timing for a single RunOnce call. It is
@@ -21,7 +23,7 @@ import (
 // plus child artifacts remain the recovery source.
 type oneShotChildRuns struct {
 	orchestrator *Orchestrator
-	mode         syncengine.SyncMode
+	mode         syncdomain.SyncMode
 	opts         syncengine.RunOptions
 
 	// mu guards every field below it: cache, parents, parentAckers,
@@ -34,7 +36,7 @@ type oneShotChildRuns struct {
 	parents      map[mountID]*mountSpec
 	parentAckers map[mountID]shortcutChildAckHandle
 	parentDone   map[mountID]bool
-	snapshots    map[mountID]syncengine.ShortcutChildWorkSnapshot
+	snapshots    map[mountID]syncshortcut.ShortcutChildWorkSnapshot
 	started      map[mountID]bool
 	startup      []MountStartupResult
 	childReports []*MountReport
@@ -47,7 +49,7 @@ type oneShotChildRuns struct {
 
 func newOneShotChildRuns(
 	orchestrator *Orchestrator,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.RunOptions,
 	parents []*mountSpec,
 ) *oneShotChildRuns {
@@ -66,7 +68,7 @@ func newOneShotChildRuns(
 		parents:      parentByID,
 		parentAckers: make(map[mountID]shortcutChildAckHandle),
 		parentDone:   make(map[mountID]bool),
-		snapshots:    make(map[mountID]syncengine.ShortcutChildWorkSnapshot),
+		snapshots:    make(map[mountID]syncshortcut.ShortcutChildWorkSnapshot),
 		started:      make(map[mountID]bool),
 	}
 }
@@ -91,7 +93,7 @@ func (c *oneShotChildRuns) registerParents(work []indexedMountWork) {
 func (c *oneShotChildRuns) notifyParentSnapshot(
 	ctx context.Context,
 	parentID mountID,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
+	snapshot syncshortcut.ShortcutChildWorkSnapshot,
 ) error {
 	if c == nil || parentID == "" {
 		return nil
@@ -111,7 +113,7 @@ func (c *oneShotChildRuns) markParentDone(ctx context.Context, parentID mountID)
 }
 
 // recordSnapshot keeps the latest work snapshot parentID published.
-func (c *oneShotChildRuns) recordSnapshot(parentID mountID, snapshot syncengine.ShortcutChildWorkSnapshot) {
+func (c *oneShotChildRuns) recordSnapshot(parentID mountID, snapshot syncshortcut.ShortcutChildWorkSnapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.snapshots[parentID] = snapshot
@@ -143,20 +145,20 @@ func (c *oneShotChildRuns) startChildrenForParent(ctx context.Context, parentID 
 // finished and published work, and counts their run in childRunGroup; the
 // caller then starts that run. It reports false when there is nothing to
 // start yet, or nothing at all.
-func (c *oneShotChildRuns) claimChildRun(parentID mountID) (*mountSpec, syncengine.ShortcutChildWorkSnapshot, bool) {
+func (c *oneShotChildRuns) claimChildRun(parentID mountID) (*mountSpec, syncshortcut.ShortcutChildWorkSnapshot, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.started[parentID] || !c.parentDone[parentID] {
-		return nil, syncengine.ShortcutChildWorkSnapshot{}, false
+		return nil, syncshortcut.ShortcutChildWorkSnapshot{}, false
 	}
 	parent := cloneMountSpec(c.parents[parentID])
 	if parent == nil {
-		return nil, syncengine.ShortcutChildWorkSnapshot{}, false
+		return nil, syncshortcut.ShortcutChildWorkSnapshot{}, false
 	}
 	snapshot := c.snapshots[parentID]
 	if !shortcutChildWorkSnapshotHasWork(snapshot) {
-		return nil, syncengine.ShortcutChildWorkSnapshot{}, false
+		return nil, syncshortcut.ShortcutChildWorkSnapshot{}, false
 	}
 	c.started[parentID] = true
 	c.childRunGroup.Add(1)
@@ -221,7 +223,7 @@ func (c *oneShotChildRuns) runChildrenForParent(
 	ctx context.Context,
 	parentID mountID,
 	parent *mountSpec,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
+	snapshot syncshortcut.ShortcutChildWorkSnapshot,
 ) {
 	defer c.childRunGroup.Done()
 	// Each shortcut's own run recovers its panic into its report

@@ -1,0 +1,460 @@
+package syncshortcut
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"path"
+	"slices"
+
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+)
+
+type shortcutTopologyObservationKind string
+
+const (
+	ShortcutTopologyObservationIncremental shortcutTopologyObservationKind = "incremental"
+	ShortcutTopologyObservationComplete    shortcutTopologyObservationKind = "complete"
+)
+
+type ShortcutTopologyBatch struct {
+	NamespaceID string
+	Kind        shortcutTopologyObservationKind
+	Upserts     []ShortcutBindingUpsert
+	Deletes     []ShortcutBindingDelete
+	Unavailable []ShortcutBindingUnavailable
+}
+
+type ShortcutBindingUpsert struct {
+	BindingItemID     string
+	RelativeLocalPath string
+	LocalAlias        string
+	RemoteDriveID     string
+	RemoteItemID      string
+	RemoteIsFolder    bool
+	Complete          bool
+}
+
+type ShortcutBindingDelete struct {
+	BindingItemID string
+}
+
+type ShortcutBindingUnavailable struct {
+	BindingItemID     string
+	RelativeLocalPath string
+	LocalAlias        string
+	RemoteDriveID     string
+	RemoteItemID      string
+	RemoteIsFolder    bool
+	Reason            string
+}
+
+type ShortcutChildWorkSink func(context.Context, ShortcutChildWorkSnapshot) error
+
+type ShortcutChildRunMode string
+
+const (
+	ShortcutChildRunModeNormal     ShortcutChildRunMode = "normal"
+	ShortcutChildRunModeFinalDrain ShortcutChildRunMode = "final_drain"
+)
+
+// ShortcutChildWorkSnapshot is the parent engine's child-work output
+// to multisync. Raw shortcut observations and parent-visible status facts stay
+// inside internal/sync; multisync sees only child engine commands plus artifact
+// cleanup requests.
+type ShortcutChildWorkSnapshot struct {
+	NamespaceID     string
+	RunCommands     []ShortcutChildRunCommand
+	CleanupCommands []ShortcutChildCleanupCommand
+}
+
+type ShortcutChildRunCommand struct {
+	ChildMountID string
+	DisplayName  string
+	Engine       ShortcutChildEngineSpec
+	Mode         ShortcutChildRunMode
+	AckRef       ShortcutChildAckRef
+}
+
+type ShortcutChildEngineSpec struct {
+	LocalRoot         string
+	RemoteDriveID     string
+	RemoteItemID      string
+	LocalRootIdentity *ShortcutRootIdentity
+	ContentFilter     syncdomain.ContentFilterConfig
+}
+
+func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, error) {
+	if command == nil {
+		return "", fmt.Errorf("sync: shortcut child run command is incomplete")
+	}
+	childMountID := command.ChildMountID
+	if childMountID == "" {
+		return "", fmt.Errorf("sync: shortcut child run command is missing a child mount ID")
+	}
+	if !config.IsChildMountID(childMountID) {
+		return "", fmt.Errorf("sync: shortcut child run command has invalid child mount ID %s", childMountID)
+	}
+	if command.Engine.LocalRoot == "" {
+		return "", fmt.Errorf("sync: shortcut child %s is missing a local root", childMountID)
+	}
+	if command.Engine.RemoteDriveID == "" || command.Engine.RemoteItemID == "" {
+		return "", fmt.Errorf("sync: shortcut child %s is missing remote root identity", childMountID)
+	}
+	switch command.Mode {
+	case ShortcutChildRunModeNormal, ShortcutChildRunModeFinalDrain:
+	default:
+		return "", fmt.Errorf("sync: shortcut child %s has unsupported run mode %q", childMountID, command.Mode)
+	}
+	if command.Mode == ShortcutChildRunModeFinalDrain && command.AckRef.IsZero() {
+		return "", fmt.Errorf("sync: shortcut final-drain child %s is missing an acknowledgement reference", childMountID)
+	}
+	return childMountID, nil
+}
+
+func ShortcutChildEngineSpecsEqual(a *ShortcutChildEngineSpec, b *ShortcutChildEngineSpec) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.LocalRoot == b.LocalRoot &&
+		a.RemoteDriveID == b.RemoteDriveID &&
+		a.RemoteItemID == b.RemoteItemID &&
+		syncdomain.ContentFilterConfigsEqual(a.ContentFilter, b.ContentFilter) &&
+		shortcutRootIdentityPointersEqual(a.LocalRootIdentity, b.LocalRootIdentity)
+}
+
+func CloneShortcutRootIdentity(identity *ShortcutRootIdentity) *ShortcutRootIdentity {
+	if identity == nil {
+		return nil
+	}
+	cloned := *identity
+	return &cloned
+}
+
+type ShortcutChildCleanupCommand struct {
+	ChildMountID string
+	LocalRoot    string
+	Reason       ShortcutChildArtifactCleanupReason
+	AckRef       ShortcutChildAckRef
+}
+
+// ShortcutChildAckHandle is the live-parent acknowledgement capability that
+// multisync receives from a running parent engine. It is intentionally a value
+// handle instead of an interface so control-plane code can invoke acknowledgements
+// without owning or re-opening parent shortcut lifecycle state.
+type ShortcutChildAckHandle struct {
+	ackFinalDrain      func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error)
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error)
+}
+
+func NewShortcutChildAckHandle(
+	ackFinalDrain func(context.Context, ShortcutChildDrainAck) (ShortcutChildWorkSnapshot, error),
+	ackArtifactsPurged func(context.Context, ShortcutChildArtifactCleanupAck) (ShortcutChildWorkSnapshot, error),
+) ShortcutChildAckHandle {
+	return ShortcutChildAckHandle{
+		ackFinalDrain:      ackFinalDrain,
+		ackArtifactsPurged: ackArtifactsPurged,
+	}
+}
+
+func (h ShortcutChildAckHandle) IsZero() bool {
+	return h.ackFinalDrain == nil && h.ackArtifactsPurged == nil
+}
+
+func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
+	ctx context.Context,
+	ack ShortcutChildDrainAck,
+) (ShortcutChildWorkSnapshot, error) {
+	if h.ackFinalDrain == nil {
+		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
+	}
+	return h.ackFinalDrain(ctx, ack)
+}
+
+func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
+	ctx context.Context,
+	ack ShortcutChildArtifactCleanupAck,
+) (ShortcutChildWorkSnapshot, error) {
+	if h.ackArtifactsPurged == nil {
+		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
+	}
+	return h.ackArtifactsPurged(ctx, ack)
+}
+
+// ShortcutChildAckRef is the parent-issued opaque token for child completion
+// acknowledgements. Multisync may carry and compare the token, but only sync
+// can read the binding identity behind it.
+type ShortcutChildAckRef struct {
+	bindingItemID string
+}
+
+func newShortcutChildAckRef(bindingItemID string) ShortcutChildAckRef {
+	return ShortcutChildAckRef{bindingItemID: bindingItemID}
+}
+
+func (r ShortcutChildAckRef) IsZero() bool {
+	return r.bindingItemID == ""
+}
+
+// Matches reports whether record is the shortcut root this acknowledgement
+// names.
+func (r ShortcutChildAckRef) Matches(record *ShortcutRootRecord) bool {
+	return record.BindingItemID == r.bindingItemID
+}
+
+// ShortcutRootIdentity is the parent-engine-issued local directory identity
+// token for a managed shortcut root. Control-plane code carries this value as
+// child engine input, but only sync opens the filesystem and decides whether it
+// still matches.
+type ShortcutRootIdentity struct {
+	Device uint64
+	Inode  uint64
+	// BirthTime is the directory's creation time in Unix nanoseconds; zero
+	// means unknown (synctree.FileIdentity).
+	BirthTime int64
+}
+
+func sameShortcutRootIdentity(a ShortcutRootIdentity, b ShortcutRootIdentity) bool {
+	return synctree.SameIdentity(
+		synctree.FileIdentity{Device: a.Device, Inode: a.Inode, BirthTime: a.BirthTime},
+		synctree.FileIdentity{Device: b.Device, Inode: b.Inode, BirthTime: b.BirthTime},
+	)
+}
+
+func shortcutRootIdentityFromFileIdentity(identity *synctree.FileIdentity) *ShortcutRootIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &ShortcutRootIdentity{
+		Device:    identity.Device,
+		Inode:     identity.Inode,
+		BirthTime: identity.BirthTime,
+	}
+}
+
+func ShortcutRootIdentityToFileIdentity(identity *ShortcutRootIdentity) *synctree.FileIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &synctree.FileIdentity{
+		Device:    identity.Device,
+		Inode:     identity.Inode,
+		BirthTime: identity.BirthTime,
+	}
+}
+
+type ShortcutChildArtifactCleanupReason string
+
+const (
+	ShortcutChildArtifactCleanupParentRemoved ShortcutChildArtifactCleanupReason = "parent_removed"
+)
+
+type ShortcutChildDrainAck struct {
+	Ref ShortcutChildAckRef
+}
+
+type ShortcutChildArtifactCleanupAck struct {
+	Ref ShortcutChildAckRef
+}
+
+func NormalizeShortcutChildWorkSnapshot(
+	namespaceID string,
+	snapshot ShortcutChildWorkSnapshot,
+) ShortcutChildWorkSnapshot {
+	if snapshot.NamespaceID == "" {
+		snapshot.NamespaceID = namespaceID
+	}
+	snapshot.RunCommands = cloneShortcutChildRunCommands(snapshot.RunCommands)
+	snapshot.CleanupCommands = append([]ShortcutChildCleanupCommand(nil), snapshot.CleanupCommands...)
+	if len(snapshot.RunCommands) == 0 {
+		snapshot.RunCommands = nil
+	}
+	if len(snapshot.CleanupCommands) == 0 {
+		snapshot.CleanupCommands = nil
+	}
+	slices.SortFunc(snapshot.RunCommands, func(a, b ShortcutChildRunCommand) int {
+		if byMount := cmp.Compare(a.ChildMountID, b.ChildMountID); byMount != 0 {
+			return byMount
+		}
+		return cmp.Compare(a.DisplayName, b.DisplayName)
+	})
+	slices.SortFunc(snapshot.CleanupCommands, func(a, b ShortcutChildCleanupCommand) int {
+		if byMount := cmp.Compare(a.ChildMountID, b.ChildMountID); byMount != 0 {
+			return byMount
+		}
+		return cmp.Compare(a.Reason, b.Reason)
+	})
+	return snapshot
+}
+
+func ShortcutChildWorkSnapshotsEqual(
+	a ShortcutChildWorkSnapshot,
+	b ShortcutChildWorkSnapshot,
+) bool {
+	if a.NamespaceID != b.NamespaceID ||
+		len(a.RunCommands) != len(b.RunCommands) ||
+		len(a.CleanupCommands) != len(b.CleanupCommands) {
+		return false
+	}
+	for i := range a.RunCommands {
+		if !shortcutChildRunCommandEqual(&a.RunCommands[i], &b.RunCommands[i]) {
+			return false
+		}
+	}
+	for i := range a.CleanupCommands {
+		if a.CleanupCommands[i] != b.CleanupCommands[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneShortcutChildRunCommands(commands []ShortcutChildRunCommand) []ShortcutChildRunCommand {
+	cloned := append([]ShortcutChildRunCommand(nil), commands...)
+	for i := range cloned {
+		if cloned[i].Engine.LocalRootIdentity != nil {
+			identity := *cloned[i].Engine.LocalRootIdentity
+			cloned[i].Engine.LocalRootIdentity = &identity
+		}
+		cloned[i].Engine.ContentFilter = syncdomain.CloneContentFilterConfig(cloned[i].Engine.ContentFilter)
+	}
+	return cloned
+}
+
+func shortcutChildRunCommandEqual(a *ShortcutChildRunCommand, b *ShortcutChildRunCommand) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if shortcutChildRunCommandComparableFor(a) != shortcutChildRunCommandComparableFor(b) {
+		return false
+	}
+	return shortcutRootIdentityPointersEqual(a.Engine.LocalRootIdentity, b.Engine.LocalRootIdentity) &&
+		syncdomain.ContentFilterConfigsEqual(a.Engine.ContentFilter, b.Engine.ContentFilter)
+}
+
+type shortcutChildRunCommandComparable struct {
+	ChildMountID  string
+	DisplayName   string
+	LocalRoot     string
+	RemoteDriveID string
+	RemoteItemID  string
+	Mode          ShortcutChildRunMode
+	AckRef        ShortcutChildAckRef
+}
+
+func shortcutChildRunCommandComparableFor(command *ShortcutChildRunCommand) shortcutChildRunCommandComparable {
+	if command == nil {
+		return shortcutChildRunCommandComparable{}
+	}
+	return shortcutChildRunCommandComparable{
+		ChildMountID:  command.ChildMountID,
+		DisplayName:   command.DisplayName,
+		LocalRoot:     command.Engine.LocalRoot,
+		RemoteDriveID: command.Engine.RemoteDriveID,
+		RemoteItemID:  command.Engine.RemoteItemID,
+		Mode:          command.Mode,
+		AckRef:        command.AckRef,
+	}
+}
+
+func shortcutRootIdentityPointersEqual(a *ShortcutRootIdentity, b *ShortcutRootIdentity) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return sameShortcutRootIdentity(*a, *b)
+	}
+}
+
+func (b ShortcutTopologyBatch) hasFacts() bool {
+	return len(b.Upserts) > 0 || len(b.Deletes) > 0 || len(b.Unavailable) > 0
+}
+
+func (b ShortcutTopologyBatch) ShouldApply() bool {
+	return b.hasFacts() || b.Kind == ShortcutTopologyObservationComplete
+}
+
+func (b *ShortcutTopologyBatch) AppendUpsert(fact ShortcutBindingUpsert) {
+	if fact.BindingItemID == "" {
+		return
+	}
+	for i := range b.Upserts {
+		if b.Upserts[i].BindingItemID == fact.BindingItemID {
+			b.Upserts[i] = fact
+			return
+		}
+	}
+	b.removeUnavailable(fact.BindingItemID)
+	b.removeDelete(fact.BindingItemID)
+	b.Upserts = append(b.Upserts, fact)
+}
+
+func (b *ShortcutTopologyBatch) AppendDelete(fact ShortcutBindingDelete) {
+	if fact.BindingItemID == "" {
+		return
+	}
+	b.removeUpsert(fact.BindingItemID)
+	b.removeUnavailable(fact.BindingItemID)
+	if slices.ContainsFunc(b.Deletes, func(existing ShortcutBindingDelete) bool {
+		return existing.BindingItemID == fact.BindingItemID
+	}) {
+		return
+	}
+	b.Deletes = append(b.Deletes, fact)
+}
+
+func (b *ShortcutTopologyBatch) AppendUnavailable(fact ShortcutBindingUnavailable) {
+	if fact.BindingItemID == "" {
+		return
+	}
+	for i := range b.Unavailable {
+		if b.Unavailable[i].BindingItemID == fact.BindingItemID {
+			b.Unavailable[i] = fact
+			return
+		}
+	}
+	b.removeUpsert(fact.BindingItemID)
+	b.removeDelete(fact.BindingItemID)
+	b.Unavailable = append(b.Unavailable, fact)
+}
+
+func (b *ShortcutTopologyBatch) removeUpsert(bindingItemID string) {
+	b.Upserts = slices.DeleteFunc(b.Upserts, func(existing ShortcutBindingUpsert) bool {
+		return existing.BindingItemID == bindingItemID
+	})
+}
+
+func (b *ShortcutTopologyBatch) removeDelete(bindingItemID string) {
+	b.Deletes = slices.DeleteFunc(b.Deletes, func(existing ShortcutBindingDelete) bool {
+		return existing.BindingItemID == bindingItemID
+	})
+}
+
+func (b *ShortcutTopologyBatch) removeUnavailable(bindingItemID string) {
+	b.Unavailable = slices.DeleteFunc(b.Unavailable, func(existing ShortcutBindingUnavailable) bool {
+		return existing.BindingItemID == bindingItemID
+	})
+}
+
+func ProtectedRootByBinding(protectedRoots []ProtectedRoot) map[string]ProtectedRoot {
+	byBinding := make(map[string]ProtectedRoot, len(protectedRoots))
+	for i := range protectedRoots {
+		protectedRoot := protectedRoots[i]
+		if protectedRoot.BindingID == "" {
+			continue
+		}
+		byBinding[protectedRoot.BindingID] = protectedRoot
+	}
+	return byBinding
+}
+
+func ProtectedRootPrimaryName(relPath string) string {
+	if relPath == "" {
+		return ""
+	}
+	return path.Base(relPath)
+}

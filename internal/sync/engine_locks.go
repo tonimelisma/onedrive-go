@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/filelock"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // ErrSyncRootInUse means another onedrive-go engine, in this process or
@@ -358,7 +359,7 @@ func MoveStateDBs(
 	}
 	if begin != nil {
 		for _, move := range pending {
-			if removeErr := RemoveStateDBSidecars(move.To); removeErr != nil {
+			if removeErr := syncstore.RemoveStateDBSidecars(move.To); removeErr != nil {
 				return removeErr
 			}
 		}
@@ -369,7 +370,7 @@ func MoveStateDBs(
 
 	for _, move := range pending {
 		foldStateDBLogBeforeMove(ctx, move, logger)
-		if moveErr := MoveStateDBFamily(move.From, move.To); moveErr != nil {
+		if moveErr := syncstore.MoveStateDBFamily(move.From, move.To); moveErr != nil {
 			return moveErr
 		}
 		logger.Info("moved sync state for an account email change",
@@ -390,7 +391,7 @@ func MoveStateDBs(
 func splitStateDBMoves(moves []config.StateDBMove) (pending []config.StateDBMove, leftovers []string, err error) {
 	pending = make([]config.StateDBMove, 0, len(moves))
 	for _, move := range moves {
-		exists, statErr := StateDBFileExists(move.From)
+		exists, statErr := syncstore.StateDBFileExists(move.From)
 		switch {
 		case statErr != nil:
 			return nil, nil, fmt.Errorf("move sync state %s: %w", move.From, statErr)
@@ -411,7 +412,7 @@ func splitStateDBMoves(moves []config.StateDBMove) (pending []config.StateDBMove
 // was created afterwards.
 func checkStateDBMoveTargets(pending []config.StateDBMove, isResumed bool) error {
 	for _, move := range pending {
-		exists, err := StateDBFileExists(move.To)
+		exists, err := syncstore.StateDBFileExists(move.To)
 		switch {
 		case err != nil:
 			return fmt.Errorf("check sync state target %s: %w", move.To, err)
@@ -443,7 +444,7 @@ func foldStateDBLogBeforeMove(ctx context.Context, move config.StateDBMove, logg
 	family := config.StateDBFamily(move.From)
 	hasSidecar := false
 	for _, sidecar := range family[:len(family)-1] {
-		if exists, err := StateDBFileExists(sidecar); err == nil && exists {
+		if exists, err := syncstore.StateDBFileExists(sidecar); err == nil && exists {
 			hasSidecar = true
 			break
 		}
@@ -451,11 +452,11 @@ func foldStateDBLogBeforeMove(ctx context.Context, move config.StateDBMove, logg
 	if !hasSidecar {
 		return
 	}
-	if targetFound, err := StateDBFamilyExists(move.To); err != nil || targetFound {
+	if targetFound, err := syncstore.StateDBFamilyExists(move.To); err != nil || targetFound {
 		return
 	}
 
-	if err := FoldStateDBLog(ctx, move.From); err != nil {
+	if err := syncstore.FoldStateDBLog(ctx, move.From); err != nil {
 		logger.Warn("could not fold the sync state log into its database before an account email change "+
 			"moves it; moving its files as they are",
 			slog.String("db_path", move.From), slog.Any("error", err))
@@ -500,14 +501,14 @@ func refuseStoreOfUnfinishedEmailChange(dataDir, dbPath string) error {
 // removeStateDBLeftovers deletes the sidecars at dbPath, a name that has no
 // database. The caller holds the store lock.
 func removeStateDBLeftovers(dbPath string, logger *slog.Logger) error {
-	found, err := StateDBFamilyExists(dbPath)
+	found, err := syncstore.StateDBFamilyExists(dbPath)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return nil
 	}
-	if err := RemoveStateDBFiles(dbPath); err != nil {
+	if err := syncstore.RemoveStateDBFiles(dbPath); err != nil {
 		return err
 	}
 	if logger != nil {

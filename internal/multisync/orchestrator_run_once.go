@@ -13,6 +13,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // mountWork pairs a MountRunner with the sync function it will execute.
@@ -37,7 +39,7 @@ type indexedMountWork struct {
 // failure.
 func (o *Orchestrator) RunOnce(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.RunOptions,
 ) (result RunOnceResult) {
 	if len(o.cfg.StandaloneMounts) == 0 {
@@ -179,7 +181,7 @@ func processFailureRunOnceResult(err error) RunOnceResult {
 // MountRunner executes — no early abort for individual mount failures.
 func (o *Orchestrator) prepareRunOnceWork(
 	ctx context.Context,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	mounts []*mountSpec,
 	initialStartup []MountStartupResult,
 	opts syncengine.RunOptions,
@@ -247,7 +249,7 @@ func (o *Orchestrator) buildEngineWork(
 	ctx context.Context,
 	mount *mountSpec,
 	session *driveops.Session,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.RunOptions,
 ) (mountWork, error) {
 	mountCollector := o.registerMountPerfCollector(mount.id().String())
@@ -279,7 +281,7 @@ func (o *Orchestrator) buildEngineWork(
 			runMode := mode
 			runOpts := opts
 			if mount.isFinalDrainChild() {
-				runMode = syncengine.SyncBidirectional
+				runMode = syncdomain.SyncBidirectional
 				runOpts.FullReconcile = true
 				runOpts.ReleaseLocalTree = true
 			}
@@ -455,13 +457,13 @@ func acknowledgeSuccessfulFinalDrains(
 		if shortcutChildAckHandleIsZero(acker) {
 			return nil, fmt.Errorf("drive %s is not running, so removed shortcut %s can't be released yet", parentID, mount.label())
 		}
-		snapshot, err := acker.AcknowledgeChildFinalDrain(ctx, syncengine.ShortcutChildDrainAck{
+		snapshot, err := acker.AcknowledgeChildFinalDrain(ctx, syncshortcut.ShortcutChildDrainAck{
 			Ref: result.AckRef,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("release removed shortcut %s: %w", mount.label(), err)
 		}
-		publishedCleanups, cleanupErr := shortcutChildArtifactCleanups(map[mountID]syncengine.ShortcutChildWorkSnapshot{
+		publishedCleanups, cleanupErr := shortcutChildArtifactCleanups(map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
 			parentID: snapshot,
 		})
 		if cleanupErr != nil {

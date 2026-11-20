@@ -12,6 +12,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // The tests here follow a pending-create record when its item or its path
@@ -31,20 +36,20 @@ import (
 func TestPrunePendingCreates_DropsTheRecordOfAnItemAtAPathTheScanDoesNotVisit(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
+	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(testDriveID)
-	require.NoError(t, store.RecordPendingCreate(ctx, &PendingCreate{
-		ItemID: testPlaceholderID, DriveID: driveID, Path: "hidden.txt", ParentID: GraphRootID,
+	driveID := driveid.New(syncfixture.TestDriveID)
+	require.NoError(t, store.RecordPendingCreate(ctx, &syncdomain.PendingCreate{
+		ItemID: testPlaceholderID, DriveID: driveID, Path: "hidden.txt", ParentID: syncexec.GraphRootID,
 		CreatedETag: placeholderCreatedETag,
 	}))
-	require.NoError(t, store.RecordPendingCreateIntent(ctx, &PendingCreate{
-		DriveID: driveID, Path: "hidden-intent.txt", ParentID: GraphRootID,
+	require.NoError(t, store.RecordPendingCreateIntent(ctx, &syncdomain.PendingCreate{
+		DriveID: driveID, Path: "hidden-intent.txt", ParentID: syncexec.GraphRootID,
 	}))
 	require.NoError(t, store.ReplaceLocalState(ctx, nil))
 	scanned := func(path string) bool { return path != "hidden.txt" && path != "hidden-intent.txt" }
 
-	require.NoError(t, store.PrunePendingCreates(ctx, PassObservedRemoteThenLocal, scanned))
+	require.NoError(t, store.PrunePendingCreates(ctx, syncstore.PassObservedRemoteThenLocal, scanned))
 
 	requireNoPendingCreateAt(t, store, "hidden.txt", "a record nothing will upload into ends")
 	_, found, err := store.PendingCreateAt(ctx, "hidden-intent.txt")
@@ -61,7 +66,7 @@ func TestPrunePendingCreates_DropsTheRecordOfAnItemAtAPathTheScanDoesNotVisit(t 
 func TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	// A file both sides keep, so no pass sees one side emptied.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
@@ -71,7 +76,7 @@ func TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord(t *testing.T) {
 	remote.mu.Lock()
 	remote.interruptCreates = true
 	remote.mu.Unlock()
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	pending, found, err := eng.baseline.PendingCreateAt(t.Context(), "doc.txt")
 	require.NoError(t, err)
@@ -81,12 +86,12 @@ func TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord(t *testing.T) {
 	remote.mu.Lock()
 	remote.interruptCreates = false
 	remote.mu.Unlock()
-	eng.contentFilter = ContentFilterConfig{IgnoredPaths: []string{"doc.txt"}}
+	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredPaths: []string{"doc.txt"}}
 	expireRetryWork(t, eng)
 	runScenarioPass(t, eng)
 
 	requireNoPendingCreateAt(t, eng.baseline, "doc.txt", "the record ends with the hidden baseline row")
-	_, _, inBaseline := readBaselineRow(t, eng.baseline, pending.ItemID)
+	_, _, inBaseline := syncstoretest.ReadBaselineRow(t, eng.baseline, pending.ItemID)
 	assert.False(t, inBaseline)
 }
 
@@ -100,16 +105,16 @@ func TestRunOnce_PlaceholderAtAPathTheFilterHidesLosesItsRecord(t *testing.T) {
 func TestCommitObservation_AdoptedPlaceholderRenamedOntoARecordedPathLeavesNoRecordBehind(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
+	store := syncstoretest.NewTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	placeholder := adoptTestPlaceholder(t, store)
-	require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &PendingCreate{
-		DriveID: driveID, Path: renamedPath, ParentID: GraphRootID,
+	require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
+		DriveID: driveID, Path: renamedPath, ParentID: syncexec.GraphRootID,
 	}))
 
 	renamed := placeholder
 	renamed.Path, renamed.ETag = renamedPath, placeholderMovedETag
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{renamed}, "t-renamed", driveID))
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{renamed}, "t-renamed", driveID))
 
 	requireNoPendingCreateAt(t, store, "doc.txt", "no record stays at the path the item left")
 	pending, found, err := store.PendingCreateAt(t.Context(), renamedPath)
@@ -129,24 +134,24 @@ func TestCommitObservation_AdoptedPlaceholderRenamedOntoARecordedPathLeavesNoRec
 func TestCommitObservation_APlaceholderTakingAFreedPathEndsTheRecordOfTheItemThatLeftIt(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
-	driveID := driveid.New(testDriveID)
+	store := syncstoretest.NewTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	left := adoptTestPlaceholder(t, store)
 	left.Path, left.ETag = renamedPath, placeholderMovedETag
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{left}, "t-renamed", driveID))
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{left}, "t-renamed", driveID))
 	_, followed, err := store.PendingCreateAt(t.Context(), renamedPath)
 	require.NoError(t, err)
 	require.True(t, followed, "the record followed the renamed item")
 
-	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-		ItemID: "new-placeholder", DriveID: driveID, Path: "doc.txt", ParentID: GraphRootID, CreatedETag: `"n,1"`,
+	require.NoError(t, store.RecordPendingCreate(t.Context(), &syncdomain.PendingCreate{
+		ItemID: "new-placeholder", DriveID: driveID, Path: "doc.txt", ParentID: syncexec.GraphRootID, CreatedETag: `"n,1"`,
 	}))
-	require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
-		DriveID: driveID, ItemID: "new-placeholder", ParentID: GraphRootID, Path: "doc.txt", ItemType: ItemTypeFile,
-		Hash: emptyQuickXor, Size: 0, ETag: `"n,1"`,
+	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{{
+		DriveID: driveID, ItemID: "new-placeholder", ParentID: syncexec.GraphRootID, Path: "doc.txt", ItemType: syncdomain.ItemTypeFile,
+		Hash: syncfixture.EmptyQuickXor, Size: 0, ETag: `"n,1"`,
 	}}, "t-new", driveID))
 
-	_, _, adopted := readBaselineRow(t, store, "new-placeholder")
+	_, _, adopted := syncstoretest.ReadBaselineRow(t, store, "new-placeholder")
 	require.True(t, adopted, "the new placeholder takes the freed path")
 	requireNoPendingCreateAt(t, store, renamedPath, "the record of the item that left the path ends")
 	pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
@@ -165,19 +170,19 @@ func TestCommitObservation_APlaceholderTakingAFreedPathEndsTheRecordOfTheItemTha
 func TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	// renameOfPlaceholder is the committed move of the adopted placeholder
 	// from doc.txt to renamedPath: ActionRemoteMove when this client moved the
 	// item online to match a local rename, ActionLocalMove when it moved the
 	// local file to match a rename made online.
-	renameOfPlaceholder := func(action ActionType) *BaselineMutation {
-		return &BaselineMutation{
+	renameOfPlaceholder := func(action syncdomain.ActionType) *syncdomain.BaselineMutation {
+		return &syncdomain.BaselineMutation{
 			Action: action, Success: true, Path: renamedPath, OldPath: "doc.txt", DriveID: driveID,
-			ItemID: testPlaceholderID, ParentID: GraphRootID, ItemType: ItemTypeFile,
+			ItemID: testPlaceholderID, ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFile,
 			LocalSize: 0, LocalSizeKnown: true, RemoteSize: 0, RemoteSizeKnown: true, ETag: placeholderMovedETag,
 		}
 	}
-	requirePlaceholderRecordAtRenamedPath := func(t *testing.T, store *SyncStore) {
+	requirePlaceholderRecordAtRenamedPath := func(t *testing.T, store *syncstore.SyncStore) {
 		t.Helper()
 
 		requireNoPendingCreateAt(t, store, "doc.txt", "nothing is left at the old path")
@@ -190,10 +195,10 @@ func TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong(t *testing.T) {
 	t.Run("the item itself", func(t *testing.T) {
 		t.Parallel()
 
-		store := newTestStore(t)
+		store := syncstoretest.NewTestStore(t)
 		adoptTestPlaceholder(t, store)
 
-		require.NoError(t, store.CommitMutation(t.Context(), renameOfPlaceholder(ActionRemoteMove)))
+		require.NoError(t, store.CommitMutation(t.Context(), renameOfPlaceholder(syncdomain.ActionRemoteMove)))
 
 		requirePlaceholderRecordAtRenamedPath(t, store)
 	})
@@ -207,21 +212,21 @@ func TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong(t *testing.T) {
 		t.Parallel()
 
 		const displacedID, displacedETag = "displaced", `"d,1"`
-		store := newTestStore(t)
+		store := syncstoretest.NewTestStore(t)
 		adoptTestPlaceholder(t, store)
-		require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
-			ItemID: displacedID, DriveID: driveID, Path: renamedPath, ParentID: GraphRootID, CreatedETag: displacedETag,
+		require.NoError(t, store.RecordPendingCreate(t.Context(), &syncdomain.PendingCreate{
+			ItemID: displacedID, DriveID: driveID, Path: renamedPath, ParentID: syncexec.GraphRootID, CreatedETag: displacedETag,
 		}))
-		require.NoError(t, store.CommitObservation(t.Context(), []ObservedItem{{
-			DriveID: driveID, ItemID: displacedID, ParentID: GraphRootID, Path: renamedPath, ItemType: ItemTypeFile,
-			Hash: emptyQuickXor, Size: 0, ETag: displacedETag,
+		require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{{
+			DriveID: driveID, ItemID: displacedID, ParentID: syncexec.GraphRootID, Path: renamedPath, ItemType: syncdomain.ItemTypeFile,
+			Hash: syncfixture.EmptyQuickXor, Size: 0, ETag: displacedETag,
 		}}, "t-displaced", driveID))
-		_, _, adopted := readBaselineRow(t, store, displacedID)
+		_, _, adopted := syncstoretest.ReadBaselineRow(t, store, displacedID)
 		require.True(t, adopted, "the second placeholder is adopted at the path the move takes")
 
-		require.NoError(t, store.CommitMutation(t.Context(), renameOfPlaceholder(ActionLocalMove)))
+		require.NoError(t, store.CommitMutation(t.Context(), renameOfPlaceholder(syncdomain.ActionLocalMove)))
 
-		_, _, kept := readBaselineRow(t, store, displacedID)
+		_, _, kept := syncstoretest.ReadBaselineRow(t, store, displacedID)
 		require.False(t, kept, "the move takes the path from the item it displaces")
 		requirePlaceholderRecordAtRenamedPath(t, store)
 	})
@@ -259,24 +264,24 @@ func TestCommitMutation_MoveOutcomeTakesTheRecordOfItsItemAlong(t *testing.T) {
 // newStoreWithDocsFolderMovedToPapers is a store whose baseline folder docs
 // held the record of a created item at docs/doc.txt and an intent at
 // intentPath, after the committed move of that folder to papers.
-func newStoreWithDocsFolderMovedToPapers(t *testing.T, intentPath string) *SyncStore {
+func newStoreWithDocsFolderMovedToPapers(t *testing.T, intentPath string) *syncstore.SyncStore {
 	t.Helper()
 
-	driveID := driveid.New(testDriveID)
-	store := newTestStore(t)
+	driveID := driveid.New(syncfixture.TestDriveID)
+	store := syncstoretest.NewTestStore(t)
 	_, err := store.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline (item_id, path, parent_id, item_type, etag)
 		VALUES ('folder-docs', 'docs', 'root', 'folder', '"f,1"')`)
 	require.NoError(t, err)
-	require.NoError(t, store.RecordPendingCreate(t.Context(), &PendingCreate{
+	require.NoError(t, store.RecordPendingCreate(t.Context(), &syncdomain.PendingCreate{
 		ItemID: testPlaceholderID, DriveID: driveID, Path: "docs/doc.txt", ParentID: "folder-docs",
 		CreatedETag: placeholderCreatedETag,
 	}))
-	require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &PendingCreate{
+	require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
 		DriveID: driveID, Path: intentPath, ParentID: "folder-docs",
 	}))
-	require.NoError(t, store.CommitMutation(t.Context(), &BaselineMutation{
-		Action: ActionRemoteMove, Success: true, Path: "papers", OldPath: "docs", DriveID: driveID,
-		ItemID: "folder-docs", ParentID: GraphRootID, ItemType: ItemTypeFolder, ETag: `"f,2"`,
+	require.NoError(t, store.CommitMutation(t.Context(), &syncdomain.BaselineMutation{
+		Action: syncdomain.ActionRemoteMove, Success: true, Path: "papers", OldPath: "docs", DriveID: driveID,
+		ItemID: "folder-docs", ParentID: syncexec.GraphRootID, ItemType: syncdomain.ItemTypeFolder, ETag: `"f,2"`,
 	}))
 
 	return store
@@ -293,7 +298,7 @@ func newStoreWithDocsFolderMovedToPapers(t *testing.T, intentPath string) *SyncS
 func TestRunOnce_AdoptedHashlessPlaceholderRenamedOnlineIsFinishedWithoutAConflict(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.hashlessEmptyFiles = true
 	// A file both sides keep, so no pass sees one side emptied.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -306,16 +311,16 @@ func TestRunOnce_AdoptedHashlessPlaceholderRenamedOnlineIsFinishedWithoutAConfli
 	remote.mu.Lock()
 	remote.interruptCreates = true
 	remote.mu.Unlock()
-	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	remote.mu.Lock()
 	remote.interruptCreates = false
 	remote.mu.Unlock()
 	placeholder, ok := remote.itemAt("doc.txt")
 	require.True(t, ok)
-	_, err = h.eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	_, err = h.eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
-	_, _, adopted := readBaselineRow(t, h.eng.baseline, placeholder.ID)
+	_, _, adopted := syncstoretest.ReadBaselineRow(t, h.eng.baseline, placeholder.ID)
 	require.True(t, adopted, "the placeholder is adopted")
 
 	// Someone renames the empty item online.
@@ -347,7 +352,7 @@ func TestRunOnce_AdoptedHashlessPlaceholderRenamedOnlineIsFinishedWithoutAConfli
 func TestMoveScenarioRemote_ZeroByteCreateRunsNoCreateHook(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	hooked := 0
 	hook := func(*graph.Item) error {
 		hooked++

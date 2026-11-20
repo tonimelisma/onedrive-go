@@ -12,6 +12,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -31,7 +35,7 @@ func rewriteKeepingMtime(t *testing.T, path, content string) {
 func TestRunOnce_InPlaceEditWithRestoredMtimeUploads(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-1", "root", "doc.txt", "synced version")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	require.Equal(t, 1, runScenarioPass(t, eng).Downloads)
@@ -50,7 +54,7 @@ func TestRunOnce_InPlaceEditWithRestoredMtimeUploads(t *testing.T) {
 func TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-1", "root", "doc.txt", "synced version")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	require.Equal(t, 1, runScenarioPass(t, eng).Downloads)
@@ -86,10 +90,10 @@ func TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit(t *testing.
 func TestRunOnce_TransfersRecordLocalCtimeAndIdentity(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-1", "root", "down.txt", "downloaded")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	writeTestFile(t, syncRoot, "up.txt", "uploaded")
+	syncfixture.WriteTestFile(t, syncRoot, "up.txt", "uploaded")
 	report := runScenarioPass(t, eng)
 	require.Equal(t, 1, report.Downloads)
 	require.Equal(t, 1, report.Uploads)
@@ -105,7 +109,7 @@ func TestRunOnce_TransfersRecordLocalCtimeAndIdentity(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, ctime, entry.LocalCtime, "%s baseline ctime", name)
 		assert.True(t, entry.LocalHasIdentity, "%s baseline identity", name)
-		assert.True(t, CanReuseBaselineHash(info, entry, ctime+2*int64(RacilyCleanWindow)), "%s fast path applies", name)
+		assert.True(t, syncobserve.CanReuseBaselineHash(info, entry, ctime+2*int64(syncobserve.RacilyCleanWindow)), "%s fast path applies", name)
 	}
 }
 
@@ -117,7 +121,7 @@ func TestRunOnce_TransfersRecordLocalCtimeAndIdentity(t *testing.T) {
 func TestRunOnce_FullRescanWithItemReplacedAtSamePath(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-old", "root", "doc.txt", "old version")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	require.Equal(t, 1, runScenarioPass(t, eng).Downloads)
@@ -126,10 +130,10 @@ func TestRunOnce_FullRescanWithItemReplacedAtSamePath(t *testing.T) {
 	// delete never reaches delta.
 	remote.removeUnreported("item-old")
 	remote.addFile(t, "item-new", "root", "doc.txt", "new version")
-	logs := &syncLockedBuffer{}
+	logs := &syncfixture.SyncLockedBuffer{}
 	eng.baseline.SetLoggerForTest(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 	require.Zero(t, report.Failed, "errors: %v", report.Errors)
 
@@ -141,6 +145,6 @@ func TestRunOnce_FullRescanWithItemReplacedAtSamePath(t *testing.T) {
 	entry, found := bl.GetByPath("doc.txt")
 	require.True(t, found)
 	assert.Equal(t, "item-new", entry.ItemID)
-	assert.Empty(t, twinIssuePaths(t, eng.baseline))
+	assert.Empty(t, syncstoretest.TwinIssuePaths(t, eng.baseline))
 	assert.NotContains(t, logs.String(), "two items", "a replacement is not a name twin")
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func testSyncConsole() (*syncConsole, *bytes.Buffer, *bytes.Buffer) {
@@ -237,14 +238,14 @@ func TestSyncConsole_AConditionTheUserMustClearIsSaidOnceInStatusWords(t *testin
 	refused := syncengine.Activity{
 		Kind:          syncengine.ActivityFolderCreate,
 		Path:          "deep",
-		ConditionKey:  syncengine.ConditionPathTooLong,
-		ConditionType: syncengine.IssueType("path_too_long"),
+		ConditionKey:  syncdomain.ConditionPathTooLong,
+		ConditionType: syncdomain.IssueType("path_too_long"),
 		Err:           errors.New("graph: bad request"),
 	}
 	report := &syncengine.Report{
 		Duration: 2 * time.Second, FolderCreates: 1, Failed: 1, LastPassFailed: 1, LastPassAwaitingUser: 1,
 	}
-	words := describeStatusCondition(syncengine.ConditionPathTooLong)
+	words := describeStatusCondition(syncdomain.ConditionPathTooLong)
 
 	c, out, errOut := testSyncConsole()
 	c.ActivityHook()
@@ -292,12 +293,12 @@ func TestSyncConsole_AConditionIsSaidAgainOnceItsPathSyncedInBetween(t *testing.
 	refused := syncengine.Activity{
 		Kind:          syncengine.ActivityFolderCreate,
 		Path:          "deep",
-		ConditionKey:  syncengine.ConditionPathTooLong,
-		ConditionType: syncengine.IssueType("path_too_long"),
+		ConditionKey:  syncdomain.ConditionPathTooLong,
+		ConditionType: syncdomain.IssueType("path_too_long"),
 		Err:           errors.New("graph: bad request"),
 	}
 	synced := syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "deep", Success: true}
-	words := describeStatusCondition(syncengine.ConditionPathTooLong)
+	words := describeStatusCondition(syncdomain.ConditionPathTooLong)
 	conditionLine := "Can't create folder deep: " + words.Title + ". " + words.Reason + " " + words.Action + "\n"
 
 	c, out, errOut := testSyncConsole()
@@ -337,13 +338,13 @@ func TestSyncConsole_AConditionThatStartsAgainWithNoActivityBetweenIsSaidAgain(t
 		Kind:            syncengine.ActivityFolderCreate,
 		Path:            "deep",
 		ConditionStarts: true,
-		ConditionKey:    syncengine.ConditionPathTooLong,
-		ConditionType:   syncengine.IssueType("path_too_long"),
+		ConditionKey:    syncdomain.ConditionPathTooLong,
+		ConditionType:   syncdomain.IssueType("path_too_long"),
 		Err:             errors.New("graph: bad request"),
 	}
 	retry := starts
 	retry.ConditionStarts = false
-	words := describeStatusCondition(syncengine.ConditionPathTooLong)
+	words := describeStatusCondition(syncdomain.ConditionPathTooLong)
 	conditionLine := "Can't create folder deep: " + words.Title + ". " + words.Reason + " " + words.Action + "\n"
 
 	c, _, errOut := testSyncConsole()
@@ -371,8 +372,8 @@ func TestSyncConsole_SummaryExplainsHeldBackWork(t *testing.T) {
 
 	c, out, _ := testSyncConsole()
 	c.Summary(singleMountResult(&syncengine.Report{
-		Mode:           syncengine.SyncDownloadOnly,
-		DeferredByMode: syncengine.DeferredCounts{Uploads: 3},
+		Mode:           syncdomain.SyncDownloadOnly,
+		DeferredByMode: syncdomain.DeferredCounts{Uploads: 3},
 	}))
 
 	assert.Contains(t, out.String(), "Held back by --download-only: 3 uploads.")
@@ -384,8 +385,8 @@ func TestHeldBackSummary_CountsOneOfEachInTheSingular(t *testing.T) {
 
 	assert.Equal(t, "Held back by --download-only: 1 upload, 1 download, 1 delete on OneDrive, "+
 		"1 local delete, 1 move, 1 folder create.", heldBackSummary(&syncengine.Report{
-		Mode: syncengine.SyncDownloadOnly,
-		DeferredByMode: syncengine.DeferredCounts{
+		Mode: syncdomain.SyncDownloadOnly,
+		DeferredByMode: syncdomain.DeferredCounts{
 			Uploads: 1, Downloads: 1, RemoteDeletes: 1, LocalDeletes: 1, Moves: 1, FolderCreates: 1,
 		},
 	}))
@@ -402,7 +403,7 @@ func TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync(t *testing.T) 
 
 	c, out, _ := testSyncConsole()
 	c.Summary(singleMountResult(&syncengine.Report{
-		Mode:            syncengine.SyncBidirectional,
+		Mode:            syncdomain.SyncBidirectional,
 		Duration:        16 * time.Minute,
 		RemoteDeletes:   5557,
 		Succeeded:       5557,
@@ -420,7 +421,7 @@ func TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync(t *testing.T) 
 	c, out, _ = testSyncConsole()
 	c.json = true
 	c.Summary(singleMountResult(&syncengine.Report{
-		Mode:            syncengine.SyncBidirectional,
+		Mode:            syncdomain.SyncBidirectional,
 		RemoteDeletes:   5557,
 		Succeeded:       5557,
 		Failed:          1,
@@ -538,7 +539,7 @@ func TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop(t *testing.
 
 	c, out, _ := testSyncConsole()
 	c.stamp = true
-	c.Watching([]multisync.StandaloneMountConfig{{SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"}}, syncengine.SyncBidirectional)
+	c.Watching([]multisync.StandaloneMountConfig{{SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"}}, syncdomain.SyncBidirectional)
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "a.txt", Success: true}))
 	c.Stopped()
 
@@ -556,7 +557,7 @@ func TestSyncConsole_JournalMarksFailuresWithErrorPriority(t *testing.T) {
 
 	c, out, errOut := testSyncConsole()
 	c.journal = true
-	c.Watching([]multisync.StandaloneMountConfig{{SyncRoot: "/srv/data", AccountEmail: "user@example.com"}}, syncengine.SyncDownloadOnly)
+	c.Watching([]multisync.StandaloneMountConfig{{SyncRoot: "/srv/data", AccountEmail: "user@example.com"}}, syncdomain.SyncDownloadOnly)
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.txt", Err: os.ErrPermission}))
 
 	assert.Equal(t, "Watching /srv/data for user@example.com (download only).\n", out.String(),
@@ -571,7 +572,7 @@ func TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor(t *testing.T) {
 	c, out, _ := testSyncConsole()
 	c.Watching([]multisync.StandaloneMountConfig{
 		{SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com", Paused: true},
-	}, syncengine.SyncBidirectional)
+	}, syncdomain.SyncBidirectional)
 
 	assert.Equal(t, "Watching ~/OneDrive for user@example.com (paused).\n"+
 		"All drives are paused; waiting until one is resumed ('onedrive-go resume').\n"+
@@ -586,7 +587,7 @@ func TestSyncConsole_StartingNamesFolderAndAccount(t *testing.T) {
 	c.Starting([]multisync.StandaloneMountConfig{
 		{SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"},
 		{SyncRoot: "/home/user/Paused", AccountEmail: "user@example.com", Paused: true},
-	}, syncengine.SyncBidirectional, false)
+	}, syncdomain.SyncBidirectional, false)
 
 	assert.Equal(t, "Syncing ~/OneDrive with user@example.com...\n", out.String())
 }
@@ -619,7 +620,7 @@ func TestSyncConsole_JSONWritesOnlyJSONLines(t *testing.T) {
 	c, out, errOut := testSyncConsole()
 	c.json = true
 	c.Starting([]multisync.StandaloneMountConfig{{DisplayName: "Personal", SyncRoot: "/home/user/OneDrive", AccountEmail: "user@example.com"}},
-		syncengine.SyncBidirectional, false)
+		syncdomain.SyncBidirectional, false)
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityDownload, Path: "a.pdf", Size: 10, SizeKnown: true, Success: true}))
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Err: os.ErrPermission}))
 	c.Summary(singleMountResult(&syncengine.Report{
@@ -723,7 +724,7 @@ func TestSyncConsole_SummaryDoesNotPromiseARetryOfWorkTheRunFinished(t *testing.
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", WillRetry: true}))
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "beta/rl-1.txt", Size: 22, SizeKnown: true, Success: true}))
 	left := c.Summary(singleMountResult(&syncengine.Report{
-		Mode:      syncengine.SyncBidirectional,
+		Mode:      syncdomain.SyncBidirectional,
 		Duration:  136 * time.Second,
 		Uploads:   1,
 		Succeeded: 1,
@@ -747,7 +748,7 @@ func TestSyncConsole_SummaryWithAWiredFeedAndNoActivityDoesNotUsePlannerCounts(t
 	c, out, _ := testSyncConsole()
 	c.ActivityHook()
 	c.Summary(singleMountResult(&syncengine.Report{
-		Mode:            syncengine.SyncBidirectional,
+		Mode:            syncdomain.SyncBidirectional,
 		Duration:        1900 * time.Millisecond,
 		Uploads:         1,
 		LeftForNextSync: 1,

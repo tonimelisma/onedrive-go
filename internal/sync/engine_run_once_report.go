@@ -3,11 +3,13 @@ package sync
 import (
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func (e *Engine) completeRunOnceWithoutChanges(
 	start time.Time,
-	mode SyncMode,
+	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) *Report {
 	e.logger.Info("sync pass complete: no changes detected",

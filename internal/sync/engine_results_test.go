@@ -11,6 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-6.6.7, R-6.6.12
@@ -19,14 +22,14 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn(t *testing.T)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
 	for i := range 11 {
-		flow.recordError(&ResultDecision{
-			Persistence:   PersistRetryWork,
-			ConditionType: IssueServiceOutage,
-		}, &ActionCompletion{
+		flow.recordError(&syncdomain.ResultDecision{
+			Persistence:   syncdomain.PersistRetryWork,
+			ConditionType: syncdomain.IssueServiceOutage,
+		}, &syncdomain.ActionCompletion{
 			Path:   fmt.Sprintf("retry-%02d.txt", i),
 			Err:    errors.New("boom"),
 			ErrMsg: "boom",
@@ -65,14 +68,14 @@ func TestEngineFlow_LogFailureSummary_GroupsFailuresWithNoConditionApart(t *test
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	for i, condition := range []IssueType{"", IssueServiceOutage, ""} {
-		flow.recordError(&ResultDecision{
-			Persistence:   PersistRetryWork,
+	for i, condition := range []syncdomain.IssueType{"", syncdomain.IssueServiceOutage, ""} {
+		flow.recordError(&syncdomain.ResultDecision{
+			Persistence:   syncdomain.PersistRetryWork,
 			ConditionType: condition,
-		}, &ActionCompletion{
+		}, &syncdomain.ActionCompletion{
 			Path:   fmt.Sprintf("unclassified-%02d.txt", i),
 			ErrMsg: "connection reset",
 		})
@@ -92,13 +95,13 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	now := eng.nowFunc()
-	rt.holdAction(&TrackedAction{
-		Action: Action{
+	rt.holdAction(&syncdomain.TrackedAction{
+		Action: syncdomain.Action{
 			Path: "due.txt",
-			Type: ActionUpload,
+			Type: syncdomain.ActionUpload,
 		},
 		ID: 1,
-	}, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	}, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
 	rt.armRetryTimer()
 
@@ -114,18 +117,18 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	clock := newManualClock(eng.nowFunc())
+	clock := syncfixture.NewManualClock(eng.nowFunc())
 	installManualClockForTestEngine(eng, clock)
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()
 
-	rt.holdAction(&TrackedAction{
-		Action: Action{
+	rt.holdAction(&syncdomain.TrackedAction{
+		Action: syncdomain.Action{
 			Path: "later.txt",
-			Type: ActionUpload,
+			Type: syncdomain.ActionUpload,
 		},
 		ID: 1,
-	}, heldReasonRetry, ScopeKey{}, now.Add(30*time.Second))
+	}, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(30*time.Second))
 
 	rt.armRetryTimer()
 

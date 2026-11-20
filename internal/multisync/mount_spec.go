@@ -8,7 +8,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 type mountID string
@@ -36,7 +37,7 @@ type StandaloneMountConfig struct {
 	TransferWorkers        int
 	CheckWorkers           int
 	MinFreeSpaceBytes      int64
-	ContentFilter          syncengine.ContentFilterConfig
+	ContentFilter          syncdomain.ContentFilterConfig
 }
 
 // StandaloneMountSelection carries the configured top-level mounts that are
@@ -72,7 +73,7 @@ type mountRuntimeCommon struct {
 	transferWorkers        int
 	checkWorkers           int
 	minFreeSpace           int64
-	contentFilter          syncengine.ContentFilterConfig
+	contentFilter          syncdomain.ContentFilterConfig
 }
 
 type parentMountSpec struct {
@@ -95,7 +96,7 @@ type parentMountSpec struct {
 	transferWorkers           int
 	checkWorkers              int
 	minFreeSpace              int64
-	contentFilter             syncengine.ContentFilterConfig
+	contentFilter             syncdomain.ContentFilterConfig
 }
 
 type childMountSpec struct {
@@ -114,18 +115,18 @@ type childMountSpec struct {
 	transferWorkers        int
 	checkWorkers           int
 	minFreeSpace           int64
-	contentFilter          syncengine.ContentFilterConfig
-	mode                   syncengine.ShortcutChildRunMode
-	ackRef                 syncengine.ShortcutChildAckRef
-	engine                 syncengine.ShortcutChildEngineSpec
+	contentFilter          syncdomain.ContentFilterConfig
+	mode                   syncshortcut.ShortcutChildRunMode
+	ackRef                 syncshortcut.ShortcutChildAckRef
+	engine                 syncshortcut.ShortcutChildEngineSpec
 }
 
 type childMountRuntime struct {
 	common        mountRuntimeCommon
 	parentMountID mountID
-	mode          syncengine.ShortcutChildRunMode
-	ackRef        syncengine.ShortcutChildAckRef
-	engine        syncengine.ShortcutChildEngineSpec
+	mode          syncshortcut.ShortcutChildRunMode
+	ackRef        syncshortcut.ShortcutChildAckRef
+	engine        syncshortcut.ShortcutChildEngineSpec
 }
 
 type parentMountRuntime struct {
@@ -134,7 +135,7 @@ type parentMountRuntime struct {
 	driveType                 string
 	rejectSharePointRootForms bool
 	personalNameRules         bool
-	childWorkSink             syncengine.ShortcutChildWorkSink
+	childWorkSink             syncshortcut.ShortcutChildWorkSink
 }
 
 type runtimeWorkSet struct {
@@ -177,7 +178,7 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 
 func buildRuntimeWork(
 	standaloneMounts []StandaloneMountConfig,
-	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
 	dataDir string,
 ) (*runtimeWorkSet, error) {
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
@@ -194,7 +195,7 @@ func buildRuntimeWork(
 
 func buildRuntimeWorkForParents(
 	parents []*mountSpec,
-	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
 	dataDir string,
 	logger *slog.Logger,
 ) (*runtimeWorkSet, error) {
@@ -232,7 +233,7 @@ func indexStandaloneMounts(parents []*mountSpec) map[mountID]*mountSpec {
 
 func buildChildMountSpecs(
 	parentByID map[mountID]*mountSpec,
-	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
 	dataDir string,
 ) (map[mountID][]*mountSpec, []MountStartupResult, error) {
 	childrenByParent := make(map[mountID][]*mountSpec)
@@ -267,11 +268,11 @@ func buildChildMountSpecs(
 
 type parentChildRunCommand struct {
 	namespaceID mountID
-	command     syncengine.ShortcutChildRunCommand
+	command     syncshortcut.ShortcutChildRunCommand
 }
 
 func sortedChildRunCommands(
-	snapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
 ) []parentChildRunCommand {
 	if len(snapshots) == 0 {
 		return nil
@@ -330,7 +331,7 @@ func assembleRuntimeMountSet(
 
 // childCommandLabel names a shortcut for messages: its display name when the
 // parent supplied one, else its child mount ID.
-func childCommandLabel(command *syncengine.ShortcutChildRunCommand, childMountID string) string {
+func childCommandLabel(command *syncshortcut.ShortcutChildRunCommand, childMountID string) string {
 	if command != nil && command.DisplayName != "" {
 		return fmt.Sprintf("%q", command.DisplayName)
 	}
@@ -339,7 +340,7 @@ func childCommandLabel(command *syncengine.ShortcutChildRunCommand, childMountID
 
 func childCommandStartupResult(
 	parentID mountID,
-	command *syncengine.ShortcutChildRunCommand,
+	command *syncshortcut.ShortcutChildRunCommand,
 	selectionIndex int,
 	err error,
 ) MountStartupResult {
@@ -441,7 +442,7 @@ func (spec *parentMountSpec) runtimeCommon() mountRuntimeCommon {
 
 func buildChildMountFromCommand(
 	parent *mountSpec,
-	command *syncengine.ShortcutChildRunCommand,
+	command *syncshortcut.ShortcutChildRunCommand,
 	dataDir string,
 ) (*mountSpec, error) {
 	if parent == nil || command == nil {
@@ -463,8 +464,8 @@ func buildChildMountFromCommand(
 	return childSpec.runtimeMountSpec(), nil
 }
 
-func validateChildRunCommand(command *syncengine.ShortcutChildRunCommand) (string, error) {
-	childMountID, err := syncengine.ValidateShortcutChildRunCommand(command)
+func validateChildRunCommand(command *syncshortcut.ShortcutChildRunCommand) (string, error) {
+	childMountID, err := syncshortcut.ValidateShortcutChildRunCommand(command)
 	if err != nil {
 		return "", fmt.Errorf("parent-declared child run command: %w", err)
 	}
@@ -473,7 +474,7 @@ func validateChildRunCommand(command *syncengine.ShortcutChildRunCommand) (strin
 
 func newChildMountSpec(
 	parent *mountSpec,
-	command *syncengine.ShortcutChildRunCommand,
+	command *syncshortcut.ShortcutChildRunCommand,
 	childMountID string,
 	displayName string,
 	statePath string,
@@ -690,10 +691,10 @@ func (m *mountSpec) minFreeSpace() int64 {
 	return common.minFreeSpace
 }
 
-func (m *mountSpec) contentFilter() syncengine.ContentFilterConfig {
+func (m *mountSpec) contentFilter() syncdomain.ContentFilterConfig {
 	common := m.common()
 	if common == nil {
-		return syncengine.ContentFilterConfig{}
+		return syncdomain.ContentFilterConfig{}
 	}
 	return cloneContentFilterConfig(common.contentFilter)
 }
@@ -720,7 +721,7 @@ func (m *mountSpec) personalNameRules() bool {
 	return m != nil && m.parent != nil && m.parent.personalNameRules
 }
 
-func (m *mountSpec) shortcutChildWorkSink() syncengine.ShortcutChildWorkSink {
+func (m *mountSpec) shortcutChildWorkSink() syncshortcut.ShortcutChildWorkSink {
 	if m == nil || m.parent == nil {
 		return nil
 	}
@@ -735,28 +736,28 @@ func (m *mountSpec) childParentMountID() mountID {
 }
 
 func (m *mountSpec) isFinalDrainChild() bool {
-	return m != nil && m.child != nil && m.child.mode == syncengine.ShortcutChildRunModeFinalDrain
+	return m != nil && m.child != nil && m.child.mode == syncshortcut.ShortcutChildRunModeFinalDrain
 }
 
-func (m *mountSpec) expectedChildRootIdentity() *syncengine.ShortcutRootIdentity {
+func (m *mountSpec) expectedChildRootIdentity() *syncshortcut.ShortcutRootIdentity {
 	if m == nil || m.child == nil {
 		return nil
 	}
 	return m.child.engine.LocalRootIdentity
 }
 
-func (m *mountSpec) shortcutChildAckRef() syncengine.ShortcutChildAckRef {
+func (m *mountSpec) shortcutChildAckRef() syncshortcut.ShortcutChildAckRef {
 	if m == nil || m.child == nil {
-		return syncengine.ShortcutChildAckRef{}
+		return syncshortcut.ShortcutChildAckRef{}
 	}
 	return m.child.ackRef
 }
 
-func (m *mountSpec) shortcutChildRunCommand() *syncengine.ShortcutChildRunCommand {
+func (m *mountSpec) shortcutChildRunCommand() *syncshortcut.ShortcutChildRunCommand {
 	if m == nil || m.child == nil {
 		return nil
 	}
-	return &syncengine.ShortcutChildRunCommand{
+	return &syncshortcut.ShortcutChildRunCommand{
 		ChildMountID: m.id().String(),
 		DisplayName:  m.displayName(),
 		Engine:       cloneShortcutChildEngineSpec(&m.child.engine),
@@ -765,9 +766,9 @@ func (m *mountSpec) shortcutChildRunCommand() *syncengine.ShortcutChildRunComman
 	}
 }
 
-func cloneShortcutChildEngineSpec(spec *syncengine.ShortcutChildEngineSpec) syncengine.ShortcutChildEngineSpec {
+func cloneShortcutChildEngineSpec(spec *syncshortcut.ShortcutChildEngineSpec) syncshortcut.ShortcutChildEngineSpec {
 	if spec == nil {
-		return syncengine.ShortcutChildEngineSpec{}
+		return syncshortcut.ShortcutChildEngineSpec{}
 	}
 	cloned := *spec
 	if spec.LocalRootIdentity != nil {
@@ -778,8 +779,8 @@ func cloneShortcutChildEngineSpec(spec *syncengine.ShortcutChildEngineSpec) sync
 	return cloned
 }
 
-func cloneContentFilterConfig(filter syncengine.ContentFilterConfig) syncengine.ContentFilterConfig {
-	return syncengine.ContentFilterConfig{
+func cloneContentFilterConfig(filter syncdomain.ContentFilterConfig) syncdomain.ContentFilterConfig {
+	return syncdomain.ContentFilterConfig{
 		IgnoredDirs:      append([]string(nil), filter.IgnoredDirs...),
 		IncludedDirs:     append([]string(nil), filter.IncludedDirs...),
 		IgnoredPaths:     append([]string(nil), filter.IgnoredPaths...),

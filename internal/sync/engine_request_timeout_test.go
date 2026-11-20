@@ -18,6 +18,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // timedOutRequestRetryWait is past the first retry of a transient failure,
@@ -32,17 +35,17 @@ const timedOutRequestRetryWait = 2 * time.Second
 func TestRunOnce_TimedOutRequestIsKeptForRetryAndLeftWork(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	server, _ := newStalledServer(t)
-	stalled, requests := stalledGraphClient(t, server, &http.Client{Timeout: stalledRequestTimeout})
-	client.createFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	server, _ := syncfixture.NewStalledServer(t)
+	stalled, requests := syncfixture.StalledGraphClient(t, server, &http.Client{Timeout: syncfixture.StalledRequestTimeout})
+	client.CreateFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
 		return stalled.CreateFolder(ctx, driveID, parentID, name)
 	}
 	eng, syncRoot := newTestEngine(t, client)
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "deep"), 0o750))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), requests.Load(), "one dispatch is one request")
@@ -55,7 +58,7 @@ func TestRunOnce_TimedOutRequestIsKeptForRetryAndLeftWork(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "deep", rows[0].Path)
-	assert.Equal(t, ActionFolderCreate, rows[0].ActionType)
+	assert.Equal(t, syncdomain.ActionFolderCreate, rows[0].ActionType)
 	assert.Equal(t, 1, rows[0].AttemptCount)
 }
 
@@ -68,23 +71,23 @@ func TestRunOnce_TimedOutRequestIsKeptForRetryAndLeftWork(t *testing.T) {
 func TestRunOnce_ACancelWhileTheRunGoesOnIsRetriedAndSaid(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	client.createFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
+	client.CreateFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
 		return nil, fmt.Errorf("create folder: %w", context.Canceled)
 	}
-	logger, logs := newCapturedLogger()
+	logger, logs := syncfixture.NewCapturedLogger()
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "deep"), 0o750))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.LastPassKeptForRetry, "errors: %v", report.Errors)
 	output := logs.String()
 	assert.Equal(t, 1, strings.Count(output, "Syncing deep was canceled while the sync went on"), output)
 	assert.Contains(t, output, "action_type=folder_create")
-	assert.Equal(t, 1, countLevel(output, "WARN"), output)
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), output)
 }
 
 // A fatal completion ends the one-shot pass, and a transfer it interrupts
@@ -97,15 +100,15 @@ func TestRunOnce_ACancelWhileTheRunGoesOnIsRetriedAndSaid(t *testing.T) {
 func TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown(t *testing.T) {
 	t.Parallel()
 
-	mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
+	mock := newRunOnceBidirectionalMock(driveid.New(syncfixture.EngineTestDriveID))
 	downloading := make(chan struct{})
-	mock.downloadFn = func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+	mock.DownloadFn = func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 		close(downloading)
 		<-ctx.Done()
 
 		return 0, fmt.Errorf("request canceled: %w", context.Cause(ctx))
 	}
-	mock.uploadFn = func(
+	mock.UploadFn = func(
 		ctx context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc,
 	) (*graph.Item, error) {
 		select {
@@ -113,18 +116,18 @@ func TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown(t *testing.
 		case <-ctx.Done():
 		}
 
-		return nil, graphStatusError(http.StatusUnauthorized, graph.ErrUnauthorized)
+		return nil, syncfixture.GraphStatusError(http.StatusUnauthorized, graph.ErrUnauthorized)
 	}
-	logger, logs := newCapturedLogger()
+	logger, logs := syncfixture.NewCapturedLogger()
 	eng, syncRoot := newTestEngineWithLogger(t, mock, logger)
 	// The download is in flight while the upload fails only on two workers,
 	// whatever dispatch order the test runs under.
 	eng.serializeWorkers = false
 	var activities []Activity
 	eng.SetActivityHook(func(a Activity) { activities = append(activities, a) })
-	writeLocalFile(t, syncRoot, "local.txt", "local content\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local content\n")
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
 	require.NotNil(t, report)
@@ -132,7 +135,7 @@ func TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown(t *testing.
 	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, rows, "the interrupted download is no retry work")
-	assert.Zero(t, countLevel(logs.String(), "WARN"), logs.String())
+	assert.Zero(t, syncfixture.CountLevel(logs.String(), "WARN"), logs.String())
 	require.Len(t, activities, 1, "only the upload is shown as failed: %v", activities)
 	assert.Equal(t, "local.txt", activities[0].Path)
 }
@@ -145,12 +148,12 @@ func TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown(t *testing.
 func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	server, _ := newStalledServer(t)
-	stalled, requests := stalledGraphClient(t, server, &http.Client{Timeout: stalledRequestTimeout})
+	server, _ := syncfixture.NewStalledServer(t)
+	stalled, requests := syncfixture.StalledGraphClient(t, server, &http.Client{Timeout: syncfixture.StalledRequestTimeout})
 	var creates atomic.Int32
-	client.createFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	client.CreateFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
 		if creates.Add(1) == 1 {
 			return stalled.CreateFolder(ctx, driveID, parentID, name)
 		}
@@ -158,14 +161,14 @@ func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 	}
 	eng, syncRoot := newTestEngine(t, client)
 	recorder := attachDebugEventRecorder(eng)
-	clock := newManualClock(time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "dir"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "dir", "a.txt"), []byte("below the folder\n"), 0o600))
 
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "the bootstrap to settle and the local observer to start")
 	require.Equal(t, int32(1), creates.Load(), "the bootstrap's create timed out")
 	assert.NotContains(t, remote.tree(), "dir/a.txt", "the upload waits for its folder")
@@ -173,9 +176,9 @@ func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 	clock.Advance(timedOutRequestRetryWait)
 	require.Eventually(t, func() bool {
 		return remote.tree()["dir/a.txt"] == "below the folder\n"
-	}, eventWait, 10*time.Millisecond, "the create is retried and the upload below it runs")
+	}, syncfixture.EventWait, 10*time.Millisecond, "the create is retried and the upload below it runs")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 	assert.Equal(t, int32(2), creates.Load())
 	assert.Equal(t, int64(1), requests.Load())
 }
@@ -184,8 +187,8 @@ func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 // pass of an empty folder, whose next folder poll fails.
 type mountRootPollTest struct {
 	rt    *watchRuntime
-	bl    *Baseline
-	clock *manualClock
+	bl    *syncdomain.Baseline
+	clock *syncfixture.ManualClock
 	polls atomic.Int32
 	fail  atomic.Bool
 }
@@ -197,8 +200,8 @@ func newMountRootPollTest(t *testing.T, failure error) *mountRootPollTest {
 
 	const mountRoot = "mount-root-root"
 	w := &mountRootPollTest{}
-	mock := &engineMockClient{
-		folderDeltaFn: func(context.Context, driveid.ID, string, string) ([]graph.Item, string, error) {
+	mock := &syncfixture.EngineMockClient{
+		FolderDeltaFn: func(context.Context, driveid.ID, string, string) ([]graph.Item, string, error) {
 			w.polls.Add(1)
 			if w.fail.CompareAndSwap(true, false) {
 				return nil, "", failure
@@ -211,7 +214,7 @@ func newMountRootPollTest(t *testing.T, failure error) *mountRootPollTest {
 		inputs.RemoteRootItemID = mountRoot
 		inputs.RemoteRootDeltaCapable = true
 	})
-	w.clock = newManualClock(time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
+	w.clock = syncfixture.NewManualClock(time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, w.clock)
 	runScenarioPass(t, eng)
 	setupWatchEngine(t, eng)
@@ -234,23 +237,23 @@ func TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain(t *testing.T) {
 	w := newMountRootPollTest(t, stalledGraphRequestError(t, clientTimeoutKind()))
 	polledBefore := w.polls.Load()
 	bo := retry.NewBackoff(retry.WatchRemotePolicy())
-	bo.SetMaxOverride(MinPollInterval)
+	bo.SetMaxOverride(syncdomain.MinPollInterval)
 	backoff := bo.Next()
 	backoffEnds := w.clock.Now().Add(backoff)
-	batches := make(chan RemoteObservationBatch)
-	cancel, done := runInBackground(t, t.Context(), func(ctx context.Context) error {
-		return w.rt.watchMountRootRemote(ctx, w.bl, batches, MinPollInterval)
+	batches := make(chan syncobserve.RemoteObservationBatch)
+	cancel, done := syncfixture.RunInBackground(t, t.Context(), func(ctx context.Context) error {
+		return w.rt.watchMountRootRemote(ctx, w.bl, batches, syncdomain.MinPollInterval)
 	})
 
-	require.Eventually(t, func() bool { return w.clock.HasPendingTimerAt(backoffEnds) }, eventWait, time.Millisecond,
+	require.Eventually(t, func() bool { return w.clock.HasPendingTimerAt(backoffEnds) }, syncfixture.EventWait, time.Millisecond,
 		"the watch waits out one backoff after the timed-out poll")
 	assert.Equal(t, polledBefore+1, w.polls.Load(), "the timed-out poll")
 	w.clock.Advance(backoff)
-	batch := receiveWithin(t, batches, "the batch of the poll after the backoff")
+	batch := syncfixture.ReceiveWithin(t, batches, "the batch of the poll after the backoff")
 
-	assert.Equal(t, RemoteObservationBatchMountRoot, batch.Source)
+	assert.Equal(t, syncobserve.RemoteObservationBatchMountRoot, batch.Source)
 	assert.Equal(t, polledBefore+2, w.polls.Load())
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 }
 
 // An observer whose request timed out while the run goes on has stopped
@@ -261,8 +264,8 @@ func TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain(t *testing.T) {
 func TestWatchRuntime_AnObserverWhoseRequestTimedOutIsWarnedAndReturned(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 2
 	timedOut := stalledGraphRequestError(t, clientTimeoutKind())
@@ -273,7 +276,7 @@ func TestWatchRuntime_AnObserverWhoseRequestTimedOutIsWarnedAndReturned(t *testi
 	// handler's parts called by hand.
 	require.NoError(t, rt.handleWatchObserverError(t.Context(), pipeline, observerExitError(observerNameRemote, timedOut)))
 	output := logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"), output)
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), output)
 	assert.Contains(t, output, "Stopped checking OneDrive for changes")
 
 	// The other observer exits without an error of its own.

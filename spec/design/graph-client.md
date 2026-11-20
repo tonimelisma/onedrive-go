@@ -239,7 +239,7 @@ All API quirks handled at the graph boundary — downstream code never sees them
 - Paginated non-delta item surfaces (`ListChildrenPages` and the slice forms
   built on it, drive search) keep
   provider-visible package items. Sync-only package suppression is owned by
-  `internal/sync/item_converter.go`, not by the Graph client.
+  `internal/sync/internal/syncobserve/item_converter.go`, not by the Graph client.
 - An item's kind is reported, never defaulted: `Item.IsBundle` decodes the
   `bundle` facet (albums), and `Item.TypeFacetMissing` marks a non-deleted
   item with none of the file, folder, root, package, bundle or remoteItem

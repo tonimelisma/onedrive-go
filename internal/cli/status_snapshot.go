@@ -12,7 +12,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // Drive state constants for status and drive list display.
@@ -364,13 +365,13 @@ func filterSnapshotAccounts(accounts []accountView, selectedAccounts map[string]
 }
 
 func filterShortcutRootSnapshots(
-	roots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
+	roots map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView,
 	drives map[driveid.CanonicalID]config.Drive,
-) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView {
-	filtered := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView)
+) map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView {
+	filtered := make(map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView)
 	for cid := range drives {
 		if records, ok := roots[cid]; ok {
-			filtered[cid] = append([]syncengine.ShortcutRootStatusView(nil), records...)
+			filtered[cid] = append([]syncshortcut.ShortcutRootStatusView(nil), records...)
 		}
 	}
 	return filtered
@@ -383,7 +384,7 @@ type syncStateQuerier interface {
 	// root is root; filter is the drive's sync scope, so remote changes
 	// outside it are not counted (R-2.10.48).
 	QuerySyncState(
-		ctx context.Context, statePath string, root statusStoreRoot, filter syncengine.ContentFilterConfig,
+		ctx context.Context, statePath string, root statusStoreRoot, filter syncdomain.ContentFilterConfig,
 	) *syncStateInfo
 }
 
@@ -395,20 +396,20 @@ type liveSyncStateQuerier struct {
 }
 
 func (q *liveSyncStateQuerier) QuerySyncState(
-	ctx context.Context, statePath string, root statusStoreRoot, filter syncengine.ContentFilterConfig,
+	ctx context.Context, statePath string, root statusStoreRoot, filter syncdomain.ContentFilterConfig,
 ) *syncStateInfo {
 	return querySyncStateWithOptions(ctx, statePath, q.logger, root, filter, q.verbose, q.examplesLimit)
 }
 
 type childMountStatusInput struct {
 	ParentID driveid.CanonicalID
-	Root     syncengine.ShortcutRootStatusView
+	Root     syncshortcut.ShortcutRootStatusView
 }
 
 func buildStatusAccountsFromViews(
 	ctx context.Context,
 	cfg *config.Config,
-	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
+	shortcutRoots map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView,
 	views []accountView,
 	syncQ syncStateQuerier,
 ) []statusAccount {
@@ -635,7 +636,7 @@ func markStatusDriveSyncStateUnreadable(drive *statusDrive, readError string) {
 }
 
 func groupChildMountsByParent(
-	shortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView,
+	shortcutRoots map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView,
 ) map[driveid.CanonicalID][]childMountStatusInput {
 	grouped := make(map[driveid.CanonicalID][]childMountStatusInput)
 	if shortcutRoots == nil {
@@ -785,7 +786,7 @@ func buildChildStatusDrive(
 		// A shortcut root's store holds only its own subtree, so its whole
 		// store is in scope, and its root is the shared folder's.
 		status.SyncState = syncQ.QuerySyncState(
-			ctx, config.MountStatePath(root.MountID), statusStoreRootSharedFolder, syncengine.ContentFilterConfig{},
+			ctx, config.MountStatePath(root.MountID), statusStoreRootSharedFolder, syncdomain.ContentFilterConfig{},
 		)
 	}
 	finalizeStatusDriveState(&status)
@@ -798,7 +799,7 @@ func querySyncStateWithOptions(
 	statePath string,
 	logger *slog.Logger,
 	root statusStoreRoot,
-	filter syncengine.ContentFilterConfig,
+	filter syncdomain.ContentFilterConfig,
 	verbose bool,
 	examplesLimit int,
 ) *syncStateInfo {

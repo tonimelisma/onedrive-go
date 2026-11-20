@@ -7,19 +7,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // interruptedRemovalStatusPaths returns the paths status lists under the
 // interrupted-removal condition, read the way `status` reads them: the drive
 // snapshot projected into condition groups.
-func interruptedRemovalStatusPaths(t *testing.T, store *SyncStore) []string {
+func interruptedRemovalStatusPaths(t *testing.T, store *syncstore.SyncStore) []string {
 	t.Helper()
 
 	snapshot, err := store.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
-	groups := ProjectStoredConditionGroups(&snapshot)
+	groups := syncstore.ProjectStoredConditionGroups(&snapshot)
 	for i := range groups {
-		if groups[i].ConditionKey == ConditionLocalInterrupted {
+		if groups[i].ConditionKey == syncdomain.ConditionLocalInterrupted {
 			return groups[i].Paths
 		}
 	}
@@ -38,16 +42,16 @@ func interruptedRemovalStatusPaths(t *testing.T, store *SyncStore) []string {
 func TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
+	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 	const leftoverPath = "Docs/.onedrive-go.0123456789abcdef.detach"
-	leftover := SkippedItem{
+	leftover := syncdomain.SkippedItem{
 		Path:   leftoverPath,
-		Reason: IssueLocalInterruptedRemoval,
+		Reason: syncdomain.IssueLocalInterruptedRemoval,
 		Detail: "sync set this file aside while removing it and was interrupted",
 	}
-	reconcileScan := func(skipped ...SkippedItem) bool {
-		batch := localObservationFindingsBatchFromSkippedItems(driveid.New(testDriveID), skipped)
+	reconcileScan := func(skipped ...syncdomain.SkippedItem) bool {
+		batch := localObservationFindingsBatchFromSkippedItems(driveid.New(syncfixture.TestDriveID), skipped)
 		changed, err := store.ReconcileObservationFindingsReportingChange(ctx, &batch)
 		require.NoError(t, err)
 
@@ -59,6 +63,6 @@ func TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsT
 	assert.Equal(t, []string{leftoverPath}, interruptedRemovalStatusPaths(t, store))
 
 	assert.True(t, reconcileScan(), "the scan that no longer finds the leftover clears its condition")
-	assert.Empty(t, observationIssuePathsForTest(t, store))
+	assert.Empty(t, syncstoretest.ObservationIssuePathsForTest(t, store))
 	assert.Empty(t, interruptedRemovalStatusPaths(t, store), "status no longer lists it")
 }

@@ -18,15 +18,19 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 func newSingleOwnerEngine(t *testing.T) *testEngine {
 	t.Helper()
 
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.clock = newManualClock(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
+	eng.clock = syncfixture.NewManualClock(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
 	setupWatchEngine(t, eng)
 
 	return eng
@@ -42,32 +46,32 @@ func newSingleOwnerEngine(t *testing.T) *testEngine {
 
 // Compile-time interface satisfaction checks.
 var (
-	_ DeltaFetcher            = (*engineMockClient)(nil)
-	_ SocketIOEndpointFetcher = (*engineMockClient)(nil)
-	_ ItemClient              = (*engineMockClient)(nil)
-	_ driveops.Downloader     = (*engineMockClient)(nil)
-	_ driveops.Uploader       = (*engineMockClient)(nil)
-	_ driveops.ItemUploader   = (*engineMockClient)(nil)
-	_ FolderDeltaFetcher      = (*engineMockClient)(nil)
-	_ RecursiveLister         = (*engineMockClient)(nil)
-	_ PermissionChecker       = (*engineMockClient)(nil)
-	_ DriveVerifier           = (*engineMockClient)(nil)
+	_ syncdomain.DeltaFetcher            = (*syncfixture.EngineMockClient)(nil)
+	_ syncdomain.SocketIOEndpointFetcher = (*syncfixture.EngineMockClient)(nil)
+	_ syncdomain.ItemClient              = (*syncfixture.EngineMockClient)(nil)
+	_ driveops.Downloader                = (*syncfixture.EngineMockClient)(nil)
+	_ driveops.Uploader                  = (*syncfixture.EngineMockClient)(nil)
+	_ driveops.ItemUploader              = (*syncfixture.EngineMockClient)(nil)
+	_ syncdomain.FolderDeltaFetcher      = (*syncfixture.EngineMockClient)(nil)
+	_ syncdomain.RecursiveLister         = (*syncfixture.EngineMockClient)(nil)
+	_ syncdomain.PermissionChecker       = (*syncfixture.EngineMockClient)(nil)
+	_ syncdomain.DriveVerifier           = (*syncfixture.EngineMockClient)(nil)
 )
 
 // The transfer manager type-asserts the capability, so losing it would fail
 // only the lookups that need it, at run time.
-var _ driveops.ItemReader = (*engineMockClient)(nil)
+var _ driveops.ItemReader = (*syncfixture.EngineMockClient)(nil)
 
 const (
 	engineTestEmail = "sync-user@example.com"
 )
 
 func testThrottleDriveID() driveid.ID {
-	return driveid.New(engineTestDriveID)
+	return driveid.New(syncfixture.EngineTestDriveID)
 }
 
-func testThrottleScope() ScopeKey {
-	return SKThrottleDrive(testThrottleDriveID())
+func testThrottleScope() syncdomain.ScopeKey {
+	return syncdomain.SKThrottleDrive(testThrottleDriveID())
 }
 
 type testEngine struct {
@@ -101,7 +105,7 @@ func newFlowBackedTestEngine(engine *Engine) *testEngine {
 
 // newTestEngine creates an Engine backed by a temp dir with real SQLite
 // and the given mock client. Returns the engine and sync root path.
-func newTestEngine(t *testing.T, mock *engineMockClient) (*testEngine, string) {
+func newTestEngine(t *testing.T, mock *syncfixture.EngineMockClient) (*testEngine, string) {
 	t.Helper()
 
 	return newTestEngineWithContext(t, t.Context(), mock)
@@ -109,7 +113,7 @@ func newTestEngine(t *testing.T, mock *engineMockClient) (*testEngine, string) {
 
 // newTestEngineWithContext is like newTestEngine but lets callers thread a
 // specific context through engine construction and cleanup-sensitive helpers.
-func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMockClient) (*testEngine, string) {
+func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *syncfixture.EngineMockClient) (*testEngine, string) {
 	t.Helper()
 
 	return newTestEngineInDir(t, ctx, mock, t.TempDir())
@@ -118,7 +122,7 @@ func newTestEngineWithContext(t *testing.T, ctx context.Context, mock *engineMoc
 // newTestEngineInDir builds a test engine on tmpDir's data, test.db and sync,
 // creating whichever are missing: a fresh directory gives a fresh engine, one
 // an earlier engine left behind reopens its state (crash recovery tests).
-func newTestEngineInDir(t *testing.T, ctx context.Context, mock *engineMockClient, tmpDir string) (*testEngine, string) {
+func newTestEngineInDir(t *testing.T, ctx context.Context, mock *syncfixture.EngineMockClient, tmpDir string) (*testEngine, string) {
 	t.Helper()
 
 	return newTestEngineInDirWith(t, ctx, mock, tmpDir, nil)
@@ -127,7 +131,7 @@ func newTestEngineInDir(t *testing.T, ctx context.Context, mock *engineMockClien
 // newTestEngineOnFS builds a test engine whose sync tree runs through
 // interpose: an emulated filesystem (internal/synctest, D-094).
 func newTestEngineOnFS(
-	t *testing.T, mock *engineMockClient, interpose func(synctree.Handle) synctree.Handle,
+	t *testing.T, mock *syncfixture.EngineMockClient, interpose func(synctree.Handle) synctree.Handle,
 ) (*testEngine, string) {
 	t.Helper()
 
@@ -139,7 +143,7 @@ func newTestEngineOnFS(
 // newTestEngineInDirWith is newTestEngineInDir with a last word on the
 // engine's inputs.
 func newTestEngineInDirWith(
-	t *testing.T, ctx context.Context, mock *engineMockClient, tmpDir string, configure func(*engineInputs),
+	t *testing.T, ctx context.Context, mock *syncfixture.EngineMockClient, tmpDir string, configure func(*engineInputs),
 ) (*testEngine, string) {
 	t.Helper()
 
@@ -150,8 +154,8 @@ func newTestEngineInDirWith(
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
 	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
 
-	logger := testLogger(t)
-	driveID := driveid.New(engineTestDriveID)
+	logger := syncfixture.TestLogger(t)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	accountEmail := engineTestEmail
 	accountCID := testEngineAccountCanonicalID()
 
@@ -222,7 +226,7 @@ func seedTestEngineAccount(t *testing.T, dataDir string, account driveid.Canonic
 
 // newTestEngineWithLogger is like newTestEngine but accepts a custom logger
 // for tests that need to capture or filter log output.
-func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.Logger) (*testEngine, string) {
+func newTestEngineWithLogger(t *testing.T, mock *syncfixture.EngineMockClient, logger *slog.Logger) (*testEngine, string) {
 	t.Helper()
 
 	return newTestEngineWithLoggerContext(t, t.Context(), mock, logger)
@@ -230,7 +234,7 @@ func newTestEngineWithLogger(t *testing.T, mock *engineMockClient, logger *slog.
 
 // newTestEngineWithLoggerContext is like newTestEngineWithContext but accepts a
 // custom logger for tests that need to capture or filter log output.
-func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *engineMockClient, logger *slog.Logger) (*testEngine, string) {
+func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *syncfixture.EngineMockClient, logger *slog.Logger) (*testEngine, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -241,7 +245,7 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
 	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	accountEmail := "sync-user@example.com"
 	accountCID := testEngineAccountCanonicalID()
 
@@ -280,15 +284,15 @@ func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *eng
 	return testEng, syncRoot
 }
 
-func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, content []byte) *engineMockClient {
-	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, content []byte) *syncfixture.EngineMockClient {
+	return &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				*item,
 			}, token), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write(content)
 			return int64(n), err
 		},
@@ -298,13 +302,13 @@ func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, co
 // setupWatchEngine initializes an engine with DepGraph + dispatchCh + watchRuntime
 // for processBatch tests. Returns the dispatchCh for reading dispatched actions.
 // Replaces the old two-call pattern of setupWatchEngine + newTestWatchState.
-func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *TrackedAction {
+func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *syncdomain.TrackedAction {
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
-	rt.sched.graph = NewDepGraph(eng.logger)
-	rt.sched.dispatchCh = make(chan *TrackedAction, 1024)
-	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
+	rt.sched.graph = syncexec.NewDepGraph(eng.logger)
+	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1024)
+	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
 	eng.runtime = rt
 	eng.flow = rt.engineFlow
 
@@ -320,7 +324,7 @@ func newTestWatchState(t *testing.T, eng *testEngine) {
 	_ = setupWatchEngine(t, eng)
 }
 
-func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
+func setTestBlockScope(t *testing.T, eng *testEngine, block *syncdomain.BlockScope) {
 	t.Helper()
 
 	require.NotNil(t, block)
@@ -333,7 +337,7 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *BlockScope) {
 	}
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {
-		active := ActiveScopeFromBlockScopeRow(block)
+		active := syncdomain.ActiveScopeFromBlockScopeRow(block)
 		eng.runtime.scopes.upsertActiveScope(&active)
 	}
 }
@@ -371,17 +375,17 @@ func testEngineFlow(t *testing.T, eng *testEngine) *engineFlow {
 	return flow
 }
 
-func attachDebugEventRecorder(eng *testEngine) *debugEventRecorder {
+func attachDebugEventRecorder(eng *testEngine) *syncfixture.DebugEventRecorder {
 	return attachDebugEventRecorderWithHook(eng, nil)
 }
 
 func attachDebugEventRecorderWithHook(
 	eng *testEngine,
-	hook func(EngineDebugEvent),
-) *debugEventRecorder {
-	recorder := newDebugEventRecorder()
-	eng.SetDebugEventHook(func(event DebugEvent) {
-		recorder.record(event)
+	hook func(syncdomain.EngineDebugEvent),
+) *syncfixture.DebugEventRecorder {
+	recorder := syncfixture.NewDebugEventRecorder()
+	eng.SetDebugEventHook(func(event syncdomain.DebugEvent) {
+		recorder.Record(event)
 		if hook != nil {
 			hook(event)
 		}
@@ -396,7 +400,7 @@ func attachDebugEventRecorderWithHook(
 // for production -- a run's capabilities do not change underneath it -- so a
 // test that swaps the clock after building the runtime has to say so rather
 // than relying on the runtime re-reading the engine.
-func installManualClock(eng *Engine, clock *manualClock) {
+func installManualClock(eng *Engine, clock *syncfixture.ManualClock) {
 	eng.clock = clock
 }
 
@@ -406,7 +410,7 @@ var errManualClockSkipsScopeWait = errors.New("manual clock: scope wait skipped"
 
 // installManualClockForTestEngine is the testEngine-aware form: it also
 // refreshes the deps of the runtime and flow the harness already built.
-func installManualClockForTestEngine(eng *testEngine, clock *manualClock) {
+func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualClock) {
 	installManualClock(eng.Engine, clock)
 	eng.baseline.SetNowFunc(clock.Now)
 	// A one-shot scope wait is wall-clock time; on a manual clock it would
@@ -426,12 +430,12 @@ func installManualClockForTestEngine(eng *testEngine, clock *manualClock) {
 	}
 }
 
-func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *Baseline) {
+func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *syncdomain.Baseline) {
 	t.Helper()
 	testWatchRuntime(t, eng).runFullRemoteRefreshAsync(ctx, bl)
 }
 
-func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
+func isTestBlockScopeed(eng *testEngine, key syncdomain.ScopeKey) bool {
 	if eng.runtime != nil {
 		if eng.runtime.scopes.hasActiveScope(key) {
 			return true
@@ -450,10 +454,10 @@ func isTestBlockScopeed(eng *testEngine, key ScopeKey) bool {
 	return false
 }
 
-func getTestBlockScope(eng *testEngine, key ScopeKey) (BlockScope, bool) {
+func getTestBlockScope(eng *testEngine, key syncdomain.ScopeKey) (syncdomain.BlockScope, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.scopes.lookupActiveScope(key); ok {
-			row, err := BlockScopeRowFromActiveScope(block)
+			row, err := syncdomain.BlockScopeRowFromActiveScope(block)
 			if err != nil {
 				panic(fmt.Sprintf("BlockScopeRowFromActiveScope: %v", err))
 			}
@@ -470,31 +474,31 @@ func getTestBlockScope(eng *testEngine, key ScopeKey) (BlockScope, bool) {
 			return *blocks[i], true
 		}
 	}
-	return BlockScope{}, false
+	return syncdomain.BlockScope{}, false
 }
 
 // seedBaseline commits outcomes and an optional delta token to the baseline,
 // using per-outcome CommitMutation inputs (the old batch Commit was removed).
-func seedBaseline(t *testing.T, mgr *SyncStore, ctx context.Context, outcomes []ActionOutcome, deltaToken string) {
+func seedBaseline(t *testing.T, mgr *syncstore.SyncStore, ctx context.Context, outcomes []syncdomain.ActionOutcome, deltaToken string) {
 	t.Helper()
 
 	for i := range outcomes {
-		require.NoError(t, mgr.CommitMutation(ctx, MutationFromActionOutcome(&outcomes[i])), "seed CommitMutation[%d]", i)
+		require.NoError(t, mgr.CommitMutation(ctx, syncdomain.MutationFromActionOutcome(&outcomes[i])), "seed CommitMutation[%d]", i)
 	}
 
 	if deltaToken != "" {
-		require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New(engineTestDriveID), deltaToken), "seed CommitObservationCursor")
+		require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New(syncfixture.EngineTestDriveID), deltaToken), "seed CommitObservationCursor")
 	}
 }
 
 // observeEngineClock wraps the engine's current clock so callers can attach
 // hooks, returning the wrapper for further configuration.
-func observeEngineClock(eng *Engine) *observingClock {
-	if existing, ok := eng.clock.(*observingClock); ok {
+func observeEngineClock(eng *Engine) *syncfixture.ObservingClock {
+	if existing, ok := eng.clock.(*syncfixture.ObservingClock); ok {
 		return existing
 	}
 
-	wrapped := &observingClock{SyncClock: eng.clock}
+	wrapped := &syncfixture.ObservingClock{SyncClock: eng.clock}
 	eng.clock = wrapped
 
 	return wrapped

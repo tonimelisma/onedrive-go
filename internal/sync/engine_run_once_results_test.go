@@ -14,50 +14,53 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-6.8.9
 func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 16)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 16)
 
 	for _, actionID := range []int64{1, 2, 3} {
-		runner.sched.graph.Add(&Action{
+		runner.sched.graph.Add(&syncdomain.Action{
 			Path: "action.txt",
-			Type: ActionUpload,
+			Type: syncdomain.ActionUpload,
 		}, actionID, nil)
 	}
 
-	results := make(chan ActionCompletion, 3)
-	results <- ActionCompletion{
+	results := make(chan syncdomain.ActionCompletion, 3)
+	results <- syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "a.txt",
-		ActionType: ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
 		Err:        graph.ErrServerError,
 		ErrMsg:     "fail-1",
 	}
-	results <- ActionCompletion{
+	results <- syncdomain.ActionCompletion{
 		ActionID:   2,
 		Path:       "b.txt",
-		ActionType: ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
 		Err:        graph.ErrServerError,
 		ErrMsg:     "fail-2",
 	}
-	results <- ActionCompletion{
+	results <- syncdomain.ActionCompletion{
 		ActionID:   3,
 		Path:       "c.txt",
-		ActionType: ActionDownload,
+		ActionType: syncdomain.ActionDownload,
 		Success:    true,
 	}
 	close(results)
 
-	err := runWithin(t, t.Context(), "the results loop to finish its closed channel", func(ctx context.Context) error {
+	err := syncfixture.RunWithin(t, t.Context(), "the results loop to finish its closed channel", func(ctx context.Context) error {
 		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
 	})
 	require.NoError(t, err)
@@ -71,45 +74,45 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
 
-	runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
-		View: &PathView{Path: "root.txt"},
+		View: &syncdomain.PathView{Path: "root.txt"},
 	}, 1, nil)
-	runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
-		View: &PathView{Path: "child.txt"},
+		View: &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
-	runner.sched.graph.Add(&Action{
-		Type: ActionDownload,
+	runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionDownload,
 		Path: "auth.txt",
-		View: &PathView{Path: "auth.txt"},
+		View: &syncdomain.PathView{Path: "auth.txt"},
 	}, 3, nil)
 
-	results := make(chan ActionCompletion, 2)
-	results <- ActionCompletion{
+	results := make(chan syncdomain.ActionCompletion, 2)
+	results <- syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "root.txt",
-		ActionType: ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 		Success:    true,
 	}
-	results <- ActionCompletion{
+	results <- syncdomain.ActionCompletion{
 		ActionID:   3,
 		Path:       "auth.txt",
-		ActionType: ActionDownload,
+		ActionType: syncdomain.ActionDownload,
 		HTTPStatus: http.StatusUnauthorized,
 		Err:        graph.ErrUnauthorized,
 		ErrMsg:     "unauthorized",
 	}
 	close(results)
 
-	err := runWithin(t, t.Context(), "the results loop to stop on the unauthorized completion", func(ctx context.Context) error {
+	err := syncfixture.RunWithin(t, t.Context(), "the results loop to stop on the unauthorized completion", func(ctx context.Context) error {
 		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
 	})
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
@@ -153,28 +156,28 @@ func TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress(t
 		t.Run(synced.DriveType(), func(t *testing.T) {
 			t.Parallel()
 
-			mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
-			upload := mock.uploadFn
-			mock.uploadFn = func(
+			mock := newRunOnceBidirectionalMock(driveid.New(syncfixture.EngineTestDriveID))
+			upload := mock.UploadFn
+			mock.UploadFn = func(
 				context.Context, driveid.ID, string, string, io.ReaderAt, int64, time.Time, graph.ProgressFunc,
 			) (*graph.Item, error) {
-				return nil, graphStatusError(http.StatusUnauthorized, graph.ErrUnauthorized)
+				return nil, syncfixture.GraphStatusError(http.StatusUnauthorized, graph.ErrUnauthorized)
 			}
 			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
 				inputs.AccountCanonicalID = synced
 				inputs.DriveVerifier = mock
 			})
 			seedTestEngineAccount(t, eng.dataDir, other)
-			writeLocalFile(t, syncRoot, "local.txt", "local content\n")
+			syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local content\n")
 
-			_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.ErrorIs(t, err, graph.ErrUnauthorized)
 			assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, synced), "the 401 marks the synced account")
 			assert.Empty(t, signInRequirementOf(t, eng, other), "and not the other account at its address")
 
 			require.NoError(t, config.MarkAccountAuthRequired(eng.dataDir, other, authstate.ReasonSyncAuthRejected))
-			mock.uploadFn = upload
-			_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			mock.UploadFn = upload
+			_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err, "the startup proof revalidates the synced account")
 			assert.Empty(t, signInRequirementOf(t, eng, synced), "and ends its requirement")
 			assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, other), "the other account's stands")
@@ -190,21 +193,21 @@ func TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress(t
 func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOrRetry(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	root := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
-		View: &PathView{Path: "root.txt"},
+		View: &syncdomain.PathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 	runner.sched.markRunning(root)
 
-	child := runner.sched.graph.Add(&Action{
-		Type: ActionDownload,
+	child := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionDownload,
 		Path: "child.txt",
 	}, 2, []int64{1})
 	assert.Nil(t, child)
@@ -214,11 +217,11 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 		nil,
 		nil,
 		nil,
-		&ActionCompletion{
+		&syncdomain.ActionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
-			ActionType: ActionUpload,
-			Err:        ErrActionPreconditionChanged,
+			ActionType: syncdomain.ActionUpload,
+			Err:        syncdomain.ErrActionPreconditionChanged,
 			ErrMsg:     "source changed",
 		},
 	)
@@ -241,19 +244,19 @@ func TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree(t *t
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	root := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	child := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
-		View: &PathView{Path: "child.txt"},
+		View: &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
@@ -269,21 +272,21 @@ func TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions(t *testing.
 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
-	flow.sched.graph = NewDepGraph(eng.logger)
+	flow.sched.graph = syncexec.NewDepGraph(eng.logger)
 
-	root := flow.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	root := flow.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := flow.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	child := flow.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	flow.completeOutboxAsShutdown([]*TrackedAction{root})
+	flow.completeOutboxAsShutdown([]*syncdomain.TrackedAction{root})
 
 	assert.Equal(t, 0, flow.sched.graph.InFlightCount())
 }
@@ -294,20 +297,20 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	root := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
-		View: &PathView{Path: "root.txt"},
+		View: &syncdomain.PathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	child := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
-		View: &PathView{Path: "child.txt"},
+		View: &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
@@ -316,10 +319,10 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 		nil,
 		nil,
 		assert.AnError,
-		&ActionCompletion{
+		&syncdomain.ActionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
-			ActionType: ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 			Success:    true,
 		},
 	)
@@ -335,17 +338,17 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	root := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	child := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 	}, 2, []int64{1})
 	assert.Nil(t, child)
@@ -358,10 +361,10 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 		nil,
 		nil,
 		nil,
-		&ActionCompletion{
+		&syncdomain.ActionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
-			ActionType: ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 			Success:    true,
 		},
 	)
@@ -377,25 +380,25 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	action := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	action := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
-		View: &PathView{Path: "retry.txt"},
+		View: &syncdomain.PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, action)
-	runner.holdAction(action, heldReasonRetry, ScopeKey{}, eng.nowFunc().Add(-time.Second))
+	runner.holdAction(action, heldReasonRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
 	ctx, cancel := context.WithCancel(t.Context())
-	results := make(chan ActionCompletion, 1)
+	results := make(chan syncdomain.ActionCompletion, 1)
 
-	runInBackground(t, ctx, func(workerCtx context.Context) error {
+	syncfixture.RunInBackground(t, ctx, func(workerCtx context.Context) error {
 		defer close(results)
 		select {
 		case dispatched := <-runner.sched.dispatchCh:
-			results <- ActionCompletion{
+			results <- syncdomain.ActionCompletion{
 				ActionID:   dispatched.ID,
 				Path:       dispatched.Action.Path,
 				ActionType: dispatched.Action.Type,
@@ -407,7 +410,7 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 		return nil
 	})
 
-	err := runWithin(t, ctx, "the one-shot results loop to release due held work while idle", func(loopCtx context.Context) error {
+	err := syncfixture.RunWithin(t, ctx, "the one-shot results loop to release due held work while idle", func(loopCtx context.Context) error {
 		return runner.runResultsLoopWithInitialOutbox(loopCtx, nil, nil, results, nil)
 	})
 	require.NoError(t, err)
@@ -422,30 +425,30 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 	now := eng.nowFunc()
 
-	concrete := runner.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	concrete := runner.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
-		View: &PathView{Path: "retry.txt"},
+		View: &syncdomain.PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
-	runner.holdAction(concrete, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	runner.holdAction(concrete, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
-	publication := runner.sched.graph.Add(&Action{
-		Type:    ActionCleanup,
+	publication := runner.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
 	}, 2, nil)
 	require.NotNil(t, publication)
-	runner.holdAction(publication, heldReasonRetry, ScopeKey{}, now.Add(-time.Second))
+	runner.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	err, handled := runner.releaseIdleDueHeldWork(t.Context(), &Baseline{})
+	err, handled := runner.releaseIdleDueHeldWork(t.Context(), &syncdomain.Baseline{})
 	require.True(t, handled)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, runner.outbox, "shutdown-completed releases must not be queued for a second completion pass")

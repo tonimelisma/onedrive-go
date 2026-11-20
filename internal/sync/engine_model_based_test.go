@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Model-based randomized testing in the style of Dropbox's CanopyCheck: each
@@ -86,13 +88,13 @@ const (
 
 // Validates: R-2.3.1, R-2.17.1, R-2.17.2, R-2.17.3, R-2.17.6, R-2.17.7, R-2.17.8
 func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
 	for _, seed := range modelSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			logSeedReplayOnFailure(t, modelSeedEnv, seed)
+			syncfixture.LogSeedReplayOnFailure(t, modelSeedEnv, seed)
 			runModelScenario(t, seed)
 		})
 	}
@@ -103,12 +105,12 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 // The same seed twice gives the same actions in the same order and the same
 // trees (D-090): a failing seed is a reproducible bug, not a flake.
 func TestModel_SameSeedReplaysIdentically(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
 	seeds := []uint64{3, 28}
 	replayBatches := 0
-	if raceDetectorEnabled {
+	if syncfixture.RaceDetectorEnabled {
 		// Determinism does not depend on the race detector; one seed over
 		// fewer batches keeps the race run within go test's package timeout
 		// (see modelRaceSeeds).
@@ -136,21 +138,21 @@ func TestModel_SameSeedReplaysIdentically(t *testing.T) {
 // (D-091), sometimes losing the WAL too, and sync must converge from what the
 // crash left with every model check and invariant holding.
 func TestModel_CrashAtSeededPointsRecovers(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
 	for _, seed := range modelCrashSeeds(t) {
 		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
-			logSeedReplayOnFailure(t, modelSeedEnv, seed)
+			syncfixture.LogSeedReplayOnFailure(t, modelSeedEnv, seed)
 			runModelScenarioWith(t, seed, modelOptions{crashes: true})
 		})
 	}
 }
 
 // modelSeedVars are the variables of the engine and crash runs.
-func modelSeedVars() seedVars {
-	return seedVars{single: modelSeedEnv, count: modelSeedCountEnv, start: modelSeedStartEnv}
+func modelSeedVars() syncfixture.SeedVars {
+	return syncfixture.SeedVars{Single: modelSeedEnv, Count: modelSeedCountEnv, Start: modelSeedStartEnv}
 }
 
 // modelCrashSeeds is the crash run's seeds: the ones the environment names,
@@ -159,13 +161,13 @@ func modelCrashSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
 	count := modelCrashSeedCount
-	if raceDetectorEnabled {
+	if syncfixture.RaceDetectorEnabled {
 		// The race run is for data races, which one seed exercises; see
 		// modelRaceSeeds.
 		count = 1
 	}
 
-	return seedsFromEnv(t, modelSeedVars(), count)
+	return syncfixture.SeedsFromEnv(t, modelSeedVars(), count)
 }
 
 // modelSeeds is the engine run's seeds: the ones the environment names, else
@@ -174,11 +176,11 @@ func modelSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
 	count := modelDefaultSeeds
-	if raceDetectorEnabled {
+	if syncfixture.RaceDetectorEnabled {
 		count = modelRaceSeeds
 	}
 
-	return seedsFromEnv(t, modelSeedVars(), count)
+	return syncfixture.SeedsFromEnv(t, modelSeedVars(), count)
 }
 
 type modelRun struct {
@@ -200,7 +202,7 @@ type modelRun struct {
 	expectHoldOf string
 	// afterFirstPass is a user's response to what the first pass did (a
 	// collision to rename); its edits join the batch's.
-	afterFirstPass func() []modelEdit
+	afterFirstPass func() []syncfixture.ModelEdit
 	// clock is the engine's clock, a passage of time ahead of the wall clock
 	// that grows by modelPassInterval before every pass after a batch's
 	// first.
@@ -210,7 +212,7 @@ type modelRun struct {
 	// fake; concurrentEdits are the edits its other client made.
 	chaos           *chaosGraph
 	concurrentMu    stdsync.Mutex
-	concurrentEdits []modelEdit
+	concurrentEdits []syncfixture.ModelEdit
 
 	// transcript is every dispatched action and every converged tree, in
 	// order, with conflict-copy timestamps masked: two runs of one seed must
@@ -253,7 +255,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	t.Helper()
 
 	crashes := opts.crashes
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.shuffleDelta(seed)
 	client := remote.client(t)
 	var chaos *chaosGraph
@@ -321,7 +323,7 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 		order = dispatchOrderShuffle(r.seed)
 	}
 	eng.serializeWorkers = true
-	eng.dispatchOrder = func(frontier []*TrackedAction) []*TrackedAction {
+	eng.dispatchOrder = func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 		frontier = order(frontier)
 		r.recordDispatch(frontier)
 		return frontier
@@ -331,7 +333,7 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 // armCrash installs a capture at a crash point the seed picks, half the time
 // with the WAL lost (everything since a checkpoint taken now is lost).
 func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
-	points := allCrashPoints()
+	points := syncfixture.AllCrashPoints()
 	capture := &crashCapture{
 		point:   points[rng.IntN(len(points))],
 		lostWAL: rng.IntN(2) == 0,
@@ -387,7 +389,7 @@ func (r *modelRun) recordf(format string, args ...any) {
 	r.transcript = append(r.transcript, line)
 }
 
-func (r *modelRun) recordDispatch(frontier []*TrackedAction) {
+func (r *modelRun) recordDispatch(frontier []*syncdomain.TrackedAction) {
 	for _, ta := range frontier {
 		r.recordf("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
 	}
@@ -419,7 +421,7 @@ func (r *modelRun) seedInitialTree() {
 	}
 	for range modelInitialFiles {
 		if file := r.newPathIn(r.remoteFolders(), modelFileNamePool, r.remoteTreeView()); file != "" {
-			r.remote.putFileAt(r.t, file, r.nextContent(modelRemoteSide))
+			r.remote.putFileAt(r.t, file, r.nextContent(syncfixture.ModelRemoteSide))
 			r.logf("setup remote put %s", file)
 		}
 	}
@@ -433,9 +435,9 @@ func (r *modelRun) seedInitialTree() {
 // the delete-safety hold. The model plays a user who confirms: a pass that
 // held deletes is followed by a `--confirm-deletes` pass, and the held pass
 // itself counts as a change so the loop keeps going.
-func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
+func (r *modelRun) syncUntilQuiet(label string) []syncfixture.ModelEdit {
 	confirm := false
-	var userEdits []modelEdit
+	var userEdits []syncfixture.ModelEdit
 	stormPasses := 0
 	if r.chaos != nil {
 		stormPasses = modelChaosPasses
@@ -443,7 +445,7 @@ func (r *modelRun) syncUntilQuiet(label string) []modelEdit {
 	checkWipe := true
 	for pass := 1; pass <= modelMaxSyncPasses+stormPasses; pass++ {
 		storm := r.startPass(pass, stormPasses)
-		report, err := r.eng.RunOnce(r.t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: confirm})
+		report, err := r.eng.RunOnce(r.t.Context(), syncdomain.SyncBidirectional, RunOptions{ConfirmDeletes: confirm})
 		if storm && err != nil {
 			// A fault the storm injected into observation fails the pass
 			// before it plans; the next pass starts over.
@@ -532,7 +534,7 @@ const modelPassInterval = time.Hour + time.Minute
 
 // modelClock is the wall clock plus an offset the model advances.
 type modelClock struct {
-	RealClock
+	syncdomain.RealClock
 	mu     stdsync.Mutex
 	offset time.Duration
 }
@@ -554,9 +556,9 @@ func (c *modelClock) advance(d time.Duration) {
 // deletes instead of propagating them (D-002).
 func (r *modelRun) requireWipeHeld(label string, report *Report) {
 	switch r.expectHoldOf {
-	case modelLocalSide:
+	case syncfixture.ModelLocalSide:
 		require.Positive(r.t, report.HeldRemoteDeletes, "%s: a wiped local side must hold the OneDrive deletes; %s", label, r.failureContext())
-	case modelRemoteSide:
+	case syncfixture.ModelRemoteSide:
 		if r.chaos != nil && report.HeldLocalDeletes == 0 && report.LocalDeletes == 0 && report.Uploads > 0 {
 			// The pass that saw the wipe resynced after a 410: what OneDrive
 			// no longer has is uploaded again rather than deleted locally
@@ -580,17 +582,17 @@ func (r *modelRun) requireConverged(label string) map[string]string {
 
 // requireWrittenContentSurvives checks invariant 2: content a side wrote and
 // still held when the batch ended exists somewhere after sync.
-func (r *modelRun) requireWrittenContentSurvives(label string, edits []modelEdit, converged map[string]string) {
+func (r *modelRun) requireWrittenContentSurvives(label string, edits []syncfixture.ModelEdit, converged map[string]string) {
 	present := make(map[string]bool, len(converged))
 	for _, content := range converged {
 		present[content] = true
 	}
 	var retained map[string]bool
 	for i, edit := range edits {
-		if edit.content == "" || modelOverwrittenLater(edits, i) {
+		if edit.Content == "" || syncfixture.ModelOverwrittenLater(edits, i) {
 			continue
 		}
-		if !present[edit.content] && r.chaos != nil {
+		if !present[edit.Content] && r.chaos != nil {
 			// Another client writing mid-pass (to this item, or to the item
 			// after a move) supersedes content on OneDrive, which keeps it
 			// as a version: kept, not lost. Without the chaos layer nobody
@@ -598,12 +600,12 @@ func (r *modelRun) requireWrittenContentSurvives(label string, edits []modelEdit
 			if retained == nil {
 				retained = r.retainedContents()
 			}
-			if retained[edit.content] {
+			if retained[edit.Content] {
 				continue
 			}
 		}
-		assert.True(r.t, present[edit.content],
-			"%s: %s %s of %s was lost; %s", label, edit.side, edit.kind, edit.path, r.failureContext())
+		assert.True(r.t, present[edit.Content],
+			"%s: %s %s of %s was lost; %s", label, edit.Side, edit.Kind, edit.Path, r.failureContext())
 	}
 }
 
@@ -625,16 +627,16 @@ func (r *modelRun) retainedContents() map[string]bool {
 func (r *modelRun) requireUntouchedFilesUnchanged(
 	label string,
 	before map[string]string,
-	edits []modelEdit,
+	edits []syncfixture.ModelEdit,
 	converged map[string]string,
 ) {
 	for p, content := range before {
-		if content == modelFolderSentinel {
+		if content == syncfixture.ModelFolderSentinel {
 			continue
 		}
 		touched := false
 		for _, edit := range edits {
-			if edit.touches(p) {
+			if edit.Touches(p) {
 				touched = true
 				break
 			}
@@ -663,7 +665,7 @@ func (r *modelRun) localTree() map[string]string {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			out[rel] = modelFolderSentinel
+			out[rel] = syncfixture.ModelFolderSentinel
 			return nil
 		}
 		data, readErr := os.ReadFile(p) //nolint:gosec // test reads its own temp tree
@@ -686,7 +688,7 @@ func (r *modelRun) localFolders() []string { return modelFoldersOf(r.localTree()
 func modelFoldersOf(tree map[string]string) []string {
 	folders := []string{""}
 	for p, content := range tree {
-		if content == modelFolderSentinel {
+		if content == syncfixture.ModelFolderSentinel {
 			folders = append(folders, p)
 		}
 	}
@@ -698,7 +700,7 @@ func modelFoldersOf(tree map[string]string) []string {
 func modelEntriesOf(tree map[string]string, wantFolders bool) []string {
 	var entries []string
 	for p, content := range tree {
-		if (content == modelFolderSentinel) == wantFolders {
+		if (content == syncfixture.ModelFolderSentinel) == wantFolders {
 			entries = append(entries, p)
 		}
 	}
@@ -732,44 +734,44 @@ func (r *modelRun) newPathIn(folders []string, pool string, tree map[string]stri
 
 // localBasicEdit is one of the original local operations: create, edit,
 // delete, move, mkdir or a type change.
-func (r *modelRun) localBasicEdit(kind string, tree map[string]string) (modelEdit, bool) {
+func (r *modelRun) localBasicEdit(kind string, tree map[string]string) (syncfixture.ModelEdit, bool) {
 	switch kind {
-	case modelOpReplace:
+	case syncfixture.ModelOpReplace:
 		return r.localReplace(tree)
-	case modelOpCreateFile:
+	case syncfixture.ModelOpCreateFile:
 		p := r.newPathIn(r.localFolders(), modelFileNamePool, tree)
 		if p == "" {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
-		content := r.nextContent(modelLocalSide)
-		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
+		content := r.nextContent(syncfixture.ModelLocalSide)
+		syncfixture.WriteLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
 		r.logf("local create %s", p)
-		return modelEdit{side: modelLocalSide, kind: modelOpCreateFile, path: p, content: content}, true
-	case modelOpDelete:
+		return syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpCreateFile, Path: p, Content: content}, true
+	case syncfixture.ModelOpDelete:
 		p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 		if p == "" {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
 		require.NoError(r.t, os.RemoveAll(filepath.Join(r.syncRoot, filepath.FromSlash(p))))
 		r.logf("local delete %s", p)
-		return modelEdit{side: modelLocalSide, kind: modelOpDelete, path: p}, true
-	case modelOpMove:
+		return syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpDelete, Path: p}, true
+	case syncfixture.ModelOpMove:
 		return r.localMove(tree)
 	default:
 		p := r.newPathIn(r.localFolders(), modelFolderNamePool, tree)
 		if p == "" {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
 		require.NoError(r.t, os.MkdirAll(filepath.Join(r.syncRoot, filepath.FromSlash(p)), 0o750))
 		r.logf("local mkdir %s", p)
-		return modelEdit{side: modelLocalSide, kind: modelOpMakeFolder, path: p}, true
+		return syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMakeFolder, Path: p}, true
 	}
 }
 
-func (r *modelRun) localMove(tree map[string]string) (modelEdit, bool) {
+func (r *modelRun) localMove(tree map[string]string) (syncfixture.ModelEdit, bool) {
 	from, to, ok := r.pickMove(tree)
 	if !ok {
-		return modelEdit{}, false
+		return syncfixture.ModelEdit{}, false
 	}
 	require.NoError(r.t, os.Rename(
 		filepath.Join(r.syncRoot, filepath.FromSlash(from)),
@@ -777,80 +779,80 @@ func (r *modelRun) localMove(tree map[string]string) (modelEdit, bool) {
 	))
 	r.logf("local move %s -> %s", from, to)
 
-	return modelEdit{side: modelLocalSide, kind: modelOpMove, path: from, to: to}, true
+	return syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: from, To: to}, true
 }
 
 // remoteBasicEdit is one of the original remote operations.
-func (r *modelRun) remoteBasicEdit(kind string, tree map[string]string) (modelEdit, bool) {
+func (r *modelRun) remoteBasicEdit(kind string, tree map[string]string) (syncfixture.ModelEdit, bool) {
 	switch kind {
-	case modelOpReplace:
+	case syncfixture.ModelOpReplace:
 		return r.remoteReplace(tree)
-	case modelOpCreateFile:
+	case syncfixture.ModelOpCreateFile:
 		p := r.newPathIn(modelFoldersOf(tree), modelFileNamePool, tree)
 		if p == "" {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
-		content := r.nextContent(modelRemoteSide)
+		content := r.nextContent(syncfixture.ModelRemoteSide)
 		r.remote.putFileAt(r.t, p, content)
 		r.logf("remote create %s", p)
-		return modelEdit{side: modelRemoteSide, kind: modelOpCreateFile, path: p, content: content}, true
-	case modelOpEditFile:
+		return syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpCreateFile, Path: p, Content: content}, true
+	case syncfixture.ModelOpEditFile:
 		return r.remoteEditFile(tree)
-	case modelOpDelete:
+	case syncfixture.ModelOpDelete:
 		p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 		if p == "" {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
 		r.remote.deleteAt(r.t, p)
 		r.logf("remote delete %s", p)
-		return modelEdit{side: modelRemoteSide, kind: modelOpDelete, path: p}, true
-	case modelOpMove:
+		return syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpDelete, Path: p}, true
+	case syncfixture.ModelOpMove:
 		from, to, ok := r.pickMove(tree)
 		if !ok {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
 		r.remote.moveAt(r.t, from, to)
 		r.logf("remote move %s -> %s", from, to)
-		return modelEdit{side: modelRemoteSide, kind: modelOpMove, path: from, to: to}, true
+		return syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMove, Path: from, To: to}, true
 	default:
 		p := r.newPathIn(modelFoldersOf(tree), modelFolderNamePool, tree)
 		if p == "" {
-			return modelEdit{}, false
+			return syncfixture.ModelEdit{}, false
 		}
 		r.remote.mkdirAt(r.t, p)
 		r.logf("remote mkdir %s", p)
-		return modelEdit{side: modelRemoteSide, kind: modelOpMakeFolder, path: p}, true
+		return syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMakeFolder, Path: p}, true
 	}
 }
 
 // localReplace changes an entry's type in place: a file becomes a folder with
 // one new file in it, a folder (with its subtree) becomes a file.
-func (r *modelRun) localReplace(tree map[string]string) (modelEdit, bool) {
+func (r *modelRun) localReplace(tree map[string]string) (syncfixture.ModelEdit, bool) {
 	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 	if p == "" {
-		return modelEdit{}, false
+		return syncfixture.ModelEdit{}, false
 	}
 	abs := filepath.Join(r.syncRoot, filepath.FromSlash(p))
 	require.NoError(r.t, os.RemoveAll(abs))
-	content := r.nextContent(modelLocalSide)
-	if tree[p] == modelFolderSentinel {
-		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
+	content := r.nextContent(syncfixture.ModelLocalSide)
+	if tree[p] == syncfixture.ModelFolderSentinel {
+		syncfixture.WriteLocalFile(r.t, r.syncRoot, filepath.FromSlash(p), content)
 	} else {
-		writeLocalFile(r.t, r.syncRoot, filepath.FromSlash(path.Join(p, modelReplaceChildName)), content)
+		syncfixture.WriteLocalFile(r.t, r.syncRoot, filepath.FromSlash(path.Join(p, modelReplaceChildName)), content)
 	}
 	r.logf("local replace %s", p)
 
-	return modelEdit{side: modelLocalSide, kind: modelOpReplace, path: p, content: content}, true
+	return syncfixture.ModelEdit{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpReplace, Path: p, Content: content}, true
 }
 
-func (r *modelRun) remoteReplace(tree map[string]string) (modelEdit, bool) {
+func (r *modelRun) remoteReplace(tree map[string]string) (syncfixture.ModelEdit, bool) {
 	p := r.pick(append(modelEntriesOf(tree, false), modelEntriesOf(tree, true)...))
 	if p == "" {
-		return modelEdit{}, false
+		return syncfixture.ModelEdit{}, false
 	}
 	r.remote.deleteAt(r.t, p)
-	content := r.nextContent(modelRemoteSide)
-	if tree[p] == modelFolderSentinel {
+	content := r.nextContent(syncfixture.ModelRemoteSide)
+	if tree[p] == syncfixture.ModelFolderSentinel {
 		r.remote.putFileAt(r.t, p, content)
 	} else {
 		r.remote.mkdirAt(r.t, p)
@@ -858,18 +860,18 @@ func (r *modelRun) remoteReplace(tree map[string]string) (modelEdit, bool) {
 	}
 	r.logf("remote replace %s", p)
 
-	return modelEdit{side: modelRemoteSide, kind: modelOpReplace, path: p, content: content}, true
+	return syncfixture.ModelEdit{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpReplace, Path: p, Content: content}, true
 }
 
 // mirroredMove makes the same rename on both sides, as two devices (or a
 // crash after a move ran on one side, D-050) would. Only entries both sides
 // still hold at the same path qualify.
-func (r *modelRun) mirroredMove() []modelEdit {
+func (r *modelRun) mirroredMove() []syncfixture.ModelEdit {
 	local := r.localTree()
 	remote := r.remote.tree()
 	shared := map[string]string{}
 	for p, content := range local {
-		if remote[p] == content || (content == modelFolderSentinel && remote[p] == modelFolderSentinel) {
+		if remote[p] == content || (content == syncfixture.ModelFolderSentinel && remote[p] == syncfixture.ModelFolderSentinel) {
 			shared[p] = content
 		}
 	}
@@ -894,9 +896,9 @@ func (r *modelRun) mirroredMove() []modelEdit {
 	r.remote.moveAt(r.t, from, to)
 	r.logf("both move %s -> %s", from, to)
 
-	return []modelEdit{
-		{side: modelLocalSide, kind: modelOpMove, path: from, to: to},
-		{side: modelRemoteSide, kind: modelOpMove, path: from, to: to},
+	return []syncfixture.ModelEdit{
+		{Side: syncfixture.ModelLocalSide, Kind: syncfixture.ModelOpMove, Path: from, To: to},
+		{Side: syncfixture.ModelRemoteSide, Kind: syncfixture.ModelOpMove, Path: from, To: to},
 	}
 }
 
@@ -908,7 +910,7 @@ func (r *modelRun) pickMove(tree map[string]string) (string, string, bool) {
 		return "", "", false
 	}
 	pool := modelFileNamePool
-	if tree[from] == modelFolderSentinel {
+	if tree[from] == syncfixture.ModelFolderSentinel {
 		pool = modelFolderNamePool
 	}
 	var targets []string
@@ -930,7 +932,7 @@ func (r *modelRun) pickMove(tree map[string]string) (string, string, bool) {
 func modelPaths(tree map[string]string) []string {
 	paths := make([]string, 0, len(tree))
 	for p, content := range tree {
-		if content == modelFolderSentinel {
+		if content == syncfixture.ModelFolderSentinel {
 			p += "/"
 		}
 		paths = append(paths, p)

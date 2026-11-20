@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -21,7 +22,7 @@ import (
 func TestRunOnce_BothSidesRenamedIdenticallyConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "dir")
 	remote.addFile(t, "item-child", "item-dir", "child.txt", "child\n")
@@ -55,7 +56,7 @@ func TestRunOnce_BothSidesRenamedIdenticallyConverges(t *testing.T) {
 func TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-file", "root", "a.txt", "alpha\n")
 
@@ -84,7 +85,7 @@ func TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending(t *testing
 func TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-x", "root", "x")
 	remote.addFolder("item-photos", "item-x", "photos")
@@ -114,7 +115,7 @@ func TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges(t *testing.T) {
 func TestRunOnce_HardLinkUploadsAsANewFile(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
 
@@ -138,7 +139,7 @@ func TestRunOnce_HardLinkUploadsAsANewFile(t *testing.T) {
 func TestRunOnce_RenameAndRecreateMovesThenCreates(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
 	remote.addFolder("item-dir", "root", "dir")
@@ -148,7 +149,7 @@ func TestRunOnce_RenameAndRecreateMovesThenCreates(t *testing.T) {
 	runScenarioPass(t, eng)
 
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "a.txt"), filepath.Join(syncRoot, "renamed.txt")))
-	writeLocalFile(t, syncRoot, "a.txt", "fresh\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "a.txt", "fresh\n")
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "dir"), filepath.Join(syncRoot, "renamed-dir")))
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "dir"), 0o750))
 
@@ -174,7 +175,7 @@ func TestRunOnce_RenameAndRecreateMovesThenCreates(t *testing.T) {
 func TestRunOnce_DivergentRenameConvergesInOneSync(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
 
@@ -204,7 +205,7 @@ func TestRunOnce_DivergentRenameConvergesInOneSync(t *testing.T) {
 func TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "dir")
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
@@ -212,7 +213,7 @@ func TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
-	writeLocalFile(t, syncRoot, "a.txt", "edited locally\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "a.txt", "edited locally\n")
 	remote.move("item-a", "item-dir", "moved.txt")
 
 	runScenarioPass(t, eng)
@@ -236,7 +237,7 @@ func TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads(t *testing.T) {
 func TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-A", "root", "A")
 	remote.addFolder("item-B", "root", "B")
@@ -275,7 +276,7 @@ func TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting(t *testing.T) {
 func TestRunOnce_RemoteHierarchyInversionConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-A", "root", "A")
 	remote.addFolder("item-B", "item-A", "B")
@@ -307,7 +308,7 @@ func TestRunOnce_RemoteHierarchyInversionConverges(t *testing.T) {
 func TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-old", "item-docs", "old.txt", "old\n")
@@ -351,7 +352,7 @@ func TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges(t *testing.
 func TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-old", "item-docs", "old.txt", "old\n")
@@ -384,7 +385,7 @@ func TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass(t *testing.T
 func TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
 
@@ -414,7 +415,7 @@ func TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit(t *testing.T) {
 func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
 	remote.addFile(t, "item-b", "root", "b.txt", "bravo\n")
@@ -422,7 +423,7 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
-	moved, displaced := entryIdentity(t, filepath.Join(syncRoot, "a.txt")), entryIdentity(t, filepath.Join(syncRoot, "b.txt"))
+	moved, displaced := syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "a.txt")), syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "b.txt"))
 
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
@@ -435,9 +436,9 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, "alpha\n", string(data))
 	assert.Zero(t, remote.uploads, "the moved file must not be uploaded again")
-	assert.Equal(t, moved, entryIdentity(t, filepath.Join(syncRoot, "b.txt")), "b.txt is the moved file itself")
-	kept := requireTrashHoldsOnce(t, eng.trash, "b.txt", "bravo\n")
-	assert.Equal(t, displaced, entryIdentity(t, kept.ItemPath), "the trash holds the old b.txt itself, not a copy")
+	assert.Equal(t, moved, syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "b.txt")), "b.txt is the moved file itself")
+	kept := syncfixture.RequireTrashHoldsOnce(t, eng.trash, "b.txt", "bravo\n")
+	assert.Equal(t, displaced, syncfixture.EntryIdentity(t, kept.ItemPath), "the trash holds the old b.txt itself, not a copy")
 	requireScenarioQuietPlan(t, eng)
 }
 
@@ -448,7 +449,7 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 func TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
 	remote.addFile(t, "item-b", "root", "b.txt", "bravo\n")
@@ -457,7 +458,7 @@ func TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
-	writeLocalFile(t, syncRoot, "b.txt", "edited bravo\n")
+	syncfixture.WriteLocalFile(t, syncRoot, "b.txt", "edited bravo\n")
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
 
@@ -486,7 +487,7 @@ func TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit(t *testing.T) {
 func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFile(t, "item-a", "root", "a.txt", "same\n")
 	remote.addFile(t, "item-b", "root", "b.txt", "same\n")
@@ -494,7 +495,7 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
-	moved := entryIdentity(t, filepath.Join(syncRoot, "a.txt"))
+	moved := syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "a.txt"))
 
 	remote.deleteRemotely("item-b")
 	remote.move("item-a", "root", "b.txt")
@@ -519,7 +520,7 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, identity.Inode, entry.LocalInode, "the baseline records the moved file's identity")
 	assert.Equal(t, moved.Inode, identity.Inode, "b.txt is the moved file itself")
-	requireTrashHoldsOnce(t, eng.trash, "b.txt", "same\n")
+	syncfixture.RequireTrashHoldsOnce(t, eng.trash, "b.txt", "same\n")
 	requireScenarioQuietPlan(t, eng)
 	assert.Zero(t, remote.uploads)
 }

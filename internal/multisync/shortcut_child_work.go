@@ -3,10 +3,10 @@ package multisync
 import (
 	"context"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
-type parentChildWorkNotify func(context.Context, mountID, syncengine.ShortcutChildWorkSnapshot) error
+type parentChildWorkNotify func(context.Context, mountID, syncshortcut.ShortcutChildWorkSnapshot) error
 
 // attachParentChildWorkSink points a parent mount's child-work publications at
 // the run's snapshot cache. In watch mode each changed snapshot also becomes a
@@ -34,13 +34,13 @@ func (o *Orchestrator) parentChildWorkSinkForMount(
 	cache *parentChildWorkSnapshots,
 	watchEvents chan<- watchRunnerEvent,
 	notify parentChildWorkNotify,
-) syncengine.ShortcutChildWorkSink {
+) syncshortcut.ShortcutChildWorkSink {
 	if o == nil || mount == nil || mount.projectionKind() != MountProjectionStandalone {
 		return nil
 	}
 
 	parent := *mount
-	return func(ctx context.Context, snapshot syncengine.ShortcutChildWorkSnapshot) error {
+	return func(ctx context.Context, snapshot syncshortcut.ShortcutChildWorkSnapshot) error {
 		normalized, changed := o.receiveParentChildWorkSnapshotFromParent(cache, &parent, snapshot)
 		if changed && watchEvents != nil {
 			select {
@@ -66,10 +66,10 @@ func (o *Orchestrator) parentChildWorkSinkForMount(
 func (o *Orchestrator) receiveParentChildWorkSnapshotFromParent(
 	cache *parentChildWorkSnapshots,
 	parent *mountSpec,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
-) (syncengine.ShortcutChildWorkSnapshot, bool) {
+	snapshot syncshortcut.ShortcutChildWorkSnapshot,
+) (syncshortcut.ShortcutChildWorkSnapshot, bool) {
 	if parent == nil {
-		return syncengine.ShortcutChildWorkSnapshot{}, false
+		return syncshortcut.ShortcutChildWorkSnapshot{}, false
 	}
 	if snapshot.NamespaceID == "" {
 		snapshot.NamespaceID = parent.id().String()
@@ -84,7 +84,7 @@ func (o *Orchestrator) receiveParentChildWorkSnapshotFromParent(
 				"parent_id", parent.id().String(),
 			)
 		}
-		return syncengine.ShortcutChildWorkSnapshot{}, false
+		return syncshortcut.ShortcutChildWorkSnapshot{}, false
 	}
 
 	normalized, changed := cache.receive(parent.id(), snapshot)

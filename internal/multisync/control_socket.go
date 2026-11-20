@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 const (
@@ -740,7 +741,7 @@ func perfCaptureErrorStatus(err error) (int, synccontrol.ErrorCode) {
 func (o *Orchestrator) handleControlCommand(
 	ctx context.Context,
 	cmd *controlCommand,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	runners map[mountID]*watchRunner,
 	runnerEvents chan<- watchRunnerEvent,

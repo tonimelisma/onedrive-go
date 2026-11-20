@@ -3,6 +3,10 @@ package devtool
 import (
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -256,6 +260,111 @@ func TestGolangciConfig_DepguardPackagePatternsNameExistingPackages(t *testing.T
 	}
 
 	require.Positive(t, checked, "expected depguard rules that name package folders")
+}
+
+// Validates: R-6.10.20
+//
+// The sync tree's packages import one another in one direction, and depguard
+// says which: every directory under internal/sync that holds a package has a
+// lax rule over its non-test files that refuses the whole tree and allows,
+// by exact path, the tree packages the table below lets it import. A package
+// added to the tree without a rule, a rule for a package that is gone, and a
+// rule that allows another import than the table all fail here. Because
+// depguard sees only the lint's GOOS, the test also reads the imports of every
+// non-test file of the tree, build constraints ignored, against the table.
+func TestGolangciConfig_EverySyncTreePackageHasItsImportRule(t *testing.T) {
+	t.Parallel()
+
+	const tree = "github.com/tonimelisma/onedrive-go/internal/sync"
+	may := map[string][]string{
+		"internal/sync/syncdomain":             nil,
+		"internal/sync/syncshortcut":           {"syncdomain"},
+		"internal/sync/syncstore":              {"syncdomain", "syncshortcut"},
+		"internal/sync/internal/syncplan":      {"syncdomain"},
+		"internal/sync/internal/syncobserve":   {"syncdomain", "syncshortcut"},
+		"internal/sync/internal/syncexec":      {"syncdomain"},
+		"internal/sync":                        {"syncdomain", "syncshortcut", "syncstore", "internal/syncplan", "internal/syncobserve", "internal/syncexec"},
+		"internal/sync/internal/syncfixture":   {"syncdomain"},
+		"internal/sync/internal/syncstoretest": {"syncdomain", "syncshortcut", "syncstore", "internal/syncfixture"},
+	}
+
+	root := repoRootFromDevtoolPackage(t)
+	var dirs []string
+	err := filepath.WalkDir(filepath.Join(root, "internal", "sync"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() && entry.Name() == goTestdataDirName {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() && holdsNonTestGoFile(t, path) {
+			rel, relErr := filepath.Rel(root, path)
+			require.NoError(t, relErr)
+			dirs = append(dirs, filepath.ToSlash(rel))
+		}
+
+		return nil
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, slices.Collect(maps.Keys(may)), dirs, "the table names every package of the sync tree")
+
+	rules := yamlMapping(t, golangciConfig(t), "linters", "settings", "depguard", "rules")
+	for dir, allowed := range may {
+		var found map[string]any
+		for _, node := range rules {
+			rule, isRule := node.(map[string]any)
+			if isRule && slices.Equal(yamlList(t, rule, "files"), []any{"**/" + dir + "/*.go", "!$test"}) {
+				found = rule
+			}
+		}
+		require.NotNil(t, found, "no depguard rule holds the non-test files of %s alone", dir)
+		assert.Equal(t, "lax", found["list-mode"], dir)
+		var denied []any
+		for _, entry := range yamlList(t, found, "deny") {
+			denied = append(denied, yamlValue(t, entry, "pkg"))
+		}
+		assert.Equal(t, []any{tree + "$", tree + "/"}, denied, "%s refuses the whole tree", dir)
+		want := []any{}
+		for _, pkg := range allowed {
+			want = append(want, tree+"/"+pkg+"$")
+		}
+		got := []any{}
+		if list, hasAllow := found["allow"].([]any); hasAllow {
+			got = list
+		}
+		assert.Equal(t, want, got, "%s allows exactly the tree packages it may import", dir)
+		assertTreeImportsAllowed(t, root, dir, tree, allowed)
+	}
+}
+
+// assertTreeImportsAllowed holds every non-test Go file of dir, whatever its
+// build constraints, to the tree packages its package may import. depguard
+// sees only the files of the GOOS it runs under, and the required lint runs
+// on Linux, so a file built only on macOS is checked here.
+func assertTreeImportsAllowed(t *testing.T, root, dir, tree string, allowed []string) {
+	t.Helper()
+
+	ok := map[string]bool{}
+	for _, pkg := range allowed {
+		ok[tree+"/"+pkg] = true
+	}
+	paths, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(dir), "*.go"))
+	require.NoError(t, err)
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		require.NoError(t, parseErr)
+		for _, spec := range file.Imports {
+			imported, unquoteErr := strconv.Unquote(spec.Path.Value)
+			require.NoError(t, unquoteErr)
+			if imported != tree && !strings.HasPrefix(imported, tree+"/") {
+				continue
+			}
+			assert.True(t, ok[imported], "%s imports %s, which %s may not import", filepath.Base(path), imported, dir)
+		}
+	}
 }
 
 // Validates: R-6.10.22

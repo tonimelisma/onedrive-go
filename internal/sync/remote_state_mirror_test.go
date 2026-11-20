@@ -8,21 +8,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.2
 func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := context.Background()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	err := mgr.CommitObservation(ctx, []ObservedItem{{
+	err := mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "hello.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash1",
 		Size:     100,
 		Mtime:    1000000,
@@ -30,57 +33,57 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	}}, "delta-token-1", driveID)
 	require.NoError(t, err)
 
-	row := readRemoteStateRow(t, mgr.RawDBForTest(), "item1")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "hello.txt", row.Path)
 	assert.Equal(t, "hash1", row.Hash)
 	assert.Equal(t, int64(100), row.Size)
 	assert.Equal(t, "etag1", row.ETag)
-	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.RawDBForTest(), testDriveID))
+	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.2
 func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := context.Background()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "hello.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash1",
 	}}, "delta-token-1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:   driveID,
 		ItemID:    "item1",
 		Path:      "hello.txt",
-		ItemType:  ItemTypeFile,
+		ItemType:  syncdomain.ItemTypeFile,
 		IsDeleted: true,
 	}}, "delta-token-2", driveID))
 
-	assert.Nil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "item1"))
-	assert.Equal(t, "delta-token-2", readObservationCursor(t, mgr.RawDBForTest(), testDriveID))
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item1"))
+	assert.Equal(t, "delta-token-2", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.2
 func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := context.Background()
-	contentDriveID := driveid.New(testDriveID)
+	contentDriveID := driveid.New(syncfixture.TestDriveID)
 	sharedDriveID := driveid.New("shared-drive-id")
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  sharedDriveID,
 		ItemID:   "shared-item",
 		Path:     "Shared/inside.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "shared-hash",
 		Size:     64,
 		Mtime:    1234,
@@ -91,7 +94,7 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, contentDriveID, state.ContentDriveID)
 
-	row := readRemoteStateRow(t, mgr.RawDBForTest(), "shared-item")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "shared-item")
 	require.NotNil(t, row)
 	assert.Equal(t, sharedDriveID, row.DriveID)
 	assert.Equal(t, "Shared/inside.txt", row.Path)
@@ -106,76 +109,76 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := context.Background()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "same.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash1",
 		Size:     100,
 		Mtime:    1000000,
 		ETag:     "etag1",
 	}}, "delta-token-1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item1",
 		Path:     "same.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash1",
 		Size:     100,
 		Mtime:    1000000,
 		ETag:     "etag1",
 	}}, "", driveID))
 
-	row := readRemoteStateRow(t, mgr.RawDBForTest(), "item1")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "same.txt", row.Path)
-	assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.RawDBForTest(), testDriveID))
+	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.2
 func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := context.Background()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:   driveID,
 		ItemID:    "missing-item",
 		Path:      "gone.txt",
-		ItemType:  ItemTypeFile,
+		ItemType:  syncdomain.ItemTypeFile,
 		IsDeleted: true,
 	}}, "delta-token-delete", driveID))
 
-	assert.Nil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "missing-item"))
-	assert.Equal(t, "delta-token-delete", readObservationCursor(t, mgr.RawDBForTest(), testDriveID))
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "missing-item"))
+	assert.Equal(t, "delta-token-delete", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.11
 func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := context.Background()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-junk",
 		Path:     ".DS_Store",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash-junk",
 	}}, "delta-token-junk", driveID))
 
-	require.NotNil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "item-junk"))
-	assert.Equal(t, "delta-token-junk", readObservationCursor(t, mgr.RawDBForTest(), testDriveID))
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item-junk"))
+	assert.Equal(t, "delta-token-junk", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
 // Regression: delta reports a renamed folder as one item. Its children kept
@@ -187,21 +190,21 @@ func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "dir", Path: "links", ItemType: ItemTypeFolder},
-		{DriveID: driveID, ItemID: "sub", Path: "links/sub", ItemType: ItemTypeFolder},
-		{DriveID: driveID, ItemID: "a", Path: "links/a.txt", ItemType: ItemTypeFile, Hash: "ha", Size: 1},
-		{DriveID: driveID, ItemID: "b", Path: "links/sub/b.txt", ItemType: ItemTypeFile, Hash: "hb", Size: 1},
-		{DriveID: driveID, ItemID: "sib", Path: "links-other/c.txt", ItemType: ItemTypeFile, Hash: "hc", Size: 1},
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "links", ItemType: syncdomain.ItemTypeFolder},
+		{DriveID: driveID, ItemID: "sub", Path: "links/sub", ItemType: syncdomain.ItemTypeFolder},
+		{DriveID: driveID, ItemID: "a", Path: "links/a.txt", ItemType: syncdomain.ItemTypeFile, Hash: "ha", Size: 1},
+		{DriveID: driveID, ItemID: "b", Path: "links/sub/b.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hb", Size: 1},
+		{DriveID: driveID, ItemID: "sib", Path: "links-other/c.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hc", Size: 1},
 	}, "t1", driveID))
 
 	// The next delta carries only the folder.
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "dir", Path: "links-renamed", ItemType: ItemTypeFolder, ETag: "e2"},
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "links-renamed", ItemType: syncdomain.ItemTypeFolder, ETag: "e2"},
 	}, "t2", driveID))
 
 	for id, want := range map[string]string{
@@ -211,7 +214,7 @@ func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 		"b":   "links-renamed/sub/b.txt",
 		"sib": "links-other/c.txt",
 	} {
-		row := readRemoteStateRow(t, mgr.RawDBForTest(), id)
+		row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), id)
 		require.NotNil(t, row, id)
 		assert.Equal(t, want, row.Path, id)
 	}
@@ -226,25 +229,25 @@ func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 func TestCommitObservation_FolderDeleteRemovesDescendants(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: ItemTypeFolder},
-		{DriveID: driveID, ItemID: "sub", Path: "probe/len", ItemType: ItemTypeFolder},
-		{DriveID: driveID, ItemID: "kid", Path: "probe/len/long.txt", ItemType: ItemTypeFile, Hash: "h", Size: 1},
-		{DriveID: driveID, ItemID: "sib", Path: "probe-other/keep.txt", ItemType: ItemTypeFile, Hash: "h2", Size: 1},
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: syncdomain.ItemTypeFolder},
+		{DriveID: driveID, ItemID: "sub", Path: "probe/len", ItemType: syncdomain.ItemTypeFolder},
+		{DriveID: driveID, ItemID: "kid", Path: "probe/len/long.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h", Size: 1},
+		{DriveID: driveID, ItemID: "sib", Path: "probe-other/keep.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h2", Size: 1},
 	}, "t1", driveID))
 
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: ItemTypeFolder, IsDeleted: true},
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "probe", ItemType: syncdomain.ItemTypeFolder, IsDeleted: true},
 	}, "t2", driveID))
 
 	for _, id := range []string{"dir", "sub", "kid"} {
-		assert.Nil(t, readRemoteStateRow(t, mgr.RawDBForTest(), id), id)
+		assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), id), id)
 	}
-	require.NotNil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "sib"), "a sibling with the same name prefix stays")
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "sib"), "a sibling with the same name prefix stays")
 }
 
 // A remote_state row that cannot be read is a failed read, not an absent row.
@@ -265,22 +268,22 @@ func TestCommitObservation_ARemoteRowThatCannotBeReadFailsTheWindow(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			mgr := newTestStore(t)
+			mgr := syncstoretest.NewTestStore(t)
 			ctx := t.Context()
-			driveID := driveid.New(testDriveID)
-			require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{{
-				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: ItemTypeFile, Hash: "hash1", Size: 5,
+			driveID := driveid.New(syncfixture.TestDriveID)
+			require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
+				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hash1", Size: 5,
 			}}, "delta-token-1", driveID))
 			// A size the column can no longer be read back as.
 			_, err := mgr.RawDBForTest().ExecContext(ctx, `UPDATE remote_state SET size = 'five' WHERE item_id = 'item1'`)
 			require.NoError(t, err)
 
-			err = mgr.CommitObservation(ctx, []ObservedItem{{
-				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: ItemTypeFile,
+			err = mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
+				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: syncdomain.ItemTypeFile,
 				Hash: "hash2", Size: 6, IsDeleted: tc.deleted,
 			}}, "delta-token-2", driveID)
 			require.ErrorContains(t, err, "reading remote_state of item1")
-			assert.Equal(t, "delta-token-1", readObservationCursor(t, mgr.RawDBForTest(), testDriveID), "the window is not committed")
+			assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID), "the window is not committed")
 		})
 	}
 }
@@ -293,19 +296,19 @@ func TestCommitObservation_ARemoteRowThatCannotBeReadFailsTheWindow(t *testing.T
 func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *testing.T) {
 	t.Parallel()
 
-	mgr := newTestStore(t)
+	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
-	driveID := driveid.New(testDriveID)
-	require.NoError(t, mgr.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "dir", Path: "docs", ItemType: ItemTypeFolder},
-		{DriveID: driveID, ItemID: "kid", Path: "docs/a.txt", ItemType: ItemTypeFile, Hash: "h", Size: 1},
-		{DriveID: driveID, ItemID: "odd", Path: "odd", ItemType: ItemTypeFolder},
-		{DriveID: driveID, ItemID: "odd-kid", Path: "odd/b.txt", ItemType: ItemTypeFile, Hash: "h2", Size: 1},
+	driveID := driveid.New(syncfixture.TestDriveID)
+	require.NoError(t, mgr.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "dir", Path: "docs", ItemType: syncdomain.ItemTypeFolder},
+		{DriveID: driveID, ItemID: "kid", Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h", Size: 1},
+		{DriveID: driveID, ItemID: "odd", Path: "odd", ItemType: syncdomain.ItemTypeFolder},
+		{DriveID: driveID, ItemID: "odd-kid", Path: "odd/b.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h2", Size: 1},
 	}, "t1", driveID))
 
 	require.NoError(t, mgr.ForgetRemoteItem(ctx, "dir"))
-	assert.Nil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "dir"))
-	assert.Nil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "kid"), "the subtree goes with the folder")
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "dir"))
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "kid"), "the subtree goes with the folder")
 
 	db := mgr.RawDBForTest()
 	for _, statement := range []string{
@@ -317,5 +320,5 @@ func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *tes
 		require.NoError(t, err, statement)
 	}
 	require.ErrorContains(t, mgr.ForgetRemoteItem(ctx, "odd"), `"bundle"`)
-	assert.NotNil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "odd-kid"), "nothing is half removed")
+	assert.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "odd-kid"), "nothing is half removed")
 }

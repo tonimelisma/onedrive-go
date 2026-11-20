@@ -12,7 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/testutil"
 )
 
@@ -89,7 +89,7 @@ const debugEventsSummaryLimit = 10
 // debugEventsSummary is what a failure prints of a debug-event stream: how
 // many events it holds, then one line for each of the last
 // debugEventsSummaryLimit (debugEventSummary).
-func debugEventsSummary(roles testutil.DriveRoles, events []syncengine.DebugEvent) string {
+func debugEventsSummary(roles testutil.DriveRoles, events []syncdomain.DebugEvent) string {
 	if len(events) == 0 {
 		return "no events"
 	}
@@ -108,7 +108,7 @@ func debugEventsSummary(roles testutil.DriveRoles, events []syncengine.DebugEven
 // path masked by roles, where a throttle target's drive in the note is named
 // by role or masked (drive:<id>), then its error masked and bounded. The
 // event's DriveID and ScopeKey fields are not printed: they name the drive.
-func debugEventSummary(roles testutil.DriveRoles, event *syncengine.DebugEvent) string {
+func debugEventSummary(roles testutil.DriveRoles, event *syncdomain.DebugEvent) string {
 	line := string(event.Type)
 	for _, field := range []struct{ name, value string }{
 		{name: "observer", value: event.Observer},
@@ -337,14 +337,14 @@ func TestDebugEventsSummaryNamesTypesNotDrives(t *testing.T) {
 
 	roles := testutil.NewSuiteRoles([]string{printedFirstDrive},
 		[]testutil.IdentityRole{{Value: printedFirstGraphDrive, Role: "drive-1-id"}})
-	events := make([]syncengine.DebugEvent, 0, debugEventsSummaryLimit+3)
+	events := make([]syncdomain.DebugEvent, 0, debugEventsSummaryLimit+3)
 	for range debugEventsSummaryLimit + 1 {
-		events = append(events, syncengine.DebugEvent{Type: "observer_started", Observer: "remote", DriveID: printedFirstGraphDrive})
+		events = append(events, syncdomain.DebugEvent{Type: "observer_started", Observer: "remote", DriveID: printedFirstGraphDrive})
 	}
-	events = append(events, syncengine.DebugEvent{
+	events = append(events, syncdomain.DebugEvent{
 		At: time.Unix(0, 0), Type: "websocket_connect_failed", Observer: "remote", DriveID: "0e1f2a3b4c5d6978",
 		Note: "mount_root", Path: "e2e-folder", Error: "GET https://graph.microsoft.com/v1.0/drives/0e1f2a3b4c5d6978/items/root: 503",
-	}, syncengine.DebugEvent{Type: "cold_start_allowance_raised", DriveID: "0e1f2a3b4c5d6978", Note: "drive:0e1f2a3b4c5d6978"})
+	}, syncdomain.DebugEvent{Type: "cold_start_allowance_raised", DriveID: "0e1f2a3b4c5d6978", Note: "drive:0e1f2a3b4c5d6978"})
 
 	summary := debugEventsSummary(roles, events)
 

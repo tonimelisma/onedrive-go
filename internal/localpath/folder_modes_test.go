@@ -42,17 +42,17 @@ const (
 // folder and each kind of managed state keep their own names.
 func classifiedFolderModes() map[string]folderKind {
 	return map[string]folderKind{
-		userTreeModeHome:                          userTreeFolder,
-		"internal/cli.syncRootDirPerms":           syncRootFolder,
-		"internal/config.configDirPermissions":    managedStateFolder,
-		"internal/driveops.sessionDirPerms":       managedStateFolder,
-		"internal/localtrash.entryDirPerm":        managedStateFolder,
-		"internal/logfile.dirPerm":                managedStateFolder,
-		"internal/multisync.controlSocketDirPerm": managedStateFolder,
-		"internal/perf.captureDirPerm":            managedStateFolder,
-		"internal/sync.engineLocksDirPerm":        managedStateFolder,
-		"internal/sync.syncStoreDirPerm":          managedStateFolder,
-		"internal/tokenfile.DirPerms":             managedStateFolder,
+		userTreeModeHome:                           userTreeFolder,
+		"internal/cli.syncRootDirPerms":            syncRootFolder,
+		"internal/config.configDirPermissions":     managedStateFolder,
+		"internal/driveops.sessionDirPerms":        managedStateFolder,
+		"internal/localtrash.entryDirPerm":         managedStateFolder,
+		"internal/logfile.dirPerm":                 managedStateFolder,
+		"internal/multisync.controlSocketDirPerm":  managedStateFolder,
+		"internal/perf.captureDirPerm":             managedStateFolder,
+		"internal/sync.engineLocksDirPerm":         managedStateFolder,
+		"internal/sync/syncstore.syncStoreDirPerm": managedStateFolder,
+		"internal/tokenfile.DirPerms":              managedStateFolder,
 	}
 }
 
@@ -261,7 +261,9 @@ func parseProductFiles(t *testing.T, root string) []productFile {
 			}
 			rel = filepath.ToSlash(rel)
 			if entry.IsDir() {
-				if rel == "internal/devtool" || rel == "cmd/devtool" || entry.Name() == "testdata" {
+				// the sync tree's test-helper packages are test code outside _test.go files
+				if rel == "internal/devtool" || rel == "cmd/devtool" || entry.Name() == "testdata" ||
+					rel == "internal/sync/internal/syncfixture" || rel == "internal/sync/internal/syncstoretest" {
 					return filepath.SkipDir
 				}
 				return nil
